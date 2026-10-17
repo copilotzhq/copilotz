@@ -80,6 +80,7 @@ async function fixture(
   const state = {
     fence: structuredClone(fence),
     phase: "ready",
+    duringFence: undefined as undefined | (() => void),
     control: true,
     policy: true,
     beforePolicy: undefined as undefined | (() => Promise<void>),
@@ -113,7 +114,9 @@ async function fixture(
     sessions: {
       assertCurrent(current) {
         assert.deepEqual(current, state.fence);
-        return { phase: state.phase };
+        const phase = state.phase;
+        state.duringFence?.();
+        return { phase };
       },
     },
     resolveScheduled(key) {
@@ -273,6 +276,7 @@ async function fixture(
   }
   async function close() {
     state.beforePolicy = undefined;
+    state.duringFence = undefined;
     state.afterTransaction = undefined;
     state.control = true;
     for (const completion of completions) completion.resolve("closed");
@@ -1063,3 +1067,57 @@ test("control witness rechecks the exact owner holder after asynchronous policy"
     await f.close();
   }
 });
+
+for (const processor of [false, true]) {
+  test(`private current Started snapshot is detached and requires its actual ${processor ? "Processor" : "Action"} caller witness`, async () => {
+    const f = await fixture({ processor });
+    try {
+      const opened = await f.dispatch(), w = await witness(f, opened.context());
+      const first = f.bridge.currentStarted(w.caller);
+      assert.ok(first);
+      assert.deepEqual(first, (await f.rows())[0].binding);
+      Object.assign(first, { deliveryId: "poison" });
+      assert.notEqual(f.bridge.currentStarted(w.caller)?.deliveryId, "poison");
+      // Structural reconstruction intentionally omits all private witness keys.
+      assert.equal(
+        f.bridge.currentStarted({
+          principal: w.caller.principal,
+          ownerEpoch: w.caller.ownerEpoch,
+          assignmentId: w.caller.assignmentId,
+          sessionId: w.caller.sessionId,
+          dispatchAttemptId: w.caller.dispatchAttemptId,
+        }),
+        undefined,
+      );
+      await w.handler({
+        input: stream(),
+        signal: new AbortController().signal,
+      });
+      assert.equal(f.bridge.currentStarted(w.caller), undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}
+for (const revoke of ["entry", "witness", "holder"] as const) {
+  test(`private current Started rejects ${revoke} revocation during session callback`, async () => {
+    const f = await fixture();
+    try {
+      const opened = await f.dispatch(),
+        abort = new AbortController(),
+        w = await witness(f, opened.context(abort.signal));
+      assert.ok(f.bridge.currentStarted(w.caller));
+      f.state.duringFence = () => {
+        f.state.duringFence = undefined;
+        if (revoke === "entry") f.bridge.stop();
+        else if (revoke === "holder") {
+          f.replaceHolderIdentity("replacement-holder");
+        } else abort.abort();
+      };
+      assert.equal(f.bridge.currentStarted(w.caller), undefined);
+      assert.equal(f.bridge.currentStarted(w.caller), undefined);
+    } finally {
+      await f.close();
+    }
+  });
+}

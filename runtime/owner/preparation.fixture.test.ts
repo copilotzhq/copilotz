@@ -232,6 +232,17 @@ export async function fixture(
       session,
       registry,
       catalog,
+      isCurrentParent(who, binding) {
+        const a = assignments.get(String(who.assignmentId));
+        return state.ctx && !!a && binding.kind === "action" &&
+          who.principal.kind === "worker" &&
+          who.principal.workerId === a.workerId &&
+          who.sessionId === a.sessionId &&
+          who.dispatchAttemptId === a.dispatchAttemptId &&
+          binding.assignment.deliveryId === a.deliveryId &&
+          (!options.transportAuthority ||
+            options.transportAuthority.isCurrentStarted(who) === true);
+      },
       async resolveParent(tx, caller, time) {
         const assignment = await execution.authorizeLive(tx, caller, time);
         if (assignment.placement !== "worker") {
@@ -325,6 +336,16 @@ export async function fixture(
     schedule() {},
   });
   const boundary = createOwnerCommandBoundary({
+    currentAuthorizationKinds: [
+      OWNER_CHILD_ACTION_ADMISSION,
+      OWNER_CHILD_ACTION_RESULT,
+    ],
+    isCurrentAuthorization: (tx, who, command, time) =>
+      [OWNER_CHILD_ACTION_ADMISSION, OWNER_CHILD_ACTION_RESULT].includes(
+          command.kind,
+        )
+        ? child.isCurrentAuthorization(tx, who, command, time)
+        : true,
     ownerId,
     holderId: "holder",
     schema: "public",

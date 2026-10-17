@@ -1592,3 +1592,127 @@ test("private authorization rejects async return without invoking overridden pro
     owner.stop();
   });
 });
+
+test("private authorization kind scope validates registered dense detached entries", async () => {
+  await fixture(async (db) => {
+    for (
+      const kinds of [
+        [],
+        [""],
+        ["missing"],
+        ["put", "put"],
+        new Array(1),
+        "put",
+        null,
+      ]
+    ) {
+      assert.throws(() =>
+        createOwnerCommandBoundary(options(db, {
+          isCurrentAuthorization: () => true,
+          currentAuthorizationKinds: kinds as never,
+        }))
+      );
+    }
+    assert.throws(() =>
+      createOwnerCommandBoundary(options(db, {
+        currentAuthorizationKinds: ["put"],
+      }))
+    );
+    const sparse = new Array<string>(1);
+    sparse[Symbol.iterator] = function* () {
+      yield "put";
+      return undefined;
+    };
+    assert.throws(() =>
+      createOwnerCommandBoundary(options(db, {
+        isCurrentAuthorization: () => true,
+        currentAuthorizationKinds: sparse,
+      }))
+    );
+    let accessed = 0;
+    const accessor = Object.defineProperty(["put"], "0", {
+      get() {
+        accessed++;
+        return "put";
+      },
+    });
+    assert.throws(() =>
+      createOwnerCommandBoundary(options(db, {
+        isCurrentAuthorization: () => true,
+        currentAuthorizationKinds: accessor,
+      }))
+    );
+    assert.equal(accessed, 0);
+    const kinds = ["put"];
+    kinds[Symbol.iterator] = function* () {
+      // Must not disable the captured fence.
+      yield* [];
+      return undefined;
+    };
+    const owner = createOwnerCommandBoundary(options(db, {
+      currentAuthorizationKinds: kinds,
+      isCurrentAuthorization: () => false,
+      handlers: { put, other: put },
+    }));
+    kinds[0] = "other";
+    await owner.acquire(0);
+    await assert.rejects(
+      owner.execute(caller(), command("denied")),
+      errorCode("owner_authorization_lost"),
+    );
+    assert.equal(
+      (await owner.execute(
+        caller(),
+        command("other", { id: "other" }, "other"),
+      )).status,
+      "committed",
+    );
+    assert.deepEqual(await nodeIds(db), ["other"]);
+    owner.stop();
+  });
+});
+for (const revoke of ["stop", "abort"] as const) {
+  test(`unselected private fence preserves committed acknowledgement across ${revoke}`, async () => {
+    await fixture(async (db) => {
+      let hold = false, calls = 0;
+      const entered = deferred(), release = deferred();
+      const session: SqlSession = {
+        query: db.query,
+        async transaction(run) {
+          const result = await db.transaction(run);
+          if (hold) {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        },
+      };
+      const owner = createOwnerCommandBoundary(options(session, {
+        handlers: { put, guarded: put },
+        currentAuthorizationKinds: ["guarded"],
+        isCurrentAuthorization() {
+          calls++;
+          return false;
+        },
+      }));
+      await owner.acquire(0);
+      const controller = new AbortController();
+      hold = true;
+      const pending = owner.execute(caller(), command("committed"), {
+        signal: controller.signal,
+      });
+      await entered.promise;
+      assert.deepEqual(await nodeIds(db), ["committed"]);
+      if (revoke === "stop") owner.stop();
+      else controller.abort();
+      release.resolve();
+      assert.equal((await pending).status, "committed");
+      assert.equal(calls, 0);
+      assert.equal(
+        (await db.query("SELECT * FROM owner_receipts")).rows.length,
+        1,
+      );
+      owner.stop();
+    });
+  });
+}

@@ -101,6 +101,9 @@ export type OwnerCommandBoundaryOptions = Readonly<{
     command: OwnerCommand,
     commandTime: string,
   ): boolean;
+  /** Optional explicit scope for the private fence. Omitted means all commands.
+   * Entries must be distinct registered command/projection kinds. */
+  currentAuthorizationKinds?: readonly string[];
   authenticateReceipt(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -369,6 +372,45 @@ export function createOwnerCommandBoundary(
   if ([...projections.keys()].some((kind) => handlers.has(kind))) {
     throw new TypeError("Owner command and projection names must be distinct.");
   }
+  const requestedAuthorizationKinds = options.currentAuthorizationKinds;
+  let currentAuthorizationKinds: ReadonlySet<string> | undefined;
+  if (requestedAuthorizationKinds !== undefined) {
+    const count: unknown = Array.isArray(requestedAuthorizationKinds)
+      ? Object.getOwnPropertyDescriptor(requestedAuthorizationKinds, "length")
+        ?.value
+      : undefined;
+    if (
+      !isCurrentAuthorization || typeof count !== "number" ||
+      !Number.isSafeInteger(count) || count < 1 ||
+      count > handlers.size + projections.size
+    ) {
+      throw new TypeError(
+        "Current authorization kinds require a fence and a nonempty registered allowlist.",
+      );
+    }
+    const captured: string[] = [];
+    for (let index = 0; index < count; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        requestedAuthorizationKinds,
+        String(index),
+      );
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new TypeError(
+          "Current authorization kinds require dense own data entries.",
+        );
+      }
+      const kind: unknown = descriptor.value;
+      nonempty(kind, "currentAuthorizationKind");
+      if (!handlers.has(kind) && !projections.has(kind)) {
+        throw new TypeError("Current authorization kind is not registered.");
+      }
+      captured.push(kind);
+    }
+    currentAuthorizationKinds = new Set(captured);
+    if (currentAuthorizationKinds.size !== captured.length) {
+      throw new TypeError("Current authorization kinds must be distinct.");
+    }
+  }
   const maxGroup = options.maxGroup ?? 32;
   const maxQueue = options.maxQueue ?? 128;
   const maxPostCommitGroups = options.maxPostCommitGroups ?? maxQueue;
@@ -593,17 +635,21 @@ export function createOwnerCommandBoundary(
                   pending.inputCommand ? copyJson(normalizedInput) : undefined,
                 );
                 checkPendingAbort(pending);
-                const authorizationCommand = isCurrentAuthorization
+                const currentAuthorization = !currentAuthorizationKinds ||
+                    currentAuthorizationKinds.has(pending.command.kind)
+                  ? isCurrentAuthorization
+                  : undefined;
+                const authorizationCommand = currentAuthorization
                   ? {
                     ...pending.command,
                     intent: copyJson(pending.command.intent),
                   }
                   : pending.command;
-                const checkAuthorization = isCurrentAuthorization
+                const checkAuthorization = currentAuthorization
                   ? () => {
                     let result: unknown;
                     try {
-                      result = isCurrentAuthorization(
+                      result = currentAuthorization(
                         tx,
                         copyCaller(pending.caller),
                         {

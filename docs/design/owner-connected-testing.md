@@ -69,7 +69,7 @@ The runner:
    - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
-   The selected source enables 76 opt-in cases; the other 46 cases are
+   The selected source enables 90 opt-in cases; the other 46 cases are
    unconditional. The local-host file covers private fresh local Actions, and
    the preparation-restart file covers closed prepared context over both
    transports. The terminal-recovery file covers private exact-target resume

@@ -548,6 +548,33 @@ Action/logical and Processor/incarnation kind/domain pairs. Independent
 connection coverage is 43 passing cases. Actual child/Processor policy,
 execution and facade composition remain separate acceptance slices.
 
+### Current parent proof for ordinary child calls
+
+The private child-Action composition requires both asynchronous `resolveParent`
+(current execution/Processor grants and input policy) and synchronous
+`isCurrentParent` (the exact owner/Started caller lifetime). Neither substitutes
+for the other. The host obtains the latter from the authenticated dispatch
+bridge; copying a caller tuple does not create a Started witness.
+
+After awaited child policy, and around admission/result work, the owner rechecks
+its original parent coordinates, operation cancellation, open Action, absence of
+parent terminal history, retry limit and exact PostgreSQL lease instant. It
+compares the initially verified source/invoked bodies, including their contents
+and digests, rather than assuming `event_bodies` is immutable. At most two
+bodies are retained under the child JSON limits. The private proof follows an
+internally returned parent clone; policy argument copies receive no proof.
+
+Ordinary admission/result commands also opt into the transaction boundary's
+final synchronous authorization fence through a captured, validated
+`currentAuthorizationKinds` allowlist. Other host commands retain their existing
+acknowledgement behavior; returning `true` from a globally installed fence would
+not be equivalent to leaving those commands unfenced. This closes
+receipt-reader, handler, savepoint and caller-visible completion windows after
+the last awaited check. Lost authority rolls back pre-commit work; post-commit
+loss suppresses the reply without pretending that durable work did not commit.
+Prepared admission is not silently opted into the ordinary command proof, and
+local parent activation is still a separate milestone.
+
 ### Fresh ordinary Action owner host
 
 A private fresh-schema host composes the real fenced boundary, current ingress

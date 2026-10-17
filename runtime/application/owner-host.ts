@@ -1298,6 +1298,29 @@ export async function createOwnerHost(
     catalog,
     maxPendingDeliveries: maxPending,
     authorizePreparedInput,
+    isCurrentParent(caller, parent) {
+      if (!ready() || caller.principal.kind !== "worker") return false;
+      const actual = bridge.currentStarted(caller), a = parent.assignment;
+      if (
+        !actual || !ready() || a.ownerId !== ownerId || a.ctxGranted !== true ||
+        actual.workerId !== a.workerId ||
+        actual.assignmentId !== a.assignmentId ||
+        actual.sessionId !== a.sessionId ||
+        actual.dispatchAttemptId !== a.dispatchAttemptId ||
+        actual.deliveryId !== a.deliveryId || actual.namespace !== a.namespace
+      ) return false;
+      // currentStarted already matches the complete captured caller tuple,
+      // including worker provisioning attempt and session generation.
+      return parent.kind === "processor"
+        ? "kind" in actual &&
+          actual.processorId === parent.assignment.processorId &&
+          actual.sourceEventId === parent.assignment.sourceEventId
+        : !("kind" in actual) &&
+          actual.actionId === parent.assignment.actionId &&
+          actual.executionId === parent.assignment.invocation.actionRunId &&
+          actual.sourceEventId ===
+            parent.assignment.invocation.identity?.causationId;
+    },
     async resolveParent(tx, caller, time) {
       const current = await bridge.resolveStarted(tx, caller);
       if (!current) return undefined;
@@ -1575,6 +1598,16 @@ export async function createOwnerHost(
     }
   }
   const owner: OwnerCommandBoundary = createOwnerCommandBoundary({
+    currentAuthorizationKinds: [
+      OWNER_CHILD_ACTION_ADMISSION,
+      OWNER_CHILD_ACTION_RESULT,
+    ],
+    isCurrentAuthorization(tx, caller, command, time) {
+      return command.kind === OWNER_CHILD_ACTION_ADMISSION ||
+          command.kind === OWNER_CHILD_ACTION_RESULT
+        ? child.isCurrentAuthorization(tx, caller, command, time)
+        : true;
+    },
     session,
     schema,
     ownerId,

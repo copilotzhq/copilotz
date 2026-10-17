@@ -8,7 +8,11 @@ import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { digestContent } from "../content/digest.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import { isContentRef } from "../content/schema.ts";
-import { eventDataRef, readEventBody } from "../events/body-store.ts";
+import {
+  encodeEventBody,
+  eventDataRef,
+  readEventBody,
+} from "../events/body-store.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
@@ -193,6 +197,12 @@ export function createOwnerChildActions(
       | OwnerChildActionBinding
       | undefined
       | Promise<OwnerChildActionBinding | undefined>;
+    /** Exact private caller/attempt lifetime after the last await. This does
+     * not replace SQL grant/input checks. Only a synchronous literal true admits. */
+    isCurrentParent(
+      caller: OwnerCaller,
+      binding: OwnerChildActionBinding,
+    ): boolean;
     /** Current operation-specific restrictions; ctx calls are not public ingress.
      * SQL-only and rechecked before every duplicate and output projection. */
     authorizeChild(
@@ -215,6 +225,10 @@ export function createOwnerChildActions(
   }>,
 ) {
   const authorizePreparedInput = options.authorizePreparedInput;
+  const isCurrentParent = options.isCurrentParent;
+  if (typeof isCurrentParent !== "function") {
+    throw new TypeError("A private current-parent witness is required.");
+  }
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Child Action catalog schema does not match.");
@@ -234,11 +248,83 @@ export function createOwnerChildActions(
     SqlExecutor,
     {
       parent: OwnerChildActionParent;
+      binding: OwnerChildActionBinding;
+      parentRef: OwnerChildActionParentReference;
       input?: ChildInput;
       reference?: OwnerChildActionReference;
       action: AnyActionDefinition;
     }
   >();
+  type ParentProof = Readonly<{
+    bodies: string;
+    leaseExpiresAt: string;
+    invokedEventId: string | null;
+    parent: OwnerChildActionParent;
+    binding: OwnerChildActionBinding;
+  }>;
+  const parentProofs = new WeakMap<OwnerChildActionParent, ParentProof>();
+  async function captureBody(tx: SqlExecutor, event: DurableEvent) {
+    const ref = eventDataRef(event.payload);
+    const body = json(
+      await readEventBody({ transaction: tx, tables }, event.namespace, ref),
+    );
+    const encoded = await encodeEventBody(body);
+    return {
+      namespace: event.namespace,
+      id: ref.eventBodyId,
+      schema: ref.schemaVersion,
+      body: JSON.parse(encoded.body) as OwnerJson,
+      digest: encoded.digest,
+    };
+  }
+  const currentBindings = new WeakMap<SqlExecutor, OwnerChildActionBinding>();
+  const authorizationProofs = new WeakMap<
+    SqlExecutor,
+    {
+      caller: OwnerCaller;
+      command: OwnerCommand;
+      time: string;
+      binding: OwnerChildActionBinding;
+    }
+  >();
+  function privateCurrent(
+    caller: OwnerCaller,
+    binding: OwnerChildActionBinding,
+  ): void {
+    let answer: unknown;
+    try {
+      answer = isCurrentParent(
+        structuredClone(caller),
+        structuredClone(binding),
+      );
+      if (answer instanceof Promise) {
+        Promise.prototype.then.call(answer, undefined, () => undefined);
+      }
+    } catch {
+      refuse();
+    }
+    if (answer !== true) refuse();
+  }
+  function currentBinding(tx: SqlExecutor): OwnerChildActionBinding {
+    const binding = currentBindings.get(tx);
+    if (!binding) refuse();
+    return structuredClone(binding);
+  }
+  function bindAuthorization(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    command: OwnerCommand,
+    time: string,
+    binding: OwnerChildActionBinding,
+  ) {
+    privateCurrent(caller, binding);
+    authorizationProofs.set(tx, {
+      caller: structuredClone(caller),
+      command: structuredClone(command),
+      time,
+      binding: structuredClone(binding),
+    });
+  }
   const readStore = (tx: SqlExecutor) =>
     createEventStore({
       schema: options.schema,
@@ -285,6 +371,7 @@ export function createOwnerChildActions(
     ref: OwnerChildActionParentReference,
     time: string,
   ): Promise<OwnerChildActionParent> {
+    currentBindings.delete(tx);
     const found = await options.resolveParent(
       tx,
       structuredClone(caller),
@@ -292,6 +379,22 @@ export function createOwnerChildActions(
     );
     if (!found) refuse();
     const binding = structuredClone(found);
+    privateCurrent(caller, binding);
+    const bodyProofs: Awaited<ReturnType<typeof captureBody>>[] = [];
+    let invokedEventId: string | null = null;
+    const remember = async (parent: OwnerChildActionParent) => {
+      parentProofs.set(parent, {
+        bodies: JSON.stringify(bodyProofs),
+        leaseExpiresAt,
+        invokedEventId,
+        parent: structuredClone(parent),
+        binding: structuredClone(binding),
+      });
+      await recheckParent(tx, caller, ref, time, parent, binding);
+      privateCurrent(caller, binding);
+      currentBindings.set(tx, structuredClone(binding));
+      return parent;
+    };
     const a = binding.assignment;
     if (
       a.ownerId !== options.ownerId || caller.principal.kind !== "worker" ||
@@ -314,10 +417,12 @@ export function createOwnerChildActions(
       !scope || !["accepted", "running"].includes(scope.state) ||
       scope.cancellation_requested_at != null
     ) refuse();
-    await tx.query(
-      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
+    const locked = (await tx.query<{ lease_expires_at: string | null }>(
+      `SELECT lease_expires_at::text AS lease_expires_at FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
       [a.deliveryId],
-    );
+    )).rows[0];
+    if (!locked?.lease_expires_at) refuse();
+    const leaseExpiresAt = locked.lease_expires_at;
     const delivery = await store.getDelivery(a.deliveryId);
     const source = delivery && await store.getEvent(delivery.eventId);
     if (
@@ -328,13 +433,14 @@ export function createOwnerChildActions(
       delivery.leaseOwner !== a.dispatchAttemptId ||
       !(Date.parse(delivery.leaseExpiresAt ?? "") > Date.parse(time))
     ) refuse();
+    bodyProofs.push(await captureBody(tx, source));
     if (binding.kind === "processor") {
       if (
         source.id !== binding.assignment.sourceEventId ||
         delivery.consumerId !== `processor:${binding.assignment.processorId}` ||
         ref.operationKey !== `delivery:${delivery.id}`
       ) refuse();
-      return {
+      return remember({
         namespace: a.namespace,
         operationKey: ref.operationKey,
         rootKey: ref.operationKey,
@@ -342,7 +448,7 @@ export function createOwnerChildActions(
         source,
         delivery,
         depth: 0,
-      };
+      });
     }
     const assignment = binding.assignment;
     const runId = assignment.invocation.actionRunId;
@@ -361,7 +467,15 @@ export function createOwnerChildActions(
       invoked.causationId !== source.id ||
       invoked.metadata.sourceDeliveryId !== delivery.id
     ) refuse();
-    const captured = await lifecycle(tx, invoked);
+    const invokedBody = await captureBody(tx, invoked);
+    bodyProofs.push(invokedBody);
+    invokedEventId = invoked.id;
+    ordinary(invokedBody.body);
+    const captured = parseActionLifecycleEvent({
+      ...invoked,
+      data: invokedBody.body,
+    });
+    if (!captured) refuse();
     if (
       captured.status !== "invoked" ||
       captured.actionId !== assignment.actionId ||
@@ -396,7 +510,7 @@ export function createOwnerChildActions(
       !Number.isSafeInteger(depth) || Number(depth) < 0 ||
       Number(depth) >= maxDepth
     ) refuse("Child Action nesting limit reached.");
-    return {
+    return remember({
       namespace: a.namespace,
       operationKey: captured.actionRunId,
       rootKey,
@@ -405,7 +519,101 @@ export function createOwnerChildActions(
       source,
       delivery,
       depth: Number(depth),
-    };
+    });
+  }
+  async function recheckParent(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    ref: OwnerChildActionParentReference,
+    time: string,
+    parent: OwnerChildActionParent,
+    binding: OwnerChildActionBinding,
+  ): Promise<void> {
+    // Reauthorize current worker grant/input policy as well as the private
+    // Started lifetime. The synchronous witness alone is not business policy.
+    const returned = await options.resolveParent(
+      tx,
+      structuredClone(caller),
+      time,
+    );
+    if (!returned || !same(returned, binding)) refuse();
+    privateCurrent(caller, binding);
+    const a = binding.assignment;
+    if (
+      ref.deliveryId !== a.deliveryId ||
+      ref.dispatchAttemptId !== a.dispatchAttemptId ||
+      ref.operationKey !== parent.operationKey
+    ) refuse();
+    const proof = parentProofs.get(parent);
+    if (
+      !proof || !same(proof.parent, parent) || !same(proof.binding, binding)
+    ) refuse();
+    // Body rows are mutable. Compare the initially verified bodies in SQL,
+    // together with exact lease and open-Action facts, after every awaited policy.
+    // At most two bounded bodies are captured; repeated checks return a boolean.
+    const row = (await tx.query<
+      {
+        facts_current: boolean;
+        event_id: string;
+        consumer_id: string;
+        settlement_scope_id: string;
+        action_scope_id: string | null;
+        status: string;
+        attempts: number;
+        lease_owner: string | null;
+        lease_expires_at: string | null;
+        source_owner: string;
+        source_namespace: string;
+        operation_state: string;
+        cancellation_requested_at: unknown;
+      }
+    >(
+      `SELECT (
+         d.max_attempts=$3 AND d.lease_expires_at=$4::timestamptz AND d.lease_expires_at>$5::timestamptz
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements($6::jsonb) expected
+           LEFT JOIN ${tables.event_bodies} b ON b.namespace=expected->>'namespace' AND b.event_body_id=expected->>'id'
+           WHERE b.event_body_id IS NULL OR b.schema_version<>(expected->>'schema')::int
+             OR b.body IS DISTINCT FROM expected->'body' OR b.digest IS DISTINCT FROM expected->>'digest'
+         )
+         AND ($7::text IS NULL OR (
+           EXISTS (SELECT 1 FROM ${tables.open_actions} oa WHERE oa.namespace=$2 AND oa.action_run_id=$7
+             AND oa.action_id=$8 AND oa.owner_delivery_id=d.id AND oa.scope_id=d.settlement_scope_id
+             AND oa.action_scope_id IS NOT DISTINCT FROM d.action_scope_id
+             AND oa.invoked_event_id=$9 AND oa.state='invoked')
+           AND NOT EXISTS (SELECT 1 FROM ${tables.events} terminal WHERE terminal.namespace=$2 AND terminal.deduplication_id=$7 || ':action:terminal')
+         ))
+       ) AS facts_current, d.event_id,d.consumer_id,d.settlement_scope_id,d.action_scope_id,d.status,d.attempts,d.lease_owner,d.lease_expires_at::text AS lease_expires_at,e.owner_id AS source_owner,e.namespace AS source_namespace,o.state AS operation_state,o.cancellation_requested_at
+       FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
+       JOIN ${operations.operations} o ON o.namespace=$2 AND o.operation_id=d.settlement_scope_id WHERE d.id=$1`,
+      [
+        a.deliveryId,
+        parent.namespace,
+        parent.delivery.maxAttempts,
+        proof.leaseExpiresAt,
+        time,
+        proof.bodies,
+        parent.actionRunId ?? null,
+        binding.kind === "action" ? binding.assignment.actionId : null,
+        proof.invokedEventId,
+      ],
+    )).rows[0];
+    if (
+      !row || row.facts_current !== true ||
+      row.source_owner !== options.ownerId ||
+      row.source_namespace !== parent.namespace ||
+      row.event_id !== parent.source.id ||
+      row.consumer_id !== parent.delivery.consumerId ||
+      row.settlement_scope_id !== parent.delivery.settlementScopeId ||
+      row.action_scope_id !== (parent.delivery.actionScopeId ?? null) ||
+      row.status !== "leased" || row.attempts !== parent.delivery.attempts ||
+      row.lease_owner !== a.dispatchAttemptId ||
+      !(Date.parse(row.lease_expires_at ?? "") > Date.parse(time)) ||
+      !["accepted", "running"].includes(row.operation_state) ||
+      row.cancellation_requested_at != null
+    ) refuse();
+    privateCurrent(caller, binding);
+    currentBindings.set(tx, structuredClone(binding));
   }
   const inputDefinition: OwnerCommandInputDefinition = {
     async normalize(raw) {
@@ -465,6 +673,15 @@ export function createOwnerChildActions(
     context: OwnerCommandContext,
     preparation?: OwnerPreparationCapture,
   ): Promise<OwnerChildActionReference> {
+    const binding = currentBinding(context.tx);
+    await recheckParent(
+      context.tx,
+      context.caller,
+      input.parent,
+      context.commandTime,
+      parent,
+      binding,
+    );
     const runId =
       `${parent.operationKey}/action:${input.actionId}:${input.operationKey}`;
     text(runId);
@@ -489,6 +706,7 @@ export function createOwnerChildActions(
       );
     }
     const bodyId = await deriveWorkflowId("action-input", runId);
+    privateCurrent(context.caller, binding);
     const store = createEventStore({
       schema: options.schema,
       session: options.session,
@@ -562,6 +780,14 @@ export function createOwnerChildActions(
         context.signal,
       );
     }
+    await recheckParent(
+      context.tx,
+      context.caller,
+      input.parent,
+      context.commandTime,
+      parent,
+      binding,
+    );
     context.signal.throwIfAborted();
     context.afterCommit(() => options.schedule(structuredClone(reference)));
     return reference;
@@ -640,7 +866,7 @@ export function createOwnerChildActions(
     const state = authorized.get(context.tx);
     authorized.delete(context.tx);
     if (!state?.reference) unavailable();
-    const { parent, reference: ref, action } = state;
+    const { parent, reference: ref, action, binding, parentRef } = state;
     const store = readStore(context.tx);
     const { source, delivery } = await inspect(context.tx, parent, ref);
     await guardPrepared(
@@ -651,6 +877,14 @@ export function createOwnerChildActions(
       "result",
       context.commandTime,
       context.signal,
+    );
+    await recheckParent(
+      context.tx,
+      context.caller,
+      parentRef,
+      context.commandTime,
+      parent,
+      binding,
     );
     const event = await store.getEventByDeduplicationId(
       ref.namespace,
@@ -704,6 +938,14 @@ export function createOwnerChildActions(
       context.commandTime,
       context.signal,
     );
+    await recheckParent(
+      context.tx,
+      context.caller,
+      parentRef,
+      context.commandTime,
+      parent,
+      binding,
+    );
     return result;
   };
   async function authorizeTarget(
@@ -722,6 +964,7 @@ export function createOwnerChildActions(
       parentReference(ref),
       time,
     );
+    const binding = currentBinding(tx);
     const registered = Object.hasOwn(options.registry.actions, actionAlias)
       ? options.registry.actions[actionAlias]
       : undefined;
@@ -734,7 +977,10 @@ export function createOwnerChildActions(
       action.id,
       time,
     );
-    return { parent: structuredClone(parent), actionId: action.id };
+    await recheckParent(tx, caller, ref, time, parent, binding);
+    const detached = structuredClone(parent);
+    parentProofs.set(detached, parentProofs.get(parent)!);
+    return { parent: detached, actionId: action.id };
   }
   return {
     authorizeTarget,
@@ -754,6 +1000,7 @@ export function createOwnerChildActions(
         parentReference(ref),
         time,
       );
+      const binding = currentBinding(tx);
       const parsed = childReference(reference);
       const action = actionById(parsed.actionId);
       await options.authorizeChild(
@@ -763,10 +1010,12 @@ export function createOwnerChildActions(
         action.id,
         time,
       );
+      await recheckParent(tx, caller, ref, time, parent, binding);
       const { source } = await inspect(tx, parent, parsed);
       if (!preparationCaptureFromMetadata(source.metadata)) {
         refuse("Prepared input is absent.");
       }
+      privateCurrent(caller, binding);
       return structuredClone(source);
     },
     async admitPrepared(
@@ -812,6 +1061,25 @@ export function createOwnerChildActions(
     inputDefinition,
     handler,
     projection,
+    isCurrentAuthorization(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      command: OwnerCommand,
+      time: string,
+    ): boolean {
+      const proof = authorizationProofs.get(tx);
+      try {
+        if (
+          !proof || proof.time !== time || !same(proof.caller, caller) ||
+          !same(proof.command, command)
+        ) return false;
+        privateCurrent(caller, proof.binding);
+        return authorizationProofs.get(tx) === proof;
+      } catch {
+        authorizationProofs.delete(tx);
+        return false;
+      }
+    },
     async authorize(
       tx: SqlExecutor,
       caller: OwnerCaller,
@@ -820,6 +1088,7 @@ export function createOwnerChildActions(
       normalizedInput?: OwnerJson,
     ) {
       authorized.delete(tx);
+      authorizationProofs.delete(tx);
       if (command.kind === OWNER_CHILD_ACTION_ADMISSION) {
         const input = object(normalizedInput, [
           "parent",
@@ -834,6 +1103,7 @@ export function createOwnerChildActions(
           parentReference(input.parent),
           time,
         );
+        const binding = currentBinding(tx);
         const action = actionById(input.actionId);
         if (
           command.domain !== "logical" ||
@@ -853,6 +1123,7 @@ export function createOwnerChildActions(
           action.id,
           time,
         );
+        await recheckParent(tx, caller, input.parent, time, parent, binding);
         const original = await readStore(tx).getEventByDeduplicationId(
           parent.namespace,
           `${parent.operationKey}/action:${action.id}:${input.operationKey}`,
@@ -863,7 +1134,15 @@ export function createOwnerChildActions(
         ) {
           refuse("Prepared input cannot be adopted by ordinary admission.");
         }
-        authorized.set(tx, { parent, input, action });
+        privateCurrent(caller, binding);
+        bindAuthorization(tx, caller, command, time, binding);
+        authorized.set(tx, {
+          parent,
+          binding,
+          parentRef: structuredClone(input.parent),
+          input,
+          action,
+        });
       } else if (
         command.kind === OWNER_CHILD_ACTION_RESULT &&
         command.domain === "occurrence"
@@ -875,6 +1154,7 @@ export function createOwnerChildActions(
           parentReference(value.parent),
           time,
         );
+        const binding = currentBinding(tx);
         const reference = childReference(value.reference);
         if (reference.namespace !== parent.namespace) unavailable();
         const action = actionById(reference.actionId);
@@ -885,7 +1165,10 @@ export function createOwnerChildActions(
           action.id,
           time,
         );
-        authorized.set(tx, { parent, reference, action });
+        const parentRef = parentReference(value.parent);
+        await recheckParent(tx, caller, parentRef, time, parent, binding);
+        bindAuthorization(tx, caller, command, time, binding);
+        authorized.set(tx, { parent, binding, parentRef, reference, action });
       } else throw new TypeError("Unknown child Action command.");
     },
   };

@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 14:54 UTC.
+Updated: 17 October 2026, 15:33 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,14 +10,14 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                         | Status                  | Next acceptance gate                                                                               |
-| -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter          | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority                | Hardening shared boundary | Physical lineage and final boundary fence reviewed; wire exact current-parent proofs next |
-| Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
-| Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations             | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
-| Architecture cleanup                         | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+| Task                                | Status                  | Next acceptance gate                                                                                |
+| ----------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed         |
+| Local nested Action authority       | Shared proofs reviewed  | PostgreSQL147 plus final test-only check pass; activate exact local parent selectors and ports next |
+| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation  |
+| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed            |
+| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete  |
+| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next        |
 
 ## 1. Programming model and composition
 
@@ -60,10 +60,13 @@ production-ready. All changes remain draft: **no merge or publication**.
       114-case pure review passed; separately fix Action controller revocation
       during owner-current callbacks, with a retained causal regression and
       113-case controller/port compatibility check
-- [ ] Local nested Action authority and mixed parent/child placement; shared
-      physical-lineage checks pass 18 PostgreSQL cases and the opt-in final
-      boundary fence passes 38 plus five native/fixture PostgreSQL cases;
-      consumer-specific current proofs and local parent activation remain open
+- [x] Shared ordinary child current-parent proofs, exact physical lineage and
+      command-scoped final authorization fence: independent PostgreSQL147 plus
+      one final test-only correction pass, with all151 fixture databases dropped
+      and both service runs stopped; original failed/corrected evidence retained
+- [ ] Local nested Action authority and mixed parent/child placement; activate
+      exact local parent selectors and bound ports next. Prepared receipt proofs
+      and protected-format family support remain separate gates
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 

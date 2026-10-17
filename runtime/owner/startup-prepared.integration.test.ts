@@ -159,6 +159,15 @@ async function fixture() {
     session: db,
     registry,
     catalog,
+    // This startup fixture supplies its own private Started grant (the SQL
+    // assignment resolver above also uses an explicit fixture grant).
+    isCurrentParent(who, binding) {
+      const a = binding.assignment;
+      return who.principal.kind === "worker" &&
+        who.principal.workerId === a.workerId &&
+        who.assignmentId === a.assignmentId && who.sessionId === a.sessionId &&
+        who.dispatchAttemptId === a.dispatchAttemptId;
+    },
     async resolveParent(tx, caller, time) {
       const assignment = await execution.authorizeLive(tx, caller, time);
       if (assignment.placement !== "worker") throw new Error("worker required");

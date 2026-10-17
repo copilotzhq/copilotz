@@ -318,15 +318,22 @@ export function createOwnerDispatchBridge(
     }
   }
   function currentEntry(entry: Entry, binding = false) {
-    return !closed && entries.get(entry.operationId) === entry &&
+    const privateCurrent = () =>
+      !closed && entries.get(entry.operationId) === entry &&
       entry.state === (binding ? "binding" : "bound") &&
-      !isAborted(entry.abort.signal) && !isAborted(entry.request.signal) &&
+      !isAborted(entry.abort.signal) && !isAborted(entry.request.signal);
+    return privateCurrent() &&
       currentOwner(entry.owner, entry.epoch, entry.holderId) &&
-      currentFence(entry.fence, binding);
+      currentFence(entry.fence, binding) &&
+      currentOwner(entry.owner, entry.epoch, entry.holderId) &&
+      privateCurrent() &&
+      entry.owner.state === "acquired" && entry.owner.epoch === entry.epoch;
   }
   function currentWitness(witness: Witness) {
-    return witnesses.get(witness.id) === witness && witness.active &&
-      !isAborted(witness.signal) && currentEntry(witness.entry);
+    const privateCurrent = () =>
+      witnesses.get(witness.id) === witness && witness.active &&
+      !isAborted(witness.signal);
+    return privateCurrent() && currentEntry(witness.entry) && privateCurrent();
   }
   function dropWitness(witness: Witness) {
     witness.active = false;
@@ -795,6 +802,12 @@ export function createOwnerDispatchBridge(
     assignmentHandlers: control.handlers,
     authorizeAssignment,
     resolveStarted,
+    /** Private caller-authenticated lifetime only. Durable resolution and
+     * business grants must still be checked independently in SQL. */
+    currentStarted(caller: OwnerCaller): OwnerAssignmentBinding | undefined {
+      const witness = callerWitness(caller);
+      return witness ? structuredClone(witness.entry.binding!) : undefined;
+    },
     resolveAssignment,
     wrapWorkerCalls,
     lifecycle: { onWorkAssigned, onComplete, onDisconnect },

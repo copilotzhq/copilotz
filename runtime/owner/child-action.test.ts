@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
+import { encodeEventBody } from "../events/body-store.ts";
 import { createCoreSchemaStatements } from "../events/schema.ts";
-import type { SqlSession } from "../events/session.ts";
+import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { ownerClaimKey, ownerCompletionKey } from "../execution/owner-port.ts";
@@ -60,6 +61,20 @@ function deferred() {
 const errorCode = (code: string) => (error: unknown) =>
   (error as { code?: string })?.code === code;
 
+async function snapshotChildTables(db: SqlSession) {
+  const tables = (await db.query<{ table_name: string }>(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name",
+  )).rows;
+  const result: Record<string, unknown> = {};
+  for (const { table_name } of tables) {
+    const name = `"${table_name.replaceAll('"', '""')}"`;
+    result[table_name] = (await db.query(
+      `SELECT row_to_json(t) AS data FROM ${name} t ORDER BY row_to_json(t)::text`,
+    )).rows;
+  }
+  return result;
+}
+
 async function setup(maxPendingDeliveries = 128) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
@@ -75,7 +90,14 @@ async function setup(maxPendingDeliveries = 128) {
     rollBack: false,
     hold: false,
     receiptReads: 0,
+    duringChildPolicy: undefined as
+      | undefined
+      | ((tx: SqlExecutor) => void | Promise<void>),
+    afterQuery: undefined as
+      | undefined
+      | ((sql: string, params?: unknown[]) => void),
     mutateReturned: false,
+    mutatedReturn: undefined as OwnerWorkerExecutionAssignment | undefined,
     returnedParent: undefined as OwnerWorkerExecutionAssignment | undefined,
     inTransaction: false,
     parent: undefined as OwnerWorkerExecutionAssignment | undefined,
@@ -89,12 +111,16 @@ async function setup(maxPendingDeliveries = 128) {
       try {
         return await db.transaction(async (tx) => {
           const result = await run({
-            async query(sql, params) {
+            async query<TRow extends Record<string, unknown>>(
+              sql: string,
+              params?: unknown[],
+            ) {
               if (
                 state.mutateReturned && state.returnedParent &&
                 sql.includes("event_deliveries")
               ) {
                 state.mutateReturned = false;
+                state.mutatedReturn = state.returnedParent;
                 Object.assign(state.returnedParent, { namespace: "spoofed" });
                 Object.assign(state.returnedParent.invocation, {
                   operationKey: "spoofed",
@@ -103,7 +129,9 @@ async function setup(maxPendingDeliveries = 128) {
               if (sql.includes("SELECT kind,intent,result")) {
                 state.receiptReads++;
               }
-              return await tx.query(sql, params);
+              const result = await tx.query<TRow>(sql, params);
+              state.afterQuery?.(sql, params);
+              return result;
             },
           });
           if (state.hold) {
@@ -176,6 +204,15 @@ async function setup(maxPendingDeliveries = 128) {
     registry,
     catalog,
     maxPendingDeliveries,
+    isCurrentParent(who, binding) {
+      const a = assignments.get(String(who.assignmentId));
+      return state.live && !!a && binding.kind === "action" &&
+        who.principal.kind === "worker" &&
+        who.principal.workerId === a.workerId &&
+        who.sessionId === a.sessionId &&
+        who.dispatchAttemptId === a.dispatchAttemptId &&
+        binding.assignment.deliveryId === a.deliveryId;
+    },
     async resolveParent(tx, caller, time) {
       const assignment = await execution.authorizeLive(tx, caller, time);
       if (assignment.placement !== "worker") {
@@ -184,11 +221,12 @@ async function setup(maxPendingDeliveries = 128) {
       state.returnedParent = assignment;
       return { kind: "action", assignment };
     },
-    authorizeChild(_tx, _caller, parent) {
+    async authorizeChild(tx, _caller, parent) {
       assert.deepEqual(parent.originalMetadata, {
         principal: "original-principal",
       });
       if (!state.policy) throw new Error("current child policy denied");
+      await state.duringChildPolicy?.(tx);
     },
     schedule(reference) {
       assert.equal(state.inTransaction, false);
@@ -204,6 +242,16 @@ async function setup(maxPendingDeliveries = 128) {
     schedule() {},
   });
   const boundary = createOwnerCommandBoundary({
+    currentAuthorizationKinds: [
+      OWNER_CHILD_ACTION_ADMISSION,
+      OWNER_CHILD_ACTION_RESULT,
+    ],
+    isCurrentAuthorization: (tx, who, command, time) =>
+      [OWNER_CHILD_ACTION_ADMISSION, OWNER_CHILD_ACTION_RESULT].includes(
+          command.kind,
+        )
+        ? child.isCurrentAuthorization(tx, who, command, time)
+        : true,
     ownerId,
     holderId: "holder",
     schema: "public",
@@ -441,7 +489,7 @@ test("child authorization isolates returned host bindings before awaited SQL", a
       (result.result as OwnerChildActionReference).namespace,
       namespace,
     );
-    assert.equal(f.state.returnedParent?.namespace, "spoofed");
+    assert.equal(f.state.mutatedReturn?.namespace, "spoofed");
   } finally {
     await f.close();
   }
@@ -785,6 +833,15 @@ test("Processor child Actions retain stable delivery identity and existing inher
         session: db,
         registry,
         catalog,
+        isCurrentParent(who, binding) {
+          return live && binding.kind === "processor" &&
+            who.principal.kind === "worker" &&
+            who.principal.workerId === assignment.workerId &&
+            who.assignmentId === assignment.assignmentId &&
+            who.sessionId === assignment.sessionId &&
+            who.dispatchAttemptId === assignment.dispatchAttemptId &&
+            binding.assignment.deliveryId === assignment.deliveryId;
+        },
         async resolveParent(tx, caller, time) {
           return {
             kind: "processor",
@@ -800,6 +857,16 @@ test("Processor child Actions retain stable delivery identity and existing inher
         schedule() {},
       });
       const boundary = createOwnerCommandBoundary({
+        currentAuthorizationKinds: [
+          OWNER_CHILD_ACTION_ADMISSION,
+          OWNER_CHILD_ACTION_RESULT,
+        ],
+        isCurrentAuthorization: (tx, who, command, time) =>
+          [OWNER_CHILD_ACTION_ADMISSION, OWNER_CHILD_ACTION_RESULT].includes(
+              command.kind,
+            )
+            ? children.isCurrentAuthorization(tx, who, command, time)
+            : true,
         ownerId,
         holderId: "holder",
         schema: "public",
@@ -1022,19 +1089,7 @@ for (const field of ["parentDeliveryId", "causationId"] as const) {
             );
           }
         });
-        const snapshot = async () => {
-          const tables = (await f.db.query<{ table_name: string }>(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name",
-          )).rows;
-          const result: Record<string, unknown> = {};
-          for (const { table_name } of tables) {
-            const name = `"${table_name.replaceAll('"', '""')}"`;
-            result[table_name] = (await f.db.query(
-              `SELECT row_to_json(t) AS data FROM ${name} t ORDER BY row_to_json(t)::text`,
-            )).rows;
-          }
-          return result;
-        };
+        const snapshot = () => snapshotChildTables(f.db);
         const before = await snapshot(),
           receiptReads = f.state.receiptReads,
           scheduled = structuredClone(f.state.scheduled);
@@ -1060,4 +1115,133 @@ for (const field of ["parentDeliveryId", "causationId"] as const) {
       }
     });
   }
+}
+
+for (
+  const stage of [
+    "admission-policy",
+    "result-policy",
+    "duplicate-read",
+    "result-read",
+  ] as const
+) {
+  test(`child current parent is rechecked after ${stage}`, async () => {
+    const f = await setup();
+    try {
+      const ref = stage === "admission-policy"
+        ? undefined
+        : (await f.admit()).result as OwnerChildActionReference;
+      if (stage === "result-policy" || stage === "result-read") {
+        await f.complete(ref!, { answer: "private-output" });
+      }
+      let reached = false;
+      if (stage === "admission-policy" || stage === "result-policy") {
+        f.state.duringChildPolicy = async () => {
+          await Promise.resolve();
+          reached = true;
+          f.state.ctx = false;
+        };
+      }
+      if (stage === "duplicate-read") {
+        f.state.afterQuery = (sql) => {
+          if (sql.includes("SELECT kind,intent,result")) {
+            reached = true;
+            f.state.live = false;
+          }
+        };
+      }
+      if (stage === "result-read") {
+        f.state.afterQuery = (_sql, params) => {
+          if (params?.includes(`${ref!.executionId}:action:terminal`)) {
+            reached = true;
+            f.state.live = false;
+          }
+        };
+      }
+      const before = await snapshotChildTables(f.db),
+        scheduled = structuredClone(f.state.scheduled),
+        reads = f.state.receiptReads;
+      await assert.rejects(
+        stage === "admission-policy" || stage === "duplicate-read"
+          ? f.admit()
+          : f.project(ref!),
+        errorCode(
+          stage === "duplicate-read"
+            ? "owner_authorization_lost"
+            : "ActionOwnershipLost",
+        ),
+      );
+      assert.equal(reached, true);
+      assert.deepEqual(await snapshotChildTables(f.db), before);
+      assert.deepEqual(f.state.scheduled, scheduled);
+      assert.equal(
+        f.state.receiptReads,
+        reads + (stage === "duplicate-read" ? 1 : 0),
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (
+  const mutation of [
+    "open-state",
+    "body-only",
+    "source-body-and-digest",
+    "max-attempts",
+    "lease-microsecond",
+  ] as const
+) {
+  test(`child parent facts survive awaited policy: ${mutation}`, async () => {
+    const f = await setup();
+    try {
+      const before = await snapshotChildTables(f.db);
+      let reached = false;
+      f.state.duringChildPolicy = async (tx) => {
+        reached = true;
+        const a = f.state.parent!;
+        if (mutation === "open-state") {
+          await tx.query(
+            "UPDATE open_actions SET state='deferred' WHERE action_run_id=$1",
+            [a.invocation.actionRunId],
+          );
+        } else if (mutation === "body-only") {
+          await tx.query(
+            `UPDATE event_bodies SET body=body || '{"policyReplacement":true}'::jsonb WHERE event_body_id=(SELECT payload->'dataRef'->>'eventBodyId' FROM events WHERE deduplication_id=$1)`,
+            [`${a.invocation.actionRunId}:action:invoked`],
+          );
+        } else if (mutation === "source-body-and-digest") {
+          const replacement = await encodeEventBody({
+            policyReplacement: true,
+          });
+          await tx.query(
+            `UPDATE event_bodies SET body=$1::jsonb,digest=$2 WHERE event_body_id=(SELECT payload->'dataRef'->>'eventBodyId' FROM events WHERE id=$3)`,
+            [replacement.body, replacement.digest, f.rootRef.eventId],
+          );
+        } else if (mutation === "max-attempts") {
+          await tx.query(
+            "UPDATE event_deliveries SET max_attempts=max_attempts+1 WHERE id=$1",
+            [a.deliveryId],
+          );
+        } else {
+          await tx.query(
+            "UPDATE event_deliveries SET lease_expires_at=lease_expires_at+interval '1 microsecond' WHERE id=$1",
+            [a.deliveryId],
+          );
+        }
+      };
+      await assert.rejects(
+        f.admit(),
+        mutation === "body-only"
+          ? /not an authoritative Action lifecycle Event/
+          : errorCode("ActionOwnershipLost"),
+      );
+      assert.equal(reached, true);
+      assert.deepEqual(await snapshotChildTables(f.db), before);
+      assert.deepEqual(f.state.scheduled, []);
+    } finally {
+      await f.close();
+    }
+  });
 }

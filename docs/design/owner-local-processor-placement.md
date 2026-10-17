@@ -1,8 +1,9 @@
 # Private local Processor generation ledger
 
-This internal controller records same-owner attempt generations. It is not yet
-wired into the production owner host and does not schedule retries or authorize
-public local placement.
+This internal controller records same-owner attempt generations. The private
+[host composition](owner-host-local-processor.md) now wires it into actual local
+execution. The controller itself does not schedule retries or authorize public
+local placement.
 
 ## Admission and retirement
 
@@ -43,13 +44,14 @@ identity before using it to request a durable alarm scan.
 
 Nineteen checked tests cover reservation/ordinal bounds, exact start witnesses,
 retirement checks, stale callers, NULL leases, unknown outcomes, shared
-capacity, reentrant callbacks and held start replies. Three tests compose
-the real neutral driver and bound port with a data-only boundary double; they
-are not SQL or production-host integration tests. The controller has also passed
+capacity, reentrant callbacks and held start replies. Three tests compose the
+real neutral driver and bound port with a data-only boundary double; they are
+not SQL or production-host integration tests. The controller has also passed
 independent review with the adjacent 144-case pure compatibility suite.
 
 Four additional reviewer regressions were reproduced by reconstructing the
 observed earlier callback blocks; they are explicitly reconstructed causal
 checks, not an archived committed baseline. Actual host composition, SQL
 predecessor retirement, retry alarms, mixed capacity and shutdown integration
-remain required before marking the local Processor retry lifecycle complete.
+now have their own scoped host evidence. The remaining caller-facing reply and
+precision probes are tracked with that composition.

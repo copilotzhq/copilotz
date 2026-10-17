@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
+import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import type { ActionContext } from "../actions/types.ts";
 import { defineCollection } from "../collections/definition.ts";
 import { createOwnerConnection } from "../owner/connection.ts";
@@ -32,9 +33,45 @@ async function eventually(check: () => boolean | Promise<boolean>) {
   }
 }
 const sourceRoot = process.env.COPILOTZ_OXIAN_SOURCE_ROOT;
-for (const mode of ["in-process", "websocket"] as const) {
+const cases: readonly {
+  placement: "worker" | "owner-local";
+  mode: "in-process" | "websocket";
+  fault?:
+    | "predecessor-grant"
+    | "predecessor-event"
+    | "retry-identity"
+    | "retry-cancellation"
+    | "held-completion"
+    | "unknown-completion"
+    | "held-start"
+    | "mixed-capacity"
+    | "close-held-factory";
+}[] = [
+  ...(["worker", "owner-local"] as const).flatMap((placement) =>
+    (["in-process", "websocket"] as const).map((mode) => ({ placement, mode }))
+  ),
+  ...([
+    "predecessor-grant",
+    "predecessor-event",
+    "retry-identity",
+    "retry-cancellation",
+    "held-completion",
+    "unknown-completion",
+    "held-start",
+    "mixed-capacity",
+    "close-held-factory",
+  ] as const)
+    .map((fault) => ({
+      placement: "owner-local" as const,
+      mode: "in-process" as const,
+      fault,
+    })),
+];
+for (const { placement, mode, fault } of cases) {
   test(
-    `owner whole-plugin ${mode}: Collection → Processor → child Action, detached scope and due retry`,
+    `owner whole-plugin ${mode} ${placement}${
+      fault ? ` ${fault}` : ""
+    }: Collection → Processor, detached scope and due retry`,
     {
       skip: !sourceRoot,
       timeout: 45_000,
@@ -47,6 +84,58 @@ for (const mode of ["in-process", "websocket"] as const) {
       const db = await createTestDatabase({
         pgliteMemoryProfile: "low-memory",
       });
+      const heldReply = deferred(), releaseReply = deferred();
+      const releaseFactory = deferred();
+      let factoryHeld = false;
+      let replyInjected = false;
+      const session: SqlSession =
+        fault === "held-completion" || fault === "unknown-completion" ||
+          fault === "held-start"
+          ? {
+            query: db.query.bind(db),
+            async transaction(run) {
+              let selected = false;
+              const result = await db.transaction(async (tx) =>
+                await run({
+                  async query<TRow extends Record<string, unknown>>(
+                    sql: string,
+                    values?: unknown[],
+                  ) {
+                    const result = await tx.query<TRow>(sql, values);
+                    if (
+                      !replyInjected &&
+                      sql.startsWith(
+                        'INSERT INTO "public"."owner_receipts"(',
+                      ) &&
+                      ((fault === "held-start" &&
+                        values?.[5] === "owner.local-processor-start") ||
+                        (values?.[5] === "processor.local-complete" &&
+                          JSON.parse(String(values[7])).status ===
+                            "retry_wait"))
+                    ) {
+                      selected = true;
+                      replyInjected = true;
+                    }
+                    return result;
+                  },
+                })
+              );
+              if (selected) {
+                heldReply.resolve();
+                if (fault === "unknown-completion") {
+                  throw Object.assign(
+                    new Error(
+                      "lost committed Processor completion acknowledgement",
+                    ),
+                    { code: "persistence_indeterminate" },
+                  );
+                }
+                await releaseReply.promise;
+              }
+              return result;
+            },
+          }
+          : db;
       const release = deferred();
       const releaseRevoked = deferred();
       let revokedStarted = false;
@@ -57,6 +146,23 @@ for (const mode of ["in-process", "websocket"] as const) {
       let firstStarted = false;
       let time = Date.now();
       let retryCalls = 0;
+      let localActionFactories = 0,
+        localProcessorFactories = 0,
+        workerProcessorFactories = 0;
+      let faultInjected = false;
+      async function mutatePredecessor(tx: SqlExecutor, deliveryId: string) {
+        const rows = (await tx.query(
+          "SELECT assignment_key FROM owner_assignments WHERE delivery_id=$1 AND retired=TRUE",
+          [deliveryId],
+        )).rows;
+        if (rows.length && !faultInjected) {
+          faultInjected = true;
+          await tx.query(
+            "UPDATE owner_assignments SET retired=FALSE WHERE assignment_key=$1",
+            [rows[0].assignment_key],
+          );
+        }
+      }
       const errors: unknown[] = [];
       const observed: string[] = [];
       const collection = (name: string) =>
@@ -171,14 +277,25 @@ for (const mode of ["in-process", "websocket"] as const) {
                   }
                   throw new Error("current event policy revoked");
                 }
-                const callChild = ctx.actions.child as (
-                  input: string,
-                  options: { operationKey: string },
-                ) => Promise<unknown>;
-                const result = await callChild(value, {
-                  operationKey: "child",
-                });
-                assert.equal(result, `child:${value}`);
+                if (placement === "owner-local") {
+                  await ctx.transaction(
+                    ({ collections }) =>
+                      collections.replies.create({
+                        id: `reply:${value}`,
+                        title: value,
+                      }),
+                    { operationKey: "write" },
+                  );
+                } else {
+                  const callChild = ctx.actions.child as (
+                    input: string,
+                    options: { operationKey: string },
+                  ) => Promise<unknown>;
+                  const result = await callChild(value, {
+                    operationKey: "child",
+                  });
+                  assert.equal(result, `child:${value}`);
+                }
                 (ctx.adapters.recorder as { record(value: string): void })
                   .record(value);
               },
@@ -252,51 +369,141 @@ for (const mode of ["in-process", "websocket"] as const) {
         effectOutcome: () => false,
         effectNotStarted: () => false,
       };
-      const host = await createOwnerHost({
-        ownerId: "owner",
-        holderId: "holder",
-        schema: "public",
-        session: db,
-        initialization: "fresh",
-        registry,
-        policy,
-        maxActive: 4,
-        maxPending: 32,
-        leaseMs: 3000,
-        now: () => new Date(time).toISOString(),
-        onError: (error) => errors.push(error),
-        transport: {
-          transports: mode === "in-process"
-            ? [local]
-            : [{ type: "websocket", config: { path: "/workers" } }],
-          admit: ({ identity, credential, workloads, capacity }) => ({
-            definition: {
-              workerId: identity.workerId,
-              providerId: "fixture",
-              workloads,
-              capacity,
-              providerConfig: {},
-              labels: {},
-            },
-            sessionGeneration: 1,
-            authenticatedWith: credential.kind,
-            resume: {
-              credential: { kind: "resume", capability: "fixture" },
-              expiresAtMs: Date.now() + 60_000,
-            },
-          }),
+      const host = await createOwnerHost(
+        {
+          ownerId: "owner",
+          holderId: "holder",
+          schema: "public",
+          session,
+          initialization: "fresh",
+          registry,
+          policy,
+          maxActive: fault === "mixed-capacity" ? 1 : 4,
+          maxPending: 32,
+          leaseMs: 3000,
+          now: () => new Date(time).toISOString(),
+          onError: (error) => errors.push(error),
+          transport: {
+            transports: mode === "in-process"
+              ? [local]
+              : [{ type: "websocket", config: { path: "/workers" } }],
+            admit: ({ identity, credential, workloads, capacity }) => ({
+              definition: {
+                workerId: identity.workerId,
+                providerId: "fixture",
+                workloads,
+                capacity,
+                providerConfig: {},
+                labels: {},
+              },
+              sessionGeneration: 1,
+              authenticatedWith: credential.kind,
+              resume: {
+                credential: { kind: "resume", capability: "fixture" },
+                expiresAtMs: Date.now() + 60_000,
+              },
+            }),
+          },
+          createTransport: createHypervisor,
         },
-        createTransport: createHypervisor,
-      });
+        undefined,
+        placement === "owner-local"
+          ? {
+            ...(fault === "mixed-capacity"
+              ? {
+                actions: {
+                  actionIds: ["fixture.root"],
+                  policy: {
+                    grants: () => ({ ctx: true, settlement: true }),
+                    input() {},
+                    collections: () => ({}),
+                  },
+                  createCapabilities: () => {
+                    localActionFactories++;
+                    assert.equal(host.snapshot().active, 1);
+                    return {
+                      resources: registry.resources,
+                      adapters: registry.adapters,
+                    };
+                  },
+                },
+              }
+              : {}),
+            processors: {
+              processorIds: ["fixture.follow"],
+              policy: {
+                async grants(tx, authority) {
+                  if (
+                    fault === "predecessor-grant" && authority.phase === "start"
+                  ) await mutatePredecessor(tx, authority.binding.deliveryId);
+                  if (
+                    (fault === "retry-identity" ||
+                      fault === "retry-cancellation") &&
+                    authority.phase === "current" && !faultInjected
+                  ) {
+                    const row = (await tx.query(
+                      "SELECT status FROM event_deliveries WHERE id=$1",
+                      [authority.binding.deliveryId],
+                    )).rows[0];
+                    if (row?.status === "retry_wait") {
+                      faultInjected = true;
+                      if (fault === "retry-cancellation") {
+                        await tx.query(
+                          "UPDATE copilotz_operations SET cancellation_requested_at=now() WHERE operation_id=(SELECT settlement_scope_id FROM event_deliveries WHERE id=$1) AND namespace=$2",
+                          [
+                            authority.binding.deliveryId,
+                            authority.binding.namespace,
+                          ],
+                        );
+                      } else {await tx.query(
+                          "UPDATE event_deliveries SET settlement_scope_id=(SELECT settlement_scope_id FROM event_deliveries sibling WHERE sibling.consumer_id='processor:fixture.detached' AND sibling.event_id=event_deliveries.event_id LIMIT 1) WHERE id=$1",
+                          [authority.binding.deliveryId],
+                        );}
+                    }
+                  }
+                  return { ctx: true, settlement: true };
+                },
+                async event(tx, assignment, event, data) {
+                  policy.processorEvent(tx, assignment, event, data);
+                  if (
+                    fault === "predecessor-event" &&
+                    assignment.attemptOrdinal === 2
+                  ) await mutatePredecessor(tx, assignment.deliveryId);
+                },
+                collections: () => ({}),
+              },
+              createCapabilities: async () => {
+                localProcessorFactories++;
+                if (fault === "close-held-factory") {
+                  factoryHeld = true;
+                  await releaseFactory.promise;
+                }
+                if (fault === "mixed-capacity") {
+                  assert.equal(host.snapshot().active, 1);
+                }
+                return {
+                  resources: registry.resources,
+                  adapters: registry.adapters,
+                };
+              },
+            },
+          }
+          : undefined,
+      );
       const listener = mode === "websocket"
         ? await serve({ hypervisor: host.listener })
         : undefined;
       const url = listener ? new URL("/workers", listener.url) : undefined;
-      if (url) url.protocol = "ws:";
+      if (url) {
+        url.protocol = "ws:";
+      }
       const workerOptions = (id: string) => ({
         id,
         transport: url
-          ? { type: "websocket", config: { url, allowInsecureLoopback: true } }
+          ? {
+            type: "websocket",
+            config: { url, allowInsecureLoopback: true },
+          }
           : local,
         capacity: 4,
         hostCalls: { maxConcurrent: 16, timeoutMs: 10_000 },
@@ -320,10 +527,13 @@ for (const mode of ["in-process", "websocket"] as const) {
           resources: registry.resources,
           adapters: registry.adapters,
         }),
-        createProcessorCapabilities: () => ({
-          resources: registry.resources,
-          adapters: registry.adapters,
-        }),
+        createProcessorCapabilities: () => {
+          workerProcessorFactories++;
+          if (fault === "mixed-capacity") {
+            assert.equal(host.snapshot().active, 1);
+          }
+          return { resources: registry.resources, adapters: registry.adapters };
+        },
       }, createWorker);
       const ingress = createWorker({
         ...workerOptions("ingress"),
@@ -339,43 +549,111 @@ for (const mode of ["in-process", "websocket"] as const) {
       });
       try {
         await Promise.all([worker.ready, ingress.ready]);
-        assert.equal(
-          await facade.actions.root("first", { operationKey: "first" }),
-          "root:first",
+        const firstRoot = facade.actions.root("first", {
+          operationKey: "first",
+        }).then(
+          (value) => ({ value, error: undefined }),
+          (error) => ({ value: undefined, error }),
         );
+        if (fault === "close-held-factory") {
+          await eventually(() => factoryHeld);
+          let closed = false;
+          const closing = host.close("stop during local Processor factory")
+            .then(() => {
+              closed = true;
+            });
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.equal(
+            closed,
+            false,
+            "close waits actual noncooperative factory",
+          );
+          assert.equal(host.snapshot().ready, false);
+          assert.ok(host.snapshot().active >= 1);
+          assert.equal(firstStarted, false);
+          releaseFactory.resolve();
+          await closing;
+          assert.equal(
+            firstStarted,
+            false,
+            "revoked factory return cannot invoke authored code",
+          );
+          const held = (await db.query(
+            "SELECT status,attempts FROM event_deliveries WHERE consumer_id='processor:fixture.follow'",
+          )).rows[0];
+          assert.equal(held.status, "leased");
+          assert.equal(held.attempts, 1);
+          facade.close();
+          await firstRoot;
+          return;
+        }
+        if (fault === "held-start") {
+          await eventually(() => replyInjected);
+          await heldReply.promise;
+          assert.equal(firstStarted, false);
+          assert.equal(localProcessorFactories, 0);
+          const held = (await db.query(
+            "SELECT status,attempts,lease_expires_at FROM event_deliveries WHERE consumer_id='processor:fixture.follow'",
+          )).rows[0];
+          assert.equal(held.status, "leased");
+          assert.equal(held.attempts, 1);
+          assert.equal(held.lease_expires_at, null);
+          assert.ok(host.snapshot().active >= 1);
+          releaseReply.resolve();
+        }
+        assert.equal((await firstRoot).value, "root:first");
         await eventually(() => Promise.resolve(firstStarted));
         const leased =
           (await db.query<{ id: string; lease_expires_at: string }>(
             "SELECT id,lease_expires_at FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='leased'",
           )).rows[0];
-        const leaseAlarm = async () =>
-          (await db.query<{ due_at: string }>(
-            "SELECT due_at FROM owner_alarms WHERE name=$1",
-            [JSON.stringify(["host.delivery", "space", leased.id])],
-          )).rows[0].due_at;
-        assert.equal(
-          new Date(await leaseAlarm()).getTime(),
-          new Date(leased.lease_expires_at).getTime(),
-          "active delivery alarm uses actual lease expiry, not stale availability",
-        );
-        time += 1000;
-        await eventually(async () =>
-          new Date(
-            (await db.query<{ lease_expires_at: string }>(
-              "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
+        if (placement === "owner-local") {
+          assert.equal(leased.lease_expires_at, null);
+          assert.equal(
+            (await db.query("SELECT name FROM owner_alarms WHERE name=$1", [
+              JSON.stringify(["host.delivery", "space", leased.id]),
+            ])).rows.length,
+            0,
+          );
+          time += 1000;
+          await host.wake();
+          assert.equal(
+            (await db.query(
+              "SELECT attempts FROM event_deliveries WHERE id=$1",
               [leased.id],
-            )).rows[0].lease_expires_at,
-          ).getTime() > new Date(leased.lease_expires_at).getTime()
-        );
-        const renewed = (await db.query<{ lease_expires_at: string }>(
-          "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
-          [leased.id],
-        )).rows[0];
-        assert.equal(
-          new Date(await leaseAlarm()).getTime(),
-          new Date(renewed.lease_expires_at).getTime(),
-          "renewal moves the durable alarm with the lease",
-        );
+            )).rows[0].attempts,
+            1,
+          );
+        } else {
+          const leaseAlarm = async () =>
+            (await db.query<{ due_at: string }>(
+              "SELECT due_at FROM owner_alarms WHERE name=$1",
+              [JSON.stringify(["host.delivery", "space", leased.id])],
+            )).rows[0].due_at;
+          assert.equal(
+            new Date(await leaseAlarm()).getTime(),
+            new Date(leased.lease_expires_at).getTime(),
+            "active delivery alarm uses actual lease expiry, not stale availability",
+          );
+          time += 1000;
+          await eventually(async () =>
+            new Date(
+              (await db.query<{ lease_expires_at: string }>(
+                "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
+                [leased.id],
+              )).rows[0].lease_expires_at,
+            ).getTime() > new Date(leased.lease_expires_at).getTime()
+          );
+          const renewed = (await db.query<{ lease_expires_at: string }>(
+            "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
+            [leased.id],
+          )).rows[0];
+          assert.equal(
+            new Date(await leaseAlarm()).getTime(),
+            new Date(renewed.lease_expires_at).getTime(),
+            "renewal moves the durable alarm with the lease",
+          );
+        }
         const root = (await db.query<{ settlement_scope_id: string }>(
           "SELECT settlement_scope_id FROM event_deliveries WHERE consumer_id='registered:fixture.root'",
         )).rows[0];
@@ -407,7 +685,10 @@ for (const mode of ["in-process", "websocket"] as const) {
           (await db.query<{ settlement_scope_id: string; event_id: string }>(
             "SELECT settlement_scope_id,event_id FROM event_deliveries WHERE consumer_id='processor:fixture.detached'",
           )).rows[0];
-        assert.notEqual(detached.settlement_scope_id, root.settlement_scope_id);
+        assert.notEqual(
+          detached.settlement_scope_id,
+          root.settlement_scope_id,
+        );
         assert.equal(
           (await db.query(
             "SELECT root_event_id FROM copilotz_operations WHERE operation_id=$1",
@@ -415,15 +696,102 @@ for (const mode of ["in-process", "websocket"] as const) {
           )).rows[0].root_event_id,
           detached.event_id,
         );
+        await eventually(async () =>
+          (await db.query("SELECT id FROM nodes WHERE id='audit:first'")).rows
+            .length === 1
+        );
         assert.equal(
           (await db.query("SELECT id FROM nodes WHERE id='audit:first'")).rows
             .length,
           1,
         );
-        assert.equal(
-          await facade.actions.root("retry", { operationKey: "retry" }),
-          "root:retry",
+        const retryRoot = facade.actions.root("retry", {
+          operationKey: "retry",
+        }).then(
+          (value) => ({ value, error: undefined }),
+          (error) => ({ value: undefined, error }),
         );
+        if (fault === "held-completion" || fault === "unknown-completion") {
+          await eventually(() => replyInjected);
+          await heldReply.promise;
+          const retry = (await db.query<
+            { id: string; attempts: number; available_at: string }
+          >("SELECT id,attempts,available_at::text AS available_at FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='retry_wait'"))
+            .rows[0];
+          assert.ok(retry);
+          assert.equal(retry.attempts, 1);
+          assert.equal(retryCalls, 1);
+          assert.ok(
+            host.snapshot().active >= 1,
+            "unknown or held reply retains local capacity",
+          );
+          assert.equal(
+            (await db.query(
+              "SELECT retired FROM owner_assignments WHERE delivery_id=$1",
+              [retry.id],
+            )).rows[0].retired,
+            true,
+          );
+          time = new Date(retry.available_at).getTime() + 1;
+          if (fault === "unknown-completion") {
+            await eventually(() => !host.snapshot().ready);
+            await host.wake();
+            assert.equal(retryCalls, 1);
+            assert.ok(host.snapshot().active >= 1);
+            assert.equal(
+              (await db.query(
+                "SELECT attempts FROM event_deliveries WHERE id=$1",
+                [retry.id],
+              )).rows[0].attempts,
+              1,
+            );
+            await retryRoot;
+            return;
+          }
+          // This holds the database COMMIT acknowledgement, including the
+          // serialized boundary pump; it is not a caller-facing reply shim.
+          const waking = host.wake();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.equal(retryCalls, 1);
+          releaseReply.resolve();
+          await waking;
+          assert.equal((await retryRoot).value, "root:retry");
+          await eventually(() => observed.includes("retry"));
+          assert.equal(retryCalls, 2);
+          await eventually(() => host.snapshot().active === 0);
+          assert.equal(host.snapshot().ready, true);
+          assert.deepEqual(errors, []);
+          return;
+        }
+        assert.equal((await retryRoot).value, "root:retry");
+        if (fault === "retry-identity" || fault === "retry-cancellation") {
+          await eventually(async () =>
+            faultInjected &&
+            (!host.snapshot().ready ||
+              (await db.query(
+                  "SELECT kind FROM owner_receipts WHERE kind='processor.local-complete' AND result->>'status'='retry_wait'",
+                )).rows.length > 0)
+          );
+          const rows = (await db.query(
+            "SELECT d.status,d.attempts,d.consumer_id FROM event_deliveries d WHERE d.consumer_id='processor:fixture.follow' ORDER BY d.created_at DESC LIMIT 1",
+          )).rows;
+          assert.equal(rows.length, 1);
+          assert.equal(
+            rows[0].status,
+            "leased",
+            "policy mutation and attempted completion must roll back",
+          );
+          assert.equal(rows[0].attempts, 1);
+          assert.equal(
+            (await db.query(
+              "SELECT kind FROM owner_receipts WHERE kind='processor.local-complete' AND result->>'status'='retry_wait'",
+            )).rows.length,
+            0,
+            "no retry receipt from mutated identity",
+          );
+          assert.equal(retryCalls, 1);
+          return;
+        }
         await eventually(async () =>
           (await db.query(
             "SELECT id FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='retry_wait'",
@@ -453,15 +821,58 @@ for (const mode of ["in-process", "websocket"] as const) {
         );
         time = new Date(retry.available_at).getTime() + 1;
         await host.wake();
+        if (fault === "predecessor-grant" || fault === "predecessor-event") {
+          await eventually(() => faultInjected && !host.snapshot().ready);
+          assert.equal(
+            retryCalls,
+            1,
+            "mutated predecessor cannot admit attempt two",
+          );
+          const actual = (await db.query(
+            "SELECT status,attempts FROM event_deliveries WHERE id=$1",
+            [retry.id],
+          )).rows[0];
+          assert.equal(actual.status, "retry_wait");
+          assert.equal(actual.attempts, 1);
+          const history = (await db.query(
+            "SELECT retired FROM owner_assignments WHERE delivery_id=$1",
+            [retry.id],
+          )).rows;
+          assert.equal(history.length, 1);
+          assert.equal(
+            history[0].retired,
+            true,
+            "predecessor mutation rolls back",
+          );
+          assert.equal(
+            (await db.query(
+              "SELECT kind FROM owner_receipts WHERE kind='owner.local-processor-start' AND intent->>'deliveryId'=$1",
+              [retry.id],
+            )).rows.length,
+            1,
+          );
+          return;
+        }
         await eventually(() => observed.includes("retry"));
         assert.equal(retryCalls, 2);
         assert.equal(
-          (await db.query("SELECT attempts FROM event_deliveries WHERE id=$1", [
-            retry.id,
-          ])).rows[0].attempts,
+          (await db.query(
+            "SELECT attempts FROM event_deliveries WHERE id=$1",
+            [
+              retry.id,
+            ],
+          )).rows[0].attempts,
           2,
         );
         await eventually(() => host.snapshot().active === 0);
+        if (fault === "mixed-capacity") {
+          assert.equal(localActionFactories, 2);
+          assert.equal(localProcessorFactories, 3);
+          assert.equal(workerProcessorFactories, 2);
+          assert.equal(host.snapshot().ready, true);
+          assert.deepEqual(errors, []);
+          return;
+        }
         assert.equal(
           await facade.actions.root("nested", { operationKey: "nested" }),
           "root:child:nested",
@@ -490,13 +901,22 @@ for (const mode of ["in-process", "websocket"] as const) {
           "root:revoked",
         );
         await eventually(() => Promise.resolve(revokedStarted));
+        // Detached work has its own scope. Do not revoke its event policy
+        // merely because the independently scheduled local follow is faster.
+        await eventually(async () =>
+          (await db.query(
+            "SELECT d.status FROM event_deliveries d JOIN events e ON e.id=d.event_id WHERE d.consumer_id='processor:fixture.detached' ORDER BY d.created_at DESC LIMIT 1",
+          )).rows[0]?.status === "succeeded"
+        );
         eventAllowed = false;
         releaseRevoked.resolve();
         await eventually(() => Promise.resolve(replayDenied && childDenied));
         await eventually(() => host.snapshot().active === 0);
         assert.ok(
-          policyDenials >= 2,
-          "current event policy is rerun before Collection receipt replay and child admission",
+          policyDenials >= (placement === "owner-local" ? 1 : 2),
+          placement === "owner-local"
+            ? "current event policy is rerun before Collection replay; local child capability is unavailable"
+            : "current event policy is rerun before Collection receipt replay and child admission",
         );
         assert.equal(
           (await db.query("SELECT id FROM nodes WHERE id='policy:revoked'"))
@@ -536,6 +956,8 @@ for (const mode of ["in-process", "websocket"] as const) {
       } finally {
         release.resolve();
         releaseRevoked.resolve();
+        releaseReply.resolve();
+        releaseFactory.resolve();
         facade.close();
         await ingress.stop("fixture finished");
         await worker.close("fixture finished");

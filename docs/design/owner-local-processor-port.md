@@ -51,8 +51,9 @@ unknown committed Collection replies, and current-source denial on receipt
 replay. These fixtures use PGlite by default and the explicit test PostgreSQL
 connection when supplied.
 
-The generation-aware host still needs to combine known ended receipts,
-predecessor revocation and drain, exact SQL due-time checks, alarms and shared
-local/worker capacity. Local nested Actions, effects, public mixed placement
-selection and restart parity remain separate gates. This adapter does not add a
-heartbeat or make a database prerequisite for ordinary embedded Copilotz use.
+The [private generation-aware host](owner-host-local-processor.md) now combines
+known ended receipts, predecessor revocation and drain, SQL due-time checks,
+alarms and shared local/worker capacity, with its own scoped integration
+evidence. Local nested Actions, effects, public mixed placement selection and
+restart parity remain separate gates. This adapter does not add a heartbeat or
+make a database prerequisite for ordinary embedded Copilotz use.

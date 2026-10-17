@@ -1,3 +1,4 @@
+import { ownConfiguration } from "./owner-local-configuration.ts";
 /** Private fresh-only local Action composition. No public placement option,
  * worker identity, restart adoption, child, preparation or effect capability. */
 import type { SqlExecutor } from "../events/session.ts";
@@ -107,38 +108,6 @@ function text(value: unknown): asserts value is string {
     typeof value !== "string" || !value.trim() || value !== value.trim() ||
     value.length > 1024
   ) refuse("Invalid local host identifier.");
-}
-function ownConfiguration(
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): Record<string, unknown> {
-  if (
-    !value || typeof value !== "object" || Array.isArray(value) ||
-    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
-  ) {
-    throw new TypeError(
-      "Private local configuration requires a plain own-data object.",
-    );
-  }
-  const captured: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (
-      typeof key !== "string" || !descriptor?.enumerable ||
-      !("value" in descriptor) ||
-      ![...required, ...optional].includes(key)
-    ) {
-      throw new TypeError(
-        "Private local configuration requires closed own-data fields.",
-      );
-    }
-    captured[key] = descriptor.value;
-  }
-  if (required.some((key) => !Object.hasOwn(captured, key))) {
-    throw new TypeError("Private local configuration is incomplete.");
-  }
-  return captured;
 }
 /** Capture configuration before the host's first provisioning/initialization await. */
 export function captureOwnerHostLocalActions(

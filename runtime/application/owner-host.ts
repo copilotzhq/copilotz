@@ -1,6 +1,6 @@
 /** Private ordinary Action/Processor host. Every worker, including embedded
- * workers, uses the same Oxian transport. A separate private fresh-Action seam
- * can select genuine owner-local execution without changing public composition.
+ * workers, uses the same Oxian transport. A private fresh-owner bundle selects
+ * local Actions and same-owner Processor generations without public activation.
  * Resume requires bounded compatible
  * event history and, when declared, ordinary Collection namespace coverage.
  * Closed ordinary-record prepared children of root ordinary Actions require
@@ -141,6 +141,18 @@ import {
   createOwnerHostLocalActions,
   type OwnerHostLocalActionOptions,
 } from "./owner-host-local.ts";
+
+import {
+  captureOwnerHostLocalProcessors,
+  createOwnerHostLocalProcessors,
+  type OwnerHostLocalProcessorOptions,
+} from "./owner-host-local-processor.ts";
+import { ownConfiguration } from "./owner-local-configuration.ts";
+
+export type OwnerHostLocalOptions = Readonly<{
+  actions?: OwnerHostLocalActionOptions;
+  processors?: OwnerHostLocalProcessorOptions;
+}>;
 
 import {
   captureOwnerHostTerminalRecovery,
@@ -368,7 +380,7 @@ function provenance(scope: OwnerHostIngressScope): JsonObject {
 export async function createOwnerHost(
   options: OwnerHostOptions,
   namespaceInventory?: readonly string[],
-  localActions?: OwnerHostLocalActionOptions,
+  localOptions?: OwnerHostLocalOptions,
   terminalRecovery?: OwnerHostTerminalRecoveryOptions,
 ) {
   for (const value of [options.ownerId, options.holderId, options.schema]) {
@@ -403,14 +415,14 @@ export async function createOwnerHost(
       (initialization.maxPasses ?? 4) > 16
     ) throw new TypeError("Invalid owner host resume options.");
   }
-  if (localActions !== undefined && initialization !== "fresh") {
+  if (localOptions !== undefined && initialization !== "fresh") {
     throw new TypeError(
-      "Private local Actions require fresh initialization; local resume is unavailable.",
+      "Private local placement requires fresh initialization; local resume is unavailable.",
     );
   }
   if (
     terminalRecovery !== undefined &&
-    (initialization === "fresh" || localActions !== undefined)
+    (initialization === "fresh" || localOptions !== undefined)
   ) {
     throw new TypeError(
       "Private terminal recovery requires resume without local placement.",
@@ -419,9 +431,26 @@ export async function createOwnerHost(
   const terminalConfiguration = terminalRecovery === undefined
     ? undefined
     : captureOwnerHostTerminalRecovery(terminalRecovery);
-  const localConfiguration = localActions === undefined
+  const localBundle = localOptions === undefined
     ? undefined
-    : captureOwnerHostLocalActions(localActions, options.registry);
+    : ownConfiguration(localOptions, [], ["actions", "processors"]);
+  if (localBundle && !Object.keys(localBundle).length) {
+    throw new TypeError("At least one private local selection is required.");
+  }
+  const localConfiguration =
+    localBundle && Object.hasOwn(localBundle, "actions")
+      ? captureOwnerHostLocalActions(
+        localBundle.actions as OwnerHostLocalActionOptions,
+        options.registry,
+      )
+      : undefined;
+  const processorConfiguration =
+    localBundle && Object.hasOwn(localBundle, "processors")
+      ? captureOwnerHostLocalProcessors(
+        localBundle.processors as OwnerHostLocalProcessorOptions,
+        options.registry,
+      )
+      : undefined;
   for (
     const name of [
       "ingress",
@@ -558,6 +587,9 @@ export async function createOwnerHost(
   >();
   const runningTasks = new Set<Promise<void>>();
   let local: ReturnType<typeof createOwnerHostLocalActions> | undefined;
+  let localProcessor:
+    | ReturnType<typeof createOwnerHostLocalProcessors>
+    | undefined;
   let localControlToken: string | undefined;
   const settlements = new Map<string, OperationSettlementScope>();
   let pumping = false;
@@ -607,6 +639,7 @@ export async function createOwnerHost(
     initialized = false;
     clearTimeout(alarmTimer);
     local?.stop(error);
+    localProcessor?.stop(error);
     if (localControlToken) controlTokens.delete(localControlToken);
     owner?.stop(error);
     abort.abort(error);
@@ -931,7 +964,9 @@ export async function createOwnerHost(
       pending.set(data.deliveryId, copy(data));
       placements.set(
         data.deliveryId,
-        !("kind" in data) && localConfiguration?.selects(data.actionId)
+        ("kind" in data
+            ? processorConfiguration?.selects(data.processorId)
+            : localConfiguration?.selects(data.actionId))
           ? "owner-local"
           : "worker",
       );
@@ -964,6 +999,7 @@ export async function createOwnerHost(
     status: string;
     attempts: number;
     available_at: string;
+    due?: boolean;
     lease_expires_at: string | null;
     metadata: Record<string, OwnerJson>;
     type: string;
@@ -1018,8 +1054,8 @@ export async function createOwnerHost(
       const run = async () => {
         const result = await handler(intent, context);
         const rows = (await context.tx.query<ScheduledRow>(
-          `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at,d.lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
-          [ownerId, maxPending + 1],
+          `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at::text AS available_at,(d.available_at <= $3::timestamptz) AS due,d.lease_expires_at::text AS lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
+          [ownerId, maxPending + 1, context.commandTime],
         )).rows;
         if (rows.length > maxPending) {
           unavailable("Owner durable delivery capacity exceeded.");
@@ -1032,7 +1068,10 @@ export async function createOwnerHost(
             : row.available_at;
           if (row.status === "leased" && deadline === null) {
             try {
-              if (!local || !await local.classifyNullLease(context, row.id)) {
+              const selected = "kind" in ref ? localProcessor : local;
+              if (
+                !selected || !await selected.classifyNullLease(context, row.id)
+              ) {
                 unavailable(
                   "NULL leased delivery has no current private local authority.",
                 );
@@ -1051,8 +1090,7 @@ export async function createOwnerHost(
           await setDeliveryAlarm(context, row.namespace, row.id, deadline);
           if (
             row.status !== "leased" &&
-            new Date(row.available_at).getTime() <=
-              Date.parse(context.commandTime)
+            row.due === true
           ) due.push(ref);
         }
         context.afterCommit(() => {
@@ -1060,7 +1098,7 @@ export async function createOwnerHost(
         });
         return result;
       };
-      return localConfiguration
+      return localBundle
         ? await commandContexts.run(context, run)
         : await run();
     };
@@ -1179,6 +1217,41 @@ export async function createOwnerHost(
     catalog,
     leaseMs,
     resolveAssignment: resolveProcessor,
+    ...(processorConfiguration
+      ? {
+        local: {
+          resolveAssignment: (tx, caller, time) =>
+            localProcessor?.resolve(tx, caller, time),
+          authorizeStart: (tx, caller, binding, facts, time) =>
+            localProcessor?.processor.authorizeStart(
+              tx,
+              caller,
+              binding,
+              facts,
+              time,
+            ),
+          authorizeEvent: (tx, assignment, event, data, time) => {
+            if (!localProcessor) unavailable();
+            return localProcessor.event(tx, assignment, event, data, time);
+          },
+          isCurrent: (caller, binding, ordinal, phase) =>
+            localProcessor?.processor.isCurrent(
+              caller,
+              binding,
+              ordinal,
+              phase,
+            ) === true,
+          reserveLocal: (context, binding) => {
+            if (!localProcessor) unavailable();
+            return localProcessor.processor.reserveLocal(context, binding);
+          },
+          retireLocal: (context, binding) => {
+            if (!localProcessor) unavailable();
+            return localProcessor.processor.retireLocal(context, binding);
+          },
+        },
+      }
+      : {}),
     authorizeEvent(tx, assignment, event, data, time) {
       if (!policy.processorEvent) {
         unavailable("Current Processor event policy is unavailable.");
@@ -1193,12 +1266,19 @@ export async function createOwnerHost(
     },
     scheduleSettlement: settlement.schedule,
     async scheduleRetry(context, delivery) {
-      const assigned = await resolveProcessor(
-        context.tx,
-        context.caller,
-        context.commandTime,
-      );
-      if (!assigned || assigned.deliveryId !== delivery.id) unavailable();
+      const assigned = context.caller.principal.kind === "owner-local"
+        ? {
+          deliveryId: delivery.id,
+          namespace: await localProcessor?.retryNamespace(context, delivery),
+        }
+        : await resolveProcessor(
+          context.tx,
+          context.caller,
+          context.commandTime,
+        );
+      if (
+        !assigned || !assigned.namespace || assigned.deliveryId !== delivery.id
+      ) unavailable();
       await setDeliveryAlarm(
         context,
         assigned.namespace,
@@ -1886,7 +1966,10 @@ export async function createOwnerHost(
           ) {
             return await child.authorize(tx, caller, command, time, normalized);
           }
-          if (command.kind.startsWith("processor.")) {
+          if (
+            command.kind === "owner.local-processor-start" ||
+            command.kind.startsWith("processor.")
+          ) {
             return await processor.authorize(tx, caller, command, time);
           }
           if (
@@ -1900,6 +1983,67 @@ export async function createOwnerHost(
           }
           if (command.kind === "collections") {
             if (caller.principal.kind === "owner-local") {
+              if (
+                localProcessor && await localProcessor.resolve(tx, caller, time)
+              ) {
+                const live = await processor.authorizeLocalLive(
+                  tx,
+                  caller,
+                  time,
+                );
+                const { assignment, delivery, event } = live;
+                const prefix = `delivery:${delivery.id}:`;
+                if (
+                  command.domain !== "logical" ||
+                  !command.key.startsWith(prefix) ||
+                  command.key.length <= prefix.length
+                ) unavailable();
+                const conditions = await localProcessor.collections(
+                  tx,
+                  assignment,
+                  copy(command.intent) as unknown as OwnerCollectionIntent,
+                  time,
+                );
+                const rechecked = await processor.authorizeLocalLive(
+                  tx,
+                  caller,
+                  time,
+                );
+                if (
+                  !same(rechecked.assignment, assignment) ||
+                  rechecked.delivery.id !== delivery.id ||
+                  rechecked.event.id !== event.id
+                ) unavailable();
+                const {
+                  ctxGranted: _ctx,
+                  settlementGranted: _settlement,
+                  attemptOrdinal: _ordinal,
+                  ...attempt
+                } = assignment;
+                collectionScopes.set(tx, {
+                  namespace: assignment.namespace,
+                  identity: {
+                    causationId: event.id,
+                    correlationId: event.correlationId,
+                    settlementScopeId: delivery.settlementScopeId,
+                    ...(delivery.actionScopeId
+                      ? { actionScopeId: delivery.actionScopeId }
+                      : {}),
+                    deliveryLease: {
+                      deliveryId: delivery.id,
+                      owner: assignment.attemptId,
+                    },
+                    metadata: {
+                      sourceEventId: event.id,
+                      sourceDeliveryId: delivery.id,
+                      sourceConsumerId: delivery.consumerId,
+                    },
+                  },
+                  conditions: conditions.conditions,
+                  attempt,
+                });
+                return;
+              }
               if (!local) unavailable();
               const assignment = await execution.authorizeLive(
                 tx,
@@ -2047,8 +2191,9 @@ export async function createOwnerHost(
         if (active.size >= maxActive) break;
         if (active.has(key)) continue;
         if (placements.get(key) === "owner-local") {
-          if (!local) unavailable();
-          const task = local.run(copy(ref)).catch((error) => stop(error));
+          const selected = "kind" in ref ? localProcessor : local;
+          if (!selected) unavailable();
+          const task = selected.run(copy(ref)).catch((error) => stop(error));
           trackTask(task);
           continue;
         }
@@ -2457,17 +2602,16 @@ export async function createOwnerHost(
     if (owner.state !== "acquired" || abort.signal.aborted || closed) {
       unavailable();
     }
-    if (localConfiguration) {
+    if (localBundle) {
       localControlToken = crypto.randomUUID();
       controlTokens.set(localControlToken, { purpose: "local-start" });
-      local = createOwnerHostLocalActions({
-        configuration: localConfiguration,
+      const shared = {
         registry,
         schema,
         boundary: owner,
         controlCaller: {
           principal: {
-            kind: "owner-control",
+            kind: "owner-control" as const,
             ownerId,
             epoch: owner.epoch!,
             holderId,
@@ -2476,27 +2620,54 @@ export async function createOwnerHost(
           hostControl: localControlToken,
         },
         maxActive,
-        capacity: {
-          reserve(binding) {
-            const scheduled = pending.get(binding.deliveryId);
-            if (
-              !scheduled || "kind" in scheduled ||
-              scheduled.namespace !== binding.namespace ||
-              scheduled.sourceEventId !== binding.sourceEventId ||
-              scheduled.actionId !== binding.actionId ||
-              scheduled.executionId !== binding.actionRunId
-            ) return undefined;
-            return reserveActive(binding.deliveryId, "owner-local");
-          },
-        },
         contexts: commandContexts,
         isCurrent: ready,
-        assertControl(caller) {
+        assertControl(caller: OwnerCaller) {
           if (!ready()) unavailable();
           assertControl(caller, "local-start");
         },
         onIndeterminate: stop,
-      });
+      };
+      if (localConfiguration) {
+        local = createOwnerHostLocalActions({
+          ...shared,
+          configuration: localConfiguration,
+          capacity: {
+            reserve(binding) {
+              const scheduled = pending.get(binding.deliveryId);
+              if (
+                !scheduled || "kind" in scheduled ||
+                scheduled.namespace !== binding.namespace ||
+                scheduled.sourceEventId !== binding.sourceEventId ||
+                scheduled.actionId !== binding.actionId ||
+                scheduled.executionId !== binding.actionRunId
+              ) return undefined;
+              return reserveActive(binding.deliveryId, "owner-local");
+            },
+          },
+        });
+      }
+      if (processorConfiguration) {
+        localProcessor = createOwnerHostLocalProcessors({
+          ...shared,
+          configuration: processorConfiguration,
+          capacity: {
+            reserve(binding) {
+              const scheduled = pending.get(binding.deliveryId);
+              if (
+                !scheduled || !("kind" in scheduled) ||
+                scheduled.namespace !== binding.namespace ||
+                scheduled.sourceEventId !== binding.sourceEventId ||
+                scheduled.processorId !== binding.processorId
+              ) return undefined;
+              return reserveActive(binding.deliveryId, "owner-local");
+            },
+          },
+          requestWake() {
+            if (ready()) void wakeAlarms().catch(report);
+          },
+        });
+      }
     }
     initialized = true;
     armAlarm();
@@ -2545,6 +2716,7 @@ export async function createOwnerHost(
         initialized = false;
         clearTimeout(alarmTimer);
         local?.stop(new Error(reason));
+        localProcessor?.stop(new Error(reason));
         if (localControlToken) controlTokens.delete(localControlToken);
         abort.abort(new Error(reason));
         bridge.stop();

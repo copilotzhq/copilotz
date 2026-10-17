@@ -197,7 +197,7 @@ async function fixture(input: {
   const starting = createOwnerHost(
     options,
     undefined,
-    input.local ?? localOptions(),
+    { actions: input.local ?? localOptions() },
   );
   let host: Awaited<ReturnType<typeof createOwnerHost>>;
   try {
@@ -327,7 +327,7 @@ test("local host options refuse resume and malformed selection before SQL or tra
       initialization: { mode: "resume", expectedEpoch: 1 },
     },
     undefined,
-    localOptions(),
+    { actions: localOptions() },
   ));
   for (
     const invalid of [
@@ -357,8 +357,32 @@ test("local host options refuse resume and malformed selection before SQL or tra
       })),
     ]
   ) {
+    await assert.rejects(
+      createOwnerHost(options, undefined, { actions: invalid as never }),
+    );
+  }
+  let bundleGetters = 0;
+  for (
+    const invalid of [
+      null,
+      [],
+      {},
+      { actions: undefined },
+      { processors: undefined },
+      { unknown: localOptions() },
+      localOptions(),
+      Object.defineProperty({}, "actions", {
+        enumerable: true,
+        get() {
+          bundleGetters++;
+          return localOptions();
+        },
+      }),
+    ]
+  ) {
     await assert.rejects(createOwnerHost(options, undefined, invalid as never));
   }
+  assert.equal(bundleGetters, 0);
   assert.equal(sql, 0);
   assert.equal(transports, 0);
 });

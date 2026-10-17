@@ -175,6 +175,10 @@ test("owner-local Action appender snapshots supplied authority and rejects actua
       committed++;
       assert.equal(mutation.transaction, originalTransaction);
       assert.equal(mutation.dispatch, false);
+      assert.deepEqual(mutation.draft.deliveryLease, {
+        deliveryId: "delivery",
+        owner: "local-attempt",
+      });
       sql = mutation.statement!(
         (value) => `$${params.push(value)}`,
         createCoreTableNames(schema),
@@ -326,11 +330,14 @@ async function fixture() {
     const bound = (
       transaction: SqlExecutor,
       ownerAuthority = authority(transaction),
+      localStore = true,
     ) => {
       const store = createEventStore({
         session: db,
         schema,
-        ownerCommit: ownerAuthority,
+        ownerCommit: localStore
+          ? ownerAuthority
+          : { ...ownerAuthority, localAttempt: undefined },
       });
       const coordinator = createEventCoordinator({
         store,
@@ -352,7 +359,12 @@ async function fixture() {
     };
     await db.transaction(async (tx) => {
       const options = bound(tx);
-      const root = await options.store.commitMutation({
+      const control = createEventStore({
+        session: db,
+        schema,
+        ownerCommit: { ...options.ownerAuthority, localAttempt: undefined },
+      });
+      const root = await control.commitMutation({
         transaction: tx,
         draft: { type: "source", namespace: "space", payload: {} },
         consumers: [{ consumerId: "worker", settlement: "inherit" }],
@@ -474,7 +486,7 @@ test("owner-local Action database fence rejects stale epochs, holders, deliverie
     // A NULL lease alone never grants the worker writer owner-local authority.
     await assert.rejects(
       f.db.transaction((tx) => {
-        const options = f.bound(tx);
+        const options = f.bound(tx, authority(tx), false);
         return createActionLifecycleAppender({
           ...options,
           writer: {
@@ -504,4 +516,20 @@ test("owner-local Action database fence rejects stale epochs, holders, deliverie
   } finally {
     await f.db.close();
   }
+});
+
+test("owner-local lifecycle rejects substituted delivery authority before preparation", async () => {
+  const options = configuration();
+  const append = createActionLifecycleAppender(options);
+  const value = input();
+  await assert.rejects(
+    append({
+      ...value,
+      draft: {
+        ...value.draft,
+        deliveryLease: { deliveryId: "other", owner: "local-attempt" },
+      },
+    }),
+    /delivery authority differs/,
+  );
 });

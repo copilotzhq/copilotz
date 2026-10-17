@@ -1,4 +1,5 @@
 import {
+  ActionOwnershipLost,
   actionOwnershipStatement,
   type ActionWriter,
   combineActionStatements,
@@ -165,6 +166,26 @@ export function createActionLifecycleAppender(
     throw new TypeError("Action commandTime must be a valid timestamp.");
   }
   return async ({ draft, data }) => {
+    if (localOwner) {
+      const expected = localOwner.authority.localAttempt!;
+      if (
+        draft.deliveryLease && (
+          draft.deliveryLease.deliveryId !== expected.deliveryId ||
+          draft.deliveryLease.owner !== expected.attemptId
+        )
+      ) {
+        throw new TypeError(
+          "Owner-local lifecycle delivery authority differs.",
+        );
+      }
+      draft = {
+        ...draft,
+        deliveryLease: {
+          deliveryId: expected.deliveryId,
+          owner: expected.attemptId,
+        },
+      };
+    }
     const deduplicationId = draft.deduplicationId?.trim();
     if (!deduplicationId) {
       throw new TypeError("Action lifecycle events require deduplicationId.");
@@ -215,62 +236,72 @@ export function createActionLifecycleAppender(
     // values must be adopted in code beside them.
     const inStatement = retention !== undefined && tables !== undefined &&
       prepared.prepared.length === 0;
-    return await commitMutation({
-      admission: {
-        openActionGroup: data.status === "deferred",
-        cancellation: options.writer?.kind === "cancellation",
-      },
-      draft: { ...draft, payload },
-      matchData: prepared.publicData,
-      body: { id: payload.dataRef.eventBodyId, json: prepared.body },
-      ...(tables
-        ? {
-          statement: (param, actualTables) =>
-            combineActionStatements([
-              actionOwnershipStatement(
-                { draft, data },
-                options.writer,
-                localOwner ? actualTables : tables,
-                param,
-                commandTime,
-                localOwner,
-              ),
-              ...(inStatement
-                ? [composeActionInputRetention(retention!, tables, param)]
-                : []),
-            ]),
-        }
-        : {}),
-      ...(options.transaction
-        ? { transaction: options.transaction, dispatch: false }
-        : {}),
-      ...(!inStatement && (retention || prepared.prepared.length > 0)
-        ? {
-          mutate: async (context) => {
-            if (retention) await retainActionInputContent(context, retention);
-            for (const value of prepared.prepared) {
-              await options.protectedValues!.adopt(
-                context,
-                draft.namespace,
-                value,
-              );
-            }
-          },
-        }
-        : {}),
-      recoverDuplicate: async (event, context) => {
-        const existing = await readEventBody(
-          context,
-          event.namespace,
-          eventDataRef(event.payload),
-        );
-        if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
-          throw new Error(
-            `Event body '${bodyId}' already exists with different content.`,
+    try {
+      return await commitMutation({
+        admission: {
+          openActionGroup: data.status === "deferred",
+          cancellation: options.writer?.kind === "cancellation",
+        },
+        draft: { ...draft, payload },
+        matchData: prepared.publicData,
+        body: { id: payload.dataRef.eventBodyId, json: prepared.body },
+        ...(tables
+          ? {
+            statement: (param, actualTables) =>
+              combineActionStatements([
+                actionOwnershipStatement(
+                  { draft, data },
+                  options.writer,
+                  localOwner ? actualTables : tables,
+                  param,
+                  commandTime,
+                  localOwner,
+                ),
+                ...(inStatement
+                  ? [composeActionInputRetention(retention!, tables, param)]
+                  : []),
+              ]),
+          }
+          : {}),
+        ...(options.transaction
+          ? { transaction: options.transaction, dispatch: false }
+          : {}),
+        ...(!inStatement && (retention || prepared.prepared.length > 0)
+          ? {
+            mutate: async (context) => {
+              if (retention) await retainActionInputContent(context, retention);
+              for (const value of prepared.prepared) {
+                await options.protectedValues!.adopt(
+                  context,
+                  draft.namespace,
+                  value,
+                );
+              }
+            },
+          }
+          : {}),
+        recoverDuplicate: async (event, context) => {
+          const existing = await readEventBody(
+            context,
+            event.namespace,
+            eventDataRef(event.payload),
           );
-        }
-      },
-    });
+          if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
+            throw new Error(
+              `Event body '${bodyId}' already exists with different content.`,
+            );
+          }
+        },
+      });
+    } catch (error) {
+      if (
+        localOwner && error && typeof error === "object" && "code" in error &&
+        error.code === "ActionOwnershipLost"
+      ) {
+        throw new ActionOwnershipLost(data.actionRunId);
+      }
+      throw error;
+    }
   };
 }
 

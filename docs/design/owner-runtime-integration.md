@@ -676,3 +676,19 @@ and event-store compatibility passed36 tests with one existing PostgreSQL skip;
 independent local/owner delivery acceptance passed11. This does not enable an
 owner-local host yet: Action writer fencing, durable placement and takeover
 classification remain separate prerequisites.
+
+The local Action lifecycle writer now independently locks the same epoch/holder
+and exact delivery/token before lifecycle insertion. It validates the schema,
+transaction and private authority snapshot before preparation, including
+captured coordinator/protected-storage callbacks. This is still a low-level
+prerequisite.
+
+Local event mutations additionally require that exact delivery tuple before body
+encoding, mutation callbacks or duplicate recovery. The row must remain leased
+with a NULL deadline under the locking owner fence; the event statement repeats
+the exact attempt gate. The lifecycle appender supplies the matching tuple when
+absent and refuses an explicitly different tuple before preparation. Event-only
+writes do not require a publication callback; ordinary delivery transitions keep
+their existing callback requirement. Worker deadline checks and owner-control
+writes without local attempt authority are unchanged. Durable placement,
+owner-created local execution and old-epoch loss recovery remain unfinished.

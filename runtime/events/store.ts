@@ -656,9 +656,11 @@ export function createEventStore(
   const indexOperationEventSql = options.indexOperationEventSql;
   const commandTimestamp = (params: unknown[]): string =>
     owner ? `$${params.push(owner.commandTime)}::timestamptz` : "NOW()";
-  const ownerDeliveryExecutor = async (): Promise<SqlExecutor> => {
+  const ownerDeliveryExecutor = async (
+    requirePublication = true,
+  ): Promise<SqlExecutor> => {
     if (!owner) return session;
-    if (typeof owner.afterCommit !== "function") {
+    if (requirePublication && typeof owner.afterCommit !== "function") {
       return ownerUnsupported("delivery mutations without afterCommit");
     }
     const fence = await owner.transaction.query(
@@ -762,7 +764,37 @@ export function createEventStore(
       type: mutation.draft.type.trim(),
       namespace: mutation.draft.namespace.trim(),
       deduplicationId: mutation.draft.deduplicationId?.trim() || undefined,
+      deliveryLease: mutation.draft.deliveryLease
+        ? { ...mutation.draft.deliveryLease }
+        : undefined,
     };
+    if (localAttempt) {
+      if (
+        draft.deliveryLease?.deliveryId !== localAttempt.deliveryId ||
+        draft.deliveryLease?.owner !== localAttempt.attemptId
+      ) {
+        throw Object.assign(
+          new Error("Event mutation requires its exact local attempt."),
+          {
+            name: "ActionOwnershipLost",
+            code: "ActionOwnershipLost",
+          },
+        );
+      }
+      const executor = await ownerDeliveryExecutor(false);
+      const current = await executor.query(
+        `SELECT id FROM ${tables.event_deliveries}
+         WHERE id=$1 AND status='leased' AND lease_owner=$2
+           AND lease_expires_at IS NULL FOR UPDATE`,
+        [localAttempt.deliveryId, localAttempt.attemptId],
+      );
+      if (!current.rows.length) {
+        throw Object.assign(new Error("Local event authority was lost."), {
+          name: "ActionOwnershipLost",
+          code: "ActionOwnershipLost",
+        });
+      }
+    }
     const encoded = encodeDraft(draft);
     const consumers = uniqueConsumers(mutation.consumers);
     const eventId = createId();
@@ -877,9 +909,11 @@ export function createEventStore(
           ? [`event_delivery_admission AS MATERIALIZED (
           SELECT id FROM ${tables.event_deliveries}
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
-            AND lease_owner = ${
-            param(lease.owner)
-          } AND lease_expires_at > ${commandTimestamp}
+            AND lease_owner = ${param(lease.owner)} AND ${
+            localAttempt
+              ? "lease_expires_at IS NULL"
+              : `lease_expires_at > ${commandTimestamp}`
+          }
             AND EXISTS (SELECT 1 FROM event_group_admission) FOR UPDATE
         )`]
           : []),

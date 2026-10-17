@@ -222,6 +222,26 @@ export function createDeliveryExecutor(
   } as const);
 
   let closed = false;
+  let shutdownPromise: Promise<void> | undefined;
+  // Delivery/recovery producers only; non-delivery WorkHandles and external
+  // settleOutputs calls retain their existing lifetimes.
+  const admittedTasks = new Set<Promise<unknown>>();
+  const settlementTasks = new Set<Promise<unknown>>();
+  const trackTask = <T>(
+    tasks: Set<Promise<unknown>>,
+    task: Promise<T>,
+  ): Promise<T> => {
+    tasks.add(task);
+    void task.finally(() => tasks.delete(task)).catch(() => undefined);
+    return task;
+  };
+  const admitTask = <T>(run: () => Promise<T>): Promise<T> => {
+    if (closed) {
+      return Promise.reject(new Error("Delivery executor is shut down."));
+    }
+    // Register the whole call before its first await, including store lookup.
+    return trackTask(admittedTasks, run());
+  };
   const active = new Map<string, DeliveryExecutionHandle>();
   const activeOutputScopes = new Map<
     string,
@@ -477,9 +497,11 @@ export function createDeliveryExecutor(
     })();
     trackOutputScope(delivery, event, done);
     // Do not include this callback in `done`: settlement drains that promise.
+    // Shutdown owns a separate drain; the callback must not await shutdown.
     // Maintenance retries missed wakes after a crash or temporary failure.
-    void done.then((result) => options.onDeliverySettled?.(result)).catch(() =>
-      undefined
+    trackTask(
+      settlementTasks,
+      done.then((result) => options.onDeliverySettled?.(result)),
     );
 
     return ({
@@ -500,11 +522,10 @@ export function createDeliveryExecutor(
     databaseSchema?: string;
     origin?: "direct" | "scheduled" | "recovery";
   }>;
-  const dispatchDelivery = async (
+  const dispatchAdmittedDelivery = async (
     deliveryInput: string | EventDelivery,
     dispatchOptions: DispatchOptions = {},
   ): Promise<DeliveryExecutionHandle> => {
-    if (closed) throw new Error("Delivery executor is shut down.");
     const requestedSchema = typeof deliveryInput === "string"
       ? dispatchOptions.databaseSchema?.trim() || defaultDatabaseSchema
       : deliveryInput.databaseSchema;
@@ -655,7 +676,13 @@ export function createDeliveryExecutor(
     }
   };
 
-  const dispatchRecoverable = async (
+  const dispatchDelivery = (
+    deliveryInput: string | EventDelivery,
+    dispatchOptions: DispatchOptions = {},
+  ): Promise<DeliveryExecutionHandle> =>
+    admitTask(() => dispatchAdmittedDelivery(deliveryInput, dispatchOptions));
+
+  const dispatchAdmittedRecoverable = async (
     listOptions: Parameters<DeliveryExecutor["dispatchRecoverable"]>[0] = {},
   ): Promise<DeliveryRecoveryDispatch> => {
     const databaseSchema = listOptions.databaseSchema?.trim() ||
@@ -710,29 +737,37 @@ export function createDeliveryExecutor(
     }
   };
 
+  const dispatchRecoverable = (
+    listOptions: Parameters<DeliveryExecutor["dispatchRecoverable"]>[0] = {},
+  ): Promise<DeliveryRecoveryDispatch> =>
+    admitTask(() => dispatchAdmittedRecoverable(listOptions));
+
   function refreshRecoverySchedule(requestedDatabaseSchema: string): void {
     const databaseSchema = requestedDatabaseSchema.trim();
     if (closed || !continuousRecoverySchemas.has(databaseSchema)) return;
-    void resolveStore(databaseSchema).then((store) =>
-      store.nextRecoveryDelayMs()
-    ).then((delay) => {
-      if (closed) return;
-      if (delay === null) {
-        cancelRecoveryTimer(databaseSchema);
-        return;
-      }
-      const dueAtMs = Date.now() + Math.max(RECOVERY_MINIMUM_DELAY_MS, delay);
-      const existing = recoveryTimers.get(databaseSchema);
-      if (existing && existing.dueAtMs <= dueAtMs) return;
-      if (existing) retryScheduler.cancel(existing.handle);
-      const handle = retryScheduler.schedule(() => {
-        recoveryTimers.delete(databaseSchema);
-        if (closed) return;
-        // dispatchRecoverable rearms the schema in its own finally block.
-        void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
-      }, Math.max(0, dueAtMs - Date.now()));
-      recoveryTimers.set(databaseSchema, { handle, dueAtMs } as const);
-    }).catch(() => undefined);
+    trackTask(
+      admittedTasks,
+      resolveStore(databaseSchema).then((store) => store.nextRecoveryDelayMs())
+        .then((delay) => {
+          if (closed) return;
+          if (delay === null) {
+            cancelRecoveryTimer(databaseSchema);
+            return;
+          }
+          const dueAtMs = Date.now() +
+            Math.max(RECOVERY_MINIMUM_DELAY_MS, delay);
+          const existing = recoveryTimers.get(databaseSchema);
+          if (existing && existing.dueAtMs <= dueAtMs) return;
+          if (existing) retryScheduler.cancel(existing.handle);
+          const handle = retryScheduler.schedule(() => {
+            recoveryTimers.delete(databaseSchema);
+            if (closed) return;
+            // dispatchRecoverable rearms the schema in its own finally block.
+            void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
+          }, Math.max(0, dueAtMs - Date.now()));
+          recoveryTimers.set(databaseSchema, { handle, dueAtMs } as const);
+        }).catch(() => undefined),
+    );
   }
 
   return ({
@@ -837,40 +872,64 @@ export function createDeliveryExecutor(
         for (const task of tasks.keys()) void task.then(finish, finish);
       });
     },
-    async shutdown(reason = "copilotz_delivery_executor_shutdown") {
-      if (closed) return;
+    shutdown(reason = "copilotz_delivery_executor_shutdown") {
+      if (shutdownPromise) return shutdownPromise;
       closed = true;
-      if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
-      scheduleTimer = undefined;
-      for (const timer of retryTimers.values()) {
-        retryScheduler.cancel(timer.handle);
-      }
-      retryTimers.clear();
-      for (const timer of recoveryTimers.values()) {
-        retryScheduler.cancel(timer.handle);
-      }
-      recoveryTimers.clear();
-      scheduled.clear();
-      const pending = await Promise.allSettled([...dispatchTasks.values()]);
-      const handles = new Map(active);
-      for (const result of pending) {
-        if (result.status === "fulfilled") {
-          handles.set(result.value.deliveryId, result.value);
+      // Share the complete drain with every caller, including callers arriving
+      // during cleanup. Defer cleanup until the shared promise is installed.
+      shutdownPromise = Promise.resolve().then(async () => {
+        const cleanupErrors: unknown[] = [];
+        const cleanUp = async (run: () => unknown): Promise<void> => {
+          try {
+            await run();
+          } catch (error) {
+            cleanupErrors.push(error);
+          }
+        };
+        if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
+        scheduleTimer = undefined;
+        for (const timer of retryTimers.values()) {
+          await cleanUp(() => retryScheduler.cancel(timer.handle));
         }
-      }
-      const cancellations = [...handles.values()].map((handle) =>
-        handle.cancel(reason).catch(() => undefined)
-      );
-      await Promise.all(cancellations);
-      await Promise.all(
-        attachedWorkers.map((worker) =>
-          worker.stop(reason).catch(() => undefined)
-        ),
-      );
-      await Promise.allSettled(
-        attachedWorkers.map((worker) => worker.closed),
-      );
-      await privateHypervisor?.shutdown(reason);
+        retryTimers.clear();
+        for (const timer of recoveryTimers.values()) {
+          await cleanUp(() => retryScheduler.cancel(timer.handle));
+        }
+        recoveryTimers.clear();
+        scheduled.clear();
+        // Admission is closed. These producers finish at handle creation or the
+        // end of a recovery read, never at handle.done or callback completion.
+        await Promise.allSettled([...admittedTasks]);
+        const pending = await Promise.allSettled([...dispatchTasks.values()]);
+        const handles = new Map(active);
+        for (const result of pending) {
+          if (result.status === "fulfilled") {
+            handles.set(result.value.deliveryId, result.value);
+          }
+        }
+        const cancellations = [...handles.values()].map((handle) =>
+          handle.cancel(reason).catch(() => undefined)
+        );
+        await Promise.all(cancellations);
+        await Promise.all(
+          attachedWorkers.map(async (worker) => {
+            try {
+              await worker.stop(reason);
+            } catch {
+              // Preserve the existing best-effort worker stop behavior.
+            }
+          }),
+        );
+        await Promise.allSettled(
+          attachedWorkers.map((worker) => worker.closed),
+        );
+        await cleanUp(() => privateHypervisor?.shutdown(reason));
+        // Timer/resource errors must not skip cancellation: a delivery may need
+        // it to finish. Only then drain the callbacks, independently of done.
+        await Promise.allSettled([...settlementTasks]);
+        if (cleanupErrors.length > 0) throw cleanupErrors[0];
+      });
+      return shutdownPromise;
     },
   } as const);
 }

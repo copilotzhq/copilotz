@@ -138,9 +138,9 @@ export type OwnerEventCommitContext = Readonly<{
   epoch: number;
   holderId: string;
   commandTime: string;
-  /** Internal owner-local attempt, never inferred from transport or a NULL lease.
+  /** Internal owner-controlled attempt, never inferred from transport or a NULL lease.
    * Exact delivery/token authority is valid only under this command's epoch fence. */
-  localAttempt?: Readonly<{ deliveryId: string; attemptId: string }>;
+  ownerAttempt?: Readonly<{ deliveryId: string; attemptId: string }>;
   /** Required before delivery mutations; insertion-only callers may omit it. */
   afterCommit?(callback: () => void | Promise<void>): void;
 }>;
@@ -156,7 +156,7 @@ export type OwnerLostDeliveryTransition = Readonly<{
   settlementScopeId: string;
   actionScopeId?: string;
   leaseOwner: string;
-  leaseExpiresAt: string;
+  leaseExpiresAt: string | null;
   attempts: number;
   maxAttempts: number;
   disposition: "retry" | "exhausted" | "cancelled";
@@ -342,7 +342,6 @@ export type EventStore = {
 const DEFAULT_COMPACTION_LIMIT = 100;
 const MAX_COMPACTION_LIMIT = 1_000;
 const RECENT_EVENT_LIMIT = 256;
-const OWNER_RECOVERY_BATCH_LIMIT = 100;
 
 function iso(value: string | Date | null | undefined): string | undefined {
   if (value == null) return undefined;
@@ -638,18 +637,18 @@ export function createEventStore(
   options: CreateEventStoreOptions,
 ): EventStore {
   const owner = options.ownerCommit ? { ...options.ownerCommit } : undefined;
-  const localAttempt = owner?.localAttempt
-    ? { ...owner.localAttempt }
+  const ownerAttempt = owner?.ownerAttempt
+    ? { ...owner.ownerAttempt }
     : undefined;
   if (
-    owner?.localAttempt !== undefined && (
-      !localAttempt || Object.keys(localAttempt).length !== 2 ||
-      [localAttempt.deliveryId, localAttempt.attemptId].some((value) =>
+    owner?.ownerAttempt !== undefined && (
+      !ownerAttempt || Object.keys(ownerAttempt).length !== 2 ||
+      [ownerAttempt.deliveryId, ownerAttempt.attemptId].some((value) =>
         typeof value !== "string" || !value.trim() || value !== value.trim() ||
         value.length > 1024
       )
     )
-  ) throw new TypeError("Invalid owner-local delivery attempt.");
+  ) throw new TypeError("Invalid owner-controlled delivery attempt.");
   const ownerUnsupported = (operation: string): never => {
     throw createEventStoreError(
       "event_transaction_unavailable",
@@ -703,12 +702,15 @@ export function createEventStore(
     attempt: string | undefined,
     deliveryId?: string,
   ): Promise<SqlExecutor> => {
+    if (owner && !ownerAttempt) {
+      return ownerUnsupported("delivery mutation without exact owner attempt");
+    }
     if (
-      localAttempt &&
-      (deliveryId !== localAttempt.deliveryId ||
-        attempt !== localAttempt.attemptId)
+      ownerAttempt &&
+      (deliveryId !== ownerAttempt.deliveryId ||
+        attempt !== ownerAttempt.attemptId)
     ) {
-      return ownerUnsupported("a different local delivery attempt");
+      return ownerUnsupported("a different owner delivery attempt");
     }
     if (owner && (typeof attempt !== "string" || !attempt.trim())) {
       return ownerUnsupported("delivery mutations without an attempt token");
@@ -791,13 +793,18 @@ export function createEventStore(
         ? { ...mutation.draft.deliveryLease }
         : undefined,
     };
-    if (localAttempt) {
+    if (owner && !ownerAttempt && draft.deliveryLease) {
+      return ownerUnsupported(
+        "delivery-bound append without exact owner attempt",
+      );
+    }
+    if (ownerAttempt) {
       if (
-        draft.deliveryLease?.deliveryId !== localAttempt.deliveryId ||
-        draft.deliveryLease?.owner !== localAttempt.attemptId
+        draft.deliveryLease?.deliveryId !== ownerAttempt.deliveryId ||
+        draft.deliveryLease?.owner !== ownerAttempt.attemptId
       ) {
         throw Object.assign(
-          new Error("Event mutation requires its exact local attempt."),
+          new Error("Event mutation requires its exact owner attempt."),
           {
             name: "ActionOwnershipLost",
             code: "ActionOwnershipLost",
@@ -809,7 +816,7 @@ export function createEventStore(
         `SELECT id FROM ${tables.event_deliveries}
          WHERE id=$1 AND status='leased' AND lease_owner=$2
            AND lease_expires_at IS NULL FOR UPDATE`,
-        [localAttempt.deliveryId, localAttempt.attemptId],
+        [ownerAttempt.deliveryId, ownerAttempt.attemptId],
       );
       if (!current.rows.length) {
         throw Object.assign(new Error("Local event authority was lost."), {
@@ -933,7 +940,7 @@ export function createEventStore(
           SELECT id FROM ${tables.event_deliveries}
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
             AND lease_owner = ${param(lease.owner)} AND ${
-            localAttempt
+            ownerAttempt
               ? "lease_expires_at IS NULL"
               : `lease_expires_at > ${commandTimestamp}`
           }
@@ -1212,8 +1219,13 @@ export function createEventStore(
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
     const executor = await deliveryMutationExecutor(claim.owner, claim.id);
-    const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
-    const params: unknown[] = localAttempt
+    if (ownerAttempt && claim.leaseMs !== undefined) {
+      return ownerUnsupported("per-job lease duration");
+    }
+    const leaseMs = ownerAttempt
+      ? undefined
+      : boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
+    const params: unknown[] = ownerAttempt
       ? [claim.id, claim.owner]
       : [claim.id, claim.owner, leaseMs];
     const timestamp = commandTimestamp(params);
@@ -1222,14 +1234,14 @@ export function createEventStore(
        SET status = 'leased', attempts = attempts + 1,
            lease_owner = $2,
            lease_expires_at = ${
-        localAttempt ? "NULL" : `${timestamp} + ($3 * INTERVAL '1 millisecond')`
+        ownerAttempt ? "NULL" : `${timestamp} + ($3 * INTERVAL '1 millisecond')`
       },
            updated_at = ${timestamp}, settled_at = NULL
        WHERE id = $1 AND attempts < max_attempts
          AND (
            (status IN ('pending', 'retry_wait') AND available_at <= ${timestamp})
            ${
-        localAttempt
+        ownerAttempt
           ? ""
           : `OR (status = 'leased' AND lease_expires_at <= ${timestamp})`
       }
@@ -1299,12 +1311,12 @@ export function createEventStore(
     const timestamp = commandTimestamp(params);
     const ownerFilter = leaseOwner
       ? `AND lease_owner = $${params.push(leaseOwner)} AND ${
-        localAttempt
+        ownerAttempt
           ? "lease_expires_at IS NULL"
           : `lease_expires_at > ${timestamp}`
       }`
       : "";
-    const allowed = status === "succeeded" || localAttempt
+    const allowed = status === "succeeded" || ownerAttempt
       ? "status = 'leased'"
       : "status IN ('pending', 'leased', 'retry_wait')";
     return await commitDeliverySettlement(current, async (transaction) => {
@@ -1363,7 +1375,7 @@ export function createEventStore(
     consumerIds?: readonly string[];
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
-    if (localAttempt) return ownerUnsupported("local claimNext");
+    if (owner) return ownerUnsupported("owner claimNext");
     const executor = await deliveryMutationExecutor(claim.owner);
     const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
     const params: unknown[] = [claim.owner, leaseMs];
@@ -1506,7 +1518,7 @@ export function createEventStore(
     claimDelivery,
     claimNext,
     async heartbeatDelivery(heartbeat) {
-      if (localAttempt) return ownerUnsupported("local heartbeat");
+      if (owner) return ownerUnsupported("owner heartbeat");
       const executor = await deliveryMutationExecutor(heartbeat.owner);
       const leaseMs = boundedInteger(
         heartbeat.leaseMs,
@@ -1573,7 +1585,7 @@ export function createEventStore(
                THEN ${timestamp} ELSE NULL END
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
            AND ${
-            localAttempt
+            ownerAttempt
               ? "lease_expires_at IS NULL"
               : `lease_expires_at > ${timestamp}`
           }
@@ -1587,16 +1599,15 @@ export function createEventStore(
     },
     listRecoverable,
     async recoverExpiredDeliveries(recovery = {}) {
-      if (localAttempt) {
-        return ownerUnsupported("recovery from a local attempt");
+      if (owner) {
+        return ownerUnsupported("expiry recovery in the owner path");
       }
-      // Recovery belongs to the fenced owner, not an expired execution attempt.
-      // Keep selection and settlement on this command's executor and clock.
-      const executor = await ownerDeliveryExecutor();
+      // Only the remaining non-owner legacy executor performs timed recovery.
+      const executor = session;
       const limit = boundedInteger(recovery.limit, 100, 1);
       const params: unknown[] = [
         recovery.namespace ?? null,
-        owner ? Math.min(limit, OWNER_RECOVERY_BATCH_LIMIT) : limit,
+        limit,
       ];
       const timestamp = commandTimestamp(params);
       const candidates = await executor.query<DeliveryRow>(
@@ -1609,7 +1620,6 @@ export function createEventStore(
         params,
       );
       const recovered: EventDelivery[] = [];
-      const publications: Array<() => void | Promise<void>> = [];
       for (const row of candidates.rows) {
         const delivery = await commitDeliverySettlement(
           mapDelivery(row, databaseSchema),
@@ -1634,37 +1644,15 @@ export function createEventStore(
               ? mapDelivery(result.rows[0], databaseSchema)
               : null;
           },
-          owner ? (publish) => publications.push(publish) : undefined,
         );
         if (delivery) recovered.push(delivery);
-      }
-      if (publications.length) {
-        // One bounded batch uses one boundary slot; the default scan can be
-        // larger than its per-command publication cap. Keep callbacks ordered
-        // and attempt all of them even when an earlier publication fails.
-        owner!.afterCommit!(async () => {
-          const errors: unknown[] = [];
-          for (const publish of publications) {
-            try {
-              await publish();
-            } catch (error) {
-              errors.push(error);
-            }
-          }
-          if (errors.length) {
-            throw new AggregateError(
-              errors,
-              "Delivery recovery publication failed.",
-            );
-          }
-        });
       }
       return recovered;
     },
     async recoverLostDelivery(input) {
       // This method is deliberately unavailable to legacy stores and to a live
-      // owner-local capability. A worker receives neither SQL nor this method.
-      if (!owner || localAttempt) {
+      // attempt capability. A worker receives neither SQL nor this method.
+      if (!owner || ownerAttempt) {
         return ownerUnsupported("lost-attempt recovery without owner control");
       }
       const transition = { ...input };
@@ -1699,9 +1687,11 @@ export function createEventStore(
             typeof value !== "string" || !value.trim() ||
             value !== value.trim() || value.length > 1024
           ) ||
-        typeof transition.leaseExpiresAt !== "string" ||
-        transition.leaseExpiresAt.length > 128 ||
-        !Number.isFinite(Date.parse(transition.leaseExpiresAt)) ||
+        (transition.leaseExpiresAt !== null && (
+          typeof transition.leaseExpiresAt !== "string" ||
+          transition.leaseExpiresAt.length > 128 ||
+          !Number.isFinite(Date.parse(transition.leaseExpiresAt))
+        )) ||
         !Number.isSafeInteger(transition.attempts) || transition.attempts < 1 ||
         !Number.isSafeInteger(transition.maxAttempts) ||
         transition.maxAttempts < 1 ||
@@ -1748,8 +1738,12 @@ export function createEventStore(
         const error = transition.disposition === "exhausted"
           ? `$${
             params.push(JSON.stringify({
-              name: "DeliveryLeaseExpired",
-              message: "The delivery lease was lost after its final attempt.",
+              name: transition.leaseExpiresAt === null
+                ? "AttemptLost"
+                : "DeliveryLeaseExpired",
+              message: transition.leaseExpiresAt === null
+                ? "The delivery attempt was lost after its final attempt."
+                : "The delivery lease was lost after its final attempt.",
             }))
           }::jsonb`
           : "";
@@ -1766,7 +1760,7 @@ export function createEventStore(
            WHERE d.id=$1 AND d.event_id=$2 AND d.consumer_id=$3
              AND d.settlement_scope_id=$4 AND d.action_scope_id IS NOT DISTINCT FROM $5::text
              AND d.status='leased' AND d.lease_owner=$6
-             AND d.lease_expires_at=$7::timestamptz
+             AND d.lease_expires_at IS NOT DISTINCT FROM $7::timestamptz
              AND d.attempts=$8 AND d.max_attempts=$9 AND ${attemptCondition}
              AND EXISTS(SELECT 1 FROM ${tables.events} e WHERE e.id=d.event_id
                AND e.namespace=$10 AND e.owner_id=$11)

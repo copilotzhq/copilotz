@@ -146,12 +146,12 @@ export async function fixture(
       typeof caller.assignmentId !== "string"
     ) throw new Error("source binding refused");
     // The real host first proves current authenticated Started/ctx authority.
-    // At claim, that exact reservation precedes lease acquisition. Only an
-    // untouched pending row or this exact live lease satisfies the data policy.
+    // At claim, that exact reservation precedes attempt activation. Only an
+    // untouched pending row or this exact current attempt satisfies the data policy.
     const rows = await tx.query<
       { namespace: string; binding: Record<string, unknown> }
     >(
-      `SELECT e.namespace,a.binding FROM owner_assignments a JOIN event_deliveries d ON d.id=a.delivery_id JOIN events e ON e.id=d.event_id WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE AND e.owner_id=$1 AND e.namespace='space' AND e.id=a.binding->>'sourceEventId' AND e.metadata->>'actionId'=a.binding->>'actionId' AND e.metadata->>'actionRunId'=a.binding->>'executionId' AND d.consumer_id='registered:'||(a.binding->>'actionId') AND ((d.status='pending' AND d.attempts=0 AND d.lease_owner IS NULL AND d.lease_expires_at IS NULL AND d.available_at<=$4::timestamptz) OR (d.status='leased' AND d.lease_owner=a.binding->>'dispatchAttemptId' AND d.lease_expires_at>$4::timestamptz))`,
+      `SELECT e.namespace,a.binding FROM owner_assignments a JOIN event_deliveries d ON d.id=a.delivery_id JOIN events e ON e.id=d.event_id WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE AND e.owner_id=$1 AND e.namespace='space' AND e.id=a.binding->>'sourceEventId' AND e.metadata->>'actionId'=a.binding->>'actionId' AND e.metadata->>'actionRunId'=a.binding->>'executionId' AND d.consumer_id='registered:'||(a.binding->>'actionId') AND ((d.status='pending' AND d.attempts=0 AND d.lease_owner IS NULL AND d.lease_expires_at IS NULL AND d.available_at<=$4::timestamptz) OR (d.status='leased' AND d.lease_owner=a.binding->>'dispatchAttemptId' AND d.lease_expires_at IS NULL))`,
       [
         "owner",
         caller.ownerEpoch,
@@ -306,7 +306,7 @@ export async function fixture(
         preparation,
         maxActive: scenario === "one-slot" ? 1 : 2,
         maxPending: 32,
-        leaseMs: 3000,
+
         onError: (error) => errors.push(error),
         policy: {
           ingress: (_tx, { fence, route }) =>

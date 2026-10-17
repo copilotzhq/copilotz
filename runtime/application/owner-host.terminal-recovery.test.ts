@@ -144,7 +144,7 @@ async function fixture(
     registry,
     catalog,
     executor,
-    leaseMs: 10000,
+
     async resolveAssignment(tx, caller) {
       const b = await control.resolveStarted(tx, caller);
       if (!b || "kind" in b) return undefined;
@@ -905,7 +905,7 @@ test("terminal host current policy must return literal true and cannot alter cur
 for (
   const coordinate of ["lease_expires_at", "cancellation_requested_at"] as const
 ) {
-  test(`terminal host rejects a post-policy microsecond change to ${coordinate}`, async () => {
+  test(`terminal host rejects a post-policy change to ${coordinate}`, async () => {
     const f = await fixture();
     try {
       if (coordinate === "cancellation_requested_at") {
@@ -923,7 +923,7 @@ for (
           configuration(f, async (tx) => {
             await tx.query(
               coordinate === "lease_expires_at"
-                ? "UPDATE event_deliveries SET lease_expires_at=lease_expires_at+INTERVAL '1 microsecond' WHERE id=$1"
+                ? "UPDATE event_deliveries SET lease_expires_at='2099-01-01T00:00:00.000001Z'::timestamptz WHERE id=$1"
                 : "UPDATE copilotz_operations SET cancellation_requested_at=cancellation_requested_at+INTERVAL '1 microsecond' WHERE root_event_id=$1",
               [
                 coordinate === "lease_expires_at"
@@ -1658,4 +1658,35 @@ for (const mode of ["in-process", "websocket"] as const) {
       },
     );
   }
+}
+
+for (const deadline of ["infinity", "-infinity"]) {
+  test(`terminal host refuses post-policy ${deadline} instead of treating it as a non-expiring attempt`, async () => {
+    const f = await fixture();
+    let policyCalls = 0;
+    try {
+      const before = await unchanged(f);
+      await assert.rejects(
+        createOwnerHost(
+          hostOptions(f),
+          undefined,
+          undefined,
+          configuration(f, async (tx) => {
+            policyCalls++;
+            await tx.query(
+              "UPDATE event_deliveries SET lease_expires_at=$1::timestamptz WHERE id=$2",
+              [deadline, f.refs.deliveryId],
+            );
+            return true;
+          }),
+        ),
+        { code: "owner_host_terminal_recovery_refused" },
+      );
+      assert.equal(policyCalls, 1);
+      assert.deepEqual(await unchanged(f), before);
+      assert.equal(await f.terminal(), null);
+    } finally {
+      await f.close();
+    }
+  });
 }

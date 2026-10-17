@@ -73,7 +73,6 @@ type PreparationFixtureOptions = {
     authenticateReceipt(caller: OwnerCaller): boolean;
   };
   now?(): string;
-  leaseMs?: number;
 };
 export async function fixture(options: PreparationFixtureOptions = {}) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
@@ -219,7 +218,6 @@ async function initializeFixture(
       registry,
       catalog,
       executor,
-      leaseMs: options.leaseMs ?? 60_000,
       async resolveAssignment(tx, caller) {
         const a = assignments.get(String(caller.assignmentId));
         if (assignmentControl) {

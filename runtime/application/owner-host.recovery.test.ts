@@ -82,7 +82,7 @@ for (const mode of ["in-process", "websocket"] as const) {
         registry,
         maxActive: 1,
         maxPending: 8,
-        leaseMs: 10000,
+
         policy: {
           ingress: (_tx, context) =>
             context.fence.identity.workerId === "ingress"

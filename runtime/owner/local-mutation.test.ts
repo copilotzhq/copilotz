@@ -32,7 +32,7 @@ async function fixture() {
     epoch: 1,
     holderId: "holder",
     commandTime: "2199-01-01T00:00:00.000Z",
-    localAttempt: { deliveryId: delivery.id, attemptId: "local" },
+    ownerAttempt: { deliveryId: delivery.id, attemptId: "local" },
     afterCommit() {},
   });
   await db.transaction(async (tx) => {
@@ -178,7 +178,7 @@ test("worker event gate refuses NULL deadline while owner control retains ordina
   const f = await fixture();
   try {
     await f.db.transaction(async (tx) => {
-      const { localAttempt: _, ...ownerCommit } = f.context(tx);
+      const { ownerAttempt: _, ...ownerCommit } = f.context(tx);
       const store = createEventStore({ session: f.db, ownerCommit });
       let calls = 0;
       await assert.rejects(

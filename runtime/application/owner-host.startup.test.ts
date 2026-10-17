@@ -485,7 +485,7 @@ for (const mode of ["in-process", "websocket"] as const) {
             : { mode: "resume", expectedEpoch: epoch },
           maxActive: 1,
           maxPending: 16,
-          leaseMs: 10000,
+
           policy: {
             ...options(db).policy,
             ingress: (_tx, context) =>

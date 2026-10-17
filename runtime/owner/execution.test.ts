@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import type { AnyActionDefinition } from "../actions/types.ts";
-import { ownerRenewalKey } from "../execution/owner-port.ts";
 import { createOperationCatalog } from "../streams/catalog.ts";
 import { createOwnerOperationSettlement } from "./settlement.ts";
 import { createOwnerTransactionPlanner } from "./transaction.ts";
@@ -194,26 +193,23 @@ test("lost completion reply recovers references after settlement without rerunni
   }
 });
 
-test("expiry, replacement assignment and stale epoch cannot hydrate or settle", async () => {
+test("clock passage grants no replacement; stale assignment and epoch cannot hydrate or settle", async () => {
   const f = await fixture();
   try {
-    const oldCaller = f.caller();
-    const oldPort = f.port(oldCaller);
-    const oldRef = f.reference();
+    const oldCaller = f.caller(),
+      oldPort = f.port(oldCaller),
+      oldRef = f.reference();
     await oldPort.claim(f.hint(), {});
-    f.state.time = at(1000);
+    f.state.time = at(120_000);
+    assert.equal((await oldPort.project(oldRef, {})).input, "world");
+    await f.replace();
+    await assert.rejects(f.port().claim(f.hint(), {}), {
+      code: "ActionOwnershipLost",
+    });
+    assert.equal((await f.store.getDelivery(oldRef.deliveryId))?.attempts, 1);
     await assert.rejects(oldPort.project(oldRef, {}), {
       code: "ActionOwnershipLost",
     });
-    await assert.rejects(
-      oldPort.complete(oldRef, { status: "failed", code: "action_failed" }, {}),
-      { code: "ActionOwnershipLost" },
-    );
-    await f.replace();
-    f.state.time = at(1001);
-    await f.port().claim(f.hint(), {});
-    assert.equal((await f.store.getDelivery(oldRef.deliveryId))?.attempts, 2);
-    assert.equal((await f.port().project(f.reference(), {})).input, "world");
     await assert.rejects(
       oldPort.complete(oldRef, { status: "failed", code: "action_failed" }, {}),
       { code: "ActionOwnershipLost" },
@@ -225,15 +221,6 @@ test("expiry, replacement assignment and stale epoch cannot hydrate or settle", 
       ),
       { code: "ActionOwnershipLost" },
     );
-    await f.port().complete(f.reference(), {
-      status: "cancelled",
-      code: "action_cancelled",
-    }, {});
-    const prior = await snapshot(f.db);
-    await assert.rejects(oldPort.project(oldRef, {}), {
-      code: "ActionOwnershipLost",
-    });
-    assert.deepEqual(await snapshot(f.db), prior);
   } finally {
     await f.close();
   }
@@ -471,7 +458,7 @@ test("forged provider details and inconsistent failure codes cannot enter termin
   }
 });
 
-test("captured invoked input survives source changes and current replacement reads only that capture", async () => {
+test("captured input survives source changes; an unretired replacement cannot reuse it", async () => {
   const f = await fixture();
   try {
     await f.port().claim(f.hint(), {});
@@ -482,8 +469,10 @@ test("captured invoked input survives source changes and current replacement rea
     assert.equal((await f.port().project(f.reference(), {})).input, "world");
     f.state.time = at(1001);
     await f.replace();
-    await f.port().claim(f.hint(), {});
-    assert.equal((await f.port().project(f.reference(), {})).input, "world");
+    await assert.rejects(f.port().claim(f.hint(), {}), {
+      code: "ActionOwnershipLost",
+    });
+    await assert.rejects(f.port().project(f.reference(), {}));
     assert.equal(
       (await f.db.query(
         "SELECT id FROM events WHERE deduplication_id='run:action:invoked'",
@@ -546,38 +535,10 @@ test("unknown outer claim or completion rolls back all effects and stops the own
   }
 });
 
-function renewalCommand(
-  f: Awaited<ReturnType<typeof fixture>>,
-  sequence = 1,
-): OwnerCommand {
-  const hint = f.hint();
-  return {
-    kind: "execution.renew",
-    domain: "occurrence",
-    key: ownerRenewalKey("owner", hint.assignmentId, hint.sessionId, sequence),
-    intent: { reference: f.reference(), sequence },
-  };
-}
-async function waitForRenewals(
-  f: Awaited<ReturnType<typeof fixture>>,
-  count: number,
-) {
-  await within((async () => {
-    while (
-      (await f.db.query(
-        "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
-      )).rows.length < count
-    ) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
-  })());
-}
-
-test("actual registered long Action renews the current lease and settles after the original expiry", async () => {
-  const entered = deferred();
-  const release = deferred();
+test("worker remains current beyond former lease interval without renewal receipts", async () => {
+  const entered = deferred(), release = deferred();
   const f = await fixture({
-    async afterAction() {
+    afterAction: async () => {
       entered.resolve();
       await release.promise;
     },
@@ -585,279 +546,61 @@ test("actual registered long Action renews the current lease and settles after t
   try {
     const pending = f.worker().execute(f.hint());
     await within(entered.promise);
-    f.state.time = at(700);
-    await waitForRenewals(f, 1);
     assert.equal(
       (await f.store.getDelivery(f.reference().deliveryId))?.leaseExpiresAt,
-      at(1700),
+      undefined,
     );
-    f.state.time = at(1400);
-    await waitForRenewals(f, 2);
-    f.state.time = at(2100);
+    f.state.time = at(120_000);
+    assert.equal((await f.port().project(f.reference(), {})).input, "world");
     release.resolve();
     assert.equal((await within(pending)).receipt.status, "completed");
-    assert.equal(f.state.executions, 1);
-    assert.equal(
-      (await f.store.getDelivery(f.reference().deliveryId))?.status,
-      "succeeded",
-    );
-    assert.equal((await f.db.query("SELECT id FROM nodes")).rows.length, 1);
-    const count = (await f.db.query(
-      "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
-    )).rows.length;
-    await new Promise<void>((resolve) => setTimeout(resolve, 370));
-    assert.equal(
-      (await f.db.query(
-        "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
-      )).rows.length,
-      count,
-    );
-  } finally {
-    release.resolve();
-    await f.close();
-  }
-});
-
-test("owner renewal uses captured commandTime, occurrence identity, and current authorization before duplicate lookup", async () => {
-  const f = await fixture();
-  try {
-    const claim = await f.port().claim(f.hint(), {});
-    assert.deepEqual(Object.keys(claim.result).sort(), [
-      "deliveryId",
-      "dispatchAttemptId",
-      "executionId",
-    ]);
-    assert.deepEqual((await f.port().project(f.reference(), {})).lease, {
-      remainingMs: 1000,
-      renewAfterMs: 333,
-    });
-    const command = renewalCommand(f);
-    f.state.time = at(700);
-    const result = await f.boundary.execute(f.caller(), command);
-    assert.deepEqual(result.result, {
-      ...f.reference(),
-      lease: { remainingMs: 1000, renewAfterMs: 333 },
-    });
-    assert.equal(
-      (await f.store.getDelivery(f.reference().deliveryId))?.leaseExpiresAt,
-      at(1700),
-    );
-    f.state.time = at(900);
-    assert.equal(
-      (await f.boundary.execute(f.caller(), command)).status,
-      "duplicate",
-    );
-    assert.equal(
-      (await f.store.getDelivery(f.reference().deliveryId))?.leaseExpiresAt,
-      at(1700),
-    );
-    await f.set("ctx_granted", false);
-    const before = await snapshot(f.db);
-    await assert.rejects(f.boundary.execute(f.caller(), command), {
-      code: "ActionOwnershipLost",
-    });
-    assert.deepEqual(await snapshot(f.db), before);
-    assert.equal(
-      (await f.port().complete(f.reference(), {
-        status: "failed",
-        code: "action_failed",
-      }, {})).result.status,
-      "failed",
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-test("renewal refuses forged identity, stale assignment, expired lease, cancellation and terminal execution", async () => {
-  const f = await fixture();
-  try {
-    await f.port().claim(f.hint(), {});
-    await f.port().project(f.reference(), {});
-    const caller = f.caller();
-    const command = renewalCommand(f);
-    const before = await snapshot(f.db);
-    for (
-      const invalid of [
-        { ...command, domain: "incarnation" as const },
-        { ...command, key: "forged" },
-        {
-          ...command,
-          intent: {
-            reference: { ...f.reference(), dispatchAttemptId: "old" },
-            sequence: 1,
-          },
-        },
-        { ...command, intent: { reference: f.reference(), sequence: 0 } },
-      ]
-    ) await assert.rejects(f.boundary.execute(caller, invalid));
-    assert.deepEqual(await snapshot(f.db), before);
-    f.state.time = at(1000);
-    await assert.rejects(f.boundary.execute(caller, command), {
-      code: "ActionOwnershipLost",
-    });
-    await f.replace();
-    await f.port().claim(f.hint(), {});
-    await assert.rejects(f.boundary.execute(caller, command), {
-      code: "ActionOwnershipLost",
-    });
-    await f.db.query(
-      "UPDATE copilotz_operations SET cancellation_requested_at=$1 WHERE operation_id=$2",
-      [at(1000), f.source.event.id],
-    );
-    await assert.rejects(f.boundary.execute(f.caller(), renewalCommand(f)), {
-      code: "ActionOwnershipLost",
-    });
-    await f.port().complete(f.reference(), {
-      status: "cancelled",
-      code: "action_cancelled",
-    }, {});
-    await assert.rejects(f.boundary.execute(f.caller(), renewalCommand(f)), {
-      code: "ActionOwnershipLost",
-    });
     assert.equal(
       (await f.db.query(
         "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
       )).rows.length,
       0,
     );
+    assert.equal(f.state.executions, 1);
   } finally {
+    release.resolve();
     await f.close();
   }
 });
 
-test("renewal receipt and lease change roll back together and unknown outer rollback stops the owner", async () => {
-  for (const unknown of [false, true]) {
-    const f = await fixture();
-    try {
-      await f.port().claim(f.hint(), {});
-      f.state.time = at(700);
-      const before = await snapshot(f.db);
-      if (unknown) f.state.rejectOuter = true;
-      else f.state.rollback = true;
-      await assert.rejects(
-        f.boundary.execute(f.caller(), renewalCommand(f)),
-        unknown
-          ? { code: "owner_commit_unknown" }
-          : /injected command rollback/,
-      );
-      assert.deepEqual(await snapshot(f.db), before);
-      assert.equal(f.boundary.state, unknown ? "stopped" : "acquired");
-    } finally {
-      await f.close();
-    }
-  }
-});
-
-test("current ctx revocation during a long Action aborts capabilities but permits safe restricted settlement", async () => {
-  const entered = deferred();
-  let failedMutation = false;
+test("revoked ctx refuses next command while narrow settlement remains available without polling", async () => {
+  const entered = deferred(), release = deferred();
   const f = await fixture({
-    async afterAction(ctx) {
+    afterAction: async (ctx) => {
       entered.resolve();
-      await new Promise<void>((resolve) =>
-        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
-      );
-      await assert.rejects(async () =>
-        await ctx.transaction(() => null, { operationKey: "after-revoke" })
-      );
-      failedMutation = true;
+      await release.promise;
+      await ctx.transaction(async ({ collections }) => {
+        await collections.notes.create({
+          id: "after-revoke",
+          title: "must refuse",
+        });
+      }, { operationKey: "after-revoke" });
     },
   });
   try {
     const pending = f.worker().execute(f.hint());
     await within(entered.promise);
     await f.set("ctx_granted", false);
-    const result = await within(pending);
-    assert.equal(result.receipt.status, "failed");
-    assert.equal(failedMutation, true);
-    assert.equal(f.state.executions, 1);
+    release.resolve();
+    assert.equal((await within(pending)).receipt.status, "failed");
     assert.equal(
-      (await f.db.query("SELECT id FROM nodes")).rows.length,
-      1,
-      "already committed business effects are not rolled back",
+      f.state.collectionAttempts,
+      2,
+      "both calls reached owner authorization",
     );
     assert.equal(
-      (await f.db.query(
-        "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
-      )).rows.length,
+      (await f.db.query("SELECT 1 FROM nodes WHERE id='after-revoke'")).rows
+        .length,
       0,
     );
-  } finally {
-    await f.close();
-  }
-});
-
-test("renewal acknowledgement remains behind outer commit and carries no Action data", async () => {
-  const f = await fixture();
-  try {
-    await f.port().claim(f.hint(), {});
-    f.state.time = at(700);
-    f.state.gateKind = "execution.renew";
-    let exposed = false;
-    const pending = f.boundary.execute(f.caller(), renewalCommand(f)).then(
-      (value) => {
-        exposed = true;
-        return value;
-      },
-    );
-    await within(f.gate.reached.promise);
-    assert.equal(exposed, false);
-    f.gate.release.resolve();
-    const result = await within(pending);
-    assert.deepEqual(result.result, {
-      ...f.reference(),
-      lease: { remainingMs: 1000, renewAfterMs: 333 },
-    });
-    assert.equal(JSON.stringify(result).includes("world"), false);
-  } finally {
-    await f.close();
-  }
-});
-
-test("lost committed renewal reply aborts capability scope and never reexecutes the claimed Action", async () => {
-  const entered = deferred();
-  const f = await fixture({
-    async afterAction(ctx) {
-      entered.resolve();
-      await new Promise<void>((resolve) =>
-        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
-      );
-    },
-  });
-  try {
-    const worker = f.worker();
-    const pending = worker.execute(f.hint());
-    await within(entered.promise);
-    f.state.time = at(700);
-    f.state.lostRenewal = true;
-    await assert.rejects(within(pending), /lost committed renewal reply/);
-    assert.equal(
-      (await f.store.getDelivery(f.reference().deliveryId))?.leaseExpiresAt,
-      at(1700),
-    );
-    assert.equal(
-      (await f.db.query(
-        "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
-      )).rows.length,
-      1,
-    );
-    assert.equal(
-      (await f.db.query(
-        "SELECT 1 FROM events WHERE deduplication_id='run:action:terminal'",
-      )).rows.length,
-      0,
-    );
-    await assert.rejects(
-      worker.execute(f.hint()),
-      /lost committed renewal reply/,
-    );
-    await assert.rejects(f.worker().execute(f.hint()), {
-      code: "registered_worker_replay_refused",
-    });
     assert.equal(f.state.executions, 1);
     assert.equal((await f.db.query("SELECT id FROM nodes")).rows.length, 1);
   } finally {
+    release.resolve();
     await f.close();
   }
 });
@@ -913,7 +656,7 @@ test("owner Action accepts the exact safe effect_indeterminate failure code", as
   }
 });
 
-test("owner Action claim and completion schedule settlement atomically, but renewal and duplicate commands do not", async () => {
+test("owner Action claim and completion schedule settlement atomically, but duplicate commands do not", async () => {
   const woke: string[] = [];
   const f = await fixture({
     scheduleSettlement: (ctx, target) => settlement.schedule(ctx, target),
@@ -951,7 +694,6 @@ test("owner Action claim and completion schedule settlement atomically, but rene
     );
     assert.equal(woke.length, 1);
     await port.project(f.reference(), {});
-    await port.renew(f.reference(), {});
     assert.equal(woke.length, 1);
     await port.complete(f.reference(), {
       status: "failed",

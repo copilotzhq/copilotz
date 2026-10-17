@@ -9,13 +9,8 @@ import {
   createOwnerConnectedWorker,
   OWNER_ACTION_WORKLOAD,
 } from "../application/owner-worker.ts";
-import {
-  createRegisteredOwnerExecutionPort,
-  ownerRenewalKey,
-} from "../execution/owner-port.ts";
-import { createExecutionHeartbeat } from "../execution/execution-heartbeat.ts";
+import { createRegisteredOwnerExecutionPort } from "../execution/owner-port.ts";
 import type { OwnerChildActionReference } from "../execution/child-action-port.ts";
-import type { RegisteredExecutionReference } from "../execution/registered-worker.ts";
 import type { OwnerCaller } from "./boundary.ts";
 import type { OwnerActionAssignmentBinding } from "./assignments.ts";
 import type { OwnerWorkerExecutionAssignment } from "./execution.ts";
@@ -55,11 +50,6 @@ async function within<T>(
   } finally {
     clearTimeout(timer);
   }
-}
-async function eventually(check: () => Promise<boolean>) {
-  await within((async () => {
-    while (!await check()) await new Promise((done) => setTimeout(done, 10));
-  })());
 }
 type Fence = OwnerWorkerCallContext["fence"];
 type Binding = {
@@ -105,7 +95,6 @@ for (const mode of ["in-process", "websocket"] as const) {
       });
       const f = await fixture({
         deferParentClaim: true,
-        leaseMs: 1500,
         now: () => new Date().toISOString(),
         transportAuthority: {
           caller(assignment) {
@@ -298,37 +287,17 @@ for (const mode of ["in-process", "websocket"] as const) {
                 assignmentId: context.streamId,
                 sessionId: parent.snapshot().connectionId,
               }, { signal: context.signal });
-              const started = performance.now();
-              const projection = await port.project(claimed.result, {
+              await port.project(claimed.result, {
                 signal: context.signal,
               });
-              const heartbeat = createExecutionHeartbeat<
-                RegisteredExecutionReference
-              >({
-                reference: claimed.result,
-                lease: projection.lease,
-                started,
-                renew: (reference, options) => port.renew(reference, options),
-                validate(result, expected) {
-                  const { lease: _lease, ...reference } = result;
-                  assert.deepEqual(reference, expected);
-                },
-                fail(error) {
-                  finish.reject(error);
-                },
-              });
               ready.resolve(connection);
-              try {
+              {
                 await finish.promise;
-                heartbeat.check();
-                await heartbeat.stop();
                 await port.complete(claimed.result, {
                   status: "completed",
                   output: null,
                 }, { signal: context.signal });
                 return new TextEncoder().encode("parent completed");
-              } finally {
-                await heartbeat.stop();
               }
             } catch (error) {
               ready.reject(error);
@@ -452,19 +421,11 @@ for (const mode of ["in-process", "websocket"] as const) {
           status: "duplicate",
           result: ref,
         });
-        await eventually(async () =>
+        assert.equal(
           (await f.db.query(
-            "SELECT 1 FROM owner_receipts WHERE owner=$1 AND kind='execution.renew' AND key=$2",
-            [
-              ownerId,
-              ownerRenewalKey(
-                ownerId,
-                f.parent.assignmentId,
-                f.parent.sessionId,
-                1,
-              ),
-            ],
-          )).rows.length > 0
+            "SELECT 1 FROM owner_receipts WHERE kind='execution.renew'",
+          )).rows.length,
+          0,
         );
         assert.equal(parent.snapshot().connectionId, f.parent.sessionId);
         assert.equal(child.snapshot().ownerReady, true);

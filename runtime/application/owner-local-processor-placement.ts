@@ -9,7 +9,6 @@ import { ownerPrincipalIdentity } from "../owner/principal.ts";
 import type {
   OwnerCaller,
   OwnerCommandBoundary,
-  OwnerCommandContext,
   OwnerCommandOutcome,
 } from "../owner/boundary.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -43,23 +42,6 @@ export type OwnerLocalProcessorPlacementEntry = Readonly<{
   /** Bookkeeping wake hint, not active work or authority. Never include this
    * potentially unresolved promise in shutdown's actual-work drain. */
   released: Promise<OwnerLocalProcessorAttemptReceipt>;
-}>;
-export type OwnerLocalProcessorNullLeaseEvidence = Readonly<{
-  assignment: Readonly<
-    { owner: string; epoch: number; binding: Reference; retired: boolean }
-  >;
-  delivery: Readonly<
-    {
-      id: string;
-      eventId: string;
-      consumerId: string;
-      status: "leased";
-      attempts: number;
-      leaseOwner: string;
-      leaseExpiresAt: null;
-    }
-  >;
-  source: Readonly<{ id: string; namespace: string; processorId: string }>;
 }>;
 function failure(message: string): Error {
   return Object.assign(new Error(message), {
@@ -133,7 +115,6 @@ export function createOwnerLocalProcessorPlacementController(
     >;
     /** Includes every generation's tombstone. Never evict uncertain history. */
     maxEntries: number;
-    authorizeAlarmContext(context: OwnerCommandContext): boolean;
     /** Trusted bounded exact predecessor-row FOR UPDATE proof in the actual
      * start transaction. The pure ledger never accepts caller-supplied proof. */
     predecessorRetired(
@@ -154,7 +135,6 @@ export function createOwnerLocalProcessorPlacementController(
   const execute = options.boundary.execute.bind(options.boundary),
     reserveCapacity = options.capacity.reserve.bind(options.capacity),
     isCurrent = options.isCurrent,
-    authorizeAlarmContext = options.authorizeAlarmContext,
     predecessorRetired = options.predecessorRetired,
     maxEntries = options.maxEntries;
   if (
@@ -602,60 +582,6 @@ export function createOwnerLocalProcessorPlacementController(
         return undefined;
       } finally {
         if (entered && state) state.authorizing = false;
-      }
-    },
-    classifyNullLease(
-      context: OwnerCommandContext,
-      input: OwnerLocalProcessorNullLeaseEvidence,
-    ): "pending-start" | "running" | undefined {
-      try {
-        const data = object(input, ["assignment", "delivery", "source"]),
-          transaction = context.tx,
-          time = context.commandTime,
-          signal = context.signal,
-          commit = { ...context.ownerCommit };
-        if (
-          !current() || authorizeAlarmContext(context) !== true || !current() ||
-          commit.transaction !== transaction ||
-          commit.ownerId !== fence.ownerId || commit.epoch !== fence.epoch ||
-          commit.holderId !== fence.holderId || commit.commandTime !== time ||
-          signal.aborted
-        ) return undefined;
-        const assignment = object(data.assignment, [
-            "owner",
-            "epoch",
-            "binding",
-            "retired",
-          ]),
-          delivery = object(data.delivery, [
-            "id",
-            "eventId",
-            "consumerId",
-            "status",
-            "attempts",
-            "leaseOwner",
-            "leaseExpiresAt",
-          ]),
-          source = object(data.source, ["id", "namespace", "processorId"]);
-        const bound = reference(assignment.binding),
-          s = latest.get(bound.deliveryId);
-        if (
-          !s?.current() || s.end || !s.authorized || !s.startPromise ||
-          !same(bound, s.reference) || assignment.owner !== fence.ownerId ||
-          assignment.epoch !== fence.epoch || assignment.retired !== false ||
-          delivery.id !== bound.deliveryId ||
-          delivery.eventId !== bound.sourceEventId ||
-          delivery.consumerId !== bound.consumerId ||
-          delivery.status !== "leased" || delivery.attempts !== s.ordinal ||
-          delivery.leaseOwner !== bound.attemptId ||
-          delivery.leaseExpiresAt !== null ||
-          source.id !== bound.sourceEventId ||
-          source.namespace !== bound.namespace ||
-          source.processorId !== bound.processorId
-        ) return undefined;
-        return s.startObserved ? "running" : "pending-start";
-      } catch {
-        return undefined;
       }
     },
   };

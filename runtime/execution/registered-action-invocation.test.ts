@@ -139,7 +139,6 @@ test("neutral Action and worker preserve ordinary context, generated IDs and loc
     deliveryId: "delivery",
     dispatchAttemptId: "attempt",
   };
-  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
   const worker = createRegisteredActionWorker({
     registry: leased.registry,
     createCapabilities: leased.options.createCapabilities,
@@ -149,12 +148,6 @@ test("neutral Action and worker preserve ordinary context, generated IDs and loc
         Promise.resolve({
           ...leased.invocation,
           workerId: "worker",
-          lease,
-        }),
-      renew: () =>
-        Promise.resolve({
-          status: "committed",
-          result: { ...reference, lease },
         }),
       complete: (_reference, completion) =>
         Promise.resolve({
@@ -421,13 +414,9 @@ test("Action worker prebinds owner execute before capability preparation awaits"
     deliveryId: "delivery",
     dispatchAttemptId: "attempt",
   };
-  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
   const port: import("./registered-worker.ts").RegisteredOwnerExecutionPort = {
     claim: () => Promise.resolve({ status: "committed", result: reference }),
-    project: () =>
-      Promise.resolve({ ...f.invocation, workerId: "worker", lease }),
-    renew: () =>
-      Promise.resolve({ status: "committed", result: { ...reference, lease } }),
+    project: () => Promise.resolve({ ...f.invocation, workerId: "worker" }),
     complete: (_reference, completion) =>
       Promise.resolve({
         status: "committed",

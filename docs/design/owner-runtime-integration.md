@@ -5,6 +5,15 @@ owner transaction boundaries, worker-to-owner calls and execution integration
 are being developed. This document describes the intended guarantees and the
 evidence still required. It does not certify full owner or wire conformance.
 
+## Approved simplification in progress
+
+The [owner-controlled attempt amendment](owner-attempt-authority.md) supersedes
+per-job worker leases, renewal heartbeats and running-attempt alarm maintenance.
+The current patch is under validation. Earlier checkpoint sections below retain
+the historical tests/implementation that introduced those mechanisms; they are
+not a requirement to keep them. Epoch/session/attempt authority, independent
+clocks, raw drain and effect uncertainty remain required.
+
 ## Current checkpoint
 
 Views are the sixth plugin primitive, including contributions, resolution,

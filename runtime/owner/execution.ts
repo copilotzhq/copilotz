@@ -33,11 +33,7 @@ import type {
   RegisteredExecutionProjection,
   RegisteredExecutionReference,
 } from "../execution/registered-worker.ts";
-import {
-  ownerClaimKey,
-  ownerCompletionKey,
-  ownerRenewalKey,
-} from "../execution/owner-port.ts";
+import { ownerClaimKey, ownerCompletionKey } from "../execution/owner-port.ts";
 import { assertJsonValue } from "../json.ts";
 import { digestContent } from "../content/digest.ts";
 import {
@@ -313,7 +309,6 @@ export function createOwnerExecutionCommands(
     catalog: OperationCatalog;
     executor: DeliveryExecutor;
     publish?: EventPublisher;
-    leaseMs?: number;
     /** Dormant host-private local composition. Missing capability fails closed.
      * authorizeStart must affirm the exact current control/capacity entry and
      * current permission to start this Action and access its input. */
@@ -424,10 +419,7 @@ export function createOwnerExecutionCommands(
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Execution catalog schema does not match.");
   }
-  const leaseMs = options.leaseMs ?? 30_000;
-  if (!Number.isSafeInteger(leaseMs) || leaseMs < 1) {
-    throw new TypeError("Invalid execution lease.");
-  }
+
   const tables = createCoreTableNames(options.schema);
   const operationTables = createOperationCatalogTables(options.schema);
   const authorized = new WeakMap<SqlExecutor, Authorized>();
@@ -475,7 +467,7 @@ export function createOwnerExecutionCommands(
     tx: SqlExecutor,
     caller: OwnerCaller,
     commandTime: string,
-    mode: "claim" | "input" | "complete" | "mutation" | "renew",
+    mode: "claim" | "input" | "complete" | "mutation",
     candidate?: OwnerLocalActionAssignmentBinding,
   ): Promise<Authorized> {
     const found = candidate
@@ -499,7 +491,7 @@ export function createOwnerExecutionCommands(
       if (
         !local ||
         assignment.invocation.actionRunId !== assignment.actionRunId ||
-        (!candidate && (mode === "claim" || mode === "renew"))
+        (!candidate && mode === "claim")
       ) {
         refuse("Local Actions require fresh control start and cannot renew.");
       }
@@ -631,7 +623,7 @@ export function createOwnerExecutionCommands(
       !delivery || delivery.settlementScopeId !== source.settlement_scope_id
     ) refuse("Execution delivery changed.");
     const time = Date.parse(commandTime);
-    const live = ownerAttemptIsLive(delivery, assignment, commandTime);
+    const live = ownerAttemptIsLive(delivery, assignment);
     if (candidate) {
       if (
         delivery.status !== "pending" || delivery.attempts !== 0 ||
@@ -642,11 +634,8 @@ export function createOwnerExecutionCommands(
       }
     } else if (mode === "claim") {
       const eligible = delivery.attempts < delivery.maxAttempts &&
-        ((["pending", "retry_wait"].includes(delivery.status) &&
-          Date.parse(delivery.availableAt) <= time) ||
-          (delivery.status === "leased" &&
-            Date.parse(delivery.leaseExpiresAt ?? "") <= time &&
-            delivery.leaseOwner !== ownerAttemptToken(assignment)));
+        (["pending", "retry_wait"].includes(delivery.status) &&
+          Date.parse(delivery.availableAt) <= time);
       if (!eligible && !live) refuse("Execution delivery is not claimable.");
     } else if (!live) refuse("Execution attempt is no longer live.");
     if (
@@ -767,7 +756,7 @@ export function createOwnerExecutionCommands(
       !delivery || delivery.eventId !== current.sourceEventId ||
       delivery.attempts !== 1 ||
       delivery.settlementScopeId !== state.delivery.settlementScopeId ||
-      !ownerAttemptIsLive(delivery, current, commandTime)
+      !ownerAttemptIsLive(delivery, current)
     ) {
       refuse(
         `Local execution ${
@@ -942,16 +931,10 @@ export function createOwnerExecutionCommands(
             namespace: state.assignment.namespace,
             operationId: state.delivery.settlementScopeId,
           }
-          : state.assignment.placement === "owner-local"
-          ? {
-            kind: "owner-local",
-            deliveryId: state.delivery.id,
-            attemptId: state.assignment.attemptId,
-          }
           : {
-            kind: "delivery",
+            kind: "owner-attempt",
             deliveryId: state.delivery.id,
-            leaseOwner: state.assignment.dispatchAttemptId,
+            attemptId: ownerAttemptToken(state.assignment),
           },
       });
       return createActionLifecycleEmitter({
@@ -960,14 +943,14 @@ export function createOwnerExecutionCommands(
         append: async (input) => {
           // Scope cancellation retains its special writer/admission semantics,
           // while the local EventStore independently requires this exact tuple.
-          if (state.assignment.placement === "owner-local") {
+          {
             const existing = input.draft.deliveryLease;
             if (
               existing &&
               (existing.deliveryId !== state.assignment.deliveryId ||
-                existing.owner !== state.assignment.attemptId)
+                existing.owner !== ownerAttemptToken(state.assignment))
             ) {
-              refuse("Local lifecycle delivery authority differs.");
+              refuse("Lifecycle delivery authority differs.");
             }
             if (!existing) {
               input = {
@@ -976,7 +959,7 @@ export function createOwnerExecutionCommands(
                   ...input.draft,
                   deliveryLease: {
                     deliveryId: state.assignment.deliveryId,
-                    owner: state.assignment.attemptId,
+                    owner: ownerAttemptToken(state.assignment),
                   },
                 },
               };
@@ -1097,7 +1080,6 @@ export function createOwnerExecutionCommands(
       const delivery = await store.claimDelivery({
         id: state.delivery.id,
         owner: ownerAttemptToken(state.assignment),
-        leaseMs,
       });
       // A receiptless live attempt is never a new execution entitlement.
       if (!delivery) refuse("Execution claim did not acquire a fresh attempt.");
@@ -1197,42 +1179,6 @@ export function createOwnerExecutionCommands(
       ...reference(state.assignment),
       ...(recovery ? { recovery } : {}),
       ...(contract ? { contract } : {}),
-    });
-  };
-  function leaseTiming(expiresAt: string, commandTime: string) {
-    const remainingMs = Date.parse(expiresAt) - Date.parse(commandTime);
-    if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) {
-      refuse("Execution lease has no remaining budget.");
-    }
-    return {
-      remainingMs,
-      renewAfterMs: Math.max(1, Math.min(10_000, Math.floor(remainingMs / 3))),
-    };
-  }
-  const renew: OwnerCommandHandler = async (_intent, context) => {
-    const state = requireAuthorized(context.tx);
-    if (state.assignment.placement !== "worker") {
-      refuse("Local attempts cannot renew.");
-    }
-    if (!await invoked(context.tx, state)) {
-      refuse("Execution has no captured invocation.");
-    }
-    const { store } = runtime(context);
-    if (
-      !await store.heartbeatDelivery({
-        id: state.delivery.id,
-        owner: state.assignment.dispatchAttemptId,
-        leaseMs,
-      })
-    ) {
-      refuse("Execution renewal lost its attempt.");
-    }
-    return json({
-      ...reference(state.assignment),
-      lease: leaseTiming(
-        new Date(Date.parse(context.commandTime) + leaseMs).toISOString(),
-        context.commandTime,
-      ),
     });
   };
   const complete: OwnerCommandHandler = async (_intent, context) => {
@@ -1340,10 +1286,6 @@ export function createOwnerExecutionCommands(
       actionId: captured.actionId,
       ...(state.assignment.placement === "worker"
         ? {
-          lease: leaseTiming(
-            state.delivery.leaseExpiresAt!,
-            context.commandTime,
-          ),
           workerId: state.assignment.workerId,
         }
         : { reference: localBinding(state.assignment) }),
@@ -1444,7 +1386,6 @@ export function createOwnerExecutionCommands(
         startLocal(binding as OwnerLocalActionAssignmentBinding, context),
       "execution.claim": claim,
       "execution.complete": complete,
-      "execution.renew": renew,
     },
     projections: {
       "execution.input": project,
@@ -1477,8 +1418,6 @@ export function createOwnerExecutionCommands(
         ? "complete"
         : command.kind === "execution.input"
         ? "input"
-        : command.kind === "execution.renew"
-        ? "renew"
         : undefined;
       if (!mode) throw new TypeError("Unknown execution command.");
       const state = await current(tx, caller, commandTime, mode);
@@ -1540,21 +1479,6 @@ export function createOwnerExecutionCommands(
             "Action output",
           );
         }
-      } else if (mode === "renew") {
-        if (a.placement !== "worker") {
-          refuse("Worker renewal requires worker placement.");
-        }
-        const data = object(command.intent, ["reference", "sequence"]);
-        if (
-          !Number.isSafeInteger(data.sequence) || Number(data.sequence) < 1 ||
-          command.domain !== "occurrence" || command.key !== ownerRenewalKey(
-              options.ownerId,
-              a.assignmentId,
-              a.sessionId,
-              Number(data.sequence),
-            )
-        ) refuse("Renewal identity is not assigned.");
-        checkReference(data.reference, a);
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
     },

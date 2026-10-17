@@ -189,7 +189,6 @@ async function setup(maxPendingDeliveries = 128) {
     registry,
     catalog,
     executor,
-    leaseMs: 60_000,
     resolveAssignment(_tx, caller) {
       const a = assignments.get(String(caller.assignmentId));
       return state.live && a ? { ...a, ctxGranted: state.ctx } : undefined;
@@ -590,6 +589,12 @@ test("child admission rejects parent, attempt, namespace and option spoofing bef
       errorCode("ActionOwnershipLost"),
     );
     f.state.time = "2020-01-01T00:01:01.000Z";
+    assert.equal(
+      (await f.admit()).status,
+      "duplicate",
+      "time alone cannot revoke current attempt",
+    );
+    f.state.live = false;
     await assert.rejects(f.admit(), errorCode("ActionOwnershipLost"));
   } finally {
     await f.close();
@@ -602,6 +607,36 @@ test("replacement parent attempts replay the same logical child without another 
     const ref = (await f.admit()).result as OwnerChildActionReference;
     const old = f.caller();
     f.state.time = "2020-01-01T00:01:01.000Z";
+    // Explicit fixture failed-attempt transition, not expiry or blind replay.
+    // High-level loss/effect eligibility is exercised in lost-action.test.ts.
+    const previous = f.state.parent!;
+    await f.db.transaction(async (tx) => {
+      const store = createEventStore({
+        session: f.db,
+        ownerCommit: {
+          transaction: tx,
+          ownerId,
+          epoch: 1,
+          holderId: "holder",
+          commandTime: f.state.time,
+          ownerAttempt: {
+            deliveryId: previous.deliveryId,
+            attemptId: previous.dispatchAttemptId,
+          },
+          afterCommit() {},
+        },
+      });
+      assert.equal(
+        (await store.failDelivery({
+          id: previous.deliveryId,
+          owner: previous.dispatchAttemptId,
+          error: new Error("known fixture failure"),
+          retryable: true,
+          backoffMs: 0,
+        }))?.status,
+        "retry_wait",
+      );
+    });
     const replacement = f.assign(f.rootRef, "replacement");
     f.state.parent = replacement;
     await f.claim(replacement);
@@ -1195,7 +1230,7 @@ for (
     "body-only",
     "source-body-and-digest",
     "max-attempts",
-    "lease-microsecond",
+    "unexpected-deadline",
   ] as const
 ) {
   test(`child parent facts survive awaited policy: ${mutation}`, async () => {
@@ -1231,7 +1266,7 @@ for (
           );
         } else {
           await tx.query(
-            "UPDATE event_deliveries SET lease_expires_at=lease_expires_at+interval '1 microsecond' WHERE id=$1",
+            "UPDATE event_deliveries SET lease_expires_at='2099-01-01T00:00:00.000001Z'::timestamptz WHERE id=$1",
             [a.deliveryId],
           );
         }

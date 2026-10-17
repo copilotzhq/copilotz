@@ -3,7 +3,7 @@ import {
   actionOwnershipStatement,
   type ActionWriter,
   combineActionStatements,
-  validateOwnerLocalActionAuthority,
+  validateOwnerActionAuthority,
 } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { OwnerEventCommitContext } from "../events/store.ts";
@@ -46,9 +46,9 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   protectedValues?: ProtectedValueRuntime;
   writer?: ActionWriter;
   transaction?: SqlExecutor;
-  /** Explicit owner-local command authority; never taken from lifecycle data. */
+  /** Explicit owner-controlled command authority; never taken from lifecycle data. */
   ownerAuthority?: OwnerEventCommitContext;
-  /** Required for owner-local writers and checked against the actual tables. */
+  /** Required for owner-attempt writers and checked against the actual tables. */
   schema?: string;
 }>;
 
@@ -117,8 +117,8 @@ export function createActionLifecycleAppender(
   const ownerAuthority = options.ownerAuthority
     ? {
       ...options.ownerAuthority,
-      localAttempt: options.ownerAuthority.localAttempt
-        ? { ...options.ownerAuthority.localAttempt }
+      ownerAttempt: options.ownerAuthority.ownerAttempt
+        ? { ...options.ownerAuthority.ownerAttempt }
         : undefined,
     }
     : undefined;
@@ -131,33 +131,35 @@ export function createActionLifecycleAppender(
       ? { ...options.store, tables: { ...options.store.tables } }
       : undefined,
   };
-  const localOwner = options.writer?.kind === "owner-local"
+  const attemptOwner = options.writer?.kind === "owner-attempt"
     ? { authority: ownerAuthority!, schema: options.schema! }
     : undefined;
-  if (options.writer?.kind === "owner-local") {
+  if (options.writer?.kind === "owner-attempt") {
     if (
       !options.store || !ownerAuthority || !options.transaction ||
       options.transaction !== ownerAuthority.transaction
     ) {
       throw new TypeError(
-        "Owner-local Actions require a store, authority and matching command transaction.",
+        "Owner-controlled Actions require a store, authority and matching command transaction.",
       );
     }
-    validateOwnerLocalActionAuthority(
+    validateOwnerActionAuthority(
       options.writer,
-      localOwner,
+      attemptOwner,
       options.store.tables,
     );
     if (
       options.commandTime !== undefined &&
       options.commandTime !== ownerAuthority.commandTime
     ) {
-      throw new TypeError("Owner-local Action command timestamps must match.");
+      throw new TypeError(
+        "Owner-controlled Action command timestamps must match.",
+      );
     }
   }
   const commandTime = options.commandTime !== undefined
     ? options.commandTime
-    : localOwner?.authority.commandTime;
+    : attemptOwner?.authority.commandTime;
   if (
     commandTime !== undefined &&
     (typeof commandTime !== "string" ||
@@ -166,8 +168,8 @@ export function createActionLifecycleAppender(
     throw new TypeError("Action commandTime must be a valid timestamp.");
   }
   return async ({ draft, data }) => {
-    if (localOwner) {
-      const expected = localOwner.authority.localAttempt!;
+    if (attemptOwner) {
+      const expected = attemptOwner.authority.ownerAttempt!;
       if (
         draft.deliveryLease && (
           draft.deliveryLease.deliveryId !== expected.deliveryId ||
@@ -252,10 +254,10 @@ export function createActionLifecycleAppender(
                 actionOwnershipStatement(
                   { draft, data },
                   options.writer,
-                  localOwner ? actualTables : tables,
+                  attemptOwner ? actualTables : tables,
                   param,
                   commandTime,
-                  localOwner,
+                  attemptOwner,
                 ),
                 ...(inStatement
                   ? [composeActionInputRetention(retention!, tables, param)]
@@ -295,7 +297,7 @@ export function createActionLifecycleAppender(
       });
     } catch (error) {
       if (
-        localOwner && error && typeof error === "object" && "code" in error &&
+        attemptOwner && error && typeof error === "object" && "code" in error &&
         error.code === "ActionOwnershipLost"
       ) {
         throw new ActionOwnershipLost(data.actionRunId);

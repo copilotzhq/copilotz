@@ -338,7 +338,6 @@ test("all helpers validate assignments rather than deriving authority from a tok
         ownerAttemptIsLive(
           delivery({ leaseOwner: "attempt", leaseExpiresAt: undefined }),
           input,
-          now,
         ),
       TypeError,
     );
@@ -555,8 +554,11 @@ test("attempt tokens are placement-specific and never worker or holder identitie
   assert.equal(ownerAttemptToken(processor()), "attempt");
 });
 
-test("worker liveness requires leased delivery, exact token and a strictly future non-NULL deadline", () => {
-  assert.equal(ownerAttemptIsLive(delivery(), worker(), now), true);
+test("worker liveness requires exact non-expiring owner attempt, not a deadline", () => {
+  assert.equal(
+    ownerAttemptIsLive(delivery({ leaseExpiresAt: null }), worker()),
+    true,
+  );
   for (
     const changes of [
       { id: "other" },
@@ -567,31 +569,30 @@ test("worker liveness requires leased delivery, exact token and a strictly futur
       { leaseOwner: undefined },
       { leaseExpiresAt: now },
       { leaseExpiresAt: past },
-      { leaseExpiresAt: undefined },
-      { leaseExpiresAt: null },
+      { leaseExpiresAt: future },
       { leaseExpiresAt: "invalid" },
       { leaseExpiresAt: "" },
       { leaseExpiresAt: 1 },
     ]
   ) {
     assert.equal(
-      ownerAttemptIsLive(delivery(changes), worker(), now),
+      ownerAttemptIsLive(delivery(changes), worker()),
       false,
       JSON.stringify(changes),
     );
   }
-  for (const time of ["invalid", "", future]) {
-    assert.equal(ownerAttemptIsLive(delivery(), worker(), time), false, time);
-  }
+
   assert.equal(
-    ownerAttemptIsLive(delivery(), { ...worker(), deliveryId: "other" }, now),
+    ownerAttemptIsLive(delivery({ leaseExpiresAt: null }), {
+      ...worker(),
+      deliveryId: "other",
+    }),
     false,
   );
   assert.equal(
     ownerAttemptIsLive(
-      delivery(),
+      delivery({ leaseExpiresAt: null }),
       { ...worker(), dispatchAttemptId: "other" },
-      now,
     ),
     false,
   );
@@ -600,14 +601,11 @@ test("worker liveness requires leased delivery, exact token and a strictly futur
 test("local liveness requires the exact NULL-deadline attempt and does not expire by clock", () => {
   for (const assignment of [local(), processor()]) {
     for (const leaseExpiresAt of [undefined, null]) {
-      for (
-        const commandTime of [past, now, future, "9999-12-31T23:59:59.999Z"]
-      ) {
+      {
         assert.equal(
           ownerAttemptIsLive(
             delivery({ leaseOwner: "attempt", leaseExpiresAt }),
             assignment,
-            commandTime,
           ),
           true,
         );
@@ -636,7 +634,6 @@ test("local liveness requires the exact NULL-deadline attempt and does not expir
             ...changes,
           }),
           assignment,
-          now,
         ),
         false,
         JSON.stringify(changes),
@@ -658,13 +655,13 @@ test("delivery liveness snapshots own data coordinates without invoking accessor
         },
       });
       assert.throws(
-        () => ownerAttemptIsLive(input, assignment, now),
+        () => ownerAttemptIsLive(input, assignment),
         TypeError,
         key,
       );
     }
     assert.throws(
-      () => ownerAttemptIsLive(Object.create(delivery()), assignment, now),
+      () => ownerAttemptIsLive(Object.create(delivery()), assignment),
       TypeError,
     );
   }
@@ -673,13 +670,12 @@ test("delivery liveness snapshots own data coordinates without invoking accessor
     delivery({ leaseOwner: "attempt" }),
     "leaseExpiresAt",
   ) as EventDelivery;
-  assert.equal(ownerAttemptIsLive(input, local(), now), true);
-  assert.equal(ownerAttemptIsLive(input, worker(), now), false);
+  assert.equal(ownerAttemptIsLive(input, local()), true);
+  assert.equal(ownerAttemptIsLive(input, worker()), false);
   assert.equal(
     ownerAttemptIsLive(
       without(input, "leaseOwner") as EventDelivery,
       local(),
-      now,
     ),
     false,
   );
@@ -697,30 +693,34 @@ test("event context derivation preserves exact command capabilities and copies o
     },
   };
   const workerResult = ownerEventCommitForAttempt(enriched, worker());
-  assert.deepEqual(workerResult, { ...input.ownerCommit, afterCommit });
+  assert.deepEqual(workerResult, {
+    ...input.ownerCommit,
+    afterCommit,
+    ownerAttempt: { deliveryId: "delivery", attemptId: "dispatch" },
+  });
   const localResult = ownerEventCommitForAttempt(enriched, local());
   assert.deepEqual(localResult, {
     ...input.ownerCommit,
     afterCommit,
-    localAttempt: { deliveryId: "delivery", attemptId: "attempt" },
+    ownerAttempt: { deliveryId: "delivery", attemptId: "attempt" },
   });
   assert.equal(workerResult.transaction, tx);
   assert.equal(localResult.transaction, tx);
   assert.equal(workerResult.afterCommit, afterCommit);
   assert.equal(localResult.afterCommit, afterCommit);
-  assert.equal("localAttempt" in workerResult, false);
+  assert.equal("ownerAttempt" in workerResult, true);
 });
 
 test("event context conversion is derivation, including separately authorized control-start candidates", () => {
   const input = { ...context(), caller: controlCaller() };
-  assert.deepEqual(ownerEventCommitForAttempt(input, local()).localAttempt, {
+  assert.deepEqual(ownerEventCommitForAttempt(input, local()).ownerAttempt, {
     deliveryId: "delivery",
     attemptId: "attempt",
   });
   // No local selector is manufactured from a local caller tag alone.
   assert.equal(
-    "localAttempt" in ownerEventCommitForAttempt(context(), worker()),
-    false,
+    "ownerAttempt" in ownerEventCommitForAttempt(context(), worker()),
+    true,
   );
 });
 
@@ -824,12 +824,12 @@ test("event context rejects malformed owner coordinates and missing capabilities
   }
 });
 
-test("worker context refuses any preexisting local selector, including undefined", () => {
+test("worker context refuses malformed or foreign attempt selectors, including undefined", () => {
   for (
-    const localAttempt of [undefined, null, {}, {
+    const ownerAttempt of [undefined, null, {}, {
       deliveryId: "delivery",
-      attemptId: "dispatch",
-    }, { deliveryId: "delivery", attemptId: "attempt" }]
+      attemptId: "attempt",
+    }]
   ) {
     const input = context();
     assert.throws(
@@ -837,30 +837,30 @@ test("worker context refuses any preexisting local selector, including undefined
         ownerEventCommitForAttempt(
           asContext({
             ...input,
-            ownerCommit: { ...input.ownerCommit, localAttempt },
+            ownerCommit: { ...input.ownerCommit, ownerAttempt },
           }),
           worker(),
         ),
-      ownershipLost,
+      ownerAttempt && "attemptId" in ownerAttempt ? ownershipLost : TypeError,
     );
   }
 });
 
 test("local context accepts an exact preexisting selector and rejects contradictions or extra keys", () => {
   const input = context();
-  const withAttempt = (localAttempt: unknown) => ({
+  const withAttempt = (ownerAttempt: unknown) => ({
     ...input,
-    ownerCommit: { ...input.ownerCommit, localAttempt },
+    ownerCommit: { ...input.ownerCommit, ownerAttempt },
   });
   assert.deepEqual(
     ownerEventCommitForAttempt(
       withAttempt({ deliveryId: "delivery", attemptId: "attempt" }),
       local(),
-    ).localAttempt,
+    ).ownerAttempt,
     { deliveryId: "delivery", attemptId: "attempt" },
   );
   for (
-    const localAttempt of [
+    const ownerAttempt of [
       undefined,
       null,
       {},
@@ -884,7 +884,7 @@ test("local context accepts an exact preexisting selector and rejects contradict
     ]
   ) {
     assert.throws(() =>
-      ownerEventCommitForAttempt(withAttempt(localAttempt), local())
+      ownerEventCommitForAttempt(withAttempt(ownerAttempt), local())
     );
   }
 });
@@ -910,7 +910,7 @@ test("event context and selector accessors are rejected without invocation", () 
       "holderId",
       "transaction",
       "commandTime",
-      "localAttempt",
+      "ownerAttempt",
     ]
   ) {
     const input = context();
@@ -923,14 +923,14 @@ test("event context and selector accessors are rejected without invocation", () 
   }
   for (const key of ["deliveryId", "attemptId"]) {
     const input = context();
-    const localAttempt = { deliveryId: "delivery", attemptId: "attempt" };
-    Object.defineProperty(localAttempt, key, getter);
+    const ownerAttempt = { deliveryId: "delivery", attemptId: "attempt" };
+    Object.defineProperty(ownerAttempt, key, getter);
     assert.throws(
       () =>
         ownerEventCommitForAttempt(
           asContext({
             ...input,
-            ownerCommit: { ...input.ownerCommit, localAttempt },
+            ownerCommit: { ...input.ownerCommit, ownerAttempt },
           }),
           local(),
         ),
@@ -944,7 +944,7 @@ test("returned context and tuple remain detached from later assignment and sourc
   const assignment = { ...local() };
   const sourceAttempt = { deliveryId: "delivery", attemptId: "attempt" };
   const input = context();
-  const ownerCommit = { ...input.ownerCommit, localAttempt: sourceAttempt };
+  const ownerCommit = { ...input.ownerCommit, ownerAttempt: sourceAttempt };
   const result = ownerEventCommitForAttempt(
     { ...input, ownerCommit },
     assignment,
@@ -966,11 +966,11 @@ test("returned context and tuple remain detached from later assignment and sourc
     holderId: "holder",
     commandTime: now,
     afterCommit,
-    localAttempt: { deliveryId: "delivery", attemptId: "attempt" },
+    ownerAttempt: { deliveryId: "delivery", attemptId: "attempt" },
   });
-  assert.notEqual(result.localAttempt, sourceAttempt);
+  assert.notEqual(result.ownerAttempt, sourceAttempt);
   const second = ownerEventCommitForAttempt(context(), local());
-  assert.notEqual(result.localAttempt, second.localAttempt);
+  assert.notEqual(result.ownerAttempt, second.ownerAttempt);
 });
 
 test("canonical local binding byte bounds still apply after selecting richer fields", () => {

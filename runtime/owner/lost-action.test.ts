@@ -194,7 +194,6 @@ async function fixture(
     registry,
     catalog,
     executor,
-    leaseMs: 10000,
     async resolveAssignment(tx, caller) {
       const b = await control.resolveStarted(tx, caller);
       if (!b || "kind" in b) return undefined;
@@ -318,6 +317,10 @@ async function fixture(
             ownerCommit: {
               ...ctx.ownerCommit,
               afterCommit: ctx.afterCommit,
+              ownerAttempt: {
+                deliveryId: value.deliveryId,
+                attemptId: value.dispatchAttemptId,
+              },
             },
             lockSettlementScope: (tx, scope) => catalog.lockScope(tx, scope),
           });
@@ -1155,8 +1158,8 @@ test("lost final first claim retains the complete effect matrix and exact termin
       assert.equal(delivery?.leaseOwner, undefined);
       assert.equal(delivery?.leaseExpiresAt, undefined);
       assert.deepEqual(delivery?.lastError, {
-        name: "DeliveryLeaseExpired",
-        message: "The delivery lease was lost after its final attempt.",
+        name: "AttemptLost",
+        message: "The delivery attempt was lost after its final attempt.",
       });
       assert.deepEqual(await effectBytes(f), evidence);
       assert.deepEqual(

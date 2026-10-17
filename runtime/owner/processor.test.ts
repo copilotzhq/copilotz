@@ -378,13 +378,12 @@ test("Processor cancellation skips onError and settlement remains available afte
   }
 });
 
-test("Processor completion respects current operation cancellation and expired attempt authority", async () => {
-  for (const mode of ["cancelled", "expired"] as const) {
+test("Processor completion respects current operation cancellation and revoked attempt authority", async () => {
+  for (const mode of ["cancelled", "revoked"] as const) {
     const f = await processorFixture({
       afterWrite: async () => {
-        if (mode === "expired") {
-          f.state.time = new Date(Date.parse(processorStart) + 1001)
-            .toISOString();
+        if (mode === "revoked") {
+          f.state.live = false;
         } else {await f.db.query(
             "UPDATE copilotz_operations SET cancellation_requested_at=$1::timestamptz WHERE operation_id=$2",
             [processorStart, f.source.eventId],
@@ -394,7 +393,7 @@ test("Processor completion respects current operation cancellation and expired a
     try {
       await assert.rejects(
         f.worker().execute(f.hint()),
-        mode === "expired" ? /lease/ : /cancellation/,
+        mode === "revoked" ? /current|authority|assignment/ : /cancellation/,
       );
       assert.equal(
         (await f.store.getDelivery(f.source.deliveryId))?.status,
@@ -406,47 +405,29 @@ test("Processor completion respects current operation cancellation and expired a
   }
 });
 
-test("Processor long handler renews its real delivery and unknown renewal never settles or reruns", async () => {
-  for (const unknown of [false, true]) {
-    const clock = { started: undefined as number | undefined };
-    let aborted = false;
-    const f = await processorFixture({
-      leaseMs: 100,
-      now: () =>
-        clock.started === undefined ? processorStart : new Date(
-          Date.parse(processorStart) +
-            Math.floor(performance.now() - clock.started),
-        ).toISOString(),
-      async afterWrite(ctx) {
-        await delay(250);
-        aborted = ctx.signal.aborted;
-      },
-    });
-    clock.started = performance.now();
-    try {
-      f.state.unknownRenewal = unknown;
-      const worker = f.worker();
-      if (unknown) {
-        await assert.rejects(worker.execute(f.hint()), /renewal/);
-        await assert.rejects(worker.execute(f.hint()), /renewal/);
-        assert.equal(aborted, true);
-        assert.equal(
-          (await f.store.getDelivery(f.source.deliveryId))?.status,
-          "leased",
-        );
-      } else {assert.equal(
-          (await worker.execute(f.hint())).receipt.status,
-          "succeeded",
-        );}
-      assert.ok(f.state.renewals >= 1);
-      assert.equal(f.state.executions, 1);
-      assert.equal(
-        (await f.store.getDelivery(f.source.deliveryId))?.attempts,
-        1,
-      );
-    } finally {
-      await f.close();
-    }
+test("Processor handler remains current across former expiry without renewal", async () => {
+  const f = await processorFixture({
+    async afterWrite() {
+      f.state.time = new Date(Date.parse(processorStart) + 120_000)
+        .toISOString();
+      await delay(20);
+    },
+  });
+  try {
+    assert.equal(
+      (await f.worker().execute(f.hint())).receipt.status,
+      "succeeded",
+    );
+    assert.equal(
+      (await f.db.query(
+        "SELECT 1 FROM owner_receipts WHERE kind='processor.renew'",
+      )).rows.length,
+      0,
+    );
+    assert.equal(f.state.executions, 1);
+    assert.equal((await f.store.getDelivery(f.source.deliveryId))?.attempts, 1);
+  } finally {
+    await f.close();
   }
 });
 

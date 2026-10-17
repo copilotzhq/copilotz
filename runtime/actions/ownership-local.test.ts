@@ -22,7 +22,7 @@ import {
 
 const schema = "owner_local_actions";
 const writer = () => ({
-  kind: "owner-local" as const,
+  kind: "owner-attempt" as const,
   deliveryId: "delivery",
   attemptId: "local-attempt",
 });
@@ -32,7 +32,7 @@ const authority = (transaction: SqlExecutor) => ({
   epoch: 1,
   holderId: "holder",
   commandTime: "2099-01-01T00:00:00.000Z",
-  localAttempt: { deliveryId: "delivery", attemptId: "local-attempt" },
+  ownerAttempt: { deliveryId: "delivery", attemptId: "local-attempt" },
 });
 const input = (run = "run"): ActionLifecycleAppendInput => ({
   draft: {
@@ -84,7 +84,7 @@ function configuration() {
   };
 }
 
-test("owner-local Action configuration refuses missing or mismatched authority before any work", () => {
+test("owner-controlled Action configuration refuses missing or mismatched authority before any work", () => {
   const invalid = [
     { store: undefined },
     { transaction: undefined },
@@ -100,14 +100,14 @@ test("owner-local Action configuration refuses missing or mismatched authority b
   for (const change of invalid) {
     assert.throws(
       () => createActionLifecycleAppender({ ...configuration(), ...change }),
-      /owner-local|schema/i,
+      /owner-controlled|schema/i,
     );
   }
   for (
     const change of [
-      { localAttempt: undefined },
-      { localAttempt: { deliveryId: "other", attemptId: "local-attempt" } },
-      { localAttempt: { deliveryId: "delivery", attemptId: "other" } },
+      { ownerAttempt: undefined },
+      { ownerAttempt: { deliveryId: "other", attemptId: "local-attempt" } },
+      { ownerAttempt: { deliveryId: "delivery", attemptId: "other" } },
       { epoch: 0 },
       { holderId: "" },
       { ownerId: "" },
@@ -121,12 +121,12 @@ test("owner-local Action configuration refuses missing or mismatched authority b
           ...options,
           ownerAuthority: { ...options.ownerAuthority, ...change },
         }),
-      /owner-local|timestamp/i,
+      /owner-controlled|timestamp/i,
     );
   }
 });
 
-test("owner-local Action statement independently locks epoch then exact NULL-deadline attempt", () => {
+test("owner-controlled Action statement independently locks epoch then exact NULL-deadline attempt", () => {
   const options = configuration();
   const params: unknown[] = [];
   const statement = actionOwnershipStatement(
@@ -159,7 +159,7 @@ test("owner-local Action statement independently locks epoch then exact NULL-dea
     ), /schema/i);
 });
 
-test("owner-local Action appender snapshots supplied authority and rejects actual-store schema mismatch", async () => {
+test("owner-controlled Action appender snapshots supplied authority and rejects actual-store schema mismatch", async () => {
   const options = {
     ...configuration(),
     actions: { work: { id: "work", execute: () => null } },
@@ -194,8 +194,8 @@ test("owner-local Action appender snapshots supplied authority and rejects actua
   });
   options.writer.deliveryId = "changed-delivery";
   options.writer.attemptId = "changed-attempt";
-  options.ownerAuthority.localAttempt.deliveryId = "changed-delivery";
-  options.ownerAuthority.localAttempt.attemptId = "changed-attempt";
+  options.ownerAuthority.ownerAttempt.deliveryId = "changed-delivery";
+  options.ownerAuthority.ownerAttempt.attemptId = "changed-attempt";
   options.ownerAuthority.ownerId = "changed-owner";
   options.ownerAuthority.epoch = 2;
   options.ownerAuthority.holderId = "changed-holder";
@@ -233,7 +233,7 @@ test("owner-local Action appender snapshots supplied authority and rejects actua
   );
 });
 
-test("owner-local Action appender captures protected preparation and adoption callbacks", async () => {
+test("owner-controlled Action appender captures protected preparation and adoption callbacks", async () => {
   let entered!: () => void;
   let release!: () => void;
   const preparing = new Promise<void>((resolve) => {
@@ -337,7 +337,7 @@ async function fixture() {
         schema,
         ownerCommit: localStore
           ? ownerAuthority
-          : { ...ownerAuthority, localAttempt: undefined },
+          : { ...ownerAuthority, ownerAttempt: undefined },
       });
       const coordinator = createEventCoordinator({
         store,
@@ -362,7 +362,7 @@ async function fixture() {
       const control = createEventStore({
         session: db,
         schema,
-        ownerCommit: { ...options.ownerAuthority, localAttempt: undefined },
+        ownerCommit: { ...options.ownerAuthority, ownerAttempt: undefined },
       });
       const root = await control.commitMutation({
         transaction: tx,
@@ -389,7 +389,7 @@ async function fixture() {
   }
 }
 
-test("owner-local Action database lifecycle ignores elapsed time and rolls back atomically", async () => {
+test("owner-controlled Action database lifecycle ignores elapsed time and rolls back atomically", async () => {
   const f = await fixture();
   try {
     await f.db.transaction(async (tx) => {
@@ -444,7 +444,7 @@ test("owner-local Action database lifecycle ignores elapsed time and rolls back 
   }
 });
 
-test("owner-local Action database fence rejects stale epochs, holders, deliveries and tokens", async () => {
+test("owner-controlled Action database fence rejects stale epochs, holders, deliveries and tokens", async () => {
   const f = await fixture();
   try {
     for (
@@ -473,8 +473,8 @@ test("owner-local Action database fence rejects stale epochs, holders, deliverie
             writer: { ...options.writer, ...change },
             ownerAuthority: {
               ...options.ownerAuthority,
-              localAttempt: {
-                ...options.ownerAuthority.localAttempt,
+              ownerAttempt: {
+                ...options.ownerAuthority.ownerAttempt,
                 ...change,
               },
             },

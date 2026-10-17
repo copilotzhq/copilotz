@@ -3,8 +3,9 @@
 Approved by the user on 17 October 2026. This decision supersedes the recovered
 F5 §4.2 and REGISTER §2 requirement that worker execution retain a delivery
 lease and renewal heartbeat. It applies to the Copilotz owner-managed path,
-including both local and worker Actions and Processors. It does not assert that
-the code migration is complete.
+including both local and worker Actions and Processors. The scoped runtime
+migration is independently checked below; content protection and general
+retained-history migration remain separate gates.
 
 ## Guarantees and simpler authority
 
@@ -96,3 +97,97 @@ The approved original local/worker split is historical evidence, not a claim
 that this replacement was already specified. Every subsequent slice applies the
 [simplification review](refactor-cleanup.md): name the removed mechanism, its
 surviving guarantee, remaining consumers and the tests justifying deletion.
+
+## Runtime migration and regression disposition
+
+The current patch converges the EventStore's command-local selector and Action
+lifecycle writer for both placements. It removes the two owner renewal routes,
+renewal keys/budgets/sequence state, worker renewal loops, the now-unused
+execution-heartbeat module and its bundle entries. Owner-context claimNext,
+heartbeat, expiry sweep and missing-selector delivery mutations refuse rather
+than falling back to the legacy timed path. The owner-only expiry sweep's dead
+callback aggregation/clamp is removed too.
+
+No running-attempt alarm classifier remains. A successful claim/start retires
+only its exact availability wake in the same transaction. The bounded inventory
+checks running-row representation without re-reading every assignment or
+constructing additional authority proofs. Unrelated commands never delete a
+running attempt's anomalous alarm; the due-alarm path refuses it. Actual
+start/current/retirement and raw-drain proofs remain at their proper boundaries,
+including authenticated command contexts for local Processor reserve/retry.
+
+Oxian already supplies connection-level WebSocket heartbeat detection, separate
+from jobs. In-process work relies on its event-fabric lifetime. An optional
+execution deadline is a separate product policy; the current owner host does not
+supply one. Content-protection renewal remains a separate implementation gate;
+the ordinary worker path did not support open-body renewal before this change.
+
+Original tests remain in the preceding Git history. Mechanism-specific tests are
+retired only where the mechanism is removed; their surviving guarantees are
+mapped below. The scoped validation and its retained initial failures are
+recorded after the migration table.
+
+| Original test responsibility                                 | Replacement or retained evidence                                                                                                                                                                                                                         |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| execution-heartbeat: serial renewal and stop drain           | Renewal scheduling is retired. Existing local raw-call/drain, held acknowledgement and worker cancellation/terminal tests retain real unsettled-call lifetime guarantees                                                                                 |
+| execution-heartbeat: duplicate/wrong renewal reference       | Renewal replies are retired. Exact attempt/reference and duplicate claim without hydration or reexecution remain in owner-port, registered-worker and attempt-authority tests                                                                            |
+| execution-heartbeat: timeout plus late successful renewal    | The artificial renewal uncertainty source is retired. Actual claim/terminal/child/effect unknown outcomes, late responses and quarantine remain tested separately                                                                                        |
+| registered-worker and owner-port renewal/timing/budget cases | Ports have no renewal method; waiting executions issue no renewal commands; actual owner tests cross the former lease interval and verify NULL deadlines, no renew receipts and no expiry alarms                                                         |
+| execution renewal COMMIT/rollback/permission cases           | Existing actual claim/completion COMMIT, rollback, duplicate, stale attempt/epoch and safe receipt tests remain; next real Collection command checks a revoked grant, and narrow settlement remains separate                                             |
+| expiry-triggered replacement reuses invoked input            | Elapsed time no longer permits replacement. Captured input immutability and refusal of an unretired replacement are explicit; authorized retry/capture reuse remains a separate actual recovery/preparation obligation                                   |
+| deliveries: timed claim/renew/reclaim                        | Exact non-expiring attempt mutation, no time-based stealing, stale token/epoch refusal and unsupported owner renewal/claimNext. Claim/settlement rollback, output gate, replay and retry availability remain                                             |
+| delivery-recovery: owner expiry cutoff and implicit sweep    | Explicit configured exact lost targets replace selection by time. Retain original fault/snapshot harness for captured time, retry requeue, duplicate, unknown COMMIT, publication and current fence; high-level eligibility remains in lost-action tests |
+| owner sweep default clamp and twenty-callback aggregation    | The owner sweep/clamp is retired. Twenty bounded explicit recovery commands retain ordered/no-starvation publication and earlier callback failure coverage through the real boundary                                                                     |
+| generic EventStore owner-sweep backend fixtures              | Owner publication guarantees move to explicit recovery/boundary tests. Genuine non-owner expiry keeps namespace filtering, default100 and explicit7 limits on each backend; no fictitious legacy1000-to100 clamp                                         |
+
+No timer removal removes current business authorization, exact predecessor
+retirement, retry backoff, effect ambiguity or output gating. Arbitrary
+out-of-band policy-table changes are checked by the next protected owner
+command; explicit cancellation/session loss still closes the worker signal.
+Observation revocation notifications remain a distinct F4/F6 obligation.
+
+The former local alarm evidence API and its forged-context/17 inert evidence
+variants retire with that classification mechanism. Held-start, unknown outcome,
+exact caller, retry ordinal, predecessor retirement, capacity and raw-drain
+tests remain. Six actual Action helper corruption variants now exercise the real
+post-acknowledgement input boundary before factory admission. Both actual
+Processor held-reply scenarios still verify real command context authenticity,
+no premature execution, and no due successor before known receipt plus drain.
+
+### Retained historical timestamp precision limit
+
+The legacy finite-deadline lost-Action recovery handoff still passes through
+EventDelivery date normalization. Sub-millisecond precision can be lost, causing
+an exact recovery CAS to refuse. This fails closed; the historical compatibility
+test proves millisecond-aligned deadlines only. New owner-controlled attempts
+use NULL deadlines and are unaffected. Exact SQL-text handoff for historical
+finite deadlines remains a separate compatibility correction, not an accepted
+migration or automatic adoption of old open attempts.
+
+## Independent checkpoint validation — 17 October 2026
+
+The exact frozen source overlay was independently checked against the preceding
+committed tree `97f71b24b405b95a8aa0f01e80bf1046de6194c0`. Runtime edits add 209
+and remove 1,001 lines (net 792 removed); test/document changes are separate.
+
+- Pure worker/port/attempt/local controller coverage: 154 passed
+- Canonical 17-file PostgreSQL run: 156 registrations, 154 passed and 2 failed.
+  Both failures were an old connected long-Action test waiting for retired renew
+  replies. Its complete corrected 12-case file passes on PostgreSQL, checking
+  held execution, 10-minute owner-clock passage, real former timer interval, SQL
+  NULL deadline, no renewals and exactly one completion on both transports
+- Broader 14-file PostgreSQL owner migration: 186 passed. Its first attempt
+  stopped at ordinary typechecking because a worker-only startup fixture had not
+  narrowed the expanded placement union; explicit worker/Action narrowing
+  corrected it
+- Complete native EventStore file: 30 passed, including real PGlite and
+  PostgreSQL default 100 / explicit 7 legacy recovery behavior
+- Role bundles: 12 passed. Strict surface: 46 exports and 725 production
+  modules. Changed-file lint/format and architecture checks pass
+
+All tests used ordinary typechecking. Counts overlap and are not summed into a
+new full-suite total. Original failures remain in the acceptance evidence; the
+canonical correction is split-run evidence, not a rewritten all-green run. The
+separate two-red current-effect-authority test delta is excluded from this
+checkpoint. No merge, publication, production migration or public
+local-placement completion is implied.

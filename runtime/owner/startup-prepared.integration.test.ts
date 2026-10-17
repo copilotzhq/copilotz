@@ -117,7 +117,6 @@ async function fixture() {
     registry,
     catalog,
     executor,
-    leaseMs: 60_000,
     scheduleSettlement: settlement.schedule,
     allowRecovery: () => true,
     async resolveAssignment(tx, caller) {
@@ -162,7 +161,9 @@ async function fixture() {
     // This startup fixture supplies its own private Started grant (the SQL
     // assignment resolver above also uses an explicit fixture grant).
     isCurrentParent(who, binding) {
+      if (binding.kind !== "action") return false;
       const a = binding.assignment;
+      if (a.placement !== "worker") return false;
       return who.principal.kind === "worker" &&
         who.principal.workerId === a.workerId &&
         who.assignmentId === a.assignmentId && who.sessionId === a.sessionId &&

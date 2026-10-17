@@ -39,7 +39,6 @@ import {
 import { createOwnerLocalProcessorPort } from "../owner/local-processor-port.ts";
 import {
   createOwnerLocalProcessorPlacementController,
-  type OwnerLocalProcessorNullLeaseEvidence,
   type OwnerLocalProcessorPlacementEntry,
 } from "./owner-local-processor-placement.ts";
 import type { createOwnerHostCommandContexts } from "./owner-host-local.ts";
@@ -232,14 +231,13 @@ export function createOwnerHostLocalProcessors(
   const operationTables = createOperationCatalogTables(schema);
   const tables = createCoreTableNames(schema),
     assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
-  const authorizeAlarmContext = options.contexts.isCurrent;
+  const isCurrentCommand = options.contexts.isCurrent;
   const controller = createOwnerLocalProcessorPlacementController({
     controlCaller,
     boundary: { execute },
     isCurrent,
     capacity: options.capacity,
     maxEntries,
-    authorizeAlarmContext,
     async predecessorRetired(tx, binding) {
       const rows = (await tx.query(
         `SELECT owner,epoch,assignment_key,delivery_id,retired,CASE WHEN octet_length(binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN binding ELSE '{}'::jsonb END AS binding FROM ${assignmentTable} WHERE owner=$1 AND epoch=$2 AND assignment_key=$3 AND delivery_id=$4 FOR UPDATE`,
@@ -364,7 +362,7 @@ export function createOwnerHostLocalProcessors(
         const proof = startProofs.get(context.tx);
         startProofs.delete(context.tx);
         if (
-          !proof || !authorizeAlarmContext(context) ||
+          !proof || !isCurrentCommand(context) ||
           proof.time !== context.commandTime ||
           !exact(proof.caller, context.caller) || !exact(proof.binding, binding)
         ) refuse();
@@ -380,7 +378,7 @@ export function createOwnerHostLocalProcessors(
         );
         if (
           grant?.attemptOrdinal !== proof.ordinal ||
-          !authorizeAlarmContext(context)
+          !isCurrentCommand(context)
         ) refuse();
         await assignments.reserveLocal(context, binding);
       },
@@ -413,7 +411,7 @@ export function createOwnerHostLocalProcessors(
     ): Promise<string> {
       const delivery = copy(suppliedDelivery);
       if (
-        !authorizeAlarmContext(context) ||
+        !isCurrentCommand(context) ||
         context.command.kind !== "processor.local-complete" ||
         context.command.domain !== "incarnation"
       ) refuse();
@@ -435,7 +433,7 @@ export function createOwnerHostLocalProcessors(
         context.commandTime,
       );
       if (
-        permission?.settlement !== true || !authorizeAlarmContext(context) ||
+        permission?.settlement !== true || !isCurrentCommand(context) ||
         !controller.isCurrent(
           context.caller,
           binding,
@@ -468,7 +466,7 @@ export function createOwnerHostLocalProcessors(
         !["accepted", "running"].includes(String(row.operation_state)) ||
         row.cancellation_requested_at !== null ||
         row.available_at !== delivery.availableAt || row.lease_owner !== null ||
-        row.lease_expires_at !== null || !authorizeAlarmContext(context) ||
+        row.lease_expires_at !== null || !isCurrentCommand(context) ||
         !controller.isCurrent(
           context.caller,
           binding,
@@ -547,52 +545,6 @@ export function createOwnerHostLocalProcessors(
       });
       entry.attachDriver(driver);
       await driver.run();
-    },
-    async classifyNullLease(
-      context: OwnerCommandContext,
-      deliveryId: string,
-    ): Promise<"pending-start" | "running" | undefined> {
-      if (!authorizeAlarmContext(context)) return undefined;
-      const rows = (await context.tx.query(
-        `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,a.retired,
-        CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,
-        d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.lease_owner,d.lease_expires_at,e.owner_id AS source_owner,e.namespace
-        FROM ${assignmentTable} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
-        WHERE a.owner=$1 AND a.delivery_id=$2 AND a.retired=FALSE FOR SHARE OF a`,
-        [ownerId, deliveryId],
-      )).rows;
-      if (rows.length !== 1 || !authorizeAlarmContext(context)) {
-        return undefined;
-      }
-      const row = rows[0],
-        stored = parseOwnerStoredAssignment(row),
-        binding = stored.binding;
-      if (
-        binding.placement !== "owner-local" || binding.kind !== "processor" ||
-        row.source_owner !== ownerId || !selects(binding.processorId)
-      ) return undefined;
-      return controller.classifyNullLease(context, {
-        assignment: {
-          owner: stored.owner,
-          epoch: stored.epoch,
-          binding,
-          retired: stored.retired,
-        },
-        delivery: {
-          id: row.id,
-          eventId: row.event_id,
-          consumerId: row.consumer_id,
-          status: row.status,
-          attempts: row.attempts,
-          leaseOwner: row.lease_owner,
-          leaseExpiresAt: row.lease_expires_at,
-        },
-        source: {
-          id: row.event_id,
-          namespace: row.namespace,
-          processorId: binding.processorId,
-        },
-      } as OwnerLocalProcessorNullLeaseEvidence);
     },
   };
 }

@@ -14,7 +14,6 @@ import type {
 } from "../owner/boundary.ts";
 import type { OwnerEffectPort } from "../owner/effects-client.ts";
 
-import { createExecutionHeartbeat } from "./execution-heartbeat.ts";
 import type { RegisteredExecutionRecovery } from "./recovery.ts";
 
 /** Host-derived live assignment identity. These hints never grant authority. */
@@ -33,23 +32,10 @@ export type RegisteredExecutionReceipt =
   & Readonly<{
     status: "completed" | "failed" | "cancelled";
   }>;
-/** Safe relative timing, discounted by monotonic request latency at the worker.
- * It is scheduling guidance, never a lease grant or a receipt replay permit.
- * A budget too short to renew (including one millisecond) refuses execution. */
-export type RegisteredExecutionLease = Readonly<{
-  remainingMs: number;
-  renewAfterMs: number;
-}>;
-export type RegisteredExecutionRenewal =
-  & RegisteredExecutionReference
-  & Readonly<{
-    lease: RegisteredExecutionLease;
-  }>;
 /** Authorized ordinary data, read only after a known durable claim. */
 export type RegisteredExecutionProjection = Readonly<{
   actionId: string;
   recovery?: RegisteredExecutionRecovery;
-  lease: RegisteredExecutionLease;
   input: OwnerJson;
   namespace: string;
   databaseSchema: string;
@@ -66,7 +52,7 @@ export type RegisteredExecutionProjection = Readonly<{
 }>;
 /** Trusted adapters implement these names using data, never shipped closures.
  * Claim/completion receipts contain references only; project rechecks the exact
- * current assignment, session, epoch and live lease before exposing input. */
+ * current assignment, session, attempt and epoch before exposing input. */
 export type RegisteredOwnerExecutionPort = Readonly<{
   /** Separately admitted effect routes, bound to this live assignment. Missing
    * capability refuses ctx.effect; never substitutes worker-local receipts. */
@@ -108,15 +94,6 @@ export type RegisteredOwnerExecutionPort = Readonly<{
     reference: RegisteredExecutionReference,
     options: OwnerCommandExecuteOptions,
   ): Promise<RegisteredExecutionProjection>;
-  renew(
-    reference: RegisteredExecutionReference,
-    options: OwnerCommandExecuteOptions,
-  ): Promise<
-    Readonly<{
-      status: "committed" | "duplicate";
-      result: RegisteredExecutionRenewal;
-    }>
-  >;
   complete(
     reference: RegisteredExecutionReference,
     completion: RegisteredExecutionCompletion,
@@ -228,50 +205,6 @@ function receipt(
   }
   return copied;
 }
-function unknownOutcome(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as {
-    code?: unknown;
-    indeterminate?: unknown;
-    outcome?: unknown;
-    execution?: unknown;
-  };
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    ["owner_commit_unknown", "persistence_indeterminate"].includes(
-      String(value.code),
-    );
-}
-/** Ordinary function lifetime only; open response-body renewal is unsupported. */
-function executionHeartbeat(input: {
-  port: RegisteredOwnerExecutionPort;
-  reference: RegisteredExecutionReference;
-  lease: RegisteredExecutionLease;
-  started: number;
-  fail(error: unknown): void;
-}) {
-  return createExecutionHeartbeat({
-    ...input,
-    renew: (ref, options) => input.port.renew(snapshot(ref), options),
-    validate(result, expected) {
-      const actual = reference({
-        executionId: result.executionId,
-        deliveryId: result.deliveryId,
-        dispatchAttemptId: result.dispatchAttemptId,
-      });
-      if (
-        Object.keys(actual).some((key) =>
-          actual[key as keyof typeof actual] !==
-            expected[key as keyof typeof actual]
-        )
-      ) {
-        throw failure("registered_worker_reference_invalid");
-      }
-      snapshot(result.lease);
-    },
-  });
-}
-
 /** One bounded worker lifetime. Entries, including uncertain outcomes, are never
  * evicted. Replacing this instance requires host assignment/session recovery;
  * it does not promise exactly-once business execution across process restarts. */
@@ -305,12 +238,8 @@ export function createRegisteredActionWorker(
     const control = new AbortController();
     const exposed = new AbortController();
     let ownerOpen = true;
-    let renewalFailed = false;
-    let renewalFailure: unknown;
-    let heartbeat: ReturnType<typeof executionHeartbeat> | undefined;
     const cancel = () => {
       cancelled = true;
-      heartbeat?.requestStop();
       // Never expose the private signal used for command cancellation to Action code.
       control.abort();
       exposed.abort();
@@ -320,8 +249,6 @@ export function createRegisteredActionWorker(
     const check = () => {
       if (cancelled) throw failure("action_cancelled");
       if (!ownerOpen) throw failure("registered_worker_context_closed");
-      if (renewalFailed) throw renewalFailure;
-      heartbeat?.check();
     };
     try {
       check();
@@ -340,7 +267,6 @@ export function createRegisteredActionWorker(
         return { status: "replayed", receipt: receipt(recovered, ref) };
       }
       check();
-      const projectionStarted = performance.now();
       const projection = snapshot(
         await port.project(snapshot(ref), { signal: control.signal }),
       );
@@ -357,18 +283,6 @@ export function createRegisteredActionWorker(
         ]
       ) identifier(value);
       check();
-      heartbeat = executionHeartbeat({
-        port,
-        reference: ref,
-        lease: projection.lease,
-        started: projectionStarted,
-        fail(error) {
-          renewalFailed = true;
-          renewalFailure = error;
-          control.abort(error);
-          exposed.abort();
-        },
-      });
       const invokeAction = projection.invocation.operationKey ===
             projection.invocation.actionRunId &&
           projection.invocation.actionRunId === ref.executionId
@@ -434,20 +348,13 @@ export function createRegisteredActionWorker(
       } finally {
         ownerOpen = false;
         exposed.abort();
-        await heartbeat.stop();
-      }
-      if (renewalFailed) {
-        if (unknownOutcome(renewalFailure)) throw renewalFailure;
-        completion = cancelled
-          ? { status: "cancelled", code: "action_cancelled" }
-          : { status: "failed", code: "action_failed" };
       }
       // A cancelled execution still attempts one safe terminal command. Current
       // owner authorization decides whether this assignment can settle anymore.
       const ack = await port.complete(
         snapshot(ref),
         snapshot(completion),
-        cancelled || renewalFailed ? {} : { signal: control.signal },
+        cancelled ? {} : { signal: control.signal },
       );
       if (ack.status !== "committed" && ack.status !== "duplicate") {
         throw failure("registered_worker_completion_invalid");
@@ -460,7 +367,6 @@ export function createRegisteredActionWorker(
     } finally {
       ownerOpen = false;
       exposed.abort();
-      await heartbeat?.stop();
       signal?.removeEventListener("abort", cancel);
     }
   }

@@ -136,7 +136,6 @@ async function fixture(
     registry,
     catalog,
     executor,
-    leaseMs: 10000,
     scheduleSettlement: settlement.schedule,
     async resolveAssignment(tx, caller) {
       const binding = await assignments.resolveStarted(tx, caller);

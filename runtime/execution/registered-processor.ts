@@ -14,7 +14,6 @@ import type {
 } from "../owner/boundary.ts";
 import type { ProcessorEvent } from "../plugins/processor.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
-import { createExecutionHeartbeat } from "./execution-heartbeat.ts";
 import { runRegisteredProcessorInvocation } from "./registered-processor-invocation.ts";
 import type { RegisteredProcessorCompletion } from "./registered-invocation.ts";
 
@@ -39,13 +38,9 @@ export type RegisteredProcessorProjection = Readonly<{
   event: ProcessorEvent;
   attempts: number;
   maxAttempts: number;
-  lease: Readonly<{ remainingMs: number; renewAfterMs: number }>;
   operationKey: string;
   identity: RuntimeIdentity;
 }>;
-export type RegisteredProcessorRenewal =
-  & RegisteredProcessorReference
-  & Readonly<{ lease: RegisteredProcessorProjection["lease"] }>;
 export type RegisteredProcessorOwnerPort = Readonly<{
   claim(
     assignment: RegisteredProcessorAssignment,
@@ -62,14 +57,6 @@ export type RegisteredProcessorOwnerPort = Readonly<{
     reference: RegisteredProcessorReference,
     options: OwnerCommandExecuteOptions,
   ): Promise<RegisteredProcessorProjection>;
-  renew(
-    reference: RegisteredProcessorReference,
-    options: OwnerCommandExecuteOptions,
-  ): Promise<
-    Readonly<
-      { status: "committed" | "duplicate"; result: RegisteredProcessorRenewal }
-    >
-  >;
   complete(
     reference: RegisteredProcessorReference,
     completion: RegisteredProcessorCompletion,
@@ -140,20 +127,6 @@ export const ownerProcessorCompletionKey = (
     ref.deliveryId,
     ref.dispatchAttemptId,
   ]);
-export const ownerProcessorRenewalKey = (
-  ownerId: string,
-  assignmentId: string,
-  sessionId: string,
-  sequence: number,
-) =>
-  JSON.stringify([
-    "processor.renew",
-    ownerId,
-    assignmentId,
-    sessionId,
-    sequence,
-  ]);
-
 function failure(code: string) {
   return Object.assign(new Error(code), {
     name: "RegisteredProcessorError",
@@ -252,8 +225,6 @@ export function createRegisteredProcessorOwnerPort(
   let attempted = false;
   let projected = false;
   let closed = false;
-  let renewing = false;
-  let sequence = 0;
   const refuse = (): never => {
     throw failure("processor_replay_refused");
   };
@@ -322,48 +293,9 @@ export function createRegisteredProcessorOwnerPort(
       projected = true;
       return result as unknown as RegisteredProcessorProjection;
     },
-    async renew(value, callOptions) {
-      const ref = reference(value);
-      requireClaim(ref);
-      if (
-        closed || !projected || renewing || !assignment ||
-        sequence >= Number.MAX_SAFE_INTEGER
-      ) refuse();
-      renewing = true;
-      const next = ++sequence;
-      try {
-        const outcome = await port.execute({
-          kind: "processor.renew",
-          domain: "occurrence",
-          key: ownerProcessorRenewalKey(
-            ownerId,
-            assignment!.assignmentId,
-            assignment!.sessionId,
-            next,
-          ),
-          intent: { reference: ref, sequence: next },
-        }, callOptions);
-        const result = snapshot(outcome.result) as RegisteredProcessorRenewal;
-        if (closed || !result || Object.keys(result).length !== 3) refuse();
-        same(
-          reference({
-            deliveryId: result.deliveryId,
-            dispatchAttemptId: result.dispatchAttemptId,
-          }),
-          ref,
-        );
-        return { status: outcome.status, result };
-      } catch (error) {
-        closed = true;
-        throw error;
-      } finally {
-        renewing = false;
-      }
-    },
     async complete(value, result, callOptions) {
       const ref = reference(value);
       requireClaim(ref);
-      if (renewing) refuse();
       closed = true;
       const outcome = await port.complete({
         kind: "processor.complete",
@@ -430,16 +362,8 @@ export function createRegisteredProcessorWorker(
     const exposed = new AbortController();
     let cancelled = signal?.aborted ?? false;
     let open = true;
-    let renewalFailure: unknown;
-    let renewalFailed = false;
-    let heartbeat:
-      | ReturnType<
-        typeof createExecutionHeartbeat<RegisteredProcessorReference>
-      >
-      | undefined;
     const cancel = () => {
       cancelled = true;
-      heartbeat?.requestStop();
       control.abort();
       exposed.abort();
     };
@@ -448,8 +372,6 @@ export function createRegisteredProcessorWorker(
     const check = () => {
       if (cancelled) throw failure("processor_cancelled");
       if (!open) throw failure("processor_context_closed");
-      if (renewalFailed) throw renewalFailure;
-      heartbeat?.check();
     };
     try {
       check();
@@ -468,7 +390,6 @@ export function createRegisteredProcessorWorker(
         return { status: "replayed", receipt: receipt(recovered, ref) };
       }
       check();
-      const started = performance.now();
       const projection = snapshot(
         await port.project(ref, { signal: control.signal }),
       );
@@ -494,30 +415,7 @@ export function createRegisteredProcessorWorker(
         projection.maxAttempts < projection.attempts
       ) throw failure("processor_projection_invalid");
       check();
-      heartbeat = createExecutionHeartbeat({
-        reference: ref,
-        lease: projection.lease,
-        started,
-        renew: (value, callOptions) => port.renew(value, callOptions),
-        validate(value, expected) {
-          if (!value || Object.keys(value).length !== 3) {
-            throw failure("processor_reference_invalid");
-          }
-          same(
-            reference({
-              deliveryId: value.deliveryId,
-              dispatchAttemptId: value.dispatchAttemptId,
-            }),
-            expected,
-          );
-        },
-        fail(error) {
-          renewalFailed = true;
-          renewalFailure = error;
-          control.abort(error);
-          exposed.abort();
-        },
-      });
+
       const invokeAction = port.invokeAction?.bind(port);
       const prepareAction = port.prepareAction?.bind(port);
       const execute = port.execute.bind(port);
@@ -575,9 +473,7 @@ export function createRegisteredProcessorWorker(
       } finally {
         open = false;
         exposed.abort();
-        await heartbeat.stop();
       }
-      if (renewalFailed) throw renewalFailure;
       const ack = await port.complete(
         snapshot(ref),
         snapshot(result),
@@ -597,7 +493,6 @@ export function createRegisteredProcessorWorker(
     } finally {
       open = false;
       exposed.abort();
-      await heartbeat?.stop();
       signal?.removeEventListener("abort", cancel);
     }
   }

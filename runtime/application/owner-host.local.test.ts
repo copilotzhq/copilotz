@@ -156,7 +156,7 @@ async function fixture(input: {
     policy: { ...baseOptions(db, registry).policy, ...input.policy },
     maxActive: input.maxActive ?? 4,
     maxPending: 32,
-    leaseMs: 10_000,
+
     onError: (error) => errors.push(error),
     transport: {
       transports: input.mode === "websocket"
@@ -734,8 +734,8 @@ for (const mode of ["in-process", "websocket"] as const) {
             (await f.db.query(
               "SELECT name FROM owner_alarms WHERE name LIKE '%host.delivery%'",
             )).rows.length,
-            2,
-            "removing the local alarm preserves both ordinary Processor alarms",
+            3 - maxActive,
+            "only not-yet-started Processors retain availability alarms",
           );
           await f.host.wake();
           await f.host.wake();
@@ -1414,7 +1414,7 @@ for (const stage of ["start", "terminal"] as const) {
 
 for (
   const corruption of [
-    "active-worker-null-deadline",
+    "reintroduced-worker-alarm",
     "reintroduced-local-alarm",
   ] as const
 ) {
@@ -1440,7 +1440,7 @@ for (
             },
           }),
         },
-        processors: corruption === "active-worker-null-deadline"
+        processors: corruption === "reintroduced-worker-alarm"
           ? {
             watch: defineProcessor({
               id: "fixture.watch",
@@ -1465,17 +1465,17 @@ for (
           (await f.db.query<{ id: string; lease_expires_at: string | null }>(
             "SELECT id,lease_expires_at FROM event_deliveries WHERE consumer_id=$1 AND status='leased'",
             [
-              corruption === "active-worker-null-deadline"
+              corruption === "reintroduced-worker-alarm"
                 ? "processor:fixture.watch"
                 : "registered:fixture.local",
             ],
           )).rows[0];
         assert.ok(target);
-        if (corruption === "active-worker-null-deadline") {
-          assert.notEqual(
+        if (corruption === "reintroduced-worker-alarm") {
+          assert.equal(
             target.lease_expires_at,
             null,
-            "actual transport worker owns a positive lease",
+            "worker attempts have no job lease",
           );
           const binding = (await f.db.query<
             { binding: { placement: string; workerId: string } }
@@ -1495,12 +1495,6 @@ for (
           );
         }
         await f.db.transaction(async (tx) => {
-          if (corruption === "active-worker-null-deadline") {
-            await tx.query(
-              "UPDATE event_deliveries SET lease_expires_at=NULL WHERE id=$1",
-              [target.id],
-            );
-          }
           await tx.query(
             "INSERT INTO owner_alarms(owner,name,due_at) VALUES('owner',$1,'2000-01-01T00:00:00.000Z') ON CONFLICT(owner,name) DO UPDATE SET due_at=EXCLUDED.due_at",
             [JSON.stringify(["host.delivery", "space", target.id])],
@@ -1516,7 +1510,7 @@ for (
         assert.equal(authored, 1);
         assert.equal(
           processorCalls,
-          corruption === "active-worker-null-deadline" ? 1 : 0,
+          corruption === "reintroduced-worker-alarm" ? 1 : 0,
         );
         assert.equal(f.counts().workerActionFactories, 0);
         assert.equal(
@@ -1674,10 +1668,6 @@ async function localHelperFixture(
               const result = await handler(input, context);
               if (kind === "owner.local-start") {
                 assert.ok(reference);
-                assert.equal(
-                  await helper.classifyNullLease(context, reference.deliveryId),
-                  "pending-start",
-                );
               }
               return result;
             }),
@@ -1731,19 +1721,14 @@ async function localHelperFixture(
             false,
             "a structural copy is not the live actual context",
           );
-          assert.equal(
-            await helper.classifyNullLease(
-              { ...context },
-              reference.deliveryId,
-            ),
-            undefined,
-          );
-          const tag = await helper.classifyNullLease(
-            context,
-            reference.deliveryId,
-          );
-          if (tag) stats.scans.push(tag);
-          return tag ?? null;
+
+          const row = (await context.tx.query(
+            "SELECT status FROM event_deliveries WHERE id=$1",
+            [reference.deliveryId],
+          )).rows[0];
+          const status = String(row.status);
+          stats.scans.push(status);
+          return status;
         });
       },
     },
@@ -1784,7 +1769,6 @@ async function localHelperFixture(
     schema: "public",
     controlCaller: control,
     maxActive: 1,
-    contexts,
     assertControl,
     isCurrent: () => current,
     onIndeterminate(error) {
@@ -1889,7 +1873,7 @@ test("local host actual helper classifies committed held start reply in an unrel
       )).rows,
       [{ status: "leased", attempts: 1, lease_expires_at: null }],
     );
-    assert.equal((await f.scan()).result, "pending-start");
+    assert.equal((await f.scan()).result, "leased");
     assert.equal(f.stats.factories, 0);
     assert.equal(f.stats.inputProjections, 0);
     assert.equal(f.stats.active, 1);
@@ -1898,13 +1882,7 @@ test("local host actual helper classifies committed held start reply in an unrel
       false,
       "handler return closes context membership",
     );
-    assert.equal(
-      await f.helper.classifyNullLease(
-        f.lastContext(),
-        f.reference().deliveryId,
-      ),
-      undefined,
-    );
+
     f.releaseReply.resolve();
     assert.equal((await f.running).error, undefined);
     assert.equal(f.stats.authored, 1);
@@ -1920,91 +1898,55 @@ test("local host actual helper classifies committed held start reply in an unrel
   }
 });
 
-test("local host actual helper refuses missing or mismatched NULL evidence without turning it into current ctx", async () => {
-  const f = await localHelperFixture();
-  try {
-    await f.committedStart.promise;
-    const binding = f.reference();
-    const delivery = (await f.db.query(
-      "SELECT lease_owner,status,attempts FROM event_deliveries WHERE id=$1",
-      [binding.deliveryId],
-    )).rows[0];
-    const source = (await f.db.query(
-      "SELECT metadata,type,namespace FROM events WHERE id=$1",
-      [binding.sourceEventId],
-    )).rows[0];
-    const cases = [
-      ["UPDATE event_deliveries SET lease_owner='foreign' WHERE id=$1", [
-        binding.deliveryId,
-      ]],
-      ["UPDATE event_deliveries SET attempts=2 WHERE id=$1", [
-        binding.deliveryId,
-      ]],
-      ["UPDATE owner_assignments SET retired=TRUE WHERE delivery_id=$1", [
-        binding.deliveryId,
-      ]],
-      ["UPDATE owner_assignments SET epoch=2 WHERE delivery_id=$1", [
-        binding.deliveryId,
-      ]],
-      ["UPDATE events SET type='foreign' WHERE id=$1", [binding.sourceEventId]],
-      [
-        "UPDATE events SET metadata=jsonb_set(metadata,'{actionId}','123'::jsonb) WHERE id=$1",
-        [binding.sourceEventId],
-      ],
-    ] as const;
-    // Deliberate corruption fixture only. The trigger is disabled and restored
-    // in one transaction; failure rolls the DDL back as well. Ordinary setup,
-    // execution, scans and all production writes retain the immutable guard.
-    const corruptSource = (sql: string, params: unknown[]) =>
-      f.db.transaction(async (tx) => {
-        await tx.query(
-          'ALTER TABLE events DISABLE TRIGGER "copilotz_events_immutable"',
-        );
-        await tx.query(sql, params);
-        await tx.query(
-          'ALTER TABLE events ENABLE TRIGGER "copilotz_events_immutable"',
-        );
+test("local host actual input refuses corrupt held-start authority before factory admission", async () => {
+  for (
+    const corruption of [
+      "token",
+      "attempts",
+      "retired",
+      "epoch",
+      "source-type",
+      "source-action",
+    ]
+  ) {
+    const f = await localHelperFixture();
+    try {
+      await f.committedStart.promise;
+      const binding = f.reference();
+      await f.db.transaction(async (tx) => {
+        if (corruption.startsWith("source-")) {
+          await tx.query(
+            'ALTER TABLE events DISABLE TRIGGER "copilotz_events_immutable"',
+          );
+          await tx.query(
+            corruption === "source-type"
+              ? "UPDATE events SET type='foreign' WHERE id=$1"
+              : "UPDATE events SET metadata=jsonb_set(metadata,'{actionId}','123'::jsonb) WHERE id=$1",
+            [binding.sourceEventId],
+          );
+          await tx.query(
+            'ALTER TABLE events ENABLE TRIGGER "copilotz_events_immutable"',
+          );
+        } else {
+          const sql = corruption === "token"
+            ? "UPDATE event_deliveries SET lease_owner='foreign' WHERE id=$1"
+            : corruption === "attempts"
+            ? "UPDATE event_deliveries SET attempts=2 WHERE id=$1"
+            : corruption === "retired"
+            ? "UPDATE owner_assignments SET retired=TRUE WHERE delivery_id=$1"
+            : "UPDATE owner_assignments SET epoch=2 WHERE delivery_id=$1";
+          await tx.query(sql, [binding.deliveryId]);
+        }
       });
-    for (const [sql, params] of cases) {
-      const sourceCorruption = sql.startsWith("UPDATE events");
-      if (sourceCorruption) await corruptSource(sql, [...params]);
-      else await f.db.query(sql, [...params]);
-      const result = await outcome(f.scan());
-      assert.ok(result.error || result.value?.result === null, sql);
-      assert.equal(f.stats.active, 1);
-      assert.equal(f.stats.factories, 0);
-      assert.equal(f.stats.inputProjections, 0);
-      await f.db.query(
-        "UPDATE event_deliveries SET lease_owner=$2,status=$3,attempts=$4 WHERE id=$1",
-        [
-          binding.deliveryId,
-          delivery.lease_owner,
-          delivery.status,
-          delivery.attempts,
-        ],
-      );
-      await f.db.query(
-        "UPDATE owner_assignments SET retired=FALSE,epoch=1 WHERE delivery_id=$1",
-        [binding.deliveryId],
-      );
-      if (sourceCorruption) {
-        await corruptSource(
-          "UPDATE events SET metadata=$2::jsonb,type=$3,namespace=$4 WHERE id=$1",
-          [
-            binding.sourceEventId,
-            JSON.stringify(source.metadata),
-            source.type,
-            source.namespace,
-          ],
-        );
-      }
+      f.releaseReply.resolve();
+      assert.ok((await f.running).error, corruption);
+      assert.equal(f.stats.factories, 0, corruption);
+      assert.equal(f.stats.authored, 0, corruption);
+      assert.equal(f.stats.active, 1, corruption);
+      assert.equal(f.stats.released, 0, corruption);
+    } finally {
+      await f.close();
     }
-    assert.equal((await f.scan()).result, "pending-start");
-    f.releaseReply.resolve();
-    assert.equal((await f.running).error, undefined);
-    assert.equal(f.stats.released, 1);
-  } finally {
-    await f.close();
   }
 });
 
@@ -2209,12 +2151,12 @@ for (const mode of ["in-process", "websocket"] as const) {
           assert.equal(
             rows.find((r) => r.consumer_id === "registered:fixture.local")
               ?.lease_expires_at === null,
-            parentPlacement === "owner-local",
+            true,
           );
           assert.equal(
             rows.find((r) => r.consumer_id === "registered:fixture.child")
               ?.lease_expires_at === null,
-            childPlacement === "owner-local",
+            true,
           );
           release.resolve();
           const result = await pending;
@@ -2586,6 +2528,126 @@ for (
       } finally {
         release.resolve();
         await f.close();
+      }
+    },
+  );
+}
+
+for (const placement of ["owner-local", "worker"] as const) {
+  test(
+    `unrelated Collection command cannot erase anomalous ${placement} running-job alarm`,
+    { skip: !sourceRoot, timeout: 30_000 },
+    async () => {
+      const entered = deferred(), release = deferred();
+      let target: string | undefined, injected = false, heldCalls = 0;
+      const heldId = placement === "owner-local"
+        ? "fixture.local"
+        : "fixture.remote";
+      const registry = createPluginRegistry({
+        collections: {
+          notes: defineCollection({
+            name: "note",
+            schema: {
+              type: "object",
+              properties: { id: { type: "string" }, title: { type: "string" } },
+            } as const,
+          }),
+        },
+        actions: {
+          hold: defineAction({
+            id: heldId,
+            async execute() {
+              heldCalls++;
+              entered.resolve();
+              await release.promise;
+              return "held";
+            },
+          }),
+          probe: defineAction({
+            id: "fixture.probe",
+            async execute(_input: unknown, ctx: ActionContext) {
+              await ctx.transaction(async ({ collections }) => {
+                await collections.notes.create({
+                  id: "probe-note",
+                  title: "probe",
+                });
+              }, { operationKey: "probe-write" });
+              return "probe";
+            },
+          }),
+        },
+      });
+      const f = await fixture({
+        registry,
+        maxActive: 2,
+        local: localOptions({
+          actionIds: [placement === "owner-local" ? heldId : "fixture.probe"],
+        }),
+        session(db) {
+          return {
+            query: db.query,
+            transaction: (run) =>
+              db.transaction((tx) =>
+                run({
+                  async query<
+                    TRow extends Record<string, unknown> = Record<
+                      string,
+                      unknown
+                    >,
+                  >(sql: string, params?: unknown[]) {
+                    const result = await tx.query<TRow>(sql, params);
+                    if (
+                      target && !injected && sql.includes("INSERT") &&
+                      sql.includes('"nodes"')
+                    ) {
+                      injected = true;
+                      await tx.query(
+                        "INSERT INTO owner_alarms(owner,name,due_at) VALUES('owner',$1,'2000-01-01T00:00:00Z')",
+                        [JSON.stringify(["host.delivery", "space", target])],
+                      );
+                    }
+                    return result;
+                  },
+                })
+              ),
+          };
+        },
+      });
+      const facade = f.facade as ReturnType<typeof createOwnerActionCallers>;
+      const holding = outcome(
+        facade.actions.hold(null, { operationKey: "held" }),
+      );
+      try {
+        await entered.promise;
+        target = String(
+          (await f.db.query(
+            "SELECT d.id FROM event_deliveries d WHERE d.consumer_id=$1 AND status='leased'",
+            [`registered:${heldId}`],
+          )).rows[0].id,
+        );
+        await outcome(facade.actions.probe(null, { operationKey: "probe" }));
+        assert.equal(injected, true);
+        assert.equal(
+          (await f.db.query("SELECT id FROM nodes WHERE id='probe-note'")).rows
+            .length,
+          1,
+          "probe Collection command committed",
+        );
+        assert.equal(
+          (await f.db.query("SELECT name FROM owner_alarms WHERE name=$1", [
+            JSON.stringify(["host.delivery", "space", target]),
+          ])).rows.length,
+          1,
+          "unrelated command did not hide running-job alarm",
+        );
+        await outcome(f.host.wake());
+        await eventually(() => !f.host.snapshot().ready);
+        assert.equal(f.host.snapshot().recoveryRequired, true);
+        assert.equal(heldCalls, 1);
+      } finally {
+        release.resolve();
+        await f.close();
+        await holding;
       }
     },
   );

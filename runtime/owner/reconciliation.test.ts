@@ -138,7 +138,6 @@ async function fixture(
     registry,
     catalog,
     executor,
-    leaseMs: 60_000,
     async resolveAssignment(tx, caller) {
       const b = await control.resolveStarted(tx, caller);
       if (!b || "kind" in b) return undefined;

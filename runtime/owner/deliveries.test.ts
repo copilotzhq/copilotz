@@ -147,11 +147,13 @@ async function createFixture() {
     },
   };
   const mark = async (
-    store: EventStore,
     ctx: OwnerCommandContext,
     label: string,
   ) => {
-    await store.commitMutation({
+    await createEventStore({
+      session: unavailable,
+      ownerCommit: { ...ctx.ownerCommit, afterCommit: ctx.afterCommit },
+    }).commitMutation({
       transaction: ctx.tx,
       draft: {
         type: label,
@@ -198,11 +200,17 @@ async function createFixture() {
           op: string;
           id: string;
           retryable?: boolean;
-          leaseMs?: number;
         };
         const store = createEventStore({
           session: unavailable,
-          ownerCommit: { ...ctx.ownerCommit, afterCommit: ctx.afterCommit },
+          ownerCommit: {
+            ...ctx.ownerCommit,
+            afterCommit: ctx.afterCommit,
+            ownerAttempt: {
+              deliveryId: input.id,
+              attemptId: String(ctx.caller.dispatchAttemptId),
+            },
+          },
           now: () => {
             throw new Error("command must use its timestamp");
           },
@@ -212,7 +220,7 @@ async function createFixture() {
           },
           async settleActionOwners(tx) {
             assert.equal(tx, ctx.tx);
-            await mark(store, ctx, "delivery.terminal");
+            await mark(ctx, "delivery.terminal");
             const key = ctx.command.key;
             return async () => {
               state.publications.push({
@@ -238,15 +246,7 @@ async function createFixture() {
           delivery = await store.claimDelivery({
             id: input.id,
             owner,
-            leaseMs: input.leaseMs ?? 1000,
           });
-        } else if (input.op === "renew") {
-          const renewed = await store.heartbeatDelivery({
-            id: input.id,
-            owner,
-            leaseMs: input.leaseMs ?? 5000,
-          });
-          delivery = renewed ? await store.getDelivery(input.id) : null;
         } else if (input.op === "succeed") {
           delivery = await store.succeedDelivery(input.id, owner);
         } else if (input.op === "cancel") {
@@ -261,7 +261,7 @@ async function createFixture() {
           });
         } else throw new Error("unknown fixture operation");
         if (!delivery) return { changed: false };
-        await mark(store, ctx, "delivery.operation");
+        await mark(ctx, "delivery.operation");
         return {
           changed: true,
           id: delivery.id,
@@ -308,10 +308,10 @@ async function createFixture() {
   };
 }
 
-test("owner claim, renew and settlement roll back with receipt/event/alarm; replay changes nothing", async () => {
+test("owner claim and settlement roll back with receipt/event/alarm; replay changes nothing", async () => {
   const f = await createFixture();
   try {
-    for (const [index, op] of ["claim", "renew", "succeed"].entries()) {
+    for (const [index, op] of ["claim", "succeed"].entries()) {
       f.state.time = at(index * 100);
       const before = await snapshot(f.db);
       f.state.rejectRelease = true;
@@ -350,7 +350,7 @@ test("owner claim, renew and settlement roll back with receipt/event/alarm; repl
     const settled = await createEventStore({ session: f.db }).getDelivery(f.id);
     assert.equal(settled?.status, "succeeded");
     assert.equal(settled?.attempts, 1);
-    assert.equal(settled?.settledAt, at(200));
+    assert.equal(settled?.settledAt, at(100));
     for (
       const read of [
         () => f.state.lastStore!.getDelivery(f.id),
@@ -370,10 +370,9 @@ test("injected outer rollback discards delivery transitions, receipts, events, a
     f.state.rejectOuter = true;
     const results = await Promise.allSettled([
       f.call("claim", "claim"),
-      f.call("renew", "renew"),
       f.call("succeed", "succeed"),
     ]);
-    assert.equal(f.state.rollbackSnapshot?.receipts.length, 3);
+    assert.equal(f.state.rollbackSnapshot?.receipts.length, 2);
     assert.equal(f.state.rollbackSnapshot?.deliveries[0].status, "succeeded");
     for (const result of results) {
       assert.equal(result.status, "rejected");
@@ -418,91 +417,58 @@ test("owner delivery settlement output and callbacks wait for the outer commit",
   }
 });
 
-test("owner lease commands use command time; reclaimed attempt and stale epoch cannot mutate", async () => {
+test("owner attempts do not expire; exact tokens and stale epochs fence mutations", async () => {
   const f = await createFixture();
   try {
     await f.db.transaction(async (tx) => {
-      const store = (time: number, epoch = 1) =>
+      const store = (time: number, token = "attempt-old", epoch = 1) =>
         createEventStore({
           session: unavailable,
-          ownerCommit: { ...context(tx, at(time)), epoch, afterCommit() {} },
+          ownerCommit: {
+            ...context(tx, at(time)),
+            epoch,
+            afterCommit() {},
+            ownerAttempt: { deliveryId: f.id, attemptId: token },
+          },
         });
-      const first = await store(0).claimNext({
-        owner: "attempt-old",
-        namespace: "space",
-        consumerIds: ["consumer"],
-        leaseMs: 10,
-      });
-      assert.equal(first?.id, f.id);
-      assert.equal(first?.leaseExpiresAt, at(10));
       assert.equal(
-        await store(10).heartbeatDelivery({ id: f.id, owner: "attempt-old" }),
-        false,
+        (await store(0).claimDelivery({ id: f.id, owner: "attempt-old" }))
+          ?.attempts,
+        1,
       );
-      assert.equal(await store(10).succeedDelivery(f.id, "attempt-old"), null);
-      assert.equal(await store(10).cancelDelivery(f.id, "attempt-old"), null);
       assert.equal(
-        await store(10).failDelivery({
-          id: f.id,
-          owner: "attempt-old",
-          error: "late",
-        }),
-        null,
+        (await store(120_000).getDelivery(f.id))?.leaseExpiresAt,
+        undefined,
       );
-      const next = await store(11).claimDelivery({
-        id: f.id,
-        owner: "attempt-new",
-        leaseMs: 100,
-      });
-      assert.equal(next?.attempts, 2);
-      const before = await snapshot(tx);
       assert.equal(
-        await store(12).heartbeatDelivery({ id: f.id, owner: "attempt-old" }),
-        false,
-      );
-      assert.equal(await store(12).succeedDelivery(f.id, "attempt-old"), null);
-      assert.equal(await store(12).cancelDelivery(f.id, "attempt-old"), null);
-      assert.equal(
-        await store(12).failDelivery({
-          id: f.id,
-          owner: "attempt-old",
-          error: "stale",
-        }),
-        null,
-      );
-      assert.deepEqual(await snapshot(tx), before);
-      for (
-        const mutate of [
-          () => store(12, 0).claimDelivery({ id: f.id, owner: "attempt-new" }),
-          () => store(12, 0).claimNext({ owner: "attempt-new" }),
-          () =>
-            store(12, 0).heartbeatDelivery({ id: f.id, owner: "attempt-new" }),
-          () => store(12, 0).succeedDelivery(f.id, "attempt-new"),
-          () => store(12, 0).cancelDelivery(f.id, "attempt-new"),
-          () =>
-            store(12, 0).failDelivery({
-              id: f.id,
-              owner: "attempt-new",
-              error: "stale epoch",
-            }),
-        ]
-      ) await assert.rejects(mutate, { code: "ActionOwnershipLost" });
-      assert.deepEqual(await snapshot(tx), before);
-      assert.equal(
-        await store(12).heartbeatDelivery({
+        await store(120_000, "attempt-new").claimDelivery({
           id: f.id,
           owner: "attempt-new",
-          leaseMs: 200,
         }),
-        true,
+        null,
+        "elapsed time cannot reclaim running work",
       );
-      assert.equal(
-        (await store(12).getDelivery(f.id))?.leaseExpiresAt,
-        at(212),
+      const before = await snapshot(tx);
+      await assert.rejects(
+        store(120_000).heartbeatDelivery({ id: f.id, owner: "attempt-old" }),
+        /does not support/,
       );
+      await assert.rejects(
+        store(120_000).claimNext({ owner: "attempt-old" }),
+        /does not support/,
+      );
+      await assert.rejects(
+        store(120_000).succeedDelivery(f.id, "attempt-new"),
+        /different owner delivery attempt/,
+      );
+      await assert.rejects(
+        store(120_000, "attempt-old", 0).succeedDelivery(f.id, "attempt-old"),
+        { code: "ActionOwnershipLost" },
+      );
+      assert.deepEqual(await snapshot(tx), before);
       assert.equal(
-        (await store(13).cancelDelivery(f.id, "attempt-new"))?.settledAt,
-        at(13),
+        (await store(120_000).succeedDelivery(f.id, "attempt-old"))?.status,
+        "succeeded",
       );
     });
   } finally {
@@ -621,7 +587,7 @@ test("owner read helpers use their executor; unsupported delivery mutation paths
       await assert.rejects(scheduled.cancelDelivery(f.id), /attempt token/);
       await assert.rejects(
         scheduled.claimDelivery({ id: f.id, owner: "" }),
-        /attempt token/,
+        /exact owner attempt/,
       );
       assert.equal(queries, before);
     });

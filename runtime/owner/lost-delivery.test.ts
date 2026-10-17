@@ -70,11 +70,18 @@ async function fixture() {
     },
   };
   const store = createEventStore({ session: db, schema: "public" });
-  const commandStore = (context: OwnerCommandContext) =>
+  const commandStore = (
+    context: OwnerCommandContext,
+    attempt?: { deliveryId: string; attemptId: string },
+  ) =>
     createEventStore({
       session,
       schema: "public",
-      ownerCommit: { ...context.ownerCommit, afterCommit: context.afterCommit },
+      ownerCommit: {
+        ...context.ownerCommit,
+        afterCommit: context.afterCommit,
+        ...(attempt ? { ownerAttempt: attempt } : {}),
+      },
       async lockSettlementScope(tx, scope) {
         state.locks.push(scope);
         await catalog.lockScope(tx, scope);
@@ -127,8 +134,11 @@ async function fixture() {
         },
         async claim(input, context) {
           return json(
-            await commandStore(context).claimDelivery(
-              input as { id: string; owner: string; leaseMs: number },
+            await commandStore(context, {
+              deliveryId: (input as { id: string }).id,
+              attemptId: (input as { owner: string }).owner,
+            }).claimDelivery(
+              input as { id: string; owner: string },
             ),
           );
         },
@@ -170,7 +180,7 @@ async function fixture() {
     kind: "claim",
     domain: "incarnation",
     key: "claim:first",
-    intent: { id: delivery.id, owner: "attempt-1", leaseMs: 10_000 },
+    intent: { id: delivery.id, owner: "attempt-1" },
   })).result as unknown as EventDelivery;
   const transition: OwnerLostDeliveryTransition = {
     namespace: "space",
@@ -179,7 +189,7 @@ async function fixture() {
     consumerId: delivery.consumerId,
     settlementScopeId: delivery.settlementScopeId,
     leaseOwner: "attempt-1",
-    leaseExpiresAt: claimed.leaseExpiresAt!,
+    leaseExpiresAt: claimed.leaseExpiresAt ?? null,
     attempts: claimed.attempts,
     maxAttempts: claimed.maxAttempts,
     disposition: "retry",
@@ -216,11 +226,11 @@ async function fixture() {
   };
 }
 
-test("owner lost transition requeues the exact unexpired attempt without consuming budget or changing availability", async () => {
+test("owner lost transition requeues the exact non-expiring attempt without consuming budget or changing availability", async () => {
   const f = await fixture();
   try {
     assert.equal(f.claimed.maxAttempts, 3);
-    assert.equal(f.claimed.leaseExpiresAt, at(10_000));
+    assert.equal(f.claimed.leaseExpiresAt, undefined);
     // Retained scheduling/error fields are not rewritten by loss classification.
     const retainedError = {
       name: "PreviousFailure",
@@ -250,7 +260,7 @@ test("owner lost transition requeues the exact unexpired attempt without consumi
       kind: "claim",
       domain: "incarnation",
       key: "claim:second",
-      intent: { id: result.id, owner: "attempt-2", leaseMs: 10_000 },
+      intent: { id: result.id, owner: "attempt-2" },
     })).result as unknown as EventDelivery;
     assert.equal(next.attempts, 2);
     assert.equal(next.leaseOwner, "attempt-2");
@@ -304,7 +314,7 @@ test("lost transition preserves exact coordinates and refuses legacy/local or ho
         session: f.db,
         ownerCommit: {
           ...ownerCommit,
-          localAttempt: { deliveryId: f.claimed.id, attemptId: "attempt-1" },
+          ownerAttempt: { deliveryId: f.claimed.id, attemptId: "attempt-1" },
         },
       });
       await assert.rejects(local.recoverLostDelivery(f.transition), {
@@ -356,7 +366,7 @@ test("exhausted and cancelled lost transitions use atomic settlement and do not 
       if (disposition === "exhausted") {
         assert.equal(
           (result.lastError as { name: string }).name,
-          "DeliveryLeaseExpired",
+          "AttemptLost",
         );
       }
     } finally {
@@ -537,7 +547,7 @@ test("lost exhausted/cancelled settlement preserves canonical Action terminals, 
                 ? { actionScopeId: delivery.actionScopeId }
                 : {}),
               leaseOwner: delivery.leaseOwner!,
-              leaseExpiresAt: delivery.leaseExpiresAt!,
+              leaseExpiresAt: delivery.leaseExpiresAt ?? null,
               attempts: delivery.attempts,
               maxAttempts: delivery.maxAttempts,
               disposition: cancelled ? "cancelled" : "exhausted",
@@ -622,5 +632,31 @@ test("lost exhausted/cancelled settlement preserves canonical Action terminals, 
       boundary?.stop();
       await f.close();
     }
+  }
+});
+
+test("explicit historical timed loss preserves exact old deadline and terminal error without waiting for expiry", async () => {
+  const f = await fixture();
+  try {
+    const deadline = "2099-01-01T00:00:00.000Z";
+    await f.db.query(
+      "UPDATE event_deliveries SET lease_expires_at=$1::timestamptz,attempts=max_attempts WHERE id=$2",
+      [deadline, f.claimed.id],
+    );
+    const transition = {
+      ...f.transition,
+      leaseExpiresAt: deadline,
+      attempts: f.claimed.maxAttempts,
+      disposition: "exhausted" as const,
+    };
+    const result = (await f.second.execute(f.caller(2), f.command(transition)))
+      .result as unknown as EventDelivery;
+    assert.equal(result.status, "dead_letter");
+    assert.deepEqual(result.lastError, {
+      name: "DeliveryLeaseExpired",
+      message: "The delivery lease was lost after its final attempt.",
+    });
+  } finally {
+    await f.close();
   }
 });

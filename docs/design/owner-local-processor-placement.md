@@ -23,10 +23,11 @@ After an awaited proof, the controller rechecks lifetime and submission facts.
 Retry timestamps remain lossless strings. Actual SQL determines whether work is
 due; the ledger does not substitute JavaScript millisecond comparisons.
 
-Current resolution opens only after a known start receipt. NULL-lease alarm
-classification requires an authenticated command context and exact persisted
-assignment, delivery, source and attempt facts. A reservation alone is not live
-authority. Policy grants remain the host's responsibility.
+Current resolution opens only after a known start receipt. A reservation alone
+is not live authority. Policy grants remain the host's responsibility. The
+approved lease-free owner model removes running-attempt alarm classification;
+real start/retirement/ordinal checks and authenticated reserve/retry commands
+remain. Only the exact successful start consumes its availability wake.
 
 ## Capacity and callbacks
 

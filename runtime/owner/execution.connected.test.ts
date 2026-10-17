@@ -14,13 +14,7 @@ import {
   createOwnerWorkerCallAdmission,
   type OwnerWorkerCallContext,
 } from "./connection.ts";
-import {
-  at,
-  deferred,
-  fixture,
-  start,
-  within,
-} from "./execution.fixture.test.ts";
+import { at, deferred, fixture, within } from "./execution.fixture.test.ts";
 
 type Fence = OwnerWorkerCallContext["fence"];
 type Assigned = Readonly<
@@ -50,17 +44,12 @@ for (const transport of ["in-process", "websocket"] as const) {
       const actionRelease = deferred();
       const completionAdmitted = deferred();
       const completionRelease = deferred();
-      const renewed = [deferred(), deferred(), deferred(), deferred()];
-      let renewals = 0;
       let deniedMutation = false;
       let lostClaim = false;
       let completionWithRevokedCtx = false;
       const reverseReplies: { workload: string; response: unknown }[] = [];
-      let clockStarted: number | undefined;
-      const ownerNow = () =>
-        clockStarted === undefined
-          ? start
-          : at(Math.floor(performance.now() - clockStarted));
+      let ownerElapsedMs = 0;
+      const ownerNow = () => at(ownerElapsedMs);
       const f = await fixture({
         ...(mode === "long-action" ? { now: ownerNow } : {}),
         async afterAction(ctx: ActionContext) {
@@ -217,13 +206,6 @@ for (const transport of ["in-process", "websocket"] as const) {
               }
               const response = await handler(input);
               const decoded = JSON.parse(new TextDecoder().decode(response));
-              if (
-                mode === "long-action" &&
-                context.workload === "copilotz.owner.command" && decoded.ok &&
-                decoded.value?.result?.lease
-              ) {
-                renewed[renewals++]?.resolve();
-              }
               reverseReplies.push({
                 workload: context.workload,
                 response: decoded,
@@ -342,7 +324,6 @@ for (const transport of ["in-process", "websocket"] as const) {
           assert.equal(f.state.executions, 0);
           f.state.gateKind = "execution.claim";
         } else await within(worker.ready);
-        if (mode === "long-action") clockStarted = performance.now();
         const dispatch = await host.dispatch({
           workload: OWNER_ACTION_WORKLOAD,
           target: { workerId: "worker" },
@@ -404,26 +385,34 @@ for (const transport of ["in-process", "websocket"] as const) {
           );
         } else if (mode === "long-action") {
           await within(actionReached.promise);
-          const originalExpiry =
-            (await f.store.getDelivery(f.reference().deliveryId))!
-              .leaseExpiresAt!;
-          const wallStart = performance.now();
-          for (let i = 0; i < 4; i++) {
-            await within(renewed[i].promise);
-            assert.ok(
-              Date.parse(
-                (await f.store.getDelivery(f.reference().deliveryId))!
-                  .leaseExpiresAt!,
-              ) > Date.parse(ownerNow()),
-            );
-          }
-          assert.ok(
-            Date.parse(ownerNow()) > Date.parse(originalExpiry),
-            "original persisted lease expired during the Action",
+          const held = await f.store.getDelivery(f.reference().deliveryId);
+          assert.ok(held);
+          assert.equal(held.leaseExpiresAt, undefined);
+          assert.equal(
+            (await f.db.query<{ lease_expires_at: unknown }>(
+              "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
+              [held.id],
+            )).rows[0].lease_expires_at,
+            null,
           );
-          assert.ok(
-            performance.now() - wallStart >= 1000,
-            "Action outlived its initial one-second lease",
+          const repliesBefore = reverseReplies.length;
+          ownerElapsedMs = 600_000;
+          // Let real time pass beyond the retired one-second per-job lease and
+          // renewal cadence too; advancing the owner clock alone would not catch
+          // an accidentally retained timer in the database-free worker.
+          await new Promise<void>((resolve) => setTimeout(resolve, 1_100));
+          assert.equal(ownerNow(), at(600_000));
+          assert.deepEqual(
+            await f.store.getDelivery(f.reference().deliveryId),
+            held,
+            "clock passage must not expire or renew the exact held attempt",
+          );
+          assert.equal(reverseReplies.length, repliesBefore);
+          assert.equal(
+            (await f.db.query(
+              "SELECT key FROM owner_receipts WHERE kind='execution.renew'",
+            )).rows.length,
+            0,
           );
           assert.equal(exposed, false);
           actionRelease.resolve();
@@ -442,9 +431,34 @@ for (const transport of ["in-process", "websocket"] as const) {
             1,
           );
           await within(f.observed.promise);
-          const count = renewals;
-          await new Promise<void>((resolve) => setTimeout(resolve, 370));
-          assert.equal(renewals, count);
+          assert.deepEqual(f.state.observations, [1]);
+          assert.equal(
+            (await f.db.query(
+              "SELECT key FROM owner_receipts WHERE kind='execution.complete'",
+            )).rows.length,
+            1,
+          );
+          assert.equal(
+            (await f.db.query(
+              "SELECT id FROM events WHERE deduplication_id='run:action:terminal'",
+            )).rows.length,
+            1,
+          );
+          assert.equal(
+            (await f.db.query(
+              "SELECT key FROM owner_receipts WHERE kind='execution.renew'",
+            )).rows.length,
+            0,
+          );
+          assert.equal(
+            reverseReplies.some(({ response }) => {
+              const value = response as {
+                value?: { result?: { lease?: unknown } };
+              };
+              return value.value?.result?.lease !== undefined;
+            }),
+            false,
+          );
           assert.equal(JSON.stringify(result).includes("lease"), false);
           assert.equal(JSON.stringify(result).includes("world"), false);
         } else if (mode === "ctx-revoked") {

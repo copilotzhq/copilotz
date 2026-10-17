@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createOwnerLocalPlacementController,
-  type OwnerLocalNullLeaseEvidence,
   type OwnerLocalPlacementEntry,
 } from "./owner-local-placement.ts";
 import type {
@@ -59,26 +58,6 @@ function command(reference = ref()): OwnerCommand {
 }
 function committed(): OwnerCommandOutcome {
   return { status: "committed", result: { binding: ref(), attempts: 1 } };
-}
-function evidence(): OwnerLocalNullLeaseEvidence {
-  return {
-    assignment: { owner: "owner", epoch: 1, binding: ref(), retired: false },
-    delivery: {
-      id: "delivery",
-      eventId: "source",
-      consumerId: "registered:work",
-      status: "leased",
-      attempts: 1,
-      leaseOwner: "attempt",
-      leaseExpiresAt: null,
-    },
-    source: {
-      id: "source",
-      namespace: "space",
-      actionId: "work",
-      actionRunId: "run",
-    },
-  };
 }
 function context(transaction: SqlExecutor = tx()): OwnerCommandContext {
   return {
@@ -175,9 +154,6 @@ function fixture() {
       if (current instanceof Error) throw current;
       return current as boolean;
     },
-    authorizeAlarmContext(ctx: OwnerCommandContext) {
-      return contexts.has(ctx);
-    },
   };
   const controller = createOwnerLocalPlacementController(options);
   const driver = {
@@ -261,10 +237,6 @@ test("local placement reserves shared capacity before factory/start and denies d
     ),
     false,
   );
-  assert.equal(
-    f.controller.classifyNullLease(f.authenticate(), evidence()),
-    undefined,
-  );
 });
 
 test("local placement shares worker occupancy and never allocates a second independent quota", () => {
@@ -293,17 +265,10 @@ test("local placement publishes start one-shot before same-stack reentrant calls
   assert.equal(f.stats().starts, 1);
 });
 
-test("local placement same-transaction start alarm classification never opens local context", async () => {
+test("local placement pending start authorization never opens local context", async () => {
   const f = fixture();
   const entry = f.reserve();
   f.afterAuthorize(() => {
-    assert.equal(
-      f.controller.classifyNullLease(
-        f.authenticate(context(f.transaction)),
-        evidence(),
-      ),
-      "pending-start",
-    );
     assert.equal(
       f.controller.resolveCurrentLocal(entry.localCaller),
       undefined,
@@ -315,7 +280,7 @@ test("local placement same-transaction start alarm classification never opens lo
   await pending;
 });
 
-test("local placement held committed reply allows a later authenticated alarm scan without context or release", async () => {
+test("local placement held committed reply grants neither local context nor release", async () => {
   const f = fixture();
   const entry = f.reserve();
   const pending = f.start(entry);
@@ -323,135 +288,18 @@ test("local placement held committed reply allows a later authenticated alarm sc
   // reply is deliberately held; this test proves only controller consumption.
   const later = f.authenticate(context(tx()));
   assert.notEqual(later.tx, f.transaction);
-  assert.equal(
-    f.controller.classifyNullLease(later, evidence()),
-    "pending-start",
-  );
+
   assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
   assert.equal(f.stats().releases, 0);
   f.raw.resolve(committed());
   await pending;
-  assert.equal(
-    f.controller.classifyNullLease(later, evidence()),
-    "pending-start",
-  );
+
   assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
   entry.onStarted(ref());
-  assert.equal(f.controller.classifyNullLease(later, evidence()), "running");
+
   assert.deepEqual(f.controller.resolveCurrentLocal(entry.localCaller), ref());
   assert.equal(f.stats().releases, 0);
 });
-
-test("local placement alarm classification rejects forged context, wrong transaction and fence", async () => {
-  const f = fixture();
-  const entry = f.reserve();
-  const pending = f.start(entry);
-  assert.equal(
-    f.controller.classifyNullLease(context(), evidence()),
-    undefined,
-  );
-  for (
-    const change of [
-      (ctx: any) => {
-        ctx.ownerCommit.transaction = tx();
-      },
-      (ctx: any) => {
-        ctx.ownerCommit.epoch = 2;
-      },
-      (ctx: any) => {
-        ctx.ownerCommit.holderId = "other";
-      },
-      (ctx: any) => {
-        ctx.ownerCommit.ownerId = "other";
-      },
-      (ctx: any) => {
-        ctx.ownerCommit.commandTime = "other";
-      },
-      (ctx: any) => {
-        ctx.signal = AbortSignal.abort();
-      },
-    ]
-  ) {
-    const ctx = f.authenticate();
-    change(ctx);
-    assert.equal(f.controller.classifyNullLease(ctx, evidence()), undefined);
-  }
-  f.raw.resolve(committed());
-  await pending;
-});
-
-const badEvidence: [string, (data: any) => void][] = [
-  ["worker placement", (data) => {
-    data.assignment.binding.placement = "worker";
-  }],
-  ["retired", (data) => {
-    data.assignment.retired = true;
-  }],
-  ["prior epoch", (data) => {
-    data.assignment.binding.epoch = 0;
-  }],
-  ["future epoch", (data) => {
-    data.assignment.binding.epoch = 2;
-  }],
-  ["storage epoch", (data) => {
-    data.assignment.epoch = 2;
-  }],
-  ["owner", (data) => {
-    data.assignment.owner = "other";
-  }],
-  ["source", (data) => {
-    data.delivery.eventId = "other";
-  }],
-  ["token", (data) => {
-    data.delivery.leaseOwner = "other";
-  }],
-  ["unrelated NULL", (data) => {
-    data.delivery.id = "other";
-  }],
-  ["missing NULL", (data) => {
-    delete data.delivery.leaseExpiresAt;
-  }],
-  ["worker deadline", (data) => {
-    data.delivery.leaseExpiresAt = time;
-  }],
-  ["attempt", (data) => {
-    data.delivery.attempts = 2;
-  }],
-  ["status", (data) => {
-    data.delivery.status = "pending";
-  }],
-  ["consumer", (data) => {
-    data.delivery.consumerId = "registered:other";
-  }],
-  ["namespace", (data) => {
-    data.source.namespace = "other";
-  }],
-  ["run", (data) => {
-    data.source.actionRunId = "other";
-  }],
-  ["undefined foreign field", (data) => {
-    data.assignment.binding.workerId = undefined;
-  }],
-];
-for (const [label, mutate] of badEvidence) {
-  test(`local placement refuses alarm ${label}`, async () => {
-    const f = fixture();
-    const entry = f.reserve();
-    const pending = f.start(entry);
-    const data = evidence();
-    mutate(data);
-    assert.equal(
-      f.controller.classifyNullLease(f.authenticate(), data),
-      undefined,
-    );
-    assert.equal(
-      f.controller.resolveCurrentLocal(entry.localCaller),
-      undefined,
-    );
-    f.raw.resolve(committed());
-    await pending;
-  });
-}
 
 test("local placement authorizes only exact pending start caller, transaction and command time", async () => {
   const f = fixture();
@@ -514,10 +362,7 @@ test("local placement rejects exact-looking start without actual authorization p
   const pending = f.start(entry);
   f.raw.resolve(committed());
   await assert.rejects(pending, /authorized fresh/);
-  assert.equal(
-    f.controller.classifyNullLease(f.authenticate(), evidence()),
-    undefined,
-  );
+
   assert.throws(() => entry.onStarted(ref()));
   f.drained.resolve();
   await tick();
@@ -545,10 +390,7 @@ for (const outcome of ["duplicate", "malformed", "unknown", "rejection"]) {
       f.controller.resolveCurrentLocal(entry.localCaller),
       undefined,
     );
-    assert.equal(
-      f.controller.classifyNullLease(f.authenticate(), evidence()),
-      undefined,
-    );
+
     assert.equal(f.start(entry), pending);
     assert.equal(f.stats().starts, 1);
   });
@@ -581,10 +423,6 @@ test("local placement drained or revoked work without known terminal stays charg
   await tick();
   assert.equal(f.stats().releases, 0);
   assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
-  assert.equal(
-    f.controller.classifyNullLease(f.authenticate(), evidence()),
-    undefined,
-  );
 });
 
 test("local placement records known raw terminal after revocation without reviving authority", async () => {
@@ -628,14 +466,13 @@ test("local placement captures callbacks and detaches all public authority snaps
   const f = fixture();
   const input = ref();
   const entry = f.controller.reserve(input, key);
-  (input as any).sourceEventId = "changed";
-  (entry.reference as any).attemptId = "changed";
-  (entry.controlCaller as any).localPlacementStart = "changed";
-  (entry.localCaller as any).principal.deliveryId = "changed";
-  (f.control as any).privateHostControl = "changed";
+  Object.assign(input, { sourceEventId: "changed" });
+  Object.assign(entry.reference, { attemptId: "changed" });
+  Object.assign(entry.controlCaller, { localPlacementStart: "changed" });
+  Object.assign(entry.localCaller.principal, { deliveryId: "changed" });
+  Object.assign(f.control, { privateHostControl: "changed" });
   f.boundary.execute = () => Promise.reject(new Error("replaced boundary"));
   f.options.isCurrent = () => false;
-  f.options.authorizeAlarmContext = () => false;
   f.shared.reserve = () => {
     throw new Error("replaced allocator");
   };
@@ -645,14 +482,11 @@ test("local placement captures callbacks and detaches all public authority snaps
   };
   await started(f, entry);
   const resolved = f.controller.resolveCurrentLocal(entry.localCaller)!;
-  (resolved as any).sourceEventId = "changed";
+  Object.assign(resolved, { sourceEventId: "changed" });
   assert.deepEqual(f.controller.resolveCurrentLocal(entry.localCaller), ref());
-  assert.equal(
-    f.controller.classifyNullLease(f.authenticate(), evidence()),
-    "running",
-  );
+
   // Changing outward methods must not change private stop/revocation behavior.
-  (entry as any).revoke = () => {};
+  Object.assign(entry, { revoke: () => {} });
   f.controller.stop();
   assert.equal(entry.isCurrent(), false);
   assert.equal(f.stats().revokes, 1);
@@ -662,7 +496,7 @@ test("local placement exact local witness is required after start", async () => 
   const f = fixture();
   const entry = f.reserve();
   await started(f, entry);
-  const caller: any = entry.localCaller;
+  const caller = { ...entry.localCaller };
   delete caller.localPlacementAttempt;
   assert.equal(f.controller.resolveCurrentLocal(caller), undefined);
   assert.equal(
@@ -773,10 +607,7 @@ test("local placement quiescence without terminal closes authority and retains c
   await tick();
   assert.equal(entry.isCurrent(), false);
   assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
-  assert.equal(
-    f.controller.classifyNullLease(f.authenticate(), evidence()),
-    undefined,
-  );
+
   assert.equal(f.stats().releases, 0);
 });
 
@@ -799,7 +630,11 @@ test("local placement invalid release result is attempted once and stops new adm
 function neutralFixture(
   options: {
     unknownCompletion?: boolean;
-    heldFactory?: ReturnType<typeof gate<{ resources: {}; adapters: {} }>>;
+    heldFactory?: ReturnType<
+      typeof gate<
+        { resources: Record<string, never>; adapters: Record<string, never> }
+      >
+    >;
   } = {},
 ) {
   let releases = 0;
@@ -833,7 +668,9 @@ function neutralFixture(
         status: "committed",
         result: {
           reference: ref(),
-          status: (cmd.input as any).completion.status,
+          status: (cmd.input as {
+            completion: { status: "completed" | "failed" | "cancelled" };
+          }).completion.status,
         },
       });
     },
@@ -888,7 +725,6 @@ function neutralFixture(
         };
       },
     },
-    authorizeAlarmContext: () => false,
   });
   const entry = controller.reserve(ref(), ownerLocalActionStartKey(ref()));
   const port = createOwnerLocalActionPort({
@@ -966,7 +802,9 @@ test("local placement actual driver unknown completion drains without a fabricat
 });
 
 test("local placement actual driver retains a revoked noncooperative factory until it really ends", async () => {
-  const heldFactory = gate<{ resources: {}; adapters: {} }>();
+  const heldFactory = gate<
+    { resources: Record<string, never>; adapters: Record<string, never> }
+  >();
   const f = neutralFixture({ heldFactory });
   const pending = f.execution.run();
   const rejected = assert.rejects(pending);
@@ -1000,14 +838,12 @@ test("local placement captures returned capacity release identity before mutatio
       releases++;
     },
   };
-  let controller!: ReturnType<typeof createOwnerLocalPlacementController>;
   const transaction = tx();
-  controller = createOwnerLocalPlacementController({
+  const controller = createOwnerLocalPlacementController({
     controlCaller: f.control,
     maxEntries: 1,
     isCurrent: () => true,
     capacity: { reserve: () => reservation },
-    authorizeAlarmContext: () => false,
     boundary: {
       execute(caller, cmd) {
         assert.equal(
@@ -1041,7 +877,10 @@ test("local placement rejects async capacity with no unhandled rejection or retr
   const controller = createOwnerLocalPlacementController({
     ...f.options,
     capacity: {
-      reserve: (() => Promise.reject(new Error("async allocator"))) as any,
+      reserve: (() =>
+        Promise.reject(
+          new Error("async allocator"),
+        )) as unknown as typeof f.options.capacity.reserve,
     },
   });
   assert.throws(() => controller.reserve(ref(), key), /Synchronous/);
@@ -1054,17 +893,17 @@ test("local placement exact command refusal does not invoke the raw start", asyn
   const entry = f.reserve();
   for (
     const change of [
-      (value: any) => {
-        value.kind = "execution.complete";
+      (value: OwnerCommand) => {
+        Object.assign(value, { kind: "execution.complete" });
       },
-      (value: any) => {
-        value.domain = "logical";
+      (value: OwnerCommand) => {
+        Object.assign(value, { domain: "logical" });
       },
-      (value: any) => {
-        value.key = "other";
+      (value: OwnerCommand) => {
+        Object.assign(value, { key: "other" });
       },
-      (value: any) => {
-        value.intent.sourceEventId = "other";
+      (value: OwnerCommand) => {
+        Object.assign(value.intent!, { sourceEventId: "other" });
       },
     ]
   ) {
@@ -1078,18 +917,14 @@ test("local placement exact command refusal does not invoke the raw start", asyn
   assert.equal(f.stats().starts, 1);
 });
 
-test("local placement raw rejection after an alarm-only scan closes that classification", async () => {
+test("local placement raw start rejection preserves charged capacity", async () => {
   const f = fixture();
   const entry = f.reserve();
   const pending = f.start(entry);
-  const ctx = f.authenticate();
-  assert.equal(
-    f.controller.classifyNullLease(ctx, evidence()),
-    "pending-start",
-  );
+
   f.raw.reject(new Error("start rejected"));
   await assert.rejects(pending);
-  assert.equal(f.controller.classifyNullLease(ctx, evidence()), undefined);
+
   assert.equal(f.stats().releases, 0);
 });
 

@@ -18,7 +18,6 @@ const workerAllowed = new Set([
   "runtime/owner/connection.ts",
   "runtime/execution/owner-port.ts",
   "runtime/execution/recovery.ts",
-  "runtime/execution/execution-heartbeat.ts",
   "runtime/actions/execution-context.ts",
   "runtime/actions/effects.ts",
   "runtime/owner/effects-client.ts",
@@ -138,7 +137,6 @@ test("neutral invocation kernels exclude placement drivers, transport and heartb
     "dependencies/oxian-worker.ts",
     "runtime/owner/connection.ts",
     "runtime/execution/owner-port.ts",
-    "runtime/execution/execution-heartbeat.ts",
   ]);
   const neutralAllowed = new Set(
     [...workerAllowed].filter((path) => !placementOnly.has(path)),

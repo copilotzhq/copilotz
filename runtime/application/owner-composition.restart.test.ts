@@ -83,7 +83,6 @@ for (const mode of ["in-process", "websocket"] as const) {
               : { mode: "resume", expectedEpoch: prior },
             maxActive: 4,
             maxPending: 32,
-            leaseMs: 5000,
             onError: (error) => errors.push(error),
             policy: {
               ingress: (_tx, { fence }) =>

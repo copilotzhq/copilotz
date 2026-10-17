@@ -13,7 +13,6 @@ import {
   ownerProcessorClaimKey,
   ownerProcessorCompletionKey,
   ownerProcessorOperationKey,
-  ownerProcessorRenewalKey,
   type RegisteredProcessorCompletion,
   type RegisteredProcessorReference,
 } from "../execution/registered-processor.ts";
@@ -357,7 +356,6 @@ export function createOwnerProcessorCommands(
     session: SqlSession;
     registry: PluginRegistry;
     catalog: OperationCatalog;
-    leaseMs?: number;
     /** Internal local capability only; absent means all local routes refuse. */
     local?: OwnerLocalProcessorOptions;
     resolveAssignment(
@@ -394,10 +392,7 @@ export function createOwnerProcessorCommands(
   if (options.catalog.databaseSchema !== options.schema) {
     throw new TypeError("Processor catalog schema does not match.");
   }
-  const leaseMs = options.leaseMs ?? 30_000;
-  if (!Number.isSafeInteger(leaseMs) || leaseMs < 2) {
-    throw new TypeError("Invalid Processor lease.");
-  }
+
   const tables = createCoreTableNames(options.schema);
   const operationTables = createOperationCatalogTables(options.schema);
   const authorized = new WeakMap<SqlExecutor, Authorized>();
@@ -420,7 +415,10 @@ export function createOwnerProcessorCommands(
       schema: options.schema,
       ownerCommit: binding
         ? ownerEventCommitForAttempt(context, binding)
-        : { ...context.ownerCommit, afterCommit: context.afterCommit },
+        : ownerEventCommitForAttempt(context, {
+          placement: "worker",
+          ...bound(context.tx).assignment,
+        }),
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
       admitOperationEventSql: (input, param) =>
         options.catalog.admitEventSql(input, param),
@@ -432,7 +430,7 @@ export function createOwnerProcessorCommands(
     tx: SqlExecutor,
     caller: OwnerCaller,
     commandTime: string,
-    mode: "claim" | "input" | "renew" | "complete" | "mutation",
+    mode: "claim" | "input" | "complete" | "mutation",
   ) {
     const found = await options.resolveAssignment(tx, caller, commandTime);
     if (!found) refuse("Processor assignment is no longer current.");
@@ -510,7 +508,7 @@ export function createOwnerProcessorCommands(
     const time = Date.parse(commandTime);
     const live = delivery.status === "leased" &&
       delivery.leaseOwner === a.dispatchAttemptId &&
-      Date.parse(delivery.leaseExpiresAt ?? "") > time;
+      delivery.leaseExpiresAt == null;
     if (mode === "claim") {
       const eligible = delivery.attempts < delivery.maxAttempts &&
         ["pending", "retry_wait"].includes(delivery.status) &&
@@ -763,11 +761,10 @@ export function createOwnerProcessorCommands(
     read: LocalRead,
     a: OwnerLocalProcessorAssignment,
     phase: LocalPhase,
-    time: string,
   ) {
     if (
       !read.reserved || read.delivery.attempts !== a.attemptOrdinal ||
-      !ownerAttemptIsLive(read.delivery, a, time) ||
+      !ownerAttemptIsLive(read.delivery, a) ||
       (phase === "settlement" ? !a.settlementGranted : !a.ctxGranted) ||
       (read.cancelled && phase !== "settlement")
     ) refuse("Local Processor attempt, grant or ordinal is no longer live.");
@@ -833,7 +830,7 @@ export function createOwnerProcessorCommands(
     const binding = bindingOf(assignment);
     await localFence(tx, caller, binding, false);
     const read = await readLocal(tx, binding, time);
-    liveLocal(read, assignment, phase, time);
+    liveLocal(read, assignment, phase);
     privateCurrent(caller, assignment, phase);
     return { assignment, read };
   }
@@ -848,7 +845,7 @@ export function createOwnerProcessorCommands(
       refuse("Local Processor state changed across authorization.");
     }
     if (state.phase !== "start") {
-      liveLocal(read, state.assignment, state.phase, time);
+      liveLocal(read, state.assignment, state.phase);
     }
     privateCurrent(caller, state.assignment, state.phase);
     return read;
@@ -903,7 +900,7 @@ export function createOwnerProcessorCommands(
     });
     if (
       !claimed || claimed.attempts !== state.assignment.attemptOrdinal ||
-      !ownerAttemptIsLive(claimed, binding, context.commandTime)
+      !ownerAttemptIsLive(claimed, binding)
     ) {
       refuse("Local Processor claim did not acquire the expected ordinal.");
     }
@@ -1179,23 +1176,12 @@ export function createOwnerProcessorCommands(
     });
   }
 
-  function lease(expiresAt: string, time: string) {
-    const remainingMs = Date.parse(expiresAt) - Date.parse(time);
-    if (!Number.isSafeInteger(remainingMs) || remainingMs < 2) {
-      refuse("Processor lease has no usable remaining budget.");
-    }
-    return {
-      remainingMs,
-      renewAfterMs: Math.max(1, Math.min(10_000, Math.floor(remainingMs / 3))),
-    };
-  }
   const claim: OwnerCommandHandler = async (_intent, context) => {
     const state = bound(context.tx);
     await projectData(context.tx, state, context.commandTime);
     const delivery = await runtime(context).claimDelivery({
       id: state.delivery.id,
       owner: state.assignment.dispatchAttemptId,
-      leaseMs,
     });
     if (!delivery) refuse("Processor claim did not acquire a fresh attempt.");
     await options.scheduleSettlement(context, {
@@ -1203,23 +1189,6 @@ export function createOwnerProcessorCommands(
       operationId: delivery.settlementScopeId,
     });
     return reference(state.assignment);
-  };
-  const renew: OwnerCommandHandler = async (_intent, context) => {
-    const state = bound(context.tx);
-    if (
-      !await runtime(context).heartbeatDelivery({
-        id: state.delivery.id,
-        owner: state.assignment.dispatchAttemptId,
-        leaseMs,
-      })
-    ) refuse("Processor renewal lost its attempt.");
-    return {
-      ...reference(state.assignment),
-      lease: lease(
-        new Date(Date.parse(context.commandTime) + leaseMs).toISOString(),
-        context.commandTime,
-      ),
-    };
   };
   const complete: OwnerCommandHandler = async (intent, context) => {
     const state = bound(context.tx);
@@ -1250,7 +1219,6 @@ export function createOwnerProcessorCommands(
       event: { ...state.event, data },
       attempts: state.delivery.attempts,
       maxAttempts: state.delivery.maxAttempts,
-      lease: lease(state.delivery.leaseExpiresAt!, context.commandTime),
       operationKey: ownerProcessorOperationKey(state.delivery.id),
       identity: {
         causationId: state.event.id,
@@ -1267,7 +1235,6 @@ export function createOwnerProcessorCommands(
       "owner.local-processor-start": startLocal,
       "processor.local-complete": completeLocal,
       "processor.claim": claim,
-      "processor.renew": renew,
       "processor.complete": complete,
     },
     projections: {
@@ -1294,8 +1261,6 @@ export function createOwnerProcessorCommands(
       }
       const mode = command.kind === "processor.claim"
         ? "claim"
-        : command.kind === "processor.renew"
-        ? "renew"
         : command.kind === "processor.complete"
         ? "complete"
         : command.kind === "processor.input"
@@ -1334,22 +1299,6 @@ export function createOwnerProcessorCommands(
           );
         }
         completion(data.completion);
-      } else if (mode === "renew") {
-        const data = object(command.intent, ["reference", "sequence"]);
-        checkReference(data.reference, a);
-        if (
-          !Number.isSafeInteger(data.sequence) || Number(data.sequence) < 1 ||
-          command.domain !== "occurrence" ||
-          command.key !==
-            ownerProcessorRenewalKey(
-              options.ownerId,
-              a.assignmentId,
-              a.sessionId,
-              Number(data.sequence),
-            )
-        ) {
-          refuse("Processor renewal identity is not assigned.");
-        }
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
     },

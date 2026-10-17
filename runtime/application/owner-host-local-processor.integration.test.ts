@@ -186,23 +186,12 @@ async function fixture(stage: "start" | "completion") {
           assert.ok(reference);
           stats.scans++;
           assert.equal(contexts.isCurrent({ ...context }), false);
-          assert.equal(
-            await helper.classifyNullLease(
-              { ...context },
-              reference.deliveryId,
-            ),
-            undefined,
-          );
-          const tag = await helper.classifyNullLease(
-            context,
-            reference.deliveryId,
-          );
+
           const row = (await context.tx.query(
             "SELECT status,attempts,available_at::text AS available_at,available_at<=$2::timestamptz AS due FROM event_deliveries WHERE id=$1",
             [reference.deliveryId, context.commandTime],
           )).rows[0];
           return {
-            tag: tag ?? null,
             status: String(row.status),
             attempts: Number(row.attempts),
             availableAt: String(row.available_at),
@@ -337,8 +326,8 @@ test("local Processor actual helper permits authenticated scans during held call
     assert.equal(f.stats.factories, 0);
     assert.equal(f.stats.authored, 0);
     const first = await bounded(f.scan()), second = await bounded(f.scan());
-    assert.equal((first.result as { tag: string }).tag, "pending-start");
-    assert.equal((second.result as { tag: string }).tag, "pending-start");
+    assert.equal((first.result as { status: string }).status, "leased");
+    assert.equal((second.result as { status: string }).status, "leased");
     assert.equal(f.stats.scans, 2);
     assert.equal(f.stats.factories, 0);
     assert.equal(f.stats.released, 0);
@@ -372,11 +361,9 @@ test("local Processor actual helper refuses due successor while committed comple
       status: string;
       due: boolean;
       attempts: number;
-      tag: null;
     };
     assert.equal(due.due, true);
     assert.equal(due.attempts, 1);
-    assert.equal(due.tag, null);
     await assert.rejects(f.helper.run(f.scheduled));
     assert.equal(f.stats.authored, 1);
     assert.equal(f.stats.active, 1);

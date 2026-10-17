@@ -49,7 +49,7 @@ The runner:
    implementation/typing modules resolve their worker dependency to the selected
    public worker entry; legacy runtime workers retain their published
    dependency. No global package override or repository-local link is created
-4. Runs these exact seventeen files (152 declared cases) serially with type
+4. Runs these exact seventeen files (156 declared cases) serially with type
    checking, including in-process and Node WebSocket transports:
    - `runtime/owner/connected.integration.test.ts`
    - `runtime/owner/execution.connected.test.ts`
@@ -69,7 +69,7 @@ The runner:
    - `runtime/application/owner-composition.restart.test.ts`
    - `build/role-bundle.connected.test.ts`
 
-   The selected source enables 106 opt-in cases; the other 46 cases are
+   The selected source enables 108 opt-in cases; the other 48 cases are
    unconditional. The local-host file covers private fresh local Actions, and
    the preparation-restart file covers closed prepared context over both
    transports. The terminal-recovery file covers private exact-target resume
@@ -135,7 +135,8 @@ after an ambiguous claim reply. Each assignment has a separate immutable parent
 call port. The whole plugin registry is loaded, and its Action uses Resource,
 Adapter and owner-backed Collection capabilities. Its postcommit Processor
 observer still uses the legacy executor. This is not yet the public factory,
-owner-only Processor execution, HTTP ingress, or long-running lease renewal.
+complete owner-only Processor parity or HTTP ingress. Per-job renewal is retired
+by the owner-controlled attempt amendment; it is not a remaining gate.
 
 The fresh-host cases compose actual registered Actions, Processors, child
 Actions, Collection mutation and catalog settlement. They test

@@ -68,9 +68,9 @@ expression/predicate caps and a bounded declared-index reread. These are
 retained-evidence bounds, not total process-memory or SQL-work limits; arbitrary
 concurrent DDL remains outside the owner contract.
 
-Storage starts a leased embedded worker through the same transport and
-owner-backed execution machinery as a connected worker. It does not implement
-the distinct F5 owner-local, no-wall-clock execution mode.
+Storage starts an owner-controlled embedded worker through the same transport
+and owner-backed execution machinery as a connected worker. It does not
+implement the distinct F5 owner-local, no-wall-clock execution mode.
 
 The connected placement receives only an opaque owner ID and an explicit worker
 connection. The owner address and credentials belong to that connection. It

@@ -109,7 +109,6 @@ export async function ownerApplicationFixture(
       },
       maxActive: 4,
       maxPending: 32,
-      leaseMs: 5000,
       onError: (error) => errors.push(error),
       transport: {
         transports: mode === "websocket"

@@ -11,7 +11,6 @@ import type {
   RegisteredExecutionProjection,
   RegisteredExecutionReceipt,
   RegisteredExecutionReference,
-  RegisteredExecutionRenewal,
   RegisteredOwnerExecutionPort,
 } from "./registered-worker.ts";
 
@@ -29,20 +28,6 @@ export const ownerCompletionKey = (
   actionRunId: string,
 ): string =>
   JSON.stringify(["execution.complete", ownerId, namespace, actionRunId]);
-
-export const ownerRenewalKey = (
-  ownerId: string,
-  assignmentId: string,
-  sessionId: string,
-  sequence: number,
-): string =>
-  JSON.stringify([
-    "execution.renew",
-    ownerId,
-    assignmentId,
-    sessionId,
-    sequence,
-  ]);
 
 type DataPort = Readonly<{
   execute(
@@ -129,11 +114,6 @@ export function createRegisteredOwnerExecutionPort(
     )
   ) throw new TypeError("Owner routing coordinates must be nonempty.");
   let assignmentKey: string | undefined;
-  let assignment: { assignmentId: string; sessionId: string } | undefined;
-  let renewalSequence = 0;
-  let projected = false;
-  let closed = false;
-  let renewing = false;
   let attemptedClaim = false;
   let claimed: RegisteredExecutionReference | undefined;
   const requireClaim = (ref: RegisteredExecutionReference) => {
@@ -168,7 +148,6 @@ export function createRegisteredOwnerExecutionPort(
       const key = ownerClaimKey(ownerId, assignmentId, sessionId);
       if (assignmentKey !== undefined && assignmentKey !== key) return refuse();
       assignmentKey = key;
-      assignment = { assignmentId, sessionId };
       const prior = await port.readReceipt(
         { domain: "incarnation", key },
         callOptions,
@@ -198,62 +177,11 @@ export function createRegisteredOwnerExecutionPort(
         ref,
         callOptions,
       );
-      if (
-        !closed && claimed &&
-        Object.keys(claimed).every((key) =>
-          claimed![key as keyof typeof claimed] === ref[key as keyof typeof ref]
-        )
-      ) projected = true;
       return projection as RegisteredExecutionProjection;
-    },
-    async renew(input, callOptions) {
-      const ref = reference(input);
-      requireClaim(ref);
-      if (
-        !projected || closed || renewing || !assignment ||
-        renewalSequence >= Number.MAX_SAFE_INTEGER
-      ) return refuse();
-      renewing = true;
-      const sequence = ++renewalSequence;
-      try {
-        const outcome = await port.execute({
-          kind: "execution.renew",
-          domain: "occurrence",
-          key: ownerRenewalKey(
-            ownerId,
-            assignment.assignmentId,
-            assignment.sessionId,
-            sequence,
-          ),
-          intent: { reference: ref, sequence },
-        }, callOptions);
-        const value = outcome.result as RegisteredExecutionRenewal;
-        const actual = reference({
-          executionId: value?.executionId,
-          deliveryId: value?.deliveryId,
-          dispatchAttemptId: value?.dispatchAttemptId,
-        });
-        requireClaim(actual);
-        if (closed || !value || Object.keys(value).length !== 4) {
-          return refuse();
-        }
-        return {
-          status: outcome.status,
-          result: { ...actual, lease: structuredClone(value.lease) },
-        };
-      } catch (error) {
-        // A failed or ambiguous heartbeat is never retried on this capability.
-        closed = true;
-        throw error;
-      } finally {
-        renewing = false;
-      }
     },
     async complete(input, completion, callOptions) {
       const ref = reference(input);
       requireClaim(ref);
-      if (renewing) return refuse();
-      closed = true;
       const outcome = await port.complete({
         kind: "execution.complete",
         domain: "logical",

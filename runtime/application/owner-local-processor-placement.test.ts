@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createOwnerLocalProcessorPlacementController,
-  type OwnerLocalProcessorNullLeaseEvidence,
   type OwnerLocalProcessorPlacementEntry,
 } from "./owner-local-processor-placement.ts";
 import type { OwnerLocalProcessorAssignmentBinding } from "../owner/placement-binding.ts";
@@ -119,8 +118,6 @@ function fixture(maxEntries = 8) {
     controlCaller: control,
     maxEntries,
     isCurrent: () => state.owner && (state.ownerHook?.() ?? true),
-    authorizeAlarmContext: (context: OwnerCommandContext) =>
-      contexts.has(context),
     capacity: {
       reserve() {
         if (state.slots === 0) return undefined;
@@ -237,30 +234,6 @@ function fixture(maxEntries = 8) {
     contexts.add(c);
     return c;
   };
-  const evidence = (
-    e: OwnerLocalProcessorPlacementEntry,
-  ): OwnerLocalProcessorNullLeaseEvidence => ({
-    assignment: {
-      owner: "owner",
-      epoch: 1,
-      binding: e.reference,
-      retired: false,
-    },
-    delivery: {
-      id: e.reference.deliveryId,
-      eventId: e.reference.sourceEventId,
-      consumerId: e.reference.consumerId,
-      status: "leased",
-      attempts: e.attemptOrdinal,
-      leaseOwner: e.reference.attemptId,
-      leaseExpiresAt: null,
-    },
-    source: {
-      id: e.reference.sourceEventId,
-      namespace: e.reference.namespace,
-      processorId: e.reference.processorId,
-    },
-  });
   const retryFacts = (receipt: OwnerLocalProcessorAttemptReceipt) => {
     if (receipt.status !== "retry_wait") throw new Error("retry required");
     state.facts = {
@@ -279,7 +252,6 @@ function fixture(maxEntries = 8) {
     end,
     drained,
     context,
-    evidence,
     retryFacts,
     transaction,
     drains,
@@ -298,10 +270,7 @@ test("Processor reservation grants neither a start nor NULL-lease ownership", as
     ),
     undefined,
   );
-  assert.equal(
-    f.controller.classifyNullLease(f.context(), f.evidence(e)),
-    undefined,
-  );
+
   assert.equal(f.controller.resolveCurrent(e.localCaller), undefined);
   assert.equal(
     f.controller.isCurrent(e.controlCaller, e.reference, 1, "start"),
@@ -348,37 +317,19 @@ test("Processor retry requires known end, irrevocable drain and released capacit
   assert.equal(f.state.releases, 2);
 });
 
-test("Processor held start reply has later-transaction NULL classification but no active context", async () => {
+test("Processor held start reply grants no active context before known acknowledgement", async () => {
   const f = fixture(), e = f.entry();
   f.state.heldStart = gate();
   const running = f.start(e);
   await tick();
-  assert.equal(
-    f.controller.classifyNullLease(f.context(), f.evidence(e)),
-    "pending-start",
-  );
+
   assert.equal(f.controller.resolveCurrent(e.localCaller), undefined);
   f.state.heldStart.resolve({
     status: "committed",
     result: { binding: e.reference, attempts: 1 },
   });
   await running;
-  assert.equal(
-    f.controller.classifyNullLease(f.context(), f.evidence(e)),
-    "running",
-  );
-  const c = f.context();
-  assert.equal(
-    f.controller.classifyNullLease({ ...c }, f.evidence(e)),
-    undefined,
-  );
-  assert.equal(
-    f.controller.classifyNullLease(c, {
-      ...f.evidence(e),
-      delivery: { ...f.evidence(e).delivery, attempts: 2 },
-    }),
-    undefined,
-  );
+
   f.end(e, "succeeded");
   await f.drained(e);
 });

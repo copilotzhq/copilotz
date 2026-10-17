@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 16:56 UTC.
+Updated: 17 October 2026, 17:58 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,22 +10,39 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Current work
 
-| Task                                | Status                    | Next acceptance gate                                                                               |
-| ----------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------- |
-| Local Processor bound owner adapter | Reviewed checkpoint       | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed        |
-| Local nested Action authority       | Reviewed checkpoint       | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete   |
-| Local Action effect capabilities    | Paused for simplification | Extend exact local attempt authority and raw-call accounting to the existing effect flow           |
-| Faster test orchestration           | Representative measured   | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
-| Reference-test reliability          | Reviewed correction       | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
-| Local Processor host generations    | Reviewed checkpoint       | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete |
-| Architecture cleanup                | In progress               | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
+| Task                                | Status                  | Next acceptance gate                                                                                     |
+| ----------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------- |
+| Local Processor bound owner adapter | Reviewed checkpoint     | Reviewed: independent 30 pure and seven real PostgreSQL cases; 83-case compatibility passed              |
+| Local nested Action authority       | Reviewed checkpoint     | Independent 144 pure and 114 PostgreSQL cases; private fresh same-owner mixed placement complete         |
+| Local Action effect capabilities    | Next implementation     | Correct current effect authorization after awaited policy; then add local parity using the existing flow |
+| Faster test orchestration           | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation       |
+| Reference-test reliability          | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed                 |
+| Local Processor host generations    | Reviewed checkpoint     | PostgreSQL 14 host plus two caller-facing helper cases pass; fresh same-owner retry scope complete       |
+| Architecture cleanup                | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next             |
 
-The next implementation is the approved
-[lease-free owner attempt contract](owner-attempt-authority.md). This replaces
-per-job worker renewal with exact owner/session/assignment authority. The
-recovered specification is amended; the runtime migration and replacement tests
-are pending. Every slice must name what it simplifies and eliminates before
-adding further machinery.
+The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
+implemented and independently checked in this scoped checkpoint. Both placements
+use exact owner/assignment/attempt authority; worker execution also requires its
+current authenticated session. Per-job renewals and running-attempt alarm
+classifiers are removed: production runtime changes add 209 and remove 1,001
+lines (net 792 removed), without adding another attempt table or worker facade.
+
+Independent evidence: pure 154; PostgreSQL owner-migration 186; native
+EventStore 30 including PGlite and PostgreSQL variants; role-bundle 12; lint,
+formatting, architecture checks and the strict 46-export / 725-module package
+surface. The 17-file canonical run registered 156 and initially passed 154 /
+failed 2 because an old long-Action fixture still awaited renewal replies. The
+corrected complete 12-case connected file passes on PostgreSQL. This is split
+correction evidence, not a claim of one all-green 156 run or a new full-suite
+acceptance. The first migration typecheck failure and its explicit worker-only
+fixture narrowing are also retained.
+
+Next is current effect authorization followed by local effect parity. The two
+causal effect-policy regression tests remain a separate uncommitted
+prerequisite; their failures are not hidden by this checkpoint. Quiet-writer
+content protection, open-history takeover and public local placement remain
+separate gates. Every slice must name what it simplifies and eliminates before
+adding machinery.
 
 ## 1. Programming model and composition
 
@@ -48,8 +65,8 @@ adding further machinery.
 - [x] Placement-independent logical mutation identity and local callback return
       semantics
 - [x] Actual worker Action/Processor/Collection/child-Action flow
-- [x] Current authority, assignment/claim, heartbeat, cancellation and terminal
-      settlement boundaries
+- [x] Current authority, assignment/claim, connection lifetime, cancellation and
+      terminal settlement boundaries
 - [x] Private fresh local Action/Collection execution, exact epoch/attempt
       authority and NULL lease
 - [x] Private local Processor command prerequisite, independently checked on
@@ -82,9 +99,11 @@ adding further machinery.
       drain are preserved. Local preparation, effects, restart and public
       placement remain separate gates; the 152-case canonical inventory is not a
       claim of a combined canonical or full-suite run
-- [ ] Remove owner-path worker per-job leases/renewal and replace expiry
-      recovery with exact attempt revocation, retaining session and content
-      protection
+- [x] Remove owner-path per-job leases/renewal, worker renewal loops and
+      running-attempt alarm classifiers; exact attempt revocation and explicit
+      loss recovery replace expiry. Connection liveness and genuine legacy
+      EventStore behavior remain; F9 quiet-writer protection is still a separate
+      implementation gate
 - [ ] Local Action effect capability parity
 - [ ] Public local placement activation and complete parity matrix
 
@@ -119,6 +138,11 @@ adding further machinery.
 - [ ] Full logical content/current-copy catalog, body ownership, retention and
       retirement
 - [ ] Streams, partial output, attempt-bound writers and client repair
+- [ ] F9 owner-driven quiet-writer body protection for both placements,
+      independent of per-job renewal
+- [ ] Historical finite-deadline sub-millisecond recovery precision correction;
+      current normalization fails closed, and new NULL-deadline attempts are
+      unaffected
 - [ ] Protected values, credential slots and scope-bound delivery
 - [ ] Cross-owner operations and remaining wire/device contracts
 

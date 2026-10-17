@@ -46,7 +46,6 @@ export async function processorFixture(input: {
   observeWrites?: boolean;
   contentCollection?: boolean;
   maxAttempts?: number;
-  leaseMs?: number;
   now?(): string;
   afterWrite?(context: ProcessorContext): void | Promise<void>;
   invokeAction?: RegisteredProcessorOwnerPort["invokeAction"];
@@ -68,8 +67,6 @@ export async function processorFixture(input: {
     rollback: false,
     unknownComplete: false,
     unknownClaim: false,
-    unknownRenewal: false,
-    renewals: 0,
     schedules: [] as string[],
     retryWakes: [] as string[],
     published: [] as string[],
@@ -164,7 +161,6 @@ export async function processorFixture(input: {
     session,
     registry,
     catalog,
-    leaseMs: input.leaseMs ?? 1000,
     resolveAssignment(_tx, caller) {
       return state.live && assignment &&
           caller.assignmentId === assignment.assignmentId &&
@@ -222,6 +218,7 @@ export async function processorFixture(input: {
       );
       return {
         namespace: live.assignment.namespace,
+        attempt: { placement: "worker", ...live.assignment },
         identity: {
           causationId: live.event.id,
           correlationId: live.event.correlationId,
@@ -359,15 +356,6 @@ export async function processorFixture(input: {
       port: {
         async execute(command, options) {
           const result = await boundary.execute(who, command, options);
-          if (command.kind === "processor.renew") {
-            state.renewals++;
-            if (state.unknownRenewal) {
-              state.unknownRenewal = false;
-              throw Object.assign(new Error("lost renewal reply"), {
-                outcome: "unknown",
-              });
-            }
-          }
           if (command.kind === "processor.claim" && state.unknownClaim) {
             state.unknownClaim = false;
             throw Object.assign(new Error("lost claim reply"), {

@@ -27,14 +27,14 @@ async function fixture() {
     tx: SqlExecutor,
     time = "2099-01-01T00:00:00.000Z",
   ): OwnerEventCommitContext & {
-    localAttempt: { deliveryId: string; attemptId: string };
+    ownerAttempt: { deliveryId: string; attemptId: string };
   } => ({
     transaction: tx,
     ownerId: "owner",
     epoch: 1,
     holderId: "holder",
     commandTime: time,
-    localAttempt: { deliveryId: delivery.id, attemptId: "local-attempt" },
+    ownerAttempt: { deliveryId: delivery.id, attemptId: "local-attempt" },
     afterCommit() {},
   });
   return { db, delivery, context };
@@ -80,8 +80,8 @@ test("local delivery authority is exact and private; generic mutation paths stay
     await f.db.transaction(async (tx) => {
       const supplied = f.context(tx);
       const store = createEventStore({ session: f.db, ownerCommit: supplied });
-      supplied.localAttempt.deliveryId = "changed";
-      supplied.localAttempt.attemptId = "changed";
+      supplied.ownerAttempt.deliveryId = "changed";
+      supplied.ownerAttempt.attemptId = "changed";
       await assert.rejects(
         store.claimDelivery({ id: "other", owner: "local-attempt" }),
       );
@@ -112,7 +112,7 @@ test("local delivery authority is exact and private; generic mutation paths stay
   }
 });
 
-test("local delivery refuses stale owner fences and never converts a worker lease", async () => {
+test("local delivery refuses stale owner fences and never steals a different owner attempt", async () => {
   const f = await fixture();
   try {
     for (const overrides of [{ epoch: 0 }, { holderId: "other" }]) {
@@ -131,8 +131,22 @@ test("local delivery refuses stale owner fences and never converts a worker leas
       );
     }
     await f.db.transaction(async (tx) => {
-      const { localAttempt: _, ...ownerCommit } = f.context(tx);
-      const worker = createEventStore({ session: f.db, ownerCommit });
+      const { ownerAttempt: _, ...ownerCommit } = f.context(tx);
+      const control = createEventStore({ session: f.db, ownerCommit });
+      await assert.rejects(
+        control.claimDelivery({ id: f.delivery.id, owner: "worker-attempt" }),
+        /exact owner attempt/,
+      );
+      const worker = createEventStore({
+        session: f.db,
+        ownerCommit: {
+          ...ownerCommit,
+          ownerAttempt: {
+            deliveryId: f.delivery.id,
+            attemptId: "worker-attempt",
+          },
+        },
+      });
       assert.equal(
         (await worker.claimDelivery({
           id: f.delivery.id,
@@ -167,7 +181,7 @@ test("local delivery refuses stale owner fences and never converts a worker leas
   }
 });
 
-test("a NULL worker deadline is never local authority and local failure remains transactional", async () => {
+test("a NULL deadline never supplies a missing owner selector and local failure remains transactional", async () => {
   const f = await fixture();
   try {
     await f.db.transaction(async (tx) => {
@@ -176,26 +190,23 @@ test("a NULL worker deadline is never local authority and local failure remains 
         ownerCommit: f.context(tx),
       });
       await store.claimDelivery({ id: f.delivery.id, owner: "local-attempt" });
-      const { localAttempt: _, ...ownerCommit } = f.context(tx);
+      const { ownerAttempt: _, ...ownerCommit } = f.context(tx);
       const worker = createEventStore({ session: f.db, ownerCommit });
-      assert.equal(
-        await worker.succeedDelivery(f.delivery.id, "local-attempt"),
-        null,
+      await assert.rejects(
+        worker.succeedDelivery(f.delivery.id, "local-attempt"),
+        /exact owner attempt/,
       );
-      assert.equal(
-        await worker.heartbeatDelivery({
-          id: f.delivery.id,
-          owner: "local-attempt",
-        }),
-        false,
+      await assert.rejects(
+        worker.heartbeatDelivery({ id: f.delivery.id, owner: "local-attempt" }),
+        /does not support/,
       );
-      assert.equal(
-        await worker.failDelivery({
+      await assert.rejects(
+        worker.failDelivery({
           id: f.delivery.id,
           owner: "local-attempt",
           error: new Error("worker"),
         }),
-        null,
+        /exact owner attempt/,
       );
     });
     await assert.rejects(
@@ -251,7 +262,7 @@ test("local attempt configuration fails closed before touching storage", () => {
     },
   };
   for (
-    const localAttempt of [null, {}, { deliveryId: "x", attemptId: " " }, {
+    const ownerAttempt of [null, {}, { deliveryId: "x", attemptId: " " }, {
       deliveryId: "x",
       attemptId: "a",
       extra: true,
@@ -267,10 +278,10 @@ test("local attempt configuration fails closed before touching storage", () => {
             epoch: 1,
             holderId: "holder",
             commandTime: "2099-01-01",
-            localAttempt,
+            ownerAttempt,
           } as unknown as OwnerEventCommitContext,
         }),
-      /Invalid owner-local/,
+      /Invalid owner-controlled/,
     );
   }
 });

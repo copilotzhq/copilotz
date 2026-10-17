@@ -44,7 +44,7 @@ export type OwnerHostTerminalRecoveryFacts = Readonly<{
     attempts: number;
     maxAttempts: number;
     leaseOwner: string;
-    leaseExpiresAt: string;
+    leaseExpiresAt: string | null;
     cancellationRequestedAt: string | null;
   }>;
 }>;
@@ -223,6 +223,7 @@ export function createOwnerHostTerminalRecovery(
         CASE WHEN octet_length(d.lease_owner)<=1024 THEN d.lease_owner END AS lease_owner,
         (d.lease_owner IS NULL) AS lease_owner_null,
         CASE WHEN isfinite(d.lease_expires_at) THEN d.lease_expires_at::text END AS lease_expires_at,
+        (d.lease_expires_at IS NULL OR isfinite(d.lease_expires_at)) AS lease_deadline_valid,
         o.cancellation_requested_at::text AS cancellation_requested_at,
         (o.cancellation_requested_at IS NULL OR isfinite(o.cancellation_requested_at)) AS cancellation_valid
        FROM ${core.event_deliveries} d
@@ -263,7 +264,10 @@ export function createOwnerHostTerminalRecovery(
       typeof row.status === "string" &&
       ["succeeded", "dead_letter", "cancelled"].includes(row.status)
     ) {
-      if (row.lease_owner_null !== true || row.lease_expires_at !== null) {
+      if (
+        row.lease_owner_null !== true || row.lease_expires_at !== null ||
+        row.lease_deadline_valid !== true
+      ) {
         refuse("Terminal target retains a lease.");
       }
       // This candidate stays unaccounted until the wrapped exhaustive proof
@@ -272,12 +276,12 @@ export function createOwnerHostTerminalRecovery(
     }
     if (
       row.status !== "leased" || row.scope_live !== true ||
-      row.lease_expires_at === null
+      row.lease_deadline_valid !== true
     ) {
-      refuse("Configured target is not a supported lost worker lease.");
+      refuse("Configured target is not a supported lost worker attempt.");
     }
     text(row.lease_owner);
-    text(row.lease_expires_at);
+    if (row.lease_expires_at !== null) text(row.lease_expires_at);
     if (row.cancellation_requested_at !== null) {
       text(row.cancellation_requested_at);
     }
@@ -313,7 +317,7 @@ export function createOwnerHostTerminalRecovery(
           attempts: Number(row.attempts),
           maxAttempts: Number(row.max_attempts),
           leaseOwner: row.lease_owner as string,
-          leaseExpiresAt: row.lease_expires_at as string,
+          leaseExpiresAt: row.lease_expires_at as string | null,
           cancellationRequestedAt: row.cancellation_requested_at as
             | string
             | null,

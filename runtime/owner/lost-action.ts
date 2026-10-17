@@ -365,8 +365,8 @@ export function createOwnerLostActionRecovery(
       delivery = current;
       if (
         delivery.status !== "leased" || !delivery.leaseOwner ||
-        !delivery.leaseExpiresAt || delivery.attempts < 1
-      ) return await block("not_a_lost_worker_lease");
+        delivery.attempts < 1
+      ) return await block("not_a_lost_worker_attempt");
       const rows = await storage.listDelivery(context.ownerCommit, {
         ...target,
         maxAssignments,
@@ -651,7 +651,7 @@ export function createOwnerLostActionRecovery(
           ? { actionScopeId: delivery.actionScopeId }
           : {}),
         leaseOwner: delivery.leaseOwner!,
-        leaseExpiresAt: delivery.leaseExpiresAt!,
+        leaseExpiresAt: delivery.leaseExpiresAt ?? null,
         attempts: delivery.attempts,
         maxAttempts: delivery.maxAttempts,
         disposition,

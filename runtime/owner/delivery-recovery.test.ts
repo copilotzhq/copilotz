@@ -157,6 +157,10 @@ async function createFixture() {
       return result;
     },
   };
+  const targets = new Map<
+    string,
+    Parameters<EventStore["recoverLostDelivery"]>[0]
+  >();
   const recover = async (intent: OwnerJson, ctx: OwnerCommandContext) => {
     state.handlerCalls++;
     const store = createEventStore({
@@ -217,9 +221,18 @@ async function createFixture() {
       },
     });
     state.lastStore = store;
-    const recovered = await store.recoverExpiredDeliveries(
-      intent as { namespace?: string; limit?: number },
+    const ids = (intent as { targetIds: string[] }).targetIds;
+    assert.ok(
+      Array.isArray(ids) && ids.length <= 16,
+      "bounded explicit targets required",
     );
+    const recovered = [];
+    for (const id of ids) {
+      const target = targets.get(id);
+      assert.ok(target, "unconfigured recovery target");
+      const result = await store.recoverLostDelivery({ ...target });
+      if (result) recovered.push(result);
+    }
     return recovered.map((delivery) => ({
       id: delivery.id,
       status: delivery.status,
@@ -287,10 +300,30 @@ async function createFixture() {
         maxAttempts: options.maxAttempts ?? 1,
       });
       const id = source.deliveries[0].id;
-      await store.claimDelivery({
+      const claimed = await createEventStore({
+        session: unavailable,
+        ownerCommit: {
+          ...context(tx),
+          ownerAttempt: { deliveryId: id, attemptId: `${key}:attempt-1` },
+        },
+      }).claimDelivery({ id, owner: `${key}:attempt-1` });
+      assert.ok(claimed);
+      targets.set(id, {
+        namespace: options.namespace ?? "space",
         id,
-        owner: `${key}:attempt-1`,
-        leaseMs: options.expires ?? 100,
+        eventId: claimed.eventId,
+        consumerId: claimed.consumerId,
+        settlementScopeId: claimed.settlementScopeId,
+        ...(claimed.actionScopeId
+          ? { actionScopeId: claimed.actionScopeId }
+          : {}),
+        leaseOwner: claimed.leaseOwner!,
+        leaseExpiresAt: null,
+        attempts: claimed.attempts,
+        maxAttempts: claimed.maxAttempts,
+        disposition: claimed.attempts < claimed.maxAttempts
+          ? "retry"
+          : "exhausted",
       });
       return id;
     });
@@ -303,7 +336,11 @@ async function createFixture() {
       kind: "recover",
       domain: "occurrence",
       key,
-      intent,
+      intent: {
+        ...intent as object,
+        targetIds: (intent as { targetIds?: string[] }).targetIds ??
+          [...targets.keys()],
+      },
     });
   return {
     db,
@@ -311,6 +348,7 @@ async function createFixture() {
     state,
     gate,
     seed,
+    targets,
     call,
     async close() {
       gate.release.resolve();
@@ -320,22 +358,20 @@ async function createFixture() {
   };
 }
 
-test("owner expired-delivery recovery uses one captured cutoff and preserves retry eligibility", async () => {
+test("owner exact recovery preserves captured time, retry eligibility and untargeted work", async () => {
   const f = await createFixture();
   try {
-    f.state.publicationTarget = 4;
-    const old = await f.seed("old", { expires: 99 });
-    const exact = await f.seed("exact");
-    const future = await f.seed("future", { expires: 101 });
-    const retry = await f.seed("retry", { maxAttempts: 2 });
-    const other = await f.seed("other", {
-      namespace: "elsewhere",
-      expires: 90,
-    });
+    f.state.publicationTarget = 1;
+    const target = await f.seed("target"),
+      retry = await f.seed("retry", { maxAttempts: 2 }),
+      other = await f.seed("other", { namespace: "elsewhere" });
+    const reads = createEventStore({ session: f.db });
+    const beforeOther = await reads.getDelivery(other),
+      beforeRetry = await reads.getDelivery(retry);
     f.state.advanceClockOnLock = true;
-    const first = await f.call("bounded", { namespace: "space", limit: 1 });
-    assert.deepEqual(first.result, [{
-      id: old,
+    const result = await f.call("exact", { targetIds: [target] });
+    assert.deepEqual(result.result, [{
+      id: target,
       status: "dead_letter",
       attempts: 1,
       updatedAt: at(100),
@@ -354,61 +390,40 @@ test("owner expired-delivery recovery uses one captured cutoff and preserves ret
       f.state.statements.some((sql) => /\bNOW\s*\(/i.test(sql)),
       false,
     );
+    assert.deepEqual(await reads.getDelivery(other), beforeOther);
+    assert.deepEqual(await reads.getDelivery(retry), beforeRetry);
+    assert.equal((await reads.getDelivery(other))?.status, "leased");
+    assert.equal((await reads.getDelivery(retry))?.status, "leased");
+    assert.equal(
+      (await reads.getDelivery(target))?.lastError?.name,
+      "AttemptLost",
+    );
     f.state.time = at(100);
-    const second = await f.call("cutoff", { namespace: "space" });
-    assert.deepEqual(second.result, [{
-      id: exact,
-      status: "dead_letter",
-      attempts: 1,
-      updatedAt: at(100),
-      settledAt: at(100),
-    }]);
-    const reads = createEventStore({ session: f.db });
-    for (const id of [future, retry, other]) {
-      assert.equal((await reads.getDelivery(id))?.status, "leased");
-    }
-    assert.deepEqual((await reads.getDelivery(old))?.lastError, {
-      name: "DeliveryLeaseExpired",
-      message: "The delivery lease expired after its final attempt.",
-    });
-    assert.equal((await reads.getDelivery(old))?.leaseOwner, undefined);
-    assert.equal((await reads.getDelivery(old))?.leaseExpiresAt, undefined);
-    assert.equal(f.state.settlementCalls, 2);
-    // Retry-eligible expirations stay leased until the existing claim path
-    // reclaims them; recovery does not synthesize retry or terminal policy.
+    await f.call("requeue", { targetIds: [retry] });
+    const requeued = await reads.getDelivery(retry);
+    assert.equal(requeued?.status, "retry_wait");
+    assert.equal(requeued?.attempts, 1);
+    assert.equal(requeued?.availableAt, beforeRetry?.availableAt);
+    assert.deepEqual(await reads.getDelivery(other), beforeOther);
     await f.db.transaction(async (tx) => {
       const store = createEventStore({
         session: unavailable,
-        ownerCommit: context(tx, at(100)),
+        ownerCommit: {
+          ...context(tx, at(100)),
+          afterCommit() {},
+          ownerAttempt: { deliveryId: retry, attemptId: "retry:attempt-2" },
+        },
       });
-      assert.deepEqual(
-        (await store.listRecoverable({ namespace: "space" })).map((d) => d.id),
-        [retry],
-      );
-      const reclaimed = await store.claimDelivery({
+      const claimed = await store.claimDelivery({
         id: retry,
         owner: "retry:attempt-2",
-        leaseMs: 100,
       });
-      assert.equal(reclaimed?.attempts, 2);
-      assert.equal(reclaimed?.leaseExpiresAt, at(200));
-      assert.equal(await store.succeedDelivery(retry, "retry:attempt-1"), null);
+      assert.equal(claimed?.attempts, 2);
+      assert.equal(claimed?.leaseExpiresAt, undefined);
+      await assert.rejects(store.succeedDelivery(retry, "retry:attempt-1"));
     });
-    f.state.time = at(199);
-    await f.call("before-final", { namespace: "space" });
-    assert.equal((await reads.getDelivery(retry))?.status, "leased");
-    f.state.time = at(200);
-    const final = await f.call("final-attempt", { namespace: "space" });
-    assert.deepEqual(final.result, [{
-      id: retry,
-      status: "dead_letter",
-      attempts: 2,
-      updatedAt: at(200),
-      settledAt: at(200),
-    }]);
     await within(f.state.published.promise);
-    assert.equal(f.state.publications.length, 4);
-    assert.deepEqual(f.state.publicationErrors, []);
+    assert.equal(f.state.publications.length, 1);
   } finally {
     await f.close();
   }
@@ -448,9 +463,12 @@ test("owner recovery replays receipts without repeated transitions or publicatio
     assert.equal(f.state.settlementCalls, 1);
     assert.equal(f.state.publications.length, 1);
     assert.deepEqual(f.state.publicationErrors, []);
-    await assert.rejects(() => f.state.lastStore!.recoverExpiredDeliveries(), {
-      code: "owner_command_closed",
-    });
+    await assert.rejects(
+      () => f.state.lastStore!.recoverLostDelivery(f.targets.get(id)!),
+      {
+        code: "owner_command_closed",
+      },
+    );
   } finally {
     await f.close();
   }
@@ -515,7 +533,7 @@ test("owner recovery output and settlement publication wait for the outer commit
 test("owner recovery requires the current locking fence and publication boundary", async () => {
   const f = await createFixture();
   try {
-    await f.seed("final");
+    const targetId = await f.seed("final");
     const before = await snapshot(f.db);
     await f.db.transaction(async (tx) => {
       const statements: string[] = [];
@@ -529,9 +547,11 @@ test("owner recovery requires the current locking fence and publication boundary
       const missingPublication = createEventStore({
         session: unavailable,
         ownerCommit: { ...authority, afterCommit: undefined },
+        lockSettlementScope: () => Promise.resolve(),
+        settleActionOwners: () => Promise.resolve(),
       });
       await assert.rejects(
-        () => missingPublication.recoverExpiredDeliveries(),
+        () => missingPublication.recoverLostDelivery(f.targets.get(targetId)!),
         /without afterCommit/,
       );
       assert.equal(statements.length, 0);
@@ -539,10 +559,15 @@ test("owner recovery requires the current locking fence and publication boundary
         const store = createEventStore({
           session: unavailable,
           ownerCommit: { ...authority, ...stale },
+          lockSettlementScope: () => Promise.resolve(),
+          settleActionOwners: () => Promise.resolve(),
         });
-        await assert.rejects(() => store.recoverExpiredDeliveries(), {
-          code: "ActionOwnershipLost",
-        });
+        await assert.rejects(
+          () => store.recoverLostDelivery(f.targets.get(targetId)!),
+          {
+            code: "ActionOwnershipLost",
+          },
+        );
       }
       assert.equal(statements.length, 2);
       for (const sql of statements) {
@@ -594,30 +619,37 @@ for (const committed of [false, true]) {
   });
 }
 
-test("owner default recovery batch fits the boundary publication cap and keeps callback order", async () => {
-  const f = await createFixture();
-  try {
-    const ids: string[] = [];
-    f.state.publicationTarget = 20;
-    for (let index = 0; index < 20; index++) {
-      ids.push(await f.seed(`batch:${index}`, { expires: index }));
+for (const failFirst of [false, true]) {
+  test(`twenty explicit owner recovery commands preserve ordered publication with failure=${failFirst}`, async () => {
+    const f = await createFixture();
+    try {
+      const ids: string[] = [];
+      f.state.publicationTarget = 20;
+      f.state.failPublicationAt = failFirst ? 1 : 0;
+      for (let i = 0; i < 20; i++) ids.push(await f.seed(`batch:${i}`));
+      const results = await Promise.all(
+        ids.map((id, i) => f.call(`recover:${i}`, { targetIds: [id] })),
+      );
+      assert.ok(results.every((r) => r.status === "committed"));
+      await within(f.state.published.promise);
+      assert.deepEqual(f.state.publications.map((p) => p.id), ids);
+      assert.ok(
+        f.state.publications.every((p) => p.receipts === 1 && !p.gated),
+      );
+      if (failFirst) await within(f.state.publicationFailure.promise);
+      assert.equal(f.state.publicationErrors.length, failFirst ? 1 : 0);
+      assert.equal((await snapshot(f.db)).receipts.length, 20);
+      assert.equal(
+        (await f.call("recover:0", { targetIds: [ids[0]] })).status,
+        "duplicate",
+      );
+      assert.equal(f.state.settlementCalls, 20);
+      assert.equal(f.state.publications.length, 20);
+    } finally {
+      await f.close();
     }
-    const result = await f.call("default-batch");
-    assert.deepEqual((result.result as { id: string }[]).map((d) => d.id), ids);
-    await within(f.state.published.promise);
-    assert.deepEqual(f.state.publications.map((p) => p.id), ids);
-    assert.ok(f.state.publications.every((p) => p.receipts === 1 && !p.gated));
-    assert.deepEqual(f.state.publicationErrors, []);
-    assert.equal((await snapshot(f.db)).receipts.length, 1);
-    assert.equal((await f.call("default-batch")).status, "duplicate");
-    assert.equal(f.state.settlementCalls, 20);
-    assert.equal(f.state.publications.length, 20);
-    await f.call("bounded-empty", { limit: 1000 });
-    assert.deepEqual(f.state.recoveryLimits, [100, 100]);
-  } finally {
-    await f.close();
-  }
-});
+  });
+}
 
 test("owner recovery publication failure leaves commit durable and attempts later callbacks", async () => {
   const f = await createFixture();
@@ -632,9 +664,8 @@ test("owner recovery publication failure leaves commit durable and attempts late
     assert.deepEqual(f.state.publications.map((p) => p.id), [first, second]);
     assert.equal(f.state.publicationErrors.length, 1);
     const error = f.state.publicationErrors[0];
-    assert.ok(error instanceof AggregateError);
-    assert.equal(error.errors.length, 1);
-    assert.match(error.errors[0].message, /injected publication failure/);
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /injected publication failure/);
     const committed = await snapshot(f.db);
     assert.ok(committed.deliveries.every((d) => d.status === "dead_letter"));
     assert.equal(committed.receipts.length, 1);

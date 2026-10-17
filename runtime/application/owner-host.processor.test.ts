@@ -440,7 +440,7 @@ for (const { placement, mode, fault, nestedChildren, localChild } of cases) {
           policy,
           maxActive: fault === "mixed-capacity" ? 1 : 4,
           maxPending: 32,
-          leaseMs: 3000,
+
           now: () =>
             fault === "submillisecond"
               ? new Date(time).toISOString().replace(
@@ -674,53 +674,28 @@ for (const { placement, mode, fault, nestedChildren, localChild } of cases) {
           (await db.query<{ id: string; lease_expires_at: string }>(
             "SELECT id,lease_expires_at FROM event_deliveries WHERE consumer_id='processor:fixture.follow' AND status='leased'",
           )).rows[0];
-        if (placement === "owner-local") {
-          assert.equal(leased.lease_expires_at, null);
-          assert.equal(
-            (await db.query("SELECT name FROM owner_alarms WHERE name=$1", [
-              JSON.stringify(["host.delivery", "space", leased.id]),
-            ])).rows.length,
-            0,
-          );
-          time += 1000;
-          await host.wake();
-          assert.equal(
-            (await db.query(
-              "SELECT attempts FROM event_deliveries WHERE id=$1",
-              [leased.id],
-            )).rows[0].attempts,
-            1,
-          );
-        } else {
-          const leaseAlarm = async () =>
-            (await db.query<{ due_at: string }>(
-              "SELECT due_at FROM owner_alarms WHERE name=$1",
-              [JSON.stringify(["host.delivery", "space", leased.id])],
-            )).rows[0].due_at;
-          assert.equal(
-            new Date(await leaseAlarm()).getTime(),
-            new Date(leased.lease_expires_at).getTime(),
-            "active delivery alarm uses actual lease expiry, not stale availability",
-          );
-          time += 1000;
-          await eventually(async () =>
-            new Date(
-              (await db.query<{ lease_expires_at: string }>(
-                "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
-                [leased.id],
-              )).rows[0].lease_expires_at,
-            ).getTime() > new Date(leased.lease_expires_at).getTime()
-          );
-          const renewed = (await db.query<{ lease_expires_at: string }>(
-            "SELECT lease_expires_at FROM event_deliveries WHERE id=$1",
-            [leased.id],
-          )).rows[0];
-          assert.equal(
-            new Date(await leaseAlarm()).getTime(),
-            new Date(renewed.lease_expires_at).getTime(),
-            "renewal moves the durable alarm with the lease",
-          );
-        }
+        assert.equal(leased.lease_expires_at, null);
+        assert.equal(
+          (await db.query("SELECT name FROM owner_alarms WHERE name=$1", [
+            JSON.stringify(["host.delivery", "space", leased.id]),
+          ])).rows.length,
+          0,
+          "neither placement schedules a job-expiry alarm",
+        );
+        time += 60_000; // Cross the previous default worker lease without renewal.
+        await host.wake();
+        assert.equal(
+          (await db.query("SELECT attempts FROM event_deliveries WHERE id=$1", [
+            leased.id,
+          ])).rows[0].attempts,
+          1,
+        );
+        assert.equal(
+          (await db.query(
+            "SELECT 1 FROM owner_receipts WHERE kind IN ('execution.renew','processor.renew')",
+          )).rows.length,
+          0,
+        );
         const root = (await db.query<{ settlement_scope_id: string }>(
           "SELECT settlement_scope_id FROM event_deliveries WHERE consumer_id='registered:fixture.root'",
         )).rows[0];

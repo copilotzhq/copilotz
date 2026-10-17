@@ -2,21 +2,14 @@ import { ownConfiguration } from "./owner-local-configuration.ts";
 /** Private fresh-only local Action composition. No public placement option,
  * worker identity, restart adoption, preparation or effect capability. */
 import type { SqlExecutor } from "../events/session.ts";
-import {
-  createCoreTableNames,
-  quoteEventIdentifier,
-} from "../events/schema.ts";
+import { createCoreTableNames } from "../events/schema.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createRegisteredLocalActionExecution,
   type RegisteredLocalActionOptions,
 } from "../execution/registered-local.ts";
-import {
-  createOwnerAssignmentControl,
-  OWNER_ASSIGNMENT_BINDING_MAX_BYTES,
-  parseOwnerStoredAssignment,
-} from "../owner/assignments.ts";
+import { createOwnerAssignmentControl } from "../owner/assignments.ts";
 import type { OwnerLocalActionAssignmentBinding } from "../owner/placement-binding.ts";
 import type {
   OwnerCaller,
@@ -36,7 +29,6 @@ import {
 import { createOwnerLocalActionPort } from "../owner/local-action-port.ts";
 import {
   createOwnerLocalPlacementController,
-  type OwnerLocalNullLeaseEvidence,
 } from "./owner-local-placement.ts";
 import type { OwnerScheduledAssignment } from "./owner-dispatch.ts";
 
@@ -249,7 +241,7 @@ export function createOwnerHostCommandContexts(
       run: () => T | Promise<T>,
     ): Promise<T> {
       if (!matches(context) || live.has(context)) {
-        refuse("Unauthenticated local alarm command context.");
+        refuse("Unauthenticated owner alarm command context.");
       }
       live.add(context);
       try {
@@ -278,7 +270,6 @@ export function createOwnerHostLocalActions(
     capacity: Readonly<{
       reserve(binding: Binding): Readonly<{ release(): void }> | undefined;
     }>;
-    contexts: ReturnType<typeof createOwnerHostCommandContexts>;
     isCurrent(): boolean;
     assertControl(caller: OwnerCaller): void;
     onIndeterminate(error: unknown): void;
@@ -307,15 +298,12 @@ export function createOwnerHostLocalActions(
   const executeInput = boundary.executeInput.bind(boundary);
   const project = boundary.project.bind(boundary);
   const tables = createCoreTableNames(schema);
-  const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
-  const authorizeAlarmContext = options.contexts.isCurrent;
   const controller = createOwnerLocalPlacementController({
     controlCaller,
     boundary: { execute },
     isCurrent,
     capacity: options.capacity,
     maxEntries: configuration.maxEntries,
-    authorizeAlarmContext,
   });
   const assignments = createOwnerAssignmentControl({
     ownerId,
@@ -503,60 +491,6 @@ export function createOwnerHostLocalActions(
       });
       entry.attachDriver(driver);
       await driver.run();
-    },
-    /** All evidence is loaded under this exact live owner command transaction. */
-    async classifyNullLease(
-      context: OwnerCommandContext,
-      deliveryId: string,
-    ): Promise<"pending-start" | "running" | undefined> {
-      if (!authorizeAlarmContext(context)) return undefined;
-      const rows = (await context.tx.query(
-        `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,a.retired,
-          CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,
-          d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.lease_owner,d.lease_expires_at,
-          e.owner_id AS source_owner,e.namespace,e.type,e.deduplication_id,
-          CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS action_id,
-          CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS action_run_id
-         FROM ${assignmentTable} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
-         WHERE a.owner=$1 AND a.delivery_id=$2 AND a.retired=FALSE FOR SHARE OF a`,
-        [ownerId, deliveryId],
-      )).rows;
-      if (rows.length !== 1 || !authorizeAlarmContext(context)) {
-        return undefined;
-      }
-      const row = rows[0];
-      const stored = parseOwnerStoredAssignment(row);
-      const binding = stored.binding;
-      if (
-        binding.placement !== "owner-local" || binding.kind !== "action" ||
-        row.source_owner !== ownerId ||
-        row.type !== "copilotz.owner.action.requested" ||
-        row.deduplication_id !== binding.actionRunId
-      ) return undefined;
-      const evidence = {
-        assignment: {
-          owner: stored.owner,
-          epoch: stored.epoch,
-          binding,
-          retired: stored.retired,
-        },
-        delivery: {
-          id: row.id,
-          eventId: row.event_id,
-          consumerId: row.consumer_id,
-          status: row.status,
-          attempts: row.attempts,
-          leaseOwner: row.lease_owner,
-          leaseExpiresAt: row.lease_expires_at,
-        },
-        source: {
-          id: row.event_id,
-          namespace: row.namespace,
-          actionId: row.action_id,
-          actionRunId: row.action_run_id,
-        },
-      } as OwnerLocalNullLeaseEvidence;
-      return controller.classifyNullLease(context, evidence);
     },
   };
 }

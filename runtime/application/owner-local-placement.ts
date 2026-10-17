@@ -9,7 +9,6 @@ import { ownerPrincipalIdentity } from "../owner/principal.ts";
 import type {
   OwnerCaller,
   OwnerCommandBoundary,
-  OwnerCommandContext,
   OwnerCommandOutcome,
 } from "../owner/boundary.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -23,29 +22,6 @@ type Driver = Pick<
   ReturnType<typeof createRegisteredLocalActionExecution>,
   "quiescent" | "revoke"
 >;
-export type OwnerLocalNullLeaseEvidence = Readonly<{
-  assignment: Readonly<{
-    owner: string;
-    epoch: number;
-    binding: Reference;
-    retired: boolean;
-  }>;
-  delivery: Readonly<{
-    id: string;
-    eventId: string;
-    consumerId: string;
-    status: "leased";
-    attempts: 1;
-    leaseOwner: string;
-    leaseExpiresAt: null;
-  }>;
-  source: Readonly<{
-    id: string;
-    namespace: string;
-    actionId: string;
-    actionRunId: string;
-  }>;
-}>;
 export type OwnerLocalPlacementEntry = Readonly<{
   readonly reference: Reference;
   readonly controlCaller: OwnerCaller;
@@ -121,9 +97,6 @@ export function createOwnerLocalPlacementController(
     /** Includes released tombstones. Reaching the bound refuses new selection;
      * there is no local history replay or unbounded completed-entry cache. */
     maxEntries: number;
-    /** Trusted host check of an actual executing boundary context. This pure
-     * controller cannot establish SQL provenance from a structural object. */
-    authorizeAlarmContext(context: OwnerCommandContext): boolean;
   }>,
 ) {
   const baseControl = copy(options.controlCaller);
@@ -140,7 +113,6 @@ export function createOwnerLocalPlacementController(
   const execute = options.boundary.execute.bind(options.boundary);
   const reserveCapacity = options.capacity.reserve.bind(options.capacity);
   const isCurrent = options.isCurrent;
-  const authorizeAlarmContext = options.authorizeAlarmContext;
   const maxEntries = options.maxEntries;
   if (
     !Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 4096
@@ -466,69 +438,6 @@ export function createOwnerLocalPlacementController(
         return true;
       } catch {
         return false;
-      }
-    },
-    classifyNullLease(
-      context: OwnerCommandContext,
-      input: OwnerLocalNullLeaseEvidence,
-    ): "pending-start" | "running" | undefined {
-      try {
-        const data = object(input, ["assignment", "delivery", "source"]);
-        const transaction = context.tx;
-        const commandTime = context.commandTime;
-        const signal = context.signal;
-        const commit = { ...context.ownerCommit };
-        if (
-          !current() || authorizeAlarmContext(context) !== true || !current()
-        ) return undefined;
-        if (
-          commit.transaction !== transaction ||
-          commit.ownerId !== fence.ownerId ||
-          commit.epoch !== fence.epoch || commit.holderId !== fence.holderId ||
-          commit.commandTime !== commandTime || signal.aborted
-        ) return undefined;
-        const assignment = object(data.assignment, [
-          "owner",
-          "epoch",
-          "binding",
-          "retired",
-        ]);
-        const delivery = object(data.delivery, [
-          "id",
-          "eventId",
-          "consumerId",
-          "status",
-          "attempts",
-          "leaseOwner",
-          "leaseExpiresAt",
-        ]);
-        const source = object(data.source, [
-          "id",
-          "namespace",
-          "actionId",
-          "actionRunId",
-        ]);
-        const bound = reference(assignment.binding);
-        const state = entries.get(bound.deliveryId);
-        if (
-          !state?.current() || state.terminal || !state.authorized ||
-          !state.startPromise || !sameReference(bound, state.reference) ||
-          assignment.owner !== fence.ownerId ||
-          assignment.epoch !== fence.epoch ||
-          assignment.retired !== false || delivery.id !== bound.deliveryId ||
-          delivery.eventId !== bound.sourceEventId ||
-          delivery.consumerId !== `registered:${bound.actionId}` ||
-          delivery.status !== "leased" || delivery.attempts !== 1 ||
-          delivery.leaseOwner !== bound.attemptId ||
-          delivery.leaseExpiresAt !== null ||
-          source.id !== bound.sourceEventId ||
-          source.namespace !== bound.namespace ||
-          source.actionId !== bound.actionId ||
-          source.actionRunId !== bound.actionRunId
-        ) return undefined;
-        return state.startObserved ? "running" : "pending-start";
-      } catch {
-        return undefined;
       }
     },
   };

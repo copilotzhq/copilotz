@@ -122,6 +122,7 @@ export async function fixture(
   const state = {
     time: start,
     executions: 0,
+    collectionAttempts: 0,
     projections: 0,
     persistenceOpens: 0,
     publications: [] as string[],
@@ -132,7 +133,6 @@ export async function fixture(
       | Awaited<ReturnType<typeof snapshot>>
       | undefined,
     lostCompletion: false,
-    lostRenewal: false,
     commitKind: "",
     gateKind: "",
   };
@@ -262,7 +262,6 @@ export async function fixture(
     registry,
     catalog,
     executor,
-    leaseMs: 1000,
     allowRecovery: input.allowRecovery,
     scheduleSettlement: input.scheduleSettlement,
     publish: (event) => {
@@ -331,13 +330,27 @@ export async function fixture(
     registry,
     collections: registry.collections,
     executor,
-    scope: (ctx) => ({
-      namespace: "space",
-      identity: {
-        causationId: String(ctx.caller.sourceEventId),
-        settlementScopeId: String(ctx.caller.sourceEventId),
-      },
-    }),
+    async scope(ctx) {
+      const assignment = await execution.authorizeLive(
+        ctx.tx,
+        ctx.caller,
+        ctx.commandTime,
+      );
+      return {
+        namespace: "space",
+        attempt: assignment,
+        identity: {
+          causationId: String(ctx.caller.sourceEventId),
+          settlementScopeId: String(ctx.caller.sourceEventId),
+          deliveryLease: {
+            deliveryId: assignment.deliveryId,
+            owner: assignment.placement === "worker"
+              ? assignment.dispatchAttemptId
+              : assignment.attemptId,
+          },
+        },
+      };
+    },
   });
   const boundary = createOwnerCommandBoundary({
     session,
@@ -355,6 +368,7 @@ export async function fixture(
     async authorize(tx, caller, command, time, normalizedInput) {
       state.commitKind = command.kind;
       if (command.kind === "collections") {
+        state.collectionAttempts++;
         const assignment = await execution.authorizeLive(tx, caller, time);
         assert.equal(command.domain, "logical");
         assert.ok(
@@ -488,12 +502,6 @@ export async function fixture(
       port: {
         async execute(command, options) {
           const value = await boundary.execute(authenticated, command, options);
-          if (command.kind === "execution.renew" && state.lostRenewal) {
-            state.lostRenewal = false;
-            throw Object.assign(new Error("lost committed renewal reply"), {
-              outcome: "unknown",
-            });
-          }
           return value;
         },
         async complete(command, options) {

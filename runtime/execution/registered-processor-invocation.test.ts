@@ -166,17 +166,13 @@ test("neutral Processor and worker preserve direct Collections, event identity a
     /closed/,
   );
   const ref = { deliveryId: "delivery", dispatchAttemptId: "attempt" };
-  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
   const { deliveryId: _deliveryId, ...projection } = leased.invocation;
   const worker = createRegisteredProcessorWorker({
     registry: leased.registry,
     createCapabilities: leased.options.createCapabilities,
     owner: {
       claim: () => Promise.resolve({ status: "committed", result: ref }),
-      project: () =>
-        Promise.resolve({ ...projection, workerId: "worker", lease }),
-      renew: () =>
-        Promise.resolve({ status: "committed", result: { ...ref, lease } }),
+      project: () => Promise.resolve({ ...projection, workerId: "worker" }),
       complete: (_reference, completion) =>
         Promise.resolve({
           status: "committed",
@@ -451,18 +447,11 @@ test("Processor worker prebinds owner execute before capability preparation awai
     },
   );
   const reference = { deliveryId: "delivery", dispatchAttemptId: "attempt" };
-  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
   const { deliveryId: _deliveryId, ...projection } = f.invocation;
   const port: import("./registered-processor.ts").RegisteredProcessorOwnerPort =
     {
       claim: () => Promise.resolve({ status: "committed", result: reference }),
-      project: () =>
-        Promise.resolve({ ...projection, workerId: "worker", lease }),
-      renew: () =>
-        Promise.resolve({
-          status: "committed",
-          result: { ...reference, lease },
-        }),
+      project: () => Promise.resolve({ ...projection, workerId: "worker" }),
       complete: (_reference, completion) =>
         Promise.resolve({
           status: "committed",
@@ -592,18 +581,11 @@ test("Processor worker prebinds named preparation and its exact reference before
     },
   );
   const reference = { deliveryId: "delivery", dispatchAttemptId: "attempt" };
-  const lease = { remainingMs: 30_000, renewAfterMs: 10_000 };
   const { deliveryId: _deliveryId, ...projection } = f.invocation;
   const port: import("./registered-processor.ts").RegisteredProcessorOwnerPort =
     {
       claim: () => Promise.resolve({ status: "committed", result: reference }),
-      project: () =>
-        Promise.resolve({ ...projection, workerId: "worker", lease }),
-      renew: () =>
-        Promise.resolve({
-          status: "committed",
-          result: { ...reference, lease },
-        }),
+      project: () => Promise.resolve({ ...projection, workerId: "worker" }),
       complete: (_reference, completion) =>
         Promise.resolve({
           status: "committed",

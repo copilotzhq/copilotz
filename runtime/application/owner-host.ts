@@ -298,13 +298,12 @@ export type OwnerHostOptions = Readonly<{
   ): Hypervisor;
   maxPending?: number;
   maxActive?: number;
-  leaseMs?: number;
-  /** Bounds transport admission only; opened work is lease/session controlled. */
+  /** Bounds transport admission only; opened work is current-session/attempt controlled. */
   dispatchWaitMs?: number;
   now?: () => string;
   onError?(error: unknown): void;
 }>;
-/** This host currently schedules leased worker placement only. */
+/** Narrow a verified execution assignment for worker-only policy callbacks. */
 function workerAssignment(
   value: OwnerExecutionAssignment,
 ): OwnerWorkerExecutionAssignment {
@@ -552,7 +551,6 @@ export async function createOwnerHost(
     createTransport,
     now,
     onError,
-    leaseMs,
   } = options;
   const policy = { ...options.policy };
   const transportOptions = { ...options.transport };
@@ -1053,6 +1051,22 @@ export async function createOwnerHost(
     return async (intent, context) => {
       const run = async () => {
         const result = await handler(intent, context);
+        const starting = [
+          "execution.claim",
+          "processor.claim",
+          "owner.local-start",
+          "owner.local-processor-start",
+        ].includes(context.command.kind);
+        const resultRecord = result as {
+          deliveryId?: unknown;
+          binding?: { deliveryId?: unknown };
+        } | null;
+        const claimedDeliveryId = starting
+          ? resultRecord?.deliveryId ?? resultRecord?.binding?.deliveryId
+          : undefined;
+        if (starting && typeof claimedDeliveryId !== "string") {
+          unavailable("Start result lacks its exact delivery.");
+        }
         const rows = (await context.tx.query<ScheduledRow>(
           `SELECT d.id,d.event_id,d.consumer_id,d.status,d.attempts,d.available_at::text AS available_at,(d.available_at <= $3::timestamptz) AS due,d.lease_expires_at::text AS lease_expires_at,e.namespace,e.metadata,e.type FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE e.owner_id=$1 AND d.status IN ('pending','retry_wait','leased') ORDER BY d.available_at,d.created_at,d.id LIMIT $2`,
           [ownerId, maxPending + 1, context.commandTime],
@@ -1060,29 +1074,31 @@ export async function createOwnerHost(
         if (rows.length > maxPending) {
           unavailable("Owner durable delivery capacity exceeded.");
         }
+        if (
+          starting &&
+          !rows.some((row) =>
+            row.id === claimedDeliveryId && row.status === "leased"
+          )
+        ) unavailable("Started delivery is not active.");
         const due: OwnerScheduledAssignment[] = [];
         for (const row of rows) {
           const ref = scheduledReference(row);
           const deadline = row.status === "leased"
             ? row.lease_expires_at
             : row.available_at;
-          if (row.status === "leased" && deadline === null) {
-            try {
-              const selected = "kind" in ref ? localProcessor : local;
-              if (
-                !selected || !await selected.classifyNullLease(context, row.id)
-              ) {
-                unavailable(
-                  "NULL leased delivery has no current private local authority.",
-                );
-              }
+          if (row.status === "leased") {
+            if (deadline !== null) {
+              unavailable(
+                "Timed in-flight owner history requires explicit migration.",
+              );
+            }
+            // A fresh claim/start consumes only its own availability wake.
+            // Unrelated commands must not hide an anomalous running-job alarm.
+            if (claimedDeliveryId === row.id) {
               await context.tx.query(
                 `DELETE FROM ${ownerTables.alarms} WHERE owner=$1 AND name=$2`,
                 [ownerId, deliveryAlarm(row.namespace, row.id)],
               );
-            } catch (error) {
-              stop(error);
-              throw error;
             }
             continue;
           }
@@ -1181,7 +1197,6 @@ export async function createOwnerHost(
     registry,
     catalog,
     executor,
-    leaseMs,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
     ...(localConfiguration
@@ -1215,7 +1230,6 @@ export async function createOwnerHost(
     session,
     registry,
     catalog,
-    leaseMs,
     resolveAssignment: resolveProcessor,
     ...(processorConfiguration
       ? {
@@ -1861,7 +1875,7 @@ export async function createOwnerHost(
               delivery.status === "leased" && delivery.lease_expires_at === null
             ) {
               const error = new Error(
-                "NULL leased delivery retained an inconsistent alarm; local recovery is unavailable.",
+                "Active owner attempt retained an inconsistent expiry alarm; explicit recovery is required.",
               );
               stop(error);
               throw error;
@@ -2224,6 +2238,15 @@ export async function createOwnerHost(
               namespace: assignment.namespace,
               identity,
               conditions: conditions.conditions,
+              attempt: {
+                placement: "worker",
+                ownerId,
+                workerId: assignment.workerId,
+                assignmentId: assignment.assignmentId,
+                sessionId: assignment.sessionId,
+                dispatchAttemptId: assignment.dispatchAttemptId,
+                deliveryId: assignment.deliveryId,
+              },
             });
             return;
           }

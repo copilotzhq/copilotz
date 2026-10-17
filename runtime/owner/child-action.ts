@@ -292,7 +292,6 @@ export function createOwnerChildActions(
   >();
   type ParentProof = Readonly<{
     bodies: string;
-    leaseExpiresAt: string | null;
     invokedEventId: string | null;
     parent: OwnerChildActionParent;
     binding: OwnerChildActionBinding;
@@ -420,7 +419,6 @@ export function createOwnerChildActions(
     const remember = async (parent: OwnerChildActionParent) => {
       parentProofs.set(parent, {
         bodies: JSON.stringify(bodyProofs),
-        leaseExpiresAt,
         invokedEventId,
         parent: structuredClone(parent),
         binding: structuredClone(binding),
@@ -452,16 +450,15 @@ export function createOwnerChildActions(
       [a.deliveryId],
     )).rows[0];
     if (
-      !locked || (authority.placement === "worker" && !locked.lease_expires_at)
+      !locked || locked.lease_expires_at !== null
     ) refuse();
-    const leaseExpiresAt = locked.lease_expires_at;
     const delivery = await store.getDelivery(a.deliveryId);
     const source = delivery && await store.getEvent(delivery.eventId);
     if (
       !delivery || !source || source.ownerId !== options.ownerId ||
       source.namespace !== a.namespace ||
       delivery.settlementScopeId !== initial.settlementScopeId ||
-      !ownerAttemptIsLive(delivery, authority, time)
+      !ownerAttemptIsLive(delivery, authority)
     ) refuse();
     bodyProofs.push(await captureBody(tx, source));
     if (binding.kind === "processor") {
@@ -600,21 +597,19 @@ export function createOwnerChildActions(
       }
     >(
       `SELECT (
-         d.max_attempts=$3 AND d.lease_expires_at IS NOT DISTINCT FROM $4::timestamptz
-         AND (($10::boolean AND d.lease_expires_at IS NULL) OR
-           (NOT $10::boolean AND d.lease_expires_at>$5::timestamptz))
+         d.max_attempts=$3 AND d.lease_expires_at IS NULL
          AND NOT EXISTS (
-           SELECT 1 FROM jsonb_array_elements($6::jsonb) expected
+           SELECT 1 FROM jsonb_array_elements($4::jsonb) expected
            LEFT JOIN ${tables.event_bodies} b ON b.namespace=expected->>'namespace' AND b.event_body_id=expected->>'id'
            WHERE b.event_body_id IS NULL OR b.schema_version<>(expected->>'schema')::int
              OR b.body IS DISTINCT FROM expected->'body' OR b.digest IS DISTINCT FROM expected->>'digest'
          )
-         AND ($7::text IS NULL OR (
-           EXISTS (SELECT 1 FROM ${tables.open_actions} oa WHERE oa.namespace=$2 AND oa.action_run_id=$7
-             AND oa.action_id=$8 AND oa.owner_delivery_id=d.id AND oa.scope_id=d.settlement_scope_id
+         AND ($5::text IS NULL OR (
+           EXISTS (SELECT 1 FROM ${tables.open_actions} oa WHERE oa.namespace=$2 AND oa.action_run_id=$5
+             AND oa.action_id=$6 AND oa.owner_delivery_id=d.id AND oa.scope_id=d.settlement_scope_id
              AND oa.action_scope_id IS NOT DISTINCT FROM d.action_scope_id
-             AND oa.invoked_event_id=$9 AND oa.state='invoked')
-           AND NOT EXISTS (SELECT 1 FROM ${tables.events} terminal WHERE terminal.namespace=$2 AND terminal.deduplication_id=$7 || ':action:terminal')
+             AND oa.invoked_event_id=$7 AND oa.state='invoked')
+           AND NOT EXISTS (SELECT 1 FROM ${tables.events} terminal WHERE terminal.namespace=$2 AND terminal.deduplication_id=$5 || ':action:terminal')
          ))
        ) AS facts_current, d.event_id,d.consumer_id,d.settlement_scope_id,d.action_scope_id,d.status,d.attempts,d.lease_owner,d.lease_expires_at::text AS lease_expires_at,e.owner_id AS source_owner,e.namespace AS source_namespace,o.state AS operation_state,o.cancellation_requested_at
        FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
@@ -623,13 +618,10 @@ export function createOwnerChildActions(
         a.deliveryId,
         parent.namespace,
         parent.delivery.maxAttempts,
-        proof.leaseExpiresAt,
-        time,
         proof.bodies,
         parent.actionRunId ?? null,
         binding.kind === "action" ? binding.assignment.actionId : null,
         proof.invokedEventId,
-        authority.placement === "owner-local",
       ],
     )).rows[0];
     if (

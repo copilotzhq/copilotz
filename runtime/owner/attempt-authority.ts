@@ -197,7 +197,6 @@ export function ownerAttemptToken(assignment: OwnerAttemptAuthority): string {
 export function ownerAttemptIsLive(
   delivery: EventDelivery,
   assignment: OwnerAttemptAuthority,
-  commandTime: string,
 ): boolean {
   const expected = authority(assignment);
   const input = record(delivery);
@@ -211,16 +210,9 @@ export function ownerAttemptIsLive(
   if (
     id !== expected.deliveryId || status !== "leased" || leaseOwner !== token
   ) return false;
-  if (expected.placement === "owner-local") {
-    // NULL is representation only: placement and token came from the binding.
-    return leaseExpiresAt === undefined || leaseExpiresAt === null;
-  }
-  if (
-    typeof leaseExpiresAt !== "string" || typeof commandTime !== "string"
-  ) return false;
-  const deadline = Date.parse(leaseExpiresAt);
-  const time = Date.parse(commandTime);
-  return Number.isFinite(deadline) && Number.isFinite(time) && deadline > time;
+  // Both placements use a non-expiring owner-controlled attempt. The exact
+  // assignment/session and epoch must already have been authenticated.
+  return leaseExpiresAt === undefined || leaseExpiresAt === null;
 }
 
 /** Convert already-authorized command state. A separately authorized local
@@ -259,15 +251,14 @@ export function ownerEventCommitForAttempt(
     expected.placement === "owner-local" &&
     (commit.epoch !== expected.epoch || commit.holderId !== expected.holderId)
   ) refuse();
-  if (Object.hasOwn(owner, "localAttempt")) {
-    if (expected.placement === "worker") refuse();
-    const previous = exactRecord(field(owner, "localAttempt"), [
+  if (Object.hasOwn(owner, "ownerAttempt")) {
+    const previous = exactRecord(field(owner, "ownerAttempt"), [
       "deliveryId",
       "attemptId",
     ]);
     if (
       previous.deliveryId !== expected.deliveryId ||
-      previous.attemptId !== expected.attemptId
+      previous.attemptId !== ownerAttemptToken(expected)
     ) refuse();
   }
   return {
@@ -277,13 +268,9 @@ export function ownerEventCommitForAttempt(
     holderId: commit.holderId,
     commandTime,
     afterCommit: afterCommit as OwnerCommandContext["afterCommit"],
-    ...(expected.placement === "owner-local"
-      ? {
-        localAttempt: {
-          deliveryId: expected.deliveryId,
-          attemptId: expected.attemptId,
-        },
-      }
-      : {}),
+    ownerAttempt: {
+      deliveryId: expected.deliveryId,
+      attemptId: ownerAttemptToken(expected),
+    },
   };
 }

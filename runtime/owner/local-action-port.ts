@@ -1,6 +1,7 @@
 /** Private actual-boundary adapter for one fresh local Action. No scheduler,
  * host activation, child capability, receipt recovery or noncommit inference. */
 import { assertJsonValue } from "../json.ts";
+import { createLocalPortCalls } from "./local-port-calls.ts";
 import type {
   RegisteredLocalActionPort,
   RegisteredLocalActionReceipt,
@@ -15,7 +16,6 @@ import type {
   OwnerCaller,
   OwnerCommand,
   OwnerCommandBoundary,
-  OwnerCommandExecuteOptions,
   OwnerCommandOutcome,
 } from "./boundary.ts";
 import { parseOwnerPlacementBinding } from "./placement-binding.ts";
@@ -57,28 +57,6 @@ function localReference(value: unknown): RegisteredLocalActionReference {
     throw failure("owner_local_port_reference_invalid");
   }
   return result;
-}
-function unknownOutcome(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value: Record<string, unknown> = {};
-  for (const key of ["indeterminate", "outcome", "execution", "code"]) {
-    let descriptor: PropertyDescriptor | undefined;
-    try {
-      descriptor = Object.getOwnPropertyDescriptor(error, key);
-    } catch {
-      return true;
-    }
-    if (descriptor && !("value" in descriptor)) return true;
-    value[key] = descriptor?.value;
-  }
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    [
-      "owner_commit_unknown",
-      "persistence_indeterminate",
-      "effect_indeterminate",
-    ]
-      .includes(value.code as string);
 }
 
 export function createOwnerLocalActionPort(
@@ -127,9 +105,6 @@ export function createOwnerLocalActionPort(
     throw new TypeError("Local raw calls require a bound between 1 and 128.");
   }
   const loss = new AbortController();
-  const pending = new Set<
-    Readonly<{ settled: Promise<void>; release(): void }>
-  >();
   let closed = false;
   let lost = false;
   let lostReason: unknown;
@@ -192,75 +167,14 @@ export function createOwnerLocalActionPort(
     }
     return data as OwnerCommandOutcome;
   };
-  const raw = <T>(
-    run: (options: OwnerCommandExecuteOptions) => Promise<T>,
-    callOptions: OwnerCommandExecuteOptions = {},
-  ): Promise<T> => {
-    current();
-    if (pending.size >= limit) throw failure("owner_admission_refused");
-    if (Object.keys(callOptions).some((key) => key !== "signal")) {
-      throw failure("owner_local_port_options_invalid");
-    }
-    let release!: () => void;
-    const settled = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const entry = { settled, release };
-    // Publish occupancy before invoking the actual raw boundary method. A
-    // synchronous reentrant drain must observe this call, too.
-    pending.add(entry);
-    const finish = () => {
-      pending.delete(entry);
-      release();
-    };
-    let result: Promise<T>;
-    try {
-      result = run({
-        signal: callOptions.signal
-          ? AbortSignal.any([loss.signal, callOptions.signal])
-          : loss.signal,
-      });
-    } catch (error) {
-      finish();
-      if (unknownOutcome(error)) return Promise.reject(quarantine(error));
-      current();
-      return Promise.reject(error);
-    }
-    return Promise.resolve(result).then((value) => {
-      finish();
-      return value;
-    }, (error) => {
-      finish();
-      if (unknownOutcome(error)) throw quarantine(error);
-      current();
-      throw error;
-    });
-  };
-  const observeHook = <T>(hook: (value: T) => void, value: T) => {
-    // Reserve before invoking even a private hook: it can reenter drain and
-    // accidentally return asynchronous work. Never certify quiescence early.
-    let release!: () => void;
-    const settled = new Promise<void>((resolve) => release = resolve);
-    const entry = { settled, release };
-    pending.add(entry);
-    const finish = () => {
-      pending.delete(entry);
-      release();
-    };
-    let returned: unknown;
-    try {
-      returned = hook(copy(value));
-    } catch (error) {
-      finish();
-      throw error;
-    }
-    if (returned === undefined) {
-      finish();
-      return;
-    }
-    Promise.resolve(returned).then(finish, finish);
-    throw failure("owner_local_port_async_hook_refused");
-  };
+  const calls = createLocalPortCalls({
+    current,
+    quarantine,
+    failure,
+    snapshot: copy,
+    signal: loss.signal,
+    maxPendingCalls: limit,
+  });
   return {
     start(callOptions = {}) {
       if (startPromise) return startPromise;
@@ -279,7 +193,7 @@ export function createOwnerLocalActionPort(
         if (closed) throw failure("owner_local_port_context_closed");
         try {
           const value = outcome(
-            await raw((execution) =>
+            await calls.run((execution) =>
               execute(copy(controlCaller), {
                 kind: "owner.local-start",
                 domain: "incarnation",
@@ -293,7 +207,7 @@ export function createOwnerLocalActionPort(
             throw failure("owner_local_port_fresh_start_required");
           }
           // Record a raw known start even if revocation raced its reply.
-          observeHook(onStarted, binding);
+          calls.observeHook(onStarted, binding);
           started = true;
           current();
           return {
@@ -309,7 +223,7 @@ export function createOwnerLocalActionPort(
     },
     async project(callOptions = {}) {
       invocation();
-      const result = await raw(
+      const result = await calls.run(
         (execution) =>
           project(
             copy(localCaller),
@@ -337,7 +251,7 @@ export function createOwnerLocalActionPort(
         !value.key.startsWith(`${reference.actionRunId}/`) ||
         value.key.length <= reference.actionRunId.length + 1
       ) throw failure("owner_local_port_command_refused");
-      const result = await raw(
+      const result = await calls.run(
         (execution) =>
           execute(copy(localCaller), value as OwnerCommand, execution),
         callOptions,
@@ -351,7 +265,7 @@ export function createOwnerLocalActionPort(
     },
     async settlementState(callOptions = {}) {
       settlement();
-      const result = await raw(
+      const result = await calls.run(
         (execution) =>
           project(
             copy(localCaller),
@@ -378,14 +292,14 @@ export function createOwnerLocalActionPort(
     },
     async complete(completion, callOptions = {}) {
       settlement();
-      if (!closed || completionSubmitted || pending.size) {
+      if (!closed || completionSubmitted || calls.size) {
         throw failure("owner_local_port_completion_refused");
       }
       completionSubmitted = true;
       try {
         const submitted = copy(completion);
         const result = outcome(
-          await raw((execution) =>
+          await calls.run((execution) =>
             executeInput(copy(localCaller), {
               kind: "execution.complete",
               domain: "logical",
@@ -408,7 +322,7 @@ export function createOwnerLocalActionPort(
         }
         const receipt = { reference: binding, status: submitted.status };
         terminalKnown = true;
-        observeHook(onTerminal, receipt);
+        calls.observeHook(onTerminal, receipt);
         current();
         return { status: result.status, result: receipt };
       } catch (error) {
@@ -421,9 +335,7 @@ export function createOwnerLocalActionPort(
       closed = true;
     },
     async drainRawCalls() {
-      while (pending.size) {
-        await Promise.all([...pending].map((entry) => entry.settled));
-      }
+      await calls.drain();
     },
   };
 }

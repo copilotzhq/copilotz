@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 13:06 UTC.
+Updated: 17 October 2026, 13:23 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -17,6 +17,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Faster test orchestration                    | Representative measured | 16 files: 15.4% faster, 7.7% higher peak RSS; reordered files require broader isolation validation |
 | Reference-test reliability                   | Reviewed correction     | 137 affected cases, independent 29-case check and three complete pipeline repeats passed           |
 | Local Processor host generations             | Designing               | Known ended-attempt receipt, predecessor revocation/drain, exact retry wake and shared capacity    |
+| Architecture cleanup                         | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next       |
 
 ## 1. Programming model and composition
 
@@ -135,6 +136,23 @@ production-ready. All changes remain draft: **no merge or publication**.
       documentation
 - [ ] Obtain explicit merge/publication approval; no release is currently
       authorized
+
+## 7. Consolidation and legacy retirement
+
+- [x] Measure the PR additions and distinguish production code from tests/docs
+- [x] Document each legacy runtime's proposed replacement and deletion gates in
+      the [cleanup plan](refactor-cleanup.md)
+- [x] Consolidate duplicated local Action/Processor raw-call and hook accounting
+      without changing their authority or settlement semantics
+- [ ] Migrate the complete public facade and embedded/default callers to the
+      surviving architecture
+- [ ] Retire superseded legacy composition, context and invocation paths after
+      their caller and behavior gates pass
+- [ ] Remove obsolete wrappers, option types, exports and compatibility branches
+- [ ] Consolidate repeated fixture provisioning while preserving fault coverage
+      and backend isolation
+- [ ] Review net responsibility/source changes and rerun the coherent release
+      gate; do not finish with duplicate supported execution architectures
 
 ## Related draft PRs and boundaries
 

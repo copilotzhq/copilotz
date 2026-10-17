@@ -18,6 +18,8 @@ type RecoveryOptions = Readonly<{
   catalog: OperationCatalog;
   actions: Readonly<Record<string, AnyActionDefinition>>;
   protectedValues?: ProtectedValueRuntime;
+  /** Owner-command clock shared by lifecycle, cancellation and stream recovery. */
+  commandTime?: string;
 }>;
 type ScopeCancellation = Readonly<
   { namespace: string; operationId: string; reason: string }
@@ -43,6 +45,7 @@ export async function cancelScopeActions(
     scope.namespace,
     scope.operationId,
     scope.reason,
+    options.commandTime,
   );
   return await recoverActions(options, transaction, undefined, scope);
 }
@@ -148,6 +151,7 @@ async function recoverActions(
       deliveryId: delivery.id,
       operationId: delivery.settlementScopeId,
       outcome: delivery.status === "cancelled" ? "cancelled" : "failed",
+      commandTime: options.commandTime,
     });
   }
   return async () => {

@@ -220,6 +220,8 @@ export type OperationCatalog = Readonly<{
     namespace: string,
     operationId: string,
     reason: string,
+    /** Captured owner-command timestamp; legacy callers retain SQL time. */
+    commandTime?: string,
   ): Promise<void>;
   listEventIds(
     input: Readonly<{
@@ -363,6 +365,8 @@ export type OperationCatalog = Readonly<{
       deliveryId: string;
       operationId: string;
       outcome: "failed" | "cancelled";
+      /** Captured owner-command timestamp; legacy callers retain SQL time. */
+      commandTime?: string;
     }>,
   ): Promise<void>;
   reconcile(
@@ -1956,18 +1960,31 @@ export function createOperationCatalog(
         ? undefined
         : String(position);
     },
-    async requestCancellation(transaction, namespace, operationId, reason) {
+    async requestCancellation(
+      transaction,
+      namespace,
+      operationId,
+      reason,
+      commandTime,
+    ) {
+      const params: unknown[] = [namespace, operationId, reason];
+      const timestamp = operationCommandTimestamp(params, commandTime);
       await transaction.query(
-        `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
-          cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = NOW()
+        `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, ${timestamp}),
+          cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = ${timestamp}
          WHERE namespace = $1 AND operation_id = $2 AND state IN ('accepted','running')`,
-        [namespace, operationId, reason],
+        params,
+      );
+      const streamParams: unknown[] = [namespace, operationId];
+      const streamTimestamp = operationCommandTimestamp(
+        streamParams,
+        commandTime,
       );
       await transaction.query(
         `UPDATE ${tables.operationStreams}
-         SET state = 'terminating', outcome = 'cancelled', capture = 'truncated', updated_at = NOW()
+         SET state = 'terminating', outcome = 'cancelled', capture = 'truncated', updated_at = ${streamTimestamp}
          WHERE namespace = $1 AND operation_id = $2 AND state = 'open'`,
-        [namespace, operationId],
+        streamParams,
       );
     },
     async listEventIds(input) {
@@ -2613,32 +2630,22 @@ export function createOperationCatalog(
       );
     },
     async failDeliveryStreams(transaction, input) {
+      const params: unknown[] = [
+        input.operationId,
+        input.deliveryId,
+        input.outcome,
+      ];
+      const timestamp = operationCommandTimestamp(params, input.commandTime);
       await transaction.query(
         `UPDATE ${tables.operationStreams}
-        SET state = 'terminating', outcome = $3, capture = 'truncated', updated_at = NOW()
+        SET state = 'terminating', outcome = $3, capture = 'truncated', updated_at = ${timestamp}
         WHERE operation_id = $1 AND state = 'open'
           AND descriptor -> 'metadata' ->> 'sourceDeliveryId' = $2`,
-        [input.operationId, input.deliveryId, input.outcome],
+        params,
       );
     },
     async reconcile(input = {}) {
-      const deliveries = `${
-        quoteEventIdentifier(databaseSchema)
-      }."event_deliveries"`;
-      const actions = `${quoteEventIdentifier(databaseSchema)}."open_actions"`;
-      const drained = `NOT EXISTS (
-        SELECT 1 FROM ${actions} AS action
-        WHERE action.namespace = operation.namespace AND action.scope_id = operation.operation_id
-      ) AND NOT EXISTS (
-        SELECT 1 FROM ${tables.operationStreams} AS stream
-        WHERE stream.namespace = operation.namespace AND stream.operation_id = operation.operation_id
-          AND stream.state IN ('open','terminating')
-      ) AND NOT EXISTS (
-        SELECT 1 FROM ${deliveries} AS delivery
-        JOIN ${tables.events} AS event ON event.id = delivery.event_id
-        WHERE delivery.settlement_scope_id = operation.operation_id AND event.namespace = operation.namespace
-          AND delivery.status IN ('pending','leased','retry_wait')
-      )`;
+      const drained = operationSettlementDrainedSql(databaseSchema);
       const terminalizable = await session.query<
         { operation_id: string; namespace: string }
       >(
@@ -2679,13 +2686,7 @@ export function createOperationCatalog(
         >(
           `WITH drained AS MATERIALIZED (
             SELECT operation.operation_id, operation.namespace,
-              CASE WHEN operation.cancellation_requested_at IS NOT NULL THEN 'cancelled'
-                WHEN EXISTS (
-                  SELECT 1 FROM ${deliveries} AS delivery
-                  JOIN ${tables.events} AS event ON event.id = delivery.event_id
-                  WHERE delivery.settlement_scope_id = operation.operation_id
-                    AND event.namespace = operation.namespace AND delivery.status IN ('dead_letter','cancelled')
-                ) THEN 'failed' ELSE 'completed' END AS outcome
+              ${operationSettlementOutcomeSql(databaseSchema)} AS outcome
             FROM ${tables.operations} AS operation
             WHERE operation.operation_id = ANY($1::text[])
               AND operation.state IN ('accepted','running') AND ${drained}
@@ -2858,4 +2859,170 @@ export function operationStreamBodyId(
     clean(input.namespace),
     clean(input.streamId),
   ].join("/");
+}
+
+/** Private transaction-only seam for owner settlement; legacy reconciliation
+ * shares the exact obligation and outcome predicates. No read infers a terminal. */
+export type OperationSettlementScope = Readonly<{
+  namespace: string;
+  operationId: string;
+}>;
+export type OperationSettlementSnapshot =
+  & OperationSettlementScope
+  & Readonly<{
+    state: OperationState;
+    ready: boolean;
+    outcome: "completed" | "failed" | "cancelled";
+    rootEventId: string;
+    correlationId: string;
+    nextEventOrdinal: string;
+    nextStreamOrdinal: string;
+    selectionKeys: readonly string[];
+  }>;
+
+function operationCommandTimestamp(params: unknown[], time?: string): string {
+  if (time === undefined) return "NOW()";
+  if (typeof time !== "string" || !Number.isFinite(Date.parse(time))) {
+    throw new TypeError("Operation commandTime must be a valid timestamp.");
+  }
+  return `$${params.push(time)}::timestamptz`;
+}
+function operationSettlementDrainedSql(schema: string): string {
+  const tables = createOperationCatalogTables(schema);
+  const prefix = quoteEventIdentifier(schema);
+  return `NOT EXISTS (
+    SELECT 1 FROM ${prefix}."open_actions" AS action
+    WHERE action.namespace = operation.namespace AND action.scope_id = operation.operation_id
+  ) AND NOT EXISTS (
+    SELECT 1 FROM ${tables.operationStreams} AS stream
+    WHERE stream.namespace = operation.namespace AND stream.operation_id = operation.operation_id
+      AND stream.state IN ('open','terminating')
+  ) AND NOT EXISTS (
+    SELECT 1 FROM ${prefix}."event_deliveries" AS delivery
+    JOIN ${tables.events} AS event ON event.id = delivery.event_id
+    WHERE delivery.settlement_scope_id = operation.operation_id AND event.namespace = operation.namespace
+      AND delivery.status IN ('pending','leased','retry_wait')
+  )`;
+}
+function operationSettlementOutcomeSql(schema: string): string {
+  const tables = createOperationCatalogTables(schema);
+  return `CASE WHEN operation.cancellation_requested_at IS NOT NULL THEN 'cancelled'
+    WHEN EXISTS (
+      SELECT 1 FROM ${
+    quoteEventIdentifier(schema)
+  }."event_deliveries" AS delivery
+      JOIN ${tables.events} AS event ON event.id = delivery.event_id
+      WHERE delivery.settlement_scope_id = operation.operation_id
+        AND event.namespace = operation.namespace AND delivery.status IN ('dead_letter','cancelled')
+    ) THEN 'failed' ELSE 'completed' END`;
+}
+
+export async function readOperationSettlement(
+  tx: SqlExecutor,
+  schema: string,
+  scope: OperationSettlementScope,
+): Promise<OperationSettlementSnapshot | null> {
+  const tables = createOperationCatalogTables(schema);
+  const result = await tx.query<{
+    state: OperationState;
+    ready: boolean;
+    outcome: OperationSettlementSnapshot["outcome"];
+    root_event_id: string;
+    correlation_id: string;
+    next_event_ordinal: string | number | bigint;
+    next_stream_ordinal: string | number | bigint;
+    observation_keys: string[];
+  }>(
+    `SELECT operation.state, operation.root_event_id, operation.correlation_id,
+      operation.next_event_ordinal, operation.next_stream_ordinal, operation.observation_keys,
+      (${operationSettlementDrainedSql(schema)}) AS ready,
+      ${operationSettlementOutcomeSql(schema)} AS outcome
+     FROM ${tables.operations} AS operation WHERE namespace=$1 AND operation_id=$2`,
+    [scope.namespace, scope.operationId],
+  );
+  const row = result.rows[0];
+  return row
+    ? {
+      ...scope,
+      state: row.state,
+      ready: row.ready,
+      outcome: row.outcome,
+      rootEventId: row.root_event_id,
+      correlationId: row.correlation_id,
+      nextEventOrdinal: String(row.next_event_ordinal),
+      nextStreamOrdinal: String(row.next_stream_ordinal),
+      selectionKeys: row.observation_keys,
+    }
+    : null;
+}
+
+/** The caller supplies its fenced command executor and captured timestamp. The
+ * callback may append only the no-consumer lifecycle fact, not new business work.
+ * The admission row lock and subsequent fresh statement match legacy settlement. */
+export async function terminalizeOperationSettlement(
+  tx: SqlExecutor,
+  schema: string,
+  scope: OperationSettlementScope,
+  options: Readonly<{
+    commandTime: string;
+    expected: Pick<
+      OperationSettlementSnapshot,
+      "nextEventOrdinal" | "nextStreamOrdinal"
+    >;
+    beforeTerminal(snapshot: OperationSettlementSnapshot): Promise<void>;
+  }>,
+): Promise<OperationSettlementSnapshot | null> {
+  const tables = createOperationCatalogTables(schema);
+  await tx.query(
+    `SELECT operation_id FROM ${tables.operations}
+     WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+    [scope.namespace, scope.operationId],
+  );
+  const current = await readOperationSettlement(tx, schema, scope);
+  if (!current || !["accepted", "running"].includes(current.state)) {
+    return current;
+  }
+  if (
+    !current.ready ||
+    current.nextEventOrdinal !== options.expected.nextEventOrdinal ||
+    current.nextStreamOrdinal !== options.expected.nextStreamOrdinal
+  ) return current;
+  await options.beforeTerminal(current);
+  const params: unknown[] = [
+    scope.namespace,
+    scope.operationId,
+    current.outcome,
+  ];
+  const timestamp = operationCommandTimestamp(params, options.commandTime);
+  const updated = await tx.query(
+    `UPDATE ${tables.operations} AS operation SET state=$3, updated_at=${timestamp},
+      completed_at=COALESCE(completed_at,${timestamp})
+     WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
+       AND ${operationSettlementDrainedSql(schema)} RETURNING operation_id`,
+    params,
+  );
+  if (updated.rows.length !== 1) {
+    throw new Error(
+      "Operation settlement admitted work inside terminalization.",
+    );
+  }
+  return { ...current, state: current.outcome };
+}
+
+/** Best-effort local acceleration only. The caller must invoke after outer
+ * durability; the payload was captured inside its transaction, so no SQL escapes. */
+export async function publishCommittedOperationSettlement(
+  session: SqlSession,
+  schema: string,
+  snapshot: OperationSettlementSnapshot,
+): Promise<void> {
+  dispatchOperationChange(
+    await operationNotificationHub(session, schema),
+    snapshot.operationId,
+    {
+      namespace: snapshot.namespace,
+      selectionKeys: snapshot.selectionKeys,
+      kind: "operation",
+    },
+  );
 }

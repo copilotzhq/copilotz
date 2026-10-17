@@ -446,3 +446,19 @@ field mapping stays in the server/host layer. Reserved identity-key collisions
 are rejected. The unchanged architecture rule caught the initial conversational
 field in this runtime seam; the retained correction passes focused group tests
 and all four filtered runtime architecture checks without changing the rule.
+
+### Two-phase owner operation settlement
+
+The existing catalog readiness and terminal transition now have a transaction-
+only owner seam. Durable alarms and post-commit wakeups schedule bounded checks;
+successful current relay drains happen outside SQL, followed by a fresh fenced
+readiness check. Terminal catalog state, semantic owner-sequenced event, receipt
+and alarm removal commit atomically. Rejected/ambiguous drains cannot be
+replayed; unresolved checks retain capacity and post-submission timeouts remain
+unknown. Claim and completion scheduling is commit-gated; renewals and
+duplicates do not republish. Captured time and original source correlation
+propagate through Action recovery/terminal events. Independent stabilized
+settlement13 and execution settlement6 cases pass, with earlier remaining
+execution24 and legacy17 evidence. Actual host alarm recovery, retained relay
+reservations and readiness composition remain required; result projection does
+not substitute for this terminalization.

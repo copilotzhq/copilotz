@@ -20,6 +20,7 @@ import { definePlugin } from "../plugins/types.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import {
   createOperationCatalog,
+  type OperationSettlementScope,
   provisionOperationCatalog,
 } from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -29,6 +30,7 @@ import {
   createOwnerCommandBoundary,
   type OwnerCaller,
   type OwnerCommand,
+  type OwnerCommandContext,
 } from "./boundary.ts";
 import { createOwnerCollectionCommand } from "./collections.ts";
 import {
@@ -89,6 +91,10 @@ export async function fixture(
     inline?: boolean;
     now?(): string;
     afterAction?(ctx: ActionContext): void | Promise<void>;
+    scheduleSettlement?(
+      context: OwnerCommandContext,
+      scope: OperationSettlementScope,
+    ): void | Promise<void>;
     validateCaller?(tx: SqlExecutor, caller: OwnerCaller): void | Promise<void>;
   } = {},
 ) {
@@ -246,6 +252,7 @@ export async function fixture(
     catalog,
     executor,
     leaseMs: 1000,
+    scheduleSettlement: input.scheduleSettlement,
     publish: (event) => {
       state.publications.push(event.type);
     },

@@ -38,6 +38,7 @@ import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
   type OperationCatalog,
+  type OperationSettlementScope,
 } from "../streams/catalog.ts";
 import type {
   OwnerCaller,
@@ -70,6 +71,7 @@ type Authorized = Readonly<{
   action: AnyActionDefinition;
   delivery: EventDelivery;
   cancelled: boolean;
+  correlationId: string;
 }>;
 function refuse(message: string): never {
   throw Object.assign(new Error(message), {
@@ -147,9 +149,11 @@ function completion(input: unknown): RegisteredExecutionCompletion {
     throw new TypeError("Unsupported execution completion.");
   }
   // Error messages, stacks and arbitrary provider details never become receipts.
-  const allowed = status === "cancelled"
-    ? ["action_cancelled"]
-    : ["action_failed", "action_capability_unsupported"];
+  const allowed = status === "cancelled" ? ["action_cancelled"] : [
+    "action_failed",
+    "action_capability_unsupported",
+    "effect_indeterminate",
+  ];
   if (typeof data.code !== "string" || !allowed.includes(data.code)) {
     throw new TypeError("Invalid safe execution failure code.");
   }
@@ -166,6 +170,12 @@ export function createOwnerExecutionCommands(
     executor: DeliveryExecutor;
     publish?: EventPublisher;
     leaseMs?: number;
+    /** Joins the current command and only enqueues a check after outer commit.
+     * No drain or dependent execution may be awaited here. */
+    scheduleSettlement?(
+      context: OwnerCommandContext,
+      scope: OperationSettlementScope,
+    ): void | Promise<void>;
     /** SQL-only current host authorization, always called inside boundary.authorize. */
     resolveAssignment(
       tx: SqlExecutor,
@@ -269,9 +279,9 @@ export function createOwnerExecutionCommands(
     }
     // Match the established operation -> delivery -> open Action lock order.
     const initial = await tx.query<
-      { settlement_scope_id: string; namespace: string }
+      { settlement_scope_id: string; namespace: string; correlation_id: string }
     >(
-      `SELECT d.settlement_scope_id,e.namespace FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
+      `SELECT d.settlement_scope_id,e.namespace,e.correlation_id FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id WHERE d.id=$1`,
       [assignment.deliveryId],
     );
     const source = initial.rows[0];
@@ -327,7 +337,13 @@ export function createOwnerExecutionCommands(
       `${assignment.invocation.actionRunId}:action:terminal`,
     );
     if (terminal) refuse("Execution already has a terminal lifecycle.");
-    return { assignment, action, delivery, cancelled };
+    return {
+      assignment,
+      action,
+      delivery,
+      cancelled,
+      correlationId: source.correlation_id,
+    };
   }
   function requireAuthorized(tx: SqlExecutor): Authorized {
     const result = authorized.get(tx);
@@ -335,6 +351,13 @@ export function createOwnerExecutionCommands(
     return result;
   }
   function runtime(context: OwnerCommandContext) {
+    const scheduled = new Set<string>();
+    const schedule = async (operationId: string) => {
+      if (!options.scheduleSettlement || scheduled.has(operationId)) return;
+      const namespace = requireAuthorized(context.tx).assignment.namespace;
+      await options.scheduleSettlement(context, { namespace, operationId });
+      scheduled.add(operationId);
+    };
     const store: EventStore = createEventStore({
       session: options.session,
       schema: options.schema,
@@ -345,17 +368,21 @@ export function createOwnerExecutionCommands(
       indexOperationEvent: (tx, input) => options.catalog.indexEvent(tx, input),
       indexOperationEventSql: (input, param) =>
         options.catalog.indexEventSql(input, param),
-      settleActionOwners: (tx, delivery) =>
-        recoverDeliveryActions(
+      settleActionOwners: async (tx, delivery) => {
+        const publish = await recoverDeliveryActions(
           {
             store,
             coordinator,
             catalog: options.catalog,
             actions: options.registry.actions,
+            commandTime: context.commandTime,
           },
           tx,
           delivery,
-        ),
+        );
+        await schedule(delivery.settlementScopeId);
+        return publish;
+      },
     });
     const coordinator = createEventCoordinator({
       store,
@@ -395,7 +422,7 @@ export function createOwnerExecutionCommands(
         },
       });
     };
-    return { store, lifecycle };
+    return { store, lifecycle, schedule };
   }
   async function invoked(
     tx: SqlExecutor,
@@ -441,7 +468,7 @@ export function createOwnerExecutionCommands(
   }
   const claim: OwnerCommandHandler = async (_intent, context) => {
     const state = requireAuthorized(context.tx);
-    const { store, lifecycle } = runtime(context);
+    const { store, lifecycle, schedule } = runtime(context);
     const captured = await invoked(context.tx, state);
     const delivery = await store.claimDelivery({
       id: state.delivery.id,
@@ -485,12 +512,14 @@ export function createOwnerExecutionCommands(
         input,
         status: "invoked",
         causationId: delivery.eventId,
+        correlationId: state.correlationId,
         settlementScopeId: delivery.settlementScopeId,
         actionScopeId: delivery.actionScopeId,
         deduplicationId:
           `${state.assignment.invocation.actionRunId}:action:invoked`,
       });
     }
+    await schedule(delivery.settlementScopeId);
     return json(reference(state.assignment));
   };
   function leaseTiming(expiresAt: string, commandTime: string) {
@@ -555,6 +584,7 @@ export function createOwnerExecutionCommands(
             },
           }),
         causationId: state.delivery.eventId,
+        correlationId: state.correlationId,
         settlementScopeId: state.delivery.settlementScopeId,
         actionScopeId: state.delivery.actionScopeId,
         deduplicationId:

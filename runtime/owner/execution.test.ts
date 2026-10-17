@@ -4,6 +4,8 @@ import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import type { AnyActionDefinition } from "../actions/types.ts";
 import { ownerRenewalKey } from "../execution/owner-port.ts";
+import { createOperationCatalog } from "../streams/catalog.ts";
+import { createOwnerOperationSettlement } from "./settlement.ts";
 import type { OwnerCommand } from "./boundary.ts";
 import {
   at,
@@ -852,6 +854,173 @@ test("lost committed renewal reply aborts capability scope and never reexecutes 
     });
     assert.equal(f.state.executions, 1);
     assert.equal((await f.db.query("SELECT id FROM nodes")).rows.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("owner Action lifecycle preserves the trusted source correlation and causation", async () => {
+  const f = await fixture();
+  try {
+    await f.worker().execute(f.hint());
+    for (const suffix of ["invoked", "terminal"]) {
+      const event = await f.store.getEventByDeduplicationId(
+        "space",
+        `run:action:${suffix}`,
+      );
+      assert.equal(
+        event?.correlationId,
+        f.source.event.correlationId,
+        `${suffix} correlation`,
+      );
+      assert.equal(
+        event?.causationId,
+        f.source.event.id,
+        `${suffix} causation`,
+      );
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+test("owner Action accepts the exact safe effect_indeterminate failure code", async () => {
+  const f = await fixture();
+  try {
+    await f.port().claim(f.hint(), {});
+    await f.port().complete(f.reference(), {
+      status: "failed",
+      code: "effect_indeterminate",
+    }, {});
+    const data = await createActionLifecycleLoader({
+      store: f.store,
+      actions: f.registry.actions,
+    })("space", "run:action:terminal");
+    assert.equal(data?.status, "failed");
+    assert.equal(
+      data && "error" in data ? data.error.code : undefined,
+      "effect_indeterminate",
+    );
+    assert.equal(
+      (await f.store.getDelivery(f.reference().deliveryId))?.status,
+      "dead_letter",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("owner Action claim and completion schedule settlement atomically, but renewal and duplicate commands do not", async () => {
+  let settlement: ReturnType<typeof createOwnerOperationSettlement>;
+  const woke: string[] = [];
+  const f = await fixture({
+    scheduleSettlement: (ctx, target) => settlement.schedule(ctx, target),
+  });
+  settlement = createOwnerOperationSettlement({
+    ownerId: "owner",
+    schema: "public",
+    session: f.db,
+    catalog: createOperationCatalog(f.db),
+    authorizeControl: () => true,
+    selectDrains: () => [],
+    authorizeDrain: () => false,
+    drain: () => Promise.resolve(false),
+    wake: (target) => {
+      woke.push(target.operationId);
+    },
+  });
+  try {
+    f.state.gateKind = "execution.claim";
+    const port = f.port();
+    const claim = port.claim(f.hint(), {});
+    await within(f.gate.reached.promise);
+    assert.equal(woke.length, 0);
+    f.gate.release.resolve();
+    await claim;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(woke, [f.source.event.id]);
+    assert.equal(
+      (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
+      1,
+    );
+    assert.equal(
+      (await f.boundary.execute(f.caller(), f.claimCommand())).status,
+      "duplicate",
+    );
+    assert.equal(woke.length, 1);
+    await port.project(f.reference(), {});
+    await port.renew(f.reference(), {});
+    assert.equal(woke.length, 1);
+    await port.complete(f.reference(), {
+      status: "failed",
+      code: "action_failed",
+    }, {});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(woke, [f.source.event.id, f.source.event.id]);
+    assert.equal(
+      (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
+      1,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("settlement scheduling failure rolls back claim, alarm, receipt and staged wake together", async () => {
+  let settlement: ReturnType<typeof createOwnerOperationSettlement>;
+  let reject = true;
+  let wakes = 0;
+  const f = await fixture({
+    scheduleSettlement: async (ctx, target) => {
+      await settlement.schedule(ctx, target);
+      if (reject) throw new Error("schedule rollback");
+    },
+  });
+  settlement = createOwnerOperationSettlement({
+    ownerId: "owner",
+    schema: "public",
+    session: f.db,
+    catalog: createOperationCatalog(f.db),
+    authorizeControl: () => true,
+    selectDrains: () => [],
+    authorizeDrain: () => false,
+    drain: () => Promise.resolve(false),
+    wake: () => {
+      wakes++;
+    },
+  });
+  try {
+    await assert.rejects(
+      f.boundary.execute(f.caller(), f.claimCommand()),
+      /schedule rollback/,
+    );
+    assert.equal(
+      (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
+      0,
+    );
+    assert.equal(
+      (await f.db.query(
+        "SELECT * FROM owner_receipts WHERE kind='execution.claim'",
+      )).rows.length,
+      0,
+    );
+    assert.equal(
+      (await f.store.getDelivery(f.reference().deliveryId))?.status,
+      "pending",
+    );
+    assert.equal(
+      await f.store.getEventByDeduplicationId("space", "run:action:invoked"),
+      null,
+    );
+    assert.equal(wakes, 0);
+    reject = false;
+    await f.boundary.execute(f.caller(), f.claimCommand());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(wakes, 1);
+    assert.equal(
+      (await f.db.query("SELECT * FROM owner_alarms")).rows.length,
+      1,
+    );
   } finally {
     await f.close();
   }

@@ -87,6 +87,7 @@ export async function fixture(
   input: {
     action?: AnyActionDefinition;
     inline?: boolean;
+    now?(): string;
     afterAction?(ctx: ActionContext): void | Promise<void>;
     validateCaller?(tx: SqlExecutor, caller: OwnerCaller): void | Promise<void>;
   } = {},
@@ -114,6 +115,7 @@ export async function fixture(
       | Awaited<ReturnType<typeof snapshot>>
       | undefined,
     lostCompletion: false,
+    lostRenewal: false,
     commitKind: "",
     gateKind: "",
   };
@@ -297,7 +299,7 @@ export async function fixture(
     schema: "public",
     ownerId: "owner",
     holderId: "holder",
-    now: () => state.time,
+    now: () => input.now?.() ?? state.time,
     handlers: { ...execution.handlers, collections: collection },
     projections: execution.projections,
     async authorize(tx, caller, command, time) {
@@ -402,8 +404,16 @@ export async function fixture(
       ownerId: "owner",
       namespace: "space",
       port: {
-        execute: (command, options) =>
-          boundary.execute(authenticated, command, options),
+        async execute(command, options) {
+          const value = await boundary.execute(authenticated, command, options);
+          if (command.kind === "execution.renew" && state.lostRenewal) {
+            state.lostRenewal = false;
+            throw Object.assign(new Error("lost committed renewal reply"), {
+              outcome: "unknown",
+            });
+          }
+          return value;
+        },
         async complete(command, options) {
           const value = await boundary.execute(authenticated, command, options);
           if (state.lostCompletion) {

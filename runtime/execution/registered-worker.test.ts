@@ -117,8 +117,12 @@ function fixture(
       adapters: { fixture: { finish: (value: string) => `${value}!` } },
     })],
   });
-  const projection: RegisteredExecutionProjection = {
+  const projection: {
+    -readonly [K in keyof RegisteredExecutionProjection]:
+      RegisteredExecutionProjection[K];
+  } = {
     actionId: registered.id,
+    lease: { remainingMs: 30_000, renewAfterMs: 10_000 },
     input: "world",
     namespace: "space",
     databaseSchema: "owner-schema",
@@ -140,6 +144,12 @@ function fixture(
     project() {
       state.projections++;
       return Promise.resolve(projection);
+    },
+    renew(reference) {
+      return Promise.resolve({
+        status: "committed",
+        result: { ...reference, lease: projection.lease },
+      });
     },
     complete(reference, completion) {
       state.completions.push(structuredClone(completion));
@@ -512,4 +522,286 @@ test("completed assignments retain lifetime capacity and are never silently evic
   });
   assert.equal((await f.worker.execute(hint)).status, "replayed");
   assert.equal(f.state.executions, 1);
+});
+
+const pause = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+async function soon<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("heartbeat test timed out")),
+          3000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+test("heartbeat starts after projection, is serial, and drains before completion", async () => {
+  const projected = deferred();
+  const entered = deferred();
+  const exit = deferred();
+  const renewalEntered = deferred();
+  const renewalRelease = deferred();
+  let renewals = 0;
+  let active = 0;
+  let maxActive = 0;
+  const f = fixture({
+    action: action(async () => {
+      entered.resolve();
+      await exit.promise;
+      return "done";
+    }),
+    port: {
+      async project() {
+        await projected.promise;
+        return f.projection;
+      },
+      async renew(reference) {
+        renewals++;
+        maxActive = Math.max(maxActive, ++active);
+        renewalEntered.resolve();
+        await renewalRelease.promise;
+        active--;
+        return {
+          status: "committed",
+          result: { ...reference, lease: f.projection.lease },
+        };
+      },
+    },
+  });
+  f.projection.lease = { remainingMs: 1000, renewAfterMs: 40 };
+  const run = f.worker.execute(hint);
+  await pause(50);
+  assert.equal(renewals, 0);
+  projected.resolve();
+  await soon(entered.promise);
+  await soon(renewalEntered.promise);
+  await pause(70);
+  assert.equal(renewals, 1);
+  exit.resolve();
+  await pause(20);
+  assert.equal(f.state.completions.length, 0);
+  assert.equal(f.state.capabilitySignals[0].aborted, true);
+  renewalRelease.resolve();
+  const result = await soon(run);
+  assert.equal(result.receipt.status, "completed");
+  assert.equal(maxActive, 1);
+  await pause(70);
+  assert.equal(renewals, 1);
+});
+
+test("cancellation stops scheduling and drains in-flight renewal before restricted settlement", async () => {
+  const renewalEntered = deferred();
+  const renewalRelease = deferred();
+  const control = new AbortController();
+  let renewalSignal!: AbortSignal;
+  let calls = 0;
+  const f = fixture({
+    action: action(async (_value, ctx) => {
+      await new Promise<void>((resolve) =>
+        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+      );
+      return "late";
+    }),
+    port: {
+      async renew(reference, options) {
+        calls++;
+        renewalSignal = options.signal!;
+        renewalEntered.resolve();
+        await renewalRelease.promise;
+        return {
+          status: "committed",
+          result: { ...reference, lease: f.projection.lease },
+        };
+      },
+    },
+  });
+  f.projection.lease = { remainingMs: 1000, renewAfterMs: 40 };
+  const run = f.worker.execute(hint, { signal: control.signal });
+  await soon(renewalEntered.promise);
+  control.abort();
+  await pause(30);
+  assert.equal(
+    renewalSignal.aborted,
+    false,
+    "drain without ambiguous client cancellation",
+  );
+  assert.equal(f.state.completions.length, 0);
+  renewalRelease.resolve();
+  assert.equal((await soon(run)).receipt.status, "cancelled");
+  await pause(60);
+  assert.equal(calls, 1);
+});
+
+for (const unknown of [false, true]) {
+  test(`renewal ${unknown ? "unknown outcome" : "refusal"} aborts capabilities and cannot rerun business code`, async () => {
+    let executions = 0;
+    let calls = 0;
+    const f = fixture({
+      action: action(async (_value, ctx) => {
+        executions++;
+        await new Promise<void>((resolve) =>
+          ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+        );
+        await assert.rejects(async () =>
+          await ctx.transaction(() => null, { operationKey: "late" })
+        );
+        return "ignored abort";
+      }),
+      port: {
+        renew() {
+          calls++;
+          return Promise.reject(
+            Object.assign(
+              new Error("renewal lost"),
+              unknown
+                ? { outcome: "unknown" }
+                : { code: "ActionOwnershipLost" },
+            ),
+          );
+        },
+      },
+    });
+    f.projection.lease = { remainingMs: 1000, renewAfterMs: 30 };
+    const run = f.worker.execute(hint);
+    if (unknown) {
+      await assert.rejects(soon(run), /renewal lost/);
+      await assert.rejects(f.worker.execute(hint), /renewal lost/);
+      assert.equal(f.state.completions.length, 0);
+    } else {
+      assert.equal((await soon(run)).receipt.status, "failed");
+      assert.equal(f.state.completions.length, 1);
+      assert.equal((await f.worker.execute(hint)).status, "replayed");
+    }
+    assert.equal(calls, 1);
+    assert.equal(executions, 1);
+    assert.equal(f.state.commands.length, 0);
+    assert.equal(f.state.capabilitySignals[0].aborted, true);
+  });
+}
+
+test("renewal timeout is bounded and a late success never revives a closed capability", async () => {
+  const release = deferred();
+  let calls = 0;
+  let renewalSignal!: AbortSignal;
+  const f = fixture({
+    action: action(async (_value, ctx) => {
+      await new Promise<void>((resolve) =>
+        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+      );
+      return null;
+    }),
+    port: {
+      async renew(reference, options) {
+        calls++;
+        renewalSignal = options.signal!;
+        await release.promise;
+        return {
+          status: "committed",
+          result: {
+            ...reference,
+            lease: { remainingMs: 1000, renewAfterMs: 30 },
+          },
+        };
+      },
+    },
+  });
+  f.projection.lease = { remainingMs: 180, renewAfterMs: 30 };
+  await assert.rejects(soon(f.worker.execute(hint)), {
+    code: "registered_worker_renewal_unknown",
+  });
+  assert.equal(renewalSignal.aborted, true);
+  release.resolve();
+  await pause(60);
+  await assert.rejects(f.worker.execute(hint), {
+    code: "registered_worker_renewal_unknown",
+  });
+  assert.equal(calls, 1);
+  assert.equal(f.state.completions.length, 0);
+  assert.equal(f.state.capabilitySignals[0].aborted, true);
+});
+
+test("expired projection timing refuses before capabilities or user code", async () => {
+  const f = fixture({
+    port: {
+      async project() {
+        await pause(50);
+        return f.projection;
+      },
+    },
+  });
+  f.projection.lease = { remainingMs: 20, renewAfterMs: 5 };
+  await assert.rejects(f.worker.execute(hint), {
+    code: "registered_worker_renewal_unknown",
+  });
+  assert.equal(f.state.capabilities, 0);
+  assert.equal(f.state.executions, 0);
+  assert.equal(f.state.completions.length, 0);
+});
+
+test("duplicate renewal timing never grants a fresh local execution budget", async () => {
+  const f = fixture({
+    action: action(async (_value, ctx) => {
+      await new Promise<void>((resolve) =>
+        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+      );
+      return null;
+    }),
+    port: {
+      renew: (reference) =>
+        Promise.resolve({
+          status: "duplicate",
+          result: { ...reference, lease: f.projection.lease },
+        }),
+    },
+  });
+  f.projection.lease = { remainingMs: 1000, renewAfterMs: 30 };
+  await assert.rejects(soon(f.worker.execute(hint)), {
+    code: "registered_worker_renewal_unknown",
+  });
+  assert.equal(f.state.completions.length, 0);
+});
+
+test("a one-millisecond projection lease intentionally refuses before user execution", async () => {
+  const f = fixture();
+  f.projection.lease = { remainingMs: 1, renewAfterMs: 1 };
+  await assert.rejects(f.worker.execute(hint), {
+    code: "registered_worker_lease_invalid",
+  });
+  assert.equal(f.state.capabilities, 0);
+  assert.equal(f.state.executions, 0);
+});
+
+test("local renewal timeout stays unknown when transport synchronously rejects abort", async () => {
+  const f = fixture({
+    action: action(async (_value, ctx) => {
+      await new Promise<void>((resolve) =>
+        ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+      );
+      return null;
+    }),
+    port: {
+      renew(_reference, options) {
+        return new Promise((_, reject) =>
+          options.signal!.addEventListener(
+            "abort",
+            () => reject(new Error("transport aborted")),
+            { once: true },
+          )
+        );
+      },
+    },
+  });
+  f.projection.lease = { remainingMs: 100, renewAfterMs: 20 };
+  await assert.rejects(soon(f.worker.execute(hint)), {
+    code: "registered_worker_renewal_unknown",
+  });
+  assert.equal(f.state.completions.length, 0);
 });

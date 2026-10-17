@@ -28,7 +28,11 @@ import type {
   RegisteredExecutionProjection,
   RegisteredExecutionReference,
 } from "../execution/registered-worker.ts";
-import { ownerClaimKey, ownerCompletionKey } from "../execution/owner-port.ts";
+import {
+  ownerClaimKey,
+  ownerCompletionKey,
+  ownerRenewalKey,
+} from "../execution/owner-port.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
@@ -213,7 +217,7 @@ export function createOwnerExecutionCommands(
     tx: SqlExecutor,
     caller: OwnerCaller,
     commandTime: string,
-    mode: "claim" | "input" | "complete" | "mutation",
+    mode: "claim" | "input" | "complete" | "mutation" | "renew",
   ): Promise<Authorized> {
     const found = await options.resolveAssignment(tx, caller, commandTime);
     if (!found) refuse("Execution assignment is no longer current.");
@@ -489,6 +493,39 @@ export function createOwnerExecutionCommands(
     }
     return json(reference(state.assignment));
   };
+  function leaseTiming(expiresAt: string, commandTime: string) {
+    const remainingMs = Date.parse(expiresAt) - Date.parse(commandTime);
+    if (!Number.isSafeInteger(remainingMs) || remainingMs <= 0) {
+      refuse("Execution lease has no remaining budget.");
+    }
+    return {
+      remainingMs,
+      renewAfterMs: Math.max(1, Math.min(10_000, Math.floor(remainingMs / 3))),
+    };
+  }
+  const renew: OwnerCommandHandler = async (_intent, context) => {
+    const state = requireAuthorized(context.tx);
+    if (!await invoked(context.tx, state)) {
+      refuse("Execution has no captured invocation.");
+    }
+    const { store } = runtime(context);
+    if (
+      !await store.heartbeatDelivery({
+        id: state.delivery.id,
+        owner: state.assignment.dispatchAttemptId,
+        leaseMs,
+      })
+    ) {
+      refuse("Execution renewal lost its attempt.");
+    }
+    return json({
+      ...reference(state.assignment),
+      lease: leaseTiming(
+        new Date(Date.parse(context.commandTime) + leaseMs).toISOString(),
+        context.commandTime,
+      ),
+    });
+  };
   const complete: OwnerCommandHandler = async (intent, context) => {
     const state = requireAuthorized(context.tx);
     const data = completion((intent as { completion: OwnerJson }).completion);
@@ -556,6 +593,7 @@ export function createOwnerExecutionCommands(
     );
     return json({
       actionId: captured.actionId,
+      lease: leaseTiming(state.delivery.leaseExpiresAt!, context.commandTime),
       input,
       namespace: state.assignment.namespace,
       databaseSchema: options.schema,
@@ -571,7 +609,11 @@ export function createOwnerExecutionCommands(
     });
   };
   return {
-    handlers: { "execution.claim": claim, "execution.complete": complete },
+    handlers: {
+      "execution.claim": claim,
+      "execution.complete": complete,
+      "execution.renew": renew,
+    },
     projections: { "execution.input": project },
     async authorize(tx, caller, command, commandTime) {
       const mode = command.kind === "execution.claim"
@@ -580,6 +622,8 @@ export function createOwnerExecutionCommands(
         ? "complete"
         : command.kind === "execution.input"
         ? "input"
+        : command.kind === "execution.renew"
+        ? "renew"
         : undefined;
       if (!mode) throw new TypeError("Unknown execution command.");
       const state = await current(tx, caller, commandTime, mode);
@@ -613,6 +657,18 @@ export function createOwnerExecutionCommands(
         if (state.cancelled && result.status !== "cancelled") {
           refuse("Scope cancellation takes precedence over worker completion.");
         }
+      } else if (mode === "renew") {
+        const data = object(command.intent, ["reference", "sequence"]);
+        if (
+          !Number.isSafeInteger(data.sequence) || Number(data.sequence) < 1 ||
+          command.domain !== "occurrence" || command.key !== ownerRenewalKey(
+              options.ownerId,
+              a.assignmentId,
+              a.sessionId,
+              Number(data.sequence),
+            )
+        ) refuse("Renewal identity is not assigned.");
+        checkReference(data.reference, a);
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
     },

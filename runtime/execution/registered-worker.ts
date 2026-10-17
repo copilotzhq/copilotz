@@ -31,9 +31,22 @@ export type RegisteredExecutionReceipt =
   & Readonly<{
     status: "completed" | "failed" | "cancelled";
   }>;
+/** Safe relative timing, discounted by monotonic request latency at the worker.
+ * It is scheduling guidance, never a lease grant or a receipt replay permit.
+ * A budget too short to renew (including one millisecond) refuses execution. */
+export type RegisteredExecutionLease = Readonly<{
+  remainingMs: number;
+  renewAfterMs: number;
+}>;
+export type RegisteredExecutionRenewal =
+  & RegisteredExecutionReference
+  & Readonly<{
+    lease: RegisteredExecutionLease;
+  }>;
 /** Authorized ordinary data, read only after a known durable claim. */
 export type RegisteredExecutionProjection = Readonly<{
   actionId: string;
+  lease: RegisteredExecutionLease;
   input: OwnerJson;
   namespace: string;
   databaseSchema: string;
@@ -65,6 +78,15 @@ export type RegisteredOwnerExecutionPort = Readonly<{
     reference: RegisteredExecutionReference,
     options: OwnerCommandExecuteOptions,
   ): Promise<RegisteredExecutionProjection>;
+  renew(
+    reference: RegisteredExecutionReference,
+    options: OwnerCommandExecuteOptions,
+  ): Promise<
+    Readonly<{
+      status: "committed" | "duplicate";
+      result: RegisteredExecutionRenewal;
+    }>
+  >;
   complete(
     reference: RegisteredExecutionReference,
     completion: RegisteredExecutionCompletion,
@@ -210,6 +232,119 @@ function sameIdentity(left: unknown, right: unknown): boolean {
   return normalize(left) === normalize(right);
 }
 
+/** Ordinary function lifetime only; open response-body renewal is unsupported.
+ * One serial heartbeat loop. Stop never starts another call and drains the
+ * current call before settlement. A timed-out call stays ambiguous even if its
+ * eventual reply succeeds; no late result can reopen the capability scope. */
+function executionHeartbeat(input: {
+  port: RegisteredOwnerExecutionPort;
+  reference: RegisteredExecutionReference;
+  lease: RegisteredExecutionLease;
+  started: number;
+  fail(error: unknown): void;
+}) {
+  let stopped = false;
+  let wake: (() => void) | undefined;
+  let deadline = 0;
+  let next = 0;
+  const lost = () =>
+    Object.assign(failure("registered_worker_renewal_unknown"), {
+      indeterminate: true,
+    });
+  const update = (lease: RegisteredExecutionLease, started: number) => {
+    if (
+      !lease || Object.keys(lease).length !== 2 ||
+      !Number.isSafeInteger(lease.remainingMs) || lease.remainingMs <= 0 ||
+      !Number.isSafeInteger(lease.renewAfterMs) || lease.renewAfterMs <= 0 ||
+      lease.renewAfterMs >= lease.remainingMs
+    ) {
+      throw failure("registered_worker_lease_invalid");
+    }
+    deadline = started + lease.remainingMs;
+    next = Math.min(started + lease.renewAfterMs, deadline);
+    if (deadline <= performance.now()) throw lost();
+  };
+  update(input.lease, input.started);
+  const loop = (async () => {
+    try {
+      while (!stopped) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(
+            resolve,
+            Math.max(0, Math.min(2_147_483_647, next - performance.now())),
+          );
+          wake = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        wake = undefined;
+        if (stopped) return;
+        const started = performance.now();
+        const budget = deadline - started;
+        if (budget <= 0) throw lost();
+        const control = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timeoutFailure: ReturnType<typeof lost> | undefined;
+        try {
+          const result = await Promise.race([
+            input.port.renew(snapshot(input.reference), {
+              signal: control.signal,
+            }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                // Latch uncertainty before abort listeners can settle the call.
+                timeoutFailure = lost();
+                reject(timeoutFailure);
+                control.abort(timeoutFailure);
+              }, Math.min(2_147_483_647, budget));
+            }),
+          ]);
+          if (timeoutFailure) throw timeoutFailure;
+          // Duplicate receipts carry old timing and cannot extend a local budget.
+          if (result.status !== "committed") throw lost();
+          const actual = reference({
+            executionId: result.result.executionId,
+            deliveryId: result.result.deliveryId,
+            dispatchAttemptId: result.result.dispatchAttemptId,
+          });
+          if (
+            Object.keys(actual).some((key) =>
+              actual[key as keyof typeof actual] !==
+                input.reference[key as keyof typeof actual]
+            )
+          ) {
+            throw failure("registered_worker_reference_invalid");
+          }
+          if (performance.now() >= deadline) throw lost();
+          update(snapshot(result.result.lease), started);
+        } catch (error) {
+          throw timeoutFailure ?? error;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    } catch (error) {
+      stopped = true;
+      input.fail(error);
+    }
+  })();
+  return {
+    check() {
+      if (!stopped && performance.now() >= deadline) throw lost();
+    },
+    requestStop() {
+      stopped = true;
+      wake?.();
+    },
+    async stop() {
+      stopped = true;
+      wake?.();
+      await loop;
+    },
+  };
+}
+
 /** One bounded worker lifetime. Entries, including uncertain outcomes, are never
  * evicted. Replacing this instance requires host assignment/session recovery;
  * it does not promise exactly-once business execution across process restarts. */
@@ -243,8 +378,12 @@ export function createRegisteredActionWorker(
     const control = new AbortController();
     const exposed = new AbortController();
     let ownerOpen = true;
+    let renewalFailed = false;
+    let renewalFailure: unknown;
+    let heartbeat: ReturnType<typeof executionHeartbeat> | undefined;
     const cancel = () => {
       cancelled = true;
+      heartbeat?.requestStop();
       // Never expose the private signal used for command cancellation to Action code.
       control.abort();
       exposed.abort();
@@ -254,6 +393,8 @@ export function createRegisteredActionWorker(
     const check = () => {
       if (cancelled) throw failure("action_cancelled");
       if (!ownerOpen) throw failure("registered_worker_context_closed");
+      if (renewalFailed) throw renewalFailure;
+      heartbeat?.check();
     };
     try {
       check();
@@ -272,6 +413,7 @@ export function createRegisteredActionWorker(
         return { status: "replayed", receipt: receipt(recovered, ref) };
       }
       check();
+      const projectionStarted = performance.now();
       const projection = snapshot(
         await port.project(snapshot(ref), { signal: control.signal }),
       );
@@ -287,6 +429,19 @@ export function createRegisteredActionWorker(
           projection.invocation?.operationKey,
         ]
       ) identifier(value);
+      check();
+      heartbeat = executionHeartbeat({
+        port,
+        reference: ref,
+        lease: projection.lease,
+        started: projectionStarted,
+        fail(error) {
+          renewalFailed = true;
+          renewalFailure = error;
+          control.abort(error);
+          exposed.abort();
+        },
+      });
       let capabilityFailure = false;
       let registrationOpen = true;
       const pending: Promise<unknown>[] = [];
@@ -460,13 +615,20 @@ export function createRegisteredActionWorker(
         registrationOpen = false;
         ownerOpen = false;
         exposed.abort();
+        await heartbeat.stop();
+      }
+      if (renewalFailed) {
+        if (unknownOutcome(renewalFailure)) throw renewalFailure;
+        completion = cancelled
+          ? { status: "cancelled", code: "action_cancelled" }
+          : { status: "failed", code: "action_failed" };
       }
       // A cancelled execution still attempts one safe terminal command. Current
       // owner authorization decides whether this assignment can settle anymore.
       const ack = await port.complete(
         snapshot(ref),
         snapshot(completion),
-        cancelled ? {} : { signal: control.signal },
+        cancelled || renewalFailed ? {} : { signal: control.signal },
       );
       if (ack.status !== "committed" && ack.status !== "duplicate") {
         throw failure("registered_worker_completion_invalid");
@@ -479,6 +641,7 @@ export function createRegisteredActionWorker(
     } finally {
       ownerOpen = false;
       exposed.abort();
+      await heartbeat?.stop();
       signal?.removeEventListener("abort", cancel);
     }
   }

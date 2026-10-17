@@ -346,3 +346,15 @@ persistence/body-store code, including the distinction between erased type
 imports and retained empty runtime imports. Nineteen focused authoring/protected
 lifecycle tests pass. The role-specific whole-application bundle and public
 factory mapping remain separate integration work.
+
+### Ordinary execution lease renewal
+
+Registered Action execution now uses owner-fenced renewal occurrence identities
+and one serial bounded heartbeat tied to its immutable assignment/session.
+Current authority is checked even on duplicate renewal, deadlines conservatively
+discount transit time, and renewal drains before completion. Refusal or
+uncertain renewal closes execution capabilities; late replies cannot reactivate
+them. A reproduced timeout/abort race is latched as uncertainty rather than safe
+failure. Independent54 worker/mapper/actual-table cases and14 real sibling
+transport cases pass, including Actions longer than their original lease. This
+does not implement open-body renewal or effect-aware recovery.

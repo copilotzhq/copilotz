@@ -14,7 +14,13 @@ import {
   createOwnerWorkerCallAdmission,
   type OwnerWorkerCallContext,
 } from "./connection.ts";
-import { deferred, fixture, within } from "./execution.fixture.test.ts";
+import {
+  at,
+  deferred,
+  fixture,
+  start,
+  within,
+} from "./execution.fixture.test.ts";
 
 type Fence = OwnerWorkerCallContext["fence"];
 type Assigned = Readonly<
@@ -23,6 +29,7 @@ type Assigned = Readonly<
 const sourceRoot = process.env.COPILOTZ_OXIAN_SOURCE_ROOT;
 const modes = [
   "committed",
+  "long-action",
   "ctx-revoked",
   "stale-admitted-parent",
   "ambiguous-claim",
@@ -43,15 +50,24 @@ for (const transport of ["in-process", "websocket"] as const) {
       const actionRelease = deferred();
       const completionAdmitted = deferred();
       const completionRelease = deferred();
+      const renewed = [deferred(), deferred(), deferred(), deferred()];
+      let renewals = 0;
       let deniedMutation = false;
       let lostClaim = false;
       let completionWithRevokedCtx = false;
       const reverseReplies: { workload: string; response: unknown }[] = [];
+      let clockStarted: number | undefined;
+      const ownerNow = () =>
+        clockStarted === undefined
+          ? start
+          : at(Math.floor(performance.now() - clockStarted));
       const f = await fixture({
+        ...(mode === "long-action" ? { now: ownerNow } : {}),
         async afterAction(ctx: ActionContext) {
-          if (mode !== "ctx-revoked") return;
+          if (mode !== "ctx-revoked" && mode !== "long-action") return;
           actionReached.resolve();
           await actionRelease.promise;
+          if (mode === "long-action") return;
           try {
             await ctx.transaction(
               ({ collections }) =>
@@ -196,6 +212,13 @@ for (const transport of ["in-process", "websocket"] as const) {
               }
               const response = await handler(input);
               const decoded = JSON.parse(new TextDecoder().decode(response));
+              if (
+                mode === "long-action" &&
+                context.workload === "copilotz.owner.command" && decoded.ok &&
+                decoded.value?.result?.lease
+              ) {
+                renewed[renewals++]?.resolve();
+              }
               reverseReplies.push({
                 workload: context.workload,
                 response: decoded,
@@ -314,6 +337,7 @@ for (const transport of ["in-process", "websocket"] as const) {
           assert.equal(f.state.executions, 0);
           f.state.gateKind = "execution.claim";
         } else await within(worker.ready);
+        if (mode === "long-action") clockStarted = performance.now();
         const dispatch = await host.dispatch({
           workload: OWNER_ACTION_WORKLOAD,
           target: { workerId: "worker" },
@@ -373,6 +397,51 @@ for (const transport of ["in-process", "websocket"] as const) {
             )).rows.length,
             1,
           );
+        } else if (mode === "long-action") {
+          await within(actionReached.promise);
+          const originalExpiry =
+            (await f.store.getDelivery(f.reference().deliveryId))!
+              .leaseExpiresAt!;
+          const wallStart = performance.now();
+          for (let i = 0; i < 4; i++) {
+            await within(renewed[i].promise);
+            assert.ok(
+              Date.parse(
+                (await f.store.getDelivery(f.reference().deliveryId))!
+                  .leaseExpiresAt!,
+              ) > Date.parse(ownerNow()),
+            );
+          }
+          assert.ok(
+            Date.parse(ownerNow()) > Date.parse(originalExpiry),
+            "original persisted lease expired during the Action",
+          );
+          assert.ok(
+            performance.now() - wallStart >= 1000,
+            "Action outlived its initial one-second lease",
+          );
+          assert.equal(exposed, false);
+          actionRelease.resolve();
+          const result = JSON.parse(await within(output));
+          assert.deepEqual(result, {
+            status: "executed",
+            receipt: { ...f.reference(), status: "completed" },
+          });
+          assert.equal(
+            (await within<{ status: string }>(dispatch.completed)).status,
+            "completed",
+          );
+          assert.equal(f.state.executions, 1);
+          assert.equal(
+            (await f.db.query("SELECT id FROM nodes")).rows.length,
+            1,
+          );
+          await within(f.observed.promise);
+          const count = renewals;
+          await new Promise<void>((resolve) => setTimeout(resolve, 370));
+          assert.equal(renewals, count);
+          assert.equal(JSON.stringify(result).includes("lease"), false);
+          assert.equal(JSON.stringify(result).includes("world"), false);
         } else if (mode === "ctx-revoked") {
           await within(actionReached.promise);
           await f.set("ctx_granted", false);

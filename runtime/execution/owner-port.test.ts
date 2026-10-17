@@ -4,6 +4,7 @@ import {
   createRegisteredOwnerExecutionPort,
   ownerClaimKey,
   ownerCompletionKey,
+  ownerRenewalKey,
 } from "./owner-port.ts";
 import type { OwnerCommand, OwnerJson } from "../owner/boundary.ts";
 const ref = {
@@ -24,7 +25,12 @@ function fixture() {
     port: {
       execute(command) {
         commands.push(command);
-        return Promise.resolve({ status: "committed", result: ref });
+        return Promise.resolve({
+          status: "committed",
+          result: command.kind === "execution.renew"
+            ? { ...ref, lease: { remainingMs: 1000, renewAfterMs: 300 } }
+            : ref,
+        });
       },
       complete(command) {
         completions.push(command);
@@ -167,4 +173,67 @@ test("mapper refuses old references and rebinding before calling restricted comp
     fresh.adapter.complete(ref, { status: "completed", output: null }, {}),
   );
   assert.equal(fresh.completions.length, 0);
+});
+
+test("renewal uses an assignment-bound occurrence sequence only after successful claim and projection", async () => {
+  const f = fixture();
+  await assert.rejects(f.adapter.renew(ref, {}));
+  await f.adapter.claim(
+    { assignmentId: "assignment", sessionId: "session" },
+    {},
+  );
+  await assert.rejects(f.adapter.renew(ref, {}));
+  await f.adapter.project(ref, {});
+  for (let sequence = 1; sequence <= 2; sequence++) {
+    assert.deepEqual(await f.adapter.renew(ref, {}), {
+      status: "committed",
+      result: { ...ref, lease: { remainingMs: 1000, renewAfterMs: 300 } },
+    });
+    assert.deepEqual(f.commands.at(-1), {
+      kind: "execution.renew",
+      domain: "occurrence",
+      key: ownerRenewalKey("owner", "assignment", "session", sequence),
+      intent: { reference: ref, sequence },
+    });
+  }
+  await assert.rejects(
+    f.adapter.renew({ ...ref, dispatchAttemptId: "stale" }, {}),
+  );
+  await f.adapter.complete(ref, { status: "completed", output: null }, {});
+  await assert.rejects(f.adapter.renew(ref, {}));
+  assert.equal(f.commands.length, 3);
+});
+
+test("mapper refuses overlapping heartbeat and never retries ambiguous renewal", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => release = resolve);
+  let calls = 0;
+  const adapter = createRegisteredOwnerExecutionPort({
+    ownerId: "owner",
+    namespace: "space",
+    port: {
+      async execute(command) {
+        if (command.kind === "execution.claim") {
+          return { status: "committed", result: ref };
+        }
+        calls++;
+        await gate;
+        throw Object.assign(new Error("lost renewal"), { outcome: "unknown" });
+      },
+      complete: () => Promise.resolve({ status: "committed", result: done }),
+      project: () => Promise.resolve(null),
+      readReceipt: () => Promise.resolve(undefined),
+    },
+  });
+  await adapter.claim({ assignmentId: "assignment", sessionId: "session" }, {});
+  await adapter.project(ref, {});
+  const first = adapter.renew(ref, {});
+  await assert.rejects(adapter.renew(ref, {}));
+  await assert.rejects(
+    adapter.complete(ref, { status: "completed", output: null }, {}),
+  );
+  release();
+  await assert.rejects(first, /lost renewal/);
+  await assert.rejects(adapter.renew(ref, {}));
+  assert.equal(calls, 1);
 });

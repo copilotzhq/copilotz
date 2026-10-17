@@ -353,13 +353,18 @@ export function createOwnerLostActionRecovery(
         !["accepted", "running"].includes(scope.state)
       ) return await block("scope_identity_or_state_mismatch");
       cancelled = scope.cancellation_requested_at !== null;
-      await context.tx.query(
-        `SELECT id FROM ${core.event_deliveries} WHERE id=$1 FOR UPDATE`,
-        [delivery.id],
-      );
+      // Preserve the exact historical deadline under the existing lock. The
+      // public EventDelivery mapper normalizes through JavaScript Date;
+      // using it as the CAS witness would round a retained PostgreSQL instant.
+      const leaseExpiresAt =
+        (await context.tx.query<{ lease_expires_at: string | null }>(
+          `SELECT lease_expires_at::text AS lease_expires_at FROM ${core.event_deliveries} WHERE id=$1 FOR UPDATE`,
+          [delivery.id],
+        )).rows[0]?.lease_expires_at;
       const current = await store.getDelivery(delivery.id);
       if (
-        !current || current.eventId !== delivery.eventId ||
+        leaseExpiresAt === undefined || !current ||
+        current.eventId !== delivery.eventId ||
         current.settlementScopeId !== delivery.settlementScopeId
       ) return await block("delivery_changed");
       delivery = current;
@@ -651,7 +656,7 @@ export function createOwnerLostActionRecovery(
           ? { actionScopeId: delivery.actionScopeId }
           : {}),
         leaseOwner: delivery.leaseOwner!,
-        leaseExpiresAt: delivery.leaseExpiresAt ?? null,
+        leaseExpiresAt,
         attempts: delivery.attempts,
         maxAttempts: delivery.maxAttempts,
         disposition,

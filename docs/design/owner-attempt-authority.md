@@ -154,15 +154,34 @@ post-acknowledgement input boundary before factory admission. Both actual
 Processor held-reply scenarios still verify real command context authenticity,
 no premature execution, and no due successor before known receipt plus drain.
 
-### Retained historical timestamp precision limit
+### Exact historical timestamp handoff
 
-The legacy finite-deadline lost-Action recovery handoff still passes through
-EventDelivery date normalization. Sub-millisecond precision can be lost, causing
-an exact recovery CAS to refuse. This fails closed; the historical compatibility
-test proves millisecond-aligned deadlines only. New owner-controlled attempts
-use NULL deadlines and are unaffected. Exact SQL-text handoff for historical
-finite deadlines remains a separate compatibility correction, not an accepted
-migration or automatic adoption of old open attempts.
+Historical finite-deadline lost-Action recovery now captures
+`lease_expires_at::text` in its existing delivery `FOR UPDATE` query. The
+primitive SQL value is retained unchanged through later policy awaits and passed
+to the existing exact compare-and-swap. NULL remains NULL. No extra read,
+timestamp parser, cache, public EventDelivery format change or execution
+deadline is added.
+
+The former EventDelivery date normalization rounded sub-millisecond timestamps,
+causing a safe but incorrect refusal. Six causal cases reproduce that failure;
+the corrected tests cover retry, exhausted and cancelled dispositions for both
+microsecond instants and explicit timezone offsets. They compare the stored
+instant, not the original offset spelling. A one-microsecond policy-time change
+still fails the exact CAS and rolls back the relevant durable state. Infinity
+and negative infinity remain refused; new NULL-deadline attempts are unchanged.
+
+Independent scoped validation passes 99 normally checked PostgreSQL-configured
+cases across seven complete recovery/host files, with no failures or skips. The
+root's focused PGlite check passes nine cases. Lint, format, all six static
+checks and strict package surface pass (46 exports / 16 external imports / 725
+production modules). All 131 test databases were dropped, sessions absent, and
+PostgreSQL stopped; candidate and sibling hashes were verified.
+
+This corrects only precision in otherwise eligible explicit recovery. Original
+execution-contract, effect, assignment, owner-control and namespace checks still
+apply. It does not migrate production history, invent an original contract,
+prove remote quiescence or activate general open/local-history restart.
 
 ## Independent checkpoint validation — 17 October 2026
 

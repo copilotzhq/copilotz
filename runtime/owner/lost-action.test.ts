@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import { createCoreSchemaStatements } from "../events/schema.ts";
-import type { SqlSession } from "../events/session.ts";
+import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import { ownerClaimKey } from "../execution/owner-port.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
@@ -76,6 +76,7 @@ async function fixture(
     maxAttempts?: number;
     policy?: boolean;
     permissiveControl?: boolean;
+    duringRecoveryPolicy?(tx: SqlExecutor): Promise<void>;
   } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
@@ -266,7 +267,8 @@ async function fixture(
       }
       return permitted;
     },
-    authorizeRecoveryTransition(_tx, identity) {
+    async authorizeRecoveryTransition(tx, identity) {
+      await options.duringRecoveryPolicy?.(tx);
       const permitted = state.policy;
       if (state.mutatePolicy) {
         Object.assign(identity, { deliveryId: "mutated" });
@@ -1575,3 +1577,127 @@ test("lost Action authorize requires the owner-control tag even with permissive 
     await f.close();
   }
 });
+
+for (const disposition of ["retry", "exhausted", "cancelled"] as const) {
+  for (
+    const deadline of [
+      "2099-01-01T00:00:00.123456Z",
+      "2099-01-01T05:30:00.000001+05:30",
+    ]
+  ) {
+    test(`lost Action ${disposition} preserves the exact historical SQL deadline ${deadline}`, async () => {
+      const f = await fixture({
+        maxAttempts: disposition === "exhausted" ? 1 : 3,
+        eligible: disposition === "retry",
+        policy: disposition === "retry",
+      });
+      try {
+        await f.db.query(
+          "UPDATE event_deliveries SET lease_expires_at=$1::timestamptz WHERE id=$2",
+          [deadline, f.refs.deliveryId],
+        );
+        if (disposition === "cancelled") {
+          await f.db.query(
+            "UPDATE copilotz_operations SET cancellation_requested_at=$1 WHERE namespace='space' AND operation_id=$2",
+            [at(99), f.refs.eventId],
+          );
+        }
+        const prior = await f.store.getDelivery(f.refs.deliveryId);
+        assert.equal(
+          (await f.db.query(
+            "SELECT lease_expires_at=$1::timestamptz AS rounded_matches FROM event_deliveries WHERE id=$2",
+            [prior!.leaseExpiresAt, f.refs.deliveryId],
+          )).rows[0].rounded_matches,
+          false,
+        );
+        await f.takeover();
+        const result = await f.recover();
+        assert.equal(result.status, "committed");
+        assert.equal(
+          (result.result as { disposition: string }).disposition,
+          disposition,
+        );
+        const current = await f.store.getDelivery(f.refs.deliveryId);
+        assert.equal(
+          current!.status,
+          disposition === "retry"
+            ? "retry_wait"
+            : disposition === "exhausted"
+            ? "dead_letter"
+            : "cancelled",
+        );
+        assert.equal(current!.leaseExpiresAt, undefined);
+        assert.equal(current!.attempts, prior!.attempts);
+        assert.equal(current!.maxAttempts, prior!.maxAttempts);
+        assert.equal(current!.availableAt, prior!.availableAt);
+        if (disposition === "exhausted") {
+          assert.equal(
+            (current!.lastError as { name: string }).name,
+            "DeliveryLeaseExpired",
+          );
+        }
+        assert.equal(f.state.executions, 0);
+        assert.equal(f.state.dispatches, 0);
+        assert.equal((await f.recover()).status, "duplicate");
+      } finally {
+        await f.close();
+      }
+    });
+  }
+}
+
+test("lost Action does not adopt a policy-time one-microsecond deadline change", async () => {
+  let reached = false;
+  const f = await fixture({
+    async duringRecoveryPolicy(tx) {
+      reached = true;
+      await tx.query(
+        "UPDATE event_deliveries SET lease_expires_at=lease_expires_at + interval '1 microsecond' WHERE id=$1",
+        [f.refs.deliveryId],
+      );
+    },
+  });
+  try {
+    const deadline = "2099-01-01T00:00:00.123456Z";
+    await f.db.query(
+      "UPDATE event_deliveries SET lease_expires_at=$1::timestamptz WHERE id=$2",
+      [deadline, f.refs.deliveryId],
+    );
+    await f.takeover();
+    const before = await durableSnapshot(f);
+    await assert.rejects(
+      f.recover(),
+      (error: unknown) =>
+        (error as { code?: string }).code === "owner_lost_action_refused",
+    );
+    assert.equal(reached, true);
+    assert.deepEqual(await durableSnapshot(f), before);
+    assert.equal(f.state.executions, 0);
+    assert.equal(f.state.dispatches, 0);
+    assert.equal(f.state.wakes, 0);
+    assert.deepEqual(f.state.publications, []);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const deadline of ["infinity", "-infinity"]) {
+  test(`historical deadline handoff still refuses ${deadline} without durable changes`, async () => {
+    const f = await fixture();
+    try {
+      await f.db.query(
+        "UPDATE event_deliveries SET lease_expires_at=$1::timestamptz WHERE id=$2",
+        [deadline, f.refs.deliveryId],
+      );
+      await f.takeover();
+      const before = await durableSnapshot(f);
+      await assert.rejects(f.recover());
+      assert.deepEqual(await durableSnapshot(f), before);
+      assert.equal(f.state.executions, 0);
+      assert.equal(f.state.dispatches, 0);
+      assert.equal(f.state.wakes, 0);
+    } finally {
+      await f.close();
+    }
+  });
+}

@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 19:58 UTC.
+Updated: 17 October 2026, 20:09 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -77,10 +77,18 @@ role 12 and all static/package checks. Original failures and split evidence are
 preserved. One shared adapter carries direct/named calls for local Actions and
 Processors; retry reuses the original View capture without rerendering.
 
-Next is the bounded historical finite-deadline precision correction.
-Quiet-writer content protection, open-history takeover and public local
-placement remain separate gates. Every slice must name what it simplifies and
-eliminates before adding machinery.
+The historical finite-deadline precision correction is now independently
+checked: 99 PostgreSQL-configured recovery/host cases pass, plus nine focused
+PGlite cases. The existing locked query preserves exact SQL timestamp text for
+the existing CAS; NULL deadlines, original recovery eligibility and all
+authority gates stay unchanged. No new parser, query or execution lease is
+introduced.
+
+Next is owner-mediated ordinary Collection reads in registered execution,
+reusing the existing query/aggregate implementation. Quiet-writer content
+protection, open-history takeover and public local placement remain separate
+gates. Every slice must name what it simplifies and eliminates before adding
+machinery.
 
 ## 1. Programming model and composition
 
@@ -187,9 +195,9 @@ eliminates before adding machinery.
 - [ ] Streams, partial output, attempt-bound writers and client repair
 - [ ] F9 owner-driven quiet-writer body protection for both placements,
       independent of per-job renewal
-- [ ] Historical finite-deadline sub-millisecond recovery precision correction;
-      current normalization fails closed, and new NULL-deadline attempts are
-      unaffected
+- [x] Historical finite-deadline recovery preserves exact locked SQL timestamp
+      precision through the existing CAS; policy-time mutation still refuses,
+      and current NULL-deadline attempts remain unchanged
 - [ ] Protected values, credential slots and scope-bound delivery
 - [ ] Cross-owner operations and remaining wire/device contracts
 

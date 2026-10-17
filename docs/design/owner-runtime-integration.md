@@ -538,3 +538,12 @@ architecture/closure7 batches passed. The shared heartbeat extraction preserves
 existing Action behavior. Exhausted recovery, provider conversion,
 index/query-plan scaling evidence and full startup recovery remain separate
 work; the default three-attempt policy is unchanged.
+
+### Child Action and Processor routes
+
+Fixed child admission/result routes require a current parent with ctx authority
+and select only the registered child input/projection operations. Parentless and
+settlement-only callers cannot use them. Restricted completion recognizes only
+Action/logical and Processor/incarnation kind/domain pairs. Independent
+connection coverage is 43 passing cases. Actual child/Processor policy,
+execution and facade composition remain separate acceptance slices.

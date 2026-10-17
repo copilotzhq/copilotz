@@ -1868,3 +1868,153 @@ test("simple Action normalization rechecks current binding and owner after its a
     assert.equal(writes, 0);
   }
 });
+
+test("child Action routes require current parent ctx and fix input/result kinds", async () => {
+  const calls: unknown[] = [];
+  const owner = recordingBoundary({
+    executeInput: (who, command) => {
+      calls.push([who, command]);
+      return Promise.resolve({ status: "committed", result: null });
+    },
+    project: (who, kind, input) => {
+      calls.push([who, kind, input]);
+      return Promise.resolve(null);
+    },
+  });
+  const host = admission(owner);
+  const signal = new AbortController().signal;
+  for (
+    const workload of [
+      "copilotz.owner.child-action",
+      "copilotz.owner.child-result",
+    ]
+  ) {
+    assert.equal(
+      await host.admitUnassigned(context({ workload, parent: undefined })),
+      undefined,
+    );
+    assert.equal(
+      await admission(owner, {
+        resolveAssignment: () => ({
+          ownerId: "tenant",
+          caller,
+          ctxGranted: false,
+          settlementGranted: true,
+        }),
+      }).admit(context({ workload })),
+      undefined,
+    );
+  }
+  const handler = await host.admit(
+    context({ workload: "copilotz.owner.child-action" }),
+  );
+  assert(handler);
+  const command = {
+    kind: "action.child-admit",
+    domain: "logical",
+    key: "child",
+    input: {
+      parent: {
+        deliveryId: "d",
+        dispatchAttemptId: "a",
+        operationKey: "parent",
+      },
+      actionAlias: "child",
+      operationKey: "local",
+      input: null,
+    },
+  };
+  for (
+    const bad of [{ ...command, kind: "action.admit" }, {
+      ...command,
+      domain: "incarnation",
+    }, { ...command, intent: {} }]
+  ) {
+    assert.equal(
+      decode(await handler({ input: stream(bad), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(
+    decode(await handler({ input: stream(command), signal })).ok,
+    true,
+  );
+  const result = await host.admit(
+    context({ workload: "copilotz.owner.child-result" }),
+  );
+  assert(result);
+  const ref = { eventId: "child" };
+  assert.equal(decode(await result({ input: stream(ref), signal })).ok, true);
+  assert.deepEqual(calls, [[caller, command], [
+    caller,
+    "action.child-result",
+    ref,
+  ]]);
+});
+
+test("restricted Processor completion admits only its exact incarnation kind pair", async () => {
+  let writes = 0;
+  const owner = recordingBoundary({
+    execute: () => {
+      writes++;
+      return Promise.resolve({ status: "committed", result: null });
+    },
+  });
+  const host = admission(owner, {
+    resolveAssignment: () => ({
+      ownerId: "tenant",
+      caller,
+      ctxGranted: false,
+      settlementGranted: true,
+    }),
+  });
+  const handler = await host.admit(
+    context({ workload: "copilotz.owner.complete" }),
+  );
+  assert(handler);
+  const signal = new AbortController().signal;
+  for (
+    const command of [
+      {
+        kind: "processor.complete",
+        domain: "logical",
+        key: "step",
+        intent: {},
+      },
+      {
+        kind: "execution.complete",
+        domain: "incarnation",
+        key: "step",
+        intent: {},
+      },
+      {
+        kind: "processor.claim",
+        domain: "incarnation",
+        key: "step",
+        intent: {},
+      },
+    ]
+  ) {
+    assert.equal(
+      decode(await handler({ input: stream(command), signal })).ok,
+      false,
+    );
+  }
+  assert.equal(writes, 0);
+  assert.equal(
+    decode(
+      await handler({
+        input: stream({
+          kind: "processor.complete",
+          domain: "incarnation",
+          key: "step",
+          intent: {},
+        }),
+        signal,
+      }),
+    ).ok,
+    true,
+  );
+  assert.equal(writes, 1);
+});

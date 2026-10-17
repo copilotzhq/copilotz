@@ -17,6 +17,8 @@ const EFFECT_SETTLE = "copilotz.owner.effect-settle";
 const EFFECT_STATE = "copilotz.owner.effect-state";
 const ACTION = "copilotz.owner.action";
 const ACTION_CALL = "copilotz.owner.action-call";
+const CHILD_ACTION = "copilotz.owner.child-action";
+const CHILD_RESULT = "copilotz.owner.child-result";
 const ACTION_RESULT = "copilotz.owner.action-result";
 const COMMAND = "copilotz.owner.command";
 const READY = "copilotz.owner.ready";
@@ -254,7 +256,8 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== READY && context.workload !== ACTION &&
       context.workload !== ACTION_RESULT && context.workload !== ACTION_CALL &&
       context.workload !== EFFECT_SETTLE &&
-      context.workload !== EFFECT_STATE
+      context.workload !== EFFECT_STATE && context.workload !== CHILD_ACTION &&
+      context.workload !== CHILD_RESULT
     ) {
       return undefined;
     }
@@ -369,8 +372,10 @@ export function createOwnerWorkerCallAdmission(
         if (isCompletion) {
           const command = object(payload);
           if (
-            command.kind !== "execution.complete" ||
-            command.domain !== "logical" ||
+            !((command.kind === "execution.complete" &&
+              command.domain === "logical") ||
+              (command.kind === "processor.complete" &&
+                command.domain === "incarnation")) ||
             Object.keys(command).some((key) =>
               !["kind", "domain", "key", "intent"].includes(key)
             )
@@ -417,6 +422,20 @@ export function createOwnerWorkerCallAdmission(
           encode(payload); // Bound the derived command as well as the wire request.
           payload = structuredClone(payload);
         }
+        if (context.workload === CHILD_ACTION) {
+          const command = object(payload);
+          if (
+            command.kind !== "action.child-admit" ||
+            command.domain !== "logical" ||
+            typeof command.key !== "string" || !command.key.trim() ||
+            !Object.hasOwn(command, "input") ||
+            Object.keys(command).some((key) =>
+              !["kind", "domain", "key", "input"].includes(key)
+            )
+          ) {
+            throw new TypeError("Invalid child Action admission request.");
+          }
+        }
         if (context.workload === ACTION || context.workload === ACTION_CALL) {
           const command = object(payload);
           if (
@@ -431,10 +450,18 @@ export function createOwnerWorkerCallAdmission(
           }
         }
         const result =
-          context.workload === ACTION || context.workload === ACTION_CALL
+          context.workload === ACTION || context.workload === ACTION_CALL ||
+            context.workload === CHILD_ACTION
             ? await owner.executeInput(admitted, payload as OwnerInputCommand, {
               signal,
             })
+            : context.workload === CHILD_RESULT
+            ? await owner.project(
+              admitted,
+              "action.child-result",
+              payload as OwnerJson,
+              { signal },
+            )
             : context.workload === ACTION_RESULT
             ? await owner.project(
               admitted,
@@ -473,10 +500,10 @@ export function createOwnerWorkerCallAdmission(
             })()
             : await owner.readReceipt(admitted, receiptIdentity(payload));
         committed = isCommand || context.workload === ACTION ||
-          context.workload === ACTION_CALL;
+          context.workload === ACTION_CALL || context.workload === CHILD_ACTION;
         if (
           context.workload === PROJECT || context.workload === ACTION_RESULT ||
-          isEffectState
+          isEffectState || context.workload === CHILD_RESULT
         ) {
           signal.throwIfAborted();
           context.signal.throwIfAborted();
@@ -643,6 +670,27 @@ export function createOwnerConnection(
         callOptions,
       ) as OwnerCommandOutcome;
     },
+    async admitChildAction(
+      command: OwnerInputCommand,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerCommandOutcome> {
+      if (
+        command.kind !== "action.child-admit" || command.domain !== "logical"
+      ) {
+        throw new TypeError("Invalid child Action admission request.");
+      }
+      return await call(
+        CHILD_ACTION,
+        command,
+        callOptions,
+      ) as OwnerCommandOutcome;
+    },
+    async childActionResult(
+      reference: OwnerJson,
+      callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+    ): Promise<OwnerJson> {
+      return await call(CHILD_RESULT, reference, callOptions) as OwnerJson;
+    },
     async actionResult(
       reference: OwnerJson,
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
@@ -661,7 +709,10 @@ export function createOwnerConnection(
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
     ): Promise<OwnerCommandOutcome> {
       if (
-        command.kind !== "execution.complete" || command.domain !== "logical"
+        !((command.kind === "execution.complete" &&
+          command.domain === "logical") ||
+          (command.kind === "processor.complete" &&
+            command.domain === "incarnation"))
       ) {
         throw new TypeError("Invalid restricted completion command.");
       }

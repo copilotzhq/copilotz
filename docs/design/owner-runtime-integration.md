@@ -547,3 +547,17 @@ settlement-only callers cannot use them. Restricted completion recognizes only
 Action/logical and Processor/incarnation kind/domain pairs. Independent
 connection coverage is 43 passing cases. Actual child/Processor policy,
 execution and facade composition remain separate acceptance slices.
+
+### Fresh ordinary Action owner host
+
+A private fresh-schema host composes the real fenced boundary, current ingress
+policy, durable assignment bridge, registered worker, Collection/effect
+commands, Action lifecycle and catalog settlement. Five independently repeated
+actual-table cases use both sibling in-process and WebSocket transports. Simple
+Action keys include trusted principal and registered target identity; current
+policy and original metadata constraints are checked on replay/results. The host
+refuses nonfresh activation instead of claiming restart recovery.
+Processor/child host composition, actual dropped-Start negative proof,
+owner-local execution, public factory, protected/content/stream support and
+default Views remain open. Transport fixtures still require the explicit
+unpublished sibling mapping.

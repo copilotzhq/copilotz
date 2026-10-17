@@ -49,18 +49,18 @@ renderer/projection plumbing is experimental; live rendering is not included.
 
 - **Dependencies first.** Each plugin's `plugins` are registered before its own
   maps, depth first. The application's own `collections`, `actions`,
-  `processors`, `resources`, `adapters` and `views` passed to `createCopilotz` act as a
-  final root plugin registered after every listed plugin.
+  `processors`, `resources`, `adapters` and `views` passed to `createCopilotz`
+  act as a final root plugin registered after every listed plugin.
 - **Same object, registered once.** When several plugins depend on the same
   plugin object, it is registered once. A _different_ object with the same
   plugin `id` fails composition with
   `Plugin '<id>' was declared more than once.` Dependency cycles also fail.
 - **Aliases and IDs are both unique.** Map keys are aliases. Each alias may
   appear once per kind across the whole composition, and each stable ID
-  (Collection `name`, Action `id`, Processor `id`, View `id`) may be exposed under only one
-  alias. The application's root maps take part in the same checks: they cannot
-  replace a plugin's Collection, Action, Processor or View. Declaring a root Action
-  under an alias a plugin already uses fails with
+  (Collection `name`, Action `id`, Processor `id`, View `id`) may be exposed
+  under only one alias. The application's root maps take part in the same
+  checks: they cannot replace a plugin's Collection, Action, Processor or View.
+  Declaring a root Action under an alias a plugin already uses fails with
   `Action alias '<alias>' is declared by more than one plugin.`
 - **Resources and adapters overlay.** `resources` and `adapters` are
   `{ namespace: { alias: value } }` maps merged by key in registration order. A

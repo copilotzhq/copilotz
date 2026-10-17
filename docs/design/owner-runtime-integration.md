@@ -628,14 +628,15 @@ worker path.
 Action completion uses the registered normalized-input boundary. A versioned
 canonical digest binds namespace, stable run identity and every terminal fact;
 ordinary output is retained in the existing lifecycle body rather than command
-receipt intent. Current assignment, immutable registered target and output policy
-are checked before receipt lookup. Plain command execution cannot bypass this
-normalizer. Settled attempts retain the existing restricted safe-receipt recovery
-rules, without regaining execution or input authority. Processor completion keeps
-its fixed safe envelope. The migration passed 105 typed compatibility cases,
-focused canonical-order/changed-fact/identity/bypass checks and all 14 actual
-in-process/WebSocket sibling transport cases. Protected/content output and the
-published dependency integration remain separate requirements.
+receipt intent. Current assignment, immutable registered target and output
+policy are checked before receipt lookup. Plain command execution cannot bypass
+this normalizer. Settled attempts retain the existing restricted safe-receipt
+recovery rules, without regaining execution or input authority. Processor
+completion keeps its fixed safe envelope. The migration passed 105 typed
+compatibility cases, focused canonical-order/changed-fact/identity/bypass checks
+and all 14 actual in-process/WebSocket sibling transport cases.
+Protected/content output and the published dependency integration remain
+separate requirements.
 
 ### Current captured-input authorization before mutations
 
@@ -659,10 +660,10 @@ catalog scopes, three-attempt retry timing and renewed lease alarm deadlines
 remain durable. Capacity-one and concurrent-root saturation refuse or time out
 boundedly without stopping the owner; an already admitted child remains durable
 and can finish when a slot becomes free. Independent actual-table sibling
-in-process/WebSocket acceptance passed11/11. This still excludes restart/takeover,
-owner-local epoch-only execution, protected/content/deferred/custom frames and
-full output/continuation recovery. Ordinary Action terminal results remain
-distinct from operation settlement.
+in-process/WebSocket acceptance passed11/11. This still excludes
+restart/takeover, owner-local epoch-only execution,
+protected/content/deferred/custom frames and full output/continuation recovery.
+Ordinary Action terminal results remain distinct from operation settlement.
 
 ### Owner-local delivery authority prerequisite
 
@@ -670,9 +671,9 @@ An internal EventStore command can bind one exact local delivery/attempt under
 its current owner epoch/holder fence. Such a claim has no wall-clock deadline;
 settlement checks the exact token and NULL deadline, and local heartbeat,
 claimNext and generic recovery remain refused. Worker deadlines and heartbeat
-semantics are unchanged; a worker row with NULL expiry grants no authority.
-The supplied tuple is privately copied. Five new cases plus existing delivery
-and event-store compatibility passed36 tests with one existing PostgreSQL skip;
+semantics are unchanged; a worker row with NULL expiry grants no authority. The
+supplied tuple is privately copied. Five new cases plus existing delivery and
+event-store compatibility passed36 tests with one existing PostgreSQL skip;
 independent local/owner delivery acceptance passed11. This does not enable an
 owner-local host yet: Action writer fencing, durable placement and takeover
 classification remain separate prerequisites.
@@ -700,9 +701,9 @@ owner-control commands and exact owner-local attempts. Owner principals bind the
 owner ID, epoch and holder; local principals additionally bind delivery and
 attempt. The boundary checks these coordinates before command authorization.
 Transport routes construct worker principals from authenticated transport facts;
-request payloads cannot select control or local authority. Assignment liveness and
-current policy remain separate checks. These tags do not by themselves enable a
-local executor.
+request payloads cannot select control or local authority. Assignment liveness
+and current policy remain separate checks. These tags do not by themselves
+enable a local executor.
 
 Logical receipt identity remains owner/domain/key, independent of worker or
 attempt. Fresh private schemas store canonical tagged principal identities for
@@ -714,28 +715,29 @@ production-data migration in this increment.
 
 Automatic retry eligibility must have evidence from the original admitted
 attempt. A prospective versioned execution-contract witness binds that attempt's
-registered Action, source/run/delivery and exact worker assignment. It is recorded
-only on a fresh first claim that the trusted host explicitly authorizes under the
-converted effect protocol. A later deployment or policy change cannot upgrade an
-old receipt or add missing historical evidence. Replacement execution still
-requires current exact-assignment approval, captured-input authorization and the
-effect-recovery barrier. The witness does not authorize dispatch, prove that an
-external effect did not start, or complete restart readiness. Logical operation
-identities do not incorporate deployment hashes.
+registered Action, source/run/delivery and exact worker assignment. It is
+recorded only on a fresh first claim that the trusted host explicitly authorizes
+under the converted effect protocol. A later deployment or policy change cannot
+upgrade an old receipt or add missing historical evidence. Replacement execution
+still requires current exact-assignment approval, captured-input authorization
+and the effect-recovery barrier. The witness does not authorize dispatch, prove
+that an external effect did not start, or complete restart readiness. Logical
+operation identities do not incorporate deployment hashes.
 
 ### Placement-neutral invocation kernels
 
 Action and Processor invocation/context assembly is shared independently of the
 leased worker drivers. The drivers still own claim, projection, heartbeat,
 completion, assignment replay and lifetime accounting. The pure kernels receive
-prebound capabilities and ordinary logical coordinates; Collection planning needs
-only owner and invocation identity. Worker replacement remains an authorization
-concern and does not change generated record IDs. Pending calls, effect recovery,
-Processor error acknowledgement and unknown completion retain their existing
-semantics. Authored reconciliation callbacks cannot receive the private effect
-controller as their JavaScript receiver. The production role graph includes only
-the two executable kernels; the shared type module is erased. This extraction
-does not itself provide the owner-local attempt driver or restart readiness.
+prebound capabilities and ordinary logical coordinates; Collection planning
+needs only owner and invocation identity. Worker replacement remains an
+authorization concern and does not change generated record IDs. Pending calls,
+effect recovery, Processor error acknowledgement and unknown completion retain
+their existing semantics. Authored reconciliation callbacks cannot receive the
+private effect controller as their JavaScript receiver. The production role
+graph includes only the two executable kernels; the shared type module is
+erased. This extraction does not itself provide the owner-local attempt driver
+or restart readiness.
 
 ### Explicit placement reservation storage
 

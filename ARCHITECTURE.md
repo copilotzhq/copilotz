@@ -142,8 +142,8 @@ is propagated immediately and records only accounting already reported by the
 provider.
 
 The runtime acts as the **composition boundary** for all of this. When plugins
-are installed, their collections, actions, processors, resources, adapters, and views
-are registered with the runtime. Resources and adapters remain separate
+are installed, their collections, actions, processors, resources, adapters, and
+views are registered with the runtime. Resources and adapters remain separate
 composition categories: resources are available under `context.resources`, while
 adapters are available under `context.adapters`. Actions and processors declare
 ordinary TypeScript interfaces for the context shape they expect. These

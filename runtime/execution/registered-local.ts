@@ -153,7 +153,7 @@ function reference(value: unknown): RegisteredLocalActionReference {
   if (binding.placement !== "owner-local" || binding.kind !== "action") {
     throw failure("registered_local_reference_invalid");
   }
-  return Object.freeze(binding);
+  return binding;
 }
 function exactReference(
   value: unknown,
@@ -571,7 +571,7 @@ export function createRegisteredLocalActionExecution(
       await finish();
     }
   };
-  return Object.freeze({
+  return {
     run() {
       // Publish the first promise before any callback can reenter run().
       pending ??= Promise.resolve().then(run);
@@ -603,5 +603,5 @@ export function createRegisteredLocalActionExecution(
       if (!pending) void finish().catch(() => {});
     },
     quiescent,
-  });
+  };
 }

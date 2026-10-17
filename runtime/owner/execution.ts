@@ -723,14 +723,15 @@ export function createOwnerExecutionCommands(
     });
     signal.throwIfAborted();
   }
-  /** Local input is released only after awaited policies have finished. The
+  /** Local data is released only after awaited policies have finished. The
    * initial private handle check cannot survive revocation inside those policies.
    * Delivery remains locked; the final resolver independently rechecks its exact
    * current private handle and durable reservation without rerunning input policy. */
-  async function recheckLocalInputAuthority(
+  async function recheckLocalAuthority(
     tx: SqlExecutor,
     state: Authorized,
     commandTime: string,
+    grant: "ctx" | "settlement",
   ): Promise<void> {
     if (state.assignment.placement !== "owner-local") return;
     const delivery = await createEventStore({
@@ -749,10 +750,15 @@ export function createOwnerExecutionCommands(
     );
     if (
       !current || current.placement !== "owner-local" ||
-      current.ctxGranted !== true ||
+      (grant === "ctx" ? current.ctxGranted : current.settlementGranted) !==
+        true ||
       current.invocation.actionRunId !== current.actionRunId
     ) {
-      refuse("Local execution input authority was revoked.");
+      refuse(
+        `Local execution ${
+          grant === "ctx" ? "input" : "settlement"
+        } authority was revoked.`,
+      );
     }
     assertOwnerAttemptCaller(state.caller, current, options.ownerId);
     if (
@@ -763,7 +769,11 @@ export function createOwnerExecutionCommands(
       delivery.settlementScopeId !== state.delivery.settlementScopeId ||
       !ownerAttemptIsLive(delivery, current, commandTime)
     ) {
-      refuse("Local execution input authority changed.");
+      refuse(
+        `Local execution ${
+          grant === "ctx" ? "input" : "settlement"
+        } authority changed.`,
+      );
     }
   }
   const inventory = (tx: SqlExecutor, state: Authorized) =>
@@ -1318,7 +1328,12 @@ export function createOwnerExecutionCommands(
       context.signal,
     );
     if (state.assignment.placement === "owner-local") {
-      await recheckLocalInputAuthority(context.tx, state, context.commandTime);
+      await recheckLocalAuthority(
+        context.tx,
+        state,
+        context.commandTime,
+        "ctx",
+      );
     }
     return json({
       ...(barrier ? { recovery: barrier } : {}),
@@ -1343,6 +1358,30 @@ export function createOwnerExecutionCommands(
           ? { parentActionRunId: captured.parentActionRunId }
           : {}),
       },
+    });
+  };
+  /** Current settlement facts only. Never hydrates input or reads a terminal
+   * receipt, and never grants recovery or permission to invoke again. */
+  const localSettlementState: OwnerProjectionHandler = async (
+    _input,
+    context,
+  ) => {
+    const state = requireAuthorized(context.tx);
+    if (state.assignment.placement !== "owner-local") {
+      refuse("Local settlement state requires a local Action attempt.");
+    }
+    if (!await invoked(context.tx, state)) {
+      refuse("Execution has no captured invocation.");
+    }
+    await recheckLocalAuthority(
+      context.tx,
+      state,
+      context.commandTime,
+      "settlement",
+    );
+    return json({
+      reference: localBinding(state.assignment),
+      cancellationRequested: state.cancelled,
     });
   };
   async function authorizeLocalStart(
@@ -1407,7 +1446,10 @@ export function createOwnerExecutionCommands(
       "execution.complete": complete,
       "execution.renew": renew,
     },
-    projections: { "execution.input": project },
+    projections: {
+      "execution.input": project,
+      "execution.local-settlement-state": localSettlementState,
+    },
     async authorize(
       tx,
       caller,
@@ -1431,6 +1473,8 @@ export function createOwnerExecutionCommands(
         ? "claim"
         : command.kind === "execution.complete"
         ? "complete"
+        : command.kind === "execution.local-settlement-state"
+        ? "complete"
         : command.kind === "execution.input"
         ? "input"
         : command.kind === "execution.renew"
@@ -1439,6 +1483,14 @@ export function createOwnerExecutionCommands(
       if (!mode) throw new TypeError("Unknown execution command.");
       const state = await current(tx, caller, commandTime, mode);
       const a = state.assignment;
+      if (command.kind === "execution.local-settlement-state") {
+        if (a.placement !== "owner-local" || command.domain !== "occurrence") {
+          refuse("Local settlement state requires a current local projection.");
+        }
+        checkReference(command.intent, a);
+        authorized.set(tx, state);
+        return;
+      }
       if (mode === "claim") {
         if (a.placement !== "worker") {
           refuse("Worker claim requires worker placement.");
@@ -1526,7 +1578,7 @@ export function createOwnerExecutionCommands(
       await recoveryBarrier(tx, state, commandTime);
       await guardPrepared(tx, state, commandTime, "mutation");
       if (state.assignment.placement === "owner-local") {
-        await recheckLocalInputAuthority(tx, state, commandTime);
+        await recheckLocalAuthority(tx, state, commandTime, "ctx");
       }
       return state.assignment;
     },

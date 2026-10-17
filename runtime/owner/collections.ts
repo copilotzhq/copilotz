@@ -16,6 +16,12 @@ import type { PluginRegistry } from "../plugins/index.ts";
 import { assertJsonValue } from "../json.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
 import type { OwnerCommandContext, OwnerCommandHandler } from "./boundary.ts";
+import {
+  assertOwnerAttemptCaller,
+  type OwnerAttemptAuthority,
+  ownerAttemptToken,
+  ownerEventCommitForAttempt,
+} from "./attempt-authority.ts";
 
 export type OwnerCollectionOperation = Readonly<{
   collection: string;
@@ -34,7 +40,33 @@ export type OwnerCollectionScope = Readonly<{
   identity?: Omit<CollectionMutationIdentity, "deduplicationId">;
   /** Current policy constraints supplied by the owner, never by the caller. */
   conditions?: Readonly<Record<string, CollectionWriteOptions["condition"]>>;
+  /** Already authorized private attempt, never part of Collection intent. */
+  attempt?: OwnerAttemptAuthority;
 }>;
+
+function snapshot<T>(value: T): T {
+  assertJsonValue(value, {
+    omitUndefinedProperties: true,
+    maxDepth: 64,
+    maxNodes: 100_000,
+  });
+  const encoded = JSON.stringify(value);
+  if (new TextEncoder().encode(encoded).length > 1024 * 1024) {
+    throw new TypeError("Owner Collection scope exceeds its byte limit.");
+  }
+  // Keep own-field presence, including undefined forbidden coordinates. The
+  // ordinary optional-field encoder must not launder mixed attempt authority.
+  return structuredClone(value);
+}
+function refuseAttempt(): never {
+  throw Object.assign(
+    new Error("Collection attempt authority does not match."),
+    {
+      name: "ActionOwnershipLost",
+      code: "ActionOwnershipLost",
+    },
+  );
+}
 
 /**
  * A bounded first handler for registered JSON Collections. Host authorization
@@ -61,9 +93,38 @@ export function createOwnerCollectionCommand(
     maxOperations?: number;
   }>,
 ): OwnerCommandHandler {
-  if (options.catalog && options.catalog.databaseSchema !== options.schema) {
+  const { schema, registry, scope: resolveScope, publish } = options;
+  const sourceSession = options.session;
+  const session: SqlSession = {
+    query: sourceSession.query.bind(sourceSession),
+    transaction: sourceSession.transaction.bind(sourceSession),
+    ...(sourceSession.readSnapshot
+      ? { readSnapshot: sourceSession.readSnapshot.bind(sourceSession) }
+      : {}),
+    ...(sourceSession.listen
+      ? { listen: sourceSession.listen.bind(sourceSession) }
+      : {}),
+  };
+  const collections = { ...options.collections };
+  const sourceExecutor = options.executor;
+  const executor: DeliveryExecutor = {
+    ...sourceExecutor,
+    scheduleDelivery: sourceExecutor.scheduleDelivery.bind(sourceExecutor),
+    dispatchDelivery: sourceExecutor.dispatchDelivery.bind(sourceExecutor),
+    dispatchRecoverable: sourceExecutor.dispatchRecoverable.bind(
+      sourceExecutor,
+    ),
+  };
+  const sourceCatalog = options.catalog;
+  if (sourceCatalog && sourceCatalog.databaseSchema !== schema) {
     throw new TypeError("Collection catalog schema does not match.");
   }
+  const catalog = sourceCatalog && {
+    lockSettlementScope: sourceCatalog.lockScope.bind(sourceCatalog),
+    admitOperationEventSql: sourceCatalog.admitEventSql.bind(sourceCatalog),
+    indexOperationEvent: sourceCatalog.indexEvent.bind(sourceCatalog),
+    indexOperationEventSql: sourceCatalog.indexEventSql.bind(sourceCatalog),
+  };
   const limit = options.maxOperations ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new TypeError("maxOperations must be positive.");
@@ -93,10 +154,9 @@ export function createOwnerCollectionCommand(
       ) {
         throw new TypeError("Invalid Collection operation.");
       }
-      const definition =
-        Object.hasOwn(options.collections, operation.collection)
-          ? options.collections[operation.collection]
-          : undefined;
+      const definition = Object.hasOwn(collections, operation.collection)
+        ? collections[operation.collection]
+        : undefined;
       if (!definition) throw new TypeError("Unknown registered Collection.");
       if (definition.content?.fields.length) {
         throw new TypeError(
@@ -115,61 +175,110 @@ export function createOwnerCollectionCommand(
         operation.operation !== "command" && operation.command !== undefined
       ) throw new TypeError("Unexpected command name.");
     }
-    const scope = await options.scope(context, intent);
+    // The policy gets its own ordinary-data copies; it cannot rewrite the
+    // command/caller or scope after returning through a retained reference.
+    const caller = snapshot(context.caller);
+    const command = { ...context.command };
+    const commandTime = context.commandTime;
+    const tx = context.tx;
+    const afterCommit = context.afterCommit;
+    const ownerCommit = { ...context.ownerCommit };
+    const currentContext = {
+      ...context,
+      caller,
+      command,
+      commandTime,
+      tx,
+      afterCommit,
+      ownerCommit,
+    };
+    const resolvedScope = resolveScope({
+      ...currentContext,
+      caller: snapshot(caller),
+      command: { ...command },
+      ownerCommit: { ...ownerCommit },
+    }, snapshot(intent));
+    // A synchronous scope is detached synchronously too: a callback's queued
+    // microtask must not rewrite its result before the first kernel await.
+    const scope = snapshot(
+      resolvedScope instanceof Promise ? await resolvedScope : resolvedScope,
+    );
+    if (
+      !scope || typeof scope !== "object" || Array.isArray(scope) ||
+      Object.keys(scope).some((key) =>
+        !["namespace", "identity", "conditions", "attempt"].includes(key)
+      )
+    ) throw new TypeError("Invalid owner Collection scope.");
     if (typeof scope.namespace !== "string" || !scope.namespace.trim()) {
       throw new TypeError("Owner scope requires a namespace.");
     }
+    const attempt = scope.attempt;
+    if (
+      caller.principal.kind === "owner-local" &&
+      attempt?.placement !== "owner-local"
+    ) {
+      refuseAttempt();
+    }
+    if (attempt !== undefined) {
+      assertOwnerAttemptCaller(caller, attempt, ownerCommit.ownerId);
+      if (attempt.placement === "owner-local") {
+        const lease = scope.identity?.deliveryLease;
+        if (
+          scope.namespace !== attempt.namespace || !lease ||
+          Object.keys(lease).length !== 2 ||
+          !Object.hasOwn(lease, "deliveryId") ||
+          !Object.hasOwn(lease, "owner") ||
+          lease.deliveryId !== attempt.deliveryId ||
+          lease.owner !== ownerAttemptToken(attempt)
+        ) refuseAttempt();
+      }
+    }
     const store = createEventStore({
-      session: options.session,
-      schema: options.schema,
-      ownerCommit: context.ownerCommit,
-      ...(options.catalog
-        ? {
-          lockSettlementScope: options.catalog.lockScope,
-          admitOperationEventSql: options.catalog.admitEventSql,
-          indexOperationEvent: options.catalog.indexEvent,
-          indexOperationEventSql: options.catalog.indexEventSql,
-        }
-        : {}),
+      session,
+      schema,
+      ownerCommit: attempt
+        ? ownerEventCommitForAttempt(currentContext, attempt)
+        : ownerCommit,
+      ...catalog,
     });
     const coordinator = createEventCoordinator({
       store,
-      registry: options.registry,
-      executor: options.executor,
-      publish: options.publish,
+      registry,
+      executor,
+      publish,
       scheduleOnly: true,
     });
     const kernel = createCollectionKernel({
-      session: options.session,
+      session,
       eventStore: store,
       coordinator,
-      now: () => new Date(context.commandTime),
+      now: () => new Date(commandTime),
       commitContext: {
-        transaction: context.tx,
+        transaction: tx,
         pending: [],
-        afterCommit: context.afterCommit,
+        afterCommit,
       },
     });
-    for (const definition of Object.values(options.collections)) {
+    for (const definition of Object.values(collections)) {
       kernel.bind(definition);
     }
     const key = await deriveWorkflowId(
       "owner-command",
       JSON.stringify([
-        context.ownerCommit.ownerId,
-        context.command.domain,
-        context.command.key,
+        ownerCommit.ownerId,
+        command.domain,
+        command.key,
       ]),
     );
     const result = await kernel.transaction({
       operationKey: key,
       namespace: scope.namespace,
       identity: { ...scope.identity, deduplicationId: key },
-      async execute({ collections }) {
+      async execute({ collections: boundCollections }) {
         const ids: string[] = [];
         for (const operation of intent.operations) {
-          const definition = options.collections[operation.collection];
-          const collection = collections[definition.name];
+          const definition = collections[operation.collection];
+          const collection = boundCollections[definition.name];
           const writeOptions = {
             condition: scope.conditions?.[operation.collection],
           };

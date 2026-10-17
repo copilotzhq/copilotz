@@ -1,5 +1,4 @@
-/** Inert canonical owner placement data. No storage, transport or authority.
- * Kept behavior-identical to assignments until its reviewed extraction lands. */
+/** Inert canonical owner placement data. No storage, transport or authority. */
 type OwnerAssignmentBase = Readonly<{
   placement: "worker";
   workerId: string;

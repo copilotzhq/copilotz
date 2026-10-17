@@ -42,8 +42,10 @@ const bindings: OwnerPlacementBinding[] = [
   },
 ];
 
-test("placement leaf preserves canonical bytes and exact detached parser parity", () => {
+test("placement leaf preserves golden canonical bytes and the legacy export API", () => {
+  assert.equal(existingParser, parseOwnerPlacementBinding);
   for (const binding of bindings) {
+    const canonicalBytes = JSON.stringify(binding);
     for (
       const input of [
         binding,
@@ -52,21 +54,17 @@ test("placement leaf preserves canonical bytes and exact detached parser parity"
       ]
     ) {
       const actual = parseOwnerPlacementBinding(input);
-      assert.deepEqual(actual, existingParser(input));
-      assert.equal(
-        JSON.stringify(actual),
-        JSON.stringify(existingParser(input)),
-      );
+      assert.deepEqual(actual, binding);
+      assert.equal(JSON.stringify(actual), canonicalBytes);
       assert.notEqual(actual, input);
       assert.equal(Object.getPrototypeOf(actual), Object.prototype);
     }
   }
 });
 
-test("placement leaf and original reject every missing, foreign or malformed coordinate", () => {
+test("placement leaf rejects every missing, foreign or malformed coordinate", () => {
   const reject = (value: unknown) => {
     assert.throws(() => parseOwnerPlacementBinding(value));
-    assert.throws(() => existingParser(value));
   };
   for (const binding of bindings) {
     reject({ ...binding, extra: "extra" });
@@ -111,7 +109,7 @@ test("placement leaf and original reject every missing, foreign or malformed coo
 
 test("placement leaf never invokes accessors and rejects hidden/symbol data", () => {
   let calls = 0;
-  for (const parser of [parseOwnerPlacementBinding, existingParser]) {
+  for (const parser of [parseOwnerPlacementBinding]) {
     for (const key of Object.keys(bindings[2])) {
       const value = { ...bindings[2] };
       Object.defineProperty(value, key, {
@@ -143,12 +141,11 @@ test("placement leaf preserves PostgreSQL escaped UTF-8 byte budget", () => {
     ]),
   );
   assert.throws(() => parseOwnerPlacementBinding(value), /byte limit/);
-  assert.throws(() => existingParser(value), /byte limit/);
   assert.deepEqual(
     parseOwnerPlacementBinding({
       ...bindings[2],
       actionRunId: "🙂".repeat(512),
     }),
-    existingParser({ ...bindings[2], actionRunId: "🙂".repeat(512) }),
+    { ...bindings[2], actionRunId: "🙂".repeat(512) },
   );
 });

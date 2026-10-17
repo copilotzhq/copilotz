@@ -6,7 +6,7 @@ import type { EventDelivery } from "../events/types.ts";
 import {
   type OwnerLocalAssignmentBinding,
   parseOwnerPlacementBinding,
-} from "./assignments.ts";
+} from "./placement-binding.ts";
 import type { OwnerCaller, OwnerCommandContext } from "./boundary.ts";
 import { ownerPrincipalIdentity } from "./principal.ts";
 

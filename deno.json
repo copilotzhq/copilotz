@@ -57,6 +57,7 @@
       "CHANGELOG.md",
       "deno.json",
       "index.ts",
+      "authoring.ts",
       "create-copilotz.ts",
       "plugins/**/*.ts",
       "plugins/**/*.md",

@@ -1,4 +1,5 @@
 /** Portable runtime entry point; application features remain in their plugins. */
+export * from "./authoring.ts";
 export { createCopilotz } from "./create-copilotz.ts";
 export type { CreateCopilotzOptions } from "./create-copilotz.ts";
 

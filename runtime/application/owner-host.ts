@@ -142,6 +142,14 @@ import {
   type OwnerHostLocalActionOptions,
 } from "./owner-host-local.ts";
 
+import {
+  captureOwnerHostTerminalRecovery,
+  createOwnerHostTerminalRecovery,
+  type OwnerHostTerminalRecoveryOptions,
+  type OwnerHostTerminalRecoveryTarget,
+} from "./owner-host-terminal-recovery.ts";
+import { OWNER_LOST_ACTION_RECOVERY } from "../owner/lost-action.ts";
+
 type Fence = OwnerWorkerCallContext["fence"];
 type JsonObject = Readonly<Record<string, OwnerJson>>;
 /** A current host reconstruction, never a worker claim. The original endpoint
@@ -361,6 +369,7 @@ export async function createOwnerHost(
   options: OwnerHostOptions,
   namespaceInventory?: readonly string[],
   localActions?: OwnerHostLocalActionOptions,
+  terminalRecovery?: OwnerHostTerminalRecoveryOptions,
 ) {
   for (const value of [options.ownerId, options.holderId, options.schema]) {
     text(value);
@@ -399,6 +408,17 @@ export async function createOwnerHost(
       "Private local Actions require fresh initialization; local resume is unavailable.",
     );
   }
+  if (
+    terminalRecovery !== undefined &&
+    (initialization === "fresh" || localActions !== undefined)
+  ) {
+    throw new TypeError(
+      "Private terminal recovery requires resume without local placement.",
+    );
+  }
+  const terminalConfiguration = terminalRecovery === undefined
+    ? undefined
+    : captureOwnerHostTerminalRecovery(terminalRecovery);
   const localConfiguration = localActions === undefined
     ? undefined
     : captureOwnerHostLocalActions(localActions, options.registry);
@@ -1351,6 +1371,25 @@ export async function createOwnerHost(
       return scope;
     },
   });
+  const terminal = terminalConfiguration
+    ? createOwnerHostTerminalRecovery({
+      configuration: terminalConfiguration,
+      ownerId,
+      schema,
+      session,
+      registry,
+      catalog,
+      executor,
+      currentOwner() {
+        return !initialized && !closed && !transport && !abort.signal.aborted &&
+            owner.state === "acquired" && owner.epoch !== undefined
+          ? { ownerId, epoch: owner.epoch, holderId }
+          : undefined;
+      },
+      scheduleSettlement: (context, scope) =>
+        settlement.schedule(context, scope),
+    })
+    : undefined;
   const startup = createOwnerStartupProof({
     ownerId,
     schema,
@@ -1465,6 +1504,14 @@ export async function createOwnerHost(
     maxPostCommitGroups: maxPending,
     handlers: {
       ...startup.handlers,
+      ...(terminal
+        ? {
+          ...terminal.handlers,
+          [OWNER_STARTUP_REPAIR]: terminal.wrapRepair(
+            startup.handlers[OWNER_STARTUP_REPAIR],
+          ),
+        }
+        : {}),
       "host.initialize-fresh": async (_input, context) => {
         // Joining the command transaction does not open a nested transaction.
         await provisionCollectionIndexes(
@@ -1576,6 +1623,13 @@ export async function createOwnerHost(
     },
     projections: {
       ...startup.projections,
+      ...(terminal
+        ? {
+          [OWNER_STARTUP_PROOF]: terminal.wrapProof(
+            startup.projections[OWNER_STARTUP_PROOF],
+          ),
+        }
+        : {}),
       ...execution.projections,
       ...processor.projections,
       [OWNER_CHILD_ACTION_RESULT]: child.projection,
@@ -1738,6 +1792,12 @@ export async function createOwnerHost(
           ) {
             assertControl(caller, "startup-settlement");
             return await settlement.authorize(tx, caller, command, time);
+          }
+          if (command.kind === OWNER_LOST_ACTION_RECOVERY) {
+            if (!terminal || initialization === "fresh" || initialized) {
+              unavailable();
+            }
+            return await terminal.authorize(tx, caller, command, time);
           }
           if (command.kind.startsWith("host.")) {
             assertControl(caller);
@@ -2340,7 +2400,16 @@ export async function createOwnerHost(
         const plan = repaired.result as {
           blockers: unknown[];
           settlements: OperationSettlementScope[];
+          terminalTargets?: OwnerHostTerminalRecoveryTarget[];
         };
+        if (terminal && plan.terminalTargets?.length) {
+          // Exact configured targets only. Each successful command is durable
+          // progress, never readiness; the next full scan accounts for all of it.
+          for (const target of plan.terminalTargets) {
+            await terminal.recover(owner, target);
+          }
+          continue;
+        }
         if (plan.blockers.length) {
           unavailable("Owner resume has unresolved durable startup blockers.");
         }

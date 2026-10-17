@@ -76,6 +76,16 @@ async function fixture(
       join(root, "runtime/owner/execution.connected.test.ts"),
       "// Execution fixture setup only.",
     );
+    for (
+      const path of [
+        "runtime/application/owner-host.test.ts",
+        "runtime/application/owner-host.processor.test.ts",
+        "runtime/application/owner-host.capacity.test.ts",
+        "plugins/channel-telegram/actions/send-text/transport.integration.test.ts",
+        "runtime/application/owner-composition.connected.test.ts",
+        "build/role-bundle.connected.test.ts",
+      ]
+    ) await put(join(root, path), "// Host/provider fixture setup only.");
     await put(join(source, "deno.json"), {
       name: "@oxian/oxian-js",
       exports,
@@ -149,7 +159,7 @@ test("setup resolves relative paths and scoped sibling imports without changing 
       pathToFileURL(root + sep).href,
     );
     assert.equal(Object.hasOwn(plan.config.imports, "ws"), false);
-    assert.equal(plan.testFiles.length, 2);
+    assert.equal(plan.testFiles.length, 8);
     assert.equal(
       plan.config
         .scopes[
@@ -158,6 +168,27 @@ test("setup resolves relative paths and scoped sibling imports without changing 
           pathToFileURL(join(root, "dependencies/oxian-worker.ts")).href
         ],
       new URL("src/worker/index.ts", sourceScope).href,
+    );
+    for (
+      const path of [
+        "runtime/application/owner-composition.ts",
+        "runtime/application/owner-composition-types.ts",
+      ]
+    ) {
+      assert.deepEqual(
+        plan.config.scopes[pathToFileURL(join(root, path)).href],
+        {
+          [pathToFileURL(join(root, "dependencies/oxian-worker.ts")).href]:
+            new URL("src/worker/index.ts", sourceScope).href,
+        },
+      );
+    }
+    assert.equal(
+      plan.config
+        .scopes[
+          pathToFileURL(join(root, "runtime/application/worker.ts")).href
+        ],
+      undefined,
     );
     assert.deepEqual(plan.config.scopes[sourceScope], {
       ws: "npm:ws@8.22.0",
@@ -208,6 +239,14 @@ test("setup requires the selected sibling's exact ws pin instead of inventing a 
         "../different/node_modules/ws/index.js",
       ]
     ) {
+      for (
+        const path of [
+          "runtime/application/owner-host.test.ts",
+          "runtime/application/owner-host.processor.test.ts",
+          "runtime/application/owner-host.capacity.test.ts",
+          "plugins/channel-telegram/actions/send-text/transport.integration.test.ts",
+        ]
+      ) await put(join(root, path), "// Host/provider fixture setup only.");
       await put(join(source, "deno.json"), {
         name: "@oxian/oxian-js",
         exports,
@@ -314,6 +353,15 @@ test("runner selects exact source, uses argument arrays and cleans config after 
           "--allow-all",
           join(root, "runtime/owner/connected.integration.test.ts"),
           join(root, "runtime/owner/execution.connected.test.ts"),
+          join(root, "runtime/application/owner-host.test.ts"),
+          join(root, "runtime/application/owner-host.processor.test.ts"),
+          join(root, "runtime/application/owner-host.capacity.test.ts"),
+          join(
+            root,
+            "plugins/channel-telegram/actions/send-text/transport.integration.test.ts",
+          ),
+          join(root, "runtime/application/owner-composition.connected.test.ts"),
+          join(root, "build/role-bundle.connected.test.ts"),
         ]);
         configPath = args[2];
         const config = JSON.parse(await readFile(configPath, "utf8"));

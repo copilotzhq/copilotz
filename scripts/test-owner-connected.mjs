@@ -186,16 +186,20 @@ export async function prepareOwnerConnectedTest(
   if (manifest.name !== "@copilotz/copilotz") {
     throw new Error("Runner root must be the @copilotz/copilotz checkout.");
   }
-  const testFile = join(root, "runtime/owner/connected.integration.test.ts");
-  const executionTestFile = join(
-    root,
+  const testFiles = [
+    "runtime/owner/connected.integration.test.ts",
     "runtime/owner/execution.connected.test.ts",
-  );
-  if (
-    !(await stat(testFile)).isFile() ||
-    !(await stat(executionTestFile)).isFile()
-  ) {
-    throw new Error("Connected owner fixture is missing.");
+    "runtime/application/owner-host.test.ts",
+    "runtime/application/owner-host.processor.test.ts",
+    "runtime/application/owner-host.capacity.test.ts",
+    "plugins/channel-telegram/actions/send-text/transport.integration.test.ts",
+    "runtime/application/owner-composition.connected.test.ts",
+    "build/role-bundle.connected.test.ts",
+  ].map((path) => join(root, path));
+  for (const testFile of testFiles) {
+    if (!(await stat(testFile)).isFile()) {
+      throw new Error("Connected owner fixture is missing.");
+    }
   }
   const sourceScope = fileBase(sourceRoot);
   const siblingScopes = scopes(
@@ -234,8 +238,8 @@ export async function prepareOwnerConnectedTest(
   return {
     root,
     sourceRoot,
-    testFile,
-    testFiles: [testFile, executionTestFile],
+    testFile: testFiles[0],
+    testFiles,
     config,
   };
 }

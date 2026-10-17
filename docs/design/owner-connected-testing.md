@@ -45,16 +45,25 @@ The runner:
 3. Generates a temporary configuration outside both checkouts. Copilotz's
    imports retain their existing published versions. Oxian's own imports,
    including its exact `ws` pin, apply only within the selected sibling source
-   scope. The actual owner-worker wrapper alone resolves its worker dependency
-   to the selected public worker entry; legacy runtime workers retain their
-   published dependency. No global package override or repository-local link is
-   created
-4. Runs `runtime/owner/connected.integration.test.ts` and
-   `runtime/owner/execution.connected.test.ts` with type checking, over
-   in-process and Node WebSocket transports, then removes its temporary config
-   on success, test failure, startup error or handled interruption. Child exit
-   failures and termination remain nonzero. An uncatchable process kill can
-   leave an ordinary OS temporary directory, never a changed dependency pin
+   scope. Only the actual owner-worker wrapper and the owner-composition
+   implementation/typing modules resolve their worker dependency to the selected
+   public worker entry; legacy runtime workers retain their published
+   dependency. No global package override or repository-local link is created
+4. Runs these exact files serially with type checking, over in-process and Node
+   WebSocket transports:
+   - `runtime/owner/connected.integration.test.ts`
+   - `runtime/owner/execution.connected.test.ts`
+   - `runtime/application/owner-host.test.ts`
+   - `runtime/application/owner-host.processor.test.ts`
+   - `runtime/application/owner-host.capacity.test.ts`
+   - `plugins/channel-telegram/actions/send-text/transport.integration.test.ts`
+   - `runtime/application/owner-composition.connected.test.ts`
+   - `build/role-bundle.connected.test.ts`
+
+   It then removes its temporary config on success, test failure, startup error
+   or handled interruption. Child exit failures and termination remain nonzero.
+   An uncatchable process kill can leave an ordinary OS temporary directory,
+   never a changed dependency pin
 
 Missing or invalid source is an error for this explicit command. It never turns
 into a skipped success or falls back to another checkout. Ordinary repository
@@ -109,3 +118,19 @@ call port. The whole plugin registry is loaded, and its Action uses Resource,
 Adapter and owner-backed Collection capabilities. Its postcommit Processor
 observer still uses the legacy executor. This is not yet the public factory,
 owner-only Processor execution, HTTP ingress, or long-running lease renewal.
+
+The fresh-host cases compose actual registered Actions, Processors, child
+Actions, Collection mutation and catalog settlement. They test
+inherited/detached scopes, current policy revocation, durable retry/renewal
+alarms and bounded saturation. The Telegram cases inject a local provider and
+real transport disconnection around effect/terminal acknowledgement; they never
+call a live provider. These cases preserve no-resend evidence and explicitly
+retain the fresh-host recovery limitation. They do not establish restart
+readiness, owner-local epoch-only placement, complete channel/content support or
+released-package compatibility.
+
+The public composition and role-artifact fixtures use the same bounded fresh
+storage/owner API and root-authored multi-primitive plugin. The artifact is
+checked before tree shaking and runs without persistence implementation imports.
+Public readiness covers this ordinary fresh composition only; the same explicit
+recovery/content/owner-local limitations apply.

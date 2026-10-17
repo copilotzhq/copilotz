@@ -15,6 +15,11 @@ import { contentRefSchema } from "../content/schema.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import { assertJsonValue } from "../json.ts";
+import {
+  parsePreparationSourceReference,
+  type PreparationContentReference,
+  type PreparationSourceReference,
+} from "./preparation-capture.ts";
 import type {
   OwnerCaller,
   OwnerJson,
@@ -63,11 +68,45 @@ export type OwnerPreparationSourceOptions = Readonly<{
       scope: PreparationSourceScope;
     }>,
   ): OwnerJson | Promise<OwnerJson>;
+  /** Required for capture and original reuse, not for the read-only projection.
+   * Must authorize the ENTIRE ORIGINAL projected value/content version for this
+   * purpose, including field-level restrictions. Record visibility alone is not
+   * sufficient; a digest is provenance, never permission. No current rerender or
+   * reproject may substitute for this decision. Called before body reads and at
+   * the output gate, with detached original facts. */
+  authorizeReference?(
+    tx: SqlExecutor,
+    context: Readonly<
+      {
+        ownerId: string;
+        caller: OwnerCaller;
+        reference: PreparationSourceReference;
+        purpose: "capture" | "duplicate" | "input" | "result";
+        commandTime: string;
+      }
+    >,
+  ): true | Promise<true>;
   /** Aggregate source/body/output budget, enforced independently at each stage. */
   maxBytes?: number;
   maxReferences?: number;
 }>;
+type SourceContext = Parameters<OwnerProjectionHandler>[1];
 export type OwnerPreparationSource = Readonly<{
+  /** Private owner-local capture facts; no new body or receipt is written. */
+  capture(
+    input: PreparationSourceRequest,
+    context: SourceContext,
+  ): Promise<
+    Readonly<{ projection: OwnerJson; reference: PreparationSourceReference }>
+  >;
+  /** Reauthorize ORIGINAL captured refs without selecting today's content field
+   * or projecting today's record. Only trusted captured event metadata may call
+   * this method; it is deliberately absent from the wire projection table. */
+  authorizeOriginal(
+    reference: PreparationSourceReference,
+    context: SourceContext,
+    purpose: "capture" | "duplicate" | "input" | "result",
+  ): Promise<void>;
   projections: Readonly<{ "preparation.source": OwnerProjectionHandler }>;
 }>;
 
@@ -147,6 +186,7 @@ export function createOwnerPreparationSource(
   const schema = options.schema;
   const authorize = options.authorize;
   const projectRecord = options.projectRecord;
+  const authorizeReference = options.authorizeReference;
   const maxBytes = limit(options.maxBytes, 1_048_576);
   const maxReferences = limit(options.maxReferences, 100);
   const sources = new Map(
@@ -169,77 +209,24 @@ export function createOwnerPreparationSource(
       }] as const;
     }),
   );
-  const read: OwnerProjectionHandler = async (input, context) => {
-    context.signal.throwIfAborted();
-    const raw = object(snapshot(input, maxBytes));
-    if (
-      Object.keys(raw).length !== 2 || !Object.hasOwn(raw, "source") ||
-      !Object.hasOwn(raw, "recordId")
-    ) fail("preparation_invalid");
-    const request = { source: text(raw.source), recordId: text(raw.recordId) };
-    const source = sources.get(request.source);
-    if (!source) fail("preparation_invalid");
-    // Keep callback data detached from the private reference, source and caller.
-    const caller = structuredClone(context.caller);
-    const scopeNow = async (): Promise<PreparationSourceScope> => {
-      context.signal.throwIfAborted();
-      const value = object(snapshot(
-        await authorize(context.tx, {
-          ownerId,
-          caller: structuredClone(caller),
-          request: structuredClone(request),
-          commandTime: context.commandTime,
-        }),
-        maxBytes,
-      ));
-      if (Object.keys(value).length !== 2) fail("preparation_invalid");
-      const scope = {
-        namespace: text(value.namespace),
-        audience: text(value.audience),
-      };
-      context.signal.throwIfAborted();
-      return scope;
-    };
-    const scope = await scopeNow();
-    // Bound the raw JSON transferred from SQL as well as the later projection.
-    const rows = await context.tx.query<{ data: unknown; bytes: number }>(
-      `SELECT CASE WHEN octet_length(data::text) <= $4 THEN data END AS data,
-        octet_length(data::text) AS bytes FROM ${tables.nodes}
-       WHERE id=$1 AND namespace=$2 AND type=$3`,
-      [request.recordId, scope.namespace, source.kind, maxBytes],
-    );
-    context.signal.throwIfAborted();
-    if (!rows.rows.length) fail("content_missing");
-    if (Number(rows.rows[0].bytes) > maxBytes) fail("preparation_limit");
-    const data = object(snapshot(rows.rows[0].data, maxBytes));
-    const record = snapshot({
-      ...data,
-      id: request.recordId,
-      namespace: scope.namespace,
-    }, maxBytes) as Record<string, OwnerJson>;
-    validateAgainstJsonSchema(
-      source.recordSchema,
-      record,
-      "Preparation source",
-    );
-    const selected = getPath(record, source.path);
-    if (!Array.isArray(selected)) fail("preparation_invalid");
+  async function loadContent(
+    selected: readonly unknown[],
+    request: PreparationSourceRequest,
+    scope: PreparationSourceScope,
+    context: SourceContext,
+    beforeBodies?: (
+      references: readonly PreparationContentReference[],
+    ) => Promise<void>,
+  ) {
     if (selected.length > maxReferences) fail("preparation_limit");
-    const projected = snapshot(
-      await projectRecord(structuredClone(record), {
-        request: structuredClone(request),
-        scope: structuredClone(scope),
-      }),
-      maxBytes,
-    );
-    plain(projected);
-    context.signal.throwIfAborted();
     const store = createDatabaseBodyStore({
       session: context.tx,
       schema,
       provisioned: true,
     });
     const content: { ref: OwnerJson; version: OwnerJson; value: OwnerJson }[] =
+      [];
+    const copies: { reference: PreparationContentReference; bodyId: string }[] =
       [];
     let bytesRead = 0;
     for (const selectedRef of selected) {
@@ -294,17 +281,36 @@ export function createOwnerPreparationSource(
         head.state !== "ready" || head.byteLength !== byteLength ||
         head.digest !== body.digest || head.mediaType !== ref.mediaType
       ) fail("content_corrupted");
+      copies.push({
+        bodyId,
+        reference: {
+          ref: {
+            assetId,
+            kind: ref.kind,
+            role: text(ref.role),
+            mediaType: text(ref.mediaType),
+          },
+          version: { byteLength: byteLength as number, digest: body.digest },
+        },
+      });
+    }
+    context.signal.throwIfAborted();
+    await beforeBodies?.(
+      copies.map(({ reference }) => structuredClone(reference)),
+    );
+    context.signal.throwIfAborted();
+    for (const { bodyId, reference } of copies) {
+      context.signal.throwIfAborted();
+      const { ref, version } = reference;
       const bytes = await store.readRange({
         bodyId,
         offset: 0,
-        end: byteLength as number,
+        end: version.byteLength,
       });
       if (
-        bytes.byteLength !== byteLength ||
-        await digestContent(bytes) !== body.digest
-      ) {
-        fail("content_corrupted");
-      }
+        bytes.byteLength !== version.byteLength ||
+        await digestContent(bytes) !== version.digest
+      ) fail("content_corrupted");
       let value: OwnerJson;
       try {
         const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -315,30 +321,149 @@ export function createOwnerPreparationSource(
         fail("content_corrupted");
       }
       plain(value);
-      content.push({
-        ref: {
-          assetId,
-          kind: ref.kind,
-          role: text(ref.role),
-          mediaType: text(ref.mediaType),
-        },
-        version: { byteLength: byteLength as number, digest: body.digest },
-        value,
-      });
+      content.push({ ref, version, value });
       // Includes escaping/JSON expansion and repeated references, without truncation.
-      snapshot({ record: projected, content }, maxBytes);
+      snapshot(content, maxBytes);
     }
-    // The exported version binds only data this audience may see. Hashing the
-    // raw record would expose low-entropy hidden fields through guess checking.
-    const version = await digestContent(encoder.encode(canonical({
-      source: request.source,
-      kind: source.kind,
-      recordId: request.recordId,
+    return content;
+  }
+  async function currentScope(
+    request: PreparationSourceRequest,
+    context: SourceContext,
+  ): Promise<PreparationSourceScope> {
+    context.signal.throwIfAborted();
+    const value = object(snapshot(
+      await authorize(context.tx, {
+        ownerId,
+        caller: structuredClone(context.caller),
+        request: structuredClone(request),
+        commandTime: context.commandTime,
+      }),
+      maxBytes,
+    ));
+    if (Object.keys(value).length !== 2) fail("preparation_invalid");
+    const scope = {
+      namespace: text(value.namespace),
+      audience: text(value.audience),
+    };
+    context.signal.throwIfAborted();
+    return scope;
+  }
+  async function permitOriginal(
+    reference: PreparationSourceReference,
+    context: SourceContext,
+    purpose: "capture" | "duplicate" | "input" | "result",
+  ) {
+    context.signal.throwIfAborted();
+    if (
+      !authorizeReference ||
+      await authorizeReference(context.tx, {
+          ownerId,
+          caller: structuredClone(context.caller),
+          reference: parsePreparationSourceReference(reference),
+          purpose,
+          commandTime: context.commandTime,
+        }) !== true
+    ) fail("preparation_reference_forbidden");
+    context.signal.throwIfAborted();
+  }
+  const readSource = async (
+    input: OwnerJson,
+    originalContext: SourceContext,
+    capture = false,
+  ) => {
+    const context = {
+      ...originalContext,
+      caller: structuredClone(originalContext.caller),
+    };
+    context.signal.throwIfAborted();
+    if (capture && !authorizeReference) fail("preparation_reference_forbidden");
+    const raw = object(snapshot(input, maxBytes));
+    if (
+      Object.keys(raw).length !== 2 || !Object.hasOwn(raw, "source") ||
+      !Object.hasOwn(raw, "recordId")
+    ) fail("preparation_invalid");
+    const request = { source: text(raw.source), recordId: text(raw.recordId) };
+    const source = sources.get(request.source);
+    if (!source) fail("preparation_invalid");
+    const scopeNow = () => currentScope(request, context);
+    const scope = await scopeNow();
+    // Bound the raw JSON transferred from SQL as well as the later projection.
+    const rows = await context.tx.query<{ data: unknown; bytes: number }>(
+      `SELECT CASE WHEN octet_length(data::text) <= $4 THEN data END AS data,
+        octet_length(data::text) AS bytes FROM ${tables.nodes}
+       WHERE id=$1 AND namespace=$2 AND type=$3`,
+      [request.recordId, scope.namespace, source.kind, maxBytes],
+    );
+    context.signal.throwIfAborted();
+    if (!rows.rows.length) fail("content_missing");
+    if (Number(rows.rows[0].bytes) > maxBytes) fail("preparation_limit");
+    const data = object(snapshot(rows.rows[0].data, maxBytes));
+    const record = snapshot({
+      ...data,
+      id: request.recordId,
       namespace: scope.namespace,
-      audience: scope.audience,
-      record: projected,
-      content: content.map(({ ref, version }) => ({ ref, version })),
-    })));
+    }, maxBytes) as Record<string, OwnerJson>;
+    validateAgainstJsonSchema(
+      source.recordSchema,
+      record,
+      "Preparation source",
+    );
+    const selected = getPath(record, source.path);
+    if (!Array.isArray(selected)) fail("preparation_invalid");
+    if (selected.length > maxReferences) fail("preparation_limit");
+    const projected = snapshot(
+      await projectRecord(structuredClone(record), {
+        request: structuredClone(request),
+        scope: structuredClone(scope),
+      }),
+      maxBytes,
+    );
+    plain(projected);
+    context.signal.throwIfAborted();
+    // The digest includes only the original authorized record projection and
+    // selected immutable content facts, never hidden raw fields or locators.
+    const versionFor = (content: readonly PreparationContentReference[]) =>
+      digestContent(encoder.encode(canonical({
+        source: request.source,
+        kind: source.kind,
+        recordId: request.recordId,
+        namespace: scope.namespace,
+        audience: scope.audience,
+        record: projected,
+        content,
+      })));
+    let reference: PreparationSourceReference | undefined;
+    const content = await loadContent(
+      selected,
+      request,
+      scope,
+      context,
+      capture
+        ? async (content) => {
+          reference = parsePreparationSourceReference({
+            source: {
+              name: request.source,
+              kind: source.kind,
+              path: source.path,
+              recordId: request.recordId,
+              namespace: scope.namespace,
+              digest: await versionFor(content),
+            },
+            audience: scope.audience,
+            content,
+          });
+          await permitOriginal(reference, context, "capture");
+        }
+        : undefined,
+    );
+    const version = reference?.source.digest ??
+      await versionFor(
+        content.map(({ ref, version }) => ({
+          ref,
+          version,
+        })) as PreparationContentReference[],
+      );
     const output = snapshot({
       source: {
         name: request.source,
@@ -359,7 +484,77 @@ export function createOwnerPreparationSource(
       fail("preparation_forbidden");
     }
     context.signal.throwIfAborted();
-    return output;
+    if (reference) await permitOriginal(reference, context, "capture");
+    return { projection: output, reference };
   };
-  return { projections: { "preparation.source": read } };
+  return {
+    projections: {
+      "preparation.source": async (input, context) =>
+        (await readSource(input, context)).projection,
+    },
+    async capture(input, originalContext) {
+      const { projection, reference } = await readSource(
+        snapshot(input, maxBytes),
+        originalContext,
+        true,
+      );
+      if (!reference) fail("preparation_invalid");
+      return snapshot({ projection, reference }, maxBytes) as {
+        projection: OwnerJson;
+        reference: PreparationSourceReference;
+      };
+    },
+    async authorizeOriginal(input, originalContext, purpose) {
+      const context = {
+        ...originalContext,
+        caller: structuredClone(originalContext.caller),
+      };
+      const captured = parsePreparationSourceReference(input);
+      const source = sources.get(captured.source.name);
+      if (
+        !source || source.kind !== captured.source.kind ||
+        source.path !== captured.source.path
+      ) fail("preparation_forbidden");
+      const request = {
+        source: captured.source.name,
+        recordId: captured.source.recordId,
+      };
+      const scope = await currentScope(request, context);
+      if (
+        scope.namespace !== captured.source.namespace ||
+        scope.audience !== captured.audience
+      ) fail("preparation_forbidden");
+      // Existence/type is checked independently of today's replaceable content
+      // field. Policy above must enforce the exact source's current visibility.
+      const rows = await context.tx.query<{ id: string }>(
+        `SELECT id FROM ${tables.nodes} WHERE id=$1 AND namespace=$2 AND type=$3`,
+        [request.recordId, scope.namespace, source.kind],
+      );
+      if (rows.rows.length !== 1) fail("content_missing");
+      await permitOriginal(captured, context, purpose);
+      const checked = await loadContent(
+        captured.content.map((item) => item.ref),
+        request,
+        scope,
+        context,
+        async (references) => {
+          if (canonical(references) !== canonical(captured.content)) {
+            fail("content_corrupted");
+          }
+          await permitOriginal(captured, context, purpose);
+        },
+      );
+      if (
+        canonical(checked.map(({ ref, version }) => ({ ref, version }))) !==
+          canonical(captured.content)
+      ) fail("content_corrupted");
+      const current = await currentScope(request, context);
+      if (
+        current.namespace !== scope.namespace ||
+        current.audience !== scope.audience
+      ) fail("preparation_forbidden");
+      await permitOriginal(captured, context, purpose);
+      context.signal.throwIfAborted();
+    },
+  };
 }

@@ -3,6 +3,7 @@ import {
   createSqlSession,
   type SqlExecutor,
   type SqlReadSnapshot,
+  type SqlSnapshotCleanup,
 } from "../events/session.ts";
 import {
   isCopilotzPersistenceError,
@@ -27,6 +28,7 @@ function generation(
     readGate?: Promise<void>;
     cleanupGate?: Promise<void>;
     entered?: () => void;
+    cleanupOutcome?: SqlSnapshotCleanup;
   } = {},
 ): OminipgDatabaseLike {
   const query: SqlExecutor["query"] = <
@@ -81,6 +83,7 @@ function generation(
         await Promise.allSettled([...pending]);
         await options.cleanupGate;
         events.push(`cleanup:${id}`);
+        if (options.cleanupOutcome) config?.onCleanup?.(options.cleanupOutcome);
         signal?.removeEventListener("abort", abort);
       }
     },
@@ -442,6 +445,175 @@ Deno.test("final caller signal preflight cannot retire generation after the last
     assertEquals(checks, 2);
   } finally {
     await closing;
+    await persistence.close();
+  }
+});
+
+Deno.test("managed native cleanup proof survives final observer-triggered generation close", async () => {
+  const persistence = await openCopilotzPersistence({});
+  const reports: SqlSnapshotCleanup[] = [];
+  let closing: Promise<void> | undefined;
+  try {
+    const error = await assertRejects(() =>
+      persistence.session.withReadSnapshot!(
+        () => Promise.resolve(42),
+        {
+          onCleanup(value) {
+            reports.push(value);
+            closing = persistence.close();
+          },
+        },
+      )
+    );
+    assertEquals(isCopilotzPersistenceError(error), true);
+    assertEquals(reports, ["confirmed"]);
+    await closing;
+  } finally {
+    await persistence.close();
+  }
+});
+
+Deno.test("missing backend cleanup observation stays unknown despite successful generic close", async () => {
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect: ({ generation: id }) => ({
+        ...generation(id, []),
+        close: () => Promise.reject(new Error("physical close unknown")),
+      }),
+    },
+  });
+  const reports: SqlSnapshotCleanup[] = [];
+  assertEquals(
+    await persistence.session.withReadSnapshot!(
+      () => Promise.resolve(42),
+      {
+        onCleanup(value) {
+          reports.push(value);
+        },
+      },
+    ),
+    42,
+  );
+  assertEquals(reports, ["unknown"]);
+  await persistence.close();
+  assertEquals(reports, ["unknown"]);
+});
+
+Deno.test("managed cleanup observation waits for old generation cleanup after retirement", async () => {
+  const entered = gate(), read = gate(), cleanup = gate();
+  const reports: SqlSnapshotCleanup[] = [];
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect: ({ generation: id }) =>
+        generation(
+          id,
+          [],
+          id === 1
+            ? {
+              entered: entered.resolve,
+              readGate: read.promise,
+              cleanupGate: cleanup.promise,
+              cleanupOutcome: "confirmed",
+            }
+            : {},
+        ),
+    },
+  });
+  let work: Promise<unknown> | undefined;
+  try {
+    work = persistence.session.withReadSnapshot!(
+      async (scope) => await scope.snapshot.query("held"),
+      {
+        onCleanup(value) {
+          reports.push(value);
+        },
+      },
+    );
+    const observed = work.catch((error) => error);
+    await entered.promise;
+    await assertRejects(() => persistence.database.query("fail"));
+    read.resolve();
+    await Promise.resolve();
+    assertEquals(reports, []);
+    cleanup.resolve();
+    assertEquals(isCopilotzPersistenceError(await observed), true);
+    assertEquals(reports, ["confirmed"]);
+  } finally {
+    read.resolve();
+    cleanup.resolve();
+    await work?.catch(() => {});
+    await persistence.close();
+  }
+});
+
+Deno.test("managed pre-invocation refusal confirms no owned snapshot resource", async () => {
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect() {
+        const { withReadSnapshot: _snapshot, ...ordinary } = generation(1, []);
+        return ordinary;
+      },
+    },
+  });
+  const reports: SqlSnapshotCleanup[] = [];
+  try {
+    await assertRejects(() =>
+      persistence.session.withReadSnapshot!(() => Promise.resolve(42), {
+        onCleanup(value) {
+          reports.push(value);
+        },
+      })
+    );
+    assertEquals(reports, ["confirmed"]);
+    await persistence.close();
+    await assertRejects(() =>
+      persistence.session.withReadSnapshot!(() => Promise.resolve(43), {
+        onCleanup(value) {
+          reports.push(value);
+        },
+      })
+    );
+    assertEquals(reports, ["confirmed", "confirmed"]);
+  } finally {
+    await persistence.close();
+  }
+});
+
+Deno.test("managed duplicate cleanup observations fail closed and observer failures preserve values", async () => {
+  const persistence = await openCopilotzPersistence({
+    database: {
+      connect() {
+        const base = generation(1, []);
+        return {
+          ...base,
+          async withReadSnapshot<T>(
+            operation: (scope: SqlReadSnapshot) => Promise<T>,
+            config?: Readonly<
+              { onCleanup?: (value: SqlSnapshotCleanup) => void }
+            >,
+          ) {
+            const value = await base.withReadSnapshot!(operation);
+            config?.onCleanup?.("confirmed");
+            config?.onCleanup?.("confirmed");
+            return value;
+          },
+        };
+      },
+    },
+  });
+  const reports: SqlSnapshotCleanup[] = [];
+  try {
+    assertEquals(
+      await persistence.session.withReadSnapshot!(() => Promise.resolve(42), {
+        onCleanup(value) {
+          reports.push(value);
+          throw new Error("observer failed");
+        },
+      }),
+      42,
+    );
+    assertEquals(reports, ["unknown"]);
+  } finally {
     await persistence.close();
   }
 });

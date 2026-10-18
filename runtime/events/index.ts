@@ -34,6 +34,7 @@ export type {
   SqlQueryResult,
   SqlReadSnapshot,
   SqlSession,
+  SqlSnapshotCleanup,
 } from "./session.ts";
 export type {
   SqlNotification,

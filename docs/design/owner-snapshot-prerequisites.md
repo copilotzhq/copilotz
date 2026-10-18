@@ -281,6 +281,36 @@ Earlier inventory setup, fixture typecheck and causal failures remain recorded.
 This is shared evaluator acceptance, not historical-read permission or
 registered snapshot activation.
 
+## Explicit cleanup outcome
+
+The backend now reports `confirmed` or `unknown` separately from a scoped
+callback's value/error. Confirmation means this invocation submitted no open or
+its exact close acknowledgement succeeded after raw drain. A temporary capacity
+refusal can therefore release its charge after confirmed cleanup; unconfirmed
+cleanup remains charged. Error classes, message text, callback entry and generic
+persistence close are not cleanup classifiers. The captured observer is notified
+once; observer failures cannot replace the operation result.
+
+Independent backend acceptance passes 157 Ominipg cases, 41 committed Copilotz
+cases plus five steps and 25 reviewer probes, including actual PostgreSQL,
+PGlite, Drizzle, lost replies and held rollback timeout. Static/hash checks and
+disposable database cleanup pass. An initial test wrongly treated a failed reset
+as unknown despite confirmed discard; the corrected distinction and an actual
+failed return are both covered.
+
+Managed forwarding records this observation independently of later cancellation
+or generation errors. Once it invokes the backend, missing or duplicate
+observations stay unknown; only a pre-invocation refusal can be confirmed
+locally. Notification occurs before the final generation witness. Independent
+managed acceptance passes 46 cases plus five steps and ten reviewer probes with
+actual PostgreSQL/PGlite, full static/hash checks and coordinator database
+export/drop/server stop. Missing or duplicate backend reports, capacity refusal
+followed by admission, delayed cleanup and observer reentrancy are covered.
+
+Consumers must await actual scope settlement as well as confirmation before
+releasing this resource charge. Confirmation never restores authority or grants
+replay. Owner resource lifecycle/routing remains the next activation gate.
+
 ## Performance boundary
 
 Snapshots are explicit, short selection scopes. Ordinary single reads do not

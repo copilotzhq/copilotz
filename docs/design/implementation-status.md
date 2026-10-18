@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 00:56 UTC.
+Updated: 18 October 2026, 01:23 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -191,6 +191,18 @@ their fixes. Historical grants, owner snapshot resource lifetime and
 worker/local activation are still next; performance benchmarks remain required
 before production acceptance.
 
+Snapshot cleanup now has an explicit per-invocation outcome, separate from the
+returned value/error. Only no-open or exact close acknowledgement confirms
+release; lost acknowledgement or missing/duplicate reports remain unknown. This
+lets an owner distinguish temporary capacity refusal from unproved cleanup
+without error-message classification or another resource registry. Backend
+acceptance passes 157 Ominipg, 41 committed Copilotz cases plus five steps and
+25 probes; Verify39085866437 is green for Ominipg423d1b23. Managed forwarding
+passes 46 cases plus five steps and ten probes, with static/hash/cleanup checks.
+Generic persistence close still supplies no physical-release proof. The owner
+resource manager is now being implemented; historical permission and actual
+worker/local invocation routing are not activated yet.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -244,6 +256,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Shared bounded Collection evaluator and private synchronous finalizer;
       final authorization preserves output-error precedence, with actual
       worker/local read compatibility and protected-source/budget checks
+- [x] Explicit backend snapshot cleanup outcome and generation-safe forwarding;
+      known release stays separate from cancellation/errors, with missing or
+      duplicate reporting fail-closed and no new wire operation
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

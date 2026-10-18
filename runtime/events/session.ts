@@ -21,6 +21,9 @@ export type SqlNotificationSubscription = Readonly<{
   close(): Promise<void>;
 }>;
 
+/** Explicit per-scope release fact. Missing observation is unknown. */
+export type SqlSnapshotCleanup = "confirmed" | "unknown";
+
 /** Long-lived backend resource scope. Its executors accept trusted compiled
  * SQL only; owner Collection APIs never expose arbitrary worker SQL. */
 export type SqlReadSnapshot =
@@ -45,7 +48,10 @@ export type SqlSession = SqlExecutor & {
   /** Optional operational snapshot/control capability. No plain-read fallback. */
   withReadSnapshot?<T>(
     operation: (scope: SqlReadSnapshot) => Promise<T>,
-    options?: Readonly<{ signal?: AbortSignal }>,
+    options?: Readonly<{
+      signal?: AbortSignal;
+      onCleanup?: (outcome: SqlSnapshotCleanup) => void;
+    }>,
   ): Promise<T>;
   /** Optional PostgreSQL notification seam; absence enables bounded fallback. */
   listen?(

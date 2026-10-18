@@ -28,8 +28,7 @@
     "resources/tools/list-knowledge-spaces/index.ts",
     "resources/tools/search-memory/index.ts",
     "resources/tools/inspect-memory/index.ts",
-    "actions/produce-checkpoint/index.ts",
-    "actions/coordinate-checkpoint/index.ts"
+    "actions/produce-checkpoint/index.ts"
   ],
   "plugins": [
     {

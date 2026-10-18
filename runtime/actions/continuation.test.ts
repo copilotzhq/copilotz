@@ -497,3 +497,151 @@ Deno.test("a detached Action's public child carries observation keys without hol
     await db.close();
   }
 });
+
+for (const cancel of ["none", "waiter", "observed"] as const) {
+  Deno.test(`observed operation: ${cancel} cancellation preserves shared work and resumes each live waiter once`, async () => {
+    const db = await createTestDatabase({
+      url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+    });
+    const schema = `continuation_observe_${
+      crypto.randomUUID().replaceAll("-", "")
+    }`;
+    const entered = gate();
+    const release = gate();
+    const outcomes: { waiter: string; outcome: OperationOutcome }[] = [];
+    let executions = 0;
+    let producerId = "";
+    const work = defineAction({
+      id: "test.observe",
+      async execute(
+        input: { waiter: string },
+        context: ActionContext,
+      ) {
+        producerId = await context.operations.start({
+          action: "producer",
+          input: {},
+          operationKey: "shared-producer",
+        });
+        return context.awaitOperation({
+          operationId: producerId,
+          handoff: { waiter: input.waiter },
+        });
+      },
+      resume(handoff, outcome) {
+        const waiter = (handoff as { waiter: string }).waiter;
+        outcomes.push({ waiter, outcome });
+        return { waiter, status: outcome.status };
+      },
+    });
+    const app = await createCopilotzApplication({
+      database: db,
+      namespace: "test",
+      databaseSchema: schema,
+      plugins: [definePlugin({
+        id: "test.observe",
+        version: "1.0.0",
+        actions: {
+          work,
+          producer: defineAction({
+            id: "test.producer",
+            async execute(_input: unknown, context: ActionContext) {
+              executions++;
+              entered.open();
+              await release.wait;
+              context.signal.throwIfAborted();
+            },
+          }),
+        },
+        processors: {
+          waiter: defineProcessor({
+            id: "test.waiter",
+            on: [{ eventType: "test.waiter" }],
+            async handle(event, context: ProcessorContext) {
+              await call(context, "work", event.data);
+            },
+          }),
+        },
+      })],
+    });
+    try {
+      const waiters = [];
+      for (let i = 0; i < 3; i++) {
+        const sent = await app.send({
+          type: "test.waiter",
+          payload: { waiter: String(i) },
+        });
+        const done = sent.done.then(() => "completed", () => "cancelled");
+        await sent.outputs.cancel();
+        waiters.push({ ...sent, done });
+      }
+      await entered.wait;
+      const store = createEventStore({
+        session: db,
+        schema,
+      });
+      await eventually(async () =>
+        (await db.query(
+          `SELECT * FROM ${store.tables.open_actions} WHERE state = 'awaiting'`,
+        )).rows.length === 3
+      );
+      assertEquals(
+        (await app.operations.get("test", producerId))?.parent,
+        undefined,
+      );
+      if (cancel === "waiter") {
+        await app.cancelOperation({ operationId: waiters[0].eventId });
+        assertEquals(await waiters[0].done, "cancelled");
+        assertEquals(
+          (await app.operations.get("test", producerId))
+            ?.cancellationRequestedAt,
+          undefined,
+        );
+        for (const waiter of waiters.slice(1)) {
+          assertEquals(
+            (await app.operations.get("test", waiter.eventId))
+              ?.cancellationRequestedAt,
+            undefined,
+          );
+        }
+      }
+      if (cancel === "observed") {
+        await app.cancelOperation({ operationId: producerId });
+      }
+      release.open();
+
+      assertEquals(
+        await Promise.all(waiters.map((waiter) => waiter.done)),
+        cancel === "waiter"
+          ? ["cancelled", "completed", "completed"]
+          : ["completed", "completed", "completed"],
+      );
+      await app.maintenance();
+      assertEquals(executions, 1);
+      assertEquals(
+        (await app.operations.get("test", producerId))?.state,
+        cancel === "observed" ? "cancelled" : "completed",
+      );
+      assertEquals(
+        outcomes.sort((a, b) => a.waiter.localeCompare(b.waiter)),
+        (cancel === "waiter" ? ["1", "2"] : ["0", "1", "2"]).map((waiter) => ({
+          waiter,
+          outcome: {
+            operationId: producerId,
+            status: cancel === "observed" ? "cancelled" : "completed",
+          },
+        })),
+      );
+      assertEquals(
+        (await db.query(
+          `SELECT * FROM ${store.tables.events} WHERE type = 'copilotz.action.resume'`,
+        )).rows.length,
+        cancel === "waiter" ? 2 : 3,
+      );
+    } finally {
+      release.open();
+      await app.close();
+      await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await db.close();
+    }
+  });
+}

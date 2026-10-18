@@ -102,9 +102,9 @@ async function fixture(url: string) {
       progressIndex: 0,
       deduplicationId: `${common.actionRunId}:action:awaiting`,
     });
-  const prestart = async () => {
+  const prestart = async (linked = false) => {
     const bodyId = `event-body:test:${childId}:start`;
-    return await store.commitMutation({
+    const result = await store.commitMutation({
       eventId: childId,
       draft: {
         namespace: "test",
@@ -122,7 +122,70 @@ async function fixture(url: string) {
       body: { id: bodyId, json: request },
       consumers: [],
     });
+    if (linked) {
+      await db.query(
+        `UPDATE ${createOperationCatalogTables(schema).operations}
+      SET parent_operation_id = $2, parent_action_run_id = $3 WHERE operation_id = $1`,
+        [childId, root.event.id, common.actionRunId],
+      );
+    }
+    return result;
   };
+  async function waiter(operationId?: string) {
+    const root = await store.append({
+      namespace: "test",
+      type: "test.waiter",
+      payload: {},
+      ...(operationId ? { settlementScopeId: operationId } : {}),
+    }, ["test.waiter"]);
+    const delivery = root.deliveries[0];
+    await store.claimDelivery({
+      id: delivery.id,
+      owner: "current",
+      leaseMs: 60000,
+    });
+    const lifecycle = createActionLifecycleEmitter({
+      namespace: "test",
+      append: createActionLifecycleAppender({
+        store,
+        coordinator,
+        writer: {
+          kind: "delivery",
+          deliveryId: delivery.id,
+          leaseOwner: "current",
+        },
+      }),
+    });
+    const common = {
+      actionId: "test.wait",
+      actionRunId: `run:${root.event.id}`,
+      input: {},
+      metadata: {},
+      settlementScopeId: delivery.settlementScopeId,
+      correlationId: root.event.id,
+    };
+    await lifecycle.emit({
+      ...common,
+      status: "invoked",
+      deduplicationId: `${common.actionRunId}:action:invoked`,
+    });
+    return {
+      root,
+      delivery,
+      common,
+      register: (target: string, linked = false) =>
+        lifecycle.emit({
+          ...common,
+          status: "awaiting",
+          handoff: { waiter: common.actionRunId },
+          ...(linked
+            ? { start: { ...request, operationId: target } }
+            : { operationId: target }),
+          progressIndex: 0,
+          deduplicationId: `${common.actionRunId}:action:awaiting`,
+        }),
+    };
+  }
   return {
     db,
     schema,
@@ -133,6 +196,7 @@ async function fixture(url: string) {
     common,
     childId,
     register,
+    waiter,
     prestart,
     async close() {
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
@@ -192,7 +256,7 @@ for (const backend of ["memory", "postgres"] as const) {
     );
   });
   test("a child settled before registration schedules immediately", async (f) => {
-    await f.prestart();
+    await f.prestart(true);
     await f.r.catalog.reconcile({ operationId: f.childId });
     await f.register();
     const child = await f.r.catalog.get("test", f.childId);
@@ -261,6 +325,109 @@ for (const backend of ["memory", "postgres"] as const) {
       await f.store.getEventByDeduplicationId(
         "test",
         `${f.common.actionRunId}:action:awaiting`,
+      ),
+      null,
+    );
+  });
+  test("one observed settlement schedules every waiter once, including after restart", async (f) => {
+    const waiters = [];
+    // Exceeds the maintenance batch size: one settlement must schedule them all.
+    for (let i = 0; i < 101; i++) {
+      const waiter = await f.waiter();
+      await waiter.register(f.root.event.id);
+      await f.store.succeedDelivery(waiter.delivery.id, "current");
+      waiters.push(waiter);
+    }
+    assertEquals(
+      (await f.r.catalog.get("test", f.root.event.id))?.parent,
+      undefined,
+    );
+    await f.db.query(
+      `DELETE FROM ${f.store.tables.open_actions} WHERE action_run_id = $1`,
+      [f.common.actionRunId],
+    );
+    await f.store.succeedDelivery(f.delivery.id, "current");
+    const fresh = runtime(f.db, f.schema);
+    await fresh.catalog.reconcile({ operationId: f.root.event.id });
+    for (let i = 0; i < 2; i++) {
+      await (await scheduleResumptions(fresh, {
+        namespace: "test",
+        operationId: f.root.event.id,
+      }))();
+    }
+    assertEquals(
+      (await fresh.store.listDeliveries({
+        consumerId: ACTION_CONTINUATION_CONSUMER,
+        limit: 200,
+      })).length,
+      101,
+    );
+    for (const waiter of waiters) {
+      const receipt = await fresh.store.getEventByDeduplicationId(
+        "test",
+        `${waiter.common.actionRunId}:resume`,
+      );
+      assertEquals(
+        receipt?.deduplicationId,
+        `${waiter.common.actionRunId}:resume`,
+      );
+    }
+  });
+  test("observing a settled operation resumes immediately without acquiring ownership", async (f) => {
+    await f.prestart();
+    await f.r.catalog.reconcile({ operationId: f.childId });
+    const waiter = await f.waiter();
+    await waiter.register(f.childId);
+    assertEquals((await f.r.catalog.get("test", f.childId))?.parent, undefined);
+    assertEquals(
+      (await f.store.getEventByDeduplicationId(
+        "test",
+        `${waiter.common.actionRunId}:resume`,
+      ))?.type,
+      "copilotz.action.resume",
+    );
+  });
+  test("unknown observed identity and indirect wait cycles roll back registration", async (f) => {
+    const a = await f.waiter();
+    const b = await f.waiter();
+    const c = await f.waiter();
+    await assertRejects(
+      () => a.register("unknown-operation"),
+      TypeError,
+      "Unknown awaited operation",
+    );
+    await a.register(b.root.event.id);
+    await b.register(c.root.event.id);
+    await assertRejects(
+      () => c.register(a.root.event.id),
+      TypeError,
+      "wait cycle",
+    );
+    assertEquals(
+      await f.store.getEventByDeduplicationId(
+        "test",
+        `${c.common.actionRunId}:action:awaiting`,
+      ),
+      null,
+    );
+  });
+  test("stale observing attempt cannot register and linked children cannot be shared", async (f) => {
+    const waiter = await f.waiter(f.root.event.id);
+    await f.register();
+    await assertRejects(
+      () => waiter.register(f.childId, true),
+      TypeError,
+      "cannot be shared",
+    );
+    await f.db.query(
+      `UPDATE ${f.store.tables.event_deliveries} SET lease_owner = 'successor' WHERE id = $1`,
+      [waiter.delivery.id],
+    );
+    await assertRejects(() => waiter.register(f.childId), ActionOwnershipLost);
+    assertEquals(
+      await f.store.getEventByDeduplicationId(
+        "test",
+        `${waiter.common.actionRunId}:action:awaiting`,
       ),
       null,
     );

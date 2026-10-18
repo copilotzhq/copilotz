@@ -105,7 +105,11 @@ function strictJsonObject(value: unknown): value is Record<string, unknown> {
     strictJsonValue(value, new WeakSet<object>());
 }
 
-function statusKeys(status: ActionStatus, nested: boolean): readonly string[] {
+function statusKeys(
+  status: ActionStatus,
+  nested: boolean,
+  observing: boolean,
+): readonly string[] {
   const base = nested
     ? [...BASE_DATA_KEYS, "parentActionRunId"]
     : BASE_DATA_KEYS;
@@ -113,7 +117,12 @@ function statusKeys(status: ActionStatus, nested: boolean): readonly string[] {
     case "invoked":
       return base;
     case "awaiting":
-      return [...base, "handoff", "start", "progressIndex"];
+      return [
+        ...base,
+        "handoff",
+        observing ? "operationId" : "start",
+        "progressIndex",
+      ];
     case "progress":
       return [...base, "progress", "progressIndex"];
     case "completed":
@@ -200,7 +209,12 @@ export function parseActionLifecycleEvent(
     (!nonEmptyText(lifecycle.parentActionRunId) ||
       lifecycle.parentActionRunId !== lifecycle.parentActionRunId.trim())
   ) return null;
-  if (!hasExactKeys(lifecycle, statusKeys(actionStatus, hasParent))) {
+  if (
+    !hasExactKeys(
+      lifecycle,
+      statusKeys(actionStatus, hasParent, "operationId" in lifecycle),
+    )
+  ) {
     return null;
   }
   if (!strictJsonObject(lifecycle.metadata)) return null;

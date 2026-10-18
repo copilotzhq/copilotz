@@ -533,7 +533,6 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
   assertEquals(plugin.plugins, [corePlugin]);
   assertEquals(Object.keys(plugin.actions).sort(), [
     "consolidate_memory",
-    "coordinateCheckpoint",
     "inspect_memory",
     "list_knowledge_spaces",
     "produceCheckpoint",
@@ -2222,7 +2221,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     run.setMemoryConfig({ triggerEstimatedTokens: 1 });
     await createHumanMessage(run, {
       id: "message:scheduled-job-trigger",
-      text: "Continue the scheduled Compass maintenance.",
+      text: "Continue the scheduled memory maintenance.",
       recipientIds: ["agent-north"],
     });
 

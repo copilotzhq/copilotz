@@ -102,6 +102,13 @@ export type RuntimeContent = Readonly<{
   open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
 }>;
 
+/** Admit independent public work once per namespace-scoped operation key. */
+export type RuntimeOperations = Readonly<{
+  start(
+    input: Omit<OperationStart, "operationId"> & { operationKey: string },
+  ): Promise<string>;
+}>;
+
 export type RuntimeStreams = ContentStreamRuntime;
 
 export type RuntimeIdentity = Readonly<{
@@ -180,6 +187,7 @@ export interface RuntimeContext<
   readonly vectors: VectorReader;
   readonly content: RuntimeContent;
   readonly streams: RuntimeStreams;
+  readonly operations: RuntimeOperations;
   readonly signal: AbortSignal;
   now(): Date;
   transaction<T>(
@@ -360,12 +368,11 @@ export type ActionInvokedData<I = unknown> =
   & Readonly<{ status: "invoked" }>;
 
 export type ActionAwaitingData<I = unknown> =
+  & AwaitOperationInput
   & ActionEventBase<I>
   & Readonly<
     {
       status: "awaiting";
-      handoff: unknown;
-      start: OperationStart;
       progressIndex: number;
     }
   >;

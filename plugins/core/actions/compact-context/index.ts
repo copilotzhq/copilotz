@@ -200,7 +200,9 @@ export const compactContextAction: ActionDefinition<
           );
           if (state.status === "pending") {
             return context.awaitOperation({
-              start: reservation.start,
+              ...(reservation.start
+                ? { start: reservation.start }
+                : { operationId: reservation.operationId }),
               handoff: {
                 schema: "copilotz.core.context-compaction-wait.v1",
                 resourceId: resource.id,

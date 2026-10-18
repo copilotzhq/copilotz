@@ -1,4 +1,4 @@
-import type { OperationStart } from "./continuation.ts";
+import { awaitOperation } from "./continuation.ts";
 import type {
   ActionAwaitingData,
   ActionEventData,
@@ -72,12 +72,16 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
     case "awaiting":
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 0
-      ) throw new TypeError("Deferred progress index must be non-negative.");
+      ) throw new TypeError("Awaiting progress index must be non-negative.");
       return {
         ...base,
         status: "awaiting",
-        handoff: durableActionValue(input.handoff),
-        start: durableActionValue(input.start) as OperationStart,
+        ...awaitOperation({
+          handoff: input.handoff,
+          ...(input.start
+            ? { start: input.start }
+            : { operationId: input.operationId }),
+        }),
         progressIndex: input.progressIndex,
       };
     case "progress": {

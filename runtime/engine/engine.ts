@@ -1,3 +1,5 @@
+import { deriveWorkflowId } from "../events/workflow-id.ts";
+import { admitActionOperation } from "../actions/continuation-work.ts";
 import { scheduleResumptions } from "../actions/continuation-work.ts";
 import { executeActionContinuation } from "../actions/resume.ts";
 import {
@@ -59,6 +61,7 @@ import type {
 } from "./types.ts";
 import {
   createOperationCatalog,
+  createOperationCatalogTables,
   provisionOperationCatalog,
   validateOperationCatalog,
 } from "../streams/catalog.ts";
@@ -263,6 +266,84 @@ export async function createCopilotzEngine(
       throw new Error("Copilotz action lifecycle is not initialized.");
     }
     return createProcessorContext({
+      operations: {
+        async start(input) {
+          base.signal.throwIfAborted();
+          if (
+            typeof input.operationKey !== "string" ||
+            !input.operationKey.trim() ||
+            input.operationKey !== input.operationKey.trim()
+          ) {
+            throw new TypeError(
+              "Operation key must be non-empty text without surrounding whitespace.",
+            );
+          }
+          const operationId = await deriveWorkflowId(
+            "operation",
+            base.event.namespace,
+            input.operationKey,
+          );
+          const committed = await scopedStore.session.transaction(
+            async (transaction) => {
+              await transaction.query(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                [base.databaseSchema, `continuation:${base.event.namespace}`],
+              );
+              if (base.settlementScopeId) {
+                const source = await transaction.query(
+                  `SELECT operation_id
+                  FROM ${
+                    createOperationCatalogTables(base.databaseSchema).operations
+                  }
+                  WHERE namespace = $1 AND operation_id = $2
+                    AND state IN ('accepted','running') AND cancellation_requested_at IS NULL FOR UPDATE`,
+                  [base.event.namespace, base.settlementScopeId],
+                );
+                if (!source.rows.length) {
+                  throw new Error(
+                    "Operation admission lost its active source operation.",
+                  );
+                }
+              }
+              if (base.source?.kind === "delivery") {
+                const lease = await transaction.query(
+                  `SELECT id FROM ${scopedStore.tables.event_deliveries}
+                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND lease_expires_at > NOW() FOR UPDATE`,
+                  [base.source.id, base.executionIncarnationId],
+                );
+                if (!lease.rows.length) {
+                  throw new Error(
+                    "Operation admission lost its delivery lease.",
+                  );
+                }
+              }
+              return await admitActionOperation(
+                {
+                  store: scopedStore,
+                  coordinator: scopedCoordinator,
+                  actions: options.registry.actions,
+                  protectedValues: scopedCapabilities.protectedValues,
+                },
+                transaction,
+                {
+                  namespace: base.event.namespace,
+                  operationId,
+                  start: input,
+                  correlationId: base.event.correlationId,
+                  causationId: base.event.durable
+                    ? base.event.id
+                    : base.event.causationId,
+                  metadata: {
+                    observationKeys: base.event.metadata.observationKeys ?? [],
+                  },
+                },
+              );
+            },
+          );
+          if (committed) await scopedCoordinator.flushCommitted(committed);
+          return operationId;
+        },
+      },
       base,
       actionResumption,
       registry: options.registry,

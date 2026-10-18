@@ -1,3 +1,4 @@
+import type { OperationStart } from "./continuation.ts";
 import {
   prepareProtectedEventBody,
   samePreparedProtectedEventBody,
@@ -33,7 +34,93 @@ type Runtime = Readonly<
   }
 >;
 
-/** Registers the child under the same transaction as the awaiting receipt. */
+/** One admission path for standalone producers and linked children. */
+export async function admitActionOperation(
+  runtime: Runtime,
+  tx: SqlExecutor,
+  input: Readonly<
+    {
+      namespace: string;
+      operationId: string;
+      start: OperationStart;
+      correlationId?: string;
+      causationId?: string;
+      metadata: Readonly<Record<string, unknown>>;
+    }
+  >,
+): Promise<Awaited<ReturnType<EventStore["commitMutation"]>> | undefined> {
+  const { store } = runtime;
+  const { namespace, operationId, start } = input;
+  const child = runtime.actions?.[start.action];
+  if (runtime.actions && !child) {
+    throw new TypeError(`Unknown Action '${start.action}'.`);
+  }
+  const prepared = await prepareProtectedEventBody({
+    namespace,
+    ownerId: `${operationId}:start`,
+    data: {
+      action: start.action,
+      input: start.input,
+      metadata: start.metadata ?? {},
+    },
+    schema: child && actionInputHasSecrets(child)
+      ? { "x-copilotz-secret": true }
+      : {},
+    protectedValues: runtime.protectedValues,
+  });
+  const existing = await tx.query<{ payload: unknown }>(
+    `SELECT event.payload FROM ${
+      createOperationCatalogTables(store.databaseSchema).operations
+    } AS operation
+     JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
+     WHERE operation.namespace = $1 AND operation.operation_id = $2`,
+    [namespace, operationId],
+  );
+  if (existing.rows[0]) {
+    const body = await readEventBody(
+      { transaction: tx, tables: store.tables },
+      namespace,
+      eventDataRef(existing.rows[0].payload),
+    );
+    if (!samePreparedProtectedEventBody(body, prepared.body)) {
+      throw new TypeError("Operation identity has a different invocation.");
+    }
+    return;
+  }
+  const bodyId = `event-body:${namespace}:${operationId}:start`;
+  return await store.commitMutation({
+    eventId: operationId,
+    draft: {
+      namespace,
+      type: ACTION_CHILD_EVENT,
+      correlationId: input.correlationId,
+      causationId: input.causationId,
+      settlementScopeId: operationId,
+      deduplicationId: `${operationId}:start`,
+      metadata: input.metadata,
+      payload: {
+        dataRef: {
+          eventBodyId: bodyId,
+          schemaVersion: 1,
+          mediaType: "application/json",
+        },
+      },
+    },
+    body: { id: bodyId, json: prepared.body },
+    mutate: async (context) => {
+      for (const value of prepared.prepared) {
+        await runtime.protectedValues!.adopt(context, namespace, value);
+      }
+    },
+    consumers: [{
+      consumerId: ACTION_CONTINUATION_CONSUMER,
+      settlement: "inherit",
+    }],
+    transaction: tx,
+  });
+}
+
+/** Registers the wait and optional linked child with the awaiting receipt. */
 export async function startAwaitedOperation(
   runtime: Runtime,
   tx: SqlExecutor,
@@ -54,9 +141,10 @@ export async function startAwaitedOperation(
     createOperationCatalogTables(store.databaseSchema).operations;
   const namespace = draft.namespace;
   const parentId = draft.settlementScopeId;
-  const childId = data.start.operationId ?? `${data.actionRunId}:child`;
-  // Lock ancestry consistently with admission/cancellation; no child can point
-  // back to this operation or to one of its ancestors.
+  const childId = data.operationId ?? data.start?.operationId ??
+    `${data.actionRunId}:child`;
+  // Follow both ownership and wait edges. A target that transitively waits
+  // for this operation is reachable in this reverse graph, as is any ancestor.
   const ancestors = await tx.query<{ operation_id: string }>(
     `WITH RECURSIVE links AS (
       SELECT operation_id AS child, parent_operation_id AS parent
@@ -75,7 +163,7 @@ export async function startAwaitedOperation(
     ancestors.rows.some((row) => row.operation_id === childId)
   ) {
     throw new TypeError(
-      "An Action cannot await its own operation or an ancestor.",
+      "An Action cannot await its own operation, an ancestor, or create a wait cycle.",
     );
   }
   const parent = await tx.query<
@@ -99,81 +187,49 @@ export async function startAwaitedOperation(
     [namespace, data.actionRunId, writer.deliveryId, writer.leaseOwner],
   );
   if (!authority.rows.length) throw new ActionOwnershipLost(data.actionRunId);
-  const request = {
-    action: data.start.action,
-    input: data.start.input,
-    metadata: data.start.metadata ?? {},
-  };
-  const child = runtime.actions?.[data.start.action];
-  if (runtime.actions && !child) {
-    throw new TypeError(`Unknown child Action '${data.start.action}'.`);
-  }
-  const prepared = await prepareProtectedEventBody({
-    namespace,
-    ownerId: `${childId}:start`,
-    data: request,
-    schema: child && actionInputHasSecrets(child)
-      ? { "x-copilotz-secret": true }
-      : {},
-    protectedValues: runtime.protectedValues,
-  });
-  const existing = await tx.query<{ payload: unknown }>(
-    `SELECT event.payload FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
-     WHERE operation.namespace = $1 AND operation.operation_id = $2`,
+  let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;
+  const existing = await tx.query<
+    {
+      payload: unknown;
+      parent_operation_id: string | null;
+      parent_action_run_id: string | null;
+    }
+  >(
+    `SELECT event.payload, operation.parent_operation_id, operation.parent_action_run_id
+     FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
+     WHERE operation.namespace = $1 AND operation.operation_id = $2 FOR UPDATE OF operation`,
     [namespace, childId],
   );
-  let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;
-  if (existing.rows[0]) {
-    const body = await readEventBody(
-      { transaction: tx, tables: store.tables },
-      namespace,
-      eventDataRef(existing.rows[0].payload),
-    );
-    if (!samePreparedProtectedEventBody(body, prepared.body)) {
-      throw new TypeError(
-        "Awaited operation identity has a different invocation.",
-      );
+  if (!data.start) {
+    if (!existing.rows.length) {
+      throw new TypeError(`Unknown awaited operation '${childId}'.`);
     }
   } else {
-    const bodyId = `event-body:${namespace}:${childId}:start`;
-    committed = await store.commitMutation({
-      eventId: childId,
-      draft: {
-        namespace,
-        type: ACTION_CHILD_EVENT,
-        correlationId: draft.correlationId,
-        causationId: draft.causationId,
-        settlementScopeId: childId,
-        deduplicationId: `${childId}:start`,
-        metadata: {
-          ...parent.rows[0].metadata,
-          observationKeys: parent.rows[0].observation_keys,
-          parent: { operationId: parentId, actionRunId: data.actionRunId },
-        },
-        payload: {
-          dataRef: {
-            eventBodyId: bodyId,
-            schemaVersion: 1,
-            mediaType: "application/json",
-          },
-        },
+    const owned = existing.rows[0];
+    if (
+      owned &&
+      (owned.parent_operation_id !== parentId ||
+        owned.parent_action_run_id !== data.actionRunId)
+    ) {
+      throw new TypeError(
+        "A linked child cannot be shared between Action awaits.",
+      );
+    }
+    committed = await admitActionOperation(runtime, tx, {
+      namespace,
+      operationId: childId,
+      start: data.start,
+      correlationId: draft.correlationId,
+      causationId: draft.causationId,
+      metadata: {
+        ...parent.rows[0].metadata,
+        observationKeys: parent.rows[0].observation_keys,
+        parent: { operationId: parentId, actionRunId: data.actionRunId },
       },
-      body: { id: bodyId, json: prepared.body },
-      mutate: async (context) => {
-        for (const value of prepared.prepared) {
-          await runtime.protectedValues!.adopt(context, namespace, value);
-        }
-      },
-      consumers: [{
-        consumerId: ACTION_CONTINUATION_CONSUMER,
-        settlement: "inherit",
-      }],
-      transaction: tx,
     });
-  }
-  const catalogTables = createOperationCatalogTables(store.databaseSchema);
-  await tx.query(
-    `WITH linked AS (
+    const catalogTables = createOperationCatalogTables(store.databaseSchema);
+    await tx.query(
+      `WITH linked AS (
     UPDATE ${operations} SET parent_operation_id = COALESCE(parent_operation_id, $3),
       parent_action_run_id = COALESCE(parent_action_run_id, $4),
       observation_keys = ARRAY(SELECT DISTINCT key FROM unnest(observation_keys || $5::text[]) AS key ORDER BY key),
@@ -187,14 +243,15 @@ export async function startAwaitedOperation(
   ) INSERT INTO ${catalogTables.selectionOperations} (namespace, selection_key, operation_id, change_ordinal)
     SELECT namespace, selection_key, $2, change_ordinal FROM heads
     ON CONFLICT (namespace, selection_key, operation_id) DO UPDATE SET change_ordinal = EXCLUDED.change_ordinal`,
-    [
-      namespace,
-      childId,
-      parentId,
-      data.actionRunId,
-      parent.rows[0].observation_keys,
-    ],
-  );
+      [
+        namespace,
+        childId,
+        parentId,
+        data.actionRunId,
+        parent.rows[0].observation_keys,
+      ],
+    );
+  }
   await tx.query(
     `UPDATE ${store.tables.open_actions} SET child_operation_id = $3 WHERE namespace = $1 AND action_run_id = $2`,
     [namespace, data.actionRunId, childId],
@@ -252,7 +309,11 @@ export async function scheduleResumptions(
       WHERE action.state = 'awaiting' AND action.owner_delivery_id IS NULL AND child.state IN ('completed','failed','cancelled')
         AND ($1::text IS NULL OR action.namespace = $1) AND ($2::text IS NULL OR child.operation_id = $2)
       ORDER BY action.namespace, action.action_run_id LIMIT $3 FOR UPDATE OF action`,
-      [input.namespace ?? null, input.operationId ?? null, input.limit ?? 100],
+      [
+        input.namespace ?? null,
+        input.operationId ?? null,
+        input.limit ?? (input.operationId ? null : 100),
+      ],
     );
     for (const row of waiters.rows) {
       const key = `${row.action_run_id}:resume`;

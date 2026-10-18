@@ -49,8 +49,8 @@ export type CompactReservation =
     status: "pending";
     checkpointId: string;
     /** The checkpoint producer is an independently settling operation. */
-    start: import("@copilotz/copilotz/actions").OperationStart;
-  }>;
+  }>
+    & import("@copilotz/copilotz/actions").AwaitOperationTarget;
 
 export type ContextSourceRef =
   | Readonly<{ type: "message"; id: string }>

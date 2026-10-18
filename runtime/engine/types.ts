@@ -323,6 +323,7 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  operations: import("../actions/types.ts").RuntimeOperations;
   base: EngineContextSeed;
   registry: PluginRegistry;
   assets: DatabaseAssetRepository;

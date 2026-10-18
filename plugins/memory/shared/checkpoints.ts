@@ -6,15 +6,16 @@ import { optionalText, record } from "./input.ts";
 import type { ConversationThread } from "@copilotz/copilotz/core";
 import { branchCertificate, certifiedHistoryBoundary } from "./source.ts";
 
-export function memoryCheckpointOperation(
-  context: Pick<MemoryProcessorContext, "namespace">,
+/** Admit the shared producer once; foreground continuations only observe it. */
+export async function memoryCheckpointOperation(
+  context: Pick<MemoryProcessorContext, "operations">,
   checkpointId: string,
-) {
-  return {
+): Promise<string> {
+  return await context.operations.start({
     action: "produceCheckpoint",
     input: { checkpointId },
-    operationId: `memory:${context.namespace}:${checkpointId}:producer`,
-  } as const;
+    operationKey: `memory:${checkpointId}:producer`,
+  });
 }
 
 /** Capture the allocation head before preparing source; on-demand writes never trim history. */

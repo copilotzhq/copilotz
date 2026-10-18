@@ -147,7 +147,7 @@ export function createActionLifecycleAppender(
         namespace: draft.namespace,
         data,
         action,
-        awaitedAction: data.status === "awaiting"
+        awaitedAction: data.status === "awaiting" && data.start
           ? options.actions?.[data.start.action]
           : undefined,
         protectedValues: options.protectedValues,

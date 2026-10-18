@@ -79,6 +79,13 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     },
   } as unknown as CollectionRuntime;
   const context = createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace: "tenant-actions",
     databaseSchema: "copilotz_action_host",
     plugins,
@@ -227,6 +234,13 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
     throw new Error("Content is not configured.");
   };
   const context = createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace: "tenant-streams",
     databaseSchema: "copilotz_action_streams",
     plugins,

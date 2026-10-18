@@ -105,7 +105,10 @@ export const memoryContextResource:
           return {
             status: "pending",
             checkpointId: checkpoint.id,
-            start: memoryCheckpointOperation(context, checkpoint.id),
+            operationId: await memoryCheckpointOperation(
+              context,
+              checkpoint.id,
+            ),
           };
         }
         if (checkpoint.status !== "ready") continue;

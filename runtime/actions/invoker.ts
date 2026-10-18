@@ -687,19 +687,25 @@ function actionCaller(
         }
         assertMetadataIsSecretFree({
           handoff: output.handoff,
-          start: {
-            ...output.start,
-            input: splitSecretActionValue(
-              actions[output.start.action]?.inputSchema,
-              output.start.input,
-            ).publicValue,
-          },
+          ...(output.start
+            ? {
+              start: {
+                ...output.start,
+                input: splitSecretActionValue(
+                  actions[output.start.action]?.inputSchema,
+                  output.start.input,
+                ).publicValue,
+              },
+            }
+            : { operationId: output.operationId }),
         }, inputSecrets);
         await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "awaiting",
           handoff: output.handoff,
-          start: output.start,
+          ...(output.start
+            ? { start: output.start }
+            : { operationId: output.operationId }),
           progressIndex,
           deduplicationId: `${frame.actionRunId}:action:awaiting`,
         });

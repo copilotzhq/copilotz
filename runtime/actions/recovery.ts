@@ -48,7 +48,7 @@ export async function cancelScopeActions(
   const operations =
     createOperationCatalogTables(options.store.databaseSchema).operations;
   const children = await transaction.query<{ operation_id: string }>(
-    `SELECT operation_id FROM ${operations} WHERE namespace = $1 AND (parent_operation_id = $2 OR operation_id IN (SELECT child_operation_id FROM ${options.store.tables.open_actions} WHERE namespace = $1 AND scope_id = $2))
+    `SELECT operation_id FROM ${operations} WHERE namespace = $1 AND parent_operation_id = $2
       AND state IN ('accepted','running') ORDER BY operation_id FOR UPDATE`,
     [scope.namespace, scope.operationId],
   );

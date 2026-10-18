@@ -16,9 +16,15 @@ export type OperationStart = Readonly<{
   operationId?: string;
   metadata?: Readonly<Record<string, unknown>>;
 }>;
-export type AwaitOperationInput = Readonly<
-  { start: OperationStart; handoff: unknown }
+export type AwaitOperationTarget = Readonly<
+  (
+    | { start: OperationStart; operationId?: never }
+    | { operationId: string; start?: never }
+  )
 >;
+export type AwaitOperationInput =
+  & AwaitOperationTarget
+  & Readonly<{ handoff: unknown }>;
 declare const continuationBrand: unique symbol;
 export type ActionContinuation =
   & AwaitOperationInput
@@ -29,23 +35,30 @@ export type AwaitingAction = Readonly<
 const continuations = new WeakSet<object>();
 export function awaitOperation(input: AwaitOperationInput): ActionContinuation {
   if (
-    !input?.start || typeof input.start.action !== "string" ||
-    !input.start.action.trim()
+    !input || (input.start !== undefined) === (input.operationId !== undefined)
+  ) {
+    throw new TypeError("Await exactly one started or existing operation.");
+  }
+  if (
+    input.start !== undefined &&
+    (!input.start || typeof input.start.action !== "string" ||
+      !input.start.action.trim())
   ) {
     throw new TypeError("An awaited operation requires an Action invocation.");
   }
   assertJsonValue(input.handoff);
+  const operationId = input.start !== undefined
+    ? input.start?.operationId
+    : input.operationId;
   if (
-    input.start.operationId !== undefined &&
-    (typeof input.start.operationId !== "string" ||
-      !input.start.operationId.trim() ||
-      input.start.operationId !== input.start.operationId.trim())
+    operationId !== undefined && (typeof operationId !== "string" ||
+      !operationId.trim() || operationId !== operationId.trim())
   ) {
     throw new TypeError(
       "An awaited operation identity must be non-empty text without surrounding whitespace.",
     );
   }
-  if (input.start.metadata !== undefined) {
+  if (input.start?.metadata !== undefined) {
     durableActionMetadata(input.start.metadata);
   }
   const value = durableActionValue(input) as ActionContinuation;

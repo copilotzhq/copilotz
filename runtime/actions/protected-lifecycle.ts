@@ -156,7 +156,7 @@ export async function prepareActionLifecycleBody(
   const prepared: PreparedProtectedValue[] = [];
   let startRef: ProtectedValueRef | undefined;
   if (
-    data.status === "awaiting" && input.awaitedAction &&
+    data.status === "awaiting" && data.start && input.awaitedAction &&
     actionInputHasSecrets(input.awaitedAction)
   ) {
     if (!input.protectedValues) {
@@ -193,7 +193,7 @@ export async function prepareActionLifecycleBody(
 
   const publicData = ({
     ...data,
-    ...(data.status === "awaiting" && startRef
+    ...(data.status === "awaiting" && data.start && startRef
       ? { start: { ...data.start, input: null } }
       : {}),
     input: inputSplit.publicValue,
@@ -269,12 +269,13 @@ export async function hydrateActionLifecycleBody(
   } else if (protectedBody.protected.output) {
     throw new Error("Only completed Actions may own a protected output.");
   }
-  const start = data.status === "awaiting" && protectedBody.protected.start
-    ? await input.protectedValues.open(
-      coordinates(input.namespace, data, "start"),
-      protectedBody.protected.start,
-    ) as OperationStart
-    : undefined;
+  const start =
+    data.status === "awaiting" && data.start && protectedBody.protected.start
+      ? await input.protectedValues.open(
+        coordinates(input.namespace, data, "start"),
+        protectedBody.protected.start,
+      ) as OperationStart
+      : undefined;
   return ({
     ...data,
     ...(start ? { start } : {}),

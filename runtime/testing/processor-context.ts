@@ -49,6 +49,7 @@ export function createTestProcessorContext(
     collections: {} as const,
     vectors: { search: unavailable },
     content,
+    operations: { start: unavailable },
     streams: {
       open: unavailable,
       follow: unavailable,

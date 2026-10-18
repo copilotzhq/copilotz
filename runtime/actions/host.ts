@@ -78,6 +78,7 @@ export type ActionHostContext = Readonly<{
   vectors: VectorReader;
   content: ActionContentHandle;
   streams: ContentStreamRuntime;
+  operations: RuntimeContext["operations"];
   signal: AbortSignal;
   now(): Date;
   transaction: ActionContext["transaction"];
@@ -97,6 +98,7 @@ export type ActionContextBindings = Readonly<{
   }>;
   now?: () => Date;
   content(namespace: string): ActionContentHandle;
+  operations: RuntimeContext["operations"];
 }>;
 
 function scopedCollections(bindings: ActionContextBindings): ScopedCollections {
@@ -150,6 +152,7 @@ type ActionInvocationHost = Pick<
   | "vectors"
   | "content"
   | "streams"
+  | "operations"
   | "signal"
   | "now"
   | "transaction"
@@ -349,6 +352,7 @@ export function createActionContext(
     vectors: bindings.collections.vectors(namespace),
     content,
     streams: content.stream,
+    operations: bindings.operations,
     signal,
     now: bindings.now ?? (() => new Date()),
     transaction: transact,

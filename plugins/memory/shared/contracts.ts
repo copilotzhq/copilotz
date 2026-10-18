@@ -19,10 +19,6 @@ export type ConsolidateMemoryActionResult = Readonly<
 >;
 
 export type MemoryActionCallers = Readonly<{
-  coordinateCheckpoint(
-    input: { checkpointId: string },
-    options?: ActionCallOptions,
-  ): Promise<unknown>;
   consolidate_memory(
     input: ConsolidateMemoryActionInput,
     options?: ActionCallOptions,

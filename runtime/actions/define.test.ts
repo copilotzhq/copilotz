@@ -227,3 +227,28 @@ Deno.test("continuations capture JSON handoff state and reject non-durable state
     })
   );
 });
+
+Deno.test("continuations name exactly one started or existing operation", () => {
+  assertEquals<unknown>(
+    awaitOperation({ operationId: "shared", handoff: null }),
+    {
+      operationId: "shared",
+      handoff: null,
+    },
+  );
+  for (
+    const value of [
+      { handoff: null },
+      {
+        operationId: "shared",
+        start: { action: "child", input: {} },
+        handoff: null,
+      },
+      { operationId: "", handoff: null },
+      { operationId: " shared", handoff: null },
+      { operationId: 12, handoff: null },
+      { operationId: null, handoff: null },
+      { start: null, handoff: null },
+    ]
+  ) assertThrows(() => awaitOperation(value as never));
+});

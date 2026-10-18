@@ -252,6 +252,23 @@ remain valid. Rules worth knowing:
 
 ### Awaiting an operation
 
+An Action may wait for a child it owns or observe an existing operation. Return
+`context.awaitOperation({ operationId, handoff })` to observe a shared producer:
+registration rejects unknown IDs, does not change ownership, and cancellation of
+one waiter leaves the producer and other waiters running. A single settlement
+resumes every live waiter, each with its own `${runId}:resume` identity. An
+already settled producer resumes immediately. Both forms reject self, ancestor,
+and transitive wait cycles. A cancelled producer supplies a `cancelled` outcome.
+
+When a domain needs shared work,
+`await context.operations.start({ action, input,
+operationKey })` admits an
+independent public operation and returns its ID. The key is scoped to the
+namespace, retries must describe the same invocation, and admission returns
+after the operation and its delivery are durable. It does not wait for execution
+or create a parent link. Observe the returned ID with
+`awaitOperation({ operationId, handoff })`.
+
 Return `context.awaitOperation({ start, handoff })` from `execute`, and declare
 `resume(handoff, outcome, context)`. `start` names a registered Action alias and
 its input. `handoff` is durable JSON used by the resumption.
@@ -290,8 +307,8 @@ settle independently of the parent's open obligation.
 Child settlement schedules one logical `${runId}:resume` delivery. Its terminal
 receipt arbitrates duplicates and survives restart. An already-settled child
 schedules the resumption at registration. `start.operationId` may supply a
-stable producer identity; repeating that identity must describe the same
-invocation.
+stable child identity; it must belong to that same Action invocation. A child
+cannot be acquired from another invocation or shared by two `start` awaits.
 
 `outcome` contains the child `operationId` and its `status`: `completed`,
 `failed`, or `cancelled`. The resumption decides its own result from durable

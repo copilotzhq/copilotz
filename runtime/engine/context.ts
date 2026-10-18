@@ -507,6 +507,7 @@ export function createProcessorContext(
     namespace,
     databaseSchema,
     operationKey: processorOperationKey,
+    operations: options.operations,
     identity: contextIdentity,
     resources: options.registry.resources,
     adapters: options.registry.adapters,

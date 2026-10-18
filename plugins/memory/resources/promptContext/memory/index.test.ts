@@ -195,6 +195,10 @@ Deno.test("pending checkpoint declares its producer without requiring a task Mes
   const input = {
     context: {
       namespace: "test",
+      operations: {
+        start: (input: { operationKey: string }) =>
+          Promise.resolve(`action-operation:test:${input.operationKey}`),
+      },
       resources: { agents: { north: {} } },
       collections: {
         message: {
@@ -218,11 +222,7 @@ Deno.test("pending checkpoint declares its producer without requiring a task Mes
   assertEquals(reservation, {
     status: "pending",
     checkpointId: "checkpoint",
-    start: {
-      action: "produceCheckpoint",
-      input: { checkpointId: "checkpoint" },
-      operationId: "memory:test:checkpoint:producer",
-    },
+    operationId: "action-operation:test:memory:checkpoint:producer",
   });
   assertEquals(await memoryContextResource.reserveCompact!(input), reservation);
 });
@@ -255,6 +255,10 @@ Deno.test("foreground compaction skips an already-consumed pending checkpoint", 
   let reservations = 0;
   const context = {
     namespace: "test",
+    operations: {
+      start: (input: { operationKey: string }) =>
+        Promise.resolve(`action-operation:test:${input.operationKey}`),
+    },
     resources: { agents: { west: { id: "west" } } },
     collections: {
       message: {
@@ -293,11 +297,7 @@ Deno.test("foreground compaction skips an already-consumed pending checkpoint", 
   assertEquals(await memoryContextResource.reserveCompact!(input), {
     status: "pending",
     checkpointId: old.id,
-    start: {
-      action: "produceCheckpoint",
-      input: { checkpointId: old.id },
-      operationId: `memory:test:${old.id}:producer`,
-    },
+    operationId: `action-operation:test:memory:${old.id}:producer`,
   });
   assertEquals(await memoryContextResource.checkCompact!(input, old.id), {
     status: "ready",

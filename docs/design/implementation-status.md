@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 03:32 UTC.
+Updated: 18 October 2026, 03:39 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -25,7 +25,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
 | Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
-| Owner snapshot host integration      | Review: two failures    | PG host34 pass; PGlite host33 pass/1 readiness failure; cancellation-code test correction pending replay; full static and role12 pass                |
+| Owner snapshot host integration      | Reviewed private scope  | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; performance/public activation remain open                     |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 A cloud runner restart restored an older workspace. The exact pushed manager
@@ -220,14 +220,23 @@ registered Action/Processor callbacks. Host shutdown joins independently owned
 SQL cleanup. Missing cleanup proof quarantines the resource and stops owner
 admission, including after invocation revocation.
 
-Fresh independent review passes PostgreSQL host34, eight probes and35
-compatibility cases; PGlite manager24 and seven probes (one explicit pooled-only
-skip); pure209, role12, changed lint/format and the unchanged full static gate.
-Two failures remain visible: PostgreSQL manager/connection/dispatch102 pass and
-one backend-specific cancellation-code assertion; PGlite host33 pass and one
-local Processor grant-loss readiness failure. The cancellation assertion has a
-reviewed test-only correction awaiting replay; the readiness failure is being
-diagnosed. This is not a new full-suite pass or production acceptance.
+Final independent correction replay passes **34 host + 24 manager cases on each
+of actual PostgreSQL and native PGlite:116 passes, zero failures/skips**. Both
+corrected test files pass lint/format, and the unchanged full static gate passes
+with 46 exports and 734 production modules. The earlier source-identical review
+also supplies PostgreSQL 35 compatibility and eight probes, PGlite seven probes
+with one explicit pooled-only skip, pure 209 and role 12.
+
+The original broad run remains recorded as 464 passes, two failures and one
+skip. Both failures were fixture assumptions: cancellation can surface either of
+two exact refusal codes depending on backend ordering; the grant-loss test must
+restore its fixture policy after snapshot rejection to avoid denying a separate
+later retry start. Corrected Processor cases now wait for successful retry
+attempt 2 and zero active executions before asserting stable readiness.
+Production bytes are unchanged across these test corrections. All 58 final
+fixture databases and coordinator were exported/dropped, no sessions or
+leftovers remain, and the database service stopped. This is scoped acceptance,
+not a new full-suite or production-load pass.
 
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
@@ -285,9 +294,10 @@ what it simplifies and eliminates before adding machinery.
 - [x] Explicit backend snapshot cleanup outcome and generation-safe forwarding;
       known release stays separate from cancellation/errors, with missing or
       duplicate reporting fail-closed and no new wire operation
-- [ ] Owner snapshot manager and genuine host integration: actual routing and
-      callback flow implemented; package reachability passes; complete review
-      after cancellation fixture replay and PGlite readiness failure diagnosis
+- [x] Private owner snapshot manager and genuine host integration: existing
+      local/worker lifetimes, queue-free routing, registered callback flow,
+      explicit cleanup ownership and actual PG/PGlite corrected acceptance;
+      public composition and load/performance gates remain separate
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

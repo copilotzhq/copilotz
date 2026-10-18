@@ -439,3 +439,27 @@ error policies can recognize them. Distinct failures retain cleanup uncertainty;
 unknown open/read failures also remain indeterminate. Error classification reads
 only own data descriptors and never coerces error properties or invokes getters.
 Accepted raw reads still drain before the callback settles.
+
+## Reconstructed integration acceptance (18 October 2026)
+
+Private host activation is independently accepted at remote
+`3df229454c82741aead424535f24ca19b75aea67`, tree
+`e9e1c4ac5a9ec0bc6f758ba5dea810d8685ea96e`, after two test-only corrections: 34
+host and24 manager cases pass on each backend (116 total, no failures/skips).
+The unchanged full static check now passes 46 exports / 734 production modules;
+the manager has genuine production reachability. Prior manager-only reachability
+and missing-routing limitations above describe the historical checkpoint.
+
+Source-identical earlier gates supply 209 pure cases, 12 role bundles, 35 PG
+compatibility cases and 8 PG / 7 PGlite probes (one explicit pooled-only skip).
+The original broad run remains 464 pass/2 fail/1 skip. Its corrected assertions
+accept backend-specific cancellation refusal ordering and isolate snapshot grant
+loss from a separate refused retry start. Final Processor cases prove a
+successful second attempt and no active execution before checking stable host
+readiness. No production failure is hidden by those fixture changes. The final
+overlay verified all 1,621 source hashes and 118 / 285 dependency hashes,
+exported and dropped 58 fixture databases plus coordinator, and stopped the
+service.
+
+This acceptance covers explicit private host configuration. Public composition,
+retained histories, and production load/performance remain separate gates.

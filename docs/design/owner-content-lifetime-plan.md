@@ -1,7 +1,8 @@
 # Owner-driven content lifetime: next coordinated slices
 
-Status: planning after private snapshot integration acceptance, 18 October 2026.
-No public stream activation or production migration is implied.
+Status: private contract/memory prerequisite implemented and scoped-reviewed;
+owner integration remains WIP, 18 October 2026. No public stream activation or
+production migration is implied.
 
 ## Approved contract and recovered-spec discrepancy
 
@@ -22,6 +23,28 @@ under
 `foundations/history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
 PHASE3 allocations remain historical. This restores an approved decision; it
 does not reopen it or change connection-liveness semantics.
+
+## Private physical contract checkpoint
+
+The private contract and memory implementation now use exact create-only
+reservation identities, fixed `owner-physical-v1` records, no lease/protection
+or maintenance API, readable generation fences, and missing-key tombstones that
+refuse delayed reserve. Fencing does not compact, adopt or remove bytes. A
+fenced copy never yields a successor writer. The existing chunk-slicing helper
+is shared without changing its legacy behavior.
+
+Private append accepts nonempty chunks up to 1 MiB. The future producer must
+normalize empty writes before allocating append IDs; this does not change legacy
+empty-append behavior. Memory ordering tests cover delayed calls, not backend
+in-flight CAS. Database/S3 implementations, format isolation, owner catalog
+commands/alarms and actual execution routing are still required.
+
+Independent scoped evidence: 75 complete-file private/legacy cases and 6 scratch
+adversarial probes pass with normal typechecking; five-file lint/format and
+exact hash checks pass. Initial typecheck/lint setup corrections are retained.
+No full static/integration pass is claimed for the new private modules before
+genuine host wiring. They are not exported through the public content entry
+point.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

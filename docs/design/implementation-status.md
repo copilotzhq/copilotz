@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 01:23 UTC.
+Updated: 18 October 2026, 01:54 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -25,6 +25,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
 | Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
+| Owner snapshot resource manager      | WIP: scoped checks pass | Actual PG/PGlite lifecycle/epoch/probe gates pass; strict package reachability is blocked until genuine host routing is wired                        |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -203,6 +204,18 @@ Generic persistence close still supplies no physical-release proof. The owner
 resource manager is now being implemented; historical permission and actual
 worker/local invocation routing are not activated yet.
 
+The private owner snapshot manager is a WIP integration checkpoint. The
+corrected candidate passes 21 repository cases on each backend, 45
+lifecycle/Collection compatibility cases, the unchanged PostgreSQL epoch
+regression and six final reviewer probes on each backend. Exact cleanup and
+separate global read/authority budgets survive cancellation and detached
+continuations. Final current-lane policy cannot replace the durable owner epoch
+and disclose old data. Original causal failures and the corrected stale reviewer
+injection indices are retained. The strict package-surface gate still fails
+because no production caller reaches the manager. Actual worker/local lifetime
+capture and queue-free host routing are next; this work is not checked complete,
+exported artificially or publicly active.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -259,6 +272,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Explicit backend snapshot cleanup outcome and generation-safe forwarding;
       known release stays separate from cancellation/errors, with missing or
       duplicate reporting fail-closed and no new wire operation
+- [ ] Owner snapshot manager and genuine host integration: lifecycle/epoch
+      scoped checks pass; production reachability, private lifetime capture,
+      queue-free local/worker routing and registered callback flow remain open
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

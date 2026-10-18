@@ -311,6 +311,66 @@ Consumers must await actual scope settlement as well as confirmation before
 releasing this resource charge. Confirmation never restores authority or grants
 replay. Owner resource lifecycle/routing remains the next activation gate.
 
+## Owner resource manager (WIP integration checkpoint)
+
+The private manager owns at most one backend scope outside the serialized owner
+command loop. It uses the shared bounded Collection evaluator and existing
+Action/Processor authority callbacks. PostgreSQL checks current authority on the
+reserved current lane; certified exclusive PGlite checks it on the owned engine.
+Both validate the owner epoch, private attempt lifetime and fresh caller
+witness. A resource ID alone grants no authority. Historical disclosure requires
+an explicit historical grant; an ordinary Collection filter does not imply one.
+
+Open/read/close retain the same captured execution lifetime. Reads compare the
+current historical scope before and after SQL, and perform final synchronous
+output validation only after authorization. Resolver and policy results are
+detached before private callbacks can mutate their returned aliases. Final
+readiness and close results recheck private authority, including revocation
+while cleanup was pending. Cleanup does not require a renewed business grant.
+
+Idle/maximum timers revoke resource authority independently of the command
+queue. Missing or duplicate cleanup observations quarantine the resource. Only
+exact confirmed cleanup plus actual backend scope settlement frees its database
+charge. A late continuation cannot disclose data or clear a successor resource.
+Two manager-wide counters bound outstanding reads and authority callbacks across
+resource generations; cancellation does not release either counter before its
+own actual continuation settles. Opening resolvers consume the authority budget.
+No job lease, durable read receipt, replay or execution registry is added.
+
+Expiry bounds authority, not response time or physical cleanup time. Accepted
+raw SQL can delay open/read/close completion. Future transport cancellation must
+preserve the underlying resource and continuation charges until their respective
+settlement, even if its caller receives an earlier timeout.
+
+The corrected frozen manager passes 21 repository cases on each of actual PGlite
+and PostgreSQL, 45 lifecycle/Collection compatibility cases, the unchanged
+causal PostgreSQL epoch probe, and six final reviewer probes on each backend.
+Lint/format and source/dependency hash checks pass; disposable fixture databases
+were dropped and coordinator databases exported/dropped with the service
+stopped. This is split scoped evidence, not a new full-suite acceptance. Two
+reviewer readiness probes initially used stale callback indices after the final
+epoch fence added checks; their failures and corrected boundary-targeted replays
+remain.
+
+The initial actual-PostgreSQL review found stale disclosure when the final
+policy changed the durable epoch inside its own current transaction. Authority
+now rechecks the exact epoch/holder after the operation in the same transaction,
+then finishes with the private witness. Earlier resolver-alias,
+close-after-revocation and detached-continuation capacity failures remain with
+corrections. An invalid policy-filter fixture was corrected to `where.id`.
+
+The unchanged full static gate still fails at strict package reachability
+because the manager has no production caller yet. This checkpoint remains WIP;
+no artificial export or check waiver makes it accepted integration. Genuine host
+wiring must close that gate before this task is checked complete.
+
+This manager uses stub execution witnesses in its tests. It does not activate
+registered `readSnapshot`. The next gate must capture existing worker dispatch
+and local placement entries, route resource calls without queued grant/readiness
+lookups, preserve the existing raw-call accounting, and prove all four
+Action/Processor placements on both transports. Nested ordinary calls must not
+wait behind a snapshot that owns their required database capacity.
+
 ## Performance boundary
 
 Snapshots are explicit, short selection scopes. Ordinary single reads do not

@@ -172,6 +172,11 @@
           "title": "Streams",
           "slug": "streams",
           "description": "Progressive bytes from Actions, stream.output payloads, replay and retention."
+        },
+        {
+          "title": "Views",
+          "slug": "views",
+          "description": "Scoped one-shot text presentations with an authorized projector."
         }
       ]
     },

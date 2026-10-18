@@ -9,6 +9,7 @@ export * from "./runtime/content/index.ts";
 export * from "./runtime/streams/index.ts";
 export * from "./runtime/events/index.ts";
 export * from "./runtime/plugins/index.ts";
+export * from "./runtime/views/index.ts";
 export * from "./runtime/engine/index.ts";
 export * from "./runtime/persistence/index.ts";
 

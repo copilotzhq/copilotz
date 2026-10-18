@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 09:29 UTC.
+Updated: 18 October 2026, 09:56 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -452,6 +452,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Owner-only confirmation-order ordinal and zero-offset reservation shape,
       terminal revocation constraint and exact old-layout refusal; scoped
       PostgreSQL/PGlite schema and legacy DDL compatibility checks pass
+- [x] Isolated catalog-first reservation/physical-confirmation coordinator on
+      the existing private boundary, exact catalog-native replay and atomic
+      publication event/ordinal; independent backend and COMMIT-loss gates pass
 - [ ] Catalog-first reservation, physical confirmation and visibility through
       the same local/worker content coordinator; confirmation-time ordinals,
       hidden failed reservations and accepted-prefix-only observation

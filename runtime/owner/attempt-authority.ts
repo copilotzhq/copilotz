@@ -234,7 +234,10 @@ export function ownerAttemptIsLive(
  * start may have an owner-control caller; caller tags never select placement.
  * This preserves capability identities, but snapshots the local selector. */
 export function ownerEventCommitForAttempt(
-  context: OwnerCommandContext,
+  context: Pick<
+    OwnerCommandContext,
+    "tx" | "commandTime" | "ownerCommit" | "afterCommit"
+  >,
   assignment: OwnerAttemptAuthority,
 ): OwnerEventCommitContext {
   const expected = authority(assignment);

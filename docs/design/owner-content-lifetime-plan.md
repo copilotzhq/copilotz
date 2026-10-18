@@ -448,6 +448,63 @@ hashes pass; unchanged full-static still refuses seven unwired modules. No real
 confirmation command, physical fencing proof or observation routing is activated
 by these row checks.
 
+## Catalog-native reservation/confirmation receipts (reviewed component)
+
+The private reservation coordinator uses the existing receipt-free mutation
+route for both SQL phases. This explicitly extends the catalog-native receipt
+representation already used for offset checkpoints: reservation's immutable
+attempt-bound catalog identity and descriptor are its durable replay record;
+confirmation's persisted descriptor and publication ordinal are its receipt. No
+duplicate owner_receipts row or second attempt registry is required. Those facts
+must survive revocation and terminal transitions. Replay identity never
+substitutes for current owner, invocation and policy authority.
+
+The component derives stream/body/reservation IDs from owner epoch, actual
+operation scope, placement, delivery ID/ordinal, current attempt and semantic
+stream ID. It serializes semantic lanes through the existing operation row and
+index. A hidden reservation precedes physical I/O; only private
+coordinator-observed matching physical evidence can confirm it. Confirmation
+increments the operation ordinal and appends one closed copilotz.stream.opened
+event in the same transaction. Publication follows COMMIT. Exact replay neither
+allocates another ordinal nor emits another event.
+
+Known-committed caller-reply loss permits exact replay while the same invocation
+remains current. An unknown SQL COMMIT still stops the holder; later recovery
+must inspect durable facts under newly authorized recovery, without adopting a
+physical tail. Unknown physical reserve retains the exact hidden intent. This
+component does not yet implement revocation, renewal alarms, offset checkpoints,
+seal, actual Action/Processor routes or host activation.
+
+Source metadata injected by legacy Action contexts is discarded and derived
+again from the authenticated owner binding. Correlation must be absent or match
+the source. Descriptor metadata uses the same ContentRef canonicalization as the
+EventStore, so catalog and lifecycle payload cannot disagree about hydrated
+data. The SQL equality test permits bounded request-derived descriptor replay
+without transferring arbitrary retained descriptor JSON.
+
+Independent scoped validation passes 252 PostgreSQL tests with 46 steps and 237
+PGlite tests with 46 steps plus 15 explicit PostgreSQL-only skips. Four real
+PostgreSQL COMMIT-loss cases cover committed and aborted reserve/confirm: each
+reports owner_commit_unknown, stops the holder, runs the handler once and emits
+no unknown-transaction callback. Durable row/event/ordinal/receipt evidence
+matches the server outcome, with one owned diagnostic and zero uncaught errors.
+Captured old candidates reproduce the delivery-token collision and scalar
+metadata normalization defects; the final candidate passes both controls. A
+contradictory 2 MiB stored descriptor is refused after transferring only the
+bounded scalar/equality result. Current-callback, lifetime, replay and semantic
+predecessor probes pass. All 166 owned databases were exported/dropped, sessions
+and leftovers are absent, and PostgreSQL is stopped. Normal checks and frozen
+source/dependency hashes pass. The full-static package guard now refuses eight
+unwired modules, including this coordinator; real host and invocation
+integration remains required.
+
+The physical-head fields prove consistency only. Authenticity comes from the
+private composition: trusted coordinator code calls checkpoint with its observed
+head; generic worker command/projection routes cannot dispatch these kinds. The
+future worker content route must call the coordinator, never forward a supplied
+head. This is not a cryptographic claim or protection against trusted host code
+that already holds the private boundary and SQL session.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:

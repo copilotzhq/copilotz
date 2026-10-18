@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 12:36 UTC.
+Updated: 18 October 2026, 13:16 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -65,6 +65,51 @@ retained-history adoption and public/default activation remain unavailable. No
 legacy writer behavior is extended, no new authority registry/lease is
 introduced, and no package is merged or published.
 
+## Latest working-tree status and remaining sequence
+
+The pushed preservation checkpoint remains `33673b15` (local `7bc6e7a`,
+identical tree `541e5878`). The following newer changes are **uncommitted working
+code**, not an accepted or published milestone:
+
+- Quiet owner renewal: 15 focused checks passed, including exact original
+  lifetime/grant checks, late deadline/identity changes, 33-writer continuation,
+  and cleanup with one held fence
+- Orphan opening cleanup: two coordinator checks and eight actual host flows
+  passed across Action/Processor, local/worker and both transports. Failure waits
+  for actual cleanup; hidden reservations remain hidden
+- SQL delivery-completion barrier added; 16 existing real abort/disposal flows
+  passed. Direct bypass/retry causal tests remain open
+- Fair cleanup pagination is being corrected: its latest combined diagnostic
+  passed three cases and failed the held-worker-fence case because a healthy
+  writer became revoked. A focused rerun reproduces that failure. This is the
+  current blocker; quiet-renewal acceptance is not claimed
+- Normal shutdown sweep, full fault coverage and the consolidated independent
+  backend/static/artifact gate remain open
+
+These diagnostics come from different intermediate sources. Counts below remain
+**105 tasks, 72 checked, 33 open**; no completion checkbox changes.
+
+The coordinated remaining sequence is:
+
+1. Finish private content lifetime in the actual owner flow: renewal fairness,
+   orphan cleanup, completion/retry barriers, actual close drain, and independent
+   PostgreSQL/PGlite plus artifact/static acceptance
+2. Complete supported content behavior: accepted seals, close/retain/follow,
+   current-copy resolution, promotion, client repair and retained references;
+   finish remaining read/vector/subscription/protected-value contracts
+3. Complete recovery parity: retained history/takeover, replay and already-admitted
+   stages, continuations/parked execution, handoff, cancellation and settlement
+4. Migrate public `createCopilotz`, embedded/connected defaults, model/message and
+   channel providers, Views UI and plugins; retire each superseded consumer and
+   obsolete option/wrapper as its replacement passes
+5. Run coherent full-suite, fault/load/resource and package-surface gates; finish
+   faster PR feedback, dependency integration and operational/migration docs;
+   obtain explicit review/merge/publication approval
+
+Content lifetime is the current implementation track, not the final outstanding
+piece of the entire refactor. The unchecked items below remain the authoritative
+scope; optional hosting and production migration stay separate.
+
 ## Current work
 
 | Task                                 | Status                        | Next acceptance gate                                                                                                                                                                  |
@@ -84,7 +129,7 @@ introduced, and no package is merged or published.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: actual abort-only flow   | [Private host content draft](owner-content-lifetime-plan.md); quiet owner renewal, orphan/close coordination and consolidated backend/artifact review remain open                     |
+| Content writer lifetime              | WIP: renewal fairness fix     | [Private host content draft](owner-content-lifetime-plan.md); quiet owner renewal, orphan/close coordination and consolidated backend/artifact review remain open                     |
 | Architecture cleanup                 | In progress                   | Dormant classifier retired; actual host fixed-core/atomic setup accepted: corrected PG70/PGlite381; real content routes in progress                                                   |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -102,9 +147,8 @@ All five causal old-version defects remain recorded beside corrected passes. The
 unchanged full-static package-surface guard now refuses seven private modules
 awaiting genuine host wiring. The private receipt-free mutation boundary now
 separately passes 194 PostgreSQL and 187 PGlite cases with seven explicit
-PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Actual
-stream checkpoint authority, reservation confirmation, catalog alarms and
-content execution routing remain open. The shared operation/event catalog core
+PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Those historical gates preceded the later reviewed reservation/checkpoint
+components and current unaccepted host integration described above. The shared operation/event catalog core
 now separately passes 335 PostgreSQL and 324 PGlite cases with 11 explicit
 PostgreSQL-only skips. Legacy SQL/parameter parity is unchanged in both
 notification modes; owner recovery still requires its explicit cleanup hook.
@@ -487,8 +531,8 @@ what it simplifies and eliminates before adding machinery.
 - [x] Shared private 1 MiB range-read admission before I/O across memory, SQL
       and S3; larger reads require paging
 - [ ] Wire private physical stores into real owner catalog/execution
-      composition; clear the unchanged seven-module package-surface failure
-      through that wiring
+      composition; clear remaining package-surface reachability failures through
+      genuine wiring and rerun the unchanged full-static gate
 
 - [x] Legacy catalog format admission guards: composed event/index SQL,
       duplicate callbacks, supplied transactions, provisioning races and cached

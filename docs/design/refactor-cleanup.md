@@ -38,6 +38,12 @@ same slice. Once consumer equivalence is established, retire old content
 composition rather than supporting both indefinitely. The checked backlog count
 is unchanged by this preservation checkpoint.
 
+The 13:16 UTC working tree additionally contains quiet renewal, orphan-open
+cleanup and SQL completion barriers. Focused checks pass, but the cleanup
+pagination follow-up reproduces a worker renewal starvation failure. This
+remains unfinished new-owner work, not expansion of the retiring runtime. No
+content completion or full-refactor completion is claimed.
+
 ## Target architecture
 
 - One `createCopilotz` programming model, shared authored Action/Processor

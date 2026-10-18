@@ -45,6 +45,32 @@ not a consolidated independent acceptance run. Quiet protection renewal,
 orphan/hidden cleanup, completion/retry and close coordination still require
 implementation and joint validation before this slice is accepted.
 
+## 18 October 13:16 UTC: working-tree progress and blocker
+
+The latest pushed code is still the preservation checkpoint above. Newer
+uncommitted code uses the original private local/Started entry and a fresh ctx
+grant for quiet owner renewal, without replaying input/preparation/event policy.
+The same catalog row and owner alarm carry protection; append activity does not
+renew it. Fifteen focused diagnostics pass, but this is not final acceptance.
+
+Known reserved opens now await genuine owner-control orphan cleanup before
+rejecting. Two coordinator and eight actual host cases pass; unknown cleanup
+remains indeterminate. A SQL-only per-delivery content barrier now precedes
+completion in both parent kinds and placements; 16 existing real abort/disposal
+flows pass, while bypass/retry causal coverage remains open.
+
+Review found that earliest-page cleanup could starve later revoking writers.
+Bounded keyset traversal is being implemented without a new authority registry.
+Its combined diagnostic is **3 passed / 1 failed**: under held worker cleanup a
+healthy writer loses protection. The focused repeat reproduces it. Fix and
+causally validate that scheduling case before accepting renewal. Normal host
+close must still sweep remaining writers and join actual physical work.
+
+All these results are intermediate development evidence. Slice 1 stays open
+until the joint PostgreSQL/PGlite, fault, static and artifact gates pass. Slices
+2 and 3 below remain required, followed by the broader recovery/public/default
+and consumer-retirement backlog in the main checklist.
+
 ## Approved contract and recovered-spec discrepancy
 
 The approved [owner-attempt contract](owner-attempt-authority.md) supersedes

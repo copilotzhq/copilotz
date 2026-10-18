@@ -102,7 +102,11 @@ async function waitForIdle(
         `Tool-plan workflow dead-lettered: ${JSON.stringify(failures)}`,
       );
     }
-    if (settlement.unsettled === 0) {
+    const operation = await engine.operations.get(NAMESPACE, rootEventId);
+    if (
+      operation &&
+      ["completed", "failed", "cancelled"].includes(operation.state)
+    ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1488,6 +1492,97 @@ Deno.test("a trailing jq result retains its real Action provenance", async () =>
     assertEquals(provenance.actionRunId, terminal?.actionRunId);
     assert(!provenance.actionRunId.startsWith("jq:"));
     assertEquals(calls, ["a", "a"]);
+  } finally {
+    await engine.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("tool-produced nested content belongs to its stage result without execution retention", async () => {
+  let producedId = "";
+  const produce = defineAction({
+    id: "test.produce-content",
+    async execute(_input: Record<string, never>, context) {
+      const asset = await context.content.publish({
+        mediaType: "text/plain",
+        body: new TextEncoder().encode("tool body"),
+      }, { operationKey: "body" });
+      producedId = asset.id;
+      return {
+        nested: {
+          content: [{
+            assetId: asset.id,
+            kind: "text",
+            role: "body",
+            mediaType: asset.mediaType,
+          }],
+        },
+      };
+    },
+  });
+  const testAgent = agent("a", ["produce"]);
+  let calls = 0;
+  const plugin = definePlugin({
+    id: "test.tool-content-owner",
+    version: "1.0.0",
+    actions: { produce },
+    resources: {
+      agents: { a: testAgent },
+      tools: {
+        produce: defineTool("produce", produce, {
+          name: "Produce",
+          description: "Produce content",
+        }),
+      },
+      llmConnections: { testModel: { adapter: "test" } },
+    },
+    adapters: {
+      llm: {
+        test: adapterFrom(() =>
+          ++calls === 1
+            ? {
+              content: [],
+              toolCalls: [{ id: "produce-call", action: "produce", input: {} }],
+              attempts: [{ status: "completed" }],
+              finishReason: "tool_calls",
+            }
+            : { content: "done", attempts: [{ status: "completed" }] }
+        ),
+      },
+    },
+  });
+  const db = await createTestDatabase({ url: ":memory:" });
+  const registry = await createPluginRegistry({
+    plugins: [corePlugin, plugin],
+  });
+  const schema = "tool_content_owner";
+  const engine = await createCopilotzEngine({
+    session: db,
+    registry,
+    defaultDatabaseSchema: schema,
+    retryBaseMs: 0,
+    random: () => 0,
+  });
+  try {
+    await waitForIdle(engine, await startRun(engine, [testAgent]));
+    assert(producedId);
+    const owners = await db.query<{ id: string; type: string }>(
+      `SELECT n.id, n.type FROM "${schema}".nodes n JOIN "${schema}".edges e ON e.source_node_id=n.id WHERE e.target_node_id=$1 AND e.type='has_asset'`,
+      [producedId],
+    );
+    assertEquals(owners.rows.length, 1);
+    assertEquals(owners.rows[0].type, "toolPlanStageResult");
+    const result = await engine.collections.get("toolPlanStageResult")!.get({
+      namespace: NAMESPACE,
+    }, { id: owners.rows[0].id });
+    assertEquals(
+      (result!.outputContent as { assetId: string }[])[0].assetId,
+      producedId,
+    );
+    const executionOwners = await db.query(
+      `SELECT id FROM "${schema}".nodes WHERE type='@copilotz/action-content'`,
+    );
+    assertEquals(executionOwners.rows, []);
   } finally {
     await engine.shutdown();
     await db.close();

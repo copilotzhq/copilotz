@@ -1,3 +1,4 @@
+import { createOperationCatalogTables } from "../streams/catalog.ts";
 import type {
   EventCoordinator,
   EventDelivery,
@@ -32,7 +33,7 @@ export async function recoverDeliveryActions(
   return await recoverActions(options, transaction, delivery);
 }
 
-/** Explicit cancellation settles every live Action, including deferred ones. */
+/** Explicit cancellation settles every live Action, including awaiting ones. */
 export async function cancelScopeActions(
   options: RecoveryOptions,
   transaction: SqlExecutor,
@@ -44,7 +45,32 @@ export async function cancelScopeActions(
     scope.operationId,
     scope.reason,
   );
-  return await recoverActions(options, transaction, undefined, scope);
+  const operations =
+    createOperationCatalogTables(options.store.databaseSchema).operations;
+  const children = await transaction.query<{ operation_id: string }>(
+    `SELECT operation_id FROM ${operations} WHERE namespace = $1 AND parent_operation_id = $2
+      AND state IN ('accepted','running') ORDER BY operation_id FOR UPDATE`,
+    [scope.namespace, scope.operationId],
+  );
+  const flushes: (() => Promise<void>)[] = [];
+  for (const child of children.rows) {
+    await transaction.query(
+      `UPDATE ${options.store.tables.event_deliveries} SET status = 'cancelled', lease_owner = NULL,
+      lease_expires_at = NULL, settled_at = NOW(), updated_at = NOW()
+      WHERE settlement_scope_id = $1 AND status IN ('pending','leased','retry_wait')`,
+      [child.operation_id],
+    );
+    flushes.push(
+      await cancelScopeActions(options, transaction, {
+        ...scope,
+        operationId: child.operation_id,
+      }),
+    );
+  }
+  flushes.push(await recoverActions(options, transaction, undefined, scope));
+  return async () => {
+    for (const flush of flushes) await flush();
+  };
 }
 
 async function recoverActions(

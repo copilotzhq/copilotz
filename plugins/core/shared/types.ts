@@ -48,9 +48,9 @@ export type CompactReservation =
   | Readonly<{
     status: "pending";
     checkpointId: string;
-    /** Exact key passed to registerDeferredWait and signalDeferredWait. */
-    waitKey: string;
-  }>;
+    /** The checkpoint producer is an independently settling operation. */
+  }>
+    & import("@copilotz/copilotz/actions").AwaitOperationTarget;
 
 export type ContextSourceRef =
   | Readonly<{ type: "message"; id: string }>
@@ -127,7 +127,7 @@ export type ContextResource = Readonly<{
       error: unknown;
     }>,
   ): boolean | Promise<boolean>;
-  /** Backwards-compatible synchronous maintenance hook. */
+  /** Synchronous maintenance that completes within its invocation. */
   compact?(input: CompactContextInput): boolean | Promise<boolean>;
   /** Non-blocking durable maintenance hooks for runtime-owned continuations. */
   reserveCompact?(input: CompactContextInput): Promise<CompactReservation>;
@@ -135,11 +135,6 @@ export type ContextResource = Readonly<{
     input: CompactContextInput,
     checkpointId: string,
   ): Promise<CompactCheckpointState>;
-  /** Re-dispatch only when a pending checkpoint has no deterministic producer. */
-  recoverCompact?(
-    input: CompactContextInput,
-    checkpointId: string,
-  ): Promise<void>;
 }>;
 
 export type FrozenContextContribution = Readonly<{

@@ -14,12 +14,7 @@ import {
   validateOperationCatalog,
 } from "../streams/catalog.ts";
 
-/**
- * Offline v5/v6 -> current schema upgrade. Stop old writers before calling this. The v5
- * Action lifecycle cutover still requires drained workflows. The additive v6
- * wait columns preserve open Actions and initialize them as unsignaled. No
- * lifecycle receipt or domain record is rewritten.
- */
+/** Offline lifecycle upgrade. Drain old writers before removing their wait state. */
 export async function upgradeActionLifecycle(
   session: SqlSession,
   schemaName = "public",
@@ -59,16 +54,9 @@ export async function upgradeActionLifecycle(
       return;
     }
     if (
-      Number(marker?.version) === 6 &&
+      Number(marker?.version) === 8 &&
       marker?.fingerprint === OPERATION_CATALOG_FINGERPRINT
     ) {
-      await transaction.query(
-        `ALTER TABLE ${core.open_actions}
-           ADD COLUMN IF NOT EXISTS wait_key TEXT,
-           ADD COLUMN IF NOT EXISTS wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
-           ADD COLUMN IF NOT EXISTS wait_expires_at TIMESTAMPTZ,
-           ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
-      );
       for (const statement of createOwnerSchemaStatements(schema)) {
         await transaction.query(statement);
       }
@@ -80,13 +68,9 @@ export async function upgradeActionLifecycle(
       await validateOperationCatalog(joined, schema);
       return;
     }
-    if (
-      Number(marker?.version) !== 5 ||
-      !["indexed-observation-ordinals-v1", OPERATION_CATALOG_FINGERPRINT]
-        .includes(marker?.fingerprint ?? "")
-    ) {
+    if (![5, 6, 7].includes(Number(marker?.version))) {
       throw new Error(
-        "Action lifecycle upgrade requires the v5 indexed-observation baseline.",
+        "Action lifecycle upgrade requires a v5, v6, v7 or v8 baseline.",
       );
     }
     const outstanding = (await transaction.query<
@@ -103,19 +87,22 @@ export async function upgradeActionLifecycle(
         "Drain existing deliveries, streams and operations on the old runtime before upgrading Action lifecycle.",
       );
     }
-    await transaction.query(
-      `ALTER TABLE ${core.event_deliveries} ADD COLUMN action_scope_id TEXT`,
-    );
+    if (Number(marker?.version) !== 5) {
+      const open = await transaction.query(
+        `SELECT 1 FROM ${core.open_actions} LIMIT 1`,
+      );
+      if (open.rows.length) {
+        throw new Error("Drain existing Action obligations before upgrading.");
+      }
+      await transaction.query(`DROP TABLE ${core.open_actions}`);
+    } else {
+      await transaction.query(
+        `ALTER TABLE ${core.event_deliveries} ADD COLUMN action_scope_id TEXT`,
+      );
+    }
     for (const statement of createActionObligationStatements(schema)) {
       await transaction.query(statement);
     }
-    await transaction.query(
-      `ALTER TABLE ${core.open_actions}
-         ADD COLUMN IF NOT EXISTS wait_key TEXT,
-         ADD COLUMN IF NOT EXISTS wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
-         ADD COLUMN IF NOT EXISTS wait_expires_at TIMESTAMPTZ,
-         ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
-    );
     await upgradeOperationCatalog(joined, schema);
     for (const statement of createOwnerSchemaStatements(schema)) {
       await transaction.query(statement);

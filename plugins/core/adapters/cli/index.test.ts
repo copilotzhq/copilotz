@@ -29,7 +29,6 @@ function completedTerminal(chunks: readonly string[]) {
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
     availability: "retained" as const,
-    capture: "complete" as const,
     offset: encoder.encode(chunks.join("")).byteLength,
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));
@@ -164,7 +163,6 @@ function lifecycleOutput(
     terminal: Promise.resolve({
       outcome,
       availability: "retained" as const,
-      capture: "complete" as const,
       offset: encoder.encode(text).byteLength,
       terminalAt: "2026-09-01T12:00:00.000Z",
     }),
@@ -682,7 +680,6 @@ Deno.test("portable CLI stop cancels a blocked nested stream and suppresses late
     terminal: Promise.resolve({
       outcome: "completed" as const,
       availability: "retained" as const,
-      capture: "complete" as const,
       offset: 0,
       terminalAt: "2026-09-01T12:00:00.000Z",
     }),

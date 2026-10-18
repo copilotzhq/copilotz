@@ -82,7 +82,7 @@ export type DurableEventDraft<TPayload = unknown> = {
   createdAt?: string;
   /** Runtime-owned completion scope inherited by this mutation's deliveries. */
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
   /** Transient write authority; never part of an immutable event or retry key. */
   deliveryLease?: DeliveryLease;

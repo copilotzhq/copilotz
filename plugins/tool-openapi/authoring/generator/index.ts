@@ -759,7 +759,8 @@ async function consumeNdjsonToolResponse(
         .filter((state) => !state.settled)
         .map(async (state) => {
           await state.writer.abort({
-            reason: error instanceof Error ? error.message : String(error),
+            outcome: context.signal?.aborted ? "cancelled" : "failed",
+            reason: context.signal?.aborted ? "cancelled" : "producer_error",
           });
           state.settled = true;
         }),

@@ -11,6 +11,10 @@ import {
   provisionOperationCatalog,
   validateOperationCatalog,
 } from "../streams/catalog.ts";
+import {
+  createCoreTableNames,
+  EVENT_SCHEMA_VERSION,
+} from "../events/schema.ts";
 import { upgradeActionLifecycle } from "./upgrade.ts";
 
 async function fixture(active = false) {
@@ -28,7 +32,7 @@ async function fixture(active = false) {
       catalog.indexEventSql(input, param),
   });
   const root = await store.append({
-    namespace: "tenant",
+    namespace: "space",
     type: "existing.work",
     payload: { retained: true },
   }, active ? ["worker"] : []);
@@ -152,3 +156,88 @@ Deno.test("lifecycle migration rolls both schema markers and all DDL back on fai
     await f.db.close();
   }
 });
+
+Deno.test("additive owner upgrade preserves active obligations and immutable history", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const schema = "owner_lifecycle_upgrade";
+  const tables = createCoreTableNames(schema);
+  try {
+    await provisionCopilotzSchema(db, schema);
+    await provisionOperationCatalog(db, schema);
+    const store = createEventStore({ session: db, schema });
+    const event = await store.append({
+      namespace: "space",
+      type: "existing.work",
+      payload: {},
+    }, ["worker"]);
+    await db.query(
+      `INSERT INTO ${tables.open_actions}
+      (namespace,action_run_id,action_id,scope_id,invoked_event_id,state,await_event_id,child_operation_id)
+      VALUES ('space','run','action','scope',$1,'awaiting',$1,'child')`,
+      [event.event.id],
+    );
+    await db.query(
+      `DROP TABLE ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+    );
+    await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version = 8`);
+    const history = (await db.query(`SELECT * FROM ${tables.events}`)).rows;
+    const obligations =
+      (await db.query(`SELECT * FROM ${tables.open_actions}`)).rows;
+    await upgradeActionLifecycle(db, schema);
+    await upgradeActionLifecycle(db, schema);
+    assertEquals(
+      (await validateCopilotzSchema(db, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
+    assertEquals(
+      (await db.query(`SELECT * FROM ${tables.events}`)).rows,
+      history,
+    );
+    assertEquals(
+      (await db.query(`SELECT * FROM ${tables.open_actions}`)).rows,
+      obligations,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+for (const baseline of [6, 7]) {
+  Deno.test(`offline obligation upgrade preserves history from baseline ${baseline}`, async () => {
+    const db = await createTestDatabase({ url: ":memory:" });
+    const schema = "obligation_upgrade";
+    const tables = createCoreTableNames(schema);
+    try {
+      await provisionCopilotzSchema(db, schema);
+      await provisionOperationCatalog(db, schema);
+      const store = createEventStore({ session: db, schema });
+      await store.append({
+        namespace: "space",
+        type: "existing.work",
+        payload: { kept: true },
+      }, []);
+      await db.query(
+        `DROP TABLE ${tables.open_actions}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+      );
+      await db.query(
+        `CREATE TABLE ${tables.open_actions} (action_run_id TEXT PRIMARY KEY, state TEXT, deferred_event_id TEXT)`,
+      );
+      await db.query(
+        `UPDATE ${tables.copilotz_schema_metadata} SET version = $1`,
+        [baseline],
+      );
+      const history = (await db.query(`SELECT * FROM ${tables.events}`)).rows;
+      await upgradeActionLifecycle(db, schema);
+      assertEquals(
+        (await validateCopilotzSchema(db, schema)).version,
+        EVENT_SCHEMA_VERSION,
+      );
+      assertEquals(
+        (await db.query(`SELECT * FROM ${tables.events}`)).rows,
+        history,
+      );
+    } finally {
+      await db.close();
+    }
+  });
+}

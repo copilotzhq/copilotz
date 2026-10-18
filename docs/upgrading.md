@@ -8,6 +8,59 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Stream taxonomy upgrade
+
+The stream catalog now uses fingerprint `stream-taxonomy-continuations-v1`. Stop
+admission, confirm that active work has drained, and stop all old writers before
+calling `upgradeOperationCatalog(session, schema)` from
+`@copilotz/copilotz/streams` for each existing schema. Startup rejects the
+previous catalog marker; it never converts rows implicitly. The upgrade is
+transactional and repeatable and preserves stream identities, offsets, digests,
+ordering and settlement times.
+
+| Previous value               | New value                                 |
+| ---------------------------- | ----------------------------------------- |
+| Outcome `superseded`         | `cancelled`, `reason: "superseded"`       |
+| Outcome `abandoned`          | `failed`, `reason: "abandoned"`           |
+| Availability `purge_pending` | `retained`, internal cleanup pending      |
+| Availability `missing`       | `purged`, `availabilityReason: "missing"` |
+| Availability `purged`        | `purged`, `availabilityReason: "deleted"` |
+
+The upgrade drops the `capture` column and replaces the old constraints.
+`completed` means complete. Failed and cancelled streams retain their prefix.
+The existing catalog upgrades from `retained-terminal-streams` and
+`indexed-observation-ordinals-v1` also finish on this schema. When upgrading an
+older Action schema, upgrade the catalog first, then run the Action lifecycle
+upgrade described below.
+
+Deploy the client protocol and server together. Remove `capture` from terminal
+fixtures and consumers. Replace the `stream_superseded` and `stream_abandoned`
+error branches with `stream_cancelled` and `stream_failed`, inspecting `reason`
+when needed. Treat `stream_unavailable` independently of the logical outcome;
+its `availabilityReason` explains whether bytes were lost or deleted. Preserve
+byte offsets, per-attempt lanes and checkpoint application during this change.
+
+## Declared operation continuations: schema v8
+
+Actions now return `context.awaitOperation({ start, handoff })` and declare
+`resume(handoff, outcome, context)`. Each child is a public operation with a
+parent link and inherited observation keys. Exact-key signals and resolver
+rearming are removed; memory compaction uses the producer's operation
+settlement.
+
+Drain all existing deliveries, operations, streams and Action obligations with
+the old runtime, then stop all writers. Run
+`upgradeActionLifecycle(session,
+schema)` for every schema before starting new
+writers. The offline upgrade supports v5, v6 and v7, refuses undrained work,
+preserves immutable event history, and replaces the old obligation layout. The
+operation catalog fingerprint is `stream-taxonomy-continuations-v1`. Historical
+receipts remain readable event history; the new runtime does not execute old
+deferred workflows.
+
+The release notes below describe earlier schema versions and their migrations.
+Use the v8 procedure above when upgrading to the current runtime.
+
 ## 0.88.0: durable compaction waits
 
 Foreground memory compaction now records a durable wait and releases its worker
@@ -110,12 +163,13 @@ cancelling their in-flight work. Run `upgradeActionLifecycle` from
 an active database and preserves historical events. Read-only operation status
 checks no longer perform recovery or settlement.
 
-Actions may return `deferAction(work)` and implement
-`resolve(input, context, resolution)`. The runtime schedules and fences their
-work without interpreting plugin metadata. A pending Ask now stays open until
-the asked turn, tools and nested Asks drain. Permanent delivery failures produce
-ordinary Action failure terminals so tool pipelines can continue through their
-normal error path.
+The current runtime uses declared operation continuations. Replace deferred
+Action definitions with `context.awaitOperation({ start, handoff })` and
+`resume(handoff, outcome, context)`. Replace exact-key producer signals with
+operation-backed producers. Before upgrading to schema v8, stop old writers and
+drain deliveries, operations, streams, and Action obligations to confirmed
+terminal states. `upgradeActionLifecycle` refuses undrained schemas, preserves
+immutable event history, and replaces the old obligation layout in place.
 
 Memory's tool input is now `{continuity, remember?, retire?}`. Remove
 `resources.memory.kinds`, `defineMemoryKind`, graph/form/kind queries and grants
@@ -320,11 +374,11 @@ separate procedure, described in
 
 ### Upgrade layers
 
-| Layer              | Current state                        | How it is applied                                                   |
-| ------------------ | ------------------------------------ | ------------------------------------------------------------------- |
-| Event schema       | v7, durable Action waits             | Provision fresh; explicitly upgrade supported v5/v6 schemas offline |
-| Operation catalog  | `action-obligations-v1` since 0.86.0 | Provision fresh; upgrade the supported legacy catalog offline       |
-| Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema        |
+| Layer              | Current state                      | How it is applied                                                    |
+| ------------------ | ---------------------------------- | -------------------------------------------------------------------- |
+| Event schema       | v8, operation continuations        | Provision fresh; explicitly upgrade drained v5/v6/v7 schemas offline |
+| Operation catalog  | `stream-taxonomy-continuations-v1` | Provision fresh; upgrade the supported legacy catalog offline        |
+| Core history index | Optional since 0.85.1              | `provisionCoreHistoryIndexes`, once per physical Core schema         |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

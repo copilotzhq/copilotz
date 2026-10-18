@@ -292,6 +292,29 @@ function checkpointApplication(
   });
 }
 
+Deno.test("history checkpoints retain terminal coverage after byte loss", async () => {
+  const operationId = "history-operation";
+  const operations = await createOperations(checkpointApplication({
+    [operationId]: [{
+      ...terminalStream(operationId, 1, "covered-run"),
+      availability: "purged",
+      availabilityReason: "missing",
+    }],
+  }));
+  const checkpoint = await operations.checkpoint("thread", {
+    checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+    actionRunIds: ["covered-run"],
+  });
+  assertEquals(
+    decodeOperationReplayCursor(checkpoint).operationStreamPositions
+      ?.[operationId],
+    {
+      highWatermark: 1,
+      offsets: {},
+    },
+  );
+});
+
 Deno.test("history checkpoint bounds sparse coverage and replays deferred lanes", async () => {
   const coveredOrdinals = new Set([
     245,

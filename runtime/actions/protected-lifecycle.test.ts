@@ -436,3 +436,74 @@ Deno.test("protected Actions reject secret metadata and progress with bounded du
     await db.close();
   }
 });
+
+Deno.test("continuation captures encrypt child secrets before either operation is observable", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  let executions = 0;
+  const child = defineAction({
+    ...protectedAction,
+    execute(input: { visible: string; token: string }) {
+      executions++;
+      return protectedAction.execute(input, undefined as never);
+    },
+  });
+  const parent = defineAction({
+    id: "test.protected-parent",
+    inputSchema: protectedAction.inputSchema,
+    execute(
+      input: { visible: string; token: string },
+      context: import("./types.ts").ActionContext,
+    ) {
+      return context.awaitOperation({
+        start: {
+          action: "child",
+          input,
+        },
+        handoff: { captured: true },
+      });
+    },
+    resume(handoff, outcome) {
+      assertEquals(handoff, { captured: true });
+      assertEquals(outcome.status, "completed");
+      return true;
+    },
+  });
+  const app = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: SCHEMA,
+    adapters: { secrets: { default: await testSecretAdapter() } },
+    plugins: [
+      definePlugin({
+        id: "test.protected-continuation",
+        version: "1.0.0",
+        actions: { child, parent },
+        processors: {
+          start: defineProcessor<ProcessorContext>({
+            id: "test.start",
+            on: [{ eventType: "test.start" }],
+            async handle(_event, context) {
+              await (context.actions as RuntimeActionCallers).parent({
+                visible: "visible-input",
+                token: INPUT_SECRET,
+              });
+            },
+          }),
+        },
+      }),
+    ],
+  });
+  try {
+    const sent = await app.send({ type: "test.start" });
+    await sent.outputs.cancel();
+    await sent.done;
+    assertEquals(executions, 1);
+    const tables = createCoreTableNames(SCHEMA);
+    const bodies = await db.query(`SELECT body FROM ${tables.event_bodies}`);
+    assertEquals(JSON.stringify(bodies.rows).includes(INPUT_SECRET), false);
+    assertEquals(JSON.stringify(bodies.rows).includes(OUTPUT_SECRET), false);
+  } finally {
+    await app.close();
+    await db.close();
+  }
+});

@@ -47,6 +47,7 @@ function fixture() {
   const callers = (
     execute: (input: Input, context: ActionContext) => unknown,
     key = "run",
+    services = content,
   ) =>
     createActionCallers({
       test: defineAction({
@@ -56,7 +57,7 @@ function fixture() {
       }),
     }, {
       signal: new AbortController().signal,
-      content,
+      content: services,
       createInvocationKey: () => key,
       actionLifecycle: {
         // A receipt identity is written once, as in the event store.
@@ -151,7 +152,7 @@ Deno.test("Action content preserves bytes while lifecycle stores references and 
   assertEquals(f.reads, 1);
 });
 
-Deno.test("prepared Action replays captured content references without evaluating a newer factory", async () => {
+Deno.test("prepared Action replays captured inline content without evaluating a newer factory", async () => {
   const f = fixture();
   const input: Input = {
     messages: [{
@@ -187,10 +188,11 @@ Deno.test("prepared Action replays captured content references without evaluatin
     "recovered",
   );
   assertEquals(factoryCalls, 0);
-  assertEquals(f.reads, 1);
+  assertEquals(f.reads, 0);
+  assertEquals(f.publishes, 0);
 });
 
-Deno.test("Action content deduplicates literal bodies, preserves per-entry kinds, and does not load descriptors", async () => {
+Deno.test("Action content keeps literal bodies inline, preserves per-entry kinds, and does not load descriptors", async () => {
   const f = fixture();
   const descriptor = await f.assets.publish({
     namespace: "tenant",
@@ -223,7 +225,7 @@ Deno.test("Action content deduplicates literal bodies, preserves per-entry kinds
       }],
     }],
   });
-  assertEquals(f.publishes, 1);
+  assertEquals(f.publishes, 0);
   assertEquals(f.reads, 0);
   assertEquals(
     (f.events[0].input as Input).messages[0].content[2].resolve,
@@ -276,7 +278,39 @@ Deno.test("Action content rejects changed and cross-namespace Assets before invo
         }],
       }),
     Error,
-    "not found",
+    "content is missing",
+  );
+  const reference = {
+    assetId: asset.id,
+    kind: "text",
+    role: "body",
+    mediaType: asset.mediaType,
+  };
+  const unavailable = f.callers(
+    () => {
+      throw new Error("must not execute");
+    },
+    "staging",
+    {
+      ...f.content,
+      getMany: () => Promise.resolve([{ ...asset, state: "staging" }]),
+    },
+  );
+  await assertRejects(
+    () => unavailable.test({ messages: [{ content: [reference] }] }),
+    Error,
+    "not ready",
+  );
+  // Every descriptor is checked, even when two entries share one Asset.
+  await assertRejects(
+    () =>
+      actions.test({
+        messages: [{
+          content: [reference, { ...reference, mediaType: "image/png" }],
+        }],
+      }),
+    Error,
+    "different media type",
   );
   assertEquals(f.events, []);
 });
@@ -515,22 +549,22 @@ Deno.test("Action content accepts plain strings as text at declared paths", asyn
   ]]);
   assertEquals(strings.messages[0].content, "You are terse.");
 
-  // Lifecycle data holds references, exactly as it does for explicit entries.
+  // Lifecycle data preserves the exact text values inline.
   assertEquals(f.events.length > 0, true);
   const stored = f.events.flatMap((event) =>
     (event.input as Input).messages.flatMap((message) => message.content)
   );
   assertEquals(stored.length, 2 * 4);
   for (const entry of stored) {
-    assert(typeof entry.assetId === "string");
-    assert(!("value" in entry));
+    assertEquals(entry.assetId, undefined);
+    assert(typeof entry.value === "string");
   }
 
-  // The shorthand and the explicit entry are the same input: same Asset.
+  // Shorthand and explicit entries preserve the same inline value.
   const explicit = f.callers(() => "ok", "explicit");
   await explicit.test({ messages: [{ content: [text("You are terse.")] }] });
-  const first = (f.events[0].input as Input).messages[0].content[0].assetId;
-  const last = (f.events.at(-1)!.input as Input).messages[0].content[0].assetId;
+  const first = (f.events[0].input as Input).messages[0].content[0].value;
+  const last = (f.events.at(-1)!.input as Input).messages[0].content[0].value;
   assertEquals(last, first);
 });
 
@@ -555,4 +589,186 @@ Deno.test("Action content still rejects shapes that are neither text nor entries
     await actions.test({ messages: [{ content: "" }] } as never),
     "ok",
   );
+});
+
+Deno.test("captured inline text, JSON and bytes replay exactly across JSON receipt storage", async () => {
+  const f = fixture();
+  const input: Input = {
+    messages: [{
+      content: [
+        {
+          kind: "text",
+          role: "body",
+          mediaType: "text/plain",
+          value: "  exact\r\n\u0000é  ",
+        },
+        {
+          kind: "json",
+          role: "body",
+          mediaType: "application/json",
+          value: {
+            nested: {
+              assetId: "application-data",
+              kind: "text",
+              role: "body",
+              mediaType: "text/plain",
+              value: "keep this too",
+            },
+            items: [null, false, 0, ""],
+          },
+        },
+        {
+          kind: "image",
+          role: "attachment",
+          mediaType: "image/png",
+          value: new Uint8Array([0, 255, 17]),
+        },
+      ],
+    }],
+  };
+  const execute = (actual: Input) => {
+    assertEquals(actual, input);
+    return "ok";
+  };
+  await f.callers(execute).test.prepare(() => ({ input }), {
+    operationKey: "exact",
+  });
+  const captured = JSON.parse(JSON.stringify(f.events[0]));
+  f.events.splice(0, f.events.length, captured);
+  let prepares = 0;
+  await f.callers(execute).test.prepare(() => {
+    prepares++;
+    return { input: { messages: [] } };
+  }, { operationKey: "exact" });
+  assertEquals(prepares, 0);
+  assertEquals(f.publishes, 0);
+  assertEquals(f.reads, 0);
+});
+
+Deno.test("deleted captured content fails content_missing without re-preparing or executing", async () => {
+  const f = fixture();
+  const asset = await f.assets.publish({
+    namespace: "tenant",
+    mediaType: "text/plain",
+    body: new TextEncoder().encode("original"),
+  });
+  const input: Input = {
+    messages: [{
+      content: [{
+        assetId: asset.id,
+        kind: "text",
+        role: "body",
+        mediaType: asset.mediaType,
+      }],
+    }],
+  };
+  await f.callers(() => "ok").test.prepare(() => ({ input }), {
+    operationKey: "deleted",
+  });
+  f.events.splice(1);
+  await f.assets.markDeleted("tenant", asset.id);
+  let prepares = 0;
+  let executions = 0;
+  const error = await assertRejects(() =>
+    f.callers(() => {
+      executions++;
+    }).test.prepare(() => {
+      prepares++;
+      return { input: { messages: [] } };
+    }, { operationKey: "deleted" })
+  );
+  assertEquals((error as { code?: string }).code, "content_missing");
+  assertEquals(prepares, 0);
+  assertEquals(executions, 0);
+  assertEquals(f.publishes, 0);
+});
+
+Deno.test("unavailable physical content maps to content_missing without hiding authorization errors", async () => {
+  const f = fixture();
+  const asset = await f.assets.publish({
+    namespace: "tenant",
+    mediaType: "text/plain",
+    body: new TextEncoder().encode("original"),
+  });
+  const input = {
+    content: [{
+      assetId: asset.id,
+      kind: "text",
+      role: "body",
+      mediaType: asset.mediaType,
+    }],
+  };
+  const prepared = await prepareActionContentInput(input, {
+    input: ["content"],
+  }, {
+    ...f.content,
+    resolveMany: () =>
+      Promise.reject(
+        Object.assign(new Error("Body not found"), { code: "asset_not_found" }),
+      ),
+  }, new AbortController().signal);
+  const error = await assertRejects(() => prepared.hydrate());
+  assertEquals((error as { code?: string }).code, "content_missing");
+});
+
+Deno.test("recorded content Action results replay after input collection", async () => {
+  const f = fixture();
+  const asset = await f.assets.publish({
+    namespace: "tenant",
+    mediaType: "text/plain",
+    body: new TextEncoder().encode("original"),
+  });
+  const input: Input = {
+    messages: [{
+      content: [{
+        assetId: asset.id,
+        kind: "text",
+        role: "body",
+        mediaType: asset.mediaType,
+      }],
+    }],
+  };
+  let executions = 0;
+  const caller = f.callers(() => {
+    executions++;
+    return "recorded result";
+  });
+  await caller.test(input);
+  await f.assets.markDeleted("tenant", asset.id);
+  assertEquals(await caller.test(input), "recorded result");
+  assertEquals(executions, 1);
+  assertEquals(f.reads, 1);
+});
+
+Deno.test("a content preparation race returns the winning capture instead of comparing newer input", async () => {
+  const f = fixture();
+  const original: Input = {
+    messages: [{
+      content: [{
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+        value: "first capture",
+      }],
+    }],
+  };
+  let executions = 0;
+  const winner = f.callers((input) => {
+    executions++;
+    assertEquals(input, original);
+    return "winner";
+  });
+  const loser = f.callers(() => {
+    throw new Error("must not execute newer input");
+  });
+  const output = await loser.test.prepare(async () => {
+    await winner.test.prepare(
+      () => ({ input: original, metadata: { revision: 1 } }),
+      { operationKey: "race" },
+    );
+    return { input: { messages: [] }, metadata: { revision: 2 } };
+  }, { operationKey: "race" });
+  assertEquals(output, "winner");
+  assertEquals(executions, 1);
+  assertEquals(f.events.length, 2);
 });

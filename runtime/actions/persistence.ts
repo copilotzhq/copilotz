@@ -1,14 +1,7 @@
-import {
-  actionOwnershipStatement,
-  type ActionWriter,
-  combineActionStatements,
-} from "./ownership.ts";
+import { runSqlTransaction } from "../events/session.ts";
+import { startAwaitedOperation } from "./continuation-work.ts";
+import { actionOwnershipStatement, type ActionWriter } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
-import {
-  composeActionInputRetention,
-  planActionInputRetention,
-  retainActionInputContent,
-} from "./content-retention.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -91,6 +84,42 @@ export function createActionLifecycleAppender(
     & ActionLifecyclePersistenceOptions,
 ): ActionLifecycleAppender {
   return async ({ draft, data }) => {
+    if (data.status === "awaiting" && !options.transaction) {
+      if (!options.store) {
+        throw new TypeError("Awaiting requires an Event Store.");
+      }
+      const store = options.store as EventStore;
+      let flush!: () => Promise<void>;
+      const result = await runSqlTransaction(
+        store.session,
+        async (transaction) => {
+          await transaction.query(
+            "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            [store.databaseSchema, `continuation:${draft.namespace}`],
+          );
+          const appended = await createActionLifecycleAppender({
+            ...options,
+            transaction,
+          })({ draft, data });
+          flush = await startAwaitedOperation(
+            {
+              store,
+              coordinator: options.coordinator,
+              actions: options.actions,
+              protectedValues: options.protectedValues,
+            },
+            transaction,
+            { draft, data },
+            options.writer,
+          );
+          return appended;
+        },
+      );
+      await options.coordinator.flushCommitted(result);
+      await flush();
+      return result;
+    }
+
     const deduplicationId = draft.deduplicationId?.trim();
     if (!deduplicationId) {
       throw new TypeError("Action lifecycle events require deduplicationId.");
@@ -113,6 +142,9 @@ export function createActionLifecycleAppender(
         namespace: draft.namespace,
         data,
         action,
+        awaitedAction: data.status === "awaiting" && data.start
+          ? options.actions?.[data.start.action]
+          : undefined,
         protectedValues: options.protectedValues,
         // Only a secret input is sealed once, by the invoked receipt; a later
         // receipt of that run reuses its reference.
@@ -133,17 +165,9 @@ export function createActionLifecycleAppender(
         mediaType: "application/json" as const,
       },
     };
-    const retention = action
-      ? await planActionInputRetention(draft.namespace, action, data)
-      : undefined;
     const tables = options.store?.tables;
-    // The receipt's own statement retains the input Assets, unless protected
-    // values must be adopted in code beside them.
-    const inStatement = retention !== undefined && tables !== undefined &&
-      prepared.prepared.length === 0;
     return await options.coordinator.commitMutation({
       admission: {
-        openActionGroup: data.status === "deferred",
         cancellation: options.writer?.kind === "cancellation",
       },
       draft: { ...draft, payload },
@@ -152,26 +176,20 @@ export function createActionLifecycleAppender(
       ...(tables
         ? {
           statement: (param: (value: unknown) => string) =>
-            combineActionStatements([
-              actionOwnershipStatement(
-                { draft, data },
-                options.writer,
-                tables,
-                param,
-              ),
-              ...(inStatement
-                ? [composeActionInputRetention(retention!, tables, param)]
-                : []),
-            ]),
+            actionOwnershipStatement(
+              { draft, data },
+              options.writer,
+              tables,
+              param,
+            ),
         }
         : {}),
       ...(options.transaction
         ? { transaction: options.transaction, dispatch: false }
         : {}),
-      ...(!inStatement && (retention || prepared.prepared.length > 0)
+      ...(prepared.prepared.length > 0
         ? {
           mutate: async (context) => {
-            if (retention) await retainActionInputContent(context, retention);
             for (const value of prepared.prepared) {
               await options.protectedValues!.adopt(
                 context,

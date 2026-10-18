@@ -66,6 +66,13 @@ export function createTestDomainContext(
 ): ActionHostContext {
   const lifecycle = new Map<string, ActionEventData>();
   return createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace,
     databaseSchema: host.databaseSchema,
     plugins: host.plugins,

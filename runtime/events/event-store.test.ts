@@ -11,6 +11,7 @@ import {
   createCoreTableNames,
   createEventStore,
   createSqlSession,
+  EVENT_SCHEMA_VERSION,
   type EventStore,
   isEventStoreError,
   provisionCopilotzSchema,
@@ -117,7 +118,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean owner baseline contains the marker and no body-reference table", async () => {
+Deno.test("A20 clean current baseline contains the marker and no body-reference table", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -200,17 +201,23 @@ Deno.test("normal provisioning refuses a released v3 schema without writing curr
   }
 });
 
-Deno.test("atomic provisioning creates and validates a fresh owner marker", async () => {
+Deno.test("atomic provisioning creates and validates a fresh schema marker", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_fresh_v4_marker";
   try {
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 8);
+    assertEquals(
+      (await provisionCopilotzSchema(session, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
     const marker = await session.query<{ version: number }>(
       `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
     );
-    assertEquals(marker.rows, [{ version: 8 }]);
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 8);
+    assertEquals(marker.rows, [{ version: EVENT_SCHEMA_VERSION }]);
+    assertEquals(
+      (await provisionCopilotzSchema(session, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
   } finally {
     await db.close();
   }

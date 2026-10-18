@@ -3,21 +3,20 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./actions/consolidate-memory/index.ts";
 import entry1 from "./actions/inspect-memory/index.ts";
 import entry2 from "./actions/list-knowledge-spaces/index.ts";
-import entry3 from "./actions/request-checkpoint-recovery/index.ts";
+import entry3 from "./actions/produce-checkpoint/index.ts";
 import entry4 from "./actions/search-memory/index.ts";
 import entry5 from "./collections/long-term-memory/index.ts";
 import entry6 from "./collections/memory-note/index.ts";
 import entry7 from "./collections/memory-space-access/index.ts";
 import entry8 from "./collections/memory-space/index.ts";
 import entry9 from "./processors/dispatch-consolidation/index.ts";
-import entry10 from "./processors/recover-consolidation/index.ts";
-import entry11 from "./processors/settle-consolidation/index.ts";
-import entry12 from "./resources/memory/config/index.ts";
-import entry13 from "./resources/promptContext/memory/index.ts";
-import entry14 from "./resources/tools/consolidate-memory/index.ts";
-import entry15 from "./resources/tools/inspect-memory/index.ts";
-import entry16 from "./resources/tools/list-knowledge-spaces/index.ts";
-import entry17 from "./resources/tools/search-memory/index.ts";
+import entry10 from "./processors/settle-consolidation/index.ts";
+import entry11 from "./resources/memory/config/index.ts";
+import entry12 from "./resources/promptContext/memory/index.ts";
+import entry13 from "./resources/tools/consolidate-memory/index.ts";
+import entry14 from "./resources/tools/inspect-memory/index.ts";
+import entry15 from "./resources/tools/list-knowledge-spaces/index.ts";
+import entry16 from "./resources/tools/search-memory/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
 const definition = {
   id: "@copilotz/core-long-term-memory",
@@ -33,26 +32,25 @@ const definition = {
     "consolidate_memory": entry0,
     "inspect_memory": entry1,
     "list_knowledge_spaces": entry2,
-    "request_memory_checkpoint_recovery": entry3,
+    "produceCheckpoint": entry3,
     "search_memory": entry4,
   },
   processors: {
     "dispatchConsolidation": entry9,
-    "recoverConsolidation": entry10,
-    "settleConsolidation": entry11,
+    "settleConsolidation": entry10,
   },
   resources: {
     "memory": {
-      "config": entry12,
+      "config": entry11,
     },
     "promptContext": {
-      "memory": entry13,
+      "memory": entry12,
     },
     "tools": {
-      "consolidate_memory": entry14,
-      "inspect_memory": entry15,
-      "list_knowledge_spaces": entry16,
-      "search_memory": entry17,
+      "consolidate_memory": entry13,
+      "inspect_memory": entry14,
+      "list_knowledge_spaces": entry15,
+      "search_memory": entry16,
     },
   },
 } as const;

@@ -18,7 +18,6 @@ import type {
   ContentStreamRetentionInput,
   ContentStreamRuntime,
   CreateContentStreamRuntimeOptions,
-  StreamCapture,
   StreamTerminalOutcome,
 } from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
@@ -34,7 +33,6 @@ export type {
   ContentStreamRuntime,
   ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
-  StreamCapture,
   StreamTerminalOutcome,
 } from "./types.ts";
 
@@ -192,8 +190,8 @@ export function createContentStreamRuntime(
           );
         } else {
           const termination = {
-            outcome: "abandoned" as const,
-            capture: "truncated" as const,
+            outcome: "failed" as const,
+            reason: "abandoned",
           } as const;
           body.fence();
           await Promise.resolve(options.onTerminalizing?.(opened, termination))
@@ -224,7 +222,7 @@ export function createContentStreamRuntime(
       let termination:
         | Readonly<{
           outcome: Exclude<StreamTerminalOutcome, "completed">;
-          capture: StreamCapture;
+          reason?: string;
         }>
         | undefined;
       let removeLifetimeAbort = () => {};
@@ -266,7 +264,6 @@ export function createContentStreamRuntime(
           body.fence();
           await options.onTerminalizing?.(opened, {
             outcome: "completed",
-            capture: "complete",
           });
           readyBody ??= await body.finalize();
           await options.onSeal?.(opened, readyBody);
@@ -319,12 +316,12 @@ export function createContentStreamRuntime(
         if (terminalKind === "sealed") return;
         const normalized = {
           outcome: abortInput.outcome ?? "failed",
-          capture: abortInput.capture ?? "truncated",
+          ...(abortInput.reason ? { reason: abortInput.reason } : {}),
         } as const;
         if (
           termination &&
           (termination.outcome !== normalized.outcome ||
-            termination.capture !== normalized.capture)
+            termination.reason !== normalized.reason)
         ) {
           throw new Error(
             `Content stream '${id}' is already terminating with another outcome.`,
@@ -398,7 +395,7 @@ export function createContentStreamRuntime(
               // The raced append may already be visible to live followers, so
               // freeze immediately and let terminalization publish the exact
               // immutable Body length as the replay boundary.
-              await abort({ outcome: "superseded", capture: "truncated" })
+              await abort({ outcome: "cancelled", reason: "superseded" })
                 .catch(() => undefined);
             }
             throw error;
@@ -410,8 +407,8 @@ export function createContentStreamRuntime(
         retain,
         async [Symbol.asyncDispose]() {
           await abort({
-            reason: "Content stream writer disposed.",
-            outcome: "abandoned",
+            reason: "abandoned",
+            outcome: "failed",
           });
         },
       } as const;
@@ -420,11 +417,11 @@ export function createContentStreamRuntime(
           // Execution signals also end after successful Processor completion.
           // Give explicit cleanup (for example abort({outcome:'cancelled'}))
           // one task to record the real outcome; only a leaked writer falls
-          // back to the generic abandoned terminal state.
+          // back to the failure with an abandonment reason.
           setTimeout(() => {
             void abort({
-              reason: "Content stream execution ended.",
-              outcome: "abandoned",
+              reason: "abandoned",
+              outcome: "failed",
             }).catch(() => undefined);
           }, 0);
         };

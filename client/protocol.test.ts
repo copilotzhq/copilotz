@@ -95,7 +95,6 @@ Deno.test("multipart preserves binary boundary bytes and split UTF-8 JSON", asyn
       content: JSON.stringify({
         offset: 7 + bytes.length,
         outcome: "completed",
-        capture: "complete",
         availability: "retained",
         terminalAt: "2026-09-04T00:00:00Z",
       }),
@@ -414,5 +413,107 @@ Deno.test("invalid JSON, renewal and clean unfinished-lane closures never retry"
       ProtocolError,
     );
     assertEquals(calls, 1);
+  }
+});
+
+Deno.test("multipart validates simplified outcomes, causes and byte availability", async () => {
+  const base = { offset: 0, terminalAt: "2026-10-18T00:00:00Z" };
+  const response = (terminal: Record<string, unknown>, kind: string) =>
+    wire([
+      {
+        kind: "output",
+        content: JSON.stringify({ type: "stream.output", streamId: "s" }),
+      },
+      {
+        kind,
+        content: JSON.stringify(terminal),
+        headers: "x-copilotz-stream-id: s\r\nx-copilotz-offset: 0\r\n",
+      },
+    ]);
+  const completed: Record<string, unknown> = {
+    ...base,
+    outcome: "completed",
+    availability: "retained",
+  };
+  const error = (
+    outcome: string,
+    reason: string,
+    availability = "retained",
+  ) => ({
+    ...base,
+    type: "stream.error",
+    streamId: "s",
+    outcome,
+    reason,
+    availability,
+    code: availability === "purged"
+      ? "stream_unavailable"
+      : `stream_${outcome}`,
+    ...(availability === "purged" ? { availabilityReason: "missing" } : {}),
+  });
+  for (
+    const terminal of [
+      completed,
+      error("failed", "abandoned"),
+      error("failed", "provider_error"),
+      error("cancelled", "superseded"),
+      error("completed", "", "purged"),
+      error("failed", "provider_error", "purged"),
+    ]
+  ) {
+    if (terminal.reason === "") delete terminal.reason;
+    const kind = terminal === completed ? "stream-end" : "stream-error";
+    const frames = await Array.fromAsync(
+      decodeObservation(response(terminal, kind)),
+    );
+    assertEquals(frames.at(-1), {
+      kind,
+      streamId: "s",
+      offset: 0,
+      terminal,
+      checkpoint: "checkpoint-1",
+    });
+  }
+  for (
+    const terminal of [
+      { ...completed, outcome: "superseded" },
+      { ...completed, outcome: "abandoned" },
+      { ...completed, availability: "missing" },
+      { ...completed, availability: "purge_pending" },
+      { ...completed, capture: "complete" },
+      { ...completed, capture: "truncated" },
+      { ...completed, cleanupState: "pending" },
+      { ...completed, reason: 42 },
+      { ...completed, reason: " " },
+      { ...completed, availabilityReason: "missing" },
+      { ...completed, availability: "purged" },
+      { ...completed, availability: "purged", availabilityReason: "missing" },
+    ]
+  ) {
+    await assertRejects(
+      () =>
+        Array.fromAsync(decodeObservation(response(terminal, "stream-end"))),
+      ProtocolError,
+      "terminal",
+    );
+  }
+  for (
+    const terminal of [
+      { ...error("cancelled", "superseded"), code: "stream_superseded" },
+      { ...error("failed", "abandoned"), code: "stream_abandoned" },
+      { ...error("failed", "provider_error"), code: "stream_cancelled" },
+      { ...error("failed", "provider_error"), streamId: "other" },
+      { ...error("failed", "provider_error"), type: "other" },
+      { ...error("failed", "provider_error"), outcome: ["failed"] },
+      { ...error("failed", "provider_error"), availability: ["retained"] },
+      { ...error("completed", "invalid"), code: undefined },
+    ]
+  ) {
+    await assertRejects(
+      () =>
+        Array.fromAsync(decodeObservation(response(terminal, "stream-error"))),
+      ProtocolError,
+      "terminal",
+    );
   }
 });

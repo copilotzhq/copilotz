@@ -372,8 +372,8 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
           digest: `sha256:${"d".repeat(64)}`,
           maintenanceVersion: 2,
         },
-        outcome: "superseded",
-        capture: "truncated",
+        outcome: "cancelled",
+        reason: "superseded",
       }),
       true,
     );
@@ -383,7 +383,8 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       "physical-old",
     );
     assertEquals(fenced?.state, "terminal");
-    assertEquals(fenced?.outcome, "superseded");
+    assertEquals(fenced?.outcome, "cancelled");
+    assertEquals(fenced?.reason, "superseded");
     // The physical write was visible before catalog ownership was checked, so
     // the frozen terminal prefix and replay boundary include that raced byte.
     assertEquals(fenced?.committedOffset, 12);
@@ -454,7 +455,6 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
         operationId,
         streamId: descriptor.streamId,
         outcome: "failed",
-        capture: "truncated",
       }),
       true,
     );
@@ -489,20 +489,18 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
           maintenanceVersion: 2,
         },
         outcome: "failed",
-        capture: "truncated",
       }),
       true,
     );
     assertEquals(await terminal, {
       outcome: "failed",
       availability: "retained",
-      capture: "truncated",
       offset: 7,
       terminalAt: (await catalog.getStream(
         "tenant-a",
         operationId,
         descriptor.streamId,
-      ))!.terminalAt,
+      ))!.terminalAt!,
     });
     await assertRejects(
       () =>
@@ -857,9 +855,9 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
           namespace: "tenant-a",
           operationId,
           streamId: descriptor.streamId,
-          outcome: "abandoned",
-          availability: "purged",
-          capture: "truncated",
+          outcome: "failed",
+          reason: "abandoned",
+          availabilityReason: "deleted",
         });
       } else {
         await catalog.sealStream({

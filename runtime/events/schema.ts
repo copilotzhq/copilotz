@@ -1,6 +1,6 @@
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 8;
+export const EVENT_SCHEMA_VERSION = 9;
 
 export type CoreTableName =
   | "owner_epochs"
@@ -112,11 +112,8 @@ const CORE_SCHEMA_COLUMNS = {
     "state",
     "owner_delivery_id",
     "action_scope_id",
-    "deferred_event_id",
-    "wait_key",
-    "wait_signaled",
-    "wait_expires_at",
-    "resolve_generation",
+    "await_event_id",
+    "child_operation_id",
   ],
   event_deliveries: [
     "id",
@@ -250,7 +247,7 @@ async function classifySchema(
     }
       WHERE singleton = TRUE LIMIT 1`,
   );
-  if (Number(marker.rows[0]?.version) === 7) return "upgrade";
+  if (Number(marker.rows[0]?.version) === 8) return "upgrade";
   if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
     return "incompatible";
   }
@@ -355,22 +352,19 @@ export function createActionObligationStatements(
       action_id TEXT NOT NULL,
       scope_id TEXT NOT NULL,
       invoked_event_id TEXT NOT NULL REFERENCES ${tables.events}(id),
-      state TEXT NOT NULL CHECK (state IN ('invoked', 'deferred', 'resolving')),
+      state TEXT NOT NULL CHECK (state IN ('invoked', 'awaiting')),
       owner_delivery_id TEXT,
       action_scope_id TEXT,
-      deferred_event_id TEXT REFERENCES ${tables.events}(id),
-      wait_key TEXT,
-      wait_signaled BOOLEAN NOT NULL DEFAULT FALSE,
-      wait_expires_at TIMESTAMPTZ,
-      resolve_generation INTEGER NOT NULL DEFAULT 0 CHECK (resolve_generation >= 0),
+      await_event_id TEXT REFERENCES ${tables.events}(id),
+      child_operation_id TEXT,
       PRIMARY KEY (namespace, action_run_id)
     )`,
     `CREATE INDEX IF NOT EXISTS "event_deliveries_action_scope_idx"
       ON ${tables.event_deliveries} (settlement_scope_id, action_scope_id, status) WHERE action_scope_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS "open_actions_group_idx"
       ON ${tables.open_actions} (namespace, action_scope_id) WHERE action_scope_id IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS "open_actions_deferred_idx"
-      ON ${tables.open_actions} (namespace, scope_id, action_run_id) WHERE state = 'deferred'`,
+    `CREATE INDEX IF NOT EXISTS "open_actions_awaiting_idx"
+      ON ${tables.open_actions} (namespace, scope_id, action_run_id) WHERE state = 'awaiting'`,
     `CREATE INDEX IF NOT EXISTS "open_actions_scope_idx"
       ON ${tables.open_actions} (namespace, scope_id)`,
     `CREATE INDEX IF NOT EXISTS "open_actions_delivery_idx"

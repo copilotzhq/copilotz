@@ -23,8 +23,8 @@ export function actionOwnershipStatement(
   param: (value: unknown) => string,
 ): EventStatement<void> {
   const { data, draft } = input;
-  if (data.status === "deferred" && writer?.kind !== "delivery") {
-    throw new TypeError("Deferred Actions require a durable delivery owner.");
+  if (data.status === "awaiting" && writer?.kind !== "delivery") {
+    throw new TypeError("Awaiting Actions require a durable delivery owner.");
   }
   // Live/direct calls have no durable lease to recover after a crash. Their
   // receipts remain observable, but only delivery-owned work is an obligation.
@@ -80,7 +80,7 @@ export function actionOwnershipStatement(
     : cancellation
     ? `EXISTS (SELECT 1 FROM action_obligation WHERE ${owner})`
     : `EXISTS (SELECT 1 FROM action_obligation WHERE state IN (${
-      data.status === "deferred" ? "'invoked'" : "'invoked','resolving'"
+      data.status === "awaiting" ? "'invoked'" : "'invoked','awaiting'"
     }) AND ${owner})`;
   const gate = `${
     writer && !cancellation ? "EXISTS (SELECT 1 FROM action_writer) AND " : ""
@@ -105,10 +105,10 @@ export function actionOwnershipStatement(
         } FROM ${source}
           ON CONFLICT (namespace, action_run_id) DO NOTHING
         )`]
-        : data.status === "deferred"
-        ? [`deferred_action AS (
+        : data.status === "awaiting"
+        ? [`awaiting_action AS (
           UPDATE ${tables.open_actions} AS action
-          SET state = 'deferred', owner_delivery_id = NULL, deferred_event_id = ${source}.id
+          SET state = 'awaiting', owner_delivery_id = NULL, await_event_id = ${source}.id
           FROM ${source}
           WHERE action.namespace = ${namespace} AND action.action_run_id = ${runId}
         )`]
@@ -125,27 +125,6 @@ export function actionOwnershipStatement(
       if (!(value as { owned?: boolean } | undefined)?.owned) {
         throw new ActionOwnershipLost(data.actionRunId);
       }
-    },
-  };
-}
-
-/** Compose transactional checks without adding SQL round trips. */
-export function combineActionStatements(
-  statements: readonly EventStatement<void>[],
-): EventStatement<void> {
-  return {
-    ctes: statements.flatMap((statement) => statement.ctes),
-    gate: statements.map((statement) => `(${statement.gate})`).join(" AND "),
-    effects: (source) =>
-      statements.flatMap((statement) => statement.effects(source)),
-    report: `jsonb_build_array(${
-      statements.map((statement) => statement.report).join(", ")
-    })`,
-    resolve(report, inserted) {
-      const values = typeof report === "string" ? JSON.parse(report) : report;
-      statements.forEach((statement, index) =>
-        statement.resolve(values?.[index], inserted)
-      );
     },
   };
 }

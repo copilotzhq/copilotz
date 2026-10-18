@@ -216,7 +216,7 @@ export function createProcessorContext(
           operationId: settlementScopeId,
           streamId: stream.id,
           outcome: input.outcome,
-          capture: input.capture,
+          ...(input.reason ? { reason: input.reason } : {}),
         });
       if (!terminalizing) {
         const current = await options.operationCatalog.getStream(
@@ -243,7 +243,6 @@ export function createProcessorContext(
           {
             outcome: "completed",
             availability: "retained",
-            capture: "complete",
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -270,7 +269,7 @@ export function createProcessorContext(
           {
             outcome: input.outcome,
             availability: "retained",
-            capture: input.capture,
+            ...(input.reason ? { reason: input.reason } : {}),
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -286,7 +285,7 @@ export function createProcessorContext(
           streamId: stream.id,
           body,
           outcome: input.outcome,
-          capture: input.capture,
+          ...(input.reason ? { reason: input.reason } : {}),
         })
       ) {
         throw new Error(
@@ -377,19 +376,6 @@ export function createProcessorContext(
     options.base.idempotencyKey,
     "Processor operation key",
   );
-  const deferredWaits: NonNullable<
-    CreateProcessorContextOptions["deferredWaits"]
-  > = options.deferredWaits ?? {
-    signal: (_waitKey: string) => Promise.resolve(0),
-    registerAction: () =>
-      Promise.reject(
-        new Error("Durable Action waits require a delivery runtime."),
-      ),
-    rearmAction: () =>
-      Promise.reject(
-        new Error("Durable Action rearming requires a delivery runtime."),
-      ),
-  };
   let transactionIndex = 0;
 
   const transaction = async <T>(
@@ -490,7 +476,7 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
-    resolution: options.actionResolution,
+    resumption: options.actionResumption,
     content: {
       ...content,
       // This runtime-owned key is content-addressed, not Processor-run-addressed.
@@ -506,20 +492,12 @@ export function createProcessorContext(
     createInvocationKey: (actionId) =>
       `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: contextIdentity,
-    rearmDeferredAction: (actionRunId) =>
-      deferredWaits.rearmAction(actionRunId),
     createContext({ frame, actions: nestedActions, progress }) {
       return createActionInvocationContext({
         host: context,
         frame,
         actions: nestedActions,
         progress,
-        registerDeferredWait: (waitKey, timeoutMs) =>
-          deferredWaits.registerAction(
-            frame.actionRunId,
-            waitKey,
-            timeoutMs,
-          ),
       });
     },
   });
@@ -528,6 +506,7 @@ export function createProcessorContext(
     namespace,
     databaseSchema,
     operationKey: processorOperationKey,
+    operations: options.operations,
     identity: contextIdentity,
     resources: options.registry.resources,
     adapters: options.registry.adapters,
@@ -537,7 +516,6 @@ export function createProcessorContext(
     collections,
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
-    signalDeferredWait: (waitKey: string) => deferredWaits.signal(waitKey),
     now: options.now ?? (() => new Date()),
     transaction,
     readSnapshot,

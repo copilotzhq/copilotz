@@ -4,7 +4,7 @@ import {
 } from "../../shared/agent-turn-source.ts";
 import { collectContextContributions } from "../../shared/contributions.ts";
 import { coreEvent } from "../../shared/events/index.ts";
-import { ContextCompactionDeferredError } from "../../shared/context-compaction.ts";
+import { ContextCompactionAwaitingError } from "../../shared/context-compaction.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
 import { ContextInputLimitError, prepareLlmCall } from "@copilotz/copilotz/llm";
 import { isContentByteLimitError } from "@copilotz/copilotz/content";
@@ -271,7 +271,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const ask = agentAskMetadata(asRecord(record.metadata)) ??
         toolAction?.ask ?? branchResult?.ask;
       // Ask output has a directional recipient for durable conversation shape,
-      // but only its deferred Tool-plan barrier may resume the requester.
+      // but only its Tool-plan continuation may resume the requester.
       if (ask && (ask.phase === "progress" || ask.phase === "answer")) {
         return;
       }
@@ -569,8 +569,8 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 );
                 if (
                   result && typeof result === "object" &&
-                  (result as { status?: unknown }).status === "deferred"
-                ) throw new ContextCompactionDeferredError();
+                  (result as { status?: unknown }).status === "awaiting"
+                ) throw new ContextCompactionAwaitingError();
               };
               let request;
               let preparedHistory:
@@ -789,7 +789,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
-          if (error instanceof ContextCompactionDeferredError) continue;
+          if (error instanceof ContextCompactionAwaitingError) continue;
           if (
             (agentTurn?.sourceHistory || agentTurn?.sourceHistoryRef) &&
             !isSettledActionError(error)

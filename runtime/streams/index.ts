@@ -14,7 +14,6 @@ export type {
   ContentStreamRuntime,
   ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
-  StreamCapture,
   StreamTerminalOutcome,
 } from "./stream.ts";
 export {
@@ -59,6 +58,7 @@ export {
   createStreamOutputDescriptor,
   isStreamOutput,
   isStreamOutputDescriptor,
+  isStreamTerminalStatus,
 } from "./observation.ts";
 export { streamErrorOutput } from "./terminal.ts";
 export type {

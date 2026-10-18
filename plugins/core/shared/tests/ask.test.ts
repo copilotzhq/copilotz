@@ -290,6 +290,22 @@ async function waitForRun(
       NAMESPACE,
       rootEventId,
     );
+    const operations = await fixture.engine.operations.list({
+      namespace: NAMESPACE,
+    });
+    const scopes = new Set([rootEventId]);
+    for (let i = 0; i < operations.length; i++) {
+      for (const operation of operations) {
+        if (operation.parent && scopes.has(operation.parent.operationId)) {
+          scopes.add(operation.operationId);
+        }
+      }
+    }
+    const deadLetters = (await fixture.engine.deliveries.list({
+      namespace: NAMESPACE,
+      status: "dead_letter",
+    }))
+      .filter((delivery) => scopes.has(delivery.settlementScopeId)).length;
     const messages = await projectMessages(
       fixture.engine,
       NAMESPACE,
@@ -297,12 +313,12 @@ async function waitForRun(
     );
     if (
       settlement.unsettled === 0 &&
-      settlement.deadLetters === expectedDeadLetters &&
+      deadLetters === expectedDeadLetters &&
       messages.length === expectedMessages
     ) {
       return;
     }
-    if (settlement.deadLetters > expectedDeadLetters) {
+    if (deadLetters > expectedDeadLetters) {
       const deliveries = await fixture.engine.deliveries.list({
         namespace: NAMESPACE,
         status: "dead_letter",
@@ -313,7 +329,14 @@ async function waitForRun(
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Ask workflow did not produce ${expectedMessages} Messages.`);
+  const failures =
+    (await projectActionEvents(fixture.engine, NAMESPACE, "copilotz.core.ask"))
+      .filter((event) => event.status === "failed");
+  throw new Error(
+    `Ask workflow did not produce ${expectedMessages} Messages. ${
+      JSON.stringify(failures)
+    }`,
+  );
 }
 function activeAgent(input: LlmAdapterCallInput): string {
   const instructions = input.request.instructions ?? "";

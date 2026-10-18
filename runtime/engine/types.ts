@@ -79,7 +79,7 @@ export type EngineContextSeed = Readonly<{
   /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
   executionIncarnationId?: string;
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
   idempotencyKey: string;
   createMutationIdentity: EngineMutationIdentityFactory;
@@ -285,7 +285,7 @@ export type CopilotzEngine = Readonly<{
       eventId?: string;
       consumerId?: string;
       settlementScopeId?: string;
-      /** Runtime-owned work group for an outstanding deferred Action. */
+      /** Action lineage carried by durable execution. */
       actionScopeId?: string;
       status?: EventDelivery["status"];
       limit?: number;
@@ -323,6 +323,7 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  operations: import("../actions/types.ts").RuntimeOperations;
   base: EngineContextSeed;
   registry: PluginRegistry;
   assets: DatabaseAssetRepository;
@@ -333,21 +334,12 @@ export type CreateProcessorContextOptions = Readonly<{
   publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
   publishLocalStream?: (output: StreamOutput) => Promise<void>;
   actionLifecycle: ActionLifecycleEmitter;
-  actionResolution?:
-    import("../actions/invoker.ts").CreateActionCallersOptions["resolution"];
+  actionResumption?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["resumption"];
   now?: () => Date;
   streamBodyStore: BodyStore;
   streamBodyPrefix: string;
   operationCatalog: OperationCatalog;
-  deferredWaits?: Readonly<{
-    signal(waitKey: string): Promise<number>;
-    registerAction(
-      actionRunId: string,
-      waitKey: string,
-      timeoutMs?: number,
-    ): Promise<void>;
-    rearmAction(actionRunId: string): Promise<void>;
-  }>;
   protectedEventResolver?: ProtectedEventResolver;
 }>;
 

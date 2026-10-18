@@ -1,7 +1,7 @@
-/** Internal control flow for yielding a message route to deferred compaction. */
-export class ContextCompactionDeferredError extends Error {
+/** Internal control flow for yielding a message route to operation-backed compaction. */
+export class ContextCompactionAwaitingError extends Error {
   constructor() {
     super("Context compaction is waiting for its checkpoint.");
-    this.name = "ContextCompactionDeferredError";
+    this.name = "ContextCompactionAwaitingError";
   }
 }

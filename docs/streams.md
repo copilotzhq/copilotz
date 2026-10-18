@@ -24,7 +24,7 @@ Progressive output needs a contract of its own, separate from Events:
   Events;
 - each observer reads independently and can reconnect from where it stopped;
 - the end of the bytes is reported separately from what that end _means_:
-  completed, failed, cancelled, superseded or abandoned;
+  completed, failed or cancelled, with a reason;
 - a retried producer never splices new bytes onto an old attempt.
 
 ## The solution
@@ -153,7 +153,7 @@ async function readStream(output: StreamOutput): Promise<void> {
   // EOF only means no more bytes; the terminal status says how it ended.
   const status = await output.terminal;
   console.log(
-    `terminal outcome=${status.outcome} capture=${status.capture}`,
+    `terminal outcome=${status.outcome}`,
     `availability=${status.availability} offset=${status.offset}`,
   );
 }
@@ -211,8 +211,8 @@ Run it with `deno run -A stream-draft.ts "release notes"` or
 `node stream-draft.ts "release notes"`. Expect the `drafts.*` lifecycle Events,
 a `stream draft.text:` line built up chunk by chunk to
 `Draft about release notes: first point. done.`, and
-`terminal outcome=completed capture=complete availability=retained offset=45`.
-Event lines can interleave with the stream text.
+`terminal outcome=completed availability=retained offset=45`. Event lines can
+interleave with the stream text.
 
 The reader decodes one chunk at a time and waits for each stdout write before
 reading the next, rather than accumulating the whole body. Writing straight to
@@ -258,12 +258,21 @@ provider field. Semantic plugins put such hints in `metadata`.
 
 ### `StreamTerminalStatus`
 
-Three independent fields describe how a lane ended:
+The terminal separates execution from byte availability:
 
-- `outcome`: `completed`, `failed`, `cancelled`, `superseded` or `abandoned`;
-- `capture`: `complete` or `truncated`; `completed` always means `complete`, but
-  another outcome may also have complete capture;
-- `availability`: `retained`, `purge_pending`, `purged` or `missing`.
+- `outcome`: `completed`, `failed` or `cancelled`. `completed` means the full
+  body was sealed; failed and cancelled lanes keep their committed prefix.
+- `reason`: an optional cause, such as `superseded`, `abandoned` or
+  `provider_error`. Replacement by a new attempt is `cancelled` with reason
+  `superseded`; a lost writer is `failed` with reason `abandoned`.
+- `availability`: `retained` or `purged`. Cleanup progress stays internal and
+  does not change availability until deletion is confirmed.
+- `availabilityReason`: the cause of unavailable bytes, such as `missing` or
+  `deleted`. Missing bytes produce a read error without changing the logical
+  outcome or its reason.
+
+There is no separate `capture` field. Retention remains `observation` or
+`canonical`.
 
 `offset` is the exact immutable length of the frozen Body, including an append
 that became visible just before the producer lost ownership. `terminalAt` is the
@@ -281,12 +290,12 @@ settlement time.
 - `retain(...)` must follow `close`. Choose
   `{ retention: "canonical", assetId }` when the content is adopted as an Asset,
   or `{ retention: "observation" }` to keep it only for operation replay.
-- `abort({ outcome?, capture?, reason? })` ends a published lane without
-  deleting it. The default outcome is `failed`; pass `{ outcome: "cancelled" }`
-  when handling cancellation. The prefix becomes an immutable `incomplete` Body
-  that is readable but never adoptable.
+- `abort({ outcome?, reason? })` ends a published lane without deleting it. The
+  default outcome is `failed`; pass `{ outcome: "cancelled" }` when handling
+  cancellation. The prefix becomes an immutable `incomplete` Body that is
+  readable but never adoptable.
 - Disposing a leaked writer (`Symbol.asyncDispose`, or execution teardown)
-  records `abandoned` rather than guessing a semantic outcome.
+  records `failed` with reason `abandoned`.
 
 Before its descriptor is published, a failed open discards staging. After
 publication, the lane is a replay obligation and always reaches a terminal
@@ -311,12 +320,12 @@ after the operation settles. Expiry happens when maintenance runs:
 after replay metadata expires.
 
 Over HTTP, a non-completed or unavailable lane ends with an in-band
-`stream.error` frame (stream ID, offset, outcome, capture, availability and a
-code such as `stream_failed`); a completed, available lane ends with
-`stream.end`. HTTP observations are renewed every 5 minutes by default. The
-published client reconnects on a planned renewal itself; custom clients must
-apply frames before advancing their checkpoint, handle repeated frames
-idempotently, and must not treat EOF or a closing multipart boundary as
+`stream.error` frame (stream ID, offset, outcome, reason, availability,
+availability reason and a code such as `stream_failed`); a completed, available
+lane ends with `stream.end`. HTTP observations are renewed every 5 minutes by
+default. The published client reconnects on a planned renewal itself; custom
+clients must apply frames before advancing their checkpoint, handle repeated
+frames idempotently, and must not treat EOF or a closing multipart boundary as
 operation completion. Cursors from an older generation are rejected with
 `invalid_replay_cursor`; see
 [Events, Deliveries, and Recovery](events-deliveries-recovery.md) for the

@@ -2,6 +2,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreTableNames,
+  EVENT_SCHEMA_VERSION,
   provisionCopilotzSchema,
 } from "../events/schema.ts";
 import {
@@ -268,12 +269,18 @@ Deno.test("versioned owner upgrade preserves an existing event and Action baseli
     await db.query(
       `DROP TABLE ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
-    await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=7`);
-    assertEquals((await provisionCopilotzSchema(db, schema)).version, 8);
+    await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=8`);
+    assertEquals(
+      (await provisionCopilotzSchema(db, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
     assertEquals((await db.query(`SELECT id FROM ${tables.events}`)).rows, [{
       id: "existing",
     }]);
-    assertEquals((await provisionCopilotzSchema(db, schema)).version, 8);
+    assertEquals(
+      (await provisionCopilotzSchema(db, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
   } finally {
     await db.close();
   }

@@ -21,9 +21,6 @@ import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
-import type { ProcessorEvent } from "../../runtime/plugins/processor.ts";
-import type { MemoryProcessorContext } from "./shared/contracts.ts";
-import { recoverMemoryConsolidationProcessor } from "./processors/recover-consolidation/index.ts";
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import {
   type CopilotzEngine,
@@ -167,7 +164,6 @@ async function fixture(
     dispatchErrors?: { attempts: number };
     skipDispatch?: boolean;
     executionCapacity?: number;
-    duplicateRecoveryDispatch?: boolean;
     snapshotCaptureGate?: Readonly<{
       wait: Promise<void>;
       arrive(): void;
@@ -188,8 +184,7 @@ async function fixture(
     retainRecentEstimatedTokens: 0,
     ...options.memoryConfig,
   };
-  const memory = options.dispatchErrors || options.skipDispatch ||
-      options.duplicateRecoveryDispatch
+  const memory = options.dispatchErrors || options.skipDispatch
     ? definePlugin({
       ...memoryPlugin,
       processors: {
@@ -203,22 +198,6 @@ async function fixture(
                   options.dispatchErrors.attempts++;
                   throw new Error("dispatch preparation unavailable");
                 }
-              },
-            },
-          }
-          : {}),
-        ...(options.duplicateRecoveryDispatch
-          ? {
-            recoverConsolidation: {
-              ...memoryPlugin.processors.recoverConsolidation,
-              async handle(
-                event: ProcessorEvent,
-                context: MemoryProcessorContext,
-              ) {
-                await Promise.all([
-                  recoverMemoryConsolidationProcessor.handle(event, context),
-                  recoverMemoryConsolidationProcessor.handle(event, context),
-                ]);
               },
             },
           }
@@ -556,12 +535,11 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
     "consolidate_memory",
     "inspect_memory",
     "list_knowledge_spaces",
-    "request_memory_checkpoint_recovery",
+    "produceCheckpoint",
     "search_memory",
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
     "dispatchConsolidation",
-    "recoverConsolidation",
     "settleConsolidation",
   ]);
 });
@@ -2200,7 +2178,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     }),
     arrive() {
       snapshotCaptureArrivals += 1;
-      if (snapshotCaptureArrivals === 2) releaseSnapshotCapture();
+      if (snapshotCaptureArrivals === 1) releaseSnapshotCapture();
     },
   };
   const run = await fixture((input) => {
@@ -2218,7 +2196,6 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     compactedContext,
     skipDispatch: true,
     executionCapacity: 1,
-    duplicateRecoveryDispatch: true,
     snapshotCaptureGate,
     memoryConfig: {
       triggerEstimatedTokens: 1_000_000,
@@ -2244,7 +2221,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     run.setMemoryConfig({ triggerEstimatedTokens: 1 });
     await createHumanMessage(run, {
       id: "message:scheduled-job-trigger",
-      text: "Continue the scheduled Compass maintenance.",
+      text: "Continue the scheduled memory maintenance.",
       recipientIds: ["agent-north"],
     });
 
@@ -2293,7 +2270,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
       "orphan repair must create the deterministic maintenance task",
     );
     assertEquals(task.historyScopeId, saved.id);
-    assertEquals(snapshotCaptureArrivals, 2);
+    assertEquals(snapshotCaptureArrivals, 1);
     assert(compactedContext.value);
     assertEquals(run.inputs.length, 4);
     await assertNoDeadLetters(run);

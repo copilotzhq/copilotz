@@ -29,8 +29,7 @@
     "collections/space/index.ts",
     "collections/thread/index.ts",
     "processors/message-input/index.ts",
-    "resources/capabilities/default/index.ts",
-    "processors/dispatch-ask/index.ts"
+    "resources/capabilities/default/index.ts"
   ],
   "plugins": [
     {

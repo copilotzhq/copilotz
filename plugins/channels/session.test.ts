@@ -39,7 +39,6 @@ const output = (name: string): ApplicationOutput => ({
   terminal: Promise.resolve({
     outcome: "completed",
     availability: "retained",
-    capture: "complete",
     offset: 0,
     terminalAt: new Date(0).toISOString(),
   }),

@@ -37,7 +37,6 @@ Deno.test("core plugin is direct static plugin composition", () => {
       "projectTextResult",
       "projectAgentFailure",
       "projectToolResult",
-      "dispatchAsk",
       "toolPlanCoordinator",
     ].sort(),
   );
@@ -93,7 +92,6 @@ Deno.test("core production modules consume public Copilotz subpaths", async () =
     "processors/project-text-result/index.ts",
     "processors/project-agent-failure/index.ts",
     "processors/project-tool-result/index.ts",
-    "processors/dispatch-ask/index.ts",
     "processors/tool-plan-coordinator/index.ts",
     "resources/tools/ask/index.ts",
     "resources/tools/read-tool-result/index.ts",

@@ -33,8 +33,9 @@ function deferred() {
 }
 async function fixture(
   run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>,
+  maxUnresolved = 128,
 ) {
-  const f = await setup();
+  const f = await setup(maxUnresolved);
   try {
     await run(f);
   } finally {
@@ -42,10 +43,10 @@ async function fixture(
     await f.db.close();
   }
 }
-async function setup() {
+async function setup(maxUnresolved = 128) {
   const db = await createTestDatabase({ url: ":memory:" });
   try {
-    return await initialize(db);
+    return await initialize(db, maxUnresolved);
   } catch (error) {
     try {
       await db.close();
@@ -58,7 +59,7 @@ async function setup() {
     throw error;
   }
 }
-async function initialize(db: TestDatabase) {
+async function initialize(db: TestDatabase, maxUnresolved: number) {
   await provisionCopilotzSchema(db, "public");
   await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
@@ -75,6 +76,11 @@ async function initialize(db: TestDatabase) {
     physical.reserve(identity);
   let append: PhysicalBodyStore["append"] = (input) => physical.append(input);
   let head: PhysicalBodyStore["head"] = (id) => physical.head(id);
+  let fence: PhysicalBodyStore["fence"] = (identity) =>
+    physical.fence(identity);
+  let controlCurrent = (caller: OwnerCaller): boolean =>
+    caller.principal.kind === "owner-control" &&
+    caller.principal.holderId === "holder";
   const published: unknown[] = [];
   const content = createOwnerStreamReservations({
     ownerId: "owner",
@@ -83,6 +89,7 @@ async function initialize(db: TestDatabase) {
     backendId: "memory",
     physical: {
       ...physical,
+      fence: (identity) => fence(identity),
       append(input) {
         return append(input);
       },
@@ -95,6 +102,8 @@ async function initialize(db: TestDatabase) {
       },
     },
     protectionMs: 1000,
+    maxUnresolved,
+    isControlCurrent: (caller) => controlCurrent(caller),
     async resolve(tx) {
       if (!active) return undefined;
       const store = createEventStore({
@@ -224,8 +233,14 @@ async function initialize(db: TestDatabase) {
     setAppend: (value: PhysicalBodyStore["append"]) => {
       append = value;
     },
+    setFence: (value: PhysicalBodyStore["fence"]) => {
+      fence = value;
+    },
     setHead: (value: PhysicalBodyStore["head"]) => {
       head = value;
+    },
+    setControlCurrent: (hook: typeof controlCurrent) => {
+      controlCurrent = hook;
     },
     setCurrent: (hook: typeof currentHook) => {
       currentHook = hook;
@@ -923,3 +938,210 @@ Deno.test("owner checkpoint refuses protection expiry during physical head obser
       [{ offset: "0" }],
     );
   }));
+
+const cleanupCaller: OwnerCaller = {
+  principal: {
+    kind: "owner-control",
+    ownerId: "owner",
+    epoch: 1,
+    holderId: "holder",
+  },
+  ownerEpoch: 1,
+};
+async function streamRow(
+  f: Awaited<ReturnType<typeof setup>>,
+  streamId?: string,
+) {
+  const row = (await f.db.query<Record<string, unknown>>(
+    "SELECT * FROM copilotz_operation_streams WHERE ($1::text IS NULL OR stream_id=$1) ORDER BY created_at LIMIT 1",
+    [streamId ?? null],
+  )).rows[0];
+  if (!row) throw new Error("missing fixture stream");
+  return {
+    row,
+    target: {
+      namespace: String(row.namespace),
+      operationId: String(row.operation_id),
+      streamId: String(row.stream_id),
+    },
+  };
+}
+Deno.test("owner revocation preserves C after caller loss and does not publish a terminal Core Event", async () => {
+  await fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 3,
+      appendId: "b",
+      bytes: new Uint8Array([4, 5]),
+    });
+    const { target } = await streamRow(f);
+    const before = await f.counts();
+    f.setActive(false);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "failed",
+    });
+    const { row } = await streamRow(f);
+    assertEquals(row.state, "terminal");
+    assertEquals(row.revocation_state, "revoked");
+    assertEquals(Number(row.committed_offset), 3);
+    assertEquals(row.outcome, "failed");
+    assertEquals(row.capture, "truncated");
+    assertEquals(row.availability, "retained");
+    assertEquals((await f.physical.head(String(row.body_id)))?.byteLength, 5);
+    assertEquals((await f.counts()).events, before.events);
+    assertEquals((await f.counts()).owner_receipts, before.owner_receipts);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "cancelled",
+    });
+    assertEquals((await streamRow(f)).row.outcome, "failed");
+  });
+});
+Deno.test("owner revocation remains unresolved while a fence is held or unknown", async () => {
+  await fixture(async (f) => {
+    await f.content.open(f.owner, f.caller, input);
+    const { target } = await streamRow(f);
+    const entered = deferred(), released = deferred();
+    f.setFence(async () => {
+      entered.resolve();
+      await released.promise;
+      throw new Error("physical outcome unknown");
+    });
+    const pending = f.content.revoke(f.owner, cleanupCaller, target);
+    void pending.catch(() => undefined);
+    await entered.promise;
+    assertEquals((await streamRow(f)).row.revocation_state, "revoking");
+    released.resolve();
+    const error = await assertRejects(
+      () => pending,
+      Error,
+      "fence outcome is unknown",
+    );
+    assertEquals(
+      (error as Error & { indeterminate?: boolean }).indeterminate,
+      true,
+    );
+    assertEquals((await streamRow(f)).row.revocation_state, "revoking");
+    f.setFence((writer) => f.physical.fence(writer));
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals((await streamRow(f)).row.revocation_state, "revoked");
+  });
+});
+Deno.test("owner cleanup fences hidden reservations without publishing them", async () => {
+  await fixture(async (f) => {
+    f.setReserve(() => Promise.reject(new Error("reserve unavailable")));
+    await assertRejects(() => f.content.open(f.owner, f.caller, input));
+    const { target } = await streamRow(f);
+    const before = await f.counts();
+    f.setActive(false);
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const { row } = await streamRow(f);
+    assertEquals(row.state, "reserving");
+    assertEquals(row.revocation_state, "revoked");
+    assertEquals(row.stream_ordinal, null);
+    assertEquals(Number(row.committed_offset), 0);
+    assertEquals((await f.counts()).events, before.events);
+  });
+});
+Deno.test("owner short physical fence marks missing without shrinking accepted prefix", async () => {
+  await fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3);
+    const missing = createMemoryPhysicalBodyStore();
+    f.setFence((writer) => missing.fence(writer));
+    const { target } = await streamRow(f);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "cancelled",
+    });
+    const { row } = await streamRow(f);
+    assertEquals(Number(row.committed_offset), 3);
+    assertEquals(row.outcome, "cancelled");
+    assertEquals(row.availability, "missing");
+  });
+});
+Deno.test("owner unresolved writer bound includes revoking rows and permits exact replay", async () => {
+  await fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    assertEquals(
+      (await f.content.open(f.owner, f.caller, input)).streamId,
+      opened.streamId,
+    );
+    await assertRejects(
+      () => f.content.open(f.owner, f.caller, { ...input, id: "second" }),
+      Error,
+      "capacity",
+    );
+    const { target } = await streamRow(f);
+    f.setFence(() => Promise.reject(new Error("unknown fence")));
+    await assertRejects(() => f.content.revoke(f.owner, cleanupCaller, target));
+    await assertRejects(
+      () => f.content.open(f.owner, f.caller, { ...input, id: "second" }),
+      Error,
+      "capacity",
+    );
+    f.setFence((writer) => f.physical.fence(writer));
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    await f.content.open(f.owner, f.caller, { ...input, id: "second" });
+  }, 1);
+});
+Deno.test("owner cleanup refuses producer callers and mismatched physical fences", async () => {
+  await fixture(async (f) => {
+    await f.content.open(f.owner, f.caller, input);
+    const { target } = await streamRow(f);
+    await assertRejects(
+      () => f.content.revoke(f.owner, f.caller, target),
+      Error,
+      "cleanup authority",
+    );
+    assertEquals((await streamRow(f)).row.revocation_state, "active");
+    f.setFence(async (writer) => ({
+      ...await f.physical.fence(writer),
+      generation: writer.generation,
+    }));
+    await assertRejects(
+      () => f.content.revoke(f.owner, cleanupCaller, target),
+      Error,
+      "does not match",
+    );
+    assertEquals((await streamRow(f)).row.revocation_state, "revoking");
+  });
+});
+
+Deno.test("owner current-epoch cleanup refuses retained epochs and asynchronous control proof", async () => {
+  await fixture(async (f) => {
+    await f.content.open(f.owner, f.caller, input);
+    const { target } = await streamRow(f);
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET opening_owner_epoch=2",
+    );
+    await assertRejects(
+      () => f.content.revoke(f.owner, cleanupCaller, target),
+      Error,
+      "target is unavailable",
+    );
+    assertEquals((await streamRow(f)).row.revocation_state, "active");
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET opening_owner_epoch=1",
+    );
+    f.setControlCurrent(
+      (() => Promise.reject(new Error("late proof rejection"))) as never,
+    );
+    await assertRejects(
+      () => f.content.revoke(f.owner, cleanupCaller, target),
+      Error,
+      "cleanup authority",
+    );
+    await new Promise((done) => setTimeout(done, 0));
+    assertEquals((await streamRow(f)).row.revocation_state, "active");
+  });
+});

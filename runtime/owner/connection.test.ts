@@ -2399,3 +2399,176 @@ test("decoded snapshot close refusal stays distinct from transport uncertainty",
       error.code === "owner_snapshot_expired" && error.outcome === "refused",
   );
 });
+
+test("stream routes use ordinary assignment grants and separate abort settlement grants", async () => {
+  let lookups = 0, writes = 0;
+  const a = admission(recordingBoundary(), {
+    resolveAssignment() {
+      lookups++;
+      return {
+        ownerId: "tenant",
+        ctxGranted: false,
+        settlementGranted: true,
+        caller,
+      };
+    },
+    streams: {
+      run: () => {
+        writes++;
+        return Promise.resolve(null);
+      },
+    },
+  });
+  assert.equal(
+    await a.admit(context({ workload: "copilotz.owner.stream" })),
+    undefined,
+  );
+  const abort = await a.admit(
+    context({ workload: "copilotz.owner.stream-abort" }),
+  );
+  assert.ok(abort);
+  assert.equal(lookups, 2);
+  assert.equal(
+    await a.admit(
+      context({ workload: "copilotz.owner.stream-abort", parent: undefined }),
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    decode(
+      await abort({
+        input: stream({ operation: "abort", input: { id: "s" } }),
+        signal: new AbortController().signal,
+      }),
+    ),
+    { ok: true, value: null },
+  );
+  assert.equal(writes, 1);
+  assert.equal(
+    decode(
+      await abort({
+        input: stream({ operation: "open", input: { id: "s" } }),
+        signal: new AbortController().signal,
+      }),
+    ).ok,
+    false,
+  );
+  assert.equal(writes, 1);
+});
+test("stream wire captures bounded bytes and dispatches a decoded owned chunk", async () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  let calls = 0;
+  const a = admission(recordingBoundary(), {
+    streams: {
+      run(_caller, request) {
+        assert.equal(request.operation, "append");
+        if (request.operation !== "append") throw new Error("wrong route");
+        assert.deepEqual(request.input.bytes, new Uint8Array([1, 2, 3]));
+        calls++;
+        return Promise.resolve({ startOffset: 0, endOffset: 3 });
+      },
+    },
+  });
+  const connection = createOwnerConnection({
+    ownerId: "tenant",
+    async callHost(input) {
+      const handler = await a.admit(context({ workload: input.workload }));
+      assert.ok(handler);
+      const result = await handler({
+        input: new ReadableStream({
+          start(c) {
+            c.enqueue(input.body as Uint8Array);
+            c.close();
+          },
+        }),
+        signal: input.signal!,
+      });
+      return {
+        output: new ReadableStream({
+          start(c) {
+            c.enqueue(result);
+            c.close();
+          },
+        }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      };
+    },
+  });
+  const pending = connection.streams.append({
+    id: "s",
+    appendId: "a",
+    expectedOffset: 0,
+    bytes,
+  }, {});
+  bytes.fill(9);
+  assert.deepEqual(await pending, { startOffset: 0, endOffset: 3 });
+  assert.equal(calls, 1);
+  await assert.rejects(() =>
+    connection.streams.append({
+      id: "s",
+      appendId: "large",
+      expectedOffset: 3,
+      bytes: new Uint8Array(256 * 1024 + 1),
+    }, {})
+  );
+  assert.equal(calls, 1);
+});
+test("stream transport loss or malformed success is indeterminate without receipt replay", async () => {
+  for (const mode of ["lost", "malformed", "unknown", "refused"] as const) {
+    const connection = createOwnerConnection({
+      ownerId: "tenant",
+      callHost: () =>
+        mode === "lost"
+          ? Promise.reject(new Error("lost reply"))
+          : Promise.resolve({
+            output: stream(
+              mode === "malformed"
+                ? { ok: true, value: null }
+                : { ok: false, code: "owner_call_rejected", outcome: mode },
+            ),
+            completed: Promise.resolve(),
+            cancel: () => Promise.resolve(),
+          }),
+    });
+    await assert.rejects(
+      () =>
+        connection.streams.checkpoint(
+          { id: "s", startOffset: 0, endOffset: 3 },
+          {},
+        ),
+      (error: unknown) =>
+        mode === "refused"
+          ? error instanceof OwnerCallRejected && error.outcome === "refused"
+          : !!error && typeof error === "object" && "indeterminate" in error &&
+            error.indeterminate === true,
+    );
+  }
+});
+test("stream failure encoding never executes hostile error accessors", async () => {
+  let reads = 0;
+  const error = Object.defineProperty(new Error("private"), "code", {
+    get() {
+      reads++;
+      throw new Error("do not execute");
+    },
+  });
+  const a = admission(recordingBoundary(), {
+    streams: { run: () => Promise.reject(error) },
+  });
+  const handler = await a.admit(context({ workload: "copilotz.owner.stream" }));
+  assert.ok(handler);
+  assert.deepEqual(
+    decode(
+      await handler({
+        input: stream({
+          operation: "open",
+          input: { id: "s", mediaType: "text/plain", role: "output" },
+        }),
+        signal: new AbortController().signal,
+      }),
+    ),
+    { ok: false, outcome: "unknown", code: "owner_call_rejected" },
+  );
+  assert.equal(reads, 0);
+});

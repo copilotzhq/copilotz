@@ -1,3 +1,5 @@
+import { captureStreamCalls } from "./stream-capability.ts";
+import { createRegisteredInvocationFailure } from "./registered-invocation.ts";
 import { captureSnapshotCalls } from "./snapshot-capability.ts";
 import type { RegisteredInvocationCalls } from "./registered-invocation.ts";
 /** Internal ordinary-JSON Action execution over named, host-bound owner ports.
@@ -58,6 +60,7 @@ export type RegisteredExecutionProjection = Readonly<{
 export type RegisteredOwnerExecutionPort = Readonly<{
   readCollection?: RegisteredInvocationCalls["readCollection"];
   snapshots?: RegisteredInvocationCalls["snapshots"];
+  streams?: RegisteredInvocationCalls["streams"];
   /** Separately admitted effect routes, bound to this live assignment. Missing
    * capability refuses ctx.effect; never substitutes worker-local receipts. */
   effects?: OwnerEffectPort;
@@ -241,6 +244,10 @@ export function createRegisteredActionWorker(
     let cancelled = signal?.aborted ?? false;
     const control = new AbortController();
     const exposed = new AbortController();
+    const invocationFailure = createRegisteredInvocationFailure(
+      control,
+      exposed,
+    );
     let ownerOpen = true;
     const cancel = () => {
       cancelled = true;
@@ -251,6 +258,7 @@ export function createRegisteredActionWorker(
     if (cancelled) cancel();
     else signal?.addEventListener("abort", cancel, { once: true });
     const check = () => {
+      invocationFailure.check();
       if (cancelled) throw failure("action_cancelled");
       if (!ownerOpen) throw failure("registered_worker_context_closed");
     };
@@ -300,6 +308,7 @@ export function createRegisteredActionWorker(
       const execute = port.execute.bind(port);
       const readCollection = port.readCollection?.bind(port);
       const snapshots = captureSnapshotCalls(port.snapshots);
+      const streams = captureStreamCalls(port.streams);
       let completion: RegisteredExecutionCompletion;
       try {
         completion = await runRegisteredActionInvocation({
@@ -317,6 +326,7 @@ export function createRegisteredActionWorker(
           },
           lifetime: {
             check,
+            fail: invocationFailure.fail,
             isCancelled: () => cancelled,
             commandSignal: control.signal,
             exposedSignal: exposed.signal,
@@ -325,6 +335,7 @@ export function createRegisteredActionWorker(
             execute,
             ...(readCollection ? { readCollection } : {}),
             ...(snapshots ? { snapshots } : {}),
+            ...(streams ? { streams } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>
@@ -362,7 +373,7 @@ export function createRegisteredActionWorker(
       const ack = await port.complete(
         snapshot(ref),
         snapshot(completion),
-        cancelled ? {} : { signal: control.signal },
+        cancelled || invocationFailure.failed ? {} : { signal: control.signal },
       );
       if (ack.status !== "committed" && ack.status !== "duplicate") {
         throw failure("registered_worker_completion_invalid");

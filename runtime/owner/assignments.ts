@@ -548,6 +548,25 @@ export function createOwnerAssignmentControl(
       row.source_action_run_id ===
         (value.placement === "worker" ? value.executionId : value.actionRunId);
   }
+  /** One bounded reservation/source decoder shared by caller and owner-control reads. */
+  async function readAssignment(
+    tx: SqlExecutor,
+    epoch: number,
+    key: string,
+    readMode: OwnerAuthorityReadMode,
+  ) {
+    return await tx.query(
+      `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,
+         CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,a.retired,
+         e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
+         CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
+       FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
+       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE ${
+        ownerAuthorityLock(readMode, " FOR SHARE OF a")
+      }`,
+      [ownerId, epoch, key],
+    );
+  }
   async function resolveStarted(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -573,17 +592,7 @@ export function createOwnerAssignmentControl(
     } catch {
       return undefined;
     }
-    const result = await tx.query(
-      `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,
-         CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,a.retired,
-         e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
-         CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
-       FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
-       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE ${
-        ownerAuthorityLock(readMode, " FOR SHARE OF a")
-      }`,
-      [ownerId, identity.ownerEpoch, key],
-    );
+    const result = await readAssignment(tx, identity.ownerEpoch, key, readMode);
     if (
       !currentStarted({ ...identity, principal: { ...identity.principal } })
     ) return undefined;
@@ -664,16 +673,7 @@ export function createOwnerAssignmentControl(
       [ownerId, principal.epoch, principal.holderId],
     );
     if (fence.rows.length !== 1) return undefined;
-    const result = await tx.query(
-      `SELECT a.owner,a.epoch,a.assignment_key,a.delivery_id,
-         CASE WHEN octet_length(a.binding::text)<=${OWNER_ASSIGNMENT_BINDING_MAX_BYTES} THEN a.binding ELSE '{}'::jsonb END AS binding,a.retired,
-         e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
-         CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
-       FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
-       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE
-         ${ownerAuthorityLock(readMode, " FOR SHARE OF a")}`,
-      [ownerId, principal.epoch, key],
-    );
+    const result = await readAssignment(tx, principal.epoch, key, readMode);
     const after = expected();
     if (!after || !result.rows.length) return undefined;
     const row = parseOwnerStoredAssignment(result.rows[0]);
@@ -686,6 +686,60 @@ export function createOwnerAssignmentControl(
       JSON.stringify(after) !== JSON.stringify(before)
     ) return undefined;
     return { ...row.binding };
+  }
+  /** For an already-reserved catalog row only. The caller remains genuine owner
+   * control and the host supplies an exact persistent-entry proof, not a Started witness. */
+  async function resolveReserved(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    supplied: OwnerPlacementBinding,
+    isCurrent: () => boolean,
+    readMode: OwnerAuthorityReadMode = "locking",
+  ): Promise<OwnerPlacementBinding | undefined> {
+    const identity = structuredClone(caller);
+    const principal = identity.principal;
+    ownerPrincipalIdentity(principal);
+    if (
+      principal.kind !== "owner-control" || principal.ownerId !== ownerId ||
+      principal.epoch !== identity.ownerEpoch
+    ) return undefined;
+    const binding = parseOwnerPlacementBinding(supplied);
+    if (
+      binding.placement === "owner-local" &&
+      (binding.ownerId !== ownerId || binding.epoch !== principal.epoch ||
+        binding.holderId !== principal.holderId)
+    ) return undefined;
+    const current = () => {
+      let value: unknown;
+      try {
+        value = isCurrent();
+        if (value instanceof Promise) {
+          Promise.prototype.then.call(value, undefined, () => undefined);
+        }
+      } catch {
+        return false;
+      }
+      return value === true;
+    };
+    if (!current()) return undefined;
+    const fence = await tx.query(
+      `SELECT owner FROM ${epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3${
+        ownerAuthorityLock(readMode, " FOR SHARE")
+      }`,
+      [ownerId, principal.epoch, principal.holderId],
+    );
+    if (fence.rows.length !== 1 || !current()) return undefined;
+    const key = ownerAssignmentKey(ownerId, binding);
+    const result = await readAssignment(tx, principal.epoch, key, readMode);
+    if (!current() || result.rows.length !== 1) return undefined;
+    const row = parseOwnerStoredAssignment(result.rows[0]);
+    if (
+      row.owner !== ownerId || row.epoch !== principal.epoch ||
+      row.key !== key || row.retired ||
+      JSON.stringify(row.binding) !== JSON.stringify(binding) ||
+      !matchesSource(result.rows[0], binding)
+    ) return undefined;
+    return row.binding;
   }
   async function validateLocalContext(
     context: OwnerCommandContext,
@@ -745,6 +799,7 @@ export function createOwnerAssignmentControl(
     authorize,
     resolveStarted,
     resolveLocal,
+    resolveReserved,
     reserveLocal,
     retireLocal,
   };

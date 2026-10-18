@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 11:29 UTC.
+Updated: 18 October 2026, 12:36 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -14,9 +14,10 @@ The 18 October [retirement review](refactor-cleanup.md) prioritizes real caller
 migration and deletion over additional isolated owner components. The reviewed
 append/checkpoint gate is pushed and the dormant classifier is removed with its
 missing safety cases moved to actual startup. The actual host now uses the fixed
-owner core with scoped backend acceptance. Next, integrate content lifetime
-through real invocation routes, cleanup and settlement together. Compatibility
-tests preserve behavior; permanent dual runtimes are not a goal.
+owner core with scoped backend acceptance. Content now has an actual abort-only
+invocation path in a private opt-in draft; quiet renewal, orphan cleanup and
+shutdown/settlement barriers still belong to this same unfinished slice.
+Compatibility tests preserve behavior; permanent dual runtimes are not a goal.
 
 The classifier cleanup preserves the used alarm identity and target type. Its
 four missing safety counterexamples now exercise the surviving startup path. It
@@ -30,8 +31,39 @@ steps and one explicit PostgreSQL-only skip. The earlier 364-case PostgreSQL
 matrix remains pre-correction evidence. Interrupted setup was reproduced on both
 backends and fixed with atomic provisioning plus validation-only reopen. The
 corrected stage exported/dropped 103 owned databases and stopped PostgreSQL;
-source/dependency hashes match. Six modules still need real content consumers,
-down from eight through actual host imports. This is not a full-suite gate.
+source/dependency hashes match. That accepted checkpoint had six unwired content
+modules, down from eight through actual host imports. Current content WIP has
+not completed a new full-static or full-suite gate.
+
+## Content integration preservation checkpoint (unaccepted WIP)
+
+The private host now connects owner-mediated `streams.open/append/abort` and
+invocation disposal through all four Action/Processor drivers, actual local raw
+tracking and both worker transports. The existing coordinator performs physical
+append acknowledgements separately from coalesced one-second catalog
+checkpoints. Known fatal failures stop invocation admission immediately; actual
+authored work and cleanup still drain before completion. Later uncertainty
+overrides known failure. Owner-control revocation freezes C, fences the original
+generation and only then confirms revoked. A strict abort-only drained predicate
+is repeated in the final settlement UPDATE; unconfigured hosts retain all-stream
+refusal.
+
+Incremental diagnostics, **not one frozen acceptance run**: 155 driver/helper
+cases; four named-wire cases; 16 actual PGlite host flows covering both
+transports, placements and parent kinds with ctx-loss abort or implicit
+disposal; seven later feature/snapshot guards; 12 worker artifact cases. Earlier
+control/assignment runs include a captured-binding ordering failure and its
+focused correction. The current draft has not received a consolidated
+PostgreSQL/PGlite independent gate. No checkbox or complete-content milestone is
+closed by these results.
+
+Remaining in this same slice: bounded owner-alarm quiet renewal using the
+original current entry/ordinal and fresh grants; hidden/orphan reservation
+cleanup; completion/retry and shutdown coordination; failure/lost-reply tests;
+final static/artifact/backend review. `close`, `retain`, `follow`,
+retained-history adoption and public/default activation remain unavailable. No
+legacy writer behavior is extended, no new authority registry/lease is
+introduced, and no package is merged or published.
 
 ## Current work
 
@@ -52,8 +84,8 @@ down from eight through actual host imports. This is not a full-suite gate.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: stores/schema checked    | [Physical stores and fresh owner schema](owner-content-lifetime-plan.md) checked; commands, execution and package wiring remain open                                                  |
-| Architecture cleanup                 | In progress                   | Dormant classifier retired; actual host fixed-core/atomic setup accepted: corrected PG70/PGlite381; real content routes next                                                          |
+| Content writer lifetime              | WIP: actual abort-only flow   | [Private host content draft](owner-content-lifetime-plan.md); quiet owner renewal, orphan/close coordination and consolidated backend/artifact review remain open                     |
+| Architecture cleanup                 | In progress                   | Dormant classifier retired; actual host fixed-core/atomic setup accepted: corrected PG70/PGlite381; real content routes in progress                                                   |
 
 A cloud runner restart restored an older workspace. The pushed manager and
 reconstructed integration have since completed fresh scoped PostgreSQL/PGlite

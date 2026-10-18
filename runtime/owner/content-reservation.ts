@@ -23,6 +23,7 @@ import {
   isStreamOutputDescriptor,
 } from "../streams/observation.ts";
 import type {
+  ContentStreamAbortInput,
   ContentStreamOpenInput,
   StreamOutputDescriptor,
 } from "../streams/types.ts";
@@ -50,13 +51,19 @@ export const OWNER_STREAM_CONFIRM = "content.stream.confirm";
 export const OWNER_STREAM_WRITER = "content.stream.writer";
 export const OWNER_STREAM_APPEND_ACK = "content.stream.append-ack";
 export const OWNER_STREAM_CHECKPOINT = "content.stream.checkpoint";
+export const OWNER_STREAM_ABORT_TARGET = "content.stream.abort-target";
+export const OWNER_STREAM_REVOKE = "content.stream.revoke";
+export const OWNER_STREAM_REVOKED = "content.stream.revoked";
+export type OwnerStreamTarget = Readonly<
+  { namespace: string; operationId: string; streamId: string }
+>;
 export const OWNER_STREAM_OPENED_EVENT = "copilotz.stream.opened";
 /** Full canonical binding and already-authorized current records, supplied only
  * by the host's existing Action/Processor live resolver. No request is authority. */
 export type OwnerStreamScope = Readonly<{
   binding: OwnerPlacementBinding;
   delivery: EventDelivery;
-  source: DurableEvent;
+  source: Pick<DurableEvent, "id" | "ownerId" | "namespace" | "correlationId">;
 }>;
 type Context = Parameters<OwnerCheckpointHandler>[1];
 type OpenInput =
@@ -73,13 +80,22 @@ type OpeningAuthorized = Readonly<{
 }>;
 type WriterAuthorized = Readonly<{
   mode: "writer";
+  cleanup: boolean;
   scope: OwnerStreamScope;
   authority: OwnerAttemptAuthority;
   streamId: string;
   writer: PhysicalWriterIdentity;
   committedOffset: number;
 }>;
-type Authorized = OpeningAuthorized | WriterAuthorized;
+type ControlAuthorized = Readonly<{
+  mode: "control";
+  target: OwnerStreamTarget;
+  writer: PhysicalWriterIdentity;
+  state: Row["state"];
+  revocation: Row["revocation_state"];
+  committedOffset: number;
+}>;
+type Authorized = OpeningAuthorized | WriterAuthorized | ControlAuthorized;
 type Row = {
   stream_id: string;
   state: "reserving" | "open" | "terminating" | "terminal";
@@ -252,11 +268,26 @@ export function createOwnerStreamReservations(
     backendId: string;
     physical: PhysicalBodyStore;
     protectionMs: number;
+    /** Bound includes hidden and revoking writers; only confirmed fences free it. */
+    maxUnresolved: number;
+    /** Genuine host control token, checked again before COMMIT. Never a worker grant. */
+    isControlCurrent?(caller: OwnerCaller): boolean;
+    onRevoked?(target: OwnerStreamTarget): void | Promise<void>;
     resolve(
       tx: SqlExecutor,
       caller: OwnerCaller,
       time: string,
     ): OwnerStreamScope | undefined | Promise<OwnerStreamScope | undefined>;
+    /** Narrow original-parent settlement facts, without failed invocation signal. */
+    resolveSettlement?(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      time: string,
+    ): OwnerStreamScope | undefined | Promise<OwnerStreamScope | undefined>;
+    isCurrentSettlement?(
+      caller: OwnerCaller,
+      binding: OwnerPlacementBinding,
+    ): boolean;
     /** Genuine current private local/Started lifetime, including host readiness. */
     isCurrent(caller: OwnerCaller, binding: OwnerPlacementBinding): boolean;
     publish?(descriptor: StreamOutputDescriptor): void | Promise<void>;
@@ -264,11 +295,21 @@ export function createOwnerStreamReservations(
 ) {
   const ownerId = physicalIdentifier(options.ownerId);
   const backendId = physicalIdentifier(options.backendId);
-  const { schema, session, protectionMs } = options;
+  const { schema, session, protectionMs, maxUnresolved } = options;
+  if (
+    !Number.isSafeInteger(maxUnresolved) || maxUnresolved < 1 ||
+    maxUnresolved > 10_000
+  ) {
+    throw new RangeError("Invalid unresolved writer bound.");
+  }
+  const isControlCurrent = options.isControlCurrent,
+    onRevoked = options.onRevoked;
   if (
     !Number.isSafeInteger(protectionMs) || protectionMs < 1 ||
     protectionMs > 3_600_000
   ) throw new RangeError("Invalid stream protection period.");
+  const resolveSettlement = options.resolveSettlement,
+    isCurrentSettlement = options.isCurrentSettlement;
   const resolve = options.resolve,
     isCurrent = options.isCurrent,
     publish = options.publish;
@@ -277,16 +318,22 @@ export function createOwnerStreamReservations(
     reserve: provider.reserve.bind(provider),
     append: provider.append.bind(provider),
     head: provider.head.bind(provider),
+    fence: provider.fence.bind(provider),
   };
   const catalog = createOwnerOperationCatalogCore(session, schema);
   const tables = createOperationCatalogTables(schema);
   // Command-local scratch only. The boundary supplies a distinct scoped tx for
   // each command, including grouped commands; nothing here grants durable authority.
   const authorized = new WeakMap<SqlExecutor, Authorized>();
-  function privateCurrent(caller: OwnerCaller, binding: OwnerPlacementBinding) {
+  function privateCurrent(
+    caller: OwnerCaller,
+    binding: OwnerPlacementBinding,
+    cleanup = false,
+  ) {
     let answer: unknown;
     try {
-      answer = isCurrent(structuredClone(caller), structuredClone(binding));
+      const check = cleanup ? isCurrentSettlement : isCurrent;
+      answer = check?.(structuredClone(caller), structuredClone(binding));
       if (answer instanceof Promise) {
         Promise.prototype.then.call(answer, undefined, () => undefined);
       }
@@ -298,9 +345,47 @@ export function createOwnerStreamReservations(
   function current(tx: SqlExecutor, caller: OwnerCaller): Authorized {
     const value = authorized.get(tx);
     if (!value) refuse();
-    privateCurrent(caller, value.scope.binding);
+    if (value.mode === "control") {
+      requireControl(caller);
+      if (authorized.get(tx) !== value) refuse();
+      return value;
+    }
+    privateCurrent(
+      caller,
+      value.scope.binding,
+      value.mode === "writer" && value.cleanup,
+    );
     if (authorized.get(tx) !== value) refuse();
     assertOwnerAttemptCaller(caller, value.authority, ownerId);
+    return value;
+  }
+  function requireControl(caller: OwnerCaller) {
+    if (
+      caller.principal.kind !== "owner-control" ||
+      caller.principal.ownerId !== ownerId ||
+      caller.ownerEpoch !== caller.principal.epoch || !isControlCurrent
+    ) {
+      refuse("Current owner cleanup authority is required.");
+    }
+    let current: unknown;
+    try {
+      current = isControlCurrent(structuredClone(caller));
+      if (current instanceof Promise) {
+        Promise.prototype.then.call(current, undefined, () => undefined);
+      }
+    } catch {
+      refuse("Current owner cleanup authority is required.");
+    }
+    if (current !== true) {
+      refuse("Current owner cleanup authority is required.");
+    }
+  }
+  function controlling(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+  ): ControlAuthorized {
+    const value = current(tx, caller);
+    if (value.mode !== "control") refuse();
     return value;
   }
   function opening(tx: SqlExecutor, caller: OwnerCaller): OpeningAuthorized {
@@ -317,8 +402,10 @@ export function createOwnerStreamReservations(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    cleanup = false,
   ) {
-    const returned = await resolve(tx, structuredClone(caller), time);
+    const selected = cleanup ? resolveSettlement : resolve;
+    const returned = await selected?.(tx, structuredClone(caller), time);
     if (!returned) refuse();
     const captured = structuredClone(returned);
     const scope = {
@@ -328,7 +415,7 @@ export function createOwnerStreamReservations(
     const authority = identity(scope, ownerId);
     assertOwnerAttemptCaller(caller, authority, ownerId);
     const { binding, delivery, source } = scope;
-    privateCurrent(caller, binding);
+    privateCurrent(caller, binding, cleanup);
     if (
       source.ownerId !== ownerId || delivery.databaseSchema !== schema ||
       source.namespace !== binding.namespace ||
@@ -347,9 +434,75 @@ export function createOwnerStreamReservations(
     time: string,
   ) {
     authorized.delete(tx);
+    if ([OWNER_STREAM_REVOKE, OWNER_STREAM_REVOKED].includes(command.kind)) {
+      requireControl(caller);
+      await catalog.assertFormat(tx);
+      const input = record(
+        command.intent,
+        command.kind === OWNER_STREAM_REVOKE
+          ? ["namespace", "operationId", "streamId", "outcome", "capture"]
+          : ["namespace", "operationId", "streamId", "head"],
+      );
+      const target = {
+        namespace: physicalIdentifier(input.namespace),
+        operationId: physicalIdentifier(input.operationId),
+        streamId: physicalIdentifier(input.streamId),
+      };
+      const row = (await tx.query<
+        {
+          state: Row["state"];
+          revocation_state: Row["revocation_state"];
+          body_id: string;
+          reservation_id: string;
+          writer_generation: string;
+          media_type: string;
+          committed_offset: string;
+        }
+      >(
+        `SELECT state,revocation_state,body_id,reservation_id,writer_generation::text,
+          CASE WHEN char_length(descriptor->>'mediaType') BETWEEN 1 AND 1024 THEN descriptor->>'mediaType' ELSE NULL END AS media_type,committed_offset::text
+         FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
+         AND owner_id=$4 AND physical_backend_id=$5 AND opening_owner_epoch=$6 FOR UPDATE`,
+        [
+          target.namespace,
+          target.operationId,
+          target.streamId,
+          ownerId,
+          backendId,
+          caller.ownerEpoch,
+        ],
+      )).rows[0];
+      if (!row) refuse("Owner cleanup target is unavailable.");
+      const writer = capturePhysicalIdentity({
+        bodyId: row.body_id,
+        mediaType: row.media_type,
+        reservationId: row.reservation_id,
+        generation: Number(row.writer_generation),
+      });
+      if (
+        writer.generation !== 1 ||
+        writer.bodyId !==
+          await deriveWorkflowId("stream-body", target.streamId) ||
+        writer.reservationId !==
+          await deriveWorkflowId("stream-reservation", target.streamId)
+      ) {
+        refuse("Owner cleanup physical identity is inconsistent.");
+      }
+      authorized.set(tx, {
+        mode: "control",
+        target,
+        writer,
+        state: row.state,
+        revocation: row.revocation_state,
+        committedOffset: safeOffset(Number(row.committed_offset)),
+      });
+      current(tx, caller);
+      return;
+    }
     if (
       ![
         OWNER_STREAM_RESERVE,
+        OWNER_STREAM_ABORT_TARGET,
         OWNER_STREAM_CONFIRM,
         OWNER_STREAM_WRITER,
         OWNER_STREAM_APPEND_ACK,
@@ -357,21 +510,32 @@ export function createOwnerStreamReservations(
       ].includes(command.kind)
     ) refuse();
     if (
-      [OWNER_STREAM_WRITER, OWNER_STREAM_APPEND_ACK, OWNER_STREAM_CHECKPOINT]
+      [
+        OWNER_STREAM_WRITER,
+        OWNER_STREAM_APPEND_ACK,
+        OWNER_STREAM_CHECKPOINT,
+        OWNER_STREAM_ABORT_TARGET,
+      ]
         .includes(command.kind)
     ) {
       const input = record(
         command.intent,
-        command.kind === OWNER_STREAM_WRITER
+        [OWNER_STREAM_WRITER, OWNER_STREAM_ABORT_TARGET].includes(command.kind)
           ? ["streamId"]
           : command.kind === OWNER_STREAM_APPEND_ACK
           ? ["streamId", "startOffset", "endOffset"]
           : ["streamId", "startOffset", "endOffset", "head"],
       );
       const streamId = physicalIdentifier(input.streamId);
-      if (command.kind !== OWNER_STREAM_WRITER) offsets(input);
-      const { scope, authority } = await authenticate(tx, caller, time);
-      await lockOperation(tx, { scope });
+      const cleanup = command.kind === OWNER_STREAM_ABORT_TARGET;
+      if (command.kind !== OWNER_STREAM_WRITER && !cleanup) offsets(input);
+      const { scope, authority } = await authenticate(
+        tx,
+        caller,
+        time,
+        cleanup,
+      );
+      await lockOperation(tx, { scope }, cleanup);
       const bodyId = await deriveWorkflowId("stream-body", streamId);
       const reservationId = await deriveWorkflowId(
         "stream-reservation",
@@ -385,7 +549,7 @@ export function createOwnerStreamReservations(
          WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND owner_id=$4
            AND opening_owner_epoch=$5 AND delivery_attempt=$6 AND placement_binding=$7::jsonb
            AND physical_backend_id=$8 AND body_id=$9 AND reservation_id=$10 AND writer_generation=1
-           AND state='open' AND revocation_state='active' AND protection_deadline>$11::timestamptz FOR UPDATE`,
+           AND (($12 AND state<>'reserving') OR (NOT $12 AND state='open' AND revocation_state='active' AND protection_deadline>$11::timestamptz)) FOR UPDATE`,
         [
           scope.binding.namespace,
           scope.delivery.settlementScopeId,
@@ -398,6 +562,7 @@ export function createOwnerStreamReservations(
           bodyId,
           reservationId,
           time,
+          cleanup,
         ],
       )).rows[0];
       if (!found) refuse();
@@ -410,6 +575,7 @@ export function createOwnerStreamReservations(
       });
       authorized.set(tx, {
         mode: "writer",
+        cleanup,
         scope,
         authority,
         streamId,
@@ -487,12 +653,16 @@ export function createOwnerStreamReservations(
     });
     current(tx, caller);
   }
-  async function lockOperation(tx: SqlExecutor, a: Pick<Authorized, "scope">) {
+  async function lockOperation(
+    tx: SqlExecutor,
+    a: Pick<OpeningAuthorized, "scope">,
+    cleanup = false,
+  ) {
     const result = await tx.query<{ next_stream_ordinal: string }>(
       `SELECT next_stream_ordinal::text FROM ${tables.operations}
        WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
-       AND cancellation_requested_at IS NULL FOR UPDATE`,
-      [a.scope.binding.namespace, a.scope.delivery.settlementScopeId],
+       AND ($3 OR cancellation_requested_at IS NULL) FOR UPDATE`,
+      [a.scope.binding.namespace, a.scope.delivery.settlementScopeId, cleanup],
     );
     if (!result.rows[0]) refuse();
     return result.rows[0];
@@ -557,6 +727,13 @@ export function createOwnerStreamReservations(
     await excludePredecessors(context.tx, a);
     let stored = await row(context.tx, a, context);
     if (!stored) {
+      const outstanding = await context.tx.query(
+        `SELECT stream_id FROM ${tables.operationStreams} WHERE owner_id=$1 AND revocation_state<>'revoked' LIMIT $2`,
+        [ownerId, maxUnresolved],
+      );
+      if (outstanding.rows.length >= maxUnresolved) {
+        refuse("Owner unresolved stream capacity exceeded.");
+      }
       await context.tx.query(
         `INSERT INTO ${tables.operationStreams}
          (namespace,operation_id,stream_id,semantic_stream_id,body_id,descriptor,
@@ -744,6 +921,95 @@ export function createOwnerStreamReservations(
     );
     return { committedOffset: endOffset };
   };
+  const beginRevocation: OwnerCheckpointHandler = async (value, context) => {
+    const a = controlling(context.tx, context.caller);
+    const input = record(value, [
+      "namespace",
+      "operationId",
+      "streamId",
+      "outcome",
+      "capture",
+    ]);
+    if (
+      !["failed", "cancelled", "superseded", "abandoned"].includes(
+        String(input.outcome),
+      ) ||
+      !["complete", "truncated"].includes(String(input.capture))
+    ) throw new TypeError("Invalid stream termination.");
+    if (a.revocation === "active") {
+      await context.tx.query(
+        `UPDATE ${tables.operationStreams} SET revocation_state='revoking',
+          state=CASE WHEN state='reserving' THEN state ELSE 'terminating' END,
+          outcome=CASE WHEN state='reserving' THEN NULL ELSE $4 END,
+          capture=CASE WHEN state='reserving' THEN NULL ELSE $5 END,updated_at=$6
+         WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND opening_owner_epoch=$7`,
+        [
+          a.target.namespace,
+          a.target.operationId,
+          a.target.streamId,
+          input.outcome,
+          input.capture,
+          context.commandTime,
+          context.caller.ownerEpoch,
+        ],
+      );
+    }
+    // The first revocation freezes the published terminal intent and C.
+    return json({ writer: a.writer, revoked: a.revocation === "revoked" });
+  };
+  const confirmRevocation: OwnerCheckpointHandler = async (value, context) => {
+    const a = controlling(context.tx, context.caller);
+    if (a.revocation === "active") {
+      refuse("Stream must begin revocation before physical fencing.");
+    }
+    const input = record(value, [
+      "namespace",
+      "operationId",
+      "streamId",
+      "head",
+    ]);
+    const head = record(input.head, [
+      "format",
+      "state",
+      "bodyId",
+      "mediaType",
+      "reservationId",
+      "generation",
+      "byteLength",
+      "versionToken",
+    ]);
+    if (
+      head.format !== "owner-physical-v1" || head.state !== "fenced" ||
+      head.bodyId !== a.writer.bodyId ||
+      head.mediaType !== a.writer.mediaType ||
+      head.reservationId !== a.writer.reservationId ||
+      head.generation !== a.writer.generation + 1 ||
+      typeof head.versionToken !== "string" || !head.versionToken ||
+      head.versionToken.length > 4096
+    ) {
+      refuse("Physical fence does not match the original writer.");
+    }
+    const available = safeOffset(head.byteLength) >= a.committedOffset;
+    if (a.revocation !== "revoked") {
+      await context.tx.query(
+        `UPDATE ${tables.operationStreams} SET revocation_state='revoked',
+          state=CASE WHEN state='reserving' THEN state ELSE 'terminal' END,
+          terminal_at=CASE WHEN state='reserving' THEN NULL ELSE $4::timestamptz END,
+          availability=CASE WHEN state='reserving' OR $5 THEN 'retained' ELSE 'missing' END,
+          updated_at=$4 WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND opening_owner_epoch=$6`,
+        [
+          a.target.namespace,
+          a.target.operationId,
+          a.target.streamId,
+          context.commandTime,
+          available,
+          context.caller.ownerEpoch,
+        ],
+      );
+      context.afterCommit(() => onRevoked?.(structuredClone(a.target)));
+    }
+    return null;
+  };
   return {
     authorize,
     isCurrentAuthorization(tx: SqlExecutor, caller: OwnerCaller) {
@@ -760,6 +1026,81 @@ export function createOwnerStreamReservations(
       [OWNER_STREAM_WRITER]: writerAdmission,
       [OWNER_STREAM_APPEND_ACK]: appendAcknowledgement,
       [OWNER_STREAM_CHECKPOINT]: checkpoint,
+      [OWNER_STREAM_ABORT_TARGET]: (_input: OwnerJson, context: Context) => {
+        const a = writing(context.tx, context.caller);
+        if (!a.cleanup) refuse();
+        return {
+          namespace: a.scope.binding.namespace,
+          operationId: a.scope.delivery.settlementScopeId,
+          streamId: a.streamId,
+        };
+      },
+      [OWNER_STREAM_REVOKE]: beginRevocation,
+      [OWNER_STREAM_REVOKED]: confirmRevocation,
+    },
+    async abortTarget(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      streamId: string,
+    ): Promise<OwnerStreamTarget> {
+      const result = record(
+        await boundary.checkpoint(
+          structuredClone(caller),
+          OWNER_STREAM_ABORT_TARGET,
+          { streamId: physicalIdentifier(streamId) },
+        ),
+        ["namespace", "operationId", "streamId"],
+      );
+      return {
+        namespace: physicalIdentifier(result.namespace),
+        operationId: physicalIdentifier(result.operationId),
+        streamId: physicalIdentifier(result.streamId),
+      };
+    },
+    /** Owner-control cleanup remains possible after the producing caller is gone.
+     * A held/unknown fence leaves the durable row revoking and its prefix intact. */
+    async revoke(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      target: OwnerStreamTarget,
+      input: ContentStreamAbortInput = {},
+    ): Promise<void> {
+      const captured = structuredClone(caller);
+      const request = {
+        namespace: physicalIdentifier(target.namespace),
+        operationId: physicalIdentifier(target.operationId),
+        streamId: physicalIdentifier(target.streamId),
+      };
+      const result = record(
+        await boundary.checkpoint(captured, OWNER_STREAM_REVOKE, {
+          ...request,
+          outcome: input.outcome ?? "abandoned",
+          capture: input.capture ?? "truncated",
+        }),
+        ["writer", "revoked"],
+      );
+      if (result.revoked === true) return;
+      if (result.revoked !== false) refuse();
+      const writer = capturePhysicalIdentity(result.writer);
+      let head: PhysicalBodyHead;
+      try {
+        head = await physical.fence(writer);
+      } catch (error) {
+        throw Object.assign(
+          new Error("Physical stream fence outcome is unknown.", {
+            cause: error,
+          }),
+          {
+            code: "content_fence_unknown",
+            indeterminate: true,
+          },
+        );
+      }
+      await boundary.checkpoint(
+        captured,
+        OWNER_STREAM_REVOKED,
+        json({ ...request, head }),
+      );
     },
     async append(
       boundary: OwnerCommandBoundary,

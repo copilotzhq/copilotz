@@ -1,3 +1,4 @@
+import { streamFailureFixture } from "./stream-failure.fixture.ts";
 /** Focused named-port tests. Real owner/transport acceptance is a separate fixture. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -1166,3 +1167,29 @@ test("registered Action named preparation binds exact live reference and refuses
     );
   }
 });
+
+for (const unknown of [false, true, "hostile"] as const) {
+  test(`worker Action background stream failure retains actual drain (unknown=${unknown})`, async () => {
+    const stream = streamFailureFixture(unknown);
+    const f = fixture({
+      action: action((_input, ctx) => stream.handle(ctx)),
+      port: { streams: stream.port },
+    });
+    let settled = false;
+    const running = f.worker.execute(hint);
+    void running.then(() => settled = true, () => settled = true);
+    try {
+      await stream.inspectBeforeRelease(() => settled);
+      assert.equal(f.state.completions.length, 0);
+      if (unknown) {
+        await assert.rejects(running, (error) => error === stream.unknown);
+        assert.equal(f.state.completions.length, 0);
+      } else {
+        assert.equal((await running).receipt.status, "failed");
+        assert.equal(f.state.completions.length, 1);
+      }
+    } finally {
+      stream.release();
+    }
+  });
+}

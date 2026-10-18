@@ -12,6 +12,7 @@ import {
   type OwnerAssignmentBinding,
   ownerAssignmentKey,
   type OwnerProcessorAssignmentBinding,
+  parseOwnerPlacementBinding,
 } from "../owner/assignments.ts";
 import type {
   OwnerCaller,
@@ -803,10 +804,59 @@ export function createOwnerDispatchBridge(
         : {}),
     };
   }
+  function captureReservedLifetime(
+    supplied: OwnerAssignmentBinding,
+    epoch: number,
+  ) {
+    let binding: OwnerAssignmentBinding;
+    try {
+      const value = parseOwnerPlacementBinding(supplied);
+      if (value.placement !== "worker") return undefined;
+      binding = value;
+    } catch {
+      return undefined;
+    }
+    const entry = entries.get(binding.parentOperationId);
+    if (!entry || entry.epoch !== epoch || !entry.binding) return undefined;
+    const isCurrent = () =>
+      currentEntry(entry) && entry.epoch === epoch &&
+      !!entry.binding && equalBinding(binding, entry.binding);
+    return isCurrent()
+      ? Object.freeze({
+        signal: AbortSignal.any([entry.abort.signal, entry.request.signal]),
+        isCurrent,
+      })
+      : undefined;
+  }
   return {
     assignmentHandlers: control.handlers,
     authorizeAssignment,
     resolveStarted,
+    /** Only renew resources whose persisted reservation proves prior Started admission. */
+    captureReservedLifetime,
+    async resolveReserved(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      binding: OwnerAssignmentBinding,
+      readMode: OwnerAuthorityReadMode = "locking",
+    ) {
+      const identity = structuredClone(caller);
+      const captured = parseOwnerPlacementBinding(binding);
+      if (captured.placement !== "worker") return undefined;
+      const lifetime = captureReservedLifetime(captured, identity.ownerEpoch);
+      if (!lifetime) return undefined;
+      const found = await control.resolveReserved(
+        tx,
+        identity,
+        captured,
+        lifetime.isCurrent,
+        readMode,
+      );
+      return found?.placement === "worker" && equalBinding(found, captured) &&
+          lifetime.isCurrent()
+        ? { binding: found, lifetime }
+        : undefined;
+    },
     /** Private caller-authenticated lifetime only. Durable resolution and
      * business grants must still be checked independently in SQL. */
     currentStarted(caller: OwnerCaller): OwnerAssignmentBinding | undefined {

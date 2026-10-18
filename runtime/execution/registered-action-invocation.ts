@@ -1,3 +1,8 @@
+import { createRegisteredStreamCapability } from "./stream-capability.ts";
+import {
+  isRegisteredInvocationUnknown as unknownOutcome,
+  registeredInvocationErrorCode,
+} from "./registered-invocation.ts";
 import { createRegisteredReadSnapshot } from "./snapshot-capability.ts";
 import { createCollectionReadCapability } from "./collection-read-capability.ts";
 import { normalizeActionNamedPreparation } from "./preparation-call.ts";
@@ -54,20 +59,7 @@ function identifier(value: unknown): asserts value is string {
     throw failure("registered_worker_identity_invalid");
   }
 }
-function unknownOutcome(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as {
-    code?: unknown;
-    indeterminate?: unknown;
-    outcome?: unknown;
-    execution?: unknown;
-  };
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    ["owner_commit_unknown", "persistence_indeterminate"].includes(
-      String(value.code),
-    );
-}
+
 function sameIdentity(left: unknown, right: unknown): boolean {
   const normalize = (value: unknown): string => {
     if (value === undefined) return "";
@@ -100,7 +92,15 @@ export async function runRegisteredActionInvocation(
   let capabilityFailure = false;
   let registrationOpen = true;
   // The bound counts calls over the whole invocation; settled calls stay here.
-  const pending: Promise<unknown>[] = [];
+  const pending: { work: Promise<unknown>; resource: boolean }[] = [];
+  let fatalInvocationFailure = false;
+  const failInvocation = options.lifetime.fail?.bind(options.lifetime);
+  const waitPending = (resources = true) =>
+    Promise.all(
+      pending.filter((entry) => resources || !entry.resource).map((entry) =>
+        entry.work
+      ),
+    );
   let pendingFailure: unknown;
   let hasPendingFailure = false;
   let effectIndeterminate = false;
@@ -109,7 +109,7 @@ export async function runRegisteredActionInvocation(
     throw failure("registered_worker_capability_unsupported");
   };
   const unavailable = () => new Proxy({}, { get: unsupported });
-  const track = <T>(start: () => Promise<T>): Promise<T> => {
+  const track = <T>(start: () => Promise<T>, resource = false): Promise<T> => {
     check();
     if (!registrationOpen) {
       throw failure("registered_worker_context_closed");
@@ -121,20 +121,36 @@ export async function runRegisteredActionInvocation(
     } catch (error) {
       promise = Promise.reject(error);
     }
-    pending.push(promise.catch((error) => {
-      if (
-        error && typeof error === "object" && "code" in error &&
-        error.code === "effect_indeterminate"
-      ) {
-        effectIndeterminate = true;
-      }
+    pending.push({
+      resource,
+      work: promise.catch((error) => {
+        if (
+          registeredInvocationErrorCode(error) === "effect_indeterminate"
+        ) {
+          effectIndeterminate = true;
+        }
+        if (!hasPendingFailure || unknownOutcome(error)) {
+          hasPendingFailure = true;
+          pendingFailure = error;
+        }
+      }),
+    });
+    return promise;
+  };
+  const streamCapability = createRegisteredStreamCapability({
+    port: options.calls.streams,
+    lifetime: options.lifetime,
+    track: (start) => track(start, true),
+    unsupported,
+    fail(error) {
+      fatalInvocationFailure = true;
       if (!hasPendingFailure || unknownOutcome(error)) {
         hasPendingFailure = true;
         pendingFailure = error;
       }
-    }));
-    return promise;
-  };
+      failInvocation?.(error);
+    },
+  });
   const readSnapshot = createRegisteredReadSnapshot({
     collections: registry.collections,
     port: options.calls.snapshots,
@@ -373,7 +389,7 @@ export async function runRegisteredActionInvocation(
             "open",
           ].map((name) => [name, unsupported]),
         ),
-        streams: { open: unsupported, follow: unsupported },
+        streams: streamCapability.streams,
         signal: exposedSignal,
         now: () => new Date(),
         transaction,
@@ -401,8 +417,8 @@ export async function runRegisteredActionInvocation(
         await effects.recover(item.step);
       }
       // A caught/unawaited reconciliation failure cannot reopen execution.
-      await Promise.all(pending);
-      if (hasPendingFailure) throw pendingFailure;
+      await waitPending(false);
+      if (hasPendingFailure || fatalInvocationFailure) throw pendingFailure;
       check();
       output = await (executeAction as (
         input: unknown,
@@ -410,9 +426,11 @@ export async function runRegisteredActionInvocation(
       ) => unknown).call(action, snapshot(projection.input), context);
     } finally {
       registrationOpen = false;
-      await Promise.all(pending);
+      streamCapability.seal();
+      await streamCapability.drain();
+      await waitPending();
     }
-    if (hasPendingFailure) throw pendingFailure;
+    if (hasPendingFailure || fatalInvocationFailure) throw pendingFailure;
     check();
     if (
       capabilityFailure || output instanceof ReadableStream ||
@@ -441,8 +459,7 @@ export async function runRegisteredActionInvocation(
         code: capabilityFailure
           ? "action_capability_unsupported"
           : effectIndeterminate ||
-              (error !== null && typeof error === "object" &&
-                "code" in error && error.code === "effect_indeterminate")
+              registeredInvocationErrorCode(error) === "effect_indeterminate"
           ? "effect_indeterminate"
           : "action_failed",
       };

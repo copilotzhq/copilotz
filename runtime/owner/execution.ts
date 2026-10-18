@@ -32,7 +32,7 @@ import {
   type CreateEventStoreOptions,
   type EventStore,
 } from "../events/store.ts";
-import type { EventDelivery } from "../events/types.ts";
+import type { DurableEvent, EventDelivery } from "../events/types.ts";
 import type { OwnerPreparedInputContext } from "./preparation.ts";
 import {
   OWNER_PREPARATION_METADATA,
@@ -179,6 +179,7 @@ type Authorized = Readonly<{
   delivery: EventDelivery;
   cancelled: boolean;
   correlationId: string;
+  source: Pick<DurableEvent, "id" | "ownerId" | "namespace" | "correlationId">;
 }>;
 function refuse(message: string): never {
   throw Object.assign(new Error(message), {
@@ -419,6 +420,19 @@ export function createOwnerExecutionCommands(
     caller: OwnerCaller,
     commandTime: string,
   ): Promise<OwnerExecutionAssignment>;
+  /** The same live authorization, retaining already-read immutable source facts. */
+  authorizeLiveFacts(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    commandTime: string,
+    readMode?: OwnerAuthorityReadMode,
+  ): Promise<Pick<Authorized, "assignment" | "delivery" | "source">>;
+  /** Same settlement grant, retaining original source and delivery coordinates. */
+  authorizeSettlementFacts(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    commandTime: string,
+  ): Promise<Pick<Authorized, "assignment" | "delivery" | "source">>;
   /** Composition seam for separately key-bound owner Collection commands. */
   authorizeLive(
     tx: SqlExecutor,
@@ -689,6 +703,12 @@ export function createOwnerExecutionCommands(
       delivery,
       cancelled,
       correlationId: source.correlation_id,
+      source: {
+        id: source.event_id,
+        ownerId: source.owner_id,
+        namespace: source.namespace,
+        correlationId: source.correlation_id,
+      },
     };
     if (mode === "claim" || mode === "input" || mode === "mutation") {
       await guardPrepared(tx, state, commandTime, mode);
@@ -1479,6 +1499,55 @@ export function createOwnerExecutionCommands(
     ownerEventCommitForAttempt(context, ready.state.assignment);
     return await claim(value, context);
   }
+  async function authorizeSettlementFacts(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    commandTime: string,
+  ) {
+    const state = await current(tx, caller, commandTime, "complete");
+    const captured = await invoked(tx, state);
+    if (!captured) {
+      refuse("Execution has no captured invocation.");
+    }
+    await recheckAuthority(tx, state, commandTime, "settlement", captured);
+    return {
+      assignment: state.assignment,
+      delivery: state.delivery,
+      source: state.source,
+    };
+  }
+  async function authorizeLiveFacts(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    commandTime: string,
+    readMode: OwnerAuthorityReadMode = "locking",
+  ): Promise<Pick<Authorized, "assignment" | "delivery" | "source">> {
+    const state = await current(
+      tx,
+      caller,
+      commandTime,
+      "mutation",
+      undefined,
+      readMode,
+    );
+    const captured = await invoked(tx, state, readMode);
+    if (!captured) refuse("Execution has no captured invocation.");
+    await options.authorizeInput(
+      tx,
+      structuredClone(state.assignment),
+      json(captured.input),
+      commandTime,
+    );
+    await recoveryBarrier(tx, state, commandTime);
+    await guardPrepared(tx, state, commandTime, "mutation");
+    await recheckAuthority(tx, state, commandTime, "ctx", captured, readMode);
+    return {
+      assignment: state.assignment,
+      delivery: state.delivery,
+      source: state.source,
+    };
+  }
+
   return {
     inputDefinitions: { "execution.complete": completionInput },
     authorizeLocalStart,
@@ -1584,36 +1653,15 @@ export function createOwnerExecutionCommands(
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
     },
+    authorizeSettlementFacts,
     async authorizeSettlement(tx, caller, commandTime) {
-      const state = await current(tx, caller, commandTime, "complete");
-      const captured = await invoked(tx, state);
-      if (!captured) {
-        refuse("Execution has no captured invocation.");
-      }
-      await recheckAuthority(tx, state, commandTime, "settlement", captured);
-      return state.assignment;
+      return (await authorizeSettlementFacts(tx, caller, commandTime))
+        .assignment;
     },
+    authorizeLiveFacts,
     async authorizeLive(tx, caller, commandTime, readMode = "locking") {
-      const state = await current(
-        tx,
-        caller,
-        commandTime,
-        "mutation",
-        undefined,
-        readMode,
-      );
-      const captured = await invoked(tx, state, readMode);
-      if (!captured) refuse("Execution has no captured invocation.");
-      await options.authorizeInput(
-        tx,
-        structuredClone(state.assignment),
-        json(captured.input),
-        commandTime,
-      );
-      await recoveryBarrier(tx, state, commandTime);
-      await guardPrepared(tx, state, commandTime, "mutation");
-      await recheckAuthority(tx, state, commandTime, "ctx", captured, readMode);
-      return state.assignment;
+      return (await authorizeLiveFacts(tx, caller, commandTime, readMode))
+        .assignment;
     },
   };
 }

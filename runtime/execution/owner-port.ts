@@ -1,3 +1,7 @@
+import {
+  captureStreamCalls,
+  type RegisteredStreamPort,
+} from "./stream-capability.ts";
 import { captureSnapshotCalls } from "./snapshot-capability.ts";
 import type { OwnerSnapshotPort } from "../owner/connection.ts";
 import {
@@ -37,6 +41,7 @@ export const ownerCompletionKey = (
 
 type DataPort = Readonly<{
   snapshots?: OwnerSnapshotPort;
+  streams?: RegisteredStreamPort;
   execute(
     command: OwnerCommand,
     options?: OwnerCommandExecuteOptions,
@@ -116,6 +121,7 @@ export function createRegisteredOwnerExecutionPort(
 ): RegisteredOwnerExecutionPort {
   const { ownerId, namespace, port } = options;
   const snapshots = captureSnapshotCalls(port.snapshots);
+  const streams = captureStreamCalls(port.streams);
   if (
     ![ownerId, namespace].every((value) =>
       typeof value === "string" && value.trim()
@@ -147,6 +153,7 @@ export function createRegisteredOwnerExecutionPort(
   };
   return {
     ...(snapshots ? { snapshots } : {}),
+    ...(streams ? { streams } : {}),
     async claim(input, callOptions) {
       const { assignmentId, sessionId } = input;
       if (

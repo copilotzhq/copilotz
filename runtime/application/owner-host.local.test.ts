@@ -1,3 +1,4 @@
+import { createMemoryPhysicalBodyStore } from "../content/memory-physical-body-store.ts";
 import { OWNER_OPERATION_SETTLED_EVENT } from "../owner/settlement.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -141,6 +142,7 @@ async function fixture(input: {
   policy?: Partial<OwnerHostPolicy>;
   preparation?: OwnerHostOptions["preparation"];
   snapshots?: OwnerHostOptions["snapshots"];
+  content?: OwnerHostOptions["content"];
   processors?: OwnerHostLocalProcessorOptions;
   session?(db: SqlSession): SqlSession;
   beforeReady?(): Promise<void>;
@@ -165,6 +167,7 @@ async function fixture(input: {
     maxPending: 32,
     ...(input.preparation ? { preparation: input.preparation } : {}),
     ...(input.snapshots ? { snapshots: input.snapshots } : {}),
+    ...(input.content ? { content: input.content } : {}),
 
     onError: (error) => errors.push(error),
     transport: {
@@ -4136,7 +4139,7 @@ for (const mode of ["in-process", "websocket"] as const) {
   }
 }
 
-function snapshotFlowRegistry(
+function invocationFlowRegistry(
   kind: "action" | "processor",
   verify: (ctx: ActionContext | ProcessorContext) => Promise<void>,
 ) {
@@ -4216,7 +4219,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           completed = true;
         };
         const f = await fixture({
-          registry: snapshotFlowRegistry(kind, verify),
+          registry: invocationFlowRegistry(kind, verify),
           mode,
           maxActive: 1,
           local: localOptions({
@@ -4313,7 +4316,7 @@ for (const mode of ["in-process", "websocket"] as const) {
               }
             };
             const f = await fixture({
-              registry: snapshotFlowRegistry(kind, verify),
+              registry: invocationFlowRegistry(kind, verify),
               mode,
               maxActive: 1,
               local: localOptions({
@@ -4400,7 +4403,7 @@ for (const shutdownFirst of [false, true]) {
         release = deferred();
       let callbackEnded = false, closeSettled = false;
       const f = await fixture({
-        registry: snapshotFlowRegistry("action", async (ctx) => {
+        registry: invocationFlowRegistry("action", async (ctx) => {
           try {
             await ctx.readSnapshot(async () => {
               opened.resolve();
@@ -4591,3 +4594,235 @@ for (const fail of [false, true]) {
     },
   );
 }
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      for (const cleanup of ["ctx-revoked", "implicit"] as const) {
+        test(
+          `owner content abort-only real ${placement} ${kind} / ${mode} / ${cleanup}`,
+          {
+            skip: !sourceRoot,
+            timeout: 45_000,
+          },
+          async () => {
+            const physical = createMemoryPhysicalBodyStore();
+            let completed = false, ctxGranted = true;
+            const verify = async (ctx: ActionContext | ProcessorContext) => {
+              const writer = await ctx.streams.open({
+                id: "answer",
+                mediaType: "text/plain",
+                role: "assistant",
+              });
+              assert.deepEqual(
+                await writer.append({
+                  appendId: "a",
+                  bytes: new Uint8Array([1, 2, 3]),
+                }),
+                { startOffset: 0, endOffset: 3 },
+              );
+              await awaitPrefix();
+              assert.deepEqual(
+                await writer.append({
+                  appendId: "b",
+                  bytes: new Uint8Array([4, 5]),
+                }),
+                { startOffset: 3, endOffset: 5 },
+              );
+              if (cleanup === "ctx-revoked") {
+                ctxGranted = false;
+                await writer.abort({
+                  outcome: "cancelled",
+                  capture: "truncated",
+                });
+              }
+              completed = true;
+            };
+            const f = await fixture({
+              registry: invocationFlowRegistry(kind, verify),
+              mode,
+              maxActive: 1,
+              local: localOptions({
+                actionIds: kind === "action" && placement === "worker"
+                  ? ["fixture.idle"]
+                  : ["fixture.local"],
+                policy: {
+                  ...localOptions().policy,
+                  grants: () => ({ ctx: ctxGranted, settlement: true }),
+                },
+              }),
+              ...(kind === "processor" && placement === "owner-local"
+                ? {
+                  processors: {
+                    processorIds: ["fixture.read"],
+                    policy: {
+                      grants: () => ({ ctx: ctxGranted, settlement: true }),
+                      event() {},
+                      collections: () => ({}),
+                    },
+                    createCapabilities: () => ({ resources: {}, adapters: {} }),
+                  },
+                }
+                : {}),
+              policy: { worker: () => ({ ctx: ctxGranted, settlement: true }) },
+              content: {
+                backendId: "memory",
+                physical,
+                protectionMs: 30_000,
+                maxUnresolved: 8,
+              },
+            });
+            const awaitPrefix = () =>
+              eventually(async () =>
+                Number(
+                  (await f.db.query(
+                    "SELECT committed_offset FROM copilotz_operation_streams",
+                  )).rows[0]?.committed_offset,
+                ) === 3
+              );
+            try {
+              assert.equal(
+                await f.facade.actions.work("content", {
+                  operationKey: `content-${kind}-${placement}`,
+                }),
+                "done",
+              );
+              await eventually(() =>
+                completed && f.host.snapshot().active === 0
+              );
+              const rows =
+                (await f.db.query("SELECT * FROM copilotz_operation_streams"))
+                  .rows;
+              assert.equal(rows.length, 1);
+              const row = rows[0];
+              assert.equal(row.state, "terminal");
+              assert.equal(row.revocation_state, "revoked");
+              assert.equal(
+                row.outcome,
+                cleanup === "ctx-revoked" ? "cancelled" : "abandoned",
+              );
+              assert.equal(row.capture, "truncated");
+              assert.equal(Number(row.committed_offset), 3);
+              assert.equal(
+                (await physical.head(String(row.body_id)))?.byteLength,
+                5,
+              );
+              assert.equal(
+                (await physical.head(String(row.body_id)))?.state,
+                "fenced",
+              );
+              await eventually(async () =>
+                (await f.db.query("SELECT state FROM copilotz_operations")).rows
+                  .every((row) => row.state === "completed")
+              );
+              assert.deepEqual(f.errors, []);
+            } finally {
+              await f.close();
+            }
+          },
+        );
+      }
+    }
+  }
+}
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    test(
+      `unconfigured stream capability is a known worker ${kind} refusal / ${mode}`,
+      { skip: !sourceRoot, timeout: 30_000 },
+      async () => {
+        const f = await fixture({
+          mode,
+          registry: invocationFlowRegistry(kind, async (ctx) => {
+            await ctx.streams.open({
+              mediaType: "text/plain",
+              role: "assistant",
+            });
+          }),
+          local: localOptions({
+            actionIds: kind === "action" ? ["fixture.idle"] : ["fixture.local"],
+          }),
+        });
+        try {
+          const result = await outcome(
+            f.facade.actions.work("unsupported", {
+              operationKey: "unsupported-stream",
+            }),
+          );
+          if (kind === "action") assert.ok(result.error);
+          else assert.equal(result.value, "done");
+          await eventually(() => f.host.snapshot().active === 0);
+          const rows = (await f.db.query(
+            "SELECT status FROM event_deliveries WHERE consumer_id=$1",
+            [
+              kind === "action"
+                ? "registered:fixture.local"
+                : "processor:fixture.read",
+            ],
+          )).rows;
+          assert.equal(rows.length, 1);
+          assert.equal(rows[0].status, "dead_letter");
+          assert.equal(
+            (await f.db.query("SELECT 1 FROM copilotz_operation_streams")).rows
+              .length,
+            0,
+          );
+          assert.equal(f.host.snapshot().recoveryRequired, false);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+  }
+}
+test(
+  "local content refuses an ordinary stream open inside exclusive read snapshot before queueing",
+  { skip: !sourceRoot, timeout: 30_000 },
+  async () => {
+    let entered = false, refused = false;
+    const f = await fixture({
+      registry: invocationFlowRegistry("action", async (ctx) => {
+        await ctx.readSnapshot(async () => {
+          entered = true;
+          try {
+            await ctx.streams.open({
+              mediaType: "text/plain",
+              role: "assistant",
+            });
+          } catch {
+            refused = true;
+          }
+        });
+      }),
+      content: {
+        backendId: "memory",
+        physical: createMemoryPhysicalBodyStore(),
+        protectionMs: 30_000,
+        maxUnresolved: 8,
+      },
+      snapshots: {
+        idleTimeoutMs: 3000,
+        maxLifetimeMs: 5000,
+        maxPendingReads: 8,
+        authorizeHistorical: () => ({ historical: true, filter: {} }),
+      },
+    });
+    try {
+      const result = await outcome(
+        f.facade.actions.work("nested", { operationKey: "nested-stream" }),
+      );
+      assert.ok(result.error);
+      assert.equal(entered, true);
+      assert.equal(refused, true);
+      await eventually(() => f.host.snapshot().active === 0);
+      assert.equal(
+        (await f.db.query("SELECT 1 FROM copilotz_operation_streams")).rows
+          .length,
+        0,
+      );
+    } finally {
+      await f.close();
+    }
+  },
+);

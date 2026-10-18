@@ -1,3 +1,5 @@
+import { createLocalStreamPort } from "./local-stream-port.ts";
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 import {
   createLocalSnapshotPort,
   type LocalSnapshotResources,
@@ -81,6 +83,7 @@ function localReference(value: unknown): OwnerLocalProcessorAssignmentBinding {
 export function createOwnerLocalProcessorPort(
   options: Readonly<{
     snapshots?: LocalSnapshotResources;
+    streams?: RegisteredStreamPort;
     boundary:
       & Pick<
         OwnerCommandBoundary,
@@ -212,6 +215,12 @@ export function createOwnerLocalProcessorPort(
   if (children && !executeInput) {
     throw new TypeError("Local children require owner input admission.");
   }
+  const streams = createLocalStreamPort({
+    port: options.streams,
+    calls,
+    invocation,
+    settlement,
+  });
   const snapshots = createLocalSnapshotPort({
     resources: options.snapshots,
     caller: localCaller,
@@ -220,6 +229,7 @@ export function createOwnerLocalProcessorPort(
   });
   return {
     ...(snapshots ? { snapshots } : {}),
+    ...(streams ? { streams } : {}),
     async readCollection(request, callOptions) {
       invocation();
       const input = parseOwnerCollectionReadRequest(

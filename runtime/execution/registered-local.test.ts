@@ -1,3 +1,4 @@
+import { streamFailureFixture } from "./stream-failure.fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
@@ -1150,3 +1151,35 @@ test("private Action invocation signal closes before raw drain without cancellin
   assert.equal(result.completion.status, "completed");
   await f.execution.quiescent;
 });
+
+for (const unknown of [false, true, "hostile"] as const) {
+  test(`local Action background stream failure retains actual drain (unknown=${unknown})`, async () => {
+    const stream = streamFailureFixture(unknown);
+    const f = fixture(
+      defineAction({
+        id: "action",
+        execute: (_input, ctx: ActionContext) => stream.handle(ctx),
+      }),
+      { streams: stream.port },
+    );
+    let settled = false, quiescent = false;
+    const running = f.execution.run();
+    void running.then(() => settled = true, () => settled = true);
+    void f.execution.quiescent.then(() => quiescent = true);
+    try {
+      await stream.inspectBeforeRelease(() => settled || quiescent);
+      assert.equal(f.completions.length, 0);
+      if (unknown) {
+        await assert.rejects(running, /registered_local_indeterminate/);
+        assert.equal(f.completions.length, 0);
+        assert.equal(f.unknown.length, 1);
+      } else {
+        assert.equal((await running).receipt.status, "failed");
+        await f.execution.quiescent;
+        assert.equal(f.completions.length, 1);
+      }
+    } finally {
+      stream.release();
+    }
+  });
+}

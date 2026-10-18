@@ -1,3 +1,5 @@
+import { createRegisteredStreamCapability } from "./stream-capability.ts";
+import { isRegisteredInvocationUnknown as unknownOutcome } from "./registered-invocation.ts";
 import { createRegisteredReadSnapshot } from "./snapshot-capability.ts";
 import { createCollectionReadCapability } from "./collection-read-capability.ts";
 import { normalizeActionNamedPreparation } from "./preparation-call.ts";
@@ -49,20 +51,6 @@ function text(value: unknown): asserts value is string {
     value.length > 1024
   ) throw failure("processor_identity_invalid");
 }
-function unknownOutcome(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const value = error as {
-    code?: unknown;
-    indeterminate?: unknown;
-    outcome?: unknown;
-    execution?: unknown;
-  };
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    ["owner_commit_unknown", "persistence_indeterminate"].includes(
-      String(value.code),
-    );
-}
 
 export async function runRegisteredProcessorInvocation(
   options: Readonly<{
@@ -87,7 +75,15 @@ export async function runRegisteredProcessorInvocation(
   let hasPendingFailure = false;
   let pendingFailures: unknown[] = [];
   // The bound counts calls over the whole invocation; settled calls stay here.
-  const pending: Promise<unknown>[] = [];
+  const pending: { work: Promise<unknown>; resource: boolean }[] = [];
+  let fatalInvocationFailure = false;
+  const failInvocation = options.lifetime.fail?.bind(options.lifetime);
+  const waitPending = (resources = true) =>
+    Promise.all(
+      pending.filter((entry) => resources || !entry.resource).map((entry) =>
+        entry.work
+      ),
+    );
   const unsupported = (): never => {
     capabilityFailure = true;
     throw failure("processor_capability_unsupported");
@@ -133,7 +129,7 @@ export async function runRegisteredProcessorInvocation(
         ];
       }),
     ));
-  const track = <T>(start: () => Promise<T>): Promise<T> => {
+  const track = <T>(start: () => Promise<T>, resource = false): Promise<T> => {
     check();
     if (!registering) throw failure("processor_context_closed");
     if (pending.length >= 100) return unsupported();
@@ -143,15 +139,32 @@ export async function runRegisteredProcessorInvocation(
     } catch (error) {
       task = Promise.reject(error);
     }
-    pending.push(task.catch((error) => {
-      pendingFailures.push(error);
+    pending.push({
+      resource,
+      work: task.catch((error) => {
+        pendingFailures.push(error);
+        if (!hasPendingFailure || unknownOutcome(error)) {
+          hasPendingFailure = true;
+          pendingFailure = error;
+        }
+      }),
+    });
+    return task;
+  };
+  const streamCapability = createRegisteredStreamCapability({
+    port: options.calls.streams,
+    lifetime: options.lifetime,
+    track: (start) => track(start, true),
+    unsupported,
+    fail(error) {
+      fatalInvocationFailure = true;
       if (!hasPendingFailure || unknownOutcome(error)) {
         hasPendingFailure = true;
         pendingFailure = error;
       }
-    }));
-    return task;
-  };
+      failInvocation?.(error);
+    },
+  });
   const readSnapshot = createRegisteredReadSnapshot({
     collections: registry.collections,
     port: options.calls.snapshots,
@@ -361,7 +374,7 @@ export async function runRegisteredProcessorInvocation(
       }),
       vectors: unavailable(),
       content: unavailable(),
-      streams: unavailable(),
+      streams: streamCapability.streams,
       signal: exposedSignal,
       now: () => new Date(),
       transaction,
@@ -372,8 +385,11 @@ export async function runRegisteredProcessorInvocation(
       try {
         await handle.call(processor, snapshot(projection.event), context);
       } catch (error) {
-        await Promise.all(pending);
-        if (hasPendingFailure && unknownOutcome(pendingFailure)) {
+        await waitPending(false);
+        if (
+          fatalInvocationFailure ||
+          (hasPendingFailure && unknownOutcome(pendingFailure))
+        ) {
           throw pendingFailure;
         }
         check();
@@ -390,6 +406,7 @@ export async function runRegisteredProcessorInvocation(
             context,
           )
         ) throw error;
+        if (fatalInvocationFailure) throw pendingFailure;
         // onError may acknowledge precisely the known settled failure that
         // reached handle. Independent/unawaited failures and anything newly
         // raised by onError stay latched; uncertainty is never cleared.
@@ -402,9 +419,11 @@ export async function runRegisteredProcessorInvocation(
       }
     } finally {
       registering = false;
-      await Promise.all(pending);
+      streamCapability.seal();
+      await streamCapability.drain();
+      await waitPending();
     }
-    if (hasPendingFailure) throw pendingFailure;
+    if (hasPendingFailure || fatalInvocationFailure) throw pendingFailure;
     check();
     if (capabilityFailure) unsupported();
     result = { status: "succeeded" };

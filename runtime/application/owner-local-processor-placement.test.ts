@@ -790,3 +790,25 @@ test("current callback cannot end a Processor invocation and preserve captured r
   f.controller.stop();
   await f.drained(entry);
 });
+
+test("reserved local Processor lookup requires exact started ordinal and closes reentrantly", async () => {
+  const f = fixture(),
+    invocation = new AbortController(),
+    entry = f.entry(ref(), invocation.signal);
+  assert.equal(f.controller.captureReservedLifetime(ref(), 1), undefined);
+  await f.start(entry);
+  const proof = f.controller.captureReservedLifetime(ref(), 1)!;
+  assert.ok(proof);
+  assert.equal(f.controller.captureReservedLifetime(ref(), 2), undefined);
+  assert.equal(
+    f.controller.captureReservedLifetime({ ...ref(), attemptId: "other" }, 1),
+    undefined,
+  );
+  f.state.ownerHook = () => {
+    f.end(entry, "succeeded");
+    return true;
+  };
+  assert.equal(proof.isCurrent(), false);
+  f.controller.stop();
+  await f.drained(entry);
+});

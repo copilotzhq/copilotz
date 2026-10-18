@@ -45,6 +45,9 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         "runtime/execution/collection-read-call.ts",
         "runtime/execution/collection-read-capability.ts",
         "runtime/execution/snapshot-capability.ts",
+        "runtime/execution/stream-capability.ts",
+        "runtime/execution/registered-invocation.ts",
+        "runtime/content/encoding.ts",
         "runtime/owner/ordinary-value.ts",
       ]
     ) {
@@ -55,6 +58,10 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         "runtime/owner/collection-read.ts",
         "runtime/owner/snapshot.ts",
         "runtime/owner/local-snapshot-port.ts",
+        "runtime/owner/local-stream-port.ts",
+        "runtime/owner/content-reservation.ts",
+        "runtime/content/physical-body-store.ts",
+        "runtime/content/database-physical-body-store.ts",
         "runtime/owner/ordinary-source-sql.ts",
         "runtime/collections/query.ts",
         "runtime/collections/aggregate.ts",
@@ -63,11 +70,7 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
     ) {
       assert(!graph.modules.some((module) => module.source === core(path)));
     }
-    assert(
-      !graph.modules.some((module) =>
-        module.source === core("runtime/execution/registered-invocation.ts")
-      ),
-    );
+
     assert(
       !graph.modules.some((m) =>
         /\/(persistence|engine|storage)\//.test(m.source)

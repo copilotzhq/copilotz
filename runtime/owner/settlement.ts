@@ -159,6 +159,8 @@ export function createOwnerOperationSettlement(
     schema: string;
     session: SqlSession;
     catalog: OperationCatalogCore;
+    /** Private opt-in; unconfigured owners refuse all stream history. */
+    contentLifecycle?: "abort-only";
     maxDrains?: number;
     maxOutstandingDrains?: number;
     maxConcurrentChecks?: number;
@@ -213,6 +215,7 @@ export function createOwnerOperationSettlement(
     schema,
     session,
     catalog,
+    contentLifecycle,
     authorizeControl,
     selectDrains,
     authorizeDrain,
@@ -420,6 +423,7 @@ export function createOwnerOperationSettlement(
       context.tx,
       schema,
       target,
+      contentLifecycle,
     );
     if (!current || !live(current)) return;
     await context.tx.query(
@@ -444,6 +448,7 @@ export function createOwnerOperationSettlement(
       context.tx,
       schema,
       target,
+      contentLifecycle,
     );
     if (!current) return { status: "missing" };
     if (live(current) && !current.ready) return { status: "pending" };
@@ -483,6 +488,7 @@ export function createOwnerOperationSettlement(
       target,
       {
         commandTime: context.commandTime,
+        contentLifecycle,
         expected,
         async beforeTerminal(snapshot) {
           const refs = await currentDrains(

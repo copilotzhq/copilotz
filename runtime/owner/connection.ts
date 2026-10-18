@@ -1,3 +1,10 @@
+import {
+  isRegisteredInvocationUnknown,
+  registeredInvocationErrorCode,
+} from "../execution/registered-invocation.ts";
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
+import { OWNER_STREAM_EXECUTION_CHUNK_BYTES } from "../execution/stream-capability.ts";
+import { base64ToBytes, bytesToBase64 } from "../content/encoding.ts";
 /** Application command bindings on Oxian's existing reverse work streams.
  * Private structural ports let the published package remain on its released
  * dependency until the separately reviewed transport change is published. */
@@ -27,6 +34,8 @@ const PROTOCOL = "copilotz.owner.v1";
 const FEATURES = ["commands", "projections", "settlement"] as const;
 const COMPLETE = "copilotz.owner.complete";
 const PROJECT = "copilotz.owner.project";
+const STREAM = "copilotz.owner.stream";
+const STREAM_ABORT = "copilotz.owner.stream-abort";
 const SNAPSHOT = "copilotz.owner.snapshot";
 const RECEIPT = "copilotz.owner.receipt";
 const LIMIT = 1_100_000;
@@ -43,6 +52,7 @@ const ERROR_CODES = new Set([
   "owner_commit_unknown",
   "persistence_indeterminate",
   "owner_call_rejected",
+  "owner_stream_unavailable",
   "effect_authority_refused",
   "effect_binding_invalid",
   "effect_transition_conflict",
@@ -60,6 +70,67 @@ const ERROR_CODES = new Set([
   "owner_snapshot_cleanup_unknown",
   "owner_snapshot_nested_call",
 ]);
+export type OwnerStreamCall = {
+  [K in keyof RegisteredStreamPort]: Readonly<
+    { operation: K; input: Parameters<RegisteredStreamPort[K]>[0] }
+  >;
+}[keyof RegisteredStreamPort];
+function streamCall(value: unknown): OwnerStreamCall {
+  const envelope = object(value);
+  if (
+    Object.keys(envelope).length !== 2 || !Object.hasOwn(envelope, "input") ||
+    !["open", "append", "checkpoint", "abort"].includes(
+      String(envelope.operation),
+    )
+  ) {
+    throw new TypeError("Invalid owner stream request.");
+  }
+  const input = object(envelope.input);
+  const allowed = envelope.operation === "open"
+    ? [
+      "id",
+      "mediaType",
+      "kind",
+      "role",
+      "name",
+      "alt",
+      "language",
+      "disposition",
+      "metadata",
+      "correlationId",
+    ]
+    : envelope.operation === "append"
+    ? ["id", "expectedOffset", "appendId", "bytes"]
+    : envelope.operation === "checkpoint"
+    ? ["id", "startOffset", "endOffset"]
+    : ["id", "reason", "outcome", "capture"];
+  if (
+    !Object.hasOwn(input, "id") ||
+    Object.keys(input).some((key) => !allowed.includes(key))
+  ) {
+    throw new TypeError("Invalid owner stream fields.");
+  }
+  if (envelope.operation === "append") {
+    if (
+      typeof input.bytes !== "string" ||
+      input.bytes.length > 4 * Math.ceil(OWNER_STREAM_EXECUTION_CHUNK_BYTES / 3)
+    ) {
+      throw new RangeError("Owner stream chunk exceeds its bound.");
+    }
+    const bytes = base64ToBytes(input.bytes);
+    if (
+      bytes.byteLength > OWNER_STREAM_EXECUTION_CHUNK_BYTES ||
+      bytesToBase64(bytes) !== input.bytes
+    ) {
+      throw new TypeError("Invalid stream byte encoding.");
+    }
+    return {
+      operation: "append",
+      input: { ...input, bytes },
+    } as OwnerStreamCall;
+  }
+  return structuredClone(envelope) as OwnerStreamCall;
+}
 export type OwnerSnapshotPort = Readonly<{
   open(
     options?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
@@ -238,6 +309,16 @@ function receiptIdentity(value: unknown): ReceiptIdentity {
 export function createOwnerWorkerCallAdmission(
   options: Readonly<{
     resolveOwner(ownerId: string): OwnerCommandBoundary | undefined;
+    /** Uses ordinary parent admission and queue grants, including a separate abort settlement route. */
+    streams?: Readonly<
+      {
+        run(
+          caller: OwnerCaller,
+          request: OwnerStreamCall,
+          signal: AbortSignal,
+        ): Promise<OwnerJson>;
+      }
+    >;
     /** Exact private attempt authentication without command-queue grant lookup.
      * Resource operations perform current SQL authorization in their own scope. */
     snapshots?: Readonly<{
@@ -305,6 +386,8 @@ export function createOwnerWorkerCallAdmission(
       >;
   }>,
 ) {
+  const streamRoutes = options.streams;
+  const runStream = streamRoutes?.run.bind(streamRoutes);
   const snapshotRoutes = options.snapshots;
   const resolveSnapshot = snapshotRoutes?.resolveCaller.bind(snapshotRoutes);
   const runSnapshot = snapshotRoutes?.run.bind(snapshotRoutes);
@@ -320,7 +403,8 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== EFFECT_SETTLE &&
       context.workload !== EFFECT_STATE && context.workload !== CHILD_ACTION &&
       context.workload !== CHILD_PREPARATION &&
-      context.workload !== CHILD_RESULT && context.workload !== SNAPSHOT
+      context.workload !== CHILD_RESULT && context.workload !== SNAPSHOT &&
+      context.workload !== STREAM && context.workload !== STREAM_ABORT
     ) {
       return undefined;
     }
@@ -339,6 +423,8 @@ export function createOwnerWorkerCallAdmission(
     if (!owner) return undefined;
     const currentOwner = () =>
       owner.state === "acquired" && options.resolveOwner(ownerId) === owner;
+    const isStream = context.workload === STREAM ||
+      context.workload === STREAM_ABORT;
     const isSnapshot = context.workload === SNAPSHOT;
     if (
       isSnapshot &&
@@ -379,7 +465,8 @@ export function createOwnerWorkerCallAdmission(
     const isCompletion = context.workload === COMPLETE;
     const isEffectSettlement = context.workload === EFFECT_SETTLE;
     const isEffectState = context.workload === EFFECT_STATE;
-    const isSettlement = isCompletion || isEffectSettlement || isEffectState;
+    const isSettlement = isCompletion || isEffectSettlement || isEffectState ||
+      context.workload === STREAM_ABORT;
     const isCommand = context.workload === COMMAND || isCompletion ||
       isEffectSettlement;
     const isAssigned = context.workload !== RECEIPT && !isReadiness &&
@@ -436,6 +523,28 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Ingress authority is no longer current.");
           }
           signal.throwIfAborted();
+        }
+        if (isStream) {
+          if (!runStream) {
+            throw Object.assign(new Error("Owner streams are unavailable."), {
+              code: "owner_stream_unavailable",
+            });
+          }
+          const request = streamCall(payload);
+          if (
+            (request.operation === "abort") !==
+              (context.workload === STREAM_ABORT)
+          ) {
+            throw new TypeError(
+              "Stream operation uses the wrong authority route.",
+            );
+          }
+          const result = await runStream!(admitted, request, signal);
+          committed = true;
+          if (!currentOwner()) throw new Error("Owner stream authority ended.");
+          signal.throwIfAborted();
+          context.signal.throwIfAborted();
+          return encode({ ok: true, value: result });
         }
         if (isSnapshot) {
           const fresh = resolveSnapshot!(context, ownerId);
@@ -639,18 +748,11 @@ export function createOwnerWorkerCallAdmission(
         return encode({ ok: true, value: reply ?? null });
       } catch (error) {
         // SQL, grants and protected values must never leak via error strings.
-        const code = error && typeof error === "object" && "code" in error &&
-            typeof error.code === "string"
-          ? error.code
-          : "owner_call_rejected";
+        const tag = registeredInvocationErrorCode(error);
+        const code = typeof tag === "string" ? tag : "owner_call_rejected";
         return encode({
           ok: false,
-          outcome: committed ||
-              (error !== null && typeof error === "object" &&
-                "indeterminate" in error && error.indeterminate === true) ||
-              ["owner_commit_unknown", "persistence_indeterminate"].includes(
-                code,
-              )
+          outcome: committed || isRegisteredInvocationUnknown(error)
             ? "unknown"
             : "refused",
           code: ERROR_CODES.has(code) ? code : "owner_call_rejected",
@@ -756,7 +858,105 @@ export function createOwnerConnection(
       signal.removeEventListener("abort", onAbort);
     }
   }
+  async function callStream(
+    operation: OwnerStreamCall["operation"],
+    input: unknown,
+    callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+  ) {
+    try {
+      const result = await call(operation === "abort" ? STREAM_ABORT : STREAM, {
+        operation,
+        input,
+      }, callOptions);
+      return operation === "abort" ? result : object(result);
+    } catch (error) {
+      if (error instanceof OwnerCallRejected && error.outcome === "refused") {
+        throw error;
+      }
+      throw Object.assign(
+        new Error(
+          "Stream call outcome is unknown; this attempt cannot continue.",
+          { cause: error },
+        ),
+        { code: "owner_stream_unknown", indeterminate: true },
+      );
+    }
+  }
+  const streams: RegisteredStreamPort = {
+    async open(input, callOptions) {
+      const result = object(await callStream("open", input, callOptions));
+      if (
+        Object.keys(result).length !== 1 || typeof result.id !== "string" ||
+        !result.id || result.id.length > 1024
+      ) {
+        throw Object.assign(new Error("Invalid stream opening reply."), {
+          indeterminate: true,
+        });
+      }
+      return { id: result.id };
+    },
+    async append(input, callOptions) {
+      const bytes = input.bytes;
+      const byteLength = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(Uint8Array.prototype),
+        "byteLength",
+      )!.get!;
+      if (
+        !(bytes instanceof Uint8Array) ||
+        byteLength.call(bytes) > OWNER_STREAM_EXECUTION_CHUNK_BYTES
+      ) {
+        throw new RangeError("Owner stream chunk exceeds its bound.");
+      }
+      const owned = new Uint8Array(bytes);
+      if (owned.byteLength > OWNER_STREAM_EXECUTION_CHUNK_BYTES) {
+        throw new RangeError("Owner stream chunk exceeds its bound.");
+      }
+      const result = object(
+        await callStream(
+          "append",
+          { ...input, bytes: bytesToBase64(owned) },
+          callOptions,
+        ),
+      );
+      if (
+        Object.keys(result).length !== 2 ||
+        !Number.isSafeInteger(result.startOffset) ||
+        !Number.isSafeInteger(result.endOffset) ||
+        Number(result.startOffset) < 0 ||
+        Number(result.endOffset) < Number(result.startOffset)
+      ) {
+        throw Object.assign(new Error("Invalid stream append reply."), {
+          indeterminate: true,
+        });
+      }
+      return {
+        startOffset: result.startOffset as number,
+        endOffset: result.endOffset as number,
+      };
+    },
+    async checkpoint(input, callOptions) {
+      const result = object(await callStream("checkpoint", input, callOptions));
+      if (
+        Object.keys(result).length !== 1 ||
+        !Number.isSafeInteger(result.committedOffset) ||
+        Number(result.committedOffset) < 0
+      ) {
+        throw Object.assign(new Error("Invalid stream checkpoint reply."), {
+          indeterminate: true,
+        });
+      }
+      return { committedOffset: result.committedOffset as number };
+    },
+    async abort(input, callOptions) {
+      if (await callStream("abort", input, callOptions) !== null) {
+        throw Object.assign(new Error("Invalid stream abort reply."), {
+          indeterminate: true,
+        });
+      }
+    },
+  };
   return {
+    streams,
     /** Must be repeated for each new transport session; this grants no ctx authority. */
     async ready(
       callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,

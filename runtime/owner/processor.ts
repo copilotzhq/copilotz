@@ -574,6 +574,16 @@ export function createOwnerProcessorCommands(
     );
     return data;
   }
+  function assertSameWorkerState(after: Authorized, before: Authorized) {
+    if (
+      exact(ownerAssignmentFacts(after.assignment)) !==
+        exact(ownerAssignmentFacts(before.assignment)) ||
+      exact(after.delivery) !== exact(before.delivery) ||
+      exact(after.event) !== exact(before.event)
+    ) {
+      refuse("Processor state changed across authorization.");
+    }
+  }
   async function recheckWorker(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -586,14 +596,12 @@ export function createOwnerProcessorCommands(
     // Re-resolve grants after event policy without recursively invoking it.
     // Then reread durable facts and the separately stored event body.
     const after = await current(tx, caller, time, mode, readMode);
-    if (
-      exact(ownerAssignmentFacts(after.assignment)) !==
-        exact(ownerAssignmentFacts(state.assignment)) ||
-      exact(after.delivery) !== exact(state.delivery) ||
-      exact(after.event) !== exact(state.event) ||
-      exact(await readData(tx, after)) !== exact(data)
-    ) refuse("Processor state changed across authorization.");
+    assertSameWorkerState(after, state);
+    if (exact(await readData(tx, after)) !== exact(data)) {
+      refuse("Processor state changed across authorization.");
+    }
   }
+
   type LocalRead = Readonly<{
     delivery: EventDelivery;
     event: DurableEvent;
@@ -1402,6 +1410,29 @@ export function createOwnerProcessorCommands(
         completion(data.completion);
       } else checkReference(command.intent, a);
       authorized.set(tx, state);
+    },
+    /** Parent resource cleanup uses settlement authority even after ctx revocation. */
+    async authorizeSettlementFacts(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      time: string,
+    ) {
+      if (caller.principal.kind === "owner-local") {
+        const state = await currentLocal(tx, caller, time, "settlement");
+        await recheckLocal(tx, caller, time, { ...state, phase: "settlement" });
+        return {
+          assignment: state.assignment,
+          delivery: state.read.delivery,
+          event: state.read.event,
+        };
+      }
+      const state = await current(tx, caller, time, "complete");
+      assertSameWorkerState(await current(tx, caller, time, "complete"), state);
+      return {
+        assignment: state.assignment,
+        delivery: state.delivery,
+        event: state.event,
+      };
     },
     /** Private local composition only; does not widen the worker return type. */
     async authorizeLocalLive(

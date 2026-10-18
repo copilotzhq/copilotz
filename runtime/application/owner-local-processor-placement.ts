@@ -521,6 +521,33 @@ export function createOwnerLocalProcessorPlacementController(
   return {
     reserve,
     stop,
+    isInvocationCurrent(caller: OwnerCaller): boolean {
+      const state = currentState(caller), signal = state?.invocationSignal;
+      return !!state && !!signal && !signal.aborted &&
+        currentState(caller) === state && !signal.aborted;
+    },
+    /** Existing exact entry only; this cannot admit a new producer invocation. */
+    captureReservedLifetime(input: Reference, ordinal: number) {
+      let bound: Reference;
+      try {
+        bound = reference(input);
+      } catch {
+        return undefined;
+      }
+      const state = latest.get(bound.deliveryId),
+        signal = state?.invocationSignal;
+      if (
+        !state || !signal || !same(bound, state.reference) ||
+        ordinal !== state.ordinal
+      ) return undefined;
+      const live = () =>
+        latest.get(bound.deliveryId) === state &&
+        state.startObserved && !state.end && !signal.aborted;
+      const isCurrent = () => live() && state.current() && live();
+      return isCurrent()
+        ? Object.freeze({ signal: AbortSignal.any([signal]), isCurrent })
+        : undefined;
+    },
     /** Driver invocation lifetime ends before its separately authorized settlement. */
     captureCurrentLifetime(caller: OwnerCaller) {
       let who: OwnerCaller;

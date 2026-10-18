@@ -1,3 +1,4 @@
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 import type { LocalSnapshotResources } from "../owner/local-snapshot-port.ts";
 import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 import { ownConfiguration } from "./owner-local-configuration.ts";
@@ -262,6 +263,7 @@ export function createOwnerHostCommandContexts(
 export function createOwnerHostLocalActions(
   options: Readonly<{
     snapshots?: LocalSnapshotResources;
+    streams?: (caller: OwnerCaller) => RegisteredStreamPort;
     configuration: ReturnType<typeof captureOwnerHostLocalActions>;
     registry: PluginRegistry;
     schema: string;
@@ -280,6 +282,7 @@ export function createOwnerHostLocalActions(
   }>,
 ) {
   const snapshotResources = options.snapshots;
+  const streamPort = options.streams;
   const {
     registry,
     schema,
@@ -436,6 +439,8 @@ export function createOwnerHostLocalActions(
     stop: controller.stop,
     current: controller.resolveCurrentLocal,
     captureLifetime: controller.captureCurrentLifetime,
+    isInvocationCurrent: controller.isInvocationCurrent,
+    captureReservedLifetime: controller.captureReservedLifetime,
     resolve,
     execution: {
       authorizeStart,
@@ -485,6 +490,7 @@ export function createOwnerHostLocalActions(
       );
       const port = createOwnerLocalActionPort({
         snapshots: snapshotResources,
+        streams: streamPort?.(entry.localCaller),
         boundary: {
           execute: (caller, command, callOptions) =>
             command.kind === "owner.local-start"

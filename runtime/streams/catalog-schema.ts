@@ -193,7 +193,7 @@ export function operationCatalogSchemaStatements(
       ? [
         `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_renewal_idx"
        ON ${tables.operationStreams} (owner_id, protection_deadline, namespace, operation_id, stream_id)
-       WHERE revocation_state = 'active'`,
+       WHERE revocation_state <> 'revoked'`,
       ]
       : []),
   ];

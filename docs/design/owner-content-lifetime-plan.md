@@ -4,6 +4,47 @@ Status: private memory/SQL/S3 physical prerequisites scoped-reviewed; owner
 integration remains WIP, 18 October 2026. No public stream activation or
 production migration is implied.
 
+## 18 October 12:36 UTC: actual abort-only integration draft
+
+This preservation checkpoint is **unaccepted WIP**, not completion of slice 1.
+The host's private fresh-only content option now binds the existing coordinator
+to local/worker Action and Processor execution. Local calls retain complete raw
+physical work; worker calls use ordinary parent/grant admission and a separate
+settlement-only abort route, without snapshot queue bypass. Local stream calls
+apply the existing snapshot exclusion before queue admission.
+
+The invocation writer owns at most one active and one queued append, caps wire
+chunks at 256 KiB, coalesces acknowledged bytes on a one-second checkpoint
+timer, and never flushes tentative bytes into C during abort/disposal.
+Background checkpoint failure closes ordinary capabilities and aborts the
+existing signals; actual authored work and cleanup remain charged. Processor
+onError cannot clear fatal content failure, and uncertain cleanup cannot become
+an ordinary completion. Known unavailable content remains an ordinary
+unsupported capability.
+
+The coordinator reuses catalog rows for begin-revoking and confirmed-revoked
+transitions under genuine current-epoch owner control. Physical fencing is
+outside SQL. Hidden reservations stay hidden; published terminal intent and C
+are frozen; short copies become missing without shrinking C. Unconfirmed fencing
+is indeterminate and stays revoking. Unresolved capacity includes hidden and
+revoking rows; exact reservation replay is exempt. The existing renewal index
+now covers non-revoked rows, reflected in the fixed fresh schema layout.
+
+An explicit private abort-only settlement mode accepts only confirmed hidden or
+noncompleted terminal rows with supported metadata. Both readiness and the final
+UPDATE use the same NULL-safe predicate. No-content hosts keep their original
+all-stream refusal. Successful sealing, promotion and retained-history recovery
+are not enabled. Worker role packaging explicitly admits three newly executable
+pure helpers while excluding owner SQL and physical-store code.
+
+Incremental diagnostics on different intermediate sources: 155 driver/helper
+cases; four wire cases; 16 real PGlite flows across both transports, placements
+and parent kinds, including ctx-grant loss and implicit disposal; seven later
+feature/snapshot guards; 12 role artifacts. These are development diagnostics,
+not a consolidated independent acceptance run. Quiet protection renewal,
+orphan/hidden cleanup, completion/retry and close coordination still require
+implementation and joint validation before this slice is accepted.
+
 ## Approved contract and recovered-spec discrepancy
 
 The approved [owner-attempt contract](owner-attempt-authority.md) supersedes

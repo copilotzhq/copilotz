@@ -429,7 +429,7 @@ export const OWNER_CATALOG_LAYOUT = {
           "pg_catalog.default",
         ],
         "0 0 0 0 0",
-        "revocation_state = 'active'::text",
+        "revocation_state <> 'revoked'::text",
       ],
       "copilotz_operation_streams_replay_key_idx": [
         "btree",

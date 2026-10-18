@@ -1,3 +1,8 @@
+import { captureStreamCalls } from "./stream-capability.ts";
+import {
+  createRegisteredInvocationFailure,
+  isRegisteredInvocationUnknown as unknown,
+} from "./registered-invocation.ts";
 import { captureSnapshotCalls } from "./snapshot-capability.ts";
 /** One owner-local Processor attempt. The host owns generations, retry wakes,
  * durable authority and capacity; neither a receipt nor quiescence grants them. */
@@ -59,6 +64,7 @@ export type RegisteredLocalProcessorPort = Readonly<{
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
   readCollection?: RegisteredInvocationCalls["readCollection"];
   snapshots?: RegisteredInvocationCalls["snapshots"];
+  streams?: RegisteredInvocationCalls["streams"];
   sealInvocationCalls(): void;
   drainRawCalls(): Promise<void>;
   settlementState(
@@ -308,16 +314,6 @@ export function parseLocalProcessorAttemptReceipt(
   return receipt as OwnerLocalProcessorAttemptReceipt;
 }
 
-function unknown(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const value = error as Record<string, unknown>;
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    ["owner_commit_unknown", "persistence_indeterminate"].includes(
-      String(value.code),
-    );
-}
-
 export function createRegisteredLocalProcessorExecution(
   options: RegisteredLocalProcessorOptions,
 ) {
@@ -346,6 +342,28 @@ export function createRegisteredLocalProcessorExecution(
       throw error;
     }
   });
+  const streams = captureStreamCalls(
+    owner.streams,
+    (work) => streamCall(work, false),
+    (work) => streamCall(work, true),
+  );
+  async function streamCall<T>(
+    work: () => Promise<T>,
+    cleanup: boolean,
+  ): Promise<T> {
+    if (cleanup) current();
+    else check();
+    try {
+      const result = await work();
+      if (cleanup) current();
+      else check();
+      return result;
+    } catch (error) {
+      if (unknown(error)) throw indeterminate(error);
+      current();
+      throw error;
+    }
+  }
   const state = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -383,6 +401,11 @@ export function createRegisteredLocalProcessorExecution(
     }
     return uncertainty;
   };
+  const invocationFailure = createRegisteredInvocationFailure(
+    command,
+    exposed,
+    indeterminate,
+  );
   const current = () => {
     if (uncertain) throw uncertainty;
     if (!revoked) {
@@ -403,6 +426,7 @@ export function createRegisteredLocalProcessorExecution(
   };
   const check = () => {
     current();
+    invocationFailure.check();
     if (cancelled) throw failure("processor_cancelled");
     if (!open) throw failure("local_processor_context_closed");
   };
@@ -552,12 +576,14 @@ export function createRegisteredLocalProcessorExecution(
               invocation,
               lifetime: {
                 check,
+                fail: invocationFailure.fail,
                 isCancelled: () => cancelled,
                 commandSignal: command.signal,
                 exposedSignal: exposed.signal,
               },
               calls: {
                 ...(snapshots ? { snapshots } : {}),
+                ...(streams ? { streams } : {}),
                 ...(readCollection
                   ? {
                     readCollection: (input, callOptions) =>

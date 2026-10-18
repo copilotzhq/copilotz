@@ -1,3 +1,5 @@
+import { captureStreamCalls } from "./stream-capability.ts";
+import { createRegisteredInvocationFailure } from "./registered-invocation.ts";
 import type { OwnerSnapshotPort } from "../owner/connection.ts";
 import { captureSnapshotCalls } from "./snapshot-capability.ts";
 import {
@@ -51,6 +53,7 @@ export type RegisteredProcessorProjection = Readonly<{
 export type RegisteredProcessorOwnerPort = Readonly<{
   readCollection?: RegisteredInvocationCalls["readCollection"];
   snapshots?: RegisteredInvocationCalls["snapshots"];
+  streams?: RegisteredInvocationCalls["streams"];
   claim(
     assignment: RegisteredProcessorAssignment,
     options: OwnerCommandExecuteOptions,
@@ -206,6 +209,7 @@ export function createRegisteredProcessorOwnerPort(
     ownerId: string;
     port: Readonly<{
       snapshots?: OwnerSnapshotPort;
+      streams?: RegisteredInvocationCalls["streams"];
       execute(
         command: OwnerCommand,
         options?: OwnerCommandExecuteOptions,
@@ -256,8 +260,10 @@ export function createRegisteredProcessorOwnerPort(
     return receipt(found.result, ref);
   };
   const snapshots = captureSnapshotCalls(options.port.snapshots);
+  const streams = captureStreamCalls(options.port.streams);
   return {
     ...(snapshots ? { snapshots } : {}),
+    ...(streams ? { streams } : {}),
     async claim(hint, callOptions) {
       const input = snapshot(hint);
       text(input.assignmentId);
@@ -382,6 +388,10 @@ export function createRegisteredProcessorWorker(
   ): Promise<RegisteredProcessorResult> {
     const control = new AbortController();
     const exposed = new AbortController();
+    const invocationFailure = createRegisteredInvocationFailure(
+      control,
+      exposed,
+    );
     let cancelled = signal?.aborted ?? false;
     let open = true;
     const cancel = () => {
@@ -392,6 +402,7 @@ export function createRegisteredProcessorWorker(
     if (cancelled) cancel();
     else signal?.addEventListener("abort", cancel, { once: true });
     const check = () => {
+      invocationFailure.check();
       if (cancelled) throw failure("processor_cancelled");
       if (!open) throw failure("processor_context_closed");
     };
@@ -443,6 +454,7 @@ export function createRegisteredProcessorWorker(
       const execute = port.execute.bind(port);
       const readCollection = port.readCollection?.bind(port);
       const snapshots = captureSnapshotCalls(port.snapshots);
+      const streams = captureStreamCalls(port.streams);
       let result: RegisteredProcessorCompletion;
       try {
         result = await runRegisteredProcessorInvocation({
@@ -461,6 +473,7 @@ export function createRegisteredProcessorWorker(
           },
           lifetime: {
             check,
+            fail: invocationFailure.fail,
             isCancelled: () => cancelled,
             commandSignal: control.signal,
             exposedSignal: exposed.signal,
@@ -469,6 +482,7 @@ export function createRegisteredProcessorWorker(
             execute,
             ...(readCollection ? { readCollection } : {}),
             ...(snapshots ? { snapshots } : {}),
+            ...(streams ? { streams } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>
@@ -503,7 +517,7 @@ export function createRegisteredProcessorWorker(
       const ack = await port.complete(
         snapshot(ref),
         snapshot(result),
-        cancelled ? {} : { signal: control.signal },
+        cancelled || invocationFailure.failed ? {} : { signal: control.signal },
       );
       if (!["committed", "duplicate"].includes(ack.status)) {
         throw failure("processor_completion_invalid");

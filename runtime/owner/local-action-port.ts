@@ -1,3 +1,5 @@
+import { createLocalStreamPort } from "./local-stream-port.ts";
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 import {
   createLocalSnapshotPort,
   type LocalSnapshotResources,
@@ -83,6 +85,7 @@ function localReference(value: unknown): RegisteredLocalActionReference {
 export function createOwnerLocalActionPort(
   options: Readonly<{
     snapshots?: LocalSnapshotResources;
+    streams?: RegisteredStreamPort;
     boundary: Pick<
       OwnerCommandBoundary,
       "execute" | "executeInput" | "project"
@@ -289,6 +292,12 @@ export function createOwnerLocalActionPort(
       }
     },
   };
+  const streams = createLocalStreamPort({
+    port: options.streams,
+    calls,
+    invocation,
+    settlement,
+  });
   const snapshots = createLocalSnapshotPort({
     resources: options.snapshots,
     caller: localCaller,
@@ -297,6 +306,7 @@ export function createOwnerLocalActionPort(
   });
   return {
     ...(snapshots ? { snapshots } : {}),
+    ...(streams ? { streams } : {}),
     async readCollection(request, callOptions) {
       invocation();
       const input = parseOwnerCollectionReadRequest(

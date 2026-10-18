@@ -1,3 +1,4 @@
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 import type { LocalSnapshotResources } from "../owner/local-snapshot-port.ts";
 import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 /** Private same-owner local Processor composition. Host wiring owns scheduling,
@@ -187,6 +188,7 @@ export function captureOwnerHostLocalProcessors(
 export function createOwnerHostLocalProcessors(
   options: Readonly<{
     snapshots?: LocalSnapshotResources;
+    streams?: (caller: OwnerCaller) => RegisteredStreamPort;
     configuration: ReturnType<typeof captureOwnerHostLocalProcessors>;
     registry: PluginRegistry;
     schema: string;
@@ -208,6 +210,7 @@ export function createOwnerHostLocalProcessors(
   }>,
 ) {
   const snapshotResources = options.snapshots;
+  const streamPort = options.streams;
   const {
     registry,
     schema,
@@ -377,6 +380,8 @@ export function createOwnerHostLocalProcessors(
     stop,
     current: controller.resolveCurrent,
     captureLifetime: controller.captureCurrentLifetime,
+    isInvocationCurrent: controller.isInvocationCurrent,
+    captureReservedLifetime: controller.captureReservedLifetime,
     resolve,
     processor: {
       authorizeStart,
@@ -536,6 +541,7 @@ export function createOwnerHostLocalProcessors(
       });
       const port = createOwnerLocalProcessorPort({
         snapshots: snapshotResources,
+        streams: streamPort?.(entry.localCaller),
         boundary: {
           execute: (caller, command, callOptions) =>
             command.kind === "owner.local-processor-start"

@@ -1,3 +1,12 @@
+import { ownerStreamDrainedSql } from "../streams/catalog.ts";
+import {
+  createOwnerStreamReservations,
+  OWNER_STREAM_REVOKE,
+  OWNER_STREAM_REVOKED,
+  type OwnerStreamScope,
+} from "../owner/content-reservation.ts";
+import type { PhysicalBodyStore } from "../content/physical-body-store.ts";
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 import {
   createOwnerSnapshotResources,
   type OwnerHistoricalReadPolicy,
@@ -308,6 +317,15 @@ export type OwnerHostOptions = Readonly<{
   registry: PluginRegistry;
   policy: OwnerHostPolicy;
   preparation?: OwnerHostPreparationOptions;
+  /** Private fresh-epoch abort-only writers; supplied physical store is already provisioned. */
+  content?: Readonly<
+    {
+      backendId: string;
+      physical: PhysicalBodyStore;
+      protectionMs: number;
+      maxUnresolved: number;
+    }
+  >;
   /** Private opt-in selection scopes; load evidence must choose production limits. */
   snapshots?: Readonly<{
     authorizeHistorical: OwnerHistoricalReadPolicy;
@@ -450,6 +468,34 @@ export async function createOwnerHost(
     throw new TypeError(
       "Private terminal recovery requires resume without local placement.",
     );
+  }
+  const contentConfiguration = options.content === undefined
+    ? undefined
+    : ownConfiguration(options.content, [
+      "backendId",
+      "physical",
+      "protectionMs",
+      "maxUnresolved",
+    ]);
+  if (contentConfiguration && initialization !== "fresh") {
+    throw new TypeError("Content retained-history recovery is not enabled.");
+  }
+  const physicalConfiguration = contentConfiguration
+    ? ownConfiguration(contentConfiguration.physical, [
+      "reserve",
+      "append",
+      "head",
+      "fence",
+      "readRange",
+    ])
+    : undefined;
+  if (
+    physicalConfiguration &&
+    Object.values(physicalConfiguration).some((method) =>
+      typeof method !== "function"
+    )
+  ) {
+    throw new TypeError("Invalid physical body store.");
   }
   const snapshotConfiguration = options.snapshots === undefined
     ? undefined
@@ -616,16 +662,21 @@ export async function createOwnerHost(
   const operationTables = createOperationCatalogTables(schema);
   const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
   const catalog = createOwnerOperationCatalogCore(session, schema);
-  // Content execution is still closed. Recovery may proceed only after proving
-  // the operation owns no stream rows, including hidden or already revoked ones.
+  // The content opt-in requires confirmed cleanup before delivery recovery.
+  // Unconfigured hosts continue to reject all unexpected stream history.
   const recoveryCatalog = Object.freeze(
     {
       ...catalog,
       async failDeliveryStreams(tx, input) {
         await catalog.assertFormat(tx);
         const rows = await tx.query(
-          `SELECT 1 FROM ${operationTables.operationStreams} WHERE operation_id=$1 LIMIT 1`,
-          [input.operationId],
+          contentConfiguration
+            ? `SELECT 1 FROM ${operationTables.operationStreams} AS stream WHERE operation_id=$1
+                AND placement_binding->>'deliveryId'=$2 AND (${ownerStreamDrainedSql()}) IS NOT TRUE LIMIT 1`
+            : `SELECT 1 FROM ${operationTables.operationStreams} WHERE operation_id=$1 LIMIT 1`,
+          contentConfiguration
+            ? [input.operationId, input.deliveryId]
+            : [input.operationId],
         );
         if (rows.rows.length) {
           unavailable("Owner content recovery is not yet supported.");
@@ -661,6 +712,7 @@ export async function createOwnerHost(
   let alarmPass: Promise<void> | undefined;
   type ControlPurpose =
     | "runtime"
+    | "content-cleanup"
     | "local-start"
     | "fresh"
     | "schema"
@@ -1207,6 +1259,7 @@ export async function createOwnerHost(
     schema,
     session,
     catalog,
+    contentLifecycle: contentConfiguration ? "abort-only" : undefined,
     maxConcurrentChecks: maxActive,
     authorizeControl(_tx, caller, target) {
       if (ready()) {
@@ -1395,50 +1448,192 @@ export async function createOwnerHost(
       });
     },
   });
+  async function resolveInvocationFacts(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
+    phase: "ctx" | "settlement" = "ctx",
+  ): Promise<
+    | Readonly<
+      { invocation: OwnerChildActionBinding; stream: OwnerStreamScope }
+    >
+    | undefined
+  > {
+    if (caller.principal.kind === "owner-local") {
+      const actionBinding = local?.current(caller);
+      if (actionBinding) {
+        const facts = phase === "settlement"
+          ? await execution.authorizeSettlementFacts(tx, caller, time)
+          : await execution.authorizeLiveFacts(tx, caller, time, readMode);
+        if (
+          facts.assignment.placement !== "owner-local" ||
+          !same(actionBinding, local?.current(caller))
+        ) return undefined;
+        return {
+          invocation: { kind: "action", assignment: facts.assignment },
+          stream: {
+            binding: actionBinding,
+            delivery: facts.delivery,
+            source: facts.source,
+          },
+        };
+      }
+      const binding = localProcessor?.current(caller);
+      if (!binding) return undefined;
+      const facts = phase === "settlement"
+        ? await processor.authorizeSettlementFacts(tx, caller, time)
+        : await processor.authorizeLocalLive(tx, caller, time, readMode);
+      if (
+        !("placement" in facts.assignment) ||
+        facts.assignment.placement !== "owner-local" ||
+        binding.attemptOrdinal !== facts.delivery.attempts ||
+        !same(binding, localProcessor?.current(caller))
+      ) return undefined;
+      return {
+        invocation: { kind: "processor", assignment: facts.assignment },
+        stream: {
+          binding: binding.reference,
+          delivery: facts.delivery,
+          source: facts.event,
+        },
+      };
+    }
+    const binding = await bridge.resolveStarted(tx, caller, readMode);
+    if (!binding) return undefined;
+    if ("kind" in binding) {
+      const facts = phase === "settlement"
+        ? await processor.authorizeSettlementFacts(tx, caller, time)
+        : await processor.authorizeLive(tx, caller, time, readMode);
+      if (
+        "placement" in facts.assignment ||
+        !same(binding, bridge.currentStarted(caller))
+      ) return undefined;
+      return {
+        invocation: { kind: "processor", assignment: facts.assignment },
+        stream: { binding, delivery: facts.delivery, source: facts.event },
+      };
+    }
+    const facts = phase === "settlement"
+      ? await execution.authorizeSettlementFacts(tx, caller, time)
+      : await execution.authorizeLiveFacts(tx, caller, time, readMode);
+    if (!same(binding, bridge.currentStarted(caller))) return undefined;
+    return {
+      invocation: {
+        kind: "action",
+        assignment: workerAssignment(facts.assignment),
+      },
+      stream: { binding, delivery: facts.delivery, source: facts.source },
+    };
+  }
   async function resolveInvocation(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
     readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerChildActionBinding | undefined> {
-    if (caller.principal.kind === "owner-local") {
-      if (local?.current(caller)) {
-        const assignment = await execution.authorizeLive(
+    return (await resolveInvocationFacts(tx, caller, time, readMode))
+      ?.invocation;
+  }
+  const content = contentConfiguration && physicalConfiguration
+    ? createOwnerStreamReservations({
+      ownerId,
+      schema,
+      session,
+      backendId: contentConfiguration.backendId as string,
+      physical: Object.fromEntries(
+        Object.entries(physicalConfiguration).map((
+          [name, method],
+        ) => [
+          name,
+          (method as (...args: never[]) => unknown).bind(
+            contentConfiguration.physical,
+          ),
+        ]),
+      ) as PhysicalBodyStore,
+      protectionMs: contentConfiguration.protectionMs as number,
+      maxUnresolved: contentConfiguration.maxUnresolved as number,
+      resolve: async (tx, caller, time) =>
+        (await resolveInvocationFacts(tx, caller, time))?.stream,
+      resolveSettlement: async (tx, caller, time) =>
+        (await resolveInvocationFacts(
           tx,
           caller,
           time,
-          readMode,
+          "locking",
+          "settlement",
+        ))?.stream,
+      isCurrent(caller, binding) {
+        if (!ready()) return false;
+        if (caller.principal.kind === "owner-local") {
+          return binding.placement === "owner-local" &&
+            (binding.kind === "action"
+              ? !!local?.isInvocationCurrent(caller) &&
+                same(binding, local.current(caller))
+              : !!localProcessor?.isInvocationCurrent(caller) &&
+                same(binding, localProcessor.current(caller)?.reference));
+        }
+        return same(binding, bridge.currentStarted(caller));
+      },
+      isCurrentSettlement(caller, binding) {
+        if (!ready()) return false;
+        return caller.principal.kind === "owner-local"
+          ? binding.placement === "owner-local" &&
+            (binding.kind === "action"
+              ? same(binding, local?.current(caller))
+              : same(binding, localProcessor?.current(caller)?.reference))
+          : same(binding, bridge.currentStarted(caller));
+      },
+      isControlCurrent(caller) {
+        assertControl(caller, "content-cleanup");
+        return owner.state === "acquired";
+      },
+      onRevoked: (target) =>
+        wake({ namespace: target.namespace, operationId: target.operationId }),
+    })
+    : undefined;
+  function streamPort(caller: OwnerCaller): RegisteredStreamPort {
+    if (!content) unavailable("Owner content is unavailable.");
+    const who = copy(caller), coordinator = content;
+    return Object.freeze({
+      async open(input, options) {
+        snapshots?.assertOrdinaryAllowed(who);
+        const descriptor = await coordinator.open(
+          owner,
+          who,
+          input,
+          options.signal,
         );
-        return assignment.placement === "owner-local"
-          ? { kind: "action", assignment }
-          : undefined;
-      }
-      if (!localProcessor?.current(caller)) return undefined;
-      const { assignment } = await processor.authorizeLocalLive(
-        tx,
-        caller,
-        time,
-        readMode,
-      );
-      return "placement" in assignment &&
-          assignment.placement === "owner-local"
-        ? { kind: "processor", assignment }
-        : undefined;
-    }
-    const current = await bridge.resolveStarted(tx, caller, readMode);
-    if (!current) return undefined;
-    return "kind" in current
-      ? {
-        kind: "processor",
-        assignment: (await processor.authorizeLive(tx, caller, time, readMode))
-          .assignment,
-      }
-      : {
-        kind: "action",
-        assignment: workerAssignment(
-          await execution.authorizeLive(tx, caller, time, readMode),
-        ),
-      };
+        return { id: descriptor.streamId };
+      },
+      append: (input, options) => {
+        snapshots?.assertOrdinaryAllowed(who);
+        return coordinator.append(owner, who, input.id, {
+          expectedOffset: input.expectedOffset,
+          appendId: input.appendId,
+          bytes: input.bytes,
+        }, options.signal);
+      },
+      checkpoint: (input, options) => {
+        snapshots?.assertOrdinaryAllowed(who);
+        return coordinator.checkpoint(
+          owner,
+          who,
+          input.id,
+          input.startOffset,
+          input.endOffset,
+          options.signal,
+        );
+      },
+      async abort(input) {
+        snapshots?.assertOrdinaryAllowed(who);
+        const target = await coordinator.abortTarget(owner, who, input.id);
+        await control(
+          (caller) => coordinator.revoke(owner, caller, target, input),
+          "content-cleanup",
+        );
+      },
+    });
   }
   const readCollections = createOwnerCollectionRead({
     schema,
@@ -1755,7 +1950,9 @@ export async function createOwnerHost(
     }
   }
   const owner: OwnerCommandBoundary = createOwnerCommandBoundary({
+    checkpoints: content?.checkpoints,
     currentAuthorizationKinds: [
+      ...Object.keys(content?.checkpoints ?? {}),
       OWNER_CHILD_ACTION_ADMISSION,
       OWNER_CHILD_ACTION_RESULT,
       ...(preparations ? [OWNER_CHILD_ACTION_PREPARATION] : []),
@@ -1767,6 +1964,9 @@ export async function createOwnerHost(
       OWNER_COLLECTION_READ,
     ],
     isCurrentAuthorization(tx, caller, command, time) {
+      if (content && Object.hasOwn(content.checkpoints, command.kind)) {
+        return content.isCurrentAuthorization(tx, caller);
+      }
       return command.kind === OWNER_CHILD_ACTION_ADMISSION ||
           command.kind === OWNER_CHILD_ACTION_RESULT ||
           command.kind === OWNER_CHILD_ACTION_PREPARATION
@@ -2048,6 +2248,17 @@ export async function createOwnerHost(
         command,
         time,
         async () => {
+          if (content && Object.hasOwn(content.checkpoints, command.kind)) {
+            if (
+              [OWNER_STREAM_REVOKE, OWNER_STREAM_REVOKED].includes(command.kind)
+            ) {
+              assertControl(caller, "content-cleanup");
+            } else {
+              if (!ready()) unavailable();
+              snapshots?.assertOrdinaryAllowed(caller);
+            }
+            return await content.authorize(tx, caller, command, time);
+          }
           if (command.kind === "host.initialize-fresh") {
             assertControl(caller, "fresh");
             if (
@@ -2605,6 +2816,30 @@ export async function createOwnerHost(
     }, 1000);
   }
   const calls = createOwnerWorkerCallAdmission({
+    ...(content
+      ? {
+        streams: {
+          async run(
+            caller: OwnerCaller,
+            request: import("../owner/connection.ts").OwnerStreamCall,
+            signal: AbortSignal,
+          ): Promise<OwnerJson> {
+            const port = streamPort(caller);
+            switch (request.operation) {
+              case "open":
+                return await port.open(request.input, { signal });
+              case "append":
+                return await port.append(request.input, { signal });
+              case "checkpoint":
+                return await port.checkpoint(request.input, { signal });
+              case "abort":
+                await port.abort(request.input, {});
+                return null;
+            }
+          },
+        },
+      }
+      : {}),
     ...(snapshots
       ? {
         snapshots: {
@@ -2901,6 +3136,7 @@ export async function createOwnerHost(
       controlTokens.set(localControlToken, { purpose: "local-start" });
       const shared = {
         snapshots,
+        streams: content ? streamPort : undefined,
         registry,
         schema,
         boundary: owner,

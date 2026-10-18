@@ -2862,11 +2862,27 @@ function operationSettlementOutcomeSql(schema: string): string {
     ) THEN 'failed' ELSE 'completed' END`;
 }
 
+/** Current abort-only owner lifecycle. Unsupported sealed/asset states cannot
+ * accidentally drain merely because their physical generation says revoked. */
+export function ownerStreamDrainedSql(alias = "stream"): string {
+  const row = quoteEventIdentifier(alias);
+  return `(${row}.revocation_state='revoked' AND ${row}.asset_id IS NULL AND ${row}.digest IS NULL
+    AND ${row}.asset_retention='observation' AND (
+      (${row}.state='reserving' AND ${row}.stream_ordinal IS NULL AND ${row}.committed_offset=0
+        AND ${row}.outcome IS NULL AND ${row}.capture IS NULL AND ${row}.terminal_at IS NULL)
+      OR (${row}.state='terminal' AND ${row}.stream_ordinal>=1
+        AND ${row}.outcome IN ('failed','cancelled','superseded','abandoned')
+        AND ${row}.capture IN ('complete','truncated') AND ${row}.terminal_at IS NOT NULL
+        AND ${row}.availability IN ('retained','missing'))))`;
+}
+
 export async function readOperationSettlement(
   tx: SqlExecutor,
   schema: string,
   scope: OperationSettlementScope,
+  contentLifecycle?: "abort-only",
 ): Promise<OperationSettlementSnapshot | null> {
+  const allowContent = contentLifecycle === "abort-only";
   const tables = createOperationCatalogTables(schema);
   await assertOperationCatalogFormat(tx, tables.metadata, {
     expected: OWNER_CONTENT_CATALOG_FINGERPRINT,
@@ -2874,7 +2890,7 @@ export async function readOperationSettlement(
   const result = await tx.query<{
     state: OperationState;
     ready: boolean;
-    has_streams: boolean;
+    has_unresolved_streams: boolean;
     outcome: OperationSettlementSnapshot["outcome"];
     root_event_id: string;
     correlation_id: string;
@@ -2886,22 +2902,32 @@ export async function readOperationSettlement(
       operation.next_event_ordinal, operation.next_stream_ordinal, operation.observation_keys,
       (${operationSettlementDrainedSql(schema)}) AS ready,
       EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
-        WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id) AS has_streams,
+        WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id
+          ${
+      allowContent ? `AND (${ownerStreamDrainedSql()}) IS NOT TRUE` : ""
+    }) AS has_unresolved_streams,
       ${operationSettlementOutcomeSql(schema)} AS outcome
      FROM ${tables.operations} AS operation WHERE namespace=$1 AND operation_id=$2`,
     [scope.namespace, scope.operationId],
   );
   const row = result.rows[0];
-  // Until owner content settlement is integrated, even hidden/revoked rows and
-  // already-terminal operations require explicit refusal before any shortcut.
-  if (row?.has_streams) {
+  if (!allowContent && row?.has_unresolved_streams) {
     throw new Error("Owner content settlement is not yet supported.");
+  }
+  // Live unresolved cleanup is ordinary pending work. A terminal operation
+  // containing it is inconsistent and must not bypass the final SQL guard.
+  if (
+    row?.has_unresolved_streams && !["accepted", "running"].includes(row.state)
+  ) {
+    throw new Error(
+      "Terminal owner operation retains unresolved stream cleanup.",
+    );
   }
   return row
     ? {
       ...scope,
       state: row.state,
-      ready: row.ready,
+      ready: row.ready && !row.has_unresolved_streams,
       outcome: row.outcome,
       rootEventId: row.root_event_id,
       correlationId: row.correlation_id,
@@ -2921,6 +2947,7 @@ export async function terminalizeOperationSettlement(
   scope: OperationSettlementScope,
   options: Readonly<{
     commandTime: string;
+    contentLifecycle?: "abort-only";
     expected: Pick<
       OperationSettlementSnapshot,
       "nextEventOrdinal" | "nextStreamOrdinal"
@@ -2937,7 +2964,12 @@ export async function terminalizeOperationSettlement(
      WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
     [scope.namespace, scope.operationId],
   );
-  const current = await readOperationSettlement(tx, schema, scope);
+  const current = await readOperationSettlement(
+    tx,
+    schema,
+    scope,
+    options.contentLifecycle,
+  );
   if (!current || !["accepted", "running"].includes(current.state)) {
     return current;
   }
@@ -2965,7 +2997,12 @@ export async function terminalizeOperationSettlement(
     }
        AND ${operationSettlementDrainedSql(schema)}
        AND NOT EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
-         WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id)
+         WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id
+           ${
+      options.contentLifecycle === "abort-only"
+        ? `AND (${ownerStreamDrainedSql()}) IS NOT TRUE`
+        : ""
+    })
        RETURNING operation_id`,
     params,
   );

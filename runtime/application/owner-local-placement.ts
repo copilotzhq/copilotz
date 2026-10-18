@@ -1,4 +1,4 @@
-/** Dormant private local Action lifecycle. This module performs no SQL and grants
+/** Private local Action lifecycle. This module performs no SQL and grants
  * no policy authority. The host must supply real command and durable evidence. */
 import { assertJsonValue } from "../json.ts";
 import {
@@ -432,6 +432,33 @@ export function createOwnerLocalPlacementController(
   return {
     reserve,
     stop,
+    isInvocationCurrent(caller: OwnerCaller): boolean {
+      const state = currentState(caller), signal = state?.invocationSignal;
+      return !!state && !!signal && !signal.aborted &&
+        currentState(caller) === state && !signal.aborted;
+    },
+    /** Existing exact entry only; this cannot admit a new producer invocation. */
+    captureReservedLifetime(input: Reference, ordinal: number) {
+      let bound: Reference;
+      try {
+        bound = reference(input);
+      } catch {
+        return undefined;
+      }
+      const state = entries.get(bound.deliveryId),
+        signal = state?.invocationSignal;
+      if (
+        !state || !signal || !sameReference(bound, state.reference) ||
+        ordinal !== 1
+      ) return undefined;
+      const live = () =>
+        entries.get(bound.deliveryId) === state &&
+        state.startObserved && !state.terminal && !signal.aborted;
+      const isCurrent = () => live() && state.current() && live();
+      return isCurrent()
+        ? Object.freeze({ signal: AbortSignal.any([signal]), isCurrent })
+        : undefined;
+    },
     /** Driver invocation lifetime ends before its separately authorized settlement. */
     captureCurrentLifetime(caller: OwnerCaller) {
       let who: OwnerCaller;

@@ -1002,3 +1002,26 @@ test("current callback cannot end an Action invocation and preserve captured rea
   f.drained.resolve();
   await tick();
 });
+
+test("reserved local Action lookup captures exact started invocation without a caller", async () => {
+  const f = fixture(), invocation = new AbortController();
+  Object.assign(f.driver, { invocationSignal: invocation.signal });
+  const entry = f.reserve();
+  assert.equal(f.controller.captureReservedLifetime(ref(), 1), undefined);
+  await started(f, entry);
+  const proof = f.controller.captureReservedLifetime(ref(), 1)!;
+  assert.ok(proof);
+  assert.equal(f.controller.captureReservedLifetime(ref(), 2), undefined);
+  assert.equal(
+    f.controller.captureReservedLifetime({ ...ref(), attemptId: "other" }, 1),
+    undefined,
+  );
+  assert.equal(proof.isCurrent(), true);
+  f.onCurrent(() =>
+    entry.onTerminal({ reference: ref(), status: "completed" })
+  );
+  assert.equal(proof.isCurrent(), false);
+  f.controller.stop();
+  f.drained.resolve();
+  await tick();
+});

@@ -1,3 +1,4 @@
+import { streamFailureFixture } from "./stream-failure.fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ActionCallOptions, RuntimeContext } from "../actions/types.ts";
@@ -723,3 +724,63 @@ test("Processor can acknowledge one known read failure repeated by snapshot clea
   assert.deepEqual(await f.run(), { status: "succeeded" });
   assert.equal(acknowledged, 1);
 });
+
+for (const unknown of [false, true, "hostile"] as const) {
+  test(`worker Processor background stream failure cannot be acknowledged (unknown=${unknown})`, async () => {
+    const stream = streamFailureFixture(unknown);
+    let onError = 0, completions = 0;
+    const f = fixture(processor(async (_event, ctx) => {
+      await stream.handle(ctx);
+      throw markNonRetryable(new Error("authored failure"));
+    }, () => {
+      onError++;
+      return true;
+    }));
+    const ref = { deliveryId: "delivery", dispatchAttemptId: "attempt" };
+    const { deliveryId: _deliveryId, ...projection } = f.invocation;
+    const worker = createRegisteredProcessorWorker({
+      registry: f.registry,
+      createCapabilities: f.options.createCapabilities,
+      owner: {
+        streams: stream.port,
+        claim: () => Promise.resolve({ status: "committed", result: ref }),
+        project: () => Promise.resolve({ ...projection, workerId: "worker" }),
+        complete: (_reference, completion, options) => {
+          assert.equal(options.signal, undefined);
+          completions++;
+          return Promise.resolve({
+            status: "committed",
+            result: {
+              ...ref,
+              status: completion.status === "failed"
+                ? "dead_letter"
+                : completion.status,
+            },
+          });
+        },
+        readCompletion: () => Promise.resolve(undefined),
+        execute: f.options.calls.execute,
+      },
+    });
+    let settled = false;
+    const running = worker.execute({
+      assignmentId: "assignment",
+      sessionId: "session",
+    });
+    void running.then(() => settled = true, () => settled = true);
+    try {
+      await stream.inspectBeforeRelease(() => settled);
+      assert.equal(completions, 0);
+      if (unknown) {
+        await assert.rejects(running, (error) => error === stream.unknown);
+        assert.equal(completions, 0);
+      } else {
+        assert.equal((await running).receipt.status, "dead_letter");
+        assert.equal(completions, 1);
+      }
+      assert.equal(onError, 0);
+    } finally {
+      stream.release();
+    }
+  });
+}

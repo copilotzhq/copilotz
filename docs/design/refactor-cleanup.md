@@ -23,6 +23,21 @@ additions, but do not justify the remaining production growth. Counts exclude
 uncommitted drafts. The removal target is redundant responsibility, not an
 arbitrary line quota or fewer safety checks.
 
+## Current content draft: surviving execution path
+
+The 18 October 12:36 UTC WIP connects abort-only content through the actual
+owner host and all four execution placements, reusing existing authority, raw
+work and settlement infrastructure. It does not modify the retiring
+lease-bearing writer. The same assignment/source SQL is shared by caller and
+reserved-control reads; the reserved-entry helpers are not yet a completed
+owner-renewal implementation.
+
+This draft has incremental real-flow evidence but is not accepted: bounded quiet
+renewal, orphan cleanup and completion/shutdown coordination remain part of the
+same slice. Once consumer equivalence is established, retire old content
+composition rather than supporting both indefinitely. The checked backlog count
+is unchanged by this preservation checkpoint.
+
 ## Target architecture
 
 - One `createCopilotz` programming model, shared authored Action/Processor

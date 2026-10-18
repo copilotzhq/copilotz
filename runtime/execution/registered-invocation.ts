@@ -1,3 +1,4 @@
+import type { RegisteredStreamPort } from "./stream-capability.ts";
 import type { OwnerSnapshotPort } from "../owner/connection.ts";
 /** Internal placement-neutral invocation data and trusted, prebound calls.
  * A projection is ordinary data, never authority. The placement driver owns
@@ -61,11 +62,14 @@ export type RegisteredContextCapabilities = Readonly<{
 export type RegisteredInvocationLifetime = Readonly<{
   check(): void;
   isCancelled(): boolean;
+  /** Driver-owned fatal invocation failure; content is unavailable without it. */
+  fail?(error: unknown): void;
   /** Private cancellation is never exposed to plugin code. */
   commandSignal: AbortSignal;
   exposedSignal: AbortSignal;
 }>;
 export type RegisteredInvocationCalls = Readonly<{
+  streams?: RegisteredStreamPort;
   snapshots?: OwnerSnapshotPort;
   readCollection?(
     request: OwnerCollectionReadRequest,
@@ -98,3 +102,80 @@ export type RegisteredInvocationCalls = Readonly<{
     options: OwnerCommandExecuteOptions,
   ): Promise<OwnerJson>;
 }>;
+
+/** Inspect a known error tag without executing arbitrary accessors/coercions. */
+export function registeredInvocationErrorCode(error: unknown): unknown {
+  if (!error || typeof error !== "object") return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, "code");
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Shared uncertainty classification; effects retain their separate reconciliation rules. */
+export function isRegisteredInvocationUnknown(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const fields: Record<string, unknown> = {};
+  for (const key of ["code", "indeterminate", "outcome", "execution"]) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(error, key);
+    } catch {
+      return true;
+    }
+    // Never invoke user-controlled getters/coercions while deciding whether
+    // cleanup is safe. Uninspectable errors are conservatively uncertain.
+    if (descriptor && !("value" in descriptor)) return true;
+    fields[key] = descriptor?.value;
+  }
+  return fields.indeterminate === true || fields.outcome === "unknown" ||
+    fields.execution === "indeterminate" ||
+    (typeof fields.code === "string" &&
+      ["owner_commit_unknown", "persistence_indeterminate"].includes(
+        fields.code,
+      ));
+}
+
+/** Fatal work closes invocation admission, never business cancellation or settlement authority. */
+export function createRegisteredInvocationFailure(
+  command: AbortController,
+  exposed: AbortController,
+  onUnknown?: (error: unknown) => unknown,
+) {
+  let failed = false, uncertain = false, notified = false;
+  let reason: unknown;
+  return Object.freeze({
+    get failed() {
+      return failed;
+    },
+    check() {
+      if (failed) throw reason;
+    },
+    fail(error: unknown) {
+      // Publish closed admission before inspecting an arbitrary error or
+      // notifying a callback that can reenter the driver.
+      if (!failed) {
+        failed = true;
+        reason = error;
+      }
+      if (isRegisteredInvocationUnknown(error) && !uncertain) {
+        uncertain = true;
+        reason = error;
+      }
+      if (uncertain && !notified && onUnknown) {
+        notified = true;
+        const original = reason;
+        try {
+          const observed = onUnknown(original);
+          if (reason === original && isRegisteredInvocationUnknown(observed)) {
+            reason = observed;
+          }
+        } catch { /* Notification cannot erase the original uncertainty. */ }
+      }
+      command.abort(reason);
+      exposed.abort(reason);
+    },
+  });
+}

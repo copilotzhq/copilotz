@@ -1,3 +1,4 @@
+import { streamFailureFixture } from "./stream-failure.fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
@@ -677,3 +678,33 @@ test("private Processor invocation signal closes before raw drain without cancel
   assert.equal(result.receipt.status, "succeeded");
   await driver.quiescent;
 });
+
+for (const unknown of [false, true, "hostile"] as const) {
+  test(`local Processor background stream failure retains actual drain (unknown=${unknown})`, async () => {
+    const stream = streamFailureFixture(unknown);
+    const f = fixture((ctx) => stream.handle(ctx), { streams: stream.port });
+    const driver = f.create();
+    let settled = false, quiescent = false;
+    const running = driver.run();
+    void running.then(() => settled = true, () => settled = true);
+    void driver.quiescent.then(() => quiescent = true);
+    try {
+      await stream.inspectBeforeRelease(() => settled || quiescent);
+      assert.equal(f.events.includes("complete"), false);
+      if (unknown) {
+        await assert.rejects(running, /local_processor_indeterminate/);
+        assert.equal(f.events.includes("complete"), false);
+        assert.equal(f.unknown.length, 1);
+      } else {
+        assert.equal((await running).receipt.status, "retry_wait");
+        await driver.quiescent;
+        assert.equal(
+          f.events.filter((event) => event === "complete").length,
+          1,
+        );
+      }
+    } finally {
+      stream.release();
+    }
+  });
+}

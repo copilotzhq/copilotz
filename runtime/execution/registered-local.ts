@@ -1,5 +1,11 @@
+import { captureStreamCalls } from "./stream-capability.ts";
+import {
+  createRegisteredInvocationFailure,
+  isRegisteredInvocationUnknown,
+  registeredInvocationErrorCode,
+} from "./registered-invocation.ts";
 import { captureSnapshotCalls } from "./snapshot-capability.ts";
-/** Dormant, fresh-only owner-local Action driver. This owns one invocation,
+/** Private fresh-only owner-local Action driver. This owns one invocation,
  * never host capacity, durable authority, retries or receipt recovery. */
 import type { PluginRegistry } from "../plugins/registry.ts";
 import type {
@@ -68,6 +74,7 @@ export type RegisteredLocalActionPort = Readonly<{
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
   readCollection?: RegisteredInvocationCalls["readCollection"];
   snapshots?: RegisteredInvocationCalls["snapshots"];
+  streams?: RegisteredInvocationCalls["streams"];
   /** Synchronously stop new invocation registrations, retaining only narrowly
    * authorized already-admitted settlement and driver terminal/state calls. */
   sealInvocationCalls(): void;
@@ -217,16 +224,8 @@ function invocation(
   return result as RegisteredActionInvocation;
 }
 function unknownOutcome(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as Record<string, unknown>;
-  return value.indeterminate === true || value.outcome === "unknown" ||
-    value.execution === "indeterminate" ||
-    [
-      "owner_commit_unknown",
-      "persistence_indeterminate",
-      "effect_indeterminate",
-    ]
-      .includes(String(value.code));
+  return isRegisteredInvocationUnknown(error) ||
+    registeredInvocationErrorCode(error) === "effect_indeterminate";
 }
 
 export function createRegisteredLocalActionExecution(
@@ -258,6 +257,22 @@ export function createRegisteredLocalActionExecution(
   const prepareAction = owner.prepareAction?.bind(owner);
   const readCollection = owner.readCollection?.bind(owner);
   const snapshots = captureSnapshotCalls(owner.snapshots, (work) => call(work));
+  const streams = captureStreamCalls(
+    owner.streams,
+    (work) => call(work),
+    async (work) => {
+      checkCurrent();
+      try {
+        const result = await work();
+        checkCurrent();
+        return result;
+      } catch (error) {
+        if (unknownOutcome(error)) throw indeterminate(error);
+        checkCurrent();
+        throw error;
+      }
+    },
+  );
   const settlementState = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -300,6 +315,11 @@ export function createRegisteredLocalActionExecution(
     }
     return uncertainty;
   };
+  const invocationFailure = createRegisteredInvocationFailure(
+    command,
+    exposed,
+    indeterminate,
+  );
   const checkCurrent = () => {
     if (uncertain) throw uncertainty;
     if (!revoked) {
@@ -322,6 +342,7 @@ export function createRegisteredLocalActionExecution(
   };
   const check = () => {
     checkCurrent();
+    invocationFailure.check();
     if (cancelled) throw failure("action_cancelled");
     if (!invocationOpen) throw failure("registered_local_context_closed");
   };
@@ -501,12 +522,14 @@ export function createRegisteredLocalActionExecution(
               invocation: projectedInvocation,
               lifetime: {
                 check,
+                fail: invocationFailure.fail,
                 isCancelled: () => cancelled,
                 commandSignal: command.signal,
                 exposedSignal: exposed.signal,
               },
               calls: {
                 ...(snapshots ? { snapshots } : {}),
+                ...(streams ? { streams } : {}),
                 ...(readCollection
                   ? {
                     readCollection: (input, callOptions) =>

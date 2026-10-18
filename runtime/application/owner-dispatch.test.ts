@@ -1158,3 +1158,40 @@ for (const processor of [false, true]) {
     }
   });
 }
+
+for (const processor of [false, true]) {
+  test(`reserved ${processor ? "Processor" : "Action"} lifetime survives the admitting call but never a different epoch`, async () => {
+    const f = await fixture({ processor });
+    try {
+      const opened = await f.dispatch(), w = await witness(f, opened.context());
+      const binding = f.bridge.currentStarted(w.caller)!;
+      const proof = f.bridge.captureReservedLifetime(
+        binding,
+        w.caller.ownerEpoch,
+      )!;
+      assert.ok(proof);
+      assert.equal(
+        f.bridge.captureReservedLifetime(binding, w.caller.ownerEpoch + 1),
+        undefined,
+      );
+      assert.equal(
+        f.bridge.captureReservedLifetime(
+          { ...binding, deliveryId: "other" },
+          w.caller.ownerEpoch,
+        ),
+        undefined,
+      );
+      await w.handler({
+        input: stream(),
+        signal: new AbortController().signal,
+      });
+      assert.equal(f.bridge.currentStarted(w.caller), undefined);
+      assert.equal(proof.isCurrent(), true);
+      f.bridge.stop();
+      assert.equal(proof.isCurrent(), false);
+      assert.equal(proof.signal.aborted, true);
+    } finally {
+      await f.close();
+    }
+  });
+}

@@ -1,3 +1,4 @@
+import { PHYSICAL_READ_MAX_BYTES } from "./physical-body-store.ts";
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createMemoryPhysicalBodyStore } from "./memory-physical-body-store.ts";
 import {
@@ -343,4 +344,32 @@ Deno.test("physical writer authority is independent of elapsed wall-clock time",
   } finally {
     Date.now = now;
   }
+});
+
+Deno.test("memory physical ranges page at the shared 1 MiB bound", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  const payload = new Uint8Array(PHYSICAL_READ_MAX_BYTES).fill(7);
+  await store.reserve(writer);
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "maximum",
+    bytes: payload,
+  });
+  assertEquals(
+    await store.readRange({
+      bodyId: writer.bodyId,
+      offset: 0,
+      end: PHYSICAL_READ_MAX_BYTES,
+    }),
+    payload,
+  );
+  const error = await assertRejects(async () =>
+    await store.readRange({
+      bodyId: "missing",
+      offset: 0,
+      end: PHYSICAL_READ_MAX_BYTES + 1,
+    })
+  );
+  assertEquals((error as { code: string }).code, "content_invalid");
 });

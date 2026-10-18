@@ -3,6 +3,8 @@ import { createContentError } from "./errors.ts";
 
 export const OWNER_PHYSICAL_BODY_FORMAT = "owner-physical-v1" as const;
 export const PHYSICAL_APPEND_MAX_BYTES = 1024 * 1024;
+/** Callers page larger reads; one private request never allocates an entire body. */
+export const PHYSICAL_READ_MAX_BYTES = 1024 * 1024;
 export type PhysicalWriterIdentity = Readonly<{
   bodyId: string;
   mediaType: string;
@@ -128,7 +130,7 @@ export function capturePhysicalAppend(input: unknown): PhysicalAppend {
 export function capturePhysicalRange(input: unknown): PhysicalRange {
   const value = data(input, ["bodyId", "offset", "end"]);
   const offset = integer(value.offset), end = integer(value.end);
-  if (end < offset) invalid();
+  if (end < offset || end - offset > PHYSICAL_READ_MAX_BYTES) invalid();
   return Object.freeze({
     bodyId: physicalIdentifier(value.bodyId),
     offset,

@@ -134,6 +134,7 @@
     "@copilotz/copilotz/plugins": "./runtime/plugins/index.ts",
     "@copilotz/copilotz/views": "./runtime/views/index.ts",
     "@copilotz/copilotz/server": "./server/index.ts",
+    "aws4fetch": "npm:aws4fetch@1.0.20",
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.6",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@1.29.0",
     "@oxian/ominipg": "jsr:@oxian/ominipg@0.9.1",

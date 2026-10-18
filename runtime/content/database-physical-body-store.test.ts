@@ -1,3 +1,4 @@
+import { PHYSICAL_READ_MAX_BYTES } from "./physical-body-store.ts";
 import { assertEquals, assertNotEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import type { SqlSession } from "../events/session.ts";
@@ -443,6 +444,38 @@ Deno.test("database physical competing offsets and fencing keep a single ordered
       (await store.head(writer.bodyId))?.byteLength,
       raced[0].status === "fulfilled" ? 2 : 1,
     );
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("database physical ranges page at the shared 1 MiB bound", async () => {
+  const { db, store } = await fixture();
+  try {
+    const payload = new Uint8Array(PHYSICAL_READ_MAX_BYTES).fill(7);
+    await store.reserve(writer);
+    await store.append({
+      writer: writer,
+      expectedOffset: 0,
+      appendId: "maximum",
+      bytes: payload,
+    });
+    assertEquals(
+      await store.readRange({
+        bodyId: writer.bodyId,
+        offset: 0,
+        end: PHYSICAL_READ_MAX_BYTES,
+      }),
+      payload,
+    );
+    const error = await assertRejects(async () =>
+      await store.readRange({
+        bodyId: "missing",
+        offset: 0,
+        end: PHYSICAL_READ_MAX_BYTES + 1,
+      })
+    );
+    assertEquals((error as { code: string }).code, "content_invalid");
   } finally {
     await db.close();
   }

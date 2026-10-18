@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 06:46 UTC.
+Updated: 18 October 2026, 07:12 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -27,7 +27,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: DB physical checked      | [Memory/DB fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; S3 and owner integration remain open                                                            |
+| Content writer lifetime              | WIP: physical stores checked  | [Memory/SQL/S3 physical stores](owner-content-lifetime-plan.md) checked; owner catalog, execution and package wiring remain open                                                      |
 | Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -35,11 +35,12 @@ reconstructed integration have since completed fresh scoped PostgreSQL/PGlite
 validation: final 34 host + 24 manager cases on each backend pass, with the
 original failed run retained. The sequential snapshot latency diagnostic is also
 complete. These scoped results do not imply full-suite acceptance or public
-activation. Current implementation work is the private content writer path; SQL
-format isolation and database writer scoped gates pass. Reserved object
-namespace isolation also passes its independent gate: 81 compatibility cases and
-seven adversarial probes. The S3 physical writer and owner integration remain
-pending.
+activation. SQL format isolation, database and S3 writer scoped gates now pass.
+The latest private checks pass 86 combined cases, 92 legacy object cases, 115
+PostgreSQL cases and 107 PGlite cases with eight explicit PostgreSQL skips. The
+unchanged full-static package-surface guard still refuses five modules without
+genuine host wiring; owner catalog/execution integration and public activation
+remain open.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -408,6 +409,15 @@ what it simplifies and eliminates before adding machinery.
 - [x] Isolate reserved owner physical object keys from legacy S3/GCS reads,
       writes and all maintenance listings; 81 checked compatibility cases and
       seven independent probes pass, including metadata-free orphan aliases
+
+- [x] Private S3 reserve/append/fence with signed conditional writes, bounded
+      manifests/responses, exact retries and retained losing parts; independent
+      TCP-loss/retry/fence probes and compatibility pass
+- [x] Shared private 1 MiB range-read admission before I/O across memory, SQL
+      and S3; larger reads require paging
+- [ ] Wire private physical stores into real owner catalog/execution
+      composition; clear the unchanged five-module package-surface failure
+      through that wiring
 
 ## 5. Views, providers and clients
 

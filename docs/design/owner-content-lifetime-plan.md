@@ -1,7 +1,7 @@
 # Owner-driven content lifetime: next coordinated slices
 
-Status: private contract/memory prerequisite implemented and scoped-reviewed;
-owner integration remains WIP, 18 October 2026. No public stream activation or
+Status: private memory/SQL/S3 physical prerequisites scoped-reviewed; owner
+integration remains WIP, 18 October 2026. No public stream activation or
 production migration is implied.
 
 ## Approved contract and recovered-spec discrepancy
@@ -33,11 +33,13 @@ refuse delayed reserve. Fencing does not compact, adopt or remove bytes. A
 fenced copy never yields a successor writer. The existing chunk-slicing helper
 is shared without changing its legacy behavior.
 
-Private append accepts nonempty chunks up to 1 MiB. The future producer must
-normalize empty writes before allocating append IDs; this does not change legacy
-empty-append behavior. Memory ordering tests cover delayed calls, not backend
-in-flight CAS. Database/S3 implementations, format isolation, owner catalog
-commands/alarms and actual execution routing are still required.
+Private append accepts nonempty chunks up to 1 MiB. Private range reads now
+share a 1 MiB per-call bound across memory, SQL and S3; callers page larger
+reads. The future producer must normalize empty writes before allocating append
+IDs; this does not change legacy empty-append behavior. Memory ordering tests
+cover delayed calls, not backend in-flight CAS. Subsequent SQL and object-store
+checkpoints are described below; owner catalog commands/alarms and actual
+execution routing remain required.
 
 Independent scoped evidence: 75 complete-file private/legacy cases and 6 scratch
 adversarial probes pass with normal typechecking; five-file lint/format and
@@ -143,6 +145,89 @@ pass, with no failures/skips; three expected baseline failures are retained.
 Six-file lint/format and frozen source/dependency hashes pass. These tests use
 local mock object services and do not establish live-provider CAS behavior or
 full-suite acceptance.
+
+## Private S3 writer and bounded reads checkpoint
+
+The private S3 adapter uses the reserved owner namespace, a stable
+caller-supplied scope and hashes of unambiguous scope/body identities. Stored
+metadata verifies the complete scope and original writer identity; the hash
+alone is not treated as authority. This format does not reuse legacy `prefix` or
+`protectionMs`. Changing scope selects another namespace; owner epochs must not
+change it.
+
+One conditional JSON manifest references immutable create-only parts whose keys
+are derived internally. HEAD followed by If-Match GET binds metadata to its
+actual version. Appends compare original offset, append ID and exact owned
+bytes; fencing retains the original generation and bytes, exposing the next
+generation only in the fenced head. Absent-key fences create tombstones. Losing
+operations never delete speculative parts, because an identical concurrent retry
+may have accepted them. No lease, renewal timer, adoption, retirement or second
+catalog is added.
+
+Bounds are explicit private limits, not established public production defaults:
+
+- Each append and each range read is at most 1 MiB. The read limit is shared by
+  memory, SQL and S3 and checked before I/O; callers page larger ranges
+- New manifest growth defaults to 1 MiB and 4,096 parts. Configurable private
+  growth caps cannot exceed the fixed 4 MiB / 8,192-part decoding ceiling
+- Serialized UTF-8 metadata is counted before part upload, including escaped
+  identifiers. Open records retain the two bytes needed to encode `fenced`
+- Lower growth caps on reopen do not prevent exact replay, reads or fencing
+- Reads verify each selected immutable part's full length and digest. They may
+  fetch a whole part to return a smaller range; empty ranges require no part GET
+
+The new request path pins `aws4fetch` 1.0.20 and uses only its supported
+`sign()` API. Actual payload SHA-256, conditional headers and the session token
+are signed. Native fetch owns the request and every response body; redirects are
+refused, all-status bodies are bounded, cancellation is awaited, and there are
+no application-level automatic mutation retries. Conditional guards must remain
+safe if the underlying HTTP stack retries an identical request. There are no
+presigned bearer URLs, credential logs, private dependency imports or copied
+signing implementation. Existing legacy S3-lite consumers remain unchanged.
+Explicit GCS mode refuses progressive composition; native GCS remains an
+immutable tier.
+
+The deadline applies to each HTTP request, including body consumption. It is not
+a deadline for a multi-request physical operation. Abort, rejection or an HTTP
+error after dispatch does not prove rollback: exact reserve/append/fence retries
+reconcile the retained state. Current loopback tests distinguish a committed
+mutation followed by HTTP503 from a pre-commit HTTP503; neither is presented as
+a dropped socket.
+
+Independent final evidence passes 86 combined private cases, 92 legacy object
+compatibility cases, 115 actual PostgreSQL cases and 107 PGlite cases with eight
+explicit PostgreSQL skips. Normal typechecking, changed-file lint/format,
+forbidden-API/generated/core-ownership checks and source/dependency hashes pass.
+All 56 fixture databases plus the coordinator were exported/dropped; sessions
+and leftovers were absent and PostgreSQL stopped.
+
+The unchanged full-static task stops at its package-surface check: private
+memory/database/S3 factories and the S3 manifest/request modules are not yet
+reachable through real public host composition. This remains an open integration
+gate. They were not exported or allowlisted merely to bypass it; no full static
+or full-suite acceptance is claimed.
+
+Earlier Buffer input/subview and response-chunk ownership failures are retained.
+Both boundaries now copy into plain Uint8Arrays. Private PUTs require exactly
+one create-only or strong-version condition before dispatch. Fixed AWS signing
+vectors, independent condition/body/token verification and native redirect/abort
+checks pass.
+
+Real TCP tests distinguish eight zero-response closures from eight truncated
+response bodies. A zero-response closure causes two identical wire PUTs from one
+application fetch call in this runtime: pre-commit retry returns 200,
+post-commit retry returns 412 and the adapter reconciles the exact retained
+state. Body, authorization and condition equality are checked. Truncated
+responses produce one wire PUT and an unavailable outcome, with correct
+pre/post-commit retry state. Fencing between native retry attempts defeats stale
+writes. Original incorrect test expectations that every zero-response close must
+reject the API remain recorded rather than being relabeled as lost-ack failures.
+
+Remaining activation gates include real endpoint conditional-write conformance,
+owner execution integration and workload measurements. Rewriting and reading a
+bounded manifest still costs O(number of parts); it must be measured with actual
+producer batching before choosing public defaults. No public stream admission or
+live-provider performance claim follows from these private checks.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

@@ -2899,8 +2899,7 @@ export function ownerStreamDrainedSql(
           body.owner_id=${row}.owner_id AND body.settlement_scope_id=${row}.operation_id
           AND body.byte_length=${row}.committed_offset AND body.digest=${row}.digest
           AND body.media_type=${row}.descriptor->>'mediaType' AND body.producer=(${producer})
-          AND body.pending_descriptor=CASE WHEN octet_length(${row}.descriptor::text)<=131072
-            THEN ${row}.descriptor - ARRAY['type','namespace','streamId','replayKey','streamOrdinal','causationId','correlationId'] ELSE NULL END
+          AND body.pending_descriptor=${row}.seal_descriptor
           AND char_length(body.pending_ref) BETWEEN 1 AND 1024 AND body.retired_at IS NULL
         ) IS TRUE) FROM ${bodies} AS body
           WHERE body.namespace=${row}.namespace AND body.producer_stream_id=${row}.stream_id) IS TRUE)))`;

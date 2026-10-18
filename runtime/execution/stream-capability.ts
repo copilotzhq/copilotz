@@ -1,3 +1,11 @@
+import {
+  capturePendingContentDescriptor,
+  capturePendingContentRef,
+} from "../content/schema.ts";
+import type {
+  PendingContentDescriptor,
+  PendingContentRef,
+} from "../content/types.ts";
 /** Invocation-owned physical append acknowledgements and bounded checkpoints.
  * This is not the legacy lease-bearing progressive writer or a content owner. */
 import type {
@@ -34,6 +42,10 @@ export type RegisteredStreamPort = Readonly<{
     input: { id: string; startOffset: number; endOffset: number },
     options: OwnerCommandExecuteOptions,
   ): Promise<{ committedOffset: number }>;
+  close(
+    input: { id: string; length: number; descriptor: PendingContentDescriptor },
+    options: OwnerCommandExecuteOptions,
+  ): Promise<PendingContentRef>;
   /** Cleanup keeps narrow settlement authority after invocation failure. */
   abort(
     input: ContentStreamAbortInput & { id: string },
@@ -52,10 +64,12 @@ export function captureStreamCalls(
   const append = supplied.append.bind(supplied);
   const checkpoint = supplied.checkpoint.bind(supplied);
   const abort = supplied.abort.bind(supplied);
+  const close = supplied.close.bind(supplied);
   return Object.freeze({
     open: (input, options) => invoke(() => open(input, options)),
     append: (input, options) => invoke(() => append(input, options)),
     checkpoint: (input, options) => invoke(() => checkpoint(input, options)),
+    close: (input, options) => invoke(() => close(input, options)),
     abort: (input, options) => cleanup(() => abort(input, options)),
   });
 }
@@ -122,6 +136,7 @@ export function createRegisteredStreamCapability(
       open: configured.open.bind(configured),
       append: configured.append.bind(configured),
       checkpoint: configured.checkpoint.bind(configured),
+      close: configured.close.bind(configured),
       abort: configured.abort.bind(configured),
     }
     : undefined;
@@ -161,6 +176,8 @@ export function createRegisteredStreamCapability(
       let checkpointQueued = false, pendingAppends = 0;
       let hasFailure = false, failure: unknown;
       let tail = Promise.resolve();
+      let closing: Promise<PendingContentRef> | undefined;
+      let closeFingerprint: string | undefined;
       let termination: ContentStreamAbortInput | undefined;
       const clearTimer = () => {
         if (timer !== undefined) clock.clear(timer);
@@ -192,9 +209,10 @@ export function createRegisteredStreamCapability(
         });
         return task;
       };
-      const checkpoint = async () => {
+      const checkpoint = async (force = false) => {
         if (
-          closed || deadline === undefined || clock.now() < deadline ||
+          (!force &&
+            (closed || deadline === undefined || clock.now() < deadline)) ||
           head <= committed
         ) return;
         check();
@@ -220,10 +238,12 @@ export function createRegisteredStreamCapability(
           timer = undefined;
           if (closed) return;
           checkpointQueued = true;
-          void enqueue(checkpoint).catch(() => undefined).finally(() => {
-            checkpointQueued = false;
-            schedule();
-          });
+          void enqueue(() => checkpoint()).catch(() => undefined).finally(
+            () => {
+              checkpointQueued = false;
+              schedule();
+            },
+          );
         }, Math.max(0, deadline - clock.now()));
       };
       function finish(input: ContentStreamAbortInput) {
@@ -249,7 +269,9 @@ export function createRegisteredStreamCapability(
         });
       }
       writers.add({
-        seal: () => finish({ outcome: "abandoned", capture: "truncated" }),
+        seal: () => {
+          if (!closing) finish({ outcome: "abandoned", capture: "truncated" });
+        },
         done,
       });
       const signal = userSignal
@@ -359,9 +381,83 @@ export function createRegisteredStreamCapability(
           await done;
           aborted(abortOptions.signal);
         },
-        close: unsupportedWriter,
-        retain: unsupportedWriter,
+        close(value, closeOptions = {}) {
+          aborted(closeOptions.signal);
+          const {
+            kind = "text",
+            role,
+            name,
+            alt,
+            language,
+            disposition,
+            metadata = {},
+          } = captured;
+          const descriptor = capturePendingContentDescriptor(
+            value.descriptor ?? JSON.parse(JSON.stringify({
+              reference: {
+                kind,
+                role,
+                name,
+                alt,
+                language,
+                disposition,
+                metadata,
+              },
+              asset: {
+                ...(value.origin ? { origin: value.origin } : {}),
+                metadata: { ...metadata, ...value.metadata, streamId: id! },
+              },
+            })),
+          );
+          const fingerprint = JSON.stringify(descriptor);
+          if (closing) {
+            if (fingerprint !== closeFingerprint) {
+              return Promise.reject(
+                new Error("Stream close semantics changed on retry."),
+              );
+            }
+            return closing;
+          }
+          requireOpen();
+          if (closed) {
+            return Promise.reject(
+              failure ?? new Error("Stream writer is closed."),
+            );
+          }
+          closeFingerprint = fingerprint;
+          closed = true;
+          clearTimer();
+          const signal = closeOptions.signal
+            ? AbortSignal.any([commandSignal, closeOptions.signal])
+            : commandSignal;
+          closing = enqueue(async () => {
+            if (hasFailure) throw failure;
+            check();
+            aborted(signal);
+            await checkpoint(true);
+            const result = capturePendingContentRef(
+              await port!.close({ id: id!, length: head, descriptor }, {
+                signal,
+              }),
+            );
+            finishQueued = true;
+            resolveDone();
+            return result;
+          });
+          return closing;
+        },
+        async retain(input) {
+          if (input.retention !== "observation") return unsupportedWriter();
+          if (!closing) {
+            throw new Error("Close the stream before retaining it.");
+          }
+          await closing;
+        },
         async [Symbol.asyncDispose]() {
+          if (closing) {
+            await closing;
+            return;
+          }
           finish({ outcome: "abandoned", capture: "truncated" });
           await done;
         },

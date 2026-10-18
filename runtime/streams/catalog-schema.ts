@@ -126,6 +126,8 @@ export function operationCatalogSchemaStatements(
         CHECK (isfinite(protection_deadline)),
       revocation_state TEXT NOT NULL CONSTRAINT owner_stream_revocation_check
         CHECK (revocation_state IN ('active','revoking','revoked')),
+      seal_descriptor JSONB CONSTRAINT owner_stream_seal_descriptor_check
+        CHECK (seal_descriptor IS NULL OR (jsonb_typeof(seal_descriptor)='object' AND octet_length(seal_descriptor::text)<=1048576) IS TRUE),
       CONSTRAINT owner_stream_descriptor_check CHECK ((jsonb_typeof(descriptor) = 'object'
         AND descriptor ->> 'type' = 'stream.output'
         AND descriptor ->> 'namespace' = namespace
@@ -208,7 +210,7 @@ export function operationCatalogSchemaStatements(
             CHECK ((jsonb_typeof(current_copy)='object' AND octet_length(current_copy::text)<=16384) IS TRUE),
           pending_ref TEXT NOT NULL,
           pending_descriptor JSONB NOT NULL CONSTRAINT owner_body_descriptor_check
-            CHECK ((jsonb_typeof(pending_descriptor)='object' AND octet_length(pending_descriptor::text)<=131072) IS TRUE),
+            CHECK ((jsonb_typeof(pending_descriptor)='object' AND octet_length(pending_descriptor::text)<=1048576) IS TRUE),
           protected_until TIMESTAMPTZ NOT NULL CONSTRAINT owner_body_protection_check CHECK (isfinite(protected_until)),
           adoption_key TEXT,
           adoption_fingerprint TEXT CONSTRAINT owner_body_adoption_fingerprint_check

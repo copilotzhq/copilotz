@@ -51,6 +51,14 @@ export function createLocalStreamPort(
         callOptions,
       );
     },
+    close(input, callOptions) {
+      const copied = structuredClone(input);
+      return run(
+        invocation,
+        (execution) => port.close(copied, execution),
+        callOptions,
+      );
+    },
     abort(input, callOptions) {
       const copied = structuredClone(input);
       return run(

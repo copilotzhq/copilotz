@@ -8,6 +8,8 @@ import type {
   AssetOrigin,
   ContentKind,
   ContentRole,
+  PendingContentDescriptor,
+  PendingContentRef,
   PreparedContent,
 } from "../content/types.ts";
 import type { CopilotzEvent, ResolvedCopilotzEvent } from "../events/index.ts";
@@ -145,6 +147,8 @@ export type ContentStreamAppendResult = Readonly<{
 }>;
 
 export type ContentStreamCloseInput = Readonly<{
+  /** Final normalized semantics, captured before sealing by owner-backed runtimes. */
+  descriptor?: PendingContentDescriptor;
   assetId: string;
   origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
@@ -181,7 +185,7 @@ export type ContentStreamWriter = Readonly<
     close(
       input: ContentStreamCloseInput,
       options?: { signal?: AbortSignal },
-    ): Promise<PreparedContent>;
+    ): Promise<PreparedContent | PendingContentRef>;
     abort(
       input?: ContentStreamAbortInput,
       options?: { signal?: AbortSignal },

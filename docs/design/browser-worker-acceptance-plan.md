@@ -1,6 +1,25 @@
 # Finish the owner refactor through a browser-worker acceptance project
 
-Updated: 18 October 2026, 14:47 UTC.
+Updated: 18 October 2026, 15:45 UTC.
+
+## Delivery strategy agreed 18 October, 15:45 UTC
+
+Target: complete the library refactor and Compass implementation by the end of
+18 October in UTC−03. This is a delivery target, not a claim of completion.
+
+Implement the remaining library work as one integrated pass. Prioritize build,
+type and artifact-boundary checks during implementation, then exercise the real
+execution flow in the separate Node/browser two-agent project. Do not block each
+slice on separate unit-test and review cycles. Retain existing tests and failure
+evidence; targeted diagnostics are appropriate when an end-to-end failure needs
+localization. The complete suite remains a release gate, not the gate for making
+a runnable draft available to the user.
+
+Deliver runnable checkpoints for the user to test, review and direct. After the
+simple project's end-to-end flow is working, implement Compass and its frontend
+on the new version. Track unsupported or incomplete behavior explicitly; a
+passing small example cannot silently remove approved library requirements. No
+merge, publication or production migration is authorized.
 
 ## Finish line and scope
 
@@ -120,11 +139,11 @@ owner-backed execution or authorize a parallel frontend runtime.
   output and a Node HTTP/WebSocket host adapter. Running a Deno-produced bundle
   under Node is supporting evidence, not that consumer acceptance gate.
 
-Before the separate project begins, library tests must cover initial/replayed
-selections, revoked scopes, nested disposal, stale results, form submission
-retries, explicit cancellation versus detach, routing and Back/Forward, and
-server-free browser artifacts. The later real-browser acceptance repeats those
-behaviors across process and browser boundaries.
+The separate project end-to-end checks must cover initial/replayed selections,
+revoked scopes, nested disposal, stale results, form submission retries,
+explicit cancellation versus detach, routing and Back/Forward, and server-free
+browser artifacts. Build and boundary checks continue during the integrated
+pass; the per-slice unit-test gate is superseded by the delivery strategy above.
 
 ## Ordered delivery milestones
 

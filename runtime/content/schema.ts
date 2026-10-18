@@ -1,4 +1,9 @@
-import type { ContentRef, PendingContentRef } from "./types.ts";
+import { snapshotStreamMetadata } from "../streams/json.ts";
+import type {
+  ContentRef,
+  PendingContentDescriptor,
+  PendingContentRef,
+} from "./types.ts";
 import { assertJsonValue } from "../json.ts";
 
 /** Canonical persisted content reference; resolved values are not stored here. */
@@ -122,4 +127,55 @@ export function isPendingContentRef(
   } catch {
     return false;
   }
+}
+
+/** Descriptor authority is catalog-owned; this captures semantics, not permissions. */
+export function capturePendingContentDescriptor(
+  value: unknown,
+): PendingContentDescriptor {
+  const captured = snapshotStreamMetadata(value, {
+    maxDepth: 32,
+    maxNodes: 60_000,
+    maxBytes: 262_144,
+  });
+  const invalid = (): never => {
+    throw new TypeError("Invalid pending content descriptor.");
+  };
+  if (
+    Object.keys(captured).length !== 2 ||
+    !Object.hasOwn(captured, "reference") || !Object.hasOwn(captured, "asset")
+  ) invalid();
+  const reference = captured.reference;
+  const asset = captured.asset;
+  if (
+    !reference || typeof reference !== "object" || Array.isArray(reference) ||
+    !asset || typeof asset !== "object" || Array.isArray(asset)
+  ) invalid();
+  const ref = reference as Record<string, unknown>;
+  const body = asset as Record<string, unknown>;
+  const allowed = Object.keys(contentRefSchema.properties).filter((key) =>
+    !["assetId", "mediaType"].includes(key)
+  );
+  if (
+    Object.keys(ref).some((key) => !allowed.includes(key)) ||
+    !isContentRef({
+      ...ref,
+      assetId: "pending",
+      mediaType: "application/octet-stream",
+    })
+  ) invalid();
+  if (
+    Object.keys(body).some((key) => !["origin", "metadata"].includes(key)) ||
+    !body.metadata || typeof body.metadata !== "object" ||
+    Array.isArray(body.metadata)
+  ) invalid();
+  if (body.origin !== undefined) {
+    const origin = body.origin as Record<string, unknown>;
+    if (
+      !origin || typeof origin !== "object" || Array.isArray(origin) ||
+      Object.keys(origin).length !== 2 || typeof origin.type !== "string" ||
+      typeof origin.id !== "string"
+    ) invalid();
+  }
+  return captured as PendingContentDescriptor;
 }

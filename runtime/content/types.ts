@@ -316,3 +316,12 @@ export type ContentJsonValue =
   | { [key: string]: ContentJsonValue };
 /** Decoded body value shared by Actions and Collections. */
 export type ContentBodyValue = ContentJsonValue | Uint8Array;
+
+/** Final reference and Asset semantics captured before physical sealing. */
+export type PendingContentDescriptor = Readonly<{
+  reference: Readonly<Omit<ContentRef, "assetId" | "mediaType">>;
+  asset: Readonly<{
+    origin?: AssetOrigin;
+    metadata: Readonly<Record<string, unknown>>;
+  }>;
+}>;

@@ -1,5 +1,11 @@
-import { capturePendingContentRef } from "../content/schema.ts";
-import type { PendingContentRef } from "../content/types.ts";
+import {
+  capturePendingContentDescriptor,
+  capturePendingContentRef,
+} from "../content/schema.ts";
+import type {
+  PendingContentDescriptor,
+  PendingContentRef,
+} from "../content/types.ts";
 import { ownerTableNames } from "./schema.ts";
 /** Private catalog-first stream opening. Catalog rows are the durable replay
  * record; physical I/O never runs inside a retriable owner SQL handler. */
@@ -111,6 +117,7 @@ type ControlAuthorized = Readonly<{
   writer: PhysicalWriterIdentity;
   descriptor: StreamOutputDescriptor;
   producer: OwnerJson | null;
+  sealDescriptor: PendingContentDescriptor | null;
   sealDigest: string | null;
   state: Row["state"];
   revocation: Row["revocation_state"];
@@ -168,14 +175,14 @@ function refuse(
     code: "ActionOwnershipLost",
   });
 }
-function json(value: unknown): OwnerJson {
+function json(value: unknown, seal = false): OwnerJson {
   assertJsonValue(value, {
     maxDepth: 32,
-    maxNodes: 20_000,
+    maxNodes: seal ? 60_000 : 20_000,
     omitUndefinedProperties: true,
   });
   const encoded = JSON.stringify(value);
-  if (new TextEncoder().encode(encoded).length > 65_536) {
+  if (new TextEncoder().encode(encoded).length > (seal ? 300_000 : 65_536)) {
     throw new RangeError("Stream opening exceeds its byte limit.");
   }
   return JSON.parse(encoded);
@@ -183,8 +190,9 @@ function json(value: unknown): OwnerJson {
 function record(
   value: unknown,
   allowed: readonly string[],
+  seal = false,
 ): Record<string, unknown> {
-  const captured = json(value);
+  const captured = json(value, seal);
   if (
     !captured || typeof captured !== "object" || Array.isArray(captured) ||
     Object.keys(captured).some((key) => !allowed.includes(key))
@@ -792,6 +800,7 @@ export function createOwnerStreamReservations(
       const row = (await tx.query<
         {
           descriptor: StreamOutputDescriptor;
+          seal_descriptor: unknown;
           placement_binding: unknown;
           semantic_stream_id: string | null;
           delivery_attempt: string;
@@ -808,6 +817,7 @@ export function createOwnerStreamReservations(
       >(
         `SELECT state,revocation_state,body_id,reservation_id,writer_generation::text,
           CASE WHEN outcome='completed' AND octet_length(descriptor::text)<=131072 THEN descriptor ELSE NULL END AS descriptor,
+          CASE WHEN octet_length(seal_descriptor::text)<=1048576 THEN seal_descriptor ELSE NULL END AS seal_descriptor,
           CASE WHEN char_length(digest)=71 THEN digest ELSE NULL END AS digest,outcome,
           CASE WHEN outcome='completed' AND octet_length(placement_binding::text)<=32768 THEN placement_binding ELSE NULL END AS placement_binding,
           CASE WHEN outcome='completed' AND char_length(semantic_stream_id) BETWEEN 1 AND 1024 THEN semantic_stream_id ELSE NULL END AS semantic_stream_id,
@@ -887,6 +897,9 @@ export function createOwnerStreamReservations(
         writer,
         descriptor: row.descriptor,
         producer,
+        sealDescriptor: row.outcome === "completed"
+          ? capturePendingContentDescriptor(row.seal_descriptor)
+          : null,
         sealDigest: row.outcome === "completed" ? row.digest : null,
         state: row.state,
         revocation: row.revocation_state,
@@ -925,12 +938,17 @@ export function createOwnerStreamReservations(
             OWNER_STREAM_ABORT_TARGET,
             OWNER_STREAM_SEAL_STATUS,
           ].includes(command.kind)
-          ? ["streamId"]
+          ? (command.kind === OWNER_STREAM_SEAL_STATUS
+            ? ["streamId", "expected"]
+            : ["streamId"])
           : command.kind === OWNER_STREAM_SEAL_INTENT
-          ? ["streamId", "length", "digest"]
+          ? ["streamId", "length", "digest", "descriptor"]
           : command.kind === OWNER_STREAM_APPEND_ACK
           ? ["streamId", "startOffset", "endOffset"]
           : ["streamId", "startOffset", "endOffset", "head"],
+        [OWNER_STREAM_SEAL_INTENT, OWNER_STREAM_SEAL_STATUS].includes(
+          command.kind,
+        ),
       );
       const streamId = physicalIdentifier(input.streamId);
       const cleanup = command.kind === OWNER_STREAM_ABORT_TARGET;
@@ -1344,13 +1362,22 @@ export function createOwnerStreamReservations(
     );
     return { committedOffset: endOffset };
   };
-  const sealStatus: OwnerCheckpointHandler = async (_value, context) => {
+  const sealStatus: OwnerCheckpointHandler = async (value, context) => {
+    const request = record(value, ["streamId", "expected"], true);
+    const expected = request.expected === undefined
+      ? undefined
+      : record(request.expected, ["length", "descriptor"], true);
+    const expectedDescriptor = expected
+      ? capturePendingContentDescriptor(expected.descriptor)
+      : undefined;
+    const expectedLength = expected ? safeOffset(expected.length) : undefined;
     const a = writing(context.tx, context.caller);
     if (!a.closing) refuse();
     const logicalBodyId = await deriveWorkflowId("logical-body", a.streamId);
     const pendingRef = await deriveWorkflowId("pending-content", a.streamId);
     const found = (await context.tx.query<{
       matches: boolean;
+      intent_matches: boolean;
       state: string;
       outcome: string | null;
       pending_ref: string | null;
@@ -1359,11 +1386,11 @@ export function createOwnerStreamReservations(
       digest: string | null;
     }>(
       `SELECT s.state,s.outcome,
+       ($7::jsonb IS NULL OR (s.seal_descriptor=$7::jsonb AND s.committed_offset=$8)) AS intent_matches,
        (b.logical_body_id=$4 AND b.pending_ref=$5 AND b.digest=s.digest
         AND b.byte_length=s.committed_offset AND b.media_type=s.descriptor->>'mediaType'
         AND b.producer=$6::jsonb AND b.retired_at IS NULL
-        AND b.pending_descriptor=CASE WHEN octet_length(s.descriptor::text)<=131072
-          THEN s.descriptor - ARRAY['type','namespace','streamId','replayKey','streamOrdinal','causationId','correlationId'] ELSE NULL END
+        AND b.pending_descriptor=s.seal_descriptor
         AND s.capture='complete' AND s.revocation_state='revoked') AS matches,
        CASE WHEN char_length(b.pending_ref) BETWEEN 1 AND 1024 THEN b.pending_ref END AS pending_ref,
        CASE WHEN char_length(b.media_type) BETWEEN 1 AND 1024 THEN b.media_type END AS media_type,
@@ -1381,11 +1408,16 @@ export function createOwnerStreamReservations(
         JSON.stringify(
           producerFacts(a.scope.binding, a.scope.delivery.attempts),
         ),
+        expectedDescriptor ? JSON.stringify(expectedDescriptor) : null,
+        expectedLength ?? null,
       ],
     )).rows;
     if (found.length !== 1) refuse("Seal result is ambiguous or unavailable.");
     const row = found[0];
     if (row.state === "open") return { state: "open", pending: null };
+    if (row.intent_matches !== true) {
+      refuse("Stream close semantics changed on retry.");
+    }
     if (row.state === "terminating") return { state: "sealing", pending: null };
     if (row.state !== "terminal") refuse();
     if (row.outcome !== "completed") return { state: "failed", pending: null };
@@ -1407,7 +1439,39 @@ export function createOwnerStreamReservations(
   // intent. No second physical ready state or per-body writer is introduced.
   const sealIntent: OwnerCheckpointHandler = async (value, context) => {
     const a = writing(context.tx, context.caller);
-    const input = record(value, ["streamId", "length", "digest"]);
+    const input = record(
+      value,
+      ["streamId", "length", "digest", "descriptor"],
+      true,
+    );
+    const opened =
+      (await context.tx.query<{ descriptor: StreamOutputDescriptor }>(
+        `SELECT descriptor FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
+        [
+          a.scope.binding.namespace,
+          a.scope.delivery.settlementScopeId,
+          a.streamId,
+        ],
+      )).rows[0]?.descriptor;
+    if (!isStreamOutputDescriptor(opened)) refuse();
+    const { kind, role, name, alt, language, disposition, metadata } = opened;
+    const descriptor = capturePendingContentDescriptor(
+      input.descriptor ??
+        JSON.parse(
+          JSON.stringify({
+            reference: {
+              kind,
+              role,
+              name,
+              alt,
+              language,
+              disposition,
+              metadata,
+            },
+            asset: { metadata: { ...metadata, streamId: a.streamId } },
+          }),
+        ),
+    );
     if (
       safeOffset(input.length) !== a.committedOffset ||
       typeof input.digest !== "string" ||
@@ -1417,7 +1481,7 @@ export function createOwnerStreamReservations(
     }
     await context.tx.query(
       `UPDATE ${tables.operationStreams} SET state='terminating',outcome='completed',capture='complete',
-       revocation_state='revoking',digest=$4,updated_at=$5
+       revocation_state='revoking',digest=$4,updated_at=$5,seal_descriptor=$6::jsonb
        WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
       [
         a.scope.binding.namespace,
@@ -1425,6 +1489,7 @@ export function createOwnerStreamReservations(
         a.streamId,
         input.digest,
         context.commandTime,
+        JSON.stringify(descriptor),
       ],
     );
     await rearm(context);
@@ -1535,17 +1600,7 @@ export function createOwnerStreamReservations(
           "pending-content",
           a.target.streamId,
         );
-        const d = a.descriptor;
-        const descriptor = json({
-          kind: d.kind,
-          role: d.role,
-          mediaType: d.mediaType,
-          name: d.name,
-          alt: d.alt,
-          language: d.language,
-          disposition: d.disposition,
-          metadata: d.metadata,
-        });
+        const descriptor = capturePendingContentDescriptor(a.sealDescriptor);
         await context.tx.query(
           `INSERT INTO ${tables.logicalBodies}
           (namespace,logical_body_id,owner_id,settlement_scope_id,producer_stream_id,producer,
@@ -1577,7 +1632,7 @@ export function createOwnerStreamReservations(
       }
       if (sealing && !accepted) {
         await context.tx.query(
-          `UPDATE ${tables.operationStreams} SET outcome='failed',capture='truncated',digest=NULL
+          `UPDATE ${tables.operationStreams} SET outcome='failed',capture='truncated',digest=NULL,seal_descriptor=NULL
            WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
           [a.target.namespace, a.target.operationId, a.target.streamId],
         );
@@ -1843,6 +1898,9 @@ export function createOwnerStreamReservations(
       caller: OwnerCaller,
       streamId: string,
       signal?: AbortSignal,
+      expected?: Readonly<
+        { length: number; descriptor: PendingContentDescriptor }
+      >,
     ): Promise<
       Readonly<
         {
@@ -1855,7 +1913,19 @@ export function createOwnerStreamReservations(
         await boundary.checkpoint(
           structuredClone(caller),
           OWNER_STREAM_SEAL_STATUS,
-          { streamId: physicalIdentifier(streamId) },
+          json({
+            streamId: physicalIdentifier(streamId),
+            ...(expected
+              ? {
+                expected: {
+                  length: safeOffset(expected.length),
+                  descriptor: capturePendingContentDescriptor(
+                    expected.descriptor,
+                  ),
+                },
+              }
+              : {}),
+          }, true),
           { signal },
         ),
         ["state", "pending"],
@@ -1883,9 +1953,13 @@ export function createOwnerStreamReservations(
       streamIdInput: string,
       length: number,
       signal?: AbortSignal,
+      descriptorInput?: PendingContentDescriptor,
     ): Promise<OwnerStreamTarget> {
       const captured = structuredClone(caller),
         streamId = physicalIdentifier(streamIdInput);
+      const descriptor = descriptorInput === undefined
+        ? undefined
+        : capturePendingContentDescriptor(descriptorInput);
       const accepted = safeOffset(length);
       const admission = record(
         await boundary.checkpoint(captured, OWNER_STREAM_WRITER, { streamId }, {
@@ -1904,11 +1978,17 @@ export function createOwnerStreamReservations(
         signal,
       );
       return target(
-        await boundary.checkpoint(captured, OWNER_STREAM_SEAL_INTENT, {
-          streamId,
-          length: accepted,
-          digest: proof.digest,
-        }, { signal }),
+        await boundary.checkpoint(
+          captured,
+          OWNER_STREAM_SEAL_INTENT,
+          json({
+            streamId,
+            length: accepted,
+            digest: proof.digest,
+            ...(descriptor ? { descriptor } : {}),
+          }, true),
+          { signal },
+        ),
       );
     },
     async beginRevocation(

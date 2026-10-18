@@ -1,3 +1,4 @@
+import { capturePendingContentRef } from "../content/schema.ts";
 import {
   isRegisteredInvocationUnknown,
   registeredInvocationErrorCode,
@@ -79,7 +80,7 @@ function streamCall(value: unknown): OwnerStreamCall {
   const envelope = object(value);
   if (
     Object.keys(envelope).length !== 2 || !Object.hasOwn(envelope, "input") ||
-    !["open", "append", "checkpoint", "abort"].includes(
+    !["open", "append", "checkpoint", "close", "abort"].includes(
       String(envelope.operation),
     )
   ) {
@@ -103,6 +104,8 @@ function streamCall(value: unknown): OwnerStreamCall {
     ? ["id", "expectedOffset", "appendId", "bytes"]
     : envelope.operation === "checkpoint"
     ? ["id", "startOffset", "endOffset"]
+    : envelope.operation === "close"
+    ? ["id", "length", "descriptor"]
     : ["id", "reason", "outcome", "capture"];
   if (
     !Object.hasOwn(input, "id") ||
@@ -933,6 +936,11 @@ export function createOwnerConnection(
         startOffset: result.startOffset as number,
         endOffset: result.endOffset as number,
       };
+    },
+    async close(input, callOptions) {
+      return capturePendingContentRef(
+        await call(STREAM, { operation: "close", input }, callOptions),
+      );
     },
     async checkpoint(input, callOptions) {
       const result = object(await callStream("checkpoint", input, callOptions));

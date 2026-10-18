@@ -1754,6 +1754,43 @@ export async function createOwnerHost(
           options.signal,
         );
       },
+      async close(input, options) {
+        snapshots?.assertOrdinaryAllowed(who);
+        const status = await coordinator.sealStatus(
+          owner,
+          who,
+          input.id,
+          options.signal,
+          { length: input.length, descriptor: input.descriptor },
+        );
+        if (status.state === "failed") {
+          unavailable("Stream has already failed.");
+        }
+        if (status.state === "open") {
+          await coordinator.beginSeal(
+            owner,
+            who,
+            input.id,
+            input.length,
+            options.signal,
+            input.descriptor,
+          );
+        }
+        const target = await coordinator.abortTarget(owner, who, input.id);
+        await control(
+          (caller) => coordinator.revoke(owner, caller, target),
+          "content-cleanup",
+        );
+        const result = await coordinator.sealStatus(
+          owner,
+          who,
+          input.id,
+          options.signal,
+          { length: input.length, descriptor: input.descriptor },
+        );
+        if (!result.pending) unavailable("Stream completion is unresolved.");
+        return result.pending;
+      },
       async abort(input) {
         snapshots?.assertOrdinaryAllowed(who);
         const target = await coordinator.abortTarget(owner, who, input.id);
@@ -3199,6 +3236,10 @@ export async function createOwnerHost(
                 return await port.append(request.input, { signal });
               case "checkpoint":
                 return await port.checkpoint(request.input, { signal });
+              case "close":
+                return copy(
+                  await port.close(request.input, { signal }),
+                ) as OwnerJson;
               case "abort":
                 await port.abort(request.input, {});
                 return null;

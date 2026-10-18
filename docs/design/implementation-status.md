@@ -1,5 +1,15 @@
 # Owner, worker and Views implementation checklist
 
+## Delivery priority — 18 October 2026, 15:45 UTC
+
+User-directed integrated implementation pass: finish all remaining library work,
+then validate end-to-end in the separate Node/browser two-agent project, then
+implement Compass including its frontend. Target: end of today in UTC−03.
+Per-slice unit-test/review gates are paused in favor of build checks and
+runnable end-to-end checkpoints for user review. Existing tests and unresolved
+requirements remain tracked; the full suite is still a release gate. Draft only,
+no merge, publication or production migration.
+
 Updated: 18 October 2026, 15:37 UTC.
 
 This is the maintained coordination checklist for

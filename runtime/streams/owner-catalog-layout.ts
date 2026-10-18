@@ -79,6 +79,7 @@ export const OWNER_CATALOG_LAYOUT = {
       "writer_generation": ["bigint", "NO", null],
       "protection_deadline": ["timestamp with time zone", "NO", null],
       "revocation_state": ["text", "NO", null],
+      "seal_descriptor": ["jsonb", "YES", null],
       "state": ["text", "NO", null],
       "outcome": ["text", "YES", null],
       "availability": ["text", "NO", "'retained'::text"],
@@ -129,7 +130,7 @@ export const OWNER_CATALOG_LAYOUT = {
       ],
       "owner_body_descriptor_check": [
         "c",
-        "CHECK ((jsonb_typeof(pending_descriptor) = 'object'::text AND octet_length(pending_descriptor::text) <= 131072) IS TRUE)",
+        "CHECK ((jsonb_typeof(pending_descriptor) = 'object'::text AND octet_length(pending_descriptor::text) <= 1048576) IS TRUE)",
       ],
       "owner_body_digest_check": [
         "c",
@@ -250,6 +251,10 @@ export const OWNER_CATALOG_LAYOUT = {
       "owner_stream_deadline_check": [
         "c",
         "CHECK (isfinite(protection_deadline))",
+      ],
+      "owner_stream_seal_descriptor_check": [
+        "c",
+        "CHECK (seal_descriptor IS NULL OR (jsonb_typeof(seal_descriptor) = 'object'::text AND octet_length(seal_descriptor::text) <= 1048576) IS TRUE)",
       ],
       "owner_stream_descriptor_check": [
         "c",

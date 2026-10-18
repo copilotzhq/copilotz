@@ -1,3 +1,4 @@
+import { runSqlTransaction as transact } from "../events/session.ts";
 import {
   projectVector,
   searchVectors,
@@ -1417,7 +1418,8 @@ export function createCollectionKernel(
       if (composed === undefined && adopting && !execution) {
         const pending: CoordinatedMutationResult<unknown>[] = [];
         let resolvedPlan: CollectionMutationPlan | undefined;
-        const result = await options.session.transaction(
+        const result = await transact(
+          options.session,
           async (transaction) => {
             const replacements = await options.assets!
               .reconcileMaterializations(transaction, plan.content);
@@ -3350,7 +3352,7 @@ export function createCollectionKernel(
       } as const);
     }
     try {
-      await options.session.transaction(async (transaction) => {
+      await transact(options.session, async (transaction) => {
         replacements = options.assets
           ? await options.assets.reconcileMaterializations(transaction, [
             ...new Set([...scope.assets.values()].map((asset) => asset.plan)),

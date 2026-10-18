@@ -1,3 +1,4 @@
+import { runSqlTransaction as transact } from "../events/session.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
@@ -1388,9 +1389,8 @@ export function createDatabaseAssetRepository(
   ): Promise<CoordinatedMutationResult<AssetRecord>> => {
     const event = assetCreationEvent(adoption);
     if (!execution) {
-      // One autocommitted statement inserts the event and the asset. It
-      // refuses when anything already holds the asset's identity, and the
-      // slower path below then decides what that means.
+      // The event and asset share the mutation transaction. If the asset's
+      // identity is already held, reconcile it before attempting adoption.
       if (adoptable([soleAdoption(adoption)])) {
         try {
           const result = await options.coordinator.commitMutation({
@@ -1423,16 +1423,19 @@ export function createDatabaseAssetRepository(
           }
         }
       }
-      const result = await options.session.transaction(async (transaction) => {
-        await lockMaterializationKeys(transaction, [{
-          namespace: adoption.asset.namespace,
-          key: adoption.candidate.idempotencyKey?.trim(),
-        }]);
-        return await commitAssetCreation(adoption, {
-          transaction,
-          dispatch: false,
-        });
-      });
+      const result = await transact(
+        options.session,
+        async (transaction) => {
+          await lockMaterializationKeys(transaction, [{
+            namespace: adoption.asset.namespace,
+            key: adoption.candidate.idempotencyKey?.trim(),
+          }]);
+          return await commitAssetCreation(adoption, {
+            transaction,
+            dispatch: false,
+          });
+        },
+      );
       retainPreparedBody(result.value!, adoption.candidate);
       await options.coordinator.flushCommitted(result);
       return result;
@@ -1453,7 +1456,7 @@ export function createDatabaseAssetRepository(
       return;
     }
     const pending: CoordinatedMutationResult<AssetRecord>[] = [];
-    await options.session.transaction(async (transaction) => {
+    await transact(options.session, async (transaction) => {
       await lockMaterializationKeys(
         transaction,
         plan.adoptions.map(({ asset, candidate }) => ({

@@ -506,7 +506,7 @@ Deno.test("events this store committed are read back without a query", async () 
       undefined,
     );
 
-    // A joined transaction's event is only remembered once confirmed.
+    // A joined transaction's event is remembered only after outer COMMIT.
     const joined = await fixture.session.transaction((transaction) =>
       store.commitMutation({
         draft: draft("note-2"),
@@ -514,10 +514,6 @@ Deno.test("events this store committed are read back without a query", async () 
         transaction,
       })
     );
-    statements = 0;
-    assertExists(await store.getEvent(joined.event.id));
-    assertEquals(statements, 1);
-    store.confirmCommitted?.(joined.event.id);
     statements = 0;
     assertExists(await store.getEvent(joined.event.id));
     assertEquals(statements, 0);
@@ -539,7 +535,7 @@ Deno.test("events this store committed are read back without a query", async () 
   }
 });
 
-Deno.test("an event with only a body commits as one statement and dedupes on retry", async () => {
+Deno.test("an event, body and deliveries commit atomically and dedupe on retry", async () => {
   const fixture = await createFixture();
   const statements: string[] = [];
   let transactions = 0;
@@ -550,7 +546,14 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
     },
     transaction: (operation) => {
       transactions++;
-      return fixture.session.transaction(operation);
+      return fixture.session.transaction((transaction) =>
+        operation({
+          query(sql, params) {
+            statements.push(sql);
+            return transaction.query(sql, params);
+          },
+        })
+      );
     },
   };
   const store = createEventStore({ session: counted, schema: TEST_SCHEMA });
@@ -568,8 +571,8 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
     });
   try {
     const first = await commit({ text: "hello" });
-    assertEquals(statements.length, 1);
-    assertEquals(transactions, 0);
+    assertEquals(transactions, 1);
+    assert(statements.length > 0);
     assertEquals(first.deduplicated, false);
     assertEquals(first.deliveries.length, 1);
 

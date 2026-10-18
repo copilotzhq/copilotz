@@ -1,3 +1,4 @@
+import { runSqlTransaction as transact } from "../events/session.ts";
 import type {
   EventCoordinator,
   EventStore,
@@ -191,7 +192,7 @@ export async function advanceDeferredActions(
       committed.push(result);
     };
     if (transaction) await advance(transaction);
-    else await store.session.transaction(advance);
+    else await transact(store.session, advance);
   }
   return async () => {
     for (const result of committed) await coordinator.flushCommitted(result);

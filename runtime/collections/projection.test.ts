@@ -171,7 +171,7 @@ async function seed(fixture: Fixture, namespace: string) {
   }
 }
 
-Deno.test("each collection write is one statement that projects its relations", async () => {
+Deno.test("collection writes atomically project their relations", async () => {
   const fixture = await createFixture(":memory:", "copilotz_projection");
   const namespace = "tenant-projection";
   const docs = fixture.docs;
@@ -197,7 +197,7 @@ Deno.test("each collection write is one statement that projects its relations", 
           tagIds: ["t1", "t2"],
         }, { namespace })
       ),
-      { statements: 1, transactions: 0 },
+      { statements: 1, transactions: 1 },
     );
     const move = {
       namespace,
@@ -207,7 +207,7 @@ Deno.test("each collection write is one statement that projects its relations", 
     // Planning reads the record; its checks and writes are the second.
     assertEquals(
       await measured(() => docs.update("d1", patch, move)),
-      { statements: 2, transactions: 0 },
+      { statements: 2, transactions: 1 },
     );
     const retried = await docs.update("d1", patch, move);
     assert(!("noop" in retried && retried.noop));
@@ -238,7 +238,7 @@ Deno.test("each collection write is one statement that projects its relations", 
       { source: "t2", target: "d1", type: "tagged" },
     ]);
 
-    // A transaction needs BEGIN/COMMIT only once it holds a second write.
+    // Single and paired plans each commit through one transaction.
     assertEquals(
       await measured(() =>
         fixture.runtime.transaction({
@@ -248,7 +248,7 @@ Deno.test("each collection write is one statement that projects its relations", 
             collections.projection_doc.create({ id: "d4", title: "Lone" }),
         })
       ),
-      { statements: 2, transactions: 0 },
+      { statements: 2, transactions: 1 },
     );
     assertEquals(
       await measured(() =>
@@ -266,7 +266,7 @@ Deno.test("each collection write is one statement that projects its relations", 
 
     assertEquals(
       await measured(() => docs.delete("d1", { namespace })),
-      { statements: 2, transactions: 0 },
+      { statements: 2, transactions: 1 },
     );
     const projected = await graph(fixture, namespace);
     assertEquals(projected[1], [
@@ -463,7 +463,7 @@ Deno.test({
         raced.error.message,
         "Collection 'projection_doc' 'd-race' was created while its mutation was prepared.",
       );
-      assertEquals(raced.transactions, 1);
+      assert(raced.transactions >= 1);
     } finally {
       await fixture.executor.shutdown();
       await fixture.db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

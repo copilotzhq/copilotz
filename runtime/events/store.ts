@@ -1,3 +1,4 @@
+import { afterSqlCommit, runSqlTransaction, sqlCommitGate } from "./session.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import { assertJsonValue } from "../json.ts";
@@ -95,21 +96,19 @@ export type CommitEventMutationOptions<T> = {
   maxAttempts?: number;
   /** Runtime-owned lifecycle admission, never derived from event metadata. */
   admission?: Readonly<{ openActionGroup?: boolean; cancellation?: boolean }>;
-  /** Join an already-open SQL transaction instead of opening a nested one. */
+  /** Join an active createSqlSession/runSqlTransaction transaction. */
   transaction?: SqlExecutor;
   /** An event body written by the event's own statement. */
   body?: Readonly<{ id: string; json: unknown }>;
   /**
-   * Writes and checks that commit in the event's own statement. They keep a
-   * mutation a single autocommitted statement.
+   * Writes and checks composed into the event insert, inside its transaction.
    */
   statement?(
     param: (value: unknown) => string,
     tables: EventMutationContext["tables"],
   ): EventStatement<T>;
   /**
-   * Writes that commit with the event. Without them (and without a joined
-   * transaction) the event commits as one autocommitted statement.
+   * Additional writes that share the event's transaction.
    */
   mutate?(context: EventMutationContext): Promise<T>;
   recoverDuplicate?: (
@@ -217,8 +216,6 @@ export type EventStore = {
     eventId: string,
     eventBodyId: string,
   ): Readonly<{ json: unknown }> | undefined;
-  /** Confirms that an event committed in a joined transaction is durable. */
-  confirmCommitted?(eventId: string): void;
   getEventByDeduplicationId(
     namespace: string,
     deduplicationId: string,
@@ -590,6 +587,15 @@ function filtersForConsumers(
   return `${alias}.consumer_id IN (${placeholders.join(", ")})`;
 }
 
+const eventCommitGates = new WeakMap<DurableEvent, () => void>();
+
+/** Publication requires the actual outer commit, never a caller's assertion. */
+export function assertEventCommitted(event: DurableEvent): void {
+  const gate = eventCommitGates.get(event);
+  if (!gate) throw new Error("Event has no transaction commit evidence.");
+  gate();
+}
+
 /** Creates the immutable-event and durable-delivery persistence boundary. */
 export function createEventStore(
   options: CreateEventStoreOptions,
@@ -692,13 +698,10 @@ export function createEventStore(
       ? { id: mutation.body.id, ...await encodeEventBody(mutation.body.json) }
       : undefined;
 
-    // One statement inserts the event, its deliveries, body, operation index,
-    // and the mutation's own writes, which its gate admits along with the
-    // event. The dedup unique index arbitrates retries: a duplicate inserts
-    // nothing and is then read back. `tolerant` lets an existing body row
-    // through for verification; outside a transaction it must fail the
-    // statement instead, so that nothing commits.
-    const insertEvent = async (executor: SqlExecutor, tolerant: boolean) => {
+    // The event, deliveries, body, operation index and projection share the
+    // transaction. An existing body is verified before that transaction can
+    // commit, and a duplicate event returns its original durable result.
+    const insertEvent = async (executor: SqlExecutor) => {
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
       const statement = mutation.statement?.(param, tables);
@@ -823,9 +826,7 @@ export function createEventStore(
         }::jsonb,
                   ${param(body.digest)}, NOW()
            FROM inserted_event
-           ${
-          tolerant ? "ON CONFLICT (namespace, event_body_id) DO NOTHING" : ""
-        }
+           ON CONFLICT (namespace, event_body_id) DO NOTHING
            RETURNING event_body_id
          )`);
       }
@@ -907,9 +908,8 @@ export function createEventStore(
 
     const runOn = async (
       executor: SqlExecutor,
-      tolerant: boolean,
     ): Promise<CommitEventMutationResult<T>> => {
-      const { inserted, outcome } = await insertEvent(executor, tolerant);
+      const { inserted, outcome } = await insertEvent(executor);
       if (!inserted) {
         const existing = draft.deduplicationId
           ? await loadDuplicate(
@@ -941,36 +941,27 @@ export function createEventStore(
       event,
       ...(body ? { body: { id: body.id, json: JSON.parse(body.body) } } : {}),
     });
-    // A joined transaction may still roll back, so its event is only held
-    // until the caller confirms the commit.
-    if (mutation.transaction) {
-      const result = await runOn(mutation.transaction, true);
+    const commitOn = async (transaction: SqlExecutor) => {
+      const gate = sqlCommitGate(transaction);
+      const result = await runOn(transaction);
+      eventCommitGates.set(result.event, gate);
       if (!result.deduplicated) {
-        boundedSet(pendingEvents, result.event.id, remembered(result.event));
+        afterSqlCommit(transaction, () => {
+          boundedSet(recentEvents, result.event.id, remembered(result.event));
+        });
       }
       return result;
-    }
-    const committed = async () => {
-      if (mutation.mutate) {
-        return await session.transaction((transaction) =>
-          runOn(transaction, true)
-        );
-      }
-      try {
-        return await runOn(session, false);
-      } catch (error) {
-        // An existing body row failed the statement; nothing committed.
-        if (!isUniqueViolation(error)) throw error;
-        return await session.transaction((transaction) =>
-          runOn(transaction, true)
-        );
-      }
     };
-    const result = await committed();
-    if (!result.deduplicated) {
-      boundedSet(recentEvents, result.event.id, remembered(result.event));
+    if (mutation.transaction) return await commitOn(mutation.transaction);
+    try {
+      return await runSqlTransaction(session, commitOn);
+    } catch (error) {
+      // A concurrent insert can win after the statement's snapshot. Its
+      // uniqueness failure rolls back this transaction; reread once in a new
+      // transaction to return the recorded duplicate or semantic conflict.
+      if (mutation.mutate || !isUniqueViolation(error)) throw error;
+      return await runSqlTransaction(session, commitOn);
     }
-    return result;
   };
 
   // Events and event bodies are immutable, so a bounded copy of the events
@@ -980,7 +971,6 @@ export function createEventStore(
     body?: { id: string; json: unknown };
   }>;
   const recentEvents = new Map<string, RecentEvent>();
-  const pendingEvents = new Map<string, RecentEvent>();
   const boundedSet = (
     map: Map<string, RecentEvent>,
     id: string,
@@ -988,12 +978,6 @@ export function createEventStore(
   ): void => {
     map.set(id, value);
     if (map.size > RECENT_EVENT_LIMIT) map.delete(map.keys().next().value!);
-  };
-  const confirmCommitted = (eventId: string): void => {
-    const pending = pendingEvents.get(eventId);
-    if (!pending) return;
-    pendingEvents.delete(eventId);
-    boundedSet(recentEvents, eventId, pending);
   };
   const recentEventBody = (
     eventId: string,
@@ -1053,7 +1037,7 @@ export function createEventStore(
   ): Promise<EventDelivery | null> => {
     if (!options.settleActionOwners) return await update(session);
     let afterCommit: (() => Promise<void>) | void;
-    const settled = await session.transaction(async (transaction) => {
+    const settled = await runSqlTransaction(session, async (transaction) => {
       await options.lockSettlementScope?.(
         transaction,
         current.settlementScopeId,
@@ -1197,7 +1181,6 @@ export function createEventStore(
     },
     getEvent,
     recentEventBody,
-    confirmCommitted,
     getEventByDeduplicationId(namespace, deduplicationId) {
       return loadDuplicate(session, namespace, deduplicationId);
     },
@@ -1467,7 +1450,7 @@ export function createEventStore(
     },
     async cancelScope(namespace, settlementScopeId, reason) {
       let afterCommit: (() => Promise<void>) | void;
-      const result = await session.transaction(async (transaction) => {
+      const result = await runSqlTransaction(session, async (transaction) => {
         await options.lockSettlementScope?.(transaction, settlementScopeId);
         const cancelled = await transaction.query<{ id: string }>(
           `UPDATE ${tables.event_deliveries} AS delivery

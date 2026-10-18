@@ -29,8 +29,8 @@ const note = defineCollection({
 type Recorder = {
   statements: string[];
   transactions: number;
-  /** Runs before the first statement matching `pattern`, then disarms. */
-  before?: { pattern: RegExp; run: () => Promise<unknown> };
+  /** Runs after planning, before the next transaction, then disarms. */
+  before?: { run: () => Promise<unknown> };
 };
 
 /** Counts what a session runs and can interleave a competitor before one. */
@@ -41,17 +41,15 @@ function recording(base: SqlSession, recorder: Recorder): SqlSession {
       params?: unknown[],
     ) => {
       recorder.statements.push(text);
-      const hook = recorder.before;
-      if (hook && hook.pattern.test(text)) {
-        recorder.before = undefined;
-        await hook.run();
-      }
       return await executor.query<TRow>(text, params);
     },
   });
   return {
     ...recorded(base),
-    transaction: (operation) => {
+    transaction: async (operation) => {
+      const hook = recorder.before;
+      recorder.before = undefined;
+      await hook?.run();
       recorder.transactions++;
       return base.transaction((transaction) =>
         operation(recorded(transaction))
@@ -120,7 +118,11 @@ async function adoptionScenarios(url: string) {
       recorder,
       () => notes.create({ id: "n1", content: "Adopted by the write" }),
     );
-    assertEquals(created.transactions, 0, "a new asset needs no transaction");
+    assertEquals(
+      created.transactions,
+      1,
+      "asset adoption shares the mutation transaction",
+    );
     assert(
       recorder.statements.some((text) =>
         text.includes("adoption_rows") && text.includes("projection_current")
@@ -158,7 +160,7 @@ async function adoptionScenarios(url: string) {
       });
       assertEquals(asset.state, "ready");
     });
-    assertEquals(published.transactions, 0);
+    assertEquals(published.transactions, 1);
     assertEquals(writes(recorder), 1, "a publish is one writing statement");
     assert(
       published.statements <= 2,
@@ -176,7 +178,6 @@ async function adoptionScenarios(url: string) {
     // its commit. The write's statement finds the key taken, so the write
     // reconciles onto the competitor's asset instead of adding another.
     recorder.before = {
-      pattern: /projection_current/,
       run: () => rivals.create({ id: "rival", content: "Contended content" }),
     };
     await notes.create({ id: "loser", content: "Contended content" });
@@ -245,7 +246,6 @@ async function adoptionScenarios(url: string) {
     // A competitor commits the same content before the transaction takes its
     // locks: the transaction finds the key and reuses the competitor's asset.
     recorder.before = {
-      pattern: /pg_advisory_xact_lock/,
       run: () => rivals.create({ id: "early", content: "Early content" }),
     };
     await measured.collections.transaction({

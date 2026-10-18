@@ -1,3 +1,4 @@
+import { assertEventCommitted } from "./store.ts";
 import type {
   DeliveryDispatchFailure,
   DeliveryExecutionHandle,
@@ -18,7 +19,8 @@ export type CoordinatedMutationOptions<T> =
     "consumers"
   >
   & Readonly<{
-    /** When false, insert deliveries but do not publish or dispatch yet. */
+    /** When false, leave publication to flushCommitted after the outer commit.
+     * Joined transactions always defer publication, regardless of this option. */
     dispatch?: boolean;
     /** Prepared JSON body used for precommit matching. Not persisted. */
     matchData?: unknown;
@@ -145,12 +147,46 @@ export function createEventCoordinator(
     } as const);
   };
 
+  const publications = new WeakMap<
+    CopilotzEvent,
+    Promise<Readonly<{ dispatch: EventDispatchReport; publishError?: unknown }>>
+  >();
+  const publishCommitted = (
+    result: CommitEventMutationResult<unknown>,
+  ) => {
+    assertEventCommitted(result.event);
+    const existing = publications.get(result.event);
+    if (existing) return existing;
+    // Install the promise before invoking user publication callbacks, which
+    // may reenter the coordinator. Repeated flushes share one publication.
+    const pending = Promise.resolve().then(async () => {
+      let publishError: unknown;
+      if (!result.deduplicated) {
+        try {
+          await options.publish?.(result.event, {
+            settlementScopeId: result.settlementScopeId,
+            actionScopeId: result.actionScopeId,
+          });
+        } catch (error) {
+          publishError = error;
+        }
+      }
+      return {
+        dispatch: await dispatch(result),
+        ...(publishError === undefined ? {} : { publishError }),
+      };
+    });
+    publications.set(result.event, pending);
+    return pending;
+  };
+
   const commitMutation = async <T>(
     mutation: CoordinatedMutationOptions<T>,
   ): Promise<CoordinatedMutationResult<T>> => {
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
-    const enableDispatch = mutation.dispatch !== false;
+    const enableDispatch = mutation.transaction === undefined &&
+      mutation.dispatch !== false;
     const consumers = options.registry.durableConsumers(
       mutation.draft,
       mutation.matchData,
@@ -173,41 +209,12 @@ export function createEventCoordinator(
         dispatch: EMPTY_DISPATCH,
       } as const);
     }
-    let publishError: unknown;
-    if (!committed.deduplicated) {
-      try {
-        await options.publish?.(committed.event, {
-          settlementScopeId: committed.settlementScopeId,
-          actionScopeId: committed.actionScopeId,
-        });
-      } catch (error) {
-        publishError = error;
-      }
-    }
-    const dispatched = await dispatch(committed);
-    return ({
-      ...committed,
-      dispatch: dispatched,
-      ...(publishError === undefined ? {} : { publishError }),
-    } as const);
+    return { ...committed, ...await publishCommitted(committed) };
   };
 
   const flushCommitted = async (
     result: CommitEventMutationResult<unknown>,
-  ): Promise<EventDispatchReport> => {
-    options.store.confirmCommitted?.(result.event.id);
-    if (!result.deduplicated) {
-      try {
-        await options.publish?.(result.event, {
-          settlementScopeId: result.settlementScopeId,
-          actionScopeId: result.actionScopeId,
-        });
-      } catch {
-        // Publication cannot roll back already committed domain state.
-      }
-    }
-    return await dispatch(result);
-  };
+  ): Promise<EventDispatchReport> => (await publishCommitted(result)).dispatch;
 
   return ({
     commitMutation,

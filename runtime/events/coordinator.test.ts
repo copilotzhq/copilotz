@@ -1,4 +1,5 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { runSqlTransaction } from "./session.ts";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
@@ -281,6 +282,98 @@ Deno.test("a rejected placement is retried from the queue without a recovery swe
     assertEquals(calls, 1);
   } finally {
     clearTimeout(deadline);
+    await executor.shutdown();
+    await fixture.db.close();
+  }
+});
+
+Deno.test("joined events publish only after confirmed outer commit", async () => {
+  const fixture = await createStore();
+  const registry = await createPluginRegistry();
+  const published: string[] = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry,
+    createContext: createTestProcessorContext,
+    workerId: "commit-gate-test",
+  });
+  const coordinator = createEventCoordinator({
+    store: fixture.store,
+    registry,
+    executor,
+    publish: (event) => {
+      assert(event.durable);
+      published.push(event.id);
+    },
+  });
+  try {
+    const committed = await fixture.session.transaction(async (transaction) => {
+      const result = await coordinator.commitMutation({
+        draft: { type: "note.created", namespace: "notes", payload: {} },
+        transaction,
+      });
+      assertEquals(published, []);
+      await assertRejects(
+        () => coordinator.flushCommitted(result),
+        Error,
+        "has not confirmed commit",
+      );
+      return result;
+    });
+    await Promise.all([
+      coordinator.flushCommitted(committed),
+      coordinator.flushCommitted(committed),
+    ]);
+    assertEquals(published, [committed.event.id]);
+
+    let rolledBack!: typeof committed;
+    await assertRejects(() =>
+      fixture.session.transaction(async (transaction) => {
+        rolledBack = await coordinator.commitMutation({
+          draft: { type: "note.created", namespace: "notes", payload: {} },
+          transaction,
+        });
+        throw new Error("rollback");
+      })
+    );
+    await assertRejects(
+      () => coordinator.flushCommitted(rolledBack),
+      Error,
+      "has not confirmed commit",
+    );
+    assertEquals(published, [committed.event.id]);
+    assertEquals(await fixture.store.getEvent(rolledBack.event.id), null);
+
+    let uncertain!: typeof committed;
+    await assertRejects(() =>
+      runSqlTransaction({
+        async transaction(operation) {
+          const result = await fixture.session.transaction(operation);
+          // The server committed, but the adapter cannot confirm its outcome.
+          assertExists(result);
+          throw new Error("commit acknowledgement lost");
+        },
+      }, async (transaction) => {
+        uncertain = await coordinator.commitMutation({
+          draft: { type: "note.created", namespace: "notes", payload: {} },
+          transaction,
+          body: { id: "uncertain-body", json: { text: "recorded" } },
+        });
+        return uncertain;
+      })
+    );
+    await assertRejects(
+      () => coordinator.flushCommitted(uncertain),
+      Error,
+      "has not confirmed commit",
+    );
+    assertEquals(published, [committed.event.id]);
+    assertEquals(
+      fixture.store.recentEventBody?.(uncertain.event.id, "uncertain-body"),
+      undefined,
+    );
+    assertExists(await fixture.store.getEvent(uncertain.event.id));
+  } finally {
     await executor.shutdown();
     await fixture.db.close();
   }

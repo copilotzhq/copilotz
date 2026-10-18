@@ -15,7 +15,10 @@ import {
   createActionLifecycleLoader,
 } from "../actions/persistence.ts";
 import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
-import { recoverDeliveryActions } from "../actions/recovery.ts";
+import {
+  type ActionRecoveryCatalog,
+  recoverDeliveryActions,
+} from "../actions/recovery.ts";
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
@@ -68,7 +71,7 @@ import type { RegisteredActionInvocation } from "../execution/registered-invocat
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
   type OperationSettlementScope,
 } from "../streams/catalog.ts";
 import type {
@@ -314,7 +317,7 @@ export function createOwnerExecutionCommands(
     session: SqlSession;
     schema: string;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore & ActionRecoveryCatalog;
     executor: DeliveryExecutor;
     publish?: EventPublisher;
     /** Runtime hosts supply an exact synchronous private witness. This runs

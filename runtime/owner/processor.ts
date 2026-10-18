@@ -42,7 +42,7 @@ import { processorConsumerId } from "../plugins/processor.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
   type OperationSettlementScope,
 } from "../streams/catalog.ts";
 import type {
@@ -365,7 +365,7 @@ export function createOwnerProcessorCommands(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore;
     /** Internal local capability only; absent means all local routes refuse. */
     local?: OwnerLocalProcessorOptions;
     resolveAssignment(

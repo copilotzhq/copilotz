@@ -32,7 +32,7 @@ import { isOwnerProtectedSchemaFamily } from "./ordinary-value.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
 } from "../streams/catalog.ts";
 import type {
   OwnerCaller,
@@ -217,7 +217,7 @@ export function createOwnerChildActions(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore;
     /** Must call the appropriate execution/Processor authorizeLive first. That
      * includes current host grant, captured execution and recovery barriers. */
     resolveParent(

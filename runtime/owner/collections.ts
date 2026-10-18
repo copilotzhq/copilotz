@@ -14,7 +14,7 @@ import { deriveWorkflowId } from "../events/index.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { assertJsonValue } from "../json.ts";
-import type { OperationCatalog } from "../streams/catalog.ts";
+import type { OperationCatalogCore } from "../streams/catalog.ts";
 import type { OwnerCommandContext, OwnerCommandHandler } from "./boundary.ts";
 import {
   assertOwnerAttemptCaller,
@@ -84,7 +84,7 @@ export function createOwnerCollectionCommand(
     executor: DeliveryExecutor;
     /** Private owner composition: operation admission/indexing shares the same
      * transaction as Collection events, including detached Processor scopes. */
-    catalog?: OperationCatalog;
+    catalog?: OperationCatalogCore;
     scope(
       context: OwnerCommandContext,
       intent: OwnerCollectionIntent,

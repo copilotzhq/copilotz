@@ -13,7 +13,7 @@ import { createEventStore } from "../events/store.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
 } from "../streams/catalog.ts";
 import { assertJsonValue } from "../json.ts";
 import type {
@@ -111,7 +111,7 @@ export function createOwnerActionAdmission(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore;
     /** Owner-schema unsettled delivery bound. Duplicates need no new slot. */
     maxPendingDeliveries?: number;
     /** Current trusted policy for new admissions, evaluated under the owner fence.

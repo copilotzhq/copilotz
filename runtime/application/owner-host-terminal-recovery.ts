@@ -1,3 +1,4 @@
+import type { ActionRecoveryCatalog } from "../actions/recovery.ts";
 /** Private startup-only terminal cleanup for an explicit finite Action inventory.
  * This seam never requeues, dispatches, grants execution, or certifies readiness. */
 import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
@@ -7,7 +8,7 @@ import type { DeliveryExecutor } from "../execution/types.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
   type OperationSettlementScope,
 } from "../streams/catalog.ts";
 import type {
@@ -138,7 +139,7 @@ export function createOwnerHostTerminalRecovery(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore & ActionRecoveryCatalog;
     executor: DeliveryExecutor;
     /** Present only for this exact acquired, unready, transport-absent owner. */
     currentOwner(): Owner | undefined;

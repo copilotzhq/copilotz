@@ -388,6 +388,39 @@ implemented stream attempt/generation authority, physical confirmation, offset
 replay, seal acceptance or host activation. Those remain the next coordinated
 work.
 
+## Shared operation/event core reviewed checkpoint
+
+The catalog's event admission/indexing and operation locking now share one
+format-bound implementation. The public legacy catalog retains its original
+format and complete behavior. A private owner factory returns a frozen object
+with exactly six members: databaseSchema, assertFormat, lockScope,
+admitEventSql, indexEvent and indexEventSql. It has no stream mutation,
+observation, cancellation, settlement or recovery methods. Construction remains
+synchronous and performs no database queries; schema validation and execution
+authority remain separate requirements.
+
+Direct owner consumers are typed against this smaller dependency. Delivery
+Action recovery still requires its explicit failDeliveryStreams hook, and scope
+cancellation additionally requires requestCancellation. Execution, lost-Action
+and startup terminal recovery keep that required hook in their types. No missing
+hook is converted into an optional no-op, and the owner event-only core cannot
+satisfy it by itself.
+
+The actual host still constructs the legacy catalog. Standalone settlement,
+owner stream revocation/recovery, nullable confirmation-time ordinals and
+visibility rules remain separate activation work. Root checks preserve the
+ordered legacy SQL/parameter capture and pass the existing format/stream
+compatibility plus direct private-format indexing tests. Independent validation
+passes 335 PostgreSQL cases and 324 PGlite cases with 11 explicit
+PostgreSQL-only skips. Exact ordered legacy SQL/parameter parity passes in both
+notification modes; transitive recovery type guards remain required. All 742
+owned fixture databases were exported and dropped, with zero remaining
+sessions/databases and the local PostgreSQL process stopped. The initial
+reviewer-fixture normalization error is preserved beside the corrected complete
+runs. The unchanged full-static guard still refuses seven private modules
+awaiting real host wiring; component checks pass. This checkpoint adds no host
+activation or stream recovery behavior.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:

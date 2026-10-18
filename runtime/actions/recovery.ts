@@ -12,10 +12,16 @@ import { publicActionLifecycleData } from "./protected-lifecycle.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
 
+/** Delivery recovery needs an explicit stream hook; an event-only owner catalog
+ * cannot silently satisfy this dependency. */
+export type ActionRecoveryCatalog = Pick<
+  OperationCatalog,
+  "failDeliveryStreams"
+>;
 type RecoveryOptions = Readonly<{
   store: EventStore;
   coordinator: EventCoordinator;
-  catalog: OperationCatalog;
+  catalog: ActionRecoveryCatalog;
   actions: Readonly<Record<string, AnyActionDefinition>>;
   protectedValues?: ProtectedValueRuntime;
   /** Owner-command clock shared by lifecycle, cancellation and stream recovery. */
@@ -43,7 +49,13 @@ export async function recoverDeliveryActions(
 
 /** Explicit cancellation settles every live Action, including deferred ones. */
 export async function cancelScopeActions(
-  options: RecoveryOptions,
+  options:
+    & RecoveryOptions
+    & Readonly<{
+      catalog:
+        & ActionRecoveryCatalog
+        & Pick<OperationCatalog, "requestCancellation">;
+    }>,
   transaction: SqlExecutor,
   scope: ScopeCancellation,
 ): Promise<() => Promise<void>> {

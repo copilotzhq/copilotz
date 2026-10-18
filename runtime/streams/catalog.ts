@@ -7,6 +7,7 @@ import {
   assertOperationCatalogFormat,
   OPERATION_CATALOG_FINGERPRINT,
   operationCatalogFormatSql,
+  OWNER_CONTENT_CATALOG_FINGERPRINT,
 } from "../events/catalog-format.ts";
 export { OPERATION_CATALOG_FINGERPRINT } from "../events/catalog-format.ts";
 import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
@@ -1218,24 +1219,30 @@ export async function validateOperationCatalog(
   return tables;
 }
 
-export function createOperationCatalog(
+/** Shared operation/event dependency only. It grants no stream or execution authority. */
+export type OperationCatalogCore = Pick<
+  OperationCatalog,
+  | "databaseSchema"
+  | "assertFormat"
+  | "lockScope"
+  | "admitEventSql"
+  | "indexEvent"
+  | "indexEventSql"
+>;
+
+function createOperationCatalogCore(
   session: SqlSession,
-  databaseSchema = "public",
-  options: Readonly<{
-    /** Commit notification only: the caller must not wait on the current writer. */
-    onStreamTerminal?: (
-      operation: Readonly<{ namespace: string; operationId: string }>,
-    ) => void;
-    /** Drains request-local/remote relay frames before a zero-settlement terminal inference. */
-    beforeTerminal?: (
-      operation: Readonly<{ namespace: string; operationId: string }>,
-    ) => Promise<void>;
-  }> = {},
-): OperationCatalog {
+  databaseSchema: string,
+  fingerprint:
+    | typeof OPERATION_CATALOG_FINGERPRINT
+    | typeof OWNER_CONTENT_CATALOG_FINGERPRINT,
+): OperationCatalogCore {
   const tables = createOperationCatalogTables(databaseSchema);
-  const formatGate = operationCatalogFormatSql(tables.metadata);
+  const formatGate = operationCatalogFormatSql(tables.metadata, fingerprint);
   const assertFormat = (executor: SqlExecutor = session) =>
-    assertOperationCatalogFormat(executor, tables.metadata);
+    assertOperationCatalogFormat(executor, tables.metadata, {
+      expected: fingerprint,
+    });
   // CTEs that index one event. A root event creates its operation in the same
   // statement, which the other CTEs' snapshot cannot see, so "the operation
   // exists" also accepts the row created here. Detached deliveries get an
@@ -1357,6 +1364,103 @@ export function createOperationCatalog(
         RETURNING selection_key
       )`;
   };
+  return {
+    databaseSchema: validateEventSchemaName(databaseSchema),
+    assertFormat,
+    async lockScope(transaction, operationId) {
+      await assertFormat(transaction);
+      await transaction.query(
+        `SELECT operation_id FROM ${tables.operations}
+        WHERE operation_id = $1 FOR UPDATE`,
+        [operationId],
+      );
+    },
+    admitEventSql(input, param) {
+      const namespace = param(
+        requiredText(input.namespace, "Operation namespace"),
+      );
+      const operation = param(requiredText(input.operationId, "Operation id"));
+      const target = `namespace = ${namespace} AND operation_id = ${operation}`;
+      return {
+        ctes: [`admitted_operation AS MATERIALIZED (
+          SELECT operation_id, cancellation_requested_at FROM ${tables.operations}
+          WHERE ${target} AND state IN ('accepted','running')
+            AND (cancellation_requested_at IS NULL OR ${
+          input.cancellationTerminal === true ? "TRUE" : "FALSE"
+        }) FOR UPDATE
+        )`],
+        // Ordinary direct mutations may start outside an operation. A
+        // deferred handoff requires a managed scope, including internal ones.
+        cancelled:
+          "EXISTS (SELECT 1 FROM admitted_operation WHERE cancellation_requested_at IS NOT NULL)",
+        gate: `(${formatGate} AND (${
+          input.requireScope !== true
+            ? `NOT EXISTS (SELECT 1 FROM ${tables.operations} WHERE ${target}) OR `
+            : ""
+        }EXISTS (SELECT 1 FROM admitted_operation)))`,
+      };
+    },
+    async indexEvent(transaction, input) {
+      await assertFormat(transaction);
+      if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
+        throw new TypeError("Operation event position is invalid.");
+      }
+      const params: unknown[] = [];
+      const param = (value: unknown) => `$${params.push(value)}`;
+      const ctes = indexEventCtes(input, param, {
+        position: `${param(input.position)}::bigint`,
+      });
+      await transaction.query(
+        `WITH ${ctes} SELECT * FROM indexed_event`,
+        params,
+      );
+    },
+    indexEventSql(input, param) {
+      return indexEventCtes(input, param, {
+        position: "(SELECT position FROM inserted_event)",
+        requires: "EXISTS (SELECT 1 FROM inserted_event)",
+        deliveries: "inserted_deliveries",
+      });
+    },
+  };
+}
+
+/** Private owner composition. No legacy stream mutation, observation or recovery
+ * method is present on this object; those require separate owner-aware proofs. */
+export function createOwnerOperationCatalogCore(
+  session: SqlSession,
+  databaseSchema: string,
+): OperationCatalogCore {
+  return Object.freeze(
+    createOperationCatalogCore(
+      session,
+      databaseSchema,
+      OWNER_CONTENT_CATALOG_FINGERPRINT,
+    ),
+  );
+}
+
+export function createOperationCatalog(
+  session: SqlSession,
+  databaseSchema = "public",
+  options: Readonly<{
+    /** Commit notification only: the caller must not wait on the current writer. */
+    onStreamTerminal?: (
+      operation: Readonly<{ namespace: string; operationId: string }>,
+    ) => void;
+    /** Drains request-local/remote relay frames before a zero-settlement terminal inference. */
+    beforeTerminal?: (
+      operation: Readonly<{ namespace: string; operationId: string }>,
+    ) => Promise<void>;
+  }> = {},
+): OperationCatalog {
+  const tables = createOperationCatalogTables(databaseSchema);
+  const core = createOperationCatalogCore(
+    session,
+    databaseSchema,
+    OPERATION_CATALOG_FINGERPRINT,
+  );
+  const assertFormat = core.assertFormat;
   const catalog: OperationCatalog = {
     databaseSchema: validateEventSchemaName(databaseSchema),
     assertFormat,
@@ -1447,53 +1551,9 @@ export function createOperationCatalog(
         },
       } as const);
     },
-    admitEventSql(input, param) {
-      const namespace = param(
-        requiredText(input.namespace, "Operation namespace"),
-      );
-      const operation = param(requiredText(input.operationId, "Operation id"));
-      const target = `namespace = ${namespace} AND operation_id = ${operation}`;
-      return {
-        ctes: [`admitted_operation AS MATERIALIZED (
-          SELECT operation_id, cancellation_requested_at FROM ${tables.operations}
-          WHERE ${target} AND state IN ('accepted','running')
-            AND (cancellation_requested_at IS NULL OR ${
-          input.cancellationTerminal === true ? "TRUE" : "FALSE"
-        }) FOR UPDATE
-        )`],
-        // Ordinary direct mutations may start outside an operation. A
-        // deferred handoff requires a managed scope, including internal ones.
-        cancelled:
-          "EXISTS (SELECT 1 FROM admitted_operation WHERE cancellation_requested_at IS NOT NULL)",
-        gate: `(${formatGate} AND (${
-          input.requireScope !== true
-            ? `NOT EXISTS (SELECT 1 FROM ${tables.operations} WHERE ${target}) OR `
-            : ""
-        }EXISTS (SELECT 1 FROM admitted_operation)))`,
-      };
-    },
-    async indexEvent(transaction, input) {
-      await assertFormat(transaction);
-      if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
-        throw new TypeError("Operation event position is invalid.");
-      }
-      const params: unknown[] = [];
-      const param = (value: unknown) => `$${params.push(value)}`;
-      const ctes = indexEventCtes(input, param, {
-        position: `${param(input.position)}::bigint`,
-      });
-      await transaction.query(
-        `WITH ${ctes} SELECT * FROM indexed_event`,
-        params,
-      );
-    },
-    indexEventSql(input, param) {
-      return indexEventCtes(input, param, {
-        position: "(SELECT position FROM inserted_event)",
-        requires: "EXISTS (SELECT 1 FROM inserted_event)",
-        deliveries: "inserted_deliveries",
-      });
-    },
+    admitEventSql: core.admitEventSql,
+    indexEvent: core.indexEvent,
+    indexEventSql: core.indexEventSql,
     async getSelectionHeads(input) {
       const namespace = requiredText(input.namespace, "Operation namespace");
       if (!Array.isArray(input.selectionKeys)) {
@@ -2506,14 +2566,7 @@ export function createOperationCatalog(
       );
       return (result.rows.map(mapStream));
     },
-    async lockScope(transaction, operationId) {
-      await assertFormat(transaction);
-      await transaction.query(
-        `SELECT operation_id FROM ${tables.operations}
-        WHERE operation_id = $1 FOR UPDATE`,
-        [operationId],
-      );
-    },
+    lockScope: core.lockScope,
     async failDeliveryStreams(transaction, input) {
       await assertFormat(transaction);
       const params: unknown[] = [

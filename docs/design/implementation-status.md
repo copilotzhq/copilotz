@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 08:45 UTC.
+Updated: 18 October 2026, 09:17 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -47,7 +47,10 @@ awaiting genuine host wiring. The private receipt-free mutation boundary now
 separately passes 194 PostgreSQL and 187 PGlite cases with seven explicit
 PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Actual
 stream checkpoint authority, reservation confirmation, catalog alarms and
-content execution routing remain open.
+content execution routing remain open. The shared operation/event catalog core
+now separately passes 335 PostgreSQL and 324 PGlite cases with 11 explicit
+PostgreSQL-only skips. Legacy SQL/parameter parity is unchanged in both
+notification modes; owner recovery still requires its explicit cleanup hook.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -439,6 +442,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Private registered receipt-free mutation boundary on the existing owner
       queue, with current lifetime fences and no automatic receipts or sequence
       events; scoped PostgreSQL/PGlite and real COMMIT-loss checks pass
+- [x] Share the existing format-bound operation/event catalog core; private
+      owner factory exposes only six members, with required recovery hooks kept
+      separate and legacy SQL/parameter parity independently checked
 - [ ] Catalog-first reservation, physical confirmation and visibility through
       the same local/worker content coordinator; confirmation-time ordinals,
       hidden failed reservations and accepted-prefix-only observation

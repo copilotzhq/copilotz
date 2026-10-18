@@ -3,7 +3,10 @@
  * remain durable blockers for the independent exhaustive reconciliation proof. */
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import { actionDefinitionHasSecrets } from "../actions/protected-lifecycle.ts";
-import { recoverDeliveryActions } from "../actions/recovery.ts";
+import {
+  type ActionRecoveryCatalog,
+  recoverDeliveryActions,
+} from "../actions/recovery.ts";
 import { eventDataRef } from "../events/body-store.ts";
 import {
   createEventCoordinator,
@@ -22,7 +25,7 @@ import type { DeliveryExecutor } from "../execution/types.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
   createOperationCatalogTables,
-  type OperationCatalog,
+  type OperationCatalogCore,
   type OperationSettlementScope,
 } from "../streams/catalog.ts";
 import { createOwnerAssignmentStorage } from "./assignment-storage.ts";
@@ -88,7 +91,7 @@ export function createOwnerLostActionRecovery(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore & ActionRecoveryCatalog;
     executor: DeliveryExecutor;
     publish?: EventPublisher;
     maxAssignments?: number;

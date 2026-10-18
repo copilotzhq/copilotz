@@ -6,7 +6,7 @@ import { createEventStore } from "../events/store.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { EventPublisher } from "../events/coordinator.ts";
 import {
-  type OperationCatalog,
+  type OperationCatalogCore,
   type OperationSettlementScope,
   type OperationSettlementSnapshot,
   publishCommittedOperationSettlement,
@@ -158,7 +158,7 @@ export function createOwnerOperationSettlement(
     ownerId: string;
     schema: string;
     session: SqlSession;
-    catalog: OperationCatalog;
+    catalog: OperationCatalogCore;
     maxDrains?: number;
     maxOutstandingDrains?: number;
     maxConcurrentChecks?: number;

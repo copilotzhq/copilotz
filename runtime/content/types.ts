@@ -281,6 +281,7 @@ export type ContentErrorCode =
   | "asset_not_ready"
   | "asset_not_found"
   | "asset_storage_unavailable"
+  | "content_missing"
   | "content_invalid"
   | "content_unauthorized";
 

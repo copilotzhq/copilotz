@@ -3413,7 +3413,7 @@ Deno.test("callLlm accepts plain strings as text message content", async () => {
     },
   });
   const explicit = (value: string) => ({
-    kind: "text",
+    kind: "text" as const,
     role: "body",
     mediaType: "text/plain; charset=utf-8",
     value,
@@ -3439,10 +3439,10 @@ Deno.test("callLlm accepts plain strings as text message content", async () => {
   );
   const sent = durable.find((data) => data.status === "invoked");
   assert(sent);
-  assertEquals(
-    JSON.stringify(sent.input).includes("You title chat rooms."),
-    false,
-  );
+  assertEquals((sent.input as LlmCallInput).request.messages, [
+    { role: "system", content: [explicit("You title chat rooms.")] },
+    { role: "user", content: [explicit("Name this: "), explicit("a chat")] },
+  ]);
 
   // Shapes that are not text or entries are still rejected, as before.
   await assertRejects(

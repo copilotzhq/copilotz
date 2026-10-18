@@ -128,24 +128,3 @@ export function actionOwnershipStatement(
     },
   };
 }
-
-/** Compose transactional checks without adding SQL round trips. */
-export function combineActionStatements(
-  statements: readonly EventStatement<void>[],
-): EventStatement<void> {
-  return {
-    ctes: statements.flatMap((statement) => statement.ctes),
-    gate: statements.map((statement) => `(${statement.gate})`).join(" AND "),
-    effects: (source) =>
-      statements.flatMap((statement) => statement.effects(source)),
-    report: `jsonb_build_array(${
-      statements.map((statement) => statement.report).join(", ")
-    })`,
-    resolve(report, inserted) {
-      const values = typeof report === "string" ? JSON.parse(report) : report;
-      statements.forEach((statement, index) =>
-        statement.resolve(values?.[index], inserted)
-      );
-    },
-  };
-}

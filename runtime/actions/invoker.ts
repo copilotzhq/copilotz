@@ -5,6 +5,7 @@ import {
 } from "./deferral.ts";
 import {
   actionContentDeclaration,
+  durableActionContentInput,
   prepareActionContentInput,
 } from "./content.ts";
 import type { RuntimeContent } from "./types.ts";
@@ -523,6 +524,24 @@ function actionCaller(
       throw new TypeError(
         "Action content requires runtime content services and non-secret schemas.",
       );
+    }
+    // A recorded result remains replayable after its input content is collected.
+    // Only an attempt that still needs execution must open the captured pointers.
+    if (action.content) {
+      const terminal = await invoker.actionLifecycle.terminal(
+        frame.actionRunId,
+      );
+      if (terminal) {
+        if (captureRace) validateReceiptIdentity(terminal, frame);
+        else {
+          validateReceipt(
+            terminal,
+            frame,
+            durableActionContentInput(input, action.content),
+          );
+        }
+        return restoreTerminal(terminal);
+      }
     }
     const preparedContent = action.content
       ? await prepareActionContentInput(

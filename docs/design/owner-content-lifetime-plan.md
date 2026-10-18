@@ -870,6 +870,37 @@ were rerun separately. Public close, producer-output wiring, domain adoption and
 logical readback remain open; these diagnostics are not final library
 acceptance.
 
+## Completed-content settlement and replay protection
+
+The private lifecycle now uses one owner-content opt-in rather than an
+abort-only mode. Delivery completion/recovery, operation readiness and the final
+terminal UPDATE share the completed-stream proof: exact owner, revoked terminal
+capture, one accepted logical body, matching integrity/provenance and retained
+metadata. A unique partial producer-stream index enforces one body per stream
+and provides bounded indexed lookup; the predicate still rejects ambiguity in a
+corrupted live schema. Accepted seals do not depend on the original physical
+placement, current worker session or pending-only ownership state.
+
+Within the existing fenced settlement transaction, logical-body protection
+becomes the greater of its existing lower bound and the persisted operation
+completion time plus the existing 24-hour replay window. This applies to
+failed/cancelled operations as well. Longer protection survives, no-op
+extensions avoid a write, and terminal replay cannot refresh from retry time. A
+failed extension rolls back lifecycle, sequence and receipt effects with it.
+Owner identity scopes both proof and update. Legacy metadata pruning and owner
+delivery compaction remain closed; future owner pruning must pin the exact
+terminal/output/causal evidence while fresh adoption is permitted. No new
+protection timer or authority registry is introduced.
+
+Evidence: 31 settlement/catalog cases plus 46 schema steps, three exact
+seal-status cases, and 16 actual-host abort/disposal regressions. Source review
+and lint passed. These are scoped PGlite/transport diagnostics, not PostgreSQL
+or public-close acceptance. Actual close/result wiring and final semantic
+capture remain next. Final semantics must distinguish ContentRef presentation
+from Asset origin/metadata; the published stream-open descriptor remains
+immutable. Reusing bytes must retain the normalized final result's semantics,
+not substitute the observation descriptor.
+
 ## 2. Checkpoints, accepted seals and recovery
 
 - Reuse catalog checkpoint SQL under a narrow internal owner mutation boundary

@@ -2865,27 +2865,70 @@ function operationSettlementOutcomeSql(schema: string): string {
     ) THEN 'failed' ELSE 'completed' END`;
 }
 
-/** Current abort-only owner lifecycle. Unsupported sealed/asset states cannot
- * accidentally drain merely because their physical generation says revoked. */
-export function ownerStreamDrainedSql(alias = "stream"): string {
+/** Owner lifecycle proof shared by delivery completion and final settlement.
+ * Accepted logical seals survive promotion and later physical unavailability. */
+export function ownerStreamDrainedSql(
+  schema: string,
+  ownerParameter: string,
+  alias = "stream",
+): string {
+  if (!/^\$[1-9][0-9]*$/.test(ownerParameter)) {
+    throw new TypeError("Owner parameter must be a SQL placeholder.");
+  }
   const row = quoteEventIdentifier(alias);
-  return `(${row}.revocation_state='revoked' AND ${row}.asset_id IS NULL AND ${row}.digest IS NULL
+  const bodies = createOperationCatalogTables(schema).logicalBodies;
+  const producer = `CASE WHEN ${row}.placement_binding->>'kind'='processor'
+    THEN jsonb_build_object('kind','processor','processorId',${row}.placement_binding->>'processorId',
+      'sourceEventId',${row}.placement_binding->>'sourceEventId','deliveryId',${row}.placement_binding->>'deliveryId','deliveryAttempt',${row}.delivery_attempt)
+    ELSE jsonb_build_object('kind','action','actionId',${row}.placement_binding->>'actionId',
+      'actionRunId',CASE WHEN ${row}.placement_binding->>'placement'='owner-local' THEN ${row}.placement_binding->>'actionRunId' ELSE ${row}.placement_binding->>'executionId' END,
+      'sourceEventId',${row}.placement_binding->>'sourceEventId','deliveryId',${row}.placement_binding->>'deliveryId','deliveryAttempt',${row}.delivery_attempt) END`;
+  return `(${row}.owner_id=${ownerParameter} AND ${row}.revocation_state='revoked' AND ${row}.asset_id IS NULL
     AND ${row}.asset_retention='observation' AND (
-      (${row}.state='reserving' AND ${row}.stream_ordinal IS NULL AND ${row}.committed_offset=0
-        AND ${row}.outcome IS NULL AND ${row}.capture IS NULL AND ${row}.terminal_at IS NULL)
-      OR (${row}.state='terminal' AND ${row}.stream_ordinal>=1
-        AND ${row}.outcome IN ('failed','cancelled','superseded','abandoned')
-        AND ${row}.capture IN ('complete','truncated') AND ${row}.terminal_at IS NOT NULL
-        AND ${row}.availability IN ('retained','missing'))))`;
+      (${row}.digest IS NULL AND (
+        (${row}.state='reserving' AND ${row}.stream_ordinal IS NULL AND ${row}.committed_offset=0
+          AND ${row}.outcome IS NULL AND ${row}.capture IS NULL AND ${row}.terminal_at IS NULL)
+        OR (${row}.state='terminal' AND ${row}.stream_ordinal>=1
+          AND ${row}.outcome IN ('failed','cancelled','superseded','abandoned')
+          AND ${row}.capture IN ('complete','truncated') AND ${row}.terminal_at IS NOT NULL
+          AND ${row}.availability IN ('retained','missing'))))
+      OR (${row}.state='terminal' AND ${row}.stream_ordinal>=1 AND ${row}.outcome='completed'
+        AND ${row}.capture='complete' AND ${row}.terminal_at IS NOT NULL
+        AND ${row}.availability IN ('retained','missing') AND ${row}.digest ~ '^sha256:[0-9a-f]{64}$'
+        AND (SELECT COUNT(*)=1 AND bool_and((
+          body.owner_id=${row}.owner_id AND body.settlement_scope_id=${row}.operation_id
+          AND body.byte_length=${row}.committed_offset AND body.digest=${row}.digest
+          AND body.media_type=${row}.descriptor->>'mediaType' AND body.producer=(${producer})
+          AND body.pending_descriptor=CASE WHEN octet_length(${row}.descriptor::text)<=131072
+            THEN ${row}.descriptor - ARRAY['type','namespace','streamId','replayKey','streamOrdinal','causationId','correlationId'] ELSE NULL END
+          AND char_length(body.pending_ref) BETWEEN 1 AND 1024 AND body.retired_at IS NULL
+        ) IS TRUE) FROM ${bodies} AS body
+          WHERE body.namespace=${row}.namespace AND body.producer_stream_id=${row}.stream_id) IS TRUE)))`;
+}
+export type OwnerContentLifecycle = Readonly<{ ownerId: string }>;
+function contentLifecycleOwner(
+  value: OwnerContentLifecycle | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value.ownerId !== "string" || !value.ownerId ||
+    value.ownerId !== value.ownerId.trim() || value.ownerId.length > 1024
+  ) {
+    throw new TypeError(
+      "Owner content lifecycle requires its exact owner identity.",
+    );
+  }
+  return value.ownerId;
 }
 
 export async function readOperationSettlement(
   tx: SqlExecutor,
   schema: string,
   scope: OperationSettlementScope,
-  contentLifecycle?: "abort-only",
+  contentLifecycle?: OwnerContentLifecycle,
 ): Promise<OperationSettlementSnapshot | null> {
-  const allowContent = contentLifecycle === "abort-only";
+  const contentOwner = contentLifecycleOwner(contentLifecycle);
+  const allowContent = contentOwner !== undefined;
   const tables = createOperationCatalogTables(schema);
   await assertOperationCatalogFormat(tx, tables.metadata, {
     expected: OWNER_CONTENT_CATALOG_FINGERPRINT,
@@ -2907,11 +2950,15 @@ export async function readOperationSettlement(
       EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
         WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id
           ${
-      allowContent ? `AND (${ownerStreamDrainedSql()}) IS NOT TRUE` : ""
+      allowContent
+        ? `AND (${ownerStreamDrainedSql(schema, "$3")}) IS NOT TRUE`
+        : ""
     }) AS has_unresolved_streams,
       ${operationSettlementOutcomeSql(schema)} AS outcome
      FROM ${tables.operations} AS operation WHERE namespace=$1 AND operation_id=$2`,
-    [scope.namespace, scope.operationId],
+    allowContent
+      ? [scope.namespace, scope.operationId, contentOwner]
+      : [scope.namespace, scope.operationId],
   );
   const row = result.rows[0];
   if (!allowContent && row?.has_unresolved_streams) {
@@ -2950,7 +2997,7 @@ export async function terminalizeOperationSettlement(
   scope: OperationSettlementScope,
   options: Readonly<{
     commandTime: string;
-    contentLifecycle?: "abort-only";
+    contentLifecycle?: OwnerContentLifecycle;
     expected: Pick<
       OperationSettlementSnapshot,
       "nextEventOrdinal" | "nextStreamOrdinal"
@@ -2988,6 +3035,10 @@ export async function terminalizeOperationSettlement(
     current.outcome,
   ];
   const timestamp = operationCommandTimestamp(params, options.commandTime);
+  const contentOwner = contentLifecycleOwner(options.contentLifecycle);
+  const ownerParameter = contentOwner === undefined
+    ? undefined
+    : `$${params.push(contentOwner)}`;
   const updated = await tx.query(
     `UPDATE ${tables.operations} AS operation SET state=$3, updated_at=${timestamp},
       completed_at=COALESCE(completed_at,${timestamp})
@@ -3002,8 +3053,8 @@ export async function terminalizeOperationSettlement(
        AND NOT EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
          WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id
            ${
-      options.contentLifecycle === "abort-only"
-        ? `AND (${ownerStreamDrainedSql()}) IS NOT TRUE`
+      ownerParameter !== undefined
+        ? `AND (${ownerStreamDrainedSql(schema, ownerParameter)}) IS NOT TRUE`
         : ""
     })
        RETURNING operation_id`,
@@ -3012,6 +3063,26 @@ export async function terminalizeOperationSettlement(
   if (updated.rows.length !== 1) {
     throw new Error(
       "Operation settlement admitted work inside terminalization.",
+    );
+  }
+  if (contentOwner !== undefined) {
+    // Producer pin holds until this transaction settles. Persist the replay
+    // lower bound before any later owner pruning can remove producer evidence.
+    // An already-terminal replay returns above and cannot extend from retry time.
+    await tx.query(
+      `UPDATE ${tables.logicalBodies} AS body SET
+        protected_until=GREATEST(body.protected_until,operation.completed_at + $4 * interval '1 millisecond'),
+        updated_at=GREATEST(body.updated_at,operation.completed_at)
+       FROM ${tables.operations} AS operation
+       WHERE body.namespace=$1 AND body.settlement_scope_id=$2 AND body.owner_id=$3 AND body.retired_at IS NULL
+         AND operation.namespace=body.namespace AND operation.operation_id=body.settlement_scope_id
+         AND body.protected_until < operation.completed_at + $4 * interval '1 millisecond'`,
+      [
+        scope.namespace,
+        scope.operationId,
+        contentOwner,
+        DEFAULT_OPERATION_REPLAY_RETENTION_MS,
+      ],
     );
   }
   return { ...current, state: current.outcome };

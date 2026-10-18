@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 15:07 UTC.
+Updated: 18 October 2026, 15:37 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -64,7 +64,24 @@ source/dependency hashes match. That accepted checkpoint had six unwired content
 modules, down from eight through actual host imports. Current content WIP has
 not completed a new full-static or full-suite gate.
 
-## Content integration preservation checkpoint (unaccepted WIP)
+## 15:37 completed-content settlement prerequisite (private WIP)
+
+The shared owner completion predicate now recognizes verified completed logical
+bodies as well as confirmed abort cleanup. Delivery barriers, readiness and the
+final operation UPDATE use that same proof and exact owner identity. The
+existing settlement transaction extends pending protection through the persisted
+completion time plus the existing 24-hour replay window, for successful, failed
+and cancelled operations. Replay cannot extend from a later retry time. Owner
+pruning stays closed.
+
+Scoped PGlite evidence: 31 settlement/catalog tests plus 46 schema steps, three
+seal-status tests, and 16 actual-host abort/disposal regressions across both
+placements, parent kinds and transports. These do not constitute public close or
+end-to-end generation acceptance. Current work is the bounded final semantic
+descriptor and actual close/result wiring, followed by atomic Message adoption
+and logical readback. No checklist completion is added.
+
+## Historical 12:36 content integration preservation checkpoint (unaccepted WIP)
 
 The private host now connects owner-mediated `streams.open/append/abort` and
 invocation disposal through all four Action/Processor drivers, actual local raw
@@ -86,13 +103,13 @@ focused correction. The current draft has not received a consolidated
 PostgreSQL/PGlite independent gate. No checkbox or complete-content milestone is
 closed by these results.
 
-Remaining in this same slice: bounded owner-alarm quiet renewal using the
-original current entry/ordinal and fresh grants; hidden/orphan reservation
-cleanup; completion/retry and shutdown coordination; failure/lost-reply tests;
-final static/artifact/backend review. `close`, `retain`, `follow`,
-retained-history adoption and public/default activation remain unavailable. No
-legacy writer behavior is extended, no new authority registry/lease is
-introduced, and no package is merged or published.
+Remaining at the 12:36 checkpoint (superseded by the later entries below):
+bounded owner-alarm quiet renewal using the original current entry/ordinal and
+fresh grants; hidden/orphan reservation cleanup; completion/retry and shutdown
+coordination; failure/lost-reply tests; final static/artifact/backend review.
+`close`, `retain`, `follow`, retained-history adoption and public/default
+activation remain unavailable. No legacy writer behavior is extended, no new
+authority registry/lease is introduced, and no package is merged or published.
 
 ## Historical 13:16 working-tree status and remaining sequence
 

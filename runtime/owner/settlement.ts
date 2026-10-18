@@ -160,7 +160,7 @@ export function createOwnerOperationSettlement(
     session: SqlSession;
     catalog: OperationCatalogCore;
     /** Private opt-in; unconfigured owners refuse all stream history. */
-    contentLifecycle?: "abort-only";
+    contentLifecycle?: "owner";
     maxDrains?: number;
     maxOutstandingDrains?: number;
     maxConcurrentChecks?: number;
@@ -215,7 +215,7 @@ export function createOwnerOperationSettlement(
     schema,
     session,
     catalog,
-    contentLifecycle,
+    contentLifecycle: contentMode,
     authorizeControl,
     selectDrains,
     authorizeDrain,
@@ -224,6 +224,12 @@ export function createOwnerOperationSettlement(
     publish,
   } = options;
   text(ownerId);
+  if (contentMode !== undefined && contentMode !== "owner") {
+    throw new TypeError("Unsupported owner content lifecycle.");
+  }
+  const contentLifecycle = contentMode === "owner"
+    ? Object.freeze({ ownerId })
+    : undefined;
   if (catalog.databaseSchema !== schema) {
     throw new TypeError("Settlement catalog schema does not match.");
   }

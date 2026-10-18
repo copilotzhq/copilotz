@@ -324,7 +324,7 @@ export type OwnerHostOptions = Readonly<{
   registry: PluginRegistry;
   policy: OwnerHostPolicy;
   preparation?: OwnerHostPreparationOptions;
-  /** Private fresh-epoch abort-only writers; supplied physical store is already provisioned. */
+  /** Private fresh-epoch catalog-backed writers; supplied physical store is already provisioned. */
   content?: Readonly<
     {
       backendId: string;
@@ -677,8 +677,10 @@ export async function createOwnerHost(
   ) {
     const rows = await tx.query(
       `SELECT 1 FROM ${operationTables.operationStreams} AS stream WHERE operation_id=$1
-        AND placement_binding->>'deliveryId'=$2 AND (${ownerStreamDrainedSql()}) IS NOT TRUE LIMIT 1`,
-      [delivery.settlementScopeId, delivery.id],
+        AND placement_binding->>'deliveryId'=$2 AND (${
+        ownerStreamDrainedSql(schema, "$3")
+      }) IS NOT TRUE LIMIT 1`,
+      [delivery.settlementScopeId, delivery.id, ownerId],
     );
     if (rows.rows.length) {
       unavailable("Delivery content cleanup is unresolved.");
@@ -692,10 +694,12 @@ export async function createOwnerHost(
         const rows = await tx.query(
           contentConfiguration
             ? `SELECT 1 FROM ${operationTables.operationStreams} AS stream WHERE operation_id=$1
-                AND placement_binding->>'deliveryId'=$2 AND (${ownerStreamDrainedSql()}) IS NOT TRUE LIMIT 1`
+                AND placement_binding->>'deliveryId'=$2 AND (${
+              ownerStreamDrainedSql(schema, "$3")
+            }) IS NOT TRUE LIMIT 1`
             : `SELECT 1 FROM ${operationTables.operationStreams} WHERE operation_id=$1 LIMIT 1`,
           contentConfiguration
-            ? [input.operationId, input.deliveryId]
+            ? [input.operationId, input.deliveryId, ownerId]
             : [input.operationId],
         );
         if (rows.rows.length) {
@@ -1293,7 +1297,7 @@ export async function createOwnerHost(
     schema,
     session,
     catalog,
-    contentLifecycle: contentConfiguration ? "abort-only" : undefined,
+    contentLifecycle: contentConfiguration ? "owner" : undefined,
     maxConcurrentChecks: maxActive,
     authorizeControl(_tx, caller, target) {
       if (ready()) {

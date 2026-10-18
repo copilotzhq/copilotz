@@ -1362,6 +1362,8 @@ export function createOwnerStreamReservations(
        (b.logical_body_id=$4 AND b.pending_ref=$5 AND b.digest=s.digest
         AND b.byte_length=s.committed_offset AND b.media_type=s.descriptor->>'mediaType'
         AND b.producer=$6::jsonb AND b.retired_at IS NULL
+        AND b.pending_descriptor=CASE WHEN octet_length(s.descriptor::text)<=131072
+          THEN s.descriptor - ARRAY['type','namespace','streamId','replayKey','streamOrdinal','causationId','correlationId'] ELSE NULL END
         AND s.capture='complete' AND s.revocation_state='revoked') AS matches,
        CASE WHEN char_length(b.pending_ref) BETWEEN 1 AND 1024 THEN b.pending_ref END AS pending_ref,
        CASE WHEN char_length(b.media_type) BETWEEN 1 AND 1024 THEN b.media_type END AS media_type,

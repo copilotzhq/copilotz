@@ -352,6 +352,16 @@ export const OWNER_CATALOG_LAYOUT = {
         "0 0",
         null,
       ],
+      "copilotz_operation_bodies_stream_idx": [
+        "btree",
+        true,
+        false,
+        ["namespace", "producer_stream_id"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        "producer_stream_id IS NOT NULL",
+      ],
     },
     "copilotz_operation_catalog_metadata": {
       "copilotz_operation_catalog_metadata_pkey": [

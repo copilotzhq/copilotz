@@ -229,6 +229,7 @@ export function operationCatalogSchemaStatements(
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_pending_idx" ON ${tables.logicalBodies}(namespace,pending_ref)`,
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_adoption_idx" ON ${tables.logicalBodies}(namespace,adoption_key) WHERE adoption_key IS NOT NULL`,
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_asset_idx" ON ${tables.logicalBodies}(namespace,asset_id) WHERE asset_id IS NOT NULL`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_stream_idx" ON ${tables.logicalBodies}(namespace,producer_stream_id) WHERE producer_stream_id IS NOT NULL`,
         `CREATE INDEX IF NOT EXISTS "copilotz_operation_bodies_producer_idx" ON ${tables.logicalBodies}(owner_id,settlement_scope_id)`,
         `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_renewal_idx"
        ON ${tables.operationStreams} (owner_id, protection_deadline, namespace, operation_id, stream_id)

@@ -1932,9 +1932,11 @@ Deno.test("owner seal status refuses contradictory retained body evidence", () =
       pending_ref: "substituted",
       logical_body_id: "substituted",
       producer: JSON.stringify({ kind: "processor", processorId: "other" }),
+      pending_descriptor: JSON.stringify({}),
     };
     for (const [field, value] of Object.entries(patches)) {
-      const cast = field === "producer" ? "::jsonb" : "";
+      const isJson = ["producer", "pending_descriptor"].includes(field);
+      const cast = isJson ? "::jsonb" : "";
       await f.db.query(
         `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
         [value],
@@ -1945,9 +1947,7 @@ Deno.test("owner seal status refuses contradictory retained body evidence", () =
       await f.db.query(
         `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
         [
-          field === "producer"
-            ? JSON.stringify(original[field])
-            : original[field],
+          isJson ? JSON.stringify(original[field]) : original[field],
         ],
       );
     }

@@ -1,4 +1,7 @@
-import { insertTestOwnerStream } from "../testing/owner-catalog.ts";
+import {
+  insertTestOwnerBody,
+  insertTestOwnerStream,
+} from "../testing/owner-catalog.ts";
 import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -57,6 +60,7 @@ async function within(promise: Promise<unknown>) {
 }
 async function fixture(
   limits: {
+    contentLifecycle?: "owner";
     drainTimeoutMs?: number;
     maxOutstandingDrains?: number;
     maxConcurrentChecks?: number;
@@ -92,6 +96,8 @@ async function fixture(
     published: deferred(),
     statements: [] as string[],
     streamRace: undefined as OperationSettlementScope | undefined,
+    bodyRace: false,
+    rejectProtection: false,
   };
   const session: SqlSession = {
     query: db.query,
@@ -115,6 +121,26 @@ async function fixture(
               await insertTestOwnerStream(tx, target, {
                 revocation: "revoked",
               });
+            }
+            if (
+              state.bodyRace &&
+              sql.includes(
+                'UPDATE "public"."copilotz_operations" AS operation SET state=$3',
+              )
+            ) {
+              state.bodyRace = false;
+              await tx.query("UPDATE copilotz_operation_bodies SET digest=$1", [
+                `sha256:${"b".repeat(64)}`,
+              ]);
+            }
+            if (
+              state.rejectProtection &&
+              sql.includes(
+                'UPDATE "public"."copilotz_operation_bodies" AS body SET',
+              )
+            ) {
+              state.rejectProtection = false;
+              throw new Error("protection update rejected");
             }
             return await tx.query(sql, params);
           },
@@ -1089,5 +1115,319 @@ test("settlement callbacks cannot redirect actual catalog drain event or receipt
   } finally {
     f.owner.stop();
     await f.db.close();
+  }
+});
+
+// Structural settlement fixtures: physical sealing itself is exercised through
+// the actual coordinator suite, not synthesized by this helper.
+async function acceptedBody(
+  f: Awaited<ReturnType<typeof fixture>>,
+  root: Awaited<ReturnType<typeof f.seed>>,
+) {
+  await insertTestOwnerStream(f.db, root, {
+    state: "terminal",
+    revocation: "revoked",
+  });
+  const binding = {
+    placement: "owner-local",
+    ownerId: "owner",
+    epoch: 1,
+    holderId: "first",
+    attemptId: `attempt:${root.deliveryId}`,
+    namespace: root.namespace,
+    sourceEventId: root.eventId,
+    deliveryId: root.deliveryId,
+    kind: "processor",
+    processorId: "fixture",
+    consumerId: "test.action",
+  };
+  const digest =
+    "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  await f.db.query(
+    'UPDATE copilotz_operation_streams SET outcome=\'completed\',capture=\'complete\',digest=$1,committed_offset=0,asset_retention=\'observation\',placement_binding=$2::jsonb,descriptor=descriptor || \'{"mediaType":"text/plain","kind":"text","role":"assistant","metadata":{}}\'::jsonb',
+    [digest, JSON.stringify(binding)],
+  );
+  await insertTestOwnerBody(f.db, root);
+  await f.db.query(
+    "UPDATE copilotz_operation_bodies SET producer_stream_id='unsupported-stream',producer=$1::jsonb,protected_until=$2,pending_descriptor=pending_descriptor||'{\"metadata\":{}}'::jsonb",
+    [
+      JSON.stringify({
+        kind: "processor",
+        processorId: "fixture",
+        sourceEventId: root.eventId,
+        deliveryId: root.deliveryId,
+        deliveryAttempt: 1,
+      }),
+      start,
+    ],
+  );
+  await f.db.query(
+    "UPDATE copilotz_operations SET next_stream_ordinal=2 WHERE operation_id=$1",
+    [root.operationId],
+  );
+}
+async function protection(f: Awaited<ReturnType<typeof fixture>>) {
+  const row = (await f.db.query(
+    "SELECT protected_until::text AS deadline FROM copilotz_operation_bodies WHERE logical_body_id='logical-fixture'",
+  )).rows[0];
+  return new Date(String(row.deadline)).toISOString();
+}
+test("owner content settlement extends pending protection from actual completion for every outcome", async () => {
+  for (const outcome of ["completed", "failed", "cancelled"]) {
+    const f = await fixture({ contentLifecycle: "owner" });
+    try {
+      const root = await f.seed(
+        outcome === "failed" ? { status: "failed" } : {},
+      );
+      await acceptedBody(f, root);
+      if (outcome === "cancelled") {
+        await f.db.query(
+          "UPDATE copilotz_operations SET cancellation_requested_at=$1",
+          [end],
+        );
+      }
+      await f.run(root);
+      assert.equal((await f.status(root)).state, outcome);
+      assert.equal(await protection(f), "2099-01-03T00:00:00.000Z");
+      f.state.time = "2099-01-05T00:00:00.000Z";
+      await f.settlement.run({
+        boundary: f.owner,
+        caller: f.caller,
+        target: { namespace: root.namespace, operationId: root.operationId },
+        occurrence: "later-replay",
+      });
+      assert.equal(await protection(f), "2099-01-03T00:00:00.000Z");
+      assert.equal((await f.events()).rows.length, 1);
+    } finally {
+      f.owner.stop();
+      await f.db.close();
+    }
+  }
+});
+test("owner content settlement preserves longer protection, adopted bodies and missing physical availability", async () => {
+  const f = await fixture({ contentLifecycle: "owner" });
+  try {
+    const root = await f.seed();
+    await acceptedBody(f, root);
+    await f.db.query(
+      "UPDATE copilotz_operation_bodies SET protected_until='2100-01-01T00:00:00Z',adoption_key='slot',adoption_fingerprint=$1,asset_id='asset',domain_owner_id='message',domain_owner_type='message',current_copy=$2::jsonb",
+      [
+        `sha256:${"c".repeat(64)}`,
+        JSON.stringify({
+          backendId: "promoted",
+          key: "new-copy",
+          versionToken: "new-version",
+        }),
+      ],
+    );
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET availability='missing'",
+    );
+    await f.run(root);
+    assert.equal((await f.status(root)).state, "completed");
+    assert.equal(await protection(f), "2100-01-01T00:00:00.000Z");
+  } finally {
+    f.owner.stop();
+    await f.db.close();
+  }
+});
+test("owner content settlement rejects contradictory, ambiguous and missing logical bodies", async () => {
+  const f = await fixture({ contentLifecycle: "owner" });
+  try {
+    const root = await f.seed();
+    await acceptedBody(f, root);
+    const original =
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows[0];
+    const patches = {
+      digest: `sha256:${"b".repeat(64)}`,
+      byte_length: 1,
+      media_type: "image/png",
+      settlement_scope_id: "other",
+      owner_id: "other",
+      producer: JSON.stringify({ kind: "processor", processorId: "other" }),
+      pending_descriptor: JSON.stringify({}),
+      retired_at: end,
+    };
+    for (const [field, value] of Object.entries(patches)) {
+      const isJson = ["producer", "pending_descriptor"].includes(field);
+      const cast = isJson ? "::jsonb" : "";
+      await f.db.query(
+        `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
+        [value],
+      );
+      assert.deepEqual(await f.run(root), { status: "pending" });
+      assert.equal((await f.status(root)).state, "accepted");
+      await f.db.query(
+        `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
+        [
+          isJson ? JSON.stringify(original[field]) : original[field],
+        ],
+      );
+      const ready = await f.owner.project(f.caller, OWNER_OPERATION_READINESS, {
+        namespace: root.namespace,
+        operationId: root.operationId,
+      }) as { status: string };
+      assert.equal(ready.status, "ready");
+    }
+    await f.db.query("UPDATE copilotz_operation_streams SET owner_id='other'");
+    await f.db.query("UPDATE copilotz_operation_bodies SET owner_id='other'");
+    assert.deepEqual(await f.run(root), { status: "pending" });
+    await f.db.query("UPDATE copilotz_operation_streams SET owner_id='owner'");
+    await f.db.query("UPDATE copilotz_operation_bodies SET owner_id='owner'");
+    // The schema prevents duplicates; also prove fail-closed completion if an
+    // external corruption removes the index while this fixture owner is live.
+    await assert.rejects(
+      f.db.query(
+        "INSERT INTO copilotz_operation_bodies SELECT (jsonb_populate_record(NULL::copilotz_operation_bodies,to_jsonb(body)||jsonb_build_object('logical_body_id','duplicate','pending_ref','duplicate'))).* FROM copilotz_operation_bodies body",
+      ),
+    );
+    await f.db.query("DROP INDEX copilotz_operation_bodies_stream_idx");
+    await f.db.query(
+      "INSERT INTO copilotz_operation_bodies SELECT (jsonb_populate_record(NULL::copilotz_operation_bodies,to_jsonb(body)||jsonb_build_object('logical_body_id','duplicate','pending_ref','duplicate'))).* FROM copilotz_operation_bodies body",
+    );
+    assert.deepEqual(await f.run(root), { status: "pending" });
+    await f.db.query("DELETE FROM copilotz_operation_bodies");
+    assert.deepEqual(await f.run(root), { status: "pending" });
+    assert.equal((await f.events()).rows.length, 0);
+  } finally {
+    f.owner.stop();
+    await f.db.close();
+  }
+});
+test("owner content final guard and protection failure roll back the lifecycle transaction", async () => {
+  for (const fault of ["bodyRace", "rejectProtection"] as const) {
+    const f = await fixture({ contentLifecycle: "owner" });
+    try {
+      const root = await f.seed();
+      await acceptedBody(f, root);
+      const before =
+        (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows;
+      f.state[fault] = true;
+      await assert.rejects(f.run(root));
+      assert.equal((await f.status(root)).state, "accepted");
+      assert.equal((await f.events()).rows.length, 0);
+      assert.deepEqual(
+        (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+        before,
+      );
+      await f.run(root);
+      assert.equal((await f.status(root)).state, "completed");
+    } finally {
+      f.owner.stop();
+      await f.db.close();
+    }
+  }
+});
+
+test("owner content lost settlement reply preserves the original replay deadline across owner succession", async () => {
+  const f = await fixture({ contentLifecycle: "owner" });
+  let successor: ReturnType<typeof f.boundary> | undefined;
+  try {
+    const root = await f.seed();
+    await acceptedBody(f, root);
+    const target = { namespace: root.namespace, operationId: root.operationId };
+    const ready = await f.owner.project(
+      f.caller,
+      OWNER_OPERATION_READINESS,
+      target,
+    ) as { ticket: OwnerJson };
+    f.state.time = end;
+    f.state.loseReply = true;
+    await assert.rejects(f.owner.execute(f.caller, {
+      kind: OWNER_OPERATION_SETTLEMENT,
+      domain: "occurrence",
+      key: ownerOperationSettlementKey("owner", target, "lost-content"),
+      intent: { occurrence: "lost-content", ticket: ready.ticket },
+    }));
+    assert.equal(f.owner.state, "stopped");
+    assert.equal((await f.status(root)).state, "completed");
+    assert.equal(await protection(f), "2099-01-03T00:00:00.000Z");
+    successor = f.boundary("successor");
+    await successor.acquire(1);
+    const caller: OwnerCaller = {
+      principal: {
+        kind: "owner-control",
+        ownerId: "owner",
+        epoch: 2,
+        holderId: "successor",
+      },
+      ownerEpoch: 2,
+    };
+    f.state.time = "2099-01-05T00:00:00.000Z";
+    await f.settlement.run({
+      boundary: successor,
+      caller,
+      target,
+      occurrence: "retry-content",
+    });
+    assert.equal(await protection(f), "2099-01-03T00:00:00.000Z");
+    assert.equal((await f.events()).rows.length, 1);
+  } finally {
+    f.owner.stop();
+    successor?.stop();
+    await f.db.close();
+  }
+});
+
+test("owner content settlement recognizes local and worker producer facts without session authority", async () => {
+  for (const shape of ["local-action", "worker-action", "worker-processor"]) {
+    const f = await fixture({ contentLifecycle: "owner" });
+    try {
+      const root = await f.seed();
+      await acceptedBody(f, root);
+      const common = {
+        namespace: root.namespace,
+        sourceEventId: root.eventId,
+        deliveryId: root.deliveryId,
+      };
+      const binding = shape === "local-action"
+        ? {
+          ...common,
+          placement: "owner-local",
+          kind: "action",
+          ownerId: "owner",
+          epoch: 1,
+          holderId: "first",
+          attemptId: "attempt",
+          actionId: "fixture.action",
+          actionRunId: "run",
+        }
+        : {
+          ...common,
+          placement: "worker",
+          workerId: "worker",
+          workerAttemptId: "worker-attempt",
+          sessionGeneration: 1,
+          sessionId: "closed-session",
+          parentOperationId: root.operationId,
+          assignmentId: "assignment",
+          dispatchAttemptId: "dispatch",
+          ...(shape === "worker-processor"
+            ? { kind: "processor", processorId: "fixture" }
+            : { actionId: "fixture.action", executionId: "run" }),
+        };
+      const producer = {
+        sourceEventId: root.eventId,
+        deliveryId: root.deliveryId,
+        deliveryAttempt: 1,
+        ...(shape === "worker-processor"
+          ? { kind: "processor", processorId: "fixture" }
+          : { kind: "action", actionId: "fixture.action", actionRunId: "run" }),
+      };
+      await f.db.query(
+        "UPDATE copilotz_operation_streams SET placement_binding=$1::jsonb",
+        [JSON.stringify(binding)],
+      );
+      await f.db.query(
+        "UPDATE copilotz_operation_bodies SET producer=$1::jsonb",
+        [JSON.stringify(producer)],
+      );
+      await f.run(root);
+      assert.equal((await f.status(root)).state, "completed");
+      assert.equal(await protection(f), "2099-01-03T00:00:00.000Z");
+    } finally {
+      f.owner.stop();
+      await f.db.close();
+    }
   }
 });

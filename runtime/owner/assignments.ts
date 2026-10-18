@@ -1,6 +1,10 @@
 /** Narrow owner control metadata. A reservation alone never proves current
  * execution authority, Started, readiness, or an external effect. */
 import {
+  ownerAuthorityLock,
+  type OwnerAuthorityReadMode,
+} from "./authority-read.ts";
+import {
   createCoreTableNames,
   quoteEventIdentifier,
 } from "../events/schema.ts";
@@ -547,6 +551,7 @@ export function createOwnerAssignmentControl(
   async function resolveStarted(
     tx: SqlExecutor,
     caller: OwnerCaller,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerAssignmentBinding | undefined> {
     if (
       caller.principal.kind !== "worker" || Object.hasOwn(caller, "workerId")
@@ -574,7 +579,9 @@ export function createOwnerAssignmentControl(
          e.owner_id AS source_owner,e.id AS source_event_id,e.namespace AS source_namespace,CASE WHEN jsonb_typeof(e.metadata->'actionId')='string' AND char_length(e.metadata->>'actionId')<=1024 THEN e.metadata->>'actionId' END AS source_action_id,
          CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
        FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
-       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE FOR SHARE OF a`,
+       WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE ${
+        ownerAuthorityLock(readMode, " FOR SHARE OF a")
+      }`,
       [ownerId, identity.ownerEpoch, key],
     );
     if (
@@ -605,12 +612,13 @@ export function createOwnerAssignmentControl(
     }
     return { ...value };
   }
-  /** Resolve reservation facts inside the actual owner command transaction.
-   * The supplied executor must retain the owner-row lock through the assignment
-   * read. An ambient session or a returned binding is not execution authority. */
+  /** Resolve reservation facts under the owner lock, or under certified backend
+   * exclusivity for read-only authority checks. An ambient session or returned
+   * binding is not execution authority. Mutating callers use locking mode. */
   async function resolveLocal(
     tx: SqlExecutor,
     caller: OwnerCaller,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerLocalAssignmentBinding | undefined> {
     if (
       !currentLocal || caller.principal.kind !== "owner-local" ||
@@ -650,7 +658,9 @@ export function createOwnerAssignmentControl(
     const key = ownerAssignmentKey(ownerId, before);
     // Direct internal resolution preserves the owner -> assignment lock order.
     const fence = await tx.query(
-      `SELECT owner FROM ${epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR SHARE`,
+      `SELECT owner FROM ${epochs} WHERE owner=$1 AND epoch=$2 AND holder=$3${
+        ownerAuthorityLock(readMode, " FOR SHARE")
+      }`,
       [ownerId, principal.epoch, principal.holderId],
     );
     if (fence.rows.length !== 1) return undefined;
@@ -661,7 +671,7 @@ export function createOwnerAssignmentControl(
          CASE WHEN jsonb_typeof(e.metadata->'actionRunId')='string' AND char_length(e.metadata->>'actionRunId')<=1024 THEN e.metadata->>'actionRunId' END AS source_action_run_id,d.consumer_id AS source_consumer
        FROM ${name} a JOIN ${tables.event_deliveries} d ON d.id=a.delivery_id JOIN ${tables.events} e ON e.id=d.event_id
        WHERE a.owner=$1 AND a.epoch=$2 AND a.assignment_key=$3 AND a.retired=FALSE
-         FOR SHARE OF a`,
+         ${ownerAuthorityLock(readMode, " FOR SHARE OF a")}`,
       [ownerId, principal.epoch, key],
     );
     const after = expected();

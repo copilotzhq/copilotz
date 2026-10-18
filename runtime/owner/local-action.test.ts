@@ -240,8 +240,8 @@ async function fixture(
         if (state.failRetirement) throw new Error("retirement failed");
       },
     },
-    async resolveAssignment(tx, who) {
-      const current = await assignments.resolveLocal(tx, who);
+    async resolveAssignment(tx, who, _time, readMode) {
+      const current = await assignments.resolveLocal(tx, who, readMode);
       if (!current || current.kind !== "action") return undefined;
       return {
         ...current,
@@ -1157,6 +1157,36 @@ test("local private witness is rechecked after the final captured-body read", as
       "private handle must be revoked after policy during the final SQL read",
     );
     assert.deepEqual(await snapshot(f.db), before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("local Action authority reuses checks in an exclusive read-only scope", async () => {
+  const f = await fixture();
+  try {
+    await f.start();
+    await f.db.withReadSnapshot!(async (scope) => {
+      const run = async (
+        tx: SqlExecutor,
+        mode: "locking" | "exclusive-read",
+      ) => {
+        const live = await f.execution.authorizeLive(
+          tx,
+          f.caller(),
+          start,
+          mode,
+        );
+        assert.equal(live.deliveryId, f.source.deliveryId);
+        f.state.ctx = false;
+        await assert.rejects(
+          f.execution.authorizeLive(tx, f.caller(), start, mode),
+        );
+      };
+      if (scope.kind === "exclusive") {
+        await run(scope.snapshot, "exclusive-read");
+      } else await scope.current((tx) => run(tx, "locking"));
+    });
   } finally {
     await f.close();
   }

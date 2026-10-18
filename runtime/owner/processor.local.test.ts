@@ -292,10 +292,10 @@ async function fixture(options: {
           return privateCurrent(who) === entry &&
             (phase === "ctx" ? state.ctx : state.settlement);
         },
-        async resolveAssignment(tx, who) {
+        async resolveAssignment(tx, who, _time, readMode) {
           const entry = privateCurrent(who);
           if (!entry) return undefined;
-          const resolved = await assignments.resolveLocal(tx, who);
+          const resolved = await assignments.resolveLocal(tx, who, readMode);
           if (!resolved || resolved.kind !== "processor") return undefined;
           await state.resolvePolicy?.(tx);
           return {
@@ -2114,6 +2114,36 @@ test("local Processor settlement recheck ignores unrelated ctx revocation", asyn
     assert.equal(f.first.knownEnd?.status, "succeeded");
     assert.equal(f.state.ctx, false);
     assert.equal(f.state.settlement, true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("local Processor authority reuses validation in an exclusive read-only scope", async () => {
+  const f = await fixture({});
+  try {
+    await f.start();
+    await f.db.withReadSnapshot!(async (scope) => {
+      const run = async (
+        tx: SqlExecutor,
+        mode: "locking" | "exclusive-read",
+      ) => {
+        const live = await f.commands.authorizeLocalLive(
+          tx,
+          f.caller(),
+          f.state.time,
+          mode,
+        );
+        assert.equal(live.assignment.deliveryId, f.source.deliveryId);
+        f.state.current = false;
+        await assert.rejects(
+          f.commands.authorizeLocalLive(tx, f.caller(), f.state.time, mode),
+        );
+      };
+      if (scope.kind === "exclusive") {
+        await run(scope.snapshot, "exclusive-read");
+      } else await scope.current((tx) => run(tx, "locking"));
+    });
   } finally {
     await f.close();
   }

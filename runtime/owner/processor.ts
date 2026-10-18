@@ -1,5 +1,9 @@
 /** Private durable Processor commands. Delivery bookkeeping is not an Action
  * invocation: no synthetic Action frame, open_action or terminal is created. */
+import {
+  ownerAuthorityLock,
+  type OwnerAuthorityReadMode,
+} from "./authority-read.ts";
 import { isContentRef } from "../content/schema.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
@@ -106,7 +110,12 @@ export type OwnerLocalProcessorSettlementState = Readonly<{
 }>;
 type LocalPhase = "start" | "ctx" | "settlement";
 export type OwnerLocalProcessorOptions = Readonly<{
-  resolveAssignment(tx: SqlExecutor, caller: OwnerCaller, time: string):
+  resolveAssignment(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+    readMode?: OwnerAuthorityReadMode,
+  ):
     | OwnerLocalProcessorAssignment
     | undefined
     | Promise<OwnerLocalProcessorAssignment | undefined>;
@@ -363,6 +372,7 @@ export function createOwnerProcessorCommands(
       tx: SqlExecutor,
       caller: OwnerCaller,
       commandTime: string,
+      readMode?: OwnerAuthorityReadMode,
     ):
       | OwnerProcessorAssignment
       | undefined
@@ -432,8 +442,14 @@ export function createOwnerProcessorCommands(
     caller: OwnerCaller,
     commandTime: string,
     mode: "claim" | "input" | "complete" | "mutation",
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
-    const found = await options.resolveAssignment(tx, caller, commandTime);
+    const found = await options.resolveAssignment(
+      tx,
+      caller,
+      commandTime,
+      readMode,
+    );
     if (!found) refuse("Processor assignment is no longer current.");
     const a = structuredClone(found);
     for (
@@ -480,7 +496,9 @@ export function createOwnerProcessorCommands(
     const scopes = await tx.query<
       { state: string; cancellation_requested_at: unknown }
     >(
-      `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+      `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [a.namespace, source.settlement_scope_id],
     );
     const scope = scopes.rows[0];
@@ -492,7 +510,9 @@ export function createOwnerProcessorCommands(
       refuse("Processor scope was cancelled.");
     }
     await tx.query(
-      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
+      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [a.deliveryId],
     );
     const store = readStore(tx);
@@ -560,10 +580,11 @@ export function createOwnerProcessorCommands(
     state: Authorized,
     data: OwnerJson,
     mode: "claim" | "input" | "mutation",
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
     // Re-resolve grants after event policy without recursively invoking it.
     // Then reread durable facts and the separately stored event body.
-    const after = await current(tx, caller, time, mode);
+    const after = await current(tx, caller, time, mode, readMode);
     if (
       exact(ownerAssignmentFacts(after.assignment)) !==
         exact(ownerAssignmentFacts(state.assignment)) ||
@@ -629,6 +650,7 @@ export function createOwnerProcessorCommands(
     caller: OwnerCaller,
     binding: OwnerLocalProcessorAssignmentBinding,
     start: boolean,
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
     if (!local || binding.ownerId !== options.ownerId) {
       refuse("Local Processor capability is unavailable.");
@@ -645,7 +667,9 @@ export function createOwnerProcessorCommands(
     const fence = await tx.query(
       `SELECT owner FROM ${
         ownerTableNames(options.schema).epochs
-      } WHERE owner=$1 AND epoch=$2 AND holder=$3 FOR SHARE`,
+      } WHERE owner=$1 AND epoch=$2 AND holder=$3${
+        ownerAuthorityLock(readMode, " FOR SHARE")
+      }`,
       [options.ownerId, binding.epoch, binding.holderId],
     );
     if (fence.rows.length !== 1) refuse("Local Processor owner fence changed.");
@@ -654,6 +678,7 @@ export function createOwnerProcessorCommands(
     tx: SqlExecutor,
     binding: OwnerLocalProcessorAssignmentBinding,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<LocalRead> {
     const processor = options.registry.processorForConsumer(binding.consumerId);
     if (!processor || processor.id !== binding.processorId) {
@@ -666,14 +691,18 @@ export function createOwnerProcessorCommands(
     if (!first) refuse("Local Processor delivery is unavailable.");
     text(first.settlement_scope_id);
     const scope = (await tx.query<{ state: string; cancelled: string | null }>(
-      `SELECT state,cancellation_requested_at::text AS cancelled FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+      `SELECT state,cancellation_requested_at::text AS cancelled FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [binding.namespace, first.settlement_scope_id],
     )).rows[0];
     if (!scope || !["accepted", "running"].includes(scope.state)) {
       refuse("Local Processor scope is no longer live.");
     }
     await tx.query(
-      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
+      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [binding.deliveryId],
     );
     const store = readStore(tx);
@@ -718,7 +747,7 @@ export function createOwnerProcessorCommands(
             AND a.delivery_id=d.id AND a.binding=$10::jsonb AND a.retired=FALSE) AS reserved
        FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
        JOIN ${operationTables.operations} o ON o.namespace=$7 AND o.operation_id=d.settlement_scope_id
-       WHERE d.id=$1 FOR UPDATE OF d`,
+       WHERE d.id=$1${ownerAuthorityLock(readMode, " FOR UPDATE OF d")}`,
       [
         binding.deliveryId,
         binding.sourceEventId,
@@ -832,18 +861,20 @@ export function createOwnerProcessorCommands(
     caller: OwnerCaller,
     time: string,
     phase: "ctx" | "settlement",
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
     if (!local) refuse("Local Processor capability is unavailable.");
     const found = await local.resolveAssignment(
       tx,
       structuredClone(caller),
       time,
+      readMode,
     );
     if (!found) refuse("Local Processor assignment is no longer current.");
     const assignment = localAssignment(found);
     const binding = bindingOf(assignment);
-    await localFence(tx, caller, binding, false);
-    const read = await readLocal(tx, binding, time);
+    await localFence(tx, caller, binding, false, readMode);
+    const read = await readLocal(tx, binding, time, readMode);
     liveLocal(read, assignment, phase);
     privateCurrent(caller, assignment, phase);
     return { assignment, read };
@@ -853,12 +884,14 @@ export function createOwnerProcessorCommands(
     caller: OwnerCaller,
     time: string,
     state: Pick<LocalAuthorized, "assignment" | "read" | "phase" | "data">,
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
     if (state.phase !== "start") {
       const found = await local!.resolveAssignment(
         tx,
         structuredClone(caller),
         time,
+        readMode,
       );
       if (!found) refuse("Local Processor assignment is no longer current.");
       const actual = localAssignment(found);
@@ -872,7 +905,12 @@ export function createOwnerProcessorCommands(
         refuse("Local Processor grants changed across authorization.");
       }
     }
-    const read = await readLocal(tx, bindingOf(state.assignment), time);
+    const read = await readLocal(
+      tx,
+      bindingOf(state.assignment),
+      time,
+      readMode,
+    );
     if (read.snapshot !== state.read.snapshot) {
       refuse("Local Processor state changed across authorization.");
     }
@@ -1369,11 +1407,18 @@ export function createOwnerProcessorCommands(
       tx: SqlExecutor,
       caller: OwnerCaller,
       time: string,
+      readMode: OwnerAuthorityReadMode = "locking",
     ) {
       localAuthorized.delete(tx);
-      const state = await currentLocal(tx, caller, time, "ctx");
+      const state = await currentLocal(tx, caller, time, "ctx", readMode);
       const data = await localData(tx, state.assignment, state.read, time);
-      await recheckLocal(tx, caller, time, { ...state, phase: "ctx", data });
+      await recheckLocal(
+        tx,
+        caller,
+        time,
+        { ...state, phase: "ctx", data },
+        readMode,
+      );
       return {
         assignment: state.assignment,
         delivery: state.read.delivery,
@@ -1381,12 +1426,17 @@ export function createOwnerProcessorCommands(
       };
     },
     /** Host composes Collection/nested-Action policy after this live attempt fence. */
-    async authorizeLive(tx: SqlExecutor, caller: OwnerCaller, time: string) {
-      const state = await current(tx, caller, time, "mutation");
+    async authorizeLive(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      time: string,
+      readMode: OwnerAuthorityReadMode = "locking",
+    ) {
+      const state = await current(tx, caller, time, "mutation", readMode);
       // Current event policy also gates dependent writes and child admission,
       // including receipt replay. Settlement remains separately authorized.
       const data = await projectData(tx, state, time);
-      await recheckWorker(tx, caller, time, state, data, "mutation");
+      await recheckWorker(tx, caller, time, state, data, "mutation", readMode);
       return {
         assignment: state.assignment,
         delivery: state.delivery,

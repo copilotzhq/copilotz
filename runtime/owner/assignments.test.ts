@@ -190,8 +190,10 @@ test("assignment reservation replay is safe and cannot grant execution before cu
     f.state.started = false;
     assert.equal(await f.owner.project(f.caller(), "binding", null), null);
     assert.equal(
-      (await f.db.query("SELECT COUNT(*) AS count FROM owner_assignments"))
-        .rows[0].count,
+      Number(
+        (await f.db.query("SELECT COUNT(*) AS count FROM owner_assignments"))
+          .rows[0].count,
+      ),
       1,
     );
   } finally {
@@ -1413,6 +1415,50 @@ test("assignment resolvers return NULL for oversized source identity scalars", a
         );
       }
     }
+  } finally {
+    f.owner.stop();
+    await f.db.close();
+  }
+});
+
+test("worker assignment authority uses certified read-only scope without losing Started revocation", async () => {
+  const f = await fixture();
+  try {
+    await f.owner.execute(f.host(), f.command());
+    f.state.started = true;
+    await f.db.withReadSnapshot!(async (scope) => {
+      if (scope.kind === "exclusive") {
+        assert.deepEqual(
+          await f.control.resolveStarted(
+            scope.snapshot,
+            f.caller(),
+            "exclusive-read",
+          ),
+          f.value,
+        );
+        f.state.started = false;
+        assert.equal(
+          await f.control.resolveStarted(
+            scope.snapshot,
+            f.caller(),
+            "exclusive-read",
+          ),
+          undefined,
+        );
+      } else {
+        await scope.current(async (tx) => {
+          assert.deepEqual(
+            await f.control.resolveStarted(tx, f.caller()),
+            f.value,
+          );
+          f.state.started = false;
+          assert.equal(
+            await f.control.resolveStarted(tx, f.caller()),
+            undefined,
+          );
+        });
+      }
+    });
   } finally {
     f.owner.stop();
     await f.db.close();

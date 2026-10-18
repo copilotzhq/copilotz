@@ -1,6 +1,10 @@
 /** Private ordinary-JSON Action execution on the existing delivery/lifecycle tables.
  * The trusted host has already selected an Action and a body-backed input event.
  * This is not a generic Processor-event-to-Action conversion or a public factory. */
+import {
+  ownerAuthorityLock,
+  type OwnerAuthorityReadMode,
+} from "./authority-read.ts";
 import type {
   ActionInvokedData,
   AnyActionDefinition,
@@ -349,6 +353,7 @@ export function createOwnerExecutionCommands(
       tx: SqlExecutor,
       caller: OwnerCaller,
       commandTime: string,
+      readMode?: OwnerAuthorityReadMode,
     ):
       | OwnerExecutionAssignment
       | undefined
@@ -416,6 +421,7 @@ export function createOwnerExecutionCommands(
     tx: SqlExecutor,
     caller: OwnerCaller,
     commandTime: string,
+    readMode?: OwnerAuthorityReadMode,
   ): Promise<OwnerExecutionAssignment>;
 }> {
   const allowRecovery = options.allowRecovery;
@@ -487,6 +493,7 @@ export function createOwnerExecutionCommands(
     commandTime: string,
     mode: "claim" | "input" | "complete" | "mutation",
     candidate?: OwnerLocalActionAssignmentBinding,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<Authorized> {
     const found = candidate
       ? {
@@ -500,7 +507,7 @@ export function createOwnerExecutionCommands(
           metadata: {},
         },
       }
-      : await options.resolveAssignment(tx, caller, commandTime);
+      : await options.resolveAssignment(tx, caller, commandTime, readMode);
     if (!found) refuse("Execution assignment is no longer current.");
     let assignment: OwnerExecutionAssignment = structuredClone(found);
     if (candidate) await authorizeStart(tx, caller, candidate, commandTime);
@@ -612,7 +619,9 @@ export function createOwnerExecutionCommands(
     const scopes = await tx.query<
       { state: string; cancellation_requested_at: unknown }
     >(
-      `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+      `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [assignment.namespace, source.settlement_scope_id],
     );
     const scope = scopes.rows[0];
@@ -624,7 +633,9 @@ export function createOwnerExecutionCommands(
       refuse("Execution scope was cancelled.");
     }
     await tx.query(
-      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
+      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [assignment.deliveryId],
     );
     const store = createEventStore({
@@ -739,11 +750,13 @@ export function createOwnerExecutionCommands(
     commandTime: string,
     grant: "ctx" | "settlement",
     captured: ActionInvokedData,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<{ cancelled: boolean }> {
     const found = await options.resolveAssignment(
       tx,
       structuredClone(state.caller),
       commandTime,
+      readMode,
     );
     const current = found ? structuredClone(found) : undefined;
     if (
@@ -771,7 +784,9 @@ export function createOwnerExecutionCommands(
     }
     const scope =
       (await tx.query<{ state: string; cancellation_requested_at: unknown }>(
-        `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
+        `SELECT state,cancellation_requested_at FROM ${operationTables.operations} WHERE namespace=$1 AND operation_id=$2${
+          ownerAuthorityLock(readMode, " FOR UPDATE")
+        }`,
         [current.namespace, state.delivery.settlementScopeId],
       )).rows[0];
     if (
@@ -801,7 +816,7 @@ export function createOwnerExecutionCommands(
     ) {
       refuse("Execution durable attempt changed after policy.");
     }
-    const currentCapture = await invoked(tx, state);
+    const currentCapture = await invoked(tx, state, readMode);
     if (
       !currentCapture ||
       JSON.stringify(json(currentCapture)) !== JSON.stringify(json(captured))
@@ -1057,6 +1072,7 @@ export function createOwnerExecutionCommands(
   async function invoked(
     tx: SqlExecutor,
     state: Authorized,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<ActionInvokedData | null> {
     const store = createEventStore({
       session: {
@@ -1084,7 +1100,9 @@ export function createOwnerExecutionCommands(
     const open = await tx.query<
       { action_id: string; owner_delivery_id: string; state: string }
     >(
-      `SELECT action_id,owner_delivery_id,state FROM ${tables.open_actions} WHERE namespace=$1 AND action_run_id=$2 FOR UPDATE`,
+      `SELECT action_id,owner_delivery_id,state FROM ${tables.open_actions} WHERE namespace=$1 AND action_run_id=$2${
+        ownerAuthorityLock(readMode, " FOR UPDATE")
+      }`,
       [state.assignment.namespace, state.assignment.invocation.actionRunId],
     );
     if (
@@ -1571,9 +1589,16 @@ export function createOwnerExecutionCommands(
       await recheckAuthority(tx, state, commandTime, "settlement", captured);
       return state.assignment;
     },
-    async authorizeLive(tx, caller, commandTime) {
-      const state = await current(tx, caller, commandTime, "mutation");
-      const captured = await invoked(tx, state);
+    async authorizeLive(tx, caller, commandTime, readMode = "locking") {
+      const state = await current(
+        tx,
+        caller,
+        commandTime,
+        "mutation",
+        undefined,
+        readMode,
+      );
+      const captured = await invoked(tx, state, readMode);
       if (!captured) refuse("Execution has no captured invocation.");
       await options.authorizeInput(
         tx,
@@ -1583,7 +1608,7 @@ export function createOwnerExecutionCommands(
       );
       await recoveryBarrier(tx, state, commandTime);
       await guardPrepared(tx, state, commandTime, "mutation");
-      await recheckAuthority(tx, state, commandTime, "ctx", captured);
+      await recheckAuthority(tx, state, commandTime, "ctx", captured, readMode);
       return state.assignment;
     },
   };

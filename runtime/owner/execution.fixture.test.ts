@@ -638,6 +638,7 @@ export async function fixture(
   });
   return {
     db,
+    execution,
     state,
     gate,
     registry,

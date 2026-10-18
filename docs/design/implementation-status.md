@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 00:20 UTC.
+Updated: 18 October 2026, 00:42 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -169,6 +169,17 @@ regressions. Generic persistence close still suppresses database close errors;
 its successful return does not prove physical cleanup. Owner historical
 authorization, expiry and actual worker/local snapshot activation remain open.
 
+Shared authority validation now reuses the existing assignment, Action and
+Processor checks in a private exclusive read-only mode. Normal commands and
+PostgreSQL current checks keep their locks. Independent broad gates pass 90
+PGlite cases (one explicit PostgreSQL-only skip) and 235 PostgreSQL cases with
+one baseline bigint-count assertion mismatch. The test-only portable correction
+then passes 35 PostgreSQL cases and the corrected PGlite case, with static,
+source-hash and database-cleanup checks. No coherent 236-case rerun is claimed.
+The mode does not supply an epoch fence or prove exclusivity: host snapshot
+routing and historical permissions remain open. A shared bounded Collection
+query evaluator is being factored without adding a second policy engine.
+
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
 its single engine. No weaker snapshot fallback or hidden external-database
@@ -216,6 +227,9 @@ what it simplifies and eliminates before adding machinery.
       revocation, final cancellation/witness checks, no replay or plain
       fallback; actual PostgreSQL/PGlite scoped compatibility and fault probes
       pass
+- [x] Reuse assignment/Action/Processor authority checks in certified exclusive
+      read-only scopes; default command/current-PostgreSQL locks preserved; host
+      routing, epoch fencing and historical grants remain separate
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

@@ -194,6 +194,37 @@ current transactions while historical snapshot rows remain stable. Generic
 close-error suppression remains the documented existing limit. These scoped
 checks do not replace the owner local/worker activation tests below.
 
+## Shared read-only authority validation
+
+The existing assignment, Action and Processor validators now accept a private
+SQL read mode. Existing callers retain their locking mode. Certified exclusive
+PGlite snapshot callers may select read-only validation; static lock clauses are
+chosen where queries are built, with no SQL rewriting and no second permission
+evaluator. PostgreSQL current-state checks retain normal row locks. This mode is
+not a worker option and does not certify exclusivity by itself.
+
+The same current grants, source/input/event policies, durable attempt facts,
+prepared-source/recovery checks and final private witnesses remain required.
+Local Action and Processor resolution forwards the mode through its existing
+rechecks. A policy that writes or reenters ordinary queued database operations
+is not bypassed: it is unsupported inside this read-only scope.
+
+Focused actual PGlite tests cover all four Action/Processor placements and
+worker assignment revocation. A normal locking Action check still fails in a
+read-only transaction, proving the default was not weakened. Independent broad
+checks pass 90 PGlite cases with one explicit PostgreSQL-only skip, and 235
+PostgreSQL cases with one unchanged COUNT bigint fixture mismatch. The narrow
+portable assertion correction then passes the full 32-case assignment file and
+three authority cases on PostgreSQL, plus the corrected case on PGlite. Full
+static checks, source audits and disposable database cleanup pass. This records
+two snapshots and the corrected-case gate, not a fictional complete 236-case
+rerun.
+
+The mode supplies neither owner epoch fencing nor backend exclusivity by itself.
+The host must establish both, retain current private revocation and perform
+authorization through the actual backend scope. Owner host routing, resource
+lifetime and historical Collection permission remain unactivated.
+
 ## Remaining backend and authority gates
 
 A read-only REPEATABLE READ snapshot owns a separate transaction outside the

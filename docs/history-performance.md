@@ -88,7 +88,7 @@ in a committed file. The script never prints the URL or driver errors.
    ```sh
    # Read-only preview: validate Event schemas and report index presence/validity.
    deno run -A scripts/provision-core-history.ts \
-     --schema public --schema tenant_example
+     --schema public --schema space_example
    ```
 
    The preview does not compare the full index definition. If a valid index with
@@ -97,14 +97,14 @@ in a committed file. The script never prints the URL or driver errors.
 
 3. **Apply.** Apply validates all selected Event schemas again before the first
    mutation. Then, for each schema in sorted order, it runs
-   `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, verifies the exact definition, and
-   runs `ANALYZE`. Old and new application readers can keep running during the
-   build.
+   `CREATE INDEX IF NOT EXISTS`, verifies the exact definition, and runs
+   `ANALYZE` in one fenced owner command. Schedule provisioning before admitting
+   work; the build holds the owner queue.
 
    ```sh
-   # Apply: build each index concurrently, verify its definition, then ANALYZE.
+   # Apply: provision each index through its owner, verify it, then ANALYZE.
    deno run -A scripts/provision-core-history.ts \
-     --schema public --schema tenant_example --apply
+     --schema public --schema space_example --apply
    ```
 
 4. **Handle failures.** A run across several schemas is not atomic: earlier
@@ -141,34 +141,30 @@ schema name:
 ```ts
 // provision-core-history.ts
 import { provisionCoreHistoryIndexes } from "@copilotz/copilotz/core";
-import type { SqlExecutor } from "@copilotz/copilotz/events";
+import type { SqlSession } from "@copilotz/copilotz/events";
 
 /**
  * Install Core's chronological history index in one physical schema.
  * Call it after that schema's Event schema has been provisioned.
- * Set concurrently only for an existing populated schema, and only when the
- * executor is outside a transaction (CREATE INDEX CONCURRENTLY requires it).
  */
 export async function provisionHistoryIndex(
-  executor: SqlExecutor,
+  executor: SqlSession,
   physicalSchema: string,
-  concurrently = false,
 ): Promise<void> {
   // Validates the Event schema, creates or verifies the index, then runs ANALYZE.
-  await provisionCoreHistoryIndexes(executor, physicalSchema, { concurrently });
+  await provisionCoreHistoryIndexes(executor, physicalSchema);
 }
 ```
 
 ## Reference
 
-`provisionCoreHistoryIndexes(executor, schemaName = "public", options?)`:
+`provisionCoreHistoryIndexes(executor, schemaName = "public")`:
 
-| Input                  | Meaning                                                                                                                                                                     |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `executor`             | `SqlExecutor` for the target database.                                                                                                                                      |
-| `schemaName`           | Validated physical schema name. Its Copilotz Event schema must already exist and validate.                                                                                  |
-| `options.concurrently` | Uses `CREATE INDEX CONCURRENTLY`. Must run outside a transaction.                                                                                                           |
-| Result                 | Resolves after it verifies a valid, non-unique, non-partial btree with the exact five keys and runs `ANALYZE`. Rejects an invalid index or one with a different definition. |
+| Input        | Meaning                                                                                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executor`   | `SqlSession` for the target database.                                                                                                                                       |
+| `schemaName` | Validated physical schema name. Its Copilotz Event schema must already exist and validate.                                                                                  |
+| Result       | Resolves after it verifies a valid, non-unique, non-partial btree with the exact five keys and runs `ANALYZE`. Rejects an invalid index or one with a different definition. |
 
 The helper is idempotent for a correctly provisioned schema.
 

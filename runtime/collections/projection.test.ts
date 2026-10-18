@@ -5,11 +5,11 @@ import { defineCollection, relation } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
   type EventStore,
+  provisionCopilotzSchema,
   type SqlExecutor,
   type SqlSession,
 } from "../events/index.ts";
@@ -96,9 +96,7 @@ type Fixture = Readonly<{
 async function createFixture(url: string, schema: string): Promise<Fixture> {
   const db = await createTestDatabase({ url });
   const base = createSqlSession(db);
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await base.query(statement);
-  }
+  await provisionCopilotzSchema(base, schema);
   const sql = { statements: [] as string[], transactions: 0 };
   const recorded = (executor: SqlExecutor): SqlExecutor => ({
     query: <TRow extends Record<string, unknown>>(
@@ -179,8 +177,18 @@ Deno.test("collection writes atomically project their relations", async () => {
     fixture.sql.statements.length = 0;
     fixture.sql.transactions = 0;
     await write();
+    assert(
+      fixture.sql.statements.find((sql) =>
+        /^\s*(UPDATE|INSERT|DELETE)\b/.test(sql)
+      )?.includes("owner_epochs"),
+      "the fence precedes the projection",
+    );
     return {
-      statements: fixture.sql.statements.length,
+      statements:
+        fixture.sql.statements.filter((sql) =>
+          !/^\s*(SAVEPOINT|RELEASE)\b/.test(sql) &&
+          !sql.includes("SET holder=holder")
+        ).length,
       transactions: fixture.sql.transactions,
     };
   };

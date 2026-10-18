@@ -1,9 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import {
-  createCoreSchemaStatements,
   createCoreTableNames,
   createEventStore,
+  provisionCopilotzSchema,
 } from "../runtime/events/index.ts";
 import { migrateActionContent } from "./migrate-action-content.ts";
 
@@ -11,7 +11,7 @@ async function fixture(url = ":memory:") {
   const db = await createTestDatabase({ url });
   const schema = `content_migration_${crypto.randomUUID().replaceAll("-", "")}`;
   const tables = createCoreTableNames(schema);
-  for (const sql of createCoreSchemaStatements(schema)) await db.query(sql);
+  await provisionCopilotzSchema(db, schema);
   const node = (
     id: string,
     type: string,

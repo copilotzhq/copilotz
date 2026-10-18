@@ -1,5 +1,8 @@
-import { runSqlTransaction } from "../events/session.ts";
-import { startAwaitedOperation } from "./continuation-work.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
+  prepareActionOperation,
+  startAwaitedOperation,
+} from "./continuation-work.ts";
 import { actionOwnershipStatement, type ActionWriter } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { EventCoordinator } from "../events/index.ts";
@@ -84,42 +87,6 @@ export function createActionLifecycleAppender(
     & ActionLifecyclePersistenceOptions,
 ): ActionLifecycleAppender {
   return async ({ draft, data }) => {
-    if (data.status === "awaiting" && !options.transaction) {
-      if (!options.store) {
-        throw new TypeError("Awaiting requires an Event Store.");
-      }
-      const store = options.store as EventStore;
-      let flush!: () => Promise<void>;
-      const result = await runSqlTransaction(
-        store.session,
-        async (transaction) => {
-          await transaction.query(
-            "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-            [store.databaseSchema, `continuation:${draft.namespace}`],
-          );
-          const appended = await createActionLifecycleAppender({
-            ...options,
-            transaction,
-          })({ draft, data });
-          flush = await startAwaitedOperation(
-            {
-              store,
-              coordinator: options.coordinator,
-              actions: options.actions,
-              protectedValues: options.protectedValues,
-            },
-            transaction,
-            { draft, data },
-            options.writer,
-          );
-          return appended;
-        },
-      );
-      await options.coordinator.flushCommitted(result);
-      await flush();
-      return result;
-    }
-
     const deduplicationId = draft.deduplicationId?.trim();
     if (!deduplicationId) {
       throw new TypeError("Action lifecycle events require deduplicationId.");
@@ -166,53 +133,105 @@ export function createActionLifecycleAppender(
       },
     };
     const tables = options.store?.tables;
-    return await options.coordinator.commitMutation({
-      admission: {
-        cancellation: options.writer?.kind === "cancellation",
-      },
-      draft: { ...draft, payload },
-      matchData: prepared.publicData,
-      body: { id: payload.dataRef.eventBodyId, json: prepared.body },
-      ...(tables
-        ? {
-          statement: (param: (value: unknown) => string) =>
-            actionOwnershipStatement(
-              { draft, data },
-              options.writer,
-              tables,
-              param,
-            ),
-        }
-        : {}),
-      ...(options.transaction
-        ? { transaction: options.transaction, dispatch: false }
-        : {}),
-      ...(prepared.prepared.length > 0
-        ? {
-          mutate: async (context) => {
-            for (const value of prepared.prepared) {
-              await options.protectedValues!.adopt(
-                context,
-                draft.namespace,
-                value,
-              );
-            }
-          },
-        }
-        : {}),
-      recoverDuplicate: async (event, context) => {
-        const existing = await readEventBody(
-          context,
-          event.namespace,
-          eventDataRef(event.payload),
-        );
-        if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
-          throw new Error(
-            `Event body '${bodyId}' already exists with different content.`,
+    const commit = (transaction?: SqlExecutor) =>
+      options.coordinator.commitMutation({
+        admission: {
+          cancellation: options.writer?.kind === "cancellation",
+        },
+        draft: { ...draft, payload },
+        matchData: prepared.publicData,
+        body: { id: payload.dataRef.eventBodyId, json: prepared.body },
+        ...(tables
+          ? {
+            statement: (param: (value: unknown) => string) =>
+              actionOwnershipStatement(
+                { draft, data },
+                options.writer,
+                tables,
+                param,
+              ),
+          }
+          : {}),
+        ...(transaction ? { transaction, dispatch: false } : {}),
+        ...(prepared.prepared.length > 0
+          ? {
+            mutate: async (context) => {
+              for (const value of prepared.prepared) {
+                await options.protectedValues!.adopt(
+                  context,
+                  draft.namespace,
+                  value,
+                );
+              }
+            },
+          }
+          : {}),
+        recoverDuplicate: async (event, context) => {
+          const existing = await readEventBody(
+            context,
+            event.namespace,
+            eventDataRef(event.payload),
           );
-        }
-      },
-    });
+          if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
+            throw new Error(
+              `Event body '${bodyId}' already exists with different content.`,
+            );
+          }
+        },
+      });
+    if (data.status === "awaiting" && !options.transaction) {
+      if (!options.store) {
+        throw new TypeError("Awaiting requires an Event Store.");
+      }
+      const store = options.store as EventStore;
+      const preparedChild = data.start
+        ? await prepareActionOperation(
+          {
+            store,
+            coordinator: options.coordinator,
+            actions: options.actions,
+            protectedValues: options.protectedValues,
+          },
+          draft.namespace,
+          data.operationId ?? data.start.operationId ??
+            `${data.actionRunId}:child`,
+          data.start,
+        )
+        : undefined;
+      let flush!: () => Promise<void>;
+      const result = await createSchemaCommandRunner(
+        store.session,
+        store.databaseSchema,
+      )(
+        "actions.await",
+        { actionRunId: data.actionRunId },
+        async (_input, { transaction }) => {
+          await transaction.query(
+            "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+            [store.databaseSchema, `continuation:${draft.namespace}`],
+          );
+          const appended = await commit(transaction);
+          flush = await startAwaitedOperation(
+            {
+              store,
+              coordinator: options.coordinator,
+              actions: options.actions,
+              protectedValues: options.protectedValues,
+            },
+            transaction,
+            { draft, data },
+            options.writer,
+            preparedChild,
+          );
+          return appended;
+        },
+      );
+      await options.coordinator.flushCommitted(result);
+      await flush();
+      return result;
+    }
+
+    return await commit(options.transaction);
   };
 }
 

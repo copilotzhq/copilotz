@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { provisionCopilotzSchema } from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -249,15 +250,18 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
     await provisionCopilotzSchema(db, schema);
     await provisionOperationCatalog(db, schema);
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((tx) =>
-      catalog.indexEvent(tx, {
-        namespace: "scope",
-        operationId: "operation",
-        eventId: "operation",
-        position: "1",
-        correlationId: "operation",
-        createdAt: "2026-10-01T00:00:00Z",
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.mutation",
+      {},
+      (_input, { transaction: tx }) =>
+        catalog.indexEvent(tx, {
+          namespace: "scope",
+          operationId: "operation",
+          eventId: "operation",
+          position: "1",
+          correlationId: "operation",
+          createdAt: "2026-10-01T00:00:00Z",
+        }),
     );
     for (const outcome of ["completed", "failed", "cancelled"] as const) {
       const target = {
@@ -353,15 +357,18 @@ Deno.test("completion requires a full sealed body and an unaccepted seal can fai
     await provisionCopilotzSchema(db, schema);
     await provisionOperationCatalog(db, schema);
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((tx) =>
-      catalog.indexEvent(tx, {
-        namespace: "scope",
-        operationId: "operation",
-        eventId: "operation",
-        position: "1",
-        correlationId: "operation",
-        createdAt: "2026-10-01T00:00:00Z",
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.mutation",
+      {},
+      (_input, { transaction: tx }) =>
+        catalog.indexEvent(tx, {
+          namespace: "scope",
+          operationId: "operation",
+          eventId: "operation",
+          position: "1",
+          correlationId: "operation",
+          createdAt: "2026-10-01T00:00:00Z",
+        }),
     );
     const target = {
       namespace: "scope",

@@ -112,6 +112,7 @@ Deno.test("Copilotz work framing relays semantic events, metadata, and bytes", a
       workload: "copilotz.delivery.v1",
       metadata: {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: 1,
         deliveryId: "delivery-1",
       },
     });
@@ -244,6 +245,7 @@ Deno.test("Copilotz work framing omits derived ProcessorEvent data", async () =>
       workload: "copilotz.delivery.v1",
       metadata: {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: 1,
         deliveryId: "delivery-large",
       },
     });

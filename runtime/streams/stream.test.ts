@@ -3,10 +3,10 @@ import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
@@ -449,9 +449,7 @@ Deno.test("content stream close returns prepared content without creating an Ass
   const database = await createTestDatabase({ url: ":memory:" });
   try {
     const session = createSqlSession(database);
-    for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
-      await session.query(statement);
-    }
+    await provisionCopilotzSchema(session, TEST_SCHEMA);
     const store = createEventStore({ session, schema: TEST_SCHEMA });
     const bodyStore = createDatabaseBodyStore({
       session,

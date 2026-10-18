@@ -1,4 +1,9 @@
-import type { CommandContext, DatabaseOwner } from "./commands.ts";
+import {
+  activateDatabaseOwner,
+  type CommandContext,
+  createSchemaCommandRunner,
+  type DatabaseOwner,
+} from "./commands.ts";
 import { scheduleResumptions } from "../actions/continuation-work.ts";
 import {
   cancelScopeActions,
@@ -22,7 +27,10 @@ import {
   createContentStreamRuntime,
   DEFAULT_OPERATION_REPLAY_RETENTION_MS,
 } from "../streams/index.ts";
-import type { OperationCatalog } from "../streams/catalog.ts";
+import {
+  createOperationCatalogTables,
+  type OperationCatalog,
+} from "../streams/catalog.ts";
 import {
   isRegisteredActionLifecycleEventType,
   isReservedActionLifecycleDeduplicationId,
@@ -88,6 +96,9 @@ export type DatabaseScopeCapabilities = Readonly<{
 
 export type DatabaseScopeRuntime = Readonly<{
   owner: DatabaseOwner;
+  activate(): Promise<void>;
+  publishActivation(): Promise<void>;
+  deferPublication(publish: () => Promise<void>): () => Promise<void>;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
   coordinator: EventCoordinator;
@@ -181,6 +192,12 @@ export function createDatabaseScope(
     },
     onDispatchFailure: engine.onDispatchFailure,
   });
+  const activationPublications: Array<() => Promise<void>> = [];
+  const deferPublication = (publish: () => Promise<void>) => async () => {
+    if (options.owner.state === "acquired") {
+      activationPublications.push(publish);
+    } else await publish();
+  };
   const onScopeCancellation: DatabaseScopeRuntime["onScopeCancellation"] = (
     transaction,
     input,
@@ -220,10 +237,10 @@ export function createDatabaseScope(
       { operationId: delivery.settlementScopeId },
       transaction,
     );
-    return async () => {
+    return deferPublication(async () => {
       await recovered();
       await advanced();
-    };
+    });
   };
   const resumeSettled: DatabaseScopeRuntime["resumeSettled"] = async (
     input = {},
@@ -233,7 +250,7 @@ export function createDatabaseScope(
       coordinator,
       catalog: options.operationCatalog,
     }, input);
-    await flush();
+    await deferPublication(flush)();
   };
   const assets = createDatabaseAssetRepository({
     coordinator,
@@ -504,20 +521,9 @@ export function createDatabaseScope(
   };
   let progressiveMaintenanceAfter: string | undefined;
   let openStreamReconcileAfter: string | undefined;
-  const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
-    maintenanceOptions = {},
+  const recoverCatalog = async (
+    maintenanceOptions: { limit?: number } = {},
   ) => {
-    const recovery = await coordinator.recover({
-      databaseSchema,
-      namespace: maintenanceOptions.namespace,
-      consumerIds: maintenanceOptions.consumerIds,
-      limit: maintenanceOptions.limit,
-    });
-    const compacted = await store.compactDeliveries({
-      retentionMs: maintenanceOptions.retentionMs,
-      now: maintenanceOptions.now,
-      limit: maintenanceOptions.limit,
-    });
     // Catalog-owned published lanes are reconciled before generic progressive
     // maintenance can settle unknown staging. Publication changes an expired
     // writer from disposable staging into a replay obligation.
@@ -644,6 +650,25 @@ export function createDatabaseScope(
     const reconciled = await options.operationCatalog.reconcile({
       limit: maintenanceOptions.limit,
     });
+    return { reconciledStreams, reconciled };
+  };
+  const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
+    maintenanceOptions = {},
+  ) => {
+    const recovery = await coordinator.recover({
+      databaseSchema,
+      namespace: maintenanceOptions.namespace,
+      consumerIds: maintenanceOptions.consumerIds,
+      limit: maintenanceOptions.limit,
+    });
+    const compacted = await store.compactDeliveries({
+      retentionMs: maintenanceOptions.retentionMs,
+      now: maintenanceOptions.now,
+      limit: maintenanceOptions.limit,
+    });
+    const { reconciledStreams, reconciled } = await recoverCatalog(
+      maintenanceOptions,
+    );
     const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
       limit: maintenanceOptions.limit,
       ...(progressiveMaintenanceAfter
@@ -789,8 +814,52 @@ export function createDatabaseScope(
     maintenance,
   } as const;
 
+  const activate = async () => {
+    await activateDatabaseOwner(options.owner, async () => {
+      await createSchemaCommandRunner(engine.session, databaseSchema)(
+        "owner.invalidateAttempts",
+        {},
+        async (_input, { transaction }) => {
+          await transaction.query(
+            `UPDATE ${store.tables.event_deliveries}
+          SET lease_expires_at=NOW(), updated_at=NOW()
+          WHERE status='leased' AND owner_epoch <> $1`,
+            [options.owner.epoch],
+          );
+        },
+      );
+      while (
+        (await store.recoverExpiredDeliveries({ limit: 1000 })).length === 1000
+      ) { /* recover every exhausted attempt */ }
+      do {
+        await recoverCatalog({ limit: 1000 });
+      } while (openStreamReconcileAfter !== undefined);
+      while (
+        await options.operationCatalog.reconcile({ limit: 1000 })
+      ) { /* bounded pages across all namespaces */ }
+      for (;;) {
+        const pending = await engine.session.query(
+          `SELECT 1 FROM ${store.tables.open_actions} AS action
+          JOIN ${
+            createOperationCatalogTables(databaseSchema).operations
+          } AS child
+          ON child.namespace=action.namespace AND child.operation_id=action.child_operation_id
+          WHERE action.state='awaiting' AND action.owner_delivery_id IS NULL
+            AND child.state IN ('completed','failed','cancelled') LIMIT 1`,
+        );
+        if (!pending.rows.length) break;
+        await resumeSettled({ limit: 1000 });
+      }
+    });
+  };
+  const publishActivation = async () => {
+    for (const publish of activationPublications.splice(0)) await publish();
+  };
   return ({
     owner: options.owner,
+    activate,
+    publishActivation,
+    deferPublication,
     public: publicScope,
     store,
     coordinator,

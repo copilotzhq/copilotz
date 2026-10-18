@@ -177,7 +177,7 @@ Deno.test("additive owner upgrade preserves active obligations and immutable his
       [event.event.id],
     );
     await db.query(
-      `DROP TABLE ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+      `DROP TABLE ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
     await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version = 8`);
     const history = (await db.query(`SELECT * FROM ${tables.events}`)).rows;
@@ -217,7 +217,7 @@ for (const baseline of [6, 7]) {
         payload: { kept: true },
       }, []);
       await db.query(
-        `DROP TABLE ${tables.open_actions}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+        `DROP TABLE ${tables.open_actions}, ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
       );
       await db.query(
         `CREATE TABLE ${tables.open_actions} (action_run_id TEXT PRIMARY KEY, state TEXT, deferred_event_id TEXT)`,

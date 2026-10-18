@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import {
   createEventStore,
@@ -125,11 +126,16 @@ async function runSelectionFixture(url: string) {
       }),
       [],
     );
-    await db.transaction((tx) =>
-      catalog.indexEvent(
-        tx,
-        indexed(root.event.id, child.event.id, "2", ["not-added-by-duplicate"]),
-      )
+    await createSchemaCommandRunner(db, schema)(
+      "test.mutation",
+      {},
+      (_input, { transaction: tx }) =>
+        catalog.indexEvent(
+          tx,
+          indexed(root.event.id, child.event.id, "2", [
+            "not-added-by-duplicate",
+          ]),
+        ),
     );
     assertEquals(
       await catalog.getSelectionHeads({
@@ -140,13 +146,17 @@ async function runSelectionFixture(url: string) {
     );
     await assertRejects(
       () =>
-        db.transaction(async (tx) => {
-          await catalog.indexEvent(
-            tx,
-            indexed("rollback", "rollback", "50", ["account:opaque"]),
-          );
-          throw new Error("rollback");
-        }),
+        createSchemaCommandRunner(db, schema)(
+          "test.mutation",
+          {},
+          async (_input, { transaction: tx }) => {
+            await catalog.indexEvent(
+              tx,
+              indexed("rollback", "rollback", "50", ["account:opaque"]),
+            );
+            throw new Error("rollback");
+          },
+        ),
       Error,
       "rollback",
     );
@@ -187,11 +197,14 @@ async function runSelectionFixture(url: string) {
     );
     await assertRejects(
       () =>
-        db.transaction((tx) =>
-          catalog.indexEvent(tx, {
-            ...indexed("invalid"),
-            metadata: { observationKeys: [1] },
-          })
+        createSchemaCommandRunner(db, schema)(
+          "test.mutation",
+          {},
+          (_input, { transaction: tx }) =>
+            catalog.indexEvent(tx, {
+              ...indexed("invalid"),
+              metadata: { observationKeys: [1] },
+            }),
         ),
       TypeError,
     );
@@ -422,7 +435,7 @@ Deno.test("offline catalog upgrade backfills opaque domain keys and event ordina
 
 Deno.test({
   name:
-    "PostgreSQL selection and operation ordinal locks prevent late commit skips",
+    "PostgreSQL concurrent owner contexts preserve selection and operation cursor order",
   ignore: !POSTGRES_URL,
   fn: async () => {
     const db = await createTestDatabase({ url: POSTGRES_URL! });
@@ -434,8 +447,11 @@ Deno.test({
     try {
       await provisionCopilotzSchema(db, schema);
       await provisionOperationCatalog(db, schema);
-      await db.transaction((tx) =>
-        catalog.indexEvent(tx, indexed("root", "root", "100", ["opaque"]))
+      await createSchemaCommandRunner(db, schema)(
+        "test.mutation",
+        {},
+        (_input, { transaction: tx }) =>
+          catalog.indexEvent(tx, indexed("root", "root", "100", ["opaque"])),
       );
       const challenge = async (
         firstOperation: string,
@@ -453,22 +469,30 @@ Deno.test({
           namespace: "tenant-a",
           selectionKeys: ["opaque"],
         }))[0].changeOrdinal;
-        const first = db.transaction(async (tx) => {
-          await catalog.indexEvent(
-            tx,
-            indexed(firstOperation, firstEvent, firstPosition, ["opaque"]),
-          );
-          ready();
-          await allowed;
-        });
+        const first = createSchemaCommandRunner(db, schema)(
+          "test.mutation",
+          {},
+          async (_input, { transaction: tx }) => {
+            await catalog.indexEvent(
+              tx,
+              indexed(firstOperation, firstEvent, firstPosition, ["opaque"]),
+            );
+            ready();
+            await allowed;
+          },
+        );
         await started;
         let secondCommitted = false;
-        const second = writer.transaction(async (tx) => {
-          await catalog.indexEvent(
-            tx,
-            indexed(secondOperation, secondEvent, secondPosition, ["opaque"]),
-          );
-        }).then(() => {
+        const second = createSchemaCommandRunner(writer, schema)(
+          "test.mutation",
+          {},
+          async (_input, { transaction: tx }) => {
+            await catalog.indexEvent(
+              tx,
+              indexed(secondOperation, secondEvent, secondPosition, ["opaque"]),
+            );
+          },
+        ).then(() => {
           secondCommitted = true;
         });
         try {
@@ -476,7 +500,7 @@ Deno.test({
           assertEquals(
             secondCommitted,
             false,
-            "counter allocation must block behind the earlier transaction",
+            "later commands must wait for the earlier commit",
           );
           assertEquals(
             (await writer.query<{ change_ordinal: string }>(
@@ -497,7 +521,7 @@ Deno.test({
         assert(changed.some((row) => row.operationId === firstOperation));
         assert(changed.some((row) => row.operationId === secondOperation));
       };
-      // Independent operations contend only on the selection head. Their global
+      // Concurrent contexts share the owner queue. Their global
       // positions deliberately run backwards relative to the commit order.
       await challenge(
         "first-root",
@@ -521,17 +545,23 @@ Deno.test({
         }],
       );
       await Promise.all([
-        db.transaction((tx) =>
-          catalog.indexEvent(
-            tx,
-            indexed("multi-a", "multi-a", "600", ["z", "a"]),
-          )
+        createSchemaCommandRunner(db, schema)(
+          "test.mutation",
+          {},
+          (_input, { transaction: tx }) =>
+            catalog.indexEvent(
+              tx,
+              indexed("multi-a", "multi-a", "600", ["z", "a"]),
+            ),
         ),
-        writer.transaction((tx) =>
-          catalog.indexEvent(
-            tx,
-            indexed("multi-b", "multi-b", "700", ["a", "z"]),
-          )
+        createSchemaCommandRunner(writer, schema)(
+          "test.mutation",
+          {},
+          (_input, { transaction: tx }) =>
+            catalog.indexEvent(
+              tx,
+              indexed("multi-b", "multi-b", "700", ["a", "z"]),
+            ),
         ),
       ]);
       assertEquals(
@@ -578,23 +608,31 @@ Deno.test({
       let ready!: () => void;
       const indexed = new Promise<void>((resolve) => ready = resolve);
       const allowed = new Promise<void>((resolve) => release = resolve);
-      writing = db.transaction(async (tx) => {
-        const events = createEventStore({
-          session: { ...db, query: tx.query, transaction: (fn) => fn(tx) },
-          schema,
-          createId: () => "root",
-          indexOperationEventSql: (input, param) =>
-            writerCatalog.indexEventSql(input, param),
-        });
-        await events.append({
-          namespace: "tenant-a",
-          type: "generic.work",
-          payload: {},
-          metadata: { observationKeys: ["opaque"] },
-        });
-        ready();
-        await allowed;
-      });
+      writing = createSchemaCommandRunner(db, schema)(
+        "test.mutation",
+        {},
+        async (_input, { transaction: tx }) => {
+          const events = createEventStore({
+            session: db,
+            schema,
+            createId: () => "root",
+            indexOperationEventSql: (input, param) =>
+              writerCatalog.indexEventSql(input, param),
+          });
+          await events.commitMutation({
+            draft: {
+              namespace: "tenant-a",
+              type: "generic.work",
+              payload: {},
+              metadata: { observationKeys: ["opaque"] },
+            },
+            consumers: [],
+            transaction: tx,
+          });
+          ready();
+          await allowed;
+        },
+      );
       await indexed;
       assertEquals(await watch.wait({ timeoutMs: 100 }), false);
       release!();
@@ -604,14 +642,18 @@ Deno.test({
       assertEquals(hints, ["root:tenant-a:opaque:event"]);
       await assertRejects(
         () =>
-          db.transaction(async (tx) => {
-            await writerCatalog.indexEvent(tx, {
-              ...indexedInput(),
-              eventId: "rolled-back",
-              position: "2",
-            });
-            throw new Error("rollback");
-          }),
+          createSchemaCommandRunner(db, schema)(
+            "test.mutation",
+            {},
+            async (_input, { transaction: tx }) => {
+              await writerCatalog.indexEvent(tx, {
+                ...indexedInput(),
+                eventId: "rolled-back",
+                position: "2",
+              });
+              throw new Error("rollback");
+            },
+          ),
         Error,
         "rollback",
       );

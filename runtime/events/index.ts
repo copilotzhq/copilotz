@@ -64,3 +64,8 @@ export {
   deriveWorkflowId,
   MAX_DERIVED_WORKFLOW_ID_LENGTH,
 } from "./workflow-id.ts";
+
+export {
+  type NodeIndexDefinition,
+  provisionNodeIndex,
+} from "../collections/indexes.ts";

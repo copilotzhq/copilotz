@@ -133,7 +133,7 @@ Deno.test({
       });
       const oldAgentPlan = await explain(captured.at(-1)!);
 
-      await provisionCoreHistoryIndexes(db, schema, { concurrently: true });
+      await provisionCoreHistoryIndexes(db, schema);
       const metrics = [];
       for (let i = 0; i < cases.length; i++) {
         const start = captured.length;

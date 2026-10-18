@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createEventStore,
@@ -101,9 +102,9 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
   const database = await createTestDatabase({ url: ":memory:" });
   try {
     await provisionCopilotzSchema(database, SCHEMA);
-    await provisionOperationCatalog(database, SCHEMA);
-    await validateOperationCatalog(database, SCHEMA);
     const notified = notificationSession(database);
+    await provisionOperationCatalog(notified, SCHEMA);
+    await validateOperationCatalog(notified, SCHEMA);
     const writer = createOperationCatalog(notified, SCHEMA);
     const observer = createOperationCatalog(notified, SCHEMA);
     const operationId = "operation-a";
@@ -116,16 +117,19 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     );
     const watch = await observer.watch(operationId);
     const change = watch.wait({ timeoutMs: 2_000 });
-    await notified.transaction((transaction) =>
-      writer.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-        metadata: { operationMetadata: { threadId: "thread-a" } },
-      })
+    await createSchemaCommandRunner(notified, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        writer.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+          metadata: { operationMetadata: { threadId: "thread-a" } },
+        }),
     );
     assertEquals(await change, true);
     assertEquals(hints.at(-1)?.kind, "event");
@@ -244,15 +248,18 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       })).map((stream) => stream.streamId),
       [descriptor.streamId],
     );
-    await notified.transaction((transaction) =>
-      writer.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-b",
-        eventId: "operation-b",
-        position: "2",
-        correlationId: "correlation-b",
-        createdAt: "2026-08-31T12:00:01.000Z",
-      })
+    await createSchemaCommandRunner(notified, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        writer.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-b",
+          eventId: "operation-b",
+          position: "2",
+          correlationId: "correlation-b",
+          createdAt: "2026-08-31T12:00:01.000Z",
+        }),
     );
     const secondIdentity = await writer.openStream({
       namespace: "tenant-a",
@@ -283,15 +290,18 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
     await provisionCopilotzSchema(database, SCHEMA);
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-incarnation",
-        eventId: "operation-incarnation",
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-incarnation",
+          eventId: "operation-incarnation",
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = (streamId: string) =>
       createStreamOutputDescriptor({
@@ -418,15 +428,18 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
     const operationId = "operation-retained-failure";
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "failed-stream",
@@ -529,15 +542,18 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
     await provisionCopilotzSchema(database, SCHEMA);
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "detached:event-a:consumer-a",
-        eventId: "event-child-a",
-        position: "2",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "detached:event-a:consumer-a",
+          eventId: "event-child-a",
+          position: "2",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     assertEquals(
       await catalog.listEventIds({
@@ -712,15 +728,18 @@ Deno.test("post-commit notification failure does not fail a stream catalog mutat
     };
     const writer = createOperationCatalog(session, SCHEMA);
     const reader = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      reader.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-notify-failure",
-        eventId: "operation-notify-failure",
-        position: "1",
-        correlationId: "correlation-notify-failure",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        reader.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-notify-failure",
+          eventId: "operation-notify-failure",
+          position: "1",
+          correlationId: "correlation-notify-failure",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "stream-notify-failure",
@@ -825,15 +844,18 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
       operationId: string,
       retention: "canonical" | "observation" | "aborted",
     ) => {
-      await database.transaction((transaction) =>
-        catalog.indexEvent(transaction, {
-          namespace: "tenant-a",
-          operationId,
-          eventId: operationId,
-          position: operationId.endsWith("a") ? "10" : "11",
-          correlationId: `${operationId}:correlation`,
-          createdAt: "2026-08-31T12:00:00.000Z",
-        })
+      await createSchemaCommandRunner(database, SCHEMA)(
+        "test.index",
+        {},
+        (_input, { transaction }) =>
+          catalog.indexEvent(transaction, {
+            namespace: "tenant-a",
+            operationId,
+            eventId: operationId,
+            position: operationId.endsWith("a") ? "10" : "11",
+            correlationId: `${operationId}:correlation`,
+            createdAt: "2026-08-31T12:00:00.000Z",
+          }),
       );
       const descriptor = createStreamOutputDescriptor({
         id: `${operationId}:stream`,

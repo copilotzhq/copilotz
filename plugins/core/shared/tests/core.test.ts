@@ -16,12 +16,12 @@ import {
 } from "../../../../runtime/testing/ominipg.ts";
 import { createTestProcessorContext } from "../../../../runtime/testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
   type EventCoordinator,
   type EventStore,
+  provisionCopilotzSchema,
   type SqlSession,
 } from "../../../../runtime/events/index.ts";
 import {
@@ -73,9 +73,7 @@ async function count(
 async function createFixture(url: string, schema: string): Promise<Fixture> {
   const db = await createTestDatabase({ url });
   const session = createSqlSession(db);
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   const store = createEventStore({ session, schema });
   const processor = defineProcessor({
     id: "core.audit",

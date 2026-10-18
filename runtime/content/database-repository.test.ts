@@ -1,14 +1,15 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
   type EventCoordinator,
   type EventStore,
+  provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
 import {
@@ -52,9 +53,7 @@ async function createFixture(options: {
 } = {}) {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
-  for (const statement of createCoreSchemaStatements(TEST_SCHEMA)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, TEST_SCHEMA);
   const store = createEventStore({ session, schema: TEST_SCHEMA });
   const observed: string[] = [];
   const observer = defineProcessor({
@@ -566,11 +565,14 @@ Deno.test("external bodies are prepared before Asset graph adoption", async () =
       null,
     );
 
-    await fixture.session.transaction((transaction) =>
-      adopter.adoptMaterialization({
-        transaction,
-        tables: fixture.store.tables,
-      }, plan)
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.mutation",
+      {},
+      (_input, { transaction: transaction }) =>
+        adopter.adoptMaterialization({
+          transaction,
+          tables: fixture.store.tables,
+        }, plan),
     );
 
     assertEquals(puts, 1);
@@ -610,11 +612,14 @@ Deno.test("database bodies and Asset metadata are adopted in one transaction", a
       null,
     );
 
-    await fixture.session.transaction((transaction) =>
-      adopter.adoptMaterialization({
-        transaction,
-        tables: fixture.store.tables,
-      }, plan)
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.mutation",
+      {},
+      (_input, { transaction: transaction }) =>
+        adopter.adoptMaterialization({
+          transaction,
+          tables: fixture.store.tables,
+        }, plan),
     );
 
     assertEquals(await bodyRows(), 1);

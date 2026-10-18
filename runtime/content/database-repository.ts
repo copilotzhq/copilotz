@@ -1,4 +1,8 @@
-import { runSqlTransaction as transact } from "../events/session.ts";
+import { quoteEventIdentifier } from "../events/schema.ts";
+import {
+  assertSchemaCommandTransaction,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
@@ -469,6 +473,10 @@ export function createDatabaseAssetRepository(
   } as const;
   const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
+  const runCommand = createSchemaCommandRunner(
+    options.session,
+    options.databaseSchema,
+  );
   const preparedBodies = new Map<string, PreparedBodyCacheEntry>();
   let preparedBodyBytes = 0;
 
@@ -996,6 +1004,23 @@ export function createDatabaseAssetRepository(
       "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
       [options.databaseSchema, "body-ownership"],
     );
+    const retired = await context.transaction.query(
+      `SELECT 1 FROM ${tables.owner_body_retirements} WHERE owner='schema'
+       AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 LIMIT 1`,
+      [
+        bodyId,
+        asset.location.kind,
+        asset.location.kind === "database"
+          ? ""
+          : asset.location.backendId ?? "",
+      ],
+    );
+    if (retired.rows.length) {
+      throw createContentError(
+        "asset_conflict",
+        "This body has entered irreversible retirement.",
+      );
+    }
     if (plan.kind === "ready" && plan.protectionRequired) {
       const protectedUntil = candidate.readyBody?.protectedUntil;
       const protectionDeadline = protectedUntil
@@ -1112,6 +1137,7 @@ export function createDatabaseAssetRepository(
     context: EventMutationContext,
     plan: AssetMaterializationPlan,
   ): Promise<void> => {
+    assertSchemaCommandTransaction(context.transaction, options.databaseSchema);
     const namespace = requiredText(plan.namespace, "Asset namespace");
     for (const adoption of plan.adoptions) {
       if (adoption.asset.namespace !== namespace) {
@@ -1278,9 +1304,12 @@ export function createDatabaseAssetRepository(
         }
          )`,
         `adoption_refused AS (
-           SELECT (EXISTS (SELECT 1 FROM adoption_taken)${
-          bodies.map(({ exists }) => ` OR ${exists}`).join("")
-        }) AS refused
+           SELECT (EXISTS (SELECT 1 FROM adoption_taken) OR EXISTS (
+             SELECT 1 FROM adoption_rows AS wanted JOIN ${tables.owner_body_retirements} AS retired
+             ON retired.owner='schema' AND retired.body_id=wanted.data->>'bodyId'
+               AND retired.backend_kind=wanted.data->'location'->>'kind'
+               AND retired.backend_id=CASE WHEN retired.backend_kind='database' THEN '' ELSE COALESCE(wanted.data->'location'->>'backendId','') END
+           )${bodies.map(({ exists }) => ` OR ${exists}`).join("")}) AS refused
          )`,
       ],
       gate:
@@ -1423,9 +1452,10 @@ export function createDatabaseAssetRepository(
           }
         }
       }
-      const result = await transact(
-        options.session,
-        async (transaction) => {
+      const result = await runCommand(
+        "content.adopt",
+        { namespace: adoption.asset.namespace, assetId: adoption.asset.id },
+        async (_input, { transaction }) => {
           await lockMaterializationKeys(transaction, [{
             namespace: adoption.asset.namespace,
             key: adoption.candidate.idempotencyKey?.trim(),
@@ -1456,7 +1486,9 @@ export function createDatabaseAssetRepository(
       return;
     }
     const pending: CoordinatedMutationResult<AssetRecord>[] = [];
-    await transact(options.session, async (transaction) => {
+    await runCommand("content.materialize", {
+      assetIds: plan.adoptions.map(({ asset }) => asset.id),
+    }, async (_input, { transaction }) => {
       await lockMaterializationKeys(
         transaction,
         plan.adoptions.map(({ asset, candidate }) => ({
@@ -1611,6 +1643,107 @@ export function createDatabaseAssetRepository(
   // Rotate bounded Ready-body scans across maintenance calls. Otherwise a
   // stable first page of graph-owned Bodies can starve later orphans forever.
   let bodyMaintenanceAfter: string | undefined;
+  // Retirement is irreversible. Physical deletion can finish after takeover,
+  // because every adopter checks the durable claim before taking ownership.
+  const retireBody = async (
+    input: Readonly<{ store: BodyStore; body: ReadyBodyHead }>,
+    idleForMs: number,
+  ): Promise<ReadyBodyRetirementResult> => {
+    if (input.body.state !== "ready") return { status: "blocked" };
+    const backendId = input.store.kind === "database"
+      ? ""
+      : input.store.backendId;
+    const request = {
+      backendKind: input.store.kind,
+      backendId,
+      bodyId: input.body.bodyId,
+    };
+    const claim = await runCommand(
+      "content.retireClaim",
+      request,
+      async (request, { transaction, commandTime }) => {
+        if (
+          input.body.protectedUntil &&
+          Date.parse(input.body.protectedUntil) > Date.parse(commandTime)
+        ) {
+          return { status: "blocked" as const };
+        }
+        const owned = await transaction.query<
+          { id: string; type: "asset" | "protected_value" }
+        >(
+          `SELECT id,type FROM ${tables.nodes}
+         WHERE type IN ('asset','protected_value') AND data->>'state'='ready'
+           AND data->>'bodyId'=$1 AND data->'location'->>'kind'=$2
+           AND CASE WHEN $2='database' THEN TRUE ELSE COALESCE(data->'location'->>'backendId','')=$3 END
+         LIMIT 1`,
+          [request.bodyId, request.backendKind, request.backendId],
+        );
+        if (owned.rows[0]) {
+          return {
+            status: "owned" as const,
+            ownerId: owned.rows[0].id,
+            ownerType: owned.rows[0].type,
+          };
+        }
+        const catalog = `${
+          quoteEventIdentifier(options.databaseSchema)
+        }."copilotz_operation_streams"`;
+        const present = await transaction.query<{ present: boolean }>(
+          "SELECT to_regclass($1) IS NOT NULL AS present",
+          [catalog],
+        );
+        if (present.rows[0]?.present) {
+          const retained = await transaction.query(
+            `SELECT stream_id FROM ${catalog} WHERE body_id=$1 AND availability='retained' AND cleanup_state IS NULL LIMIT 1`,
+            [request.bodyId],
+          );
+          if (retained.rows.length) return { status: "blocked" as const };
+        }
+        await transaction.query(
+          `INSERT INTO ${tables.owner_body_retirements} (owner,backend_kind,backend_id,body_id,token)
+         VALUES ('schema',$1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [
+            request.backendKind,
+            request.backendId,
+            request.bodyId,
+            crypto.randomUUID(),
+          ],
+        );
+        const row =
+          (await transaction.query<{ token: string; completed: boolean }>(
+            `SELECT token,completed FROM ${tables.owner_body_retirements} WHERE owner='schema' AND backend_kind=$1 AND backend_id=$2 AND body_id=$3`,
+            [request.backendKind, request.backendId, request.bodyId],
+          )).rows[0];
+        return {
+          status: "claimed" as const,
+          token: row.token,
+          completed: row.completed,
+        };
+      },
+    );
+    if (claim.status !== "claimed") return claim;
+    // External adapters never run while the owner holds its SQL fence.
+    const deleted = await input.store.maintenance.delete({
+      bodyId: input.body.bodyId,
+      expectedState: "ready",
+      expectedMaintenanceVersion: input.body.maintenanceVersion,
+      idleForMs,
+    });
+    if (!deleted && await input.store.head({ bodyId: input.body.bodyId })) {
+      return { status: "blocked" };
+    }
+    await runCommand("content.confirmRetirement", {
+      ...request,
+      token: claim.token,
+    }, async (request, { transaction }) => {
+      await transaction.query(
+        `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND backend_kind=$1 AND backend_id=$2 AND body_id=$3 AND token=$4`,
+        [request.backendKind, request.backendId, request.bodyId, request.token],
+      );
+    });
+    return { status: "deleted" };
+  };
+
   const repository: DatabaseAssetRepository = {
     async publish(input: PublishAssetInput) {
       const namespace = requiredText(input.namespace, "Asset namespace");
@@ -1947,57 +2080,15 @@ export function createDatabaseAssetRepository(
               maintenance.isBodyRetained &&
               await maintenance.isBodyRetained(body.bodyId)
             ) continue;
-            let deleted = false;
             try {
-              deleted = await options.session.transaction(
-                async (transaction) => {
-                  await transaction.query(
-                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-                    [options.databaseSchema, "body-ownership"],
-                  );
-                  const owner = await transaction.query<{ id: string }>(
-                    `SELECT id FROM ${tables.nodes}
-                 WHERE type IN ('asset', 'protected_value')
-                   AND data ->> 'state' = 'ready'
-                   AND data ->> 'bodyId' = $1
-                   AND data -> 'location' ->> 'kind' = $2
-                   AND (
-                     (type = 'asset' AND
-                       COALESCE(data -> 'location' ->> 'backendId', '') = $3)
-                     OR
-                     (type = 'protected_value' AND
-                       data -> 'location' ->> 'backendId' = $4)
-                   )
-                 LIMIT 1`,
-                    [
-                      body.bodyId,
-                      storage.writer!.kind,
-                      storage.writer!.kind === "database"
-                        ? ""
-                        : storage.writer!.backendId,
-                      storage.writer!.backendId,
-                    ],
-                  );
-                  if (owner.rows[0]) return false;
-                  const maintenanceStore = storage.writer!.kind === "database"
-                    ? createDatabaseBodyStore({
-                      session: transaction,
-                      schema: options.databaseSchema,
-                      backendId: storage.writer!.backendId,
-                    })
-                    : storage.writer!;
-                  return await maintenanceStore.maintenance.delete({
-                    bodyId: body.bodyId,
-                    expectedState: body.state,
-                    expectedMaintenanceVersion: body.maintenanceVersion,
-                    idleForMs: orphanAfterMs,
-                  });
-                },
+              const result = await retireBody(
+                { store: storage.writer!, body },
+                orphanAfterMs,
               );
+              if (result.status === "deleted") orphanedBodiesDeleted++;
             } catch {
-              // One unavailable backend object cannot block the remaining page.
+              // A durable retirement remains retryable after an adapter outage.
             }
-            if (deleted) orphanedBodiesDeleted++;
             if (orphanedBodiesDeleted >= limit) break;
           }
           if (!candidates.after) {
@@ -2009,64 +2100,7 @@ export function createDatabaseAssetRepository(
       return ({ orphanedBodiesDeleted } as const);
     },
 
-    async retireUnownedReadyBody(input) {
-      if (input.body.state !== "ready") {
-        return ({ status: "blocked" as const } as const);
-      }
-      return await options.session.transaction(async (transaction) => {
-        await transaction.query(
-          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-          [options.databaseSchema, "body-ownership"],
-        );
-        const owner = await transaction.query<{
-          id: string;
-          type: "asset" | "protected_value";
-        }>(
-          `SELECT id, type FROM ${tables.nodes}
-             WHERE type IN ('asset', 'protected_value')
-               AND data ->> 'state' = 'ready'
-               AND data ->> 'bodyId' = $1
-               AND data -> 'location' ->> 'kind' = $2
-               AND (
-                 (type = 'asset' AND
-                   COALESCE(data -> 'location' ->> 'backendId', '') = $3)
-                 OR
-                 (type = 'protected_value' AND
-                   data -> 'location' ->> 'backendId' = $4)
-               )
-             LIMIT 1`,
-          [
-            input.body.bodyId,
-            input.store.kind,
-            input.store.kind === "database" ? "" : input.store.backendId,
-            input.store.backendId,
-          ],
-        );
-        if (owner.rows[0]) {
-          return ({
-            status: "owned" as const,
-            ownerId: owner.rows[0].id,
-            ownerType: owner.rows[0].type,
-          } as const);
-        }
-        const maintenanceStore = input.store.kind === "database"
-          ? createDatabaseBodyStore({
-            session: transaction,
-            schema: options.databaseSchema,
-            backendId: input.store.backendId,
-          })
-          : input.store;
-        const deleted = await maintenanceStore.maintenance.delete({
-          bodyId: input.body.bodyId,
-          expectedState: "ready",
-          expectedMaintenanceVersion: input.body.maintenanceVersion,
-          idleForMs: 0,
-        });
-        return ({
-          status: deleted ? "deleted" as const : "blocked" as const,
-        } as const);
-      });
-    },
+    retireUnownedReadyBody: (input) => retireBody(input, 0),
 
     async materialize(input) {
       let plan = await prepareMaterializationOn(options.session, input);

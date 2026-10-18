@@ -9,11 +9,11 @@ import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
-  createCoreSchemaStatements,
   createCoreTableNames,
   createEventStore,
   createSqlSession,
   type EventStore,
+  provisionCopilotzSchema,
 } from "../events/index.ts";
 import {
   createPluginRegistry,
@@ -59,9 +59,7 @@ async function createFixture(options?: {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_execution";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   const store = createEventStore({
     session,
     schema,
@@ -649,6 +647,7 @@ Deno.test("cancelled execution never invokes terminal Processor recovery", async
       sendMetadata: async () => {},
       metadata: {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: 1,
         databaseSchema: fixture.store.databaseSchema,
         namespace: event.namespace,
         eventId: event.id,
@@ -820,6 +819,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     assertEquals(captured.length, 1);
     assertEquals(captured[0], {
       schema: "copilotz.delivery.dispatch.v1",
+      ownerEpoch: 1,
       databaseSchema: fixture.store.databaseSchema,
       deliveryId: committed.deliveries[0].id,
       eventId: committed.event.id,
@@ -1217,5 +1217,52 @@ Deno.test("A55 delivery execution core is factory-first and runtime-neutral", as
       !/serializedClosure|producedEvents|shouldProcess/.test(source),
       module,
     );
+  }
+});
+
+Deno.test("a stale owner dispatch cannot claim a delivery under the new epoch", async () => {
+  const fixture = await createFixture();
+  try {
+    const { event, deliveries: [delivery] } = await appendMessage(fixture);
+    const authority = await fixture.store.executionAuthority();
+    const workload = createDeliveryWorkload({
+      store: fixture.store,
+      registry: fixture.registry,
+      createContext: fixture.createContext,
+    });
+    await assertRejects(
+      async () =>
+        await workload({
+          streamId: "stale",
+          workload: "copilotz.delivery.v1",
+          input: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          sendMetadata: () => Promise.resolve(),
+          metadata: {
+            schema: "copilotz.delivery.dispatch.v1",
+            ownerEpoch: authority.epoch + 1,
+            databaseSchema: fixture.store.databaseSchema,
+            namespace: event.namespace,
+            eventId: event.id,
+            deliveryId: delivery.id,
+            consumerId: delivery.consumerId,
+            dispatchAttemptId: "stale",
+            idempotencyKey: delivery.id,
+          },
+          signal: new AbortController().signal,
+        }),
+      Error,
+      "stale owner epoch",
+    );
+    assertEquals(
+      (await fixture.store.getDelivery(delivery.id))?.status,
+      "pending",
+    );
+    assertEquals(fixture.calls.length, 0);
+  } finally {
+    await closeFixture(fixture);
   }
 });

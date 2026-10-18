@@ -1,3 +1,4 @@
+import { assertCommandTransaction } from "../engine/commands.ts";
 import type { EventMutationContext } from "./store.ts";
 import type { EventBodyRef } from "./types.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
@@ -107,6 +108,7 @@ export async function writeEventBody(
   context: EventBodyStoreContext,
   input: WriteEventBodyInput,
 ): Promise<EventBodyRef> {
+  assertCommandTransaction(context.transaction);
   const { body, digest } = await encodeEventBody(input.json);
   const inserted = await context.transaction.query<EventBodyRow>(
     `INSERT INTO ${context.tables.event_bodies} (

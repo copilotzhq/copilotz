@@ -1,4 +1,8 @@
 import {
+  createSchemaCommandRunner,
+  openDatabaseOwner,
+} from "../engine/commands.ts";
+import {
   assert,
   assertEquals,
   assertExists,
@@ -138,7 +142,9 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
         "nodes",
         "open_actions",
         "owner_alarms",
+        "owner_body_retirements",
         "owner_epochs",
+        "owner_event_sequences",
         "owner_receipts",
       ],
     );
@@ -517,27 +523,33 @@ Deno.test("events this store committed are read back without a query", async () 
     );
 
     // A joined transaction's event is remembered only after outer COMMIT.
-    const joined = await fixture.session.transaction((transaction) =>
+    const joined = await createSchemaCommandRunner(
+      fixture.session,
+      TEST_SCHEMA,
+    )("test.mutation", {}, (_input, { transaction }) =>
       store.commitMutation({
         draft: draft("note-2"),
         consumers: [],
         transaction,
-      })
-    );
+      }));
     statements = 0;
     assertExists(await store.getEvent(joined.event.id));
     assertEquals(statements, 0);
 
     let rolledBackId = "";
     await assertRejects(() =>
-      fixture.session.transaction(async (transaction) => {
-        rolledBackId = (await store.commitMutation({
-          draft: draft("note-3"),
-          consumers: [],
-          transaction,
-        })).event.id;
-        throw new Error("rollback");
-      })
+      createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+        "test.mutation",
+        {},
+        async (_input, { transaction }) => {
+          rolledBackId = (await store.commitMutation({
+            draft: draft("note-3"),
+            consumers: [],
+            transaction,
+          })).event.id;
+          throw new Error("rollback");
+        },
+      )
     );
     assertEquals(await store.getEvent(rolledBackId), null);
   } finally {
@@ -580,6 +592,9 @@ Deno.test("an event, body and deliveries commit atomically and dedupe on retry",
       body: { id: "body-1", json },
     });
   try {
+    await openDatabaseOwner(counted, TEST_SCHEMA);
+    transactions = 0;
+    statements.length = 0;
     const first = await commit({ text: "hello" });
     assertEquals(transactions, 1);
     assert(statements.length > 0);

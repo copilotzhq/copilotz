@@ -1,4 +1,4 @@
-import { runSqlTransaction as transact } from "../events/session.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import {
   projectVector,
   searchVectors,
@@ -790,6 +790,10 @@ export function createCollectionKernel(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
+  const runCommand = createSchemaCommandRunner(
+    options.session,
+    options.eventStore.databaseSchema,
+  );
   const bound = new Map<string, BoundCollection>();
   const operations = new Map<string, CollectionOperations>();
   type TransactionBinding = Readonly<{
@@ -1418,9 +1422,10 @@ export function createCollectionKernel(
       if (composed === undefined && adopting && !execution) {
         const pending: CoordinatedMutationResult<unknown>[] = [];
         let resolvedPlan: CollectionMutationPlan | undefined;
-        const result = await transact(
-          options.session,
-          async (transaction) => {
+        const result = await runCommand(
+          "collections.reconcile",
+          { eventType, subjectId, operation },
+          async (_input, { transaction }) => {
             const replacements = await options.assets!
               .reconcileMaterializations(transaction, plan.content);
             const resolved = reconcileCollectionContent(
@@ -3352,7 +3357,11 @@ export function createCollectionKernel(
       } as const);
     }
     try {
-      await transact(options.session, async (transaction) => {
+      await runCommand("collections.commit", {
+        namespace,
+        operationKey,
+        plans: orderedPlans.map((plan) => plan.id),
+      }, async (_input, { transaction }) => {
         replacements = options.assets
           ? await options.assets.reconcileMaterializations(transaction, [
             ...new Set([...scope.assets.values()].map((asset) => asset.plan)),

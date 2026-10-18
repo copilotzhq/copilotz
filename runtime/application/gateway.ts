@@ -1,3 +1,4 @@
+import { hostOwnerExecution } from "../execution/workload.ts";
 import {
   createHypervisor,
   type Hypervisor,
@@ -191,10 +192,17 @@ export async function createCopilotzGateway(
     ], "Copilotz Gateway recovery cleanup failed.").catch(() => undefined);
     throw error;
   }
+  const stopHostingExecution = hostOwnerExecution(
+    application.execution,
+    transports,
+    options.database ?? options.persistence,
+    options.databaseSchema?.trim() || "public",
+  );
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
     stopObservingPersistence();
+    stopHostingExecution();
     shutdownTask = settleAll([
       () => application!.shutdown(reason),
       () => hypervisor?.shutdown(reason),

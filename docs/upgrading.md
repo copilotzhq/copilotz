@@ -8,6 +8,19 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Schema owner upgrade: v9
+
+Each physical database schema now has one fenced owner shared by its namespaces.
+Fresh provisioning installs v9. Existing v8 schemas gain owner epochs, receipts,
+alarms, body retirement claims, and event sequence records without rewriting
+immutable events or open Action obligations. Call `upgradeActionLifecycle` or
+`provisionCopilotzSchema` before starting the new runtime. The owner acquires
+its epoch before accepting storage commands.
+
+The v5, v6 and v7 lifecycle upgrades below first replace drained obligations
+with the v8 continuation layout, then install the v9 owner tables in the same
+atomic upgrade. Their drain refusal still applies.
+
 ## Stream taxonomy upgrade
 
 The stream catalog now uses fingerprint `stream-taxonomy-continuations-v1`. Stop
@@ -59,7 +72,8 @@ receipts remain readable event history; the new runtime does not execute old
 deferred workflows.
 
 The release notes below describe earlier schema versions and their migrations.
-Use the v8 procedure above when upgrading to the current runtime.
+Use the continuation procedure and v9 owner upgrade above for the current
+runtime.
 
 ## 0.88.0: durable compaction waits
 
@@ -296,9 +310,9 @@ composed Collection definitions. Default database provisioning performs this
 step automatically. It adds indexes and enforces declared uniqueness, but never
 rewrites rows or drops old indexes. Resolve any duplicate-key violation through
 an explicit data correction; provisioning does not choose which record to keep.
-For populated PostgreSQL schemas, use the provisioning option
-`{ concurrently: true }` from one standalone host operation to avoid blocking
-normal writes. See [Collections](./collections.md#provision-declared-indexes).
+Provision populated schemas before admitting work: index creation now runs
+inside the schema owner command and holds its queue until commit. See
+[Collections](./collections.md#provision-declared-indexes).
 
 ### Test against disposable data only
 

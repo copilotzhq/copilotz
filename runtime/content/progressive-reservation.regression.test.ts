@@ -62,8 +62,16 @@ Deno.test("a remote follower can open an empty reserved progressive body", async
       [schema],
     );
     assertEquals(
-      tables.rows.map((row) => row.table_name),
+      tables.rows.map((row) => row.table_name).filter((name) =>
+        name.startsWith("content_")
+      ),
       ["content_bodies", "content_body_parts"],
+    );
+    assertEquals(
+      (await db.query(
+        `SELECT count(*)::int AS n FROM "${schema}".owner_epochs`,
+      )).rows,
+      [{ n: 1 }],
     );
   } finally {
     await writer.abandon().catch(() => undefined);

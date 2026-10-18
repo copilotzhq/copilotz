@@ -136,7 +136,6 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     id: workerId,
     transport,
     capacity: 8,
-    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await worker.ready;

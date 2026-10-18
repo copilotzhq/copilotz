@@ -1,9 +1,9 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
-  createCoreSchemaStatements,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
   quoteEventIdentifier,
 } from "./index.ts";
 const POSTGRES_URL = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
@@ -21,9 +21,7 @@ Deno.test({
     const db = await createTestDatabase({ url: POSTGRES_URL! });
     const session = createSqlSession(db);
     try {
-      for (const statement of createCoreSchemaStatements(schema)) {
-        await session.query(statement);
-      }
+      await provisionCopilotzSchema(session, schema);
       const tables = await session.query<{
         table_name: string;
       }>(
@@ -41,7 +39,9 @@ Deno.test({
         "nodes",
         "open_actions",
         "owner_alarms",
+        "owner_body_retirements",
         "owner_epochs",
+        "owner_event_sequences",
         "owner_receipts",
       ]);
       const store = createEventStore({

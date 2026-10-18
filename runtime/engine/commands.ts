@@ -1,4 +1,7 @@
-import { createCoreTableNames } from "../events/schema.ts";
+import {
+  createCoreTableNames,
+  provisionCopilotzSchema,
+} from "../events/schema.ts";
 import {
   afterSqlCommit,
   runSqlSavepoint,
@@ -213,16 +216,14 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     }
   }
 
-  function execute<K extends keyof T & string>(
-    kind: K,
+  function submit<Input, Output>(
+    kind: string,
     caller: CommandCaller,
-    request: CommandRequest<T[K]["input"]>,
-  ): Promise<T[K]["output"]> {
+    request: CommandRequest<Input>,
+    handler: CommandDefinition<Input, Output>,
+  ): Promise<Output> {
     try {
       assertAcquired();
-      if (!Object.hasOwn(options.handlers, kind)) {
-        throw new TypeError(`Unknown owner command '${kind}'.`);
-      }
       if (pending.length + Number(running) >= capacity) {
         throw failure("owner_queue_full", "The owner command queue is full.");
       }
@@ -235,7 +236,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     } catch (error) {
       return Promise.reject(error);
     }
-    const completion = Promise.withResolvers<T[K]["output"]>();
+    const completion = Promise.withResolvers<Output>();
     const receipt = request.receipt && {
       identity: { ...request.receipt.identity },
       intent: JSON.parse(canonical(request.receipt.intent)) as CommandJson,
@@ -288,7 +289,12 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                     callbacks.push(callback);
                   },
                 };
-                const handler = options.handlers[kind];
+                commandContexts.set(tx, {
+                  schema: options.schema,
+                  ownerId: owner,
+                  holderId: holder,
+                  context,
+                });
                 // Authority is checked even when returning a durable duplicate.
                 await handler.authorize(request.input, context);
                 assertAcquired();
@@ -314,7 +320,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                       );
                     }
 
-                    return existing.result as T[K]["output"];
+                    return existing.result as Output;
                   }
                 }
                 const output = await handler.execute(request.input, context);
@@ -350,7 +356,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
               if (!saved.ok) {
                 handlerError = saved.error;
                 handlerFailed = true;
-                return undefined as T[K]["output"];
+                return undefined as Output;
               }
               return saved.value;
             },
@@ -394,10 +400,30 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     },
     ownerId: owner,
     holderId: holder,
+    signal: lifetime.signal,
     stopped: stopped.promise,
     ready: readiness.promise,
     acquire,
-    execute,
+    execute<K extends keyof T & string>(
+      kind: K,
+      caller: CommandCaller,
+      request: CommandRequest<T[K]["input"]>,
+    ): Promise<T[K]["output"]> {
+      if (!Object.hasOwn(options.handlers, kind)) {
+        return Promise.reject(
+          new TypeError(`Unknown owner command '${kind}'.`),
+        );
+      }
+      return submit(kind, caller, request, options.handlers[kind]);
+    },
+    /** Core modules register handlers locally; command callers supply only data. */
+    register<Input, Output>(
+      kind: string,
+      handler: CommandDefinition<Input, Output>,
+    ) {
+      return (caller: CommandCaller, request: CommandRequest<Input>) =>
+        submit(kind, caller, request, handler);
+    },
     /** Caller identity is authenticated by the host, independently of its epoch. */
     async readReceipt(caller: CommandCaller, identity: CommandIdentity) {
       if (!caller.principal || !identity.key) {
@@ -446,12 +472,14 @@ export async function openDatabaseOwner(
     existing.epoch === Number(row.epoch)
   ) {
     ownerReferences.set(existing, (ownerReferences.get(existing) ?? 0) + 1);
+    bindOwner(session, schema, existing);
     return existing;
   }
   const owner = createOwnerCommands({ session, schema, handlers: {} });
   await owner.acquire(Number(row?.epoch ?? 0));
   localOwners.set(owner.holderId, new WeakRef(owner));
   ownerReferences.set(owner, 1);
+  bindOwner(session, schema, owner);
   return owner;
 }
 
@@ -462,5 +490,168 @@ export function releaseDatabaseOwner(owner: DatabaseOwner): void {
   if (remaining <= 0) {
     owner.stop();
     localOwners.delete(owner.holderId);
+    for (const { session, schema, slot } of ownerSlots.get(owner) ?? []) {
+      if (schemaOwners.get(session)?.get(schema) === slot) {
+        schemaOwners.get(session)!.delete(schema);
+      }
+    }
+    ownerSlots.delete(owner);
   }
+}
+
+type SchemaOwnerSlot = { acquired?: Promise<DatabaseOwner> };
+const schemaOwners = new WeakMap<SqlSession, Map<string, SchemaOwnerSlot>>();
+const ownerSlots = new WeakMap<
+  DatabaseOwner,
+  Array<{ session: SqlSession; schema: string; slot: SchemaOwnerSlot }>
+>();
+const commandContexts = new WeakMap<SqlExecutor, {
+  schema: string;
+  ownerId: string;
+  holderId: string;
+  context: CommandContext;
+}>();
+
+function ownerSlot(session: SqlSession, schema: string): SchemaOwnerSlot {
+  let scopes = schemaOwners.get(session);
+  if (!scopes) {
+    scopes = new Map();
+    schemaOwners.set(session, scopes);
+  }
+  let slot = scopes.get(schema);
+  if (!slot) {
+    slot = {};
+    scopes.set(schema, slot);
+  }
+  return slot;
+}
+
+/** Registers a data command at a trusted repository's construction boundary. */
+function registerCommandOnSlot<Input, Output>(
+  session: SqlSession,
+  schema: string,
+  slot: SchemaOwnerSlot,
+  kind: string,
+  execute: (input: Input, context: CommandContext) => Output | Promise<Output>,
+) {
+  let registered: ReturnType<DatabaseOwner["register"]> | undefined;
+  return async (input: Input, transaction?: SqlExecutor): Promise<Output> => {
+    slot.acquired ??= (async () => {
+      await provisionCopilotzSchema(session, schema);
+      return await openDatabaseOwner(session, schema);
+    })();
+    const owner = await slot.acquired;
+    if (transaction) {
+      const joined = commandContexts.get(transaction);
+      if (
+        !joined || joined.schema !== schema ||
+        joined.holderId !== owner.holderId || joined.ownerId !== owner.ownerId
+      ) {
+        throw failure(
+          "owner_transaction_required",
+          "A transaction from this database owner is required.",
+        );
+      }
+      return await execute(input, joined.context);
+    }
+    registered ??= owner.register(kind, {
+      authorize() {},
+      execute: execute as (input: unknown, context: CommandContext) => unknown,
+    });
+    return await registered({ principal: "runtime", epoch: owner.epoch! }, {
+      input,
+    }) as Output;
+  };
+}
+
+function bindOwner(
+  session: SqlSession,
+  schema: string,
+  owner: DatabaseOwner,
+): void {
+  ownerSlot(session, schema);
+  const slot = { acquired: Promise.resolve(owner) };
+  schemaOwners.get(session)!.set(schema, slot);
+  const slots = ownerSlots.get(owner) ?? [];
+  slots.push({ session, schema, slot });
+  ownerSlots.set(owner, slots);
+}
+
+/** Captures repository authority before any commands are submitted. */
+export function createSchemaCommandRunner(
+  session: SqlExecutor,
+  schema: string,
+) {
+  const joined = commandContexts.get(session);
+  const sql = session as SqlSession;
+  const slot = joined ? undefined : ownerSlot(sql, schema);
+  return <Input, Output>(
+    kind: string,
+    input: Input,
+    execute: (
+      input: Input,
+      context: CommandContext,
+    ) => Output | Promise<Output>,
+  ): Promise<Output> => {
+    if (joined) {
+      assertSchemaCommandTransaction(session, schema);
+      return Promise.resolve(execute(input, joined.context));
+    }
+    if (typeof sql.transaction !== "function") {
+      return Promise.reject(
+        new TypeError(
+          "Owner commands require an atomic SQL session or an active owner transaction.",
+        ),
+      );
+    }
+    return registerCommandOnSlot(sql, schema, slot!, kind, execute)(input);
+  };
+}
+
+export function assertCommandTransaction(transaction: SqlExecutor): void {
+  const command = commandContexts.get(transaction);
+  if (!command || command.context.signal.aborted) {
+    throw failure(
+      "owner_transaction_required",
+      "A current transaction from this database owner is required.",
+    );
+  }
+  sqlCommitGate(transaction);
+}
+
+export function assertSchemaCommandTransaction(
+  transaction: SqlExecutor,
+  schema: string,
+): void {
+  const command = commandContexts.get(transaction);
+  if (!command || command.schema !== schema || command.context.signal.aborted) {
+    throw failure(
+      "owner_transaction_required",
+      "A current transaction from this database owner is required.",
+    );
+  }
+  sqlCommitGate(transaction);
+}
+
+const activations = new WeakMap<DatabaseOwner, Promise<void>>();
+/** One activation per epoch, shared by every context attached to that owner. */
+export function activateDatabaseOwner(
+  owner: DatabaseOwner,
+  recover: () => Promise<void>,
+): Promise<void> {
+  if (owner.state === "ready") return Promise.resolve();
+  let activation = activations.get(owner);
+  if (!activation) {
+    activation = (async () => {
+      try {
+        await recover();
+        owner.activate();
+      } catch (error) {
+        owner.stop(error);
+        throw error;
+      }
+    })();
+    activations.set(owner, activation);
+  }
+  return activation;
 }

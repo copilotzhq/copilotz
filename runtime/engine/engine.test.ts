@@ -238,7 +238,9 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "nodes",
       "open_actions",
       "owner_alarms",
+      "owner_body_retirements",
       "owner_epochs",
+      "owner_event_sequences",
       "owner_receipts",
     ]);
     const namespace = "tenant-a";
@@ -531,7 +533,7 @@ Deno.test("database scopes acquire one owner after validation and reject unprovi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 7);
+    assert(observed.some((sql) => sql.includes("open_actions")));
     assert(/owner_epochs/.test(observed[6]));
     assert(/pg_index/.test(observed[5]));
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);

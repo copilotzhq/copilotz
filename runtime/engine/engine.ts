@@ -1,11 +1,19 @@
-import { runSqlTransaction } from "../events/session.ts";
+import {
+  bindOwnerExecution,
+  createDeliveryWorkload,
+  type OwnerExecutionOptions,
+} from "../execution/workload.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import {
   type DatabaseOwner,
   openDatabaseOwner,
   releaseDatabaseOwner,
 } from "./commands.ts";
 import { deriveWorkflowId } from "../events/workflow-id.ts";
-import { admitActionOperation } from "../actions/continuation-work.ts";
+import {
+  admitActionOperation,
+  prepareActionOperation,
+} from "../actions/continuation-work.ts";
 import { scheduleResumptions } from "../actions/continuation-work.ts";
 import { executeActionContinuation } from "../actions/resume.ts";
 import {
@@ -138,11 +146,13 @@ export async function createCopilotzEngine(
       options.session,
       databaseSchema,
       {
-        onSettled: (transaction, input) =>
-          scheduleResumptions(
-            { store, coordinator: primaryRuntime!.coordinator },
-            input,
-            transaction,
+        onSettled: async (transaction, input) =>
+          primaryRuntime!.deferPublication(
+            await scheduleResumptions(
+              { store, coordinator: primaryRuntime!.coordinator },
+              input,
+              transaction,
+            ),
           ),
         onStreamTerminal: ({ namespace, operationId }) => {
           // A terminal body may arrive after its delivery has settled. Wake the
@@ -256,10 +266,16 @@ export async function createCopilotzEngine(
         import("../actions/invoker.ts").CreateActionCallersOptions[
           "resumption"
         ],
+      execution?: OwnerExecutionOptions,
     ): Promise<ProcessorContext> => {
       const additional = base.databaseSchema === databaseSchema
         ? undefined
         : await resolveAdditionalScope(base.databaseSchema);
+      const scopedOwner = additional?.runtime.owner ?? owner;
+      base = {
+        ...base,
+        signal: AbortSignal.any([base.signal, scopedOwner.signal]),
+      };
       const scopedCapabilities = additional?.runtime.capabilities ??
         capabilities;
       const scopedResolver = additional?.runtime.public.content.resolver ??
@@ -294,73 +310,85 @@ export async function createCopilotzEngine(
               base.event.namespace,
               input.operationKey,
             );
-            const committed = await runSqlTransaction(
+            const preparedOperation = await prepareActionOperation(
+              {
+                store: scopedStore,
+                coordinator: scopedCoordinator,
+                actions: (execution?.registry ?? options.registry).actions,
+                protectedValues: scopedCapabilities.protectedValues,
+              },
+              base.event.namespace,
+              operationId,
+              input,
+            );
+            const committed = await createSchemaCommandRunner(
               scopedStore.session,
-              async (transaction) => {
-                await transaction.query(
-                  "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-                  [base.databaseSchema, `continuation:${base.event.namespace}`],
-                );
-                if (base.settlementScopeId) {
-                  const source = await transaction.query(
-                    `SELECT operation_id
+              base.databaseSchema,
+            )("actions.start", input, async (_input, { transaction }) => {
+              await transaction.query(
+                "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                [base.databaseSchema, `continuation:${base.event.namespace}`],
+              );
+              if (base.settlementScopeId) {
+                const source = await transaction.query(
+                  `SELECT operation_id
                   FROM ${
-                      createOperationCatalogTables(base.databaseSchema)
-                        .operations
-                    }
+                    createOperationCatalogTables(base.databaseSchema)
+                      .operations
+                  }
                   WHERE namespace = $1 AND operation_id = $2
                     AND state IN ('accepted','running') AND cancellation_requested_at IS NULL FOR UPDATE`,
-                    [base.event.namespace, base.settlementScopeId],
-                  );
-                  if (!source.rows.length) {
-                    throw new Error(
-                      "Operation admission lost its active source operation.",
-                    );
-                  }
-                }
-                if (base.source?.kind === "delivery") {
-                  const lease = await transaction.query(
-                    `SELECT id FROM ${scopedStore.tables.event_deliveries}
-                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND lease_expires_at > NOW() FOR UPDATE`,
-                    [base.source.id, base.executionIncarnationId],
-                  );
-                  if (!lease.rows.length) {
-                    throw new Error(
-                      "Operation admission lost its delivery lease.",
-                    );
-                  }
-                }
-                return await admitActionOperation(
-                  {
-                    store: scopedStore,
-                    coordinator: scopedCoordinator,
-                    actions: options.registry.actions,
-                    protectedValues: scopedCapabilities.protectedValues,
-                  },
-                  transaction,
-                  {
-                    namespace: base.event.namespace,
-                    operationId,
-                    start: input,
-                    correlationId: base.event.correlationId,
-                    causationId: base.event.durable
-                      ? base.event.id
-                      : base.event.causationId,
-                    metadata: {
-                      observationKeys: base.event.metadata.observationKeys ??
-                        [],
-                    },
-                  },
+                  [base.event.namespace, base.settlementScopeId],
                 );
-              },
-            );
+                if (!source.rows.length) {
+                  throw new Error(
+                    "Operation admission lost its active source operation.",
+                  );
+                }
+              }
+              if (base.source?.kind === "delivery") {
+                const lease = await transaction.query(
+                  `SELECT id FROM ${scopedStore.tables.event_deliveries}
+                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND lease_expires_at > NOW() FOR UPDATE`,
+                  [base.source.id, base.executionIncarnationId],
+                );
+                if (!lease.rows.length) {
+                  throw new Error(
+                    "Operation admission lost its delivery lease.",
+                  );
+                }
+              }
+              return await admitActionOperation(
+                {
+                  store: scopedStore,
+                  coordinator: scopedCoordinator,
+                  actions: (execution?.registry ?? options.registry).actions,
+                  protectedValues: scopedCapabilities.protectedValues,
+                },
+                transaction,
+                {
+                  namespace: base.event.namespace,
+                  operationId,
+                  start: input,
+                  correlationId: base.event.correlationId,
+                  causationId: base.event.durable
+                    ? base.event.id
+                    : base.event.causationId,
+                  metadata: {
+                    observationKeys: base.event.metadata.observationKeys ??
+                      [],
+                  },
+                },
+                preparedOperation,
+              );
+            });
             if (committed) await scopedCoordinator.flushCommitted(committed);
             return operationId;
           },
         },
         base,
         actionResumption,
-        registry: options.registry,
+        registry: execution?.registry ?? options.registry,
         assets: scopedCapabilities.assets,
         preparer,
         resolver: scopedResolver,
@@ -374,7 +402,7 @@ export async function createCopilotzEngine(
         eventHub: scopedEventHub,
         async publishOutput(output) {
           if (isStreamOutputDescriptor(output)) {
-            await options.publish?.(output, {
+            await (execution?.publish ?? options.publish)?.(output, {
               databaseSchema: base.databaseSchema,
               ...(base.settlementScopeId
                 ? { settlementScopeId: base.settlementScopeId }
@@ -407,7 +435,7 @@ export async function createCopilotzEngine(
           append: createActionLifecycleAppender({
             coordinator: scopedCoordinator,
             store: scopedStore,
-            actions: options.registry.actions,
+            actions: (execution?.registry ?? options.registry).actions,
             protectedValues: scopedCapabilities.protectedValues,
             ...(base.source?.kind === "delivery" && base.executionIncarnationId
               ? {
@@ -421,7 +449,7 @@ export async function createCopilotzEngine(
           }),
           load: createActionLifecycleLoader({
             store: scopedStore,
-            actions: options.registry.actions,
+            actions: (execution?.registry ?? options.registry).actions,
             protectedValues: scopedCapabilities.protectedValues,
           }),
           metadata: {
@@ -469,42 +497,58 @@ export async function createCopilotzEngine(
         import("../actions/invoker.ts").CreateActionCallersOptions[
           "resumption"
         ],
+      execution?: OwnerExecutionOptions,
     ): Promise<ProcessorContext> =>
-      await createContextFor({
-        databaseSchema: base.databaseSchema,
-        event: base.event,
-        signal: base.signal,
-        executionIncarnationId: base.dispatchAttemptId,
-        settlementScopeId: base.settlementScopeId,
-        actionScopeId: base.actionScopeId,
-        idempotencyKey: base.idempotencyKey,
-        createMutationIdentity: base.createMutationIdentity,
-        source: {
-          kind: "delivery",
-          id: base.delivery.id,
-          consumerId: base.delivery.consumerId,
+      await createContextFor(
+        {
+          databaseSchema: base.databaseSchema,
+          event: base.event,
+          signal: base.signal,
+          executionIncarnationId: base.dispatchAttemptId,
+          settlementScopeId: base.settlementScopeId,
+          actionScopeId: base.actionScopeId,
+          idempotencyKey: base.idempotencyKey,
+          createMutationIdentity: base.createMutationIdentity,
+          source: {
+            kind: "delivery",
+            id: base.delivery.id,
+            consumerId: base.delivery.consumerId,
+          },
         },
-      }, actionResumption);
+        actionResumption,
+        execution,
+      );
+    const resolveAuthority = async (schema: string) =>
+      await (schema === databaseSchema
+        ? store
+        : (await resolveAdditionalScope(schema)).runtime.store)
+        .executionAuthority();
+
     const createLiveContext = async (
       base: LiveProcessorContextBase,
+      execution?: OwnerExecutionOptions,
     ): Promise<ProcessorContext> =>
-      await createContextFor({
-        databaseSchema: base.databaseSchema,
-        event: base.event,
-        signal: base.signal,
-        executionIncarnationId: base.dispatchAttemptId,
-        ...(base.settlementScopeId
-          ? { settlementScopeId: base.settlementScopeId }
-          : {}),
-        actionScopeId: base.actionScopeId,
-        idempotencyKey: base.idempotencyKey,
-        createMutationIdentity: base.createMutationIdentity,
-        source: {
-          kind: "live",
-          id: base.dispatchAttemptId,
-          consumerId: `processor:${base.processorId}`,
+      await createContextFor(
+        {
+          databaseSchema: base.databaseSchema,
+          event: base.event,
+          signal: base.signal,
+          executionIncarnationId: base.dispatchAttemptId,
+          ...(base.settlementScopeId
+            ? { settlementScopeId: base.settlementScopeId }
+            : {}),
+          actionScopeId: base.actionScopeId,
+          idempotencyKey: base.idempotencyKey,
+          createMutationIdentity: base.createMutationIdentity,
+          source: {
+            kind: "live",
+            id: base.dispatchAttemptId,
+            consumerId: `processor:${base.processorId}`,
+          },
         },
-      });
+        undefined,
+        execution,
+      );
 
     const configuredWorkloads = options.execution?.workloads ?? {};
     const configuredLocalWorkers = options.execution?.localWorkloadWorkers ??
@@ -521,6 +565,7 @@ export async function createCopilotzEngine(
       workloads: {
         ...configuredWorkloads,
         [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
+          resolveAuthority,
           registry: options.registry,
           transients,
           createContext: createLiveContext,
@@ -633,6 +678,7 @@ export async function createCopilotzEngine(
       },
     });
     const liveDispatcher = createLiveEventDispatcher({
+      resolveAuthority,
       registry: options.registry,
       transients,
       executor,
@@ -742,15 +788,24 @@ export async function createCopilotzEngine(
               normalized,
               definitions,
             );
+            scopedOwner = await openDatabaseOwner(
+              options.session,
+              normalized,
+            );
             const scopedOperationCatalog = createOperationCatalog(
               options.session,
               normalized,
               {
-                onSettled: (transaction, input) =>
-                  scheduleResumptions(
-                    { store: runtime.store, coordinator: runtime.coordinator },
-                    input,
-                    transaction,
+                onSettled: async (transaction, input) =>
+                  runtime.deferPublication(
+                    await scheduleResumptions(
+                      {
+                        store: runtime.store,
+                        coordinator: runtime.coordinator,
+                      },
+                      input,
+                      transaction,
+                    ),
                   ),
                 onStreamTerminal: ({ namespace, operationId }) => {
                   void (async () => {
@@ -773,10 +828,6 @@ export async function createCopilotzEngine(
             );
             const scopedTransients = configuredTransients();
             transientsBySchema.set(normalized, scopedTransients);
-            scopedOwner = await openDatabaseOwner(
-              options.session,
-              normalized,
-            );
             const runtime = createDatabaseScope({
               owner: scopedOwner,
               databaseSchema: normalized,
@@ -796,8 +847,15 @@ export async function createCopilotzEngine(
                   actionScopeId,
                 }),
             });
-            return ({ runtime, hub } as const);
+            await runtime.activate();
+            const activated = { runtime, hub } as const;
+            // Recovery publications can resolve this schema again. Make the
+            // activated capabilities available before dispatching that work.
+            additionalScopes.set(normalized, Promise.resolve(activated));
+            await runtime.publishActivation();
+            return activated;
           } catch (error) {
+            additionalScopes.delete(normalized);
             if (scopedOwner) releaseDatabaseOwner(scopedOwner);
             transientsBySchema.delete(normalized);
             hub.close(error);
@@ -950,6 +1008,42 @@ export async function createCopilotzEngine(
           if (ownsEventHub) eventHub.close();
         },
       };
+      await scope.activate();
+      await scope.publishActivation();
+      bindOwnerExecution(engine.execution, (execution) => {
+        const context: typeof createContext = (base, resumption) =>
+          createContext(base, resumption, execution);
+        return {
+          [executor.workload]: createDeliveryWorkload({
+            registry: execution.registry,
+            workerId: execution.workerId,
+            onDiagnostic: execution.onDiagnostic,
+            resolveStore: async (schema) =>
+              schema === databaseSchema
+                ? store
+                : (await resolveAdditionalScope(schema)).runtime.store,
+            createContext: context,
+            async executeContinuation(base) {
+              const runtime = base.databaseSchema === databaseSchema
+                ? scope
+                : (await resolveAdditionalScope(base.databaseSchema)).runtime;
+              await executeActionContinuation({
+                store: runtime.store,
+                actions: execution.registry.actions,
+                protectedValues: runtime.capabilities.protectedValues,
+                base,
+                createContext: context,
+              });
+            },
+          }),
+          [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
+            resolveAuthority,
+            registry: execution.registry,
+            createContext: (base) => createLiveContext(base, execution),
+            resolveEvent: resolveEventInScope,
+          }),
+        };
+      });
       return engine;
     } catch (error) {
       await executor.shutdown("copilotz_engine_initialization_failed").catch(

@@ -1,4 +1,4 @@
-import { runSqlTransaction } from "../events/session.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type { OperationStart } from "./continuation.ts";
 import {
   prepareProtectedEventBody,
@@ -35,6 +35,31 @@ type Runtime = Readonly<
   }
 >;
 
+export async function prepareActionOperation(
+  runtime: Runtime,
+  namespace: string,
+  operationId: string,
+  start: OperationStart,
+) {
+  const child = runtime.actions?.[start.action];
+  if (runtime.actions && !child) {
+    throw new TypeError(`Unknown Action '${start.action}'.`);
+  }
+  return await prepareProtectedEventBody({
+    namespace,
+    ownerId: `${operationId}:start`,
+    data: {
+      action: start.action,
+      input: start.input,
+      metadata: start.metadata ?? {},
+    },
+    schema: child && actionInputHasSecrets(child)
+      ? { "x-copilotz-secret": true }
+      : {},
+    protectedValues: runtime.protectedValues,
+  });
+}
+
 /** One admission path for standalone producers and linked children. */
 export async function admitActionOperation(
   runtime: Runtime,
@@ -49,26 +74,10 @@ export async function admitActionOperation(
       metadata: Readonly<Record<string, unknown>>;
     }
   >,
+  prepared: Awaited<ReturnType<typeof prepareActionOperation>>,
 ): Promise<Awaited<ReturnType<EventStore["commitMutation"]>> | undefined> {
   const { store } = runtime;
-  const { namespace, operationId, start } = input;
-  const child = runtime.actions?.[start.action];
-  if (runtime.actions && !child) {
-    throw new TypeError(`Unknown Action '${start.action}'.`);
-  }
-  const prepared = await prepareProtectedEventBody({
-    namespace,
-    ownerId: `${operationId}:start`,
-    data: {
-      action: start.action,
-      input: start.input,
-      metadata: start.metadata ?? {},
-    },
-    schema: child && actionInputHasSecrets(child)
-      ? { "x-copilotz-secret": true }
-      : {},
-    protectedValues: runtime.protectedValues,
-  });
+  const { namespace, operationId } = input;
   const existing = await tx.query<{ payload: unknown }>(
     `SELECT event.payload FROM ${
       createOperationCatalogTables(store.databaseSchema).operations
@@ -127,6 +136,7 @@ export async function startAwaitedOperation(
   tx: SqlExecutor,
   input: ActionLifecycleAppendInput,
   writer: ActionWriter | undefined,
+  preparedChild: Awaited<ReturnType<typeof prepareActionOperation>> | undefined,
 ): Promise<() => Promise<void>> {
   const { store, coordinator } = runtime;
   const { draft, data } = input;
@@ -216,6 +226,9 @@ export async function startAwaitedOperation(
         "A linked child cannot be shared between Action awaits.",
       );
     }
+    if (!preparedChild) {
+      throw new Error("Linked child input must be prepared before admission.");
+    }
     committed = await admitActionOperation(runtime, tx, {
       namespace,
       operationId: childId,
@@ -227,7 +240,7 @@ export async function startAwaitedOperation(
         observationKeys: parent.rows[0].observation_keys,
         parent: { operationId: parentId, actionRunId: data.actionRunId },
       },
-    });
+    }, preparedChild);
     const catalogTables = createOperationCatalogTables(store.databaseSchema);
     await tx.query(
       `WITH linked AS (
@@ -261,15 +274,15 @@ export async function startAwaitedOperation(
     namespace,
     operationId: childId,
   }, tx);
+  await notifyOperationChange(
+    store.session,
+    tx,
+    store.databaseSchema,
+    namespace,
+    childId,
+  );
   return async () => {
     if (committed) await coordinator.flushCommitted(committed);
-    await notifyOperationChange(
-      store.session,
-      store.session,
-      store.databaseSchema,
-      namespace,
-      childId,
-    );
     await resume();
   };
 }
@@ -366,7 +379,11 @@ export async function scheduleResumptions(
     }
   };
   if (transaction) await run(transaction);
-  else await runSqlTransaction(store.session, run);
+  else {await createSchemaCommandRunner(store.session, store.databaseSchema)(
+      "actions.resume",
+      input,
+      (_input, { transaction }) => run(transaction),
+    );}
   return async () => {
     for (const result of committed) await coordinator.flushCommitted(result);
   };

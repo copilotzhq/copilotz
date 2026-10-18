@@ -14,7 +14,7 @@ const POSTGRES_URL = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
 
 Deno.test({
   name:
-    "native history provisioning applies concurrently, retains records, and is repeatable",
+    "native history provisioning retains records and is repeatable through one owner",
   ignore: !POSTGRES_URL,
   sanitizeOps: false,
   sanitizeResources: false,

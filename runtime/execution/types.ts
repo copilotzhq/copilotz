@@ -21,6 +21,7 @@ export const COPILOTZ_DELIVERY_WORKLOAD = "copilotz.delivery.v1";
 
 export type DeliveryDispatchMetadata = Readonly<{
   schema: "copilotz.delivery.dispatch.v1";
+  ownerEpoch: number;
   databaseSchema: string;
   deliveryId: string;
   eventId: string;

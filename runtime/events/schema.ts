@@ -6,6 +6,8 @@ export type CoreTableName =
   | "owner_epochs"
   | "owner_receipts"
   | "owner_alarms"
+  | "owner_body_retirements"
+  | "owner_event_sequences"
   | "nodes"
   | "edges"
   | "events"
@@ -35,6 +37,8 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     owner_epochs: table("owner_epochs"),
     owner_receipts: table("owner_receipts"),
     owner_alarms: table("owner_alarms"),
+    owner_body_retirements: table("owner_body_retirements"),
+    owner_event_sequences: table("owner_event_sequences"),
     nodes: table("nodes"),
     edges: table("edges"),
     events: table("events"),
@@ -57,6 +61,15 @@ const CORE_SCHEMA_COLUMNS = {
     "result",
   ],
   owner_alarms: ["owner", "name", "due_at"],
+  owner_event_sequences: ["owner", "sequence", "event_id"],
+  owner_body_retirements: [
+    "owner",
+    "backend_kind",
+    "backend_id",
+    "body_id",
+    "token",
+    "completed",
+  ],
   nodes: [
     "id",
     "namespace",
@@ -158,7 +171,7 @@ export async function validateCopilotzSchema(
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
-          'owner_epochs', 'owner_receipts', 'owner_alarms',
+          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_body_retirements', 'owner_event_sequences',
           'nodes',
           'edges',
           'events',
@@ -336,6 +349,23 @@ export function createOwnerSchemaStatements(
       name TEXT NOT NULL,
       due_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (owner, name)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_body_retirements} (
+      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      backend_kind TEXT NOT NULL,
+      backend_id TEXT NOT NULL,
+      body_id TEXT NOT NULL,
+      token TEXT NOT NULL,
+      completed BOOLEAN NOT NULL DEFAULT FALSE,
+      PRIMARY KEY (owner, backend_kind, backend_id, body_id)
+    )`,
+    `INSERT INTO ${tables.owner_epochs} (owner,epoch,holder) VALUES ('schema',0,'') ON CONFLICT DO NOTHING`,
+    `ALTER TABLE ${tables.event_deliveries} ADD COLUMN IF NOT EXISTS owner_epoch BIGINT NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)`,
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_event_sequences} (
+      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      sequence BIGINT NOT NULL CHECK (sequence > 0),
+      event_id TEXT NOT NULL UNIQUE REFERENCES ${tables.events}(id),
+      PRIMARY KEY (owner, sequence)
     )`,
   ];
 }

@@ -126,15 +126,11 @@ require these indexes and never create them during a request.
 Provisioning is additive and idempotent: unchanged declarations reuse their
 indexes; changed declarations produce new indexes. It never drops obsolete or
 operator-created indexes or rewrites records. Adding a unique declaration fails
-if existing rows violate it. By default, index creation runs in a serialized DDL
-transaction and can block writes while building. For populated PostgreSQL
-schemas, pass a fourth argument `{ concurrently: true }` from a standalone
-provisioning operation to build without blocking normal writes. Run one
-provisioner per schema and supply a session outside any transaction. Concurrent
-builds commit individually; a failed build can leave an invalid index, which
-validation rejects for explicit repair. Removed declarations leave their old
-indexes, including unique constraints, in place until an explicit operator
-cleanup.
+if existing rows violate it. Index creation runs as a serialized owner command
+and can block writes while building. Provision before admitting work. Invalid or
+mismatched indexes are rejected for explicit repair. Removed declarations leave
+their old indexes, including unique constraints, in place until an explicit
+operator cleanup.
 
 Ordering and scalar index creation share the same SQL field expressions. A
 compound index should put equality-filter fields before the ordered field. The

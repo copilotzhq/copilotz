@@ -17,6 +17,7 @@ export const COPILOTZ_LIVE_WORKLOAD = "copilotz.live.v1";
 
 export type LiveDispatchMetadata = Readonly<{
   schema: "copilotz.live.dispatch.v1";
+  ownerEpoch: number;
   databaseSchema: string;
   processorId: string;
   namespace: string;
@@ -61,7 +62,12 @@ export type LiveProcessorEventResolver = (
   databaseSchema: string,
 ) => Promise<ProcessorEvent>;
 
+type ExecutionAuthorityResolver = (
+  schema: string,
+) => Promise<Readonly<{ epoch: number; signal: AbortSignal }>>;
+
 export type CreateLiveProcessorWorkloadOptions = Readonly<{
+  resolveAuthority: ExecutionAuthorityResolver;
   registry: PluginRegistry;
   transients?: TransientProcessorSet;
   createContext: LiveProcessorContextFactory;
@@ -105,6 +111,7 @@ export type LiveEventDispatcher = Readonly<{
 }>;
 
 export type CreateLiveEventDispatcherOptions = Readonly<{
+  resolveAuthority: ExecutionAuthorityResolver;
   registry: PluginRegistry;
   transients?: TransientProcessorSet;
   executor: Pick<DeliveryExecutor, "dispatchWork">;
@@ -139,8 +146,12 @@ function parseMetadata(
       `Unsupported live dispatch schema '${String(value.schema)}'.`,
     );
   }
+  if (!Number.isSafeInteger(value.ownerEpoch) || Number(value.ownerEpoch) < 1) {
+    throw new TypeError("Live dispatch requires a positive owner epoch.");
+  }
   return ({
     schema: "copilotz.live.dispatch.v1",
+    ownerEpoch: Number(value.ownerEpoch),
     databaseSchema: requiredText(
       value.databaseSchema,
       "Live database schema",
@@ -363,8 +374,14 @@ export function createLiveProcessorWorkload(
   options: CreateLiveProcessorWorkloadOptions,
 ): DeliveryWorkload {
   const maxBytes = positiveBytes(options.maxEventBytes);
-  return async ({ metadata: rawMetadata, input, signal }) => {
+  return async ({ metadata: rawMetadata, input, signal: dispatchSignal }) => {
     const metadata = parseMetadata(rawMetadata);
+    const authority = await options.resolveAuthority(metadata.databaseSchema);
+    if (authority.epoch !== metadata.ownerEpoch) {
+      throw new Error("Live dispatch belongs to a stale owner epoch.");
+    }
+    const signal = AbortSignal.any([dispatchSignal, authority.signal]);
+    signal.throwIfAborted();
     const event = parseEvent(await readBytes(input, maxBytes));
     if (
       event.namespace !== metadata.namespace ||
@@ -435,11 +452,14 @@ export function createLiveEventDispatcher(
           cancel: () => Promise.resolve(),
         } as const);
       }
+      const authority = await options.resolveAuthority(databaseSchema);
+      authority.signal.throwIfAborted();
       const placements = await Promise.allSettled(
         processors.map((processor) => {
           const dispatchAttemptId = createId();
           const metadata: LiveDispatchMetadata = {
             schema: "copilotz.live.dispatch.v1",
+            ownerEpoch: authority.epoch,
             databaseSchema,
             processorId: processor.id,
             namespace: event.namespace,

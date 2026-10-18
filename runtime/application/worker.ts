@@ -5,29 +5,12 @@ import {
   type WorkerOptions,
   type WorkerResult,
 } from "../../dependencies/oxian-worker.ts";
-import type {
-  DeliveryDispatcher,
-  ExecutionWorkHandle,
-  ExecutionWorkInput,
-} from "../execution/index.ts";
-import {
-  COPILOTZ_DELIVERY_WORKLOAD,
-  createCopilotzWorkOutputRelay,
-} from "../execution/index.ts";
-import {
-  createCopilotzApplication,
-  observeApplicationPersistence,
-} from "./application.ts";
+import { createCopilotzWorkOutputRelay } from "../execution/index.ts";
+import { connectOwnerExecution } from "../execution/workload.ts";
+import { createPluginRegistry } from "../plugins/index.ts";
+import { withApplicationIngress } from "./ingress/registry.ts";
 import type { CreateCopilotzApplicationOptions } from "./types.ts";
-import {
-  type CopilotzPersistenceOptions,
-  openCopilotzPersistence,
-} from "@copilotz/copilotz/persistence";
-
-type WorkerEngineOptions = Omit<
-  NonNullable<CreateCopilotzApplicationOptions["engine"]>,
-  "eventHub" | "execution" | "publish"
->;
+import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 
 export type CreateCopilotzWorkerOptions =
   & Omit<
@@ -35,8 +18,7 @@ export type CreateCopilotzWorkerOptions =
     "database" | "engine"
   >
   & CopilotzPersistenceOptions
-  & Omit<WorkerOptions, "workloads">
-  & Readonly<{ engine?: WorkerEngineOptions }>;
+  & Omit<WorkerOptions, "workloads">;
 
 /** Private execution-role authority projected by the package factory. */
 export type InternalCopilotzWorker =
@@ -47,171 +29,61 @@ export type InternalCopilotzWorker =
     stop(reason?: string): Promise<void>;
   }>;
 
-function emptyStream(): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.close();
-    },
-  });
-}
-
-/**
- * Worker-side mutations leave their delivery rows pending. Their framed events
- * prompt the Gateway to place those rows, while recovery covers a lost frame.
- */
-function createDeferredDeliveryDispatcher(): DeliveryDispatcher {
-  return ({
-    dispatch(input: ExecutionWorkInput): Promise<ExecutionWorkHandle> {
-      if (input.workload !== COPILOTZ_DELIVERY_WORKLOAD) {
-        throw new Error(
-          `Worker runtime cannot originate root workload '${input.workload}'.`,
-        );
-      }
-      const now = Date.now();
-      const operationId = crypto.randomUUID();
-      const streamId = crypto.randomUUID();
-      const terminal = {
-        operationId,
-        workload: input.workload,
-        ...(input.target ? { target: input.target } : {}),
-        metadata: input.metadata ?? {},
-        ...(input.deadlineAtMs ? { deadlineAtMs: input.deadlineAtMs } : {}),
-        status: "completed" as const,
-        deliveryCount: 0,
-        openedAtMs: now,
-        updatedAtMs: now,
-      } as const;
-      return Promise.resolve(
-        {
-          operationId,
-          streamId,
-          metadata: Promise.resolve(
-            {
-              schema: "copilotz.delivery.deferred.v1",
-            } as const,
-          ),
-          output: emptyStream(),
-          started: Promise.resolve(),
-          completed: Promise.resolve(terminal),
-          cancel: () => Promise.resolve(terminal),
-        } as const,
-      );
-    },
-  } as const);
-}
-
-/** Creates an outbound Copilotz execution role without a private Hypervisor. */
+/** Runs the common execution kernel using its gateway owner's capabilities. */
 export async function createCopilotzWorker(
   options: CreateCopilotzWorkerOptions,
   lifecycle: WorkerLifecycleCallbacks = {},
 ): Promise<InternalCopilotzWorker> {
-  const persistence = await openCopilotzPersistence(options);
   const relay = createCopilotzWorkOutputRelay();
-  let application;
-  try {
-    application = await createCopilotzApplication({
-      namespace: options.namespace,
-      databaseSchema: options.databaseSchema,
+  const registry = withApplicationIngress(
+    createPluginRegistry({
       plugins: options.plugins,
       collections: options.collections,
       actions: options.actions,
       processors: options.processors,
       resources: options.resources,
       adapters: options.adapters,
-      assets: options.assets,
-      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
-      database: persistence.database,
-      engine: {
-        ...(options.engine ?? {}),
-        publish: relay.publish,
-        execution: {
-          workerId: options.id,
-          ...(options.capacity === undefined
-            ? {}
-            : { capacity: options.capacity }),
-          dispatcher: createDeferredDeliveryDispatcher(),
-        },
-      },
-    });
-  } catch (error) {
-    await persistence.close("copilotz_worker_initialization_failed").catch(
-      () => undefined,
-    );
-    throw error;
-  }
-
-  let worker: Worker;
-  try {
-    worker = createWorker({
-      id: options.id,
-      transport: options.transport,
-      activate: options.activate,
-      register: options.register,
-      handshake: options.handshake,
-      handshakeTimeoutMs: options.handshakeTimeoutMs,
-      readyTimeoutMs: options.readyTimeoutMs,
-      resumeExpirySkewMs: options.resumeExpirySkewMs,
-      inputBufferBytes: options.inputBufferBytes,
-      createHeartbeatMetadata: options.createHeartbeatMetadata,
-      reconnectDelay: options.reconnectDelay,
-      maxReconnectDelayMs: options.maxReconnectDelayMs,
-      createHandshakeId: options.createHandshakeId,
-      now: options.now,
-      capacity: options.capacity ?? 8,
-      signal: options.signal,
-      workloads: relay.wrap(application.execution.workloads),
-    }, lifecycle);
-  } catch (error) {
-    await application.shutdown("copilotz_worker_creation_failed").catch(
-      () => undefined,
-    );
-    await persistence.close("copilotz_worker_creation_failed").catch(
-      () => undefined,
-    );
-    throw error;
-  }
-
-  const stopObservingPersistence = observeApplicationPersistence(
-    persistence,
-    application,
-    { recoverDurable: false },
+    }),
   );
-
-  let cleanupTask: Promise<void> | undefined;
-  const cleanup = (reason: string): Promise<void> => {
-    if (cleanupTask) return cleanupTask;
-    stopObservingPersistence();
-    cleanupTask = Promise.allSettled([
-      application.shutdown(reason),
-      persistence.close(reason),
-    ]).then((settled) => {
-      const failures = settled.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Copilotz Worker cleanup failed.");
-      }
-    });
-    cleanupTask.catch(() => undefined);
-    return cleanupTask;
-  };
-
-  const closed = worker.closed.then(async (result) => {
-    await cleanup("copilotz_worker_closed");
-    return result;
-  });
-  closed.catch(() => undefined);
-
-  return ({
+  const workloads = connectOwnerExecution(
+    options.transport,
+    options.database ?? options.persistence,
+    options.databaseSchema?.trim() || "public",
+    {
+      registry,
+      publish: relay.publish,
+      workerId: options.id,
+      onDiagnostic: options.onDeliveryDiagnostic,
+    },
+  );
+  const worker = createWorker({
+    id: options.id,
+    transport: options.transport,
+    activate: options.activate,
+    register: options.register,
+    handshake: options.handshake,
+    handshakeTimeoutMs: options.handshakeTimeoutMs,
+    readyTimeoutMs: options.readyTimeoutMs,
+    resumeExpirySkewMs: options.resumeExpirySkewMs,
+    inputBufferBytes: options.inputBufferBytes,
+    createHeartbeatMetadata: options.createHeartbeatMetadata,
+    reconnectDelay: options.reconnectDelay,
+    maxReconnectDelayMs: options.maxReconnectDelayMs,
+    createHandshakeId: options.createHandshakeId,
+    now: options.now,
+    capacity: options.capacity ?? 8,
+    signal: options.signal,
+    workloads: relay.wrap(workloads),
+  }, lifecycle);
+  return await Promise.resolve({
     role: "worker",
     ready: worker.ready,
-    closed,
+    closed: worker.closed,
     events: worker.events,
     snapshot: worker.snapshot,
     async stop(reason = "copilotz_worker_stopped") {
       await worker.stop(reason);
-      await closed;
+      await worker.closed;
     },
-  } as const);
+  });
 }

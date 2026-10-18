@@ -75,7 +75,6 @@ export async function createCopilotz(
     } as const,
   } as const;
   const engine = options.engine ?? {};
-  const { publish: _publish, ...workerEngine } = engine;
   let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
   let worker: Awaited<ReturnType<typeof createCopilotzWorker>> | undefined;
   let fetch: ((request: Request) => Promise<Response>) | undefined;
@@ -111,7 +110,6 @@ export async function createCopilotz(
       id: workerId,
       transport,
       capacity: options.worker?.capacity ?? 8,
-      engine: workerEngine,
     });
     await worker.ready;
     if (createFetch) {

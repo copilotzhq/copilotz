@@ -24,9 +24,9 @@ A split deployment needs explicit answers to four questions:
 
 - **Who accepts and who executes?** One role must admit requests and record
   operations; others execute deliveries.
-- **What is the source of truth?** Every role must read and write the same
-  persisted Events, records and operations, with the same namespace, schema and
-  plugin IDs.
+- **What is the source of truth?** One owner per database schema writes
+  persisted Events, records and operations. Workers receive its capabilities;
+  namespaces select data within that owner.
 - **How does work move?** The accepting process needs a transport to place
   deliveries on executing processes, and remote executors must be admitted, not
   simply allowed to connect.
@@ -48,6 +48,17 @@ role; a role never adds Core, agents or HTTP on its own.
 
 No role exposes its internal application, engine, database scopes or Hypervisor.
 A Worker has no `send` or `fetch`: callers always go through a Gateway.
+
+The Gateway activates the schema owner before admission: it acquires the epoch,
+invalidates stale delivery attempts, and recovers the operation catalog. Storage
+commands serialize behind a locking epoch fence; provider work remains
+concurrent. Workers execute through this owner and do not open a database or
+application. Configure storage and `engine` settings on the Gateway.
+
+The owner-capability connection currently requires Gateway and Worker to share a
+process, using in-process or WebSocket transport. Cross-process WebSocket
+workers require Oxian reverse-call transport support; opening a writable Worker
+database is not a substitute.
 
 Roles depend on two Oxian libraries in different ways. **Ominipg** is the
 durable store: Events, delivery obligations and records live there, and recovery
@@ -71,10 +82,11 @@ lifecycle observation when you create it:
   callbacks. Copilotz awaits them as part of the recovery cycle, so keep them
   fast and non-throwing; a slow or failing hook delays or disturbs recovery.
 
-A role receives either `persistence` or its own `database`, never both, and a
-role given `persistence` rejects `databaseRecovery` and `databaseLifecycle`.
-Roles never close a shared persistence; the host closes it once, after every
-role. An open database you inject is never closed or replaced by Copilotz,
+An embedded application or Gateway receives either `persistence` or its own
+`database`, never both, and a role given `persistence` rejects
+`databaseRecovery` and `databaseLifecycle`. Workers use the colocated Gateway
+owner. Roles never close a shared persistence; the host closes it once, after
+every role. An open database you inject is never closed or replaced by Copilotz,
 because it cannot be reconnected; pass a connector when you want reconnection.
 
 During an outage, new admissions wait up to `waitMs` and then fail with
@@ -144,7 +156,7 @@ async function printOutputs(
 }
 
 // Host-owned persistence. A private in-memory database keeps this fixture
-// self-contained; every role below reads and writes this one connection.
+// self-contained; the Gateway owner alone writes through this connection.
 const persistence = await createCopilotzPersistence({
   database: { url: ":memory:" },
 });
@@ -165,10 +177,9 @@ try {
   });
   try {
     // Executes the Notes Processor and Action. Same plugin, same namespace,
-    // same persistence, same transport record.
+    // same owner capabilities and transport record.
     const worker = await createCopilotz({
       role: "worker",
-      persistence,
       namespace,
       databaseSchema,
       plugins: [notesPlugin],

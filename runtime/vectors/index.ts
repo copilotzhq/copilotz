@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 /** Optional pgvector storage for collection-owned vector projections. @module */
 import {
   createCoreTableNames,
@@ -98,9 +99,12 @@ export async function provisionVectorStorage(
 ): Promise<void> {
   const table = vectorTable(schema);
   const nodes = createCoreTableNames(schema).nodes;
-  await session.transaction(async (tx) => {
-    await tx.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await tx.query(`CREATE TABLE IF NOT EXISTS ${table} (
+  await createSchemaCommandRunner(session, schema)(
+    "schema.vectors",
+    {},
+    async (_input, { transaction: tx }) => {
+      await tx.query("CREATE EXTENSION IF NOT EXISTS vector");
+      await tx.query(`CREATE TABLE IF NOT EXISTS ${table} (
       namespace TEXT NOT NULL, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES ${nodes}(id) ON DELETE CASCADE,
       field TEXT NOT NULL, profile TEXT NOT NULL, dimensions INTEGER NOT NULL,
       source_field TEXT NOT NULL, source_revision TEXT NOT NULL,
@@ -108,7 +112,8 @@ export async function provisionVectorStorage(
       PRIMARY KEY(namespace, owner_type, owner_id, field, profile),
       CHECK(vector_dims(value) = dimensions)
     )`);
-  });
+    },
+  );
 }
 export async function projectVector(
   executor: SqlExecutor,

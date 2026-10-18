@@ -267,7 +267,7 @@ Deno.test("versioned owner upgrade preserves an existing event and Action baseli
       `INSERT INTO ${tables.events} (id,schema_version,type,namespace,payload,correlation_id) VALUES ('existing',1,'test.event','space','{}','existing')`,
     );
     await db.query(
-      `DROP TABLE ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+      `DROP TABLE ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
     await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=8`);
     assertEquals(
@@ -356,4 +356,82 @@ Deno.test({
       await second.close();
     }
   },
+});
+
+Deno.test({
+  name:
+    "Postgres command rejection rolls back its savepoint and keeps the owner usable",
+  ignore: !postgres,
+  async fn() {
+    const db = await createTestDatabase({ url: postgres! });
+    const schema = `owner_rejection_${crypto.randomUUID().replaceAll("-", "")}`;
+    try {
+      await provisionCopilotzSchema(db, schema);
+      const tables = createCoreTableNames(schema);
+      const owner = createOwnerCommands({
+        session: db,
+        schema,
+        handlers: {
+          write: {
+            authorize() {},
+            async execute(
+              input: { id: string; reject: boolean },
+              { transaction },
+            ) {
+              await transaction.query(
+                `INSERT INTO ${tables.nodes} (id,namespace,type,name) VALUES ($1,'space','item',$1)`,
+                [input.id],
+              );
+              if (input.reject) throw new Error("command refused");
+              return input.id;
+            },
+          },
+        },
+      });
+      const caller = { principal: "runtime", epoch: await owner.acquire(0) };
+      await assertRejects(
+        () =>
+          owner.execute("write", caller, {
+            input: { id: "refused", reject: true },
+          }),
+        Error,
+        "command refused",
+      );
+      assertEquals(owner.state, "acquired");
+      assertEquals(
+        await owner.execute("write", caller, {
+          input: { id: "kept", reject: false },
+        }),
+        "kept",
+      );
+      assertEquals((await db.query(`SELECT id FROM ${tables.nodes}`)).rows, [{
+        id: "kept",
+      }]);
+      owner.stop();
+    } finally {
+      await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await db.close();
+    }
+  },
+});
+
+Deno.test("a second owner cannot acquire the same observed schema epoch", async () => {
+  const db = await createTestDatabase();
+  const schema = "owner_rejection";
+  try {
+    await provisionCopilotzSchema(db, schema);
+    const first = createOwnerCommands({ session: db, schema, handlers: {} });
+    const second = createOwnerCommands({ session: db, schema, handlers: {} });
+    await first.acquire(0);
+    await assertRejects(
+      () => second.acquire(0),
+      Error,
+      "Another owner acquired",
+    );
+    assertEquals(first.state, "acquired");
+    assertEquals(second.state, "stopped");
+    first.stop();
+  } finally {
+    await db.close();
+  }
 });

@@ -72,13 +72,13 @@ writers must be stopped before it runs. The v5 Event schema is unchanged. Older
 cursor generations are rejected, and operation-local ordinals are not the same
 as Event positions. Follow
 [Events, Deliveries, and Recovery](./events-deliveries-recovery.md) and
-[Upgrading](./upgrading.md). The Core history index is separate. On an existing
-PostgreSQL database it can be created concurrently, outside a transaction; a
-fresh PGlite host calls the provisioning helper without the concurrent option.
-Installing the package does not create this index. It is not part of the
-observation catalog upgrade, and it does not change visibility. Its measured
-45–48× improvement applies to history query time, not to the CPU figures on this
-page. See [History Performance](./history-performance.md).
+[Upgrading](./upgrading.md). The Core history index is separate. Provision it
+through the schema owner before admitting work. The same transactional helper
+serves PostgreSQL and PGlite. Installing the package does not create this index.
+It is not part of the observation catalog upgrade, and it does not change
+visibility. Its measured 45–48× improvement applies to history query time, not
+to the CPU figures on this page. See
+[History Performance](./history-performance.md).
 
 ## Reference
 

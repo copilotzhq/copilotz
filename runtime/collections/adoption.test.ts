@@ -29,27 +29,30 @@ const note = defineCollection({
 type Recorder = {
   statements: string[];
   transactions: number;
-  /** Runs after planning, before the next transaction, then disarms. */
+  /** Runs after the asset planning read, before commit, then disarms. */
   before?: { run: () => Promise<unknown> };
 };
 
 /** Counts what a session runs and can interleave a competitor before one. */
 function recording(base: SqlSession, recorder: Recorder): SqlSession {
-  const recorded = (executor: SqlExecutor): SqlExecutor => ({
+  const recorded = (executor: SqlExecutor, planning = false): SqlExecutor => ({
     query: async <TRow extends Record<string, unknown>>(
       text: string,
       params?: unknown[],
     ) => {
       recorder.statements.push(text);
-      return await executor.query<TRow>(text, params);
+      const result = await executor.query<TRow>(text, params);
+      if (planning && text.includes("asset_idempotency")) {
+        const hook = recorder.before;
+        recorder.before = undefined;
+        await hook?.run();
+      }
+      return result;
     },
   });
   return {
-    ...recorded(base),
-    transaction: async (operation) => {
-      const hook = recorder.before;
-      recorder.before = undefined;
-      await hook?.run();
+    ...recorded(base, true),
+    transaction: (operation) => {
       recorder.transactions++;
       return base.transaction((transaction) =>
         operation(recorded(transaction))
@@ -83,7 +86,8 @@ async function createEngines(url: string, recorder: Recorder) {
 /** The statements that change data. */
 const writes = (recorder: Recorder) =>
   recorder.statements.filter((text) =>
-    /^\s*(WITH|INSERT|UPDATE|DELETE)\b/.test(text)
+    /^\s*(WITH|INSERT|UPDATE|DELETE)\b/.test(text) &&
+    !text.includes("SET holder=holder")
   ).length;
 
 const measure = async (recorder: Recorder, work: () => Promise<unknown>) => {
@@ -91,7 +95,11 @@ const measure = async (recorder: Recorder, work: () => Promise<unknown>) => {
   recorder.transactions = 0;
   await work();
   return {
-    statements: recorder.statements.length,
+    statements:
+      recorder.statements.filter((sql) =>
+        !/^\s*(SAVEPOINT|RELEASE)\b/.test(sql) &&
+        !sql.includes("SET holder=holder")
+      ).length,
     transactions: recorder.transactions,
   };
 };
@@ -113,6 +121,10 @@ async function adoptionScenarios(url: string) {
     // The first write provisions the body tables.
     await notes.create({ id: "warm", content: "Warm up" });
 
+    assert(
+      recorder.statements.some((sql) => sql.includes("SET holder=holder")),
+      "storage commands reach the epoch fence",
+    );
     // A write's new asset is stored by the statement that commits the write.
     const created = await measure(
       recorder,

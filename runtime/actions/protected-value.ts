@@ -1,3 +1,4 @@
+import { assertSchemaCommandTransaction } from "../engine/commands.ts";
 /** BodyStore-backed encrypted values owned by Action lifecycle records. @module */
 
 import {
@@ -206,10 +207,22 @@ async function insertOwner(
   ref: ProtectedValueRef,
   databaseBytes?: Uint8Array,
 ): Promise<void> {
+  assertSchemaCommandTransaction(context.transaction, databaseSchema);
   await context.transaction.query(
     "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
     [databaseSchema, "body-ownership"],
   );
+  const retired = await context.transaction.query(
+    `SELECT 1 FROM ${context.tables.owner_body_retirements} WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 LIMIT 1`,
+    [
+      ref.bodyId,
+      ref.storeKind,
+      ref.storeKind === "database" ? "" : ref.backendId,
+    ],
+  );
+  if (retired.rows.length) {
+    throw new Error("Protected body has entered irreversible retirement.");
+  }
   if (databaseBytes) {
     const store = createDatabaseBodyStore({
       session: context.transaction,
@@ -414,6 +427,7 @@ export function createProtectedValueRuntime(
       }
     },
     adopt(context, namespace, prepared) {
+      assertSchemaCommandTransaction(context.transaction, databaseSchema);
       const ref = reference(prepared.ref);
       const deadline = Date.parse(ref.protectedUntil);
       if (!Number.isFinite(deadline) || deadline <= Date.now()) {

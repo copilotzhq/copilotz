@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
@@ -569,15 +570,18 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
   try {
     const operationId = "operation-deep-checkpoint";
     const catalog = createOperationCatalog(db, databaseSchema);
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: NAMESPACE,
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "deep-checkpoint",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(db, databaseSchema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: NAMESPACE,
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "deep-checkpoint",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "placeholder",
@@ -1206,15 +1210,18 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
   try {
     const catalog = createOperationCatalog(db, databaseSchema);
     const operationId = "stream-reconcile-operation";
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: NAMESPACE,
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "stream-reconcile-correlation",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(db, databaseSchema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: NAMESPACE,
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "stream-reconcile-correlation",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const readyBodyId =
       `schemas/${databaseSchema}/content-streams/${NAMESPACE}/ready-crash`;
@@ -1268,15 +1275,18 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
       false,
     );
     const activeOperationId = "stream-reconcile-active-operation";
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: NAMESPACE,
-        operationId: activeOperationId,
-        eventId: activeOperationId,
-        position: "2",
-        correlationId: "stream-reconcile-active-correlation",
-        createdAt: "2026-08-31T12:01:00.000Z",
-      })
+    await createSchemaCommandRunner(db, databaseSchema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: NAMESPACE,
+          operationId: activeOperationId,
+          eventId: activeOperationId,
+          position: "2",
+          correlationId: "stream-reconcile-active-correlation",
+          createdAt: "2026-08-31T12:01:00.000Z",
+        }),
     );
     await catalog.openStream({
       namespace: NAMESPACE,

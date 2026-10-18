@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals } from "@std/assert";
 import { createCopilotzApplication } from "./application.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -49,15 +50,18 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
   });
   try {
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace,
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation",
-        createdAt: new Date().toISOString(),
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace,
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation",
+          createdAt: new Date().toISOString(),
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "placeholder",
@@ -296,15 +300,18 @@ Deno.test("attachment final pass includes a stream committed during the terminal
   });
   try {
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant",
-        operationId: "operation",
-        eventId: "operation",
-        position: "1",
-        correlationId: "correlation",
-        createdAt: new Date().toISOString(),
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant",
+          operationId: "operation",
+          eventId: "operation",
+          position: "1",
+          correlationId: "correlation",
+          createdAt: new Date().toISOString(),
+        }),
     );
     // Keep initial statusFor active; the race is injected only after attach's
     // topology read. A durable terminal transition remains authoritative.

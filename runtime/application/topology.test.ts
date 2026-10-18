@@ -229,7 +229,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     onDeliveryDiagnostic(diagnostic) {
       workerDiagnostics.push(diagnostic.phase);
     },
-    engine: { retryBaseMs: 0, random: () => 0 },
   }, {
     onReady() {
       ready += 1;
@@ -295,8 +294,14 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       "first worker reply",
     );
     assertEquals(streamOutputTransientCalls, 0);
-    assert(gatewayDiagnostics.includes("gateway_event_frame_received"));
-    assert(gatewayDiagnostics.includes("child_delivery_scheduled"));
+    const durableIds = observed.filter((event) =>
+      event.type === "message.created"
+    ).map((event) => {
+      assert("id" in event);
+      return event.id;
+    });
+    assertEquals(new Set(durableIds).size, durableIds.length);
+    assert(gatewayDiagnostics.includes("placement_requested"));
     assert(workerDiagnostics.includes("worker_handler_started"));
     assert(workerDiagnostics.includes("worker_handler_settled"));
     assertEquals(
@@ -340,7 +345,6 @@ Deno.test("Gateway automatically retries or terminalizes Worker delivery failure
     id: workerId,
     transport,
     capacity: 1,
-    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await worker.ready;
@@ -522,7 +526,6 @@ Deno.test({
           bootstrap: {},
         };
       },
-      engine: { retryBaseMs: 0, random: () => 0 },
     });
     const listener = listen(gateway, { hostname: "127.0.0.1", port: 0 });
     const workerUrl = new URL(transport.config.path, listener.url);
@@ -561,7 +564,6 @@ Deno.test({
       },
       reconnectDelay: false,
       capacity: 1,
-      engine: { retryBaseMs: 0, random: () => 0 },
     });
     try {
       await worker.ready;

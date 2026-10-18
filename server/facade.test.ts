@@ -715,7 +715,6 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
     id: workerId,
     transport,
     capacity: 4,
-    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await worker.ready;

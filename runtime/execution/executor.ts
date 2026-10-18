@@ -530,8 +530,11 @@ export function createDeliveryExecutor(
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
       }
+      const authority = await store.executionAuthority();
+      authority.signal.throwIfAborted();
       const metadata: DeliveryDispatchMetadata = {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: authority.epoch,
         databaseSchema: delivery.databaseSchema,
         deliveryId: delivery.id,
         eventId: event.id,

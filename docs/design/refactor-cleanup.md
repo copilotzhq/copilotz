@@ -94,6 +94,70 @@ content and authoring facilities may remain necessary. Audit concrete functions
 and callers before deleting whole modules. Standalone public APIs require an
 explicit compatibility treatment rather than accidental removal.
 
+## 18 October review: prioritize migration over more isolated components
+
+The latest eight content/catalog source checkpoints, through the accepted
+reservation/confirmation tree `1b96e87f9338a9a71601ca4a12d5159254c0540c`, add
+2,926 production lines and remove 326 (excluding one configuration line): 2,527
+added lines are in ten new production files; nineteen existing production files
+change by +399/-326. Tests change by +3,529/-19, mostly nine new test files
+(+3,345). These counts describe the scoped checkpoints, not the full PR.
+
+Most of this is replacement owner infrastructure. The frequently reported legacy
+checks predominantly execute existing tests unchanged: progressive/body-store,
+catalog/query/selection, GCS and application compatibility tests are examples.
+The old-path edits mainly enforce format/namespace isolation so an old
+entrypoint cannot mutate a new owner's storage while both remain reachable. They
+are not a reason to retain the old execution architecture permanently.
+
+The real risk is integration lag. `owner-host.ts` still constructs the full old
+catalog, and the public factory still has embedded/gateway/worker branches
+beside its owner-backed branch. Eight private modules remain outside genuine
+host reachability after the reservation checkpoint. Additional isolated
+capabilities must not become the default way to progress this refactor.
+
+The immediate sequencing rule is therefore:
+
+1. Finish and record the scoped append/checkpoint validation (now passed)
+2. Retire the audited dormant reconciliation classifier after moving its
+   remaining counterexamples into actual startup tests; retain its used alarm
+   encoder/type
+3. Move a real owner-host caller onto the narrow replacement and remove its old
+   catalog/recovery dependency, with actual Action/Processor execution tests
+4. Implement the remaining content lifetime behavior together with its real
+   local/worker callers and settlement/alarm integration, rather than
+   accumulating another independent subsystem
+5. Move the public/default facade and remaining consumers; delete their
+   superseded composition, lease-based stream writer and automatic
+   promotion/maintenance paths
+6. Remove temporary old-entrypoint guards only when the entrypoints they protect
+   are actually retired; preserve new-format refusal and migration safety
+
+No interim legacy-support release is assumed. A change to a retiring path needs
+an explicit surviving invariant, shared consumer or migration blocker. Preserve
+behavioral counterexamples by exercising the replacement, not by requiring the
+retiring implementation to remain indefinitely. No broad legacy deletion is safe
+merely because the owner path does not call a module: public embedded, engine
+and standalone exports still do. The next migration must name and move those
+callers.
+
+### Immediate deletion candidate: dormant reconciliation classifier
+
+`createOwnerReconciliation`, its inventory/classify command kinds, cursor/page/
+classification types and key helper have no production registration or public
+barrel export. Only their own test fixture calls them. Production startup and
+lost-Action recovery import the target union and exact durable alarm encoder
+from that file; those must remain unchanged.
+
+The existing exhaustive startup proof/repair replaces the unused paginated
+classifier's role. Before removing it, carry remaining counterexamples into the
+live startup path: succeeded status without canonical lifecycle, dangling
+open_actions owner delivery, a leased Processor and aggregate added-alarm
+overflow rollback. Its private pagination and classifier-receipt API can retire
+with the unused factory. This removal is separate from the following fixed-owner
+catalog migration; it must not be reported complete before tests and caller
+checks pass.
+
 ## Required evidence for each cleanup checkpoint
 
 1. Name the duplicated or superseded responsibility and its surviving owner

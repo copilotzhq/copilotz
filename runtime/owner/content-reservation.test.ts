@@ -14,6 +14,7 @@ import {
 } from "./boundary.ts";
 import {
   createOwnerStreamReservations,
+  OWNER_STREAM_CHECKPOINT,
   OWNER_STREAM_CONFIRM,
   OWNER_STREAM_RESERVE,
 } from "./content-reservation.ts";
@@ -72,6 +73,8 @@ async function initialize(db: TestDatabase) {
   let physicalCalls = 0;
   let reserve: PhysicalBodyStore["reserve"] = (identity) =>
     physical.reserve(identity);
+  let append: PhysicalBodyStore["append"] = (input) => physical.append(input);
+  let head: PhysicalBodyStore["head"] = (id) => physical.head(id);
   const published: unknown[] = [];
   const content = createOwnerStreamReservations({
     ownerId: "owner",
@@ -80,6 +83,12 @@ async function initialize(db: TestDatabase) {
     backendId: "memory",
     physical: {
       ...physical,
+      append(input) {
+        return append(input);
+      },
+      head(id) {
+        return head(id);
+      },
       reserve(identity) {
         physicalCalls++;
         return reserve(identity);
@@ -150,7 +159,7 @@ async function initialize(db: TestDatabase) {
       command.kind === "seed"
         ? true
         : content.isCurrentAuthorization(tx, caller),
-    currentAuthorizationKinds: [OWNER_STREAM_RESERVE, OWNER_STREAM_CONFIRM],
+    currentAuthorizationKinds: Object.keys(content.checkpoints),
     authenticateReceipt() {},
   });
   await owner.acquire(0);
@@ -212,6 +221,12 @@ async function initialize(db: TestDatabase) {
     published,
     counts,
     getPhysicalCalls: () => physicalCalls,
+    setAppend: (value: PhysicalBodyStore["append"]) => {
+      append = value;
+    },
+    setHead: (value: PhysicalBodyStore["head"]) => {
+      head = value;
+    },
     setCurrent: (hook: typeof currentHook) => {
       currentHook = hook;
     },
@@ -266,17 +281,24 @@ Deno.test("owner stream reserves before physical storage and publishes exactly o
 
 Deno.test("owner stream rejects generic dispatch and derives source metadata instead of trusting injected fields", () =>
   fixture(async (f) => {
-    await assertRejects(() =>
-      f.owner.execute(f.caller, {
-        kind: OWNER_STREAM_RESERVE,
-        domain: "occurrence",
-        key: "fake",
-        intent: input,
-      })
-    );
-    await assertRejects(() =>
-      f.owner.project(f.caller, OWNER_STREAM_CONFIRM, { open: input, head: {} })
-    );
+    for (const kind of Object.keys(f.content.checkpoints)) {
+      await assertRejects(
+        () =>
+          f.owner.execute(f.caller, {
+            kind,
+            domain: "occurrence",
+            key: "fake",
+            intent: input,
+          }),
+        Error,
+        "Command kind is not registered",
+      );
+      await assertRejects(
+        () => f.owner.project(f.caller, kind, input),
+        Error,
+        "Command kind is not registered",
+      );
+    }
     for (const metadata of [null, 42, "text", [], true]) {
       await assertRejects(
         () =>
@@ -599,5 +621,305 @@ Deno.test("owner stream confirmation replay does not adopt bytes appended after 
         OWNER_STREAM_CONFIRM,
         { open: input, head: fenced } as unknown as OwnerJson,
       )
+    );
+  }));
+
+Deno.test("owner physical appends remain tentative until a receipt-free checkpoint accepts their prefix", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    const before = await f.counts();
+    const sequence = () =>
+      f.db.query("SELECT last_seq::text AS seq FROM public.owner_epochs");
+    const revisions = () =>
+      f.db.query(
+        "SELECT namespace,selection_key,change_ordinal::text AS revision FROM public.copilotz_operation_selection_heads ORDER BY namespace,selection_key",
+      );
+    const beforeSequence = (await sequence()).rows,
+      beforeRevisions = (await revisions()).rows;
+    const deadline = (await f.db.query(
+      "SELECT protection_deadline::text AS deadline FROM public.copilotz_operation_streams",
+    )).rows;
+    assertEquals(
+      await f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 0,
+        appendId: "a",
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+      { startOffset: 0, endOffset: 3 },
+    );
+    assertEquals(
+      await f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 3,
+        appendId: "b",
+        bytes: new Uint8Array([4, 5, 6]),
+      }),
+      { startOffset: 3, endOffset: 6 },
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "0" }],
+    );
+    assertEquals(await f.counts(), before);
+    assertEquals(
+      await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 6),
+      { committedOffset: 6 },
+    );
+    assertEquals(
+      await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3),
+      { committedOffset: 3 },
+    );
+    assertEquals(
+      await f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 0,
+        appendId: "a",
+        bytes: new Uint8Array([1, 2, 3]),
+      }),
+      { startOffset: 0, endOffset: 3 },
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "6" }],
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT protection_deadline::text AS deadline FROM public.copilotz_operation_streams",
+      )).rows,
+      deadline,
+    );
+    assertEquals(await f.counts(), before);
+    assertEquals((await sequence()).rows, beforeSequence);
+    assertEquals((await revisions()).rows, beforeRevisions);
+    await assertRejects(() =>
+      f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 0,
+        appendId: "a",
+        bytes: new Uint8Array([9, 9, 9]),
+      })
+    );
+  }));
+
+Deno.test("owner checkpoints refuse gaps, overlap and a proposed end not equal to the observed physical head", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 1, 3)
+    );
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 2)
+    );
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 4)
+    );
+    assertEquals(
+      await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3),
+      { committedOffset: 3 },
+    );
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 3,
+      appendId: "b",
+      bytes: new Uint8Array([4, 5, 6]),
+    });
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 1, 6)
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "3" }],
+    );
+    assertEquals(
+      await f.content.checkpoint(f.owner, f.caller, opened.streamId, 3, 6),
+      { committedOffset: 6 },
+    );
+  }));
+
+Deno.test("owner append captures bytes before admission and never adopts a late revoked physical append", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    const bytes = new Uint8Array([1, 2, 3]);
+    f.setCurrent(() => {
+      bytes.fill(9);
+      return true;
+    });
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes,
+    });
+    const body = (await f.db.query<{ body_id: string }>(
+      "SELECT body_id FROM public.copilotz_operation_streams",
+    )).rows[0].body_id;
+    assertEquals(
+      await f.physical.readRange({ bodyId: body, offset: 0, end: 3 }),
+      new Uint8Array([1, 2, 3]),
+    );
+    f.setAppend(async (request) => {
+      const result = await f.physical.append(request);
+      await f.db.query(
+        "UPDATE public.copilotz_operation_streams SET revocation_state='revoking'",
+      );
+      return result;
+    });
+    await assertRejects(() =>
+      f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 3,
+        appendId: "b",
+        bytes: new Uint8Array([4, 5, 6]),
+      })
+    );
+    assertEquals((await f.physical.head(body))?.byteLength, 6);
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "0" }],
+    );
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 6)
+    );
+  }));
+
+Deno.test("owner checkpoint reauthorizes after head I/O and leaves revoked tentative bytes unaccepted", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    f.setHead(async (id) => {
+      const head = await f.physical.head(id);
+      await f.db.query(
+        "UPDATE public.copilotz_operation_streams SET revocation_state='revoking'",
+      );
+      return head;
+    });
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3)
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "0" }],
+    );
+  }));
+
+Deno.test("owner append and checkpoint retain exact durable replay after lost acknowledgements", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    const before = await f.counts();
+    const deadline = (await f.db.query(
+      "SELECT protection_deadline::text AS deadline FROM public.copilotz_operation_streams",
+    )).rows;
+    let lostAppend = true;
+    f.setAppend(async (request) => {
+      const result = await f.physical.append(request);
+      if (lostAppend) {
+        lostAppend = false;
+        throw new Error("lost append reply");
+      }
+      return result;
+    });
+    const request = {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    };
+    await assertRejects(
+      () => f.content.append(f.owner, f.caller, opened.streamId, request),
+      Error,
+      "lost append reply",
+    );
+    assertEquals(
+      await f.content.append(f.owner, f.caller, opened.streamId, request),
+      { startOffset: 0, endOffset: 3 },
+    );
+    let lostCheckpoint = true;
+    const transport = {
+      ...f.owner,
+      checkpoint: async (...args: Parameters<typeof f.owner.checkpoint>) => {
+        const result = await f.owner.checkpoint(...args);
+        if (args[1] === OWNER_STREAM_CHECKPOINT && lostCheckpoint) {
+          lostCheckpoint = false;
+          throw new Error("lost checkpoint reply");
+        }
+        return result;
+      },
+    };
+    await assertRejects(
+      () => f.content.checkpoint(transport, f.caller, opened.streamId, 0, 3),
+      Error,
+      "lost checkpoint reply",
+    );
+    // Internal receipt proof only. A real invocation must latch the reported
+    // checkpoint failure and cannot use this lower-level replay to resume itself.
+    assertEquals(
+      await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3),
+      { committedOffset: 3 },
+    );
+    assertEquals(await f.counts(), before);
+    assertEquals(
+      (await f.db.query(
+        "SELECT protection_deadline::text AS deadline FROM public.copilotz_operation_streams",
+      )).rows,
+      deadline,
+    );
+  }));
+
+Deno.test("owner append acknowledgement refuses protection expiry during physical I/O", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    f.setAppend(async (request) => {
+      const result = await f.physical.append(request);
+      f.setTime("2026-10-18T00:00:02.000Z");
+      return result;
+    });
+    await assertRejects(() =>
+      f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 0,
+        appendId: "a",
+        bytes: new Uint8Array([1, 2, 3]),
+      })
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "0" }],
+    );
+  }));
+
+Deno.test("owner checkpoint refuses protection expiry during physical head observation", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, input);
+    await f.content.append(f.owner, f.caller, opened.streamId, {
+      expectedOffset: 0,
+      appendId: "a",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    f.setHead(async (id) => {
+      const result = await f.physical.head(id);
+      f.setTime("2026-10-18T00:00:02.000Z");
+      return result;
+    });
+    await assertRejects(() =>
+      f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3)
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT committed_offset::text AS offset FROM public.copilotz_operation_streams",
+      )).rows,
+      [{ offset: "0" }],
     );
   }));

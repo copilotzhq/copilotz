@@ -26,7 +26,10 @@ export type PhysicalAppend = Readonly<{
   bytes: Uint8Array;
 }>;
 export type PhysicalAppendResult = Readonly<{
+  /** Original requested offset, including exact append replay. */
   startOffset: number;
+  /** Current physical head; an older replay can include later tentative bytes.
+   * A caller acknowledges only its original offset plus requested byte length. */
   endOffset: number;
   versionToken: string;
 }>;
@@ -107,8 +110,11 @@ const typedArrayLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   "byteLength",
 )!.get!;
-export function capturePhysicalAppend(input: unknown): PhysicalAppend {
-  const value = data(input, ["writer", "expectedOffset", "appendId", "bytes"]);
+/** Capture bounded append data before any asynchronous owner admission. */
+export function capturePhysicalAppendData(
+  input: unknown,
+): Omit<PhysicalAppend, "writer"> {
+  const value = data(input, ["expectedOffset", "appendId", "bytes"]);
   if (!(value.bytes instanceof Uint8Array)) invalid();
   const length = typedArrayLength.call(value.bytes) as number;
   // Producers normalize empty writes before allocating an append ID. The new
@@ -121,10 +127,21 @@ export function capturePhysicalAppend(input: unknown): PhysicalAppend {
   const expectedOffset = integer(value.expectedOffset);
   if (!Number.isSafeInteger(expectedOffset + bytes.byteLength)) invalid();
   return Object.freeze({
-    writer: capturePhysicalIdentity(value.writer),
     expectedOffset,
     appendId: physicalIdentifier(value.appendId),
     bytes,
+  });
+}
+export function capturePhysicalAppend(input: unknown): PhysicalAppend {
+  const value = data(input, ["writer", "expectedOffset", "appendId", "bytes"]);
+  const append = capturePhysicalAppendData({
+    expectedOffset: value.expectedOffset,
+    appendId: value.appendId,
+    bytes: value.bytes,
+  });
+  return Object.freeze({
+    writer: capturePhysicalIdentity(value.writer),
+    ...append,
   });
 }
 export function capturePhysicalRange(input: unknown): PhysicalRange {

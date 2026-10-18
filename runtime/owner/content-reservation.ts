@@ -7,6 +7,7 @@ import { deriveWorkflowId } from "../events/workflow-id.ts";
 import { assertJsonValue } from "../json.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import {
+  capturePhysicalAppendData,
   capturePhysicalIdentity,
   type PhysicalBodyHead,
   type PhysicalBodyStore,
@@ -46,6 +47,9 @@ import type {
 
 export const OWNER_STREAM_RESERVE = "content.stream.reserve";
 export const OWNER_STREAM_CONFIRM = "content.stream.confirm";
+export const OWNER_STREAM_WRITER = "content.stream.writer";
+export const OWNER_STREAM_APPEND_ACK = "content.stream.append-ack";
+export const OWNER_STREAM_CHECKPOINT = "content.stream.checkpoint";
 export const OWNER_STREAM_OPENED_EVENT = "copilotz.stream.opened";
 /** Full canonical binding and already-authorized current records, supplied only
  * by the host's existing Action/Processor live resolver. No request is authority. */
@@ -58,7 +62,8 @@ type Context = Parameters<OwnerCheckpointHandler>[1];
 type OpenInput =
   & ContentStreamOpenInput
   & Readonly<{ id: string; kind: NonNullable<ContentStreamOpenInput["kind"]> }>;
-type Authorized = Readonly<{
+type OpeningAuthorized = Readonly<{
+  mode: "opening";
   scope: OwnerStreamScope;
   authority: OwnerAttemptAuthority;
   input: OpenInput;
@@ -66,6 +71,15 @@ type Authorized = Readonly<{
   descriptor: StreamOutputDescriptor;
   streamId: string;
 }>;
+type WriterAuthorized = Readonly<{
+  mode: "writer";
+  scope: OwnerStreamScope;
+  authority: OwnerAttemptAuthority;
+  streamId: string;
+  writer: PhysicalWriterIdentity;
+  committedOffset: number;
+}>;
+type Authorized = OpeningAuthorized | WriterAuthorized;
 type Row = {
   stream_id: string;
   state: "reserving" | "open" | "terminating" | "terminal";
@@ -186,6 +200,20 @@ function openInput(value: unknown): OpenInput {
     ),
   };
 }
+function safeOffset(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError("Invalid stream offset.");
+  }
+  return value;
+}
+function offsets(input: Record<string, unknown>) {
+  const startOffset = safeOffset(input.startOffset),
+    endOffset = safeOffset(input.endOffset);
+  if (endOffset < startOffset) {
+    throw new TypeError("Invalid stream offset interval.");
+  }
+  return { startOffset, endOffset };
+}
 function identity(
   scope: OwnerStreamScope,
   ownerId: string,
@@ -245,7 +273,11 @@ export function createOwnerStreamReservations(
     isCurrent = options.isCurrent,
     publish = options.publish;
   const provider = options.physical;
-  const physical = { reserve: provider.reserve.bind(provider) };
+  const physical = {
+    reserve: provider.reserve.bind(provider),
+    append: provider.append.bind(provider),
+    head: provider.head.bind(provider),
+  };
   const catalog = createOwnerOperationCatalogCore(session, schema);
   const tables = createOperationCatalogTables(schema);
   // Command-local scratch only. The boundary supplies a distinct scoped tx for
@@ -271,20 +303,21 @@ export function createOwnerStreamReservations(
     assertOwnerAttemptCaller(caller, value.authority, ownerId);
     return value;
   }
-  async function authorize(
+  function opening(tx: SqlExecutor, caller: OwnerCaller): OpeningAuthorized {
+    const a = current(tx, caller);
+    if (a.mode !== "opening") refuse();
+    return a;
+  }
+  function writing(tx: SqlExecutor, caller: OwnerCaller): WriterAuthorized {
+    const a = current(tx, caller);
+    if (a.mode !== "writer") refuse();
+    return a;
+  }
+  async function authenticate(
     tx: SqlExecutor,
     caller: OwnerCaller,
-    command: OwnerCommand,
     time: string,
   ) {
-    authorized.delete(tx);
-    if (![OWNER_STREAM_RESERVE, OWNER_STREAM_CONFIRM].includes(command.kind)) {
-      refuse();
-    }
-    const envelope = command.kind === OWNER_STREAM_RESERVE
-      ? { open: command.intent }
-      : record(command.intent, ["open", "head"]);
-    const input = openInput(envelope.open);
     const returned = await resolve(tx, structuredClone(caller), time);
     if (!returned) refuse();
     const captured = structuredClone(returned);
@@ -295,6 +328,103 @@ export function createOwnerStreamReservations(
     const authority = identity(scope, ownerId);
     assertOwnerAttemptCaller(caller, authority, ownerId);
     const { binding, delivery, source } = scope;
+    privateCurrent(caller, binding);
+    if (
+      source.ownerId !== ownerId || delivery.databaseSchema !== schema ||
+      source.namespace !== binding.namespace ||
+      source.id !== binding.sourceEventId ||
+      delivery.eventId !== source.id || delivery.id !== binding.deliveryId ||
+      !ownerAttemptIsLive(delivery, authority) ||
+      !Number.isSafeInteger(delivery.attempts) || delivery.attempts < 1
+    ) refuse();
+    await catalog.assertFormat(tx);
+    return { scope, authority };
+  }
+  async function authorize(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    command: OwnerCommand,
+    time: string,
+  ) {
+    authorized.delete(tx);
+    if (
+      ![
+        OWNER_STREAM_RESERVE,
+        OWNER_STREAM_CONFIRM,
+        OWNER_STREAM_WRITER,
+        OWNER_STREAM_APPEND_ACK,
+        OWNER_STREAM_CHECKPOINT,
+      ].includes(command.kind)
+    ) refuse();
+    if (
+      [OWNER_STREAM_WRITER, OWNER_STREAM_APPEND_ACK, OWNER_STREAM_CHECKPOINT]
+        .includes(command.kind)
+    ) {
+      const input = record(
+        command.intent,
+        command.kind === OWNER_STREAM_WRITER
+          ? ["streamId"]
+          : command.kind === OWNER_STREAM_APPEND_ACK
+          ? ["streamId", "startOffset", "endOffset"]
+          : ["streamId", "startOffset", "endOffset", "head"],
+      );
+      const streamId = physicalIdentifier(input.streamId);
+      if (command.kind !== OWNER_STREAM_WRITER) offsets(input);
+      const { scope, authority } = await authenticate(tx, caller, time);
+      await lockOperation(tx, { scope });
+      const bodyId = await deriveWorkflowId("stream-body", streamId);
+      const reservationId = await deriveWorkflowId(
+        "stream-reservation",
+        streamId,
+      );
+      const found = (await tx.query<
+        { media_type: string | null; committed_offset: string }
+      >(
+        `SELECT CASE WHEN char_length(descriptor->>'mediaType') BETWEEN 1 AND 1024 THEN descriptor->>'mediaType' ELSE NULL END AS media_type,
+          committed_offset::text FROM ${tables.operationStreams}
+         WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND owner_id=$4
+           AND opening_owner_epoch=$5 AND delivery_attempt=$6 AND placement_binding=$7::jsonb
+           AND physical_backend_id=$8 AND body_id=$9 AND reservation_id=$10 AND writer_generation=1
+           AND state='open' AND revocation_state='active' AND protection_deadline>$11::timestamptz FOR UPDATE`,
+        [
+          scope.binding.namespace,
+          scope.delivery.settlementScopeId,
+          streamId,
+          ownerId,
+          caller.ownerEpoch,
+          scope.delivery.attempts,
+          JSON.stringify(scope.binding),
+          backendId,
+          bodyId,
+          reservationId,
+          time,
+        ],
+      )).rows[0];
+      if (!found) refuse();
+      const committedOffset = safeOffset(Number(found.committed_offset));
+      const writer = capturePhysicalIdentity({
+        bodyId,
+        mediaType: found.media_type,
+        reservationId,
+        generation: 1,
+      });
+      authorized.set(tx, {
+        mode: "writer",
+        scope,
+        authority,
+        streamId,
+        writer,
+        committedOffset,
+      });
+      current(tx, caller);
+      return;
+    }
+    const envelope = command.kind === OWNER_STREAM_RESERVE
+      ? { open: command.intent }
+      : record(command.intent, ["open", "head"]);
+    const input = openInput(envelope.open);
+    const { scope, authority } = await authenticate(tx, caller, time);
+    const { binding, delivery, source } = scope;
     if (
       input.correlationId !== undefined &&
       input.correlationId !== source.correlationId
@@ -303,17 +433,6 @@ export function createOwnerStreamReservations(
         "Stream correlation must match its owner-derived source.",
       );
     }
-    privateCurrent(caller, binding);
-    if (
-      source.ownerId !== ownerId ||
-      delivery.databaseSchema !== schema ||
-      source.namespace !== binding.namespace ||
-      source.id !== binding.sourceEventId || delivery.eventId !== source.id ||
-      delivery.id !== binding.deliveryId ||
-      !ownerAttemptIsLive(delivery, authority) ||
-      !Number.isSafeInteger(delivery.attempts) || delivery.attempts < 1
-    ) refuse();
-    await catalog.assertFormat(tx);
     const streamId = await deriveWorkflowId(
       "stream",
       ownerId,
@@ -358,6 +477,7 @@ export function createOwnerStreamReservations(
     const descriptor = json(canonicalizeContentRefs(rawDescriptor));
     if (!isStreamOutputDescriptor(descriptor)) refuse();
     authorized.set(tx, {
+      mode: "opening",
       scope,
       authority,
       input,
@@ -367,7 +487,7 @@ export function createOwnerStreamReservations(
     });
     current(tx, caller);
   }
-  async function lockOperation(tx: SqlExecutor, a: Authorized) {
+  async function lockOperation(tx: SqlExecutor, a: Pick<Authorized, "scope">) {
     const result = await tx.query<{ next_stream_ordinal: string }>(
       `SELECT next_stream_ordinal::text FROM ${tables.operations}
        WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
@@ -379,7 +499,7 @@ export function createOwnerStreamReservations(
   }
   async function row(
     tx: SqlExecutor,
-    a: Authorized,
+    a: OpeningAuthorized,
     context: Context,
   ): Promise<Row | undefined> {
     return (await tx.query<Row>(
@@ -416,7 +536,7 @@ export function createOwnerStreamReservations(
       !["reserving", "open"].includes(value.state)
     ) refuse();
   }
-  async function excludePredecessors(tx: SqlExecutor, a: Authorized) {
+  async function excludePredecessors(tx: SqlExecutor, a: OpeningAuthorized) {
     const competing = await tx.query(
       `SELECT stream_id FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2
        AND semantic_stream_id=$3 AND stream_id<>$4 AND revocation_state<>'revoked' LIMIT 1`,
@@ -432,7 +552,7 @@ export function createOwnerStreamReservations(
     }
   }
   const reserve: OwnerCheckpointHandler = async (_input, context) => {
-    const a = current(context.tx, context.caller);
+    const a = opening(context.tx, context.caller);
     await lockOperation(context.tx, a);
     await excludePredecessors(context.tx, a);
     let stored = await row(context.tx, a, context);
@@ -473,7 +593,7 @@ export function createOwnerStreamReservations(
     });
   };
   const confirm: OwnerCheckpointHandler = async (value, context) => {
-    const a = current(context.tx, context.caller);
+    const a = opening(context.tx, context.caller);
     const input = record(value, ["open", "head"]);
     const head = record(input.head, [
       "format",
@@ -571,6 +691,59 @@ export function createOwnerStreamReservations(
     });
     return json(descriptor);
   };
+  const writerAdmission: OwnerCheckpointHandler = (_input, context) => {
+    const a = writing(context.tx, context.caller);
+    return json({ writer: a.writer, committedOffset: a.committedOffset });
+  };
+  const appendAcknowledgement: OwnerCheckpointHandler = (value, context) => {
+    writing(context.tx, context.caller);
+    return json(
+      offsets(record(value, ["streamId", "startOffset", "endOffset"])),
+    );
+  };
+  const checkpoint: OwnerCheckpointHandler = async (value, context) => {
+    const a = writing(context.tx, context.caller);
+    const input = record(value, [
+      "streamId",
+      "startOffset",
+      "endOffset",
+      "head",
+    ]);
+    const { startOffset, endOffset } = offsets(input);
+    if (a.committedOffset >= endOffset) return { committedOffset: endOffset };
+    if (a.committedOffset !== startOffset) {
+      refuse("Checkpoint does not start at the accepted prefix.");
+    }
+    const head = record(input.head, [
+      "format",
+      "state",
+      "bodyId",
+      "mediaType",
+      "reservationId",
+      "generation",
+      "byteLength",
+      "versionToken",
+    ]);
+    if (
+      head.format !== "owner-physical-v1" || head.state !== "open" ||
+      head.byteLength !== endOffset ||
+      typeof head.versionToken !== "string" || !head.versionToken ||
+      head.versionToken.length > 4096 ||
+      Object.entries(a.writer).some(([key, value]) => head[key] !== value)
+    ) refuse("Checkpoint physical head does not match.");
+    await context.tx.query(
+      `UPDATE ${tables.operationStreams} SET committed_offset=$4,updated_at=$5
+      WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
+      [
+        a.scope.binding.namespace,
+        a.scope.delivery.settlementScopeId,
+        a.streamId,
+        endOffset,
+        context.commandTime,
+      ],
+    );
+    return { committedOffset: endOffset };
+  };
   return {
     authorize,
     isCurrentAuthorization(tx: SqlExecutor, caller: OwnerCaller) {
@@ -584,6 +757,95 @@ export function createOwnerStreamReservations(
     checkpoints: {
       [OWNER_STREAM_RESERVE]: reserve,
       [OWNER_STREAM_CONFIRM]: confirm,
+      [OWNER_STREAM_WRITER]: writerAdmission,
+      [OWNER_STREAM_APPEND_ACK]: appendAcknowledgement,
+      [OWNER_STREAM_CHECKPOINT]: checkpoint,
+    },
+    async append(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      streamIdInput: string,
+      appendInput: Parameters<typeof capturePhysicalAppendData>[0],
+      signal?: AbortSignal,
+    ) {
+      const capturedCaller = structuredClone(caller),
+        streamId = physicalIdentifier(streamIdInput);
+      const append = capturePhysicalAppendData(appendInput);
+      const admission = record(
+        await boundary.checkpoint(capturedCaller, OWNER_STREAM_WRITER, {
+          streamId,
+        }, { signal }),
+        ["writer", "committedOffset"],
+      );
+      if (signal?.aborted) throw signal.reason;
+      const writer = capturePhysicalIdentity(admission.writer);
+      const result = await physical.append({ writer, ...append });
+      if (signal?.aborted) throw signal.reason;
+      const observed = record(result, [
+        "startOffset",
+        "endOffset",
+        "versionToken",
+      ]);
+      if (
+        observed.startOffset !== append.expectedOffset ||
+        safeOffset(observed.endOffset) <
+          append.expectedOffset + append.bytes.byteLength ||
+        typeof observed.versionToken !== "string" || !observed.versionToken ||
+        observed.versionToken.length > 4096
+      ) refuse("Physical append acknowledgement does not match.");
+      const answer = record(
+        await boundary.checkpoint(capturedCaller, OWNER_STREAM_APPEND_ACK, {
+          streamId,
+          startOffset: append.expectedOffset,
+          endOffset: append.expectedOffset + append.bytes.byteLength,
+        }, { signal }),
+        ["startOffset", "endOffset"],
+      );
+      if (signal?.aborted) throw signal.reason;
+      return offsets(answer);
+    },
+    async checkpoint(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      streamIdInput: string,
+      startInput: number,
+      endInput: number,
+      signal?: AbortSignal,
+    ) {
+      const capturedCaller = structuredClone(caller),
+        streamId = physicalIdentifier(streamIdInput);
+      const { startOffset, endOffset } = offsets({
+        startOffset: startInput,
+        endOffset: endInput,
+      });
+      const admission = record(
+        await boundary.checkpoint(capturedCaller, OWNER_STREAM_WRITER, {
+          streamId,
+        }, { signal }),
+        ["writer", "committedOffset"],
+      );
+      if (signal?.aborted) throw signal.reason;
+      const committed = safeOffset(admission.committedOffset);
+      if (committed >= endOffset) return { committedOffset: endOffset };
+      if (committed !== startOffset) {
+        refuse("Checkpoint does not start at the accepted prefix.");
+      }
+      const writer = capturePhysicalIdentity(admission.writer);
+      const head = await physical.head(writer.bodyId);
+      if (signal?.aborted) throw signal.reason;
+      if (!head) refuse("Checkpoint physical body is missing.");
+      const result = record(
+        await boundary.checkpoint(
+          capturedCaller,
+          OWNER_STREAM_CHECKPOINT,
+          json({ streamId, startOffset, endOffset, head }),
+          { signal },
+        ),
+        ["committedOffset"],
+      );
+      if (signal?.aborted) throw signal.reason;
+      if (safeOffset(result.committedOffset) !== endOffset) refuse();
+      return { committedOffset: endOffset };
     },
     /** Caller must remain bound to the same live invocation across these awaits.
      * The two SQL phases independently prove current authority. Unknown reserve

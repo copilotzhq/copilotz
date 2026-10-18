@@ -1,12 +1,21 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 09:56 UTC.
+Updated: 18 October 2026, 10:28 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
 scoped deliverables, not a percentage complete. A checked item means the named
 scope is implemented and reviewed; it does not imply its whole workstream is
 production-ready. All changes remain draft: **no merge or publication**.
+
+## Current priority
+
+The 18 October [retirement review](refactor-cleanup.md) prioritizes real caller
+migration and deletion over additional isolated owner components. Finish the
+now-reviewed append/checkpoint gate, remove the audited dormant classifier, then
+move the host off the full legacy catalog/recovery dependency with actual
+execution evidence. Compatibility tests preserve behavior; permanent dual
+runtimes are not a goal.
 
 ## Current work
 
@@ -455,6 +464,8 @@ what it simplifies and eliminates before adding machinery.
 - [x] Isolated catalog-first reservation/physical-confirmation coordinator on
       the existing private boundary, exact catalog-native replay and atomic
       publication event/ordinal; independent backend and COMMIT-loss gates pass
+- [x] Separate tentative physical append from receipt-free offset acceptance;
+      scoped PostgreSQL/PGlite, replay-after-tail and real COMMIT gates pass
 - [ ] Catalog-first reservation, physical confirmation and visibility through
       the same local/worker content coordinator; confirmation-time ordinals,
       hidden failed reservations and accepted-prefix-only observation

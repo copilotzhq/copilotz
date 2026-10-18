@@ -471,9 +471,10 @@ allocates another ordinal nor emits another event.
 Known-committed caller-reply loss permits exact replay while the same invocation
 remains current. An unknown SQL COMMIT still stops the holder; later recovery
 must inspect durable facts under newly authorized recovery, without adopting a
-physical tail. Unknown physical reserve retains the exact hidden intent. This
-component does not yet implement revocation, renewal alarms, offset checkpoints,
-seal, actual Action/Processor routes or host activation.
+physical tail. Unknown physical reserve retains the exact hidden intent. The
+reservation-only checkpoint did not implement revocation, renewal alarms, offset
+checkpoints or seal; the separate offset checkpoint below follows it. It still
+lacks actual Action/Processor routes or host activation.
 
 Source metadata injected by legacy Action contexts is discarded and derived
 again from the authenticated owner binding. Correlation must be absent or match
@@ -504,6 +505,38 @@ head; generic worker command/projection routes cannot dispatch these kinds. The
 future worker content route must call the coordinator, never forward a supplied
 head. This is not a cryptographic claim or protection against trusted host code
 that already holds the private boundary and SQL session.
+
+## Separate physical append and accepted-offset checkpoint (reviewed component)
+
+The same coordinator now has private writer admission, tentative append
+acknowledgement and offset checkpoint handlers. They share the existing
+command-local proof map and live scope validator. Writer lookup returns only
+bounded scalar identity/offset data; physical keys stay inside the trusted
+coordinator rather than a generic worker projection.
+
+Append bytes are captured before the first asynchronous admission. Physical
+append runs outside SQL, and its acknowledgement receives a fresh current-row
+check. It changes neither committed offset, protection deadline, receipt rows,
+semantic events nor selection revision. Existing physical adapters report the
+current physical end on older exact append replay; the coordinator validates
+that it covers the original request and returns only the original requested
+interval. It never adopts the later head as newly acknowledged bytes.
+
+Checkpoint is a separate operation so the future producer can batch/cadence it.
+The coordinator observes the physical head outside SQL. A fresh advance requires
+C == expected start and an exact matching head at intended end E; the private
+handler reauthorizes and changes only the stream offset/update time. C >= E is
+an already-covered prefix receipt and returns E without changing C or observing
+additional physical bytes. Gaps and partial overlap refuse. Revocation or
+protection expiry during either physical await suppresses acceptance.
+
+Root component and memory-adapter checks pass 29 tests. The original
+older-append replay failure and one mechanical test-only import error remain
+recorded beside corrected passes. Independent backend, COMMIT-loss and
+compatibility review is pending. The real invocation's checkpoint-failure latch,
+serialization/cadence, raw-call lifetime and final route witness still require
+integration. An internal receipt replay test does not authorize a failed
+authored invocation to resume.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

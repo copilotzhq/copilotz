@@ -396,6 +396,20 @@ export async function ensureToolPlanBranchLayout(
   }
   return migrated;
 }
+/** Result bodies belong to the stage result, including refs nested in tool JSON. */
+function terminalOutputContent(terminal: ToolTerminal): ContentSequence {
+  const refs: ContentSequence[number][] = [];
+  const visit = (value: unknown): void => {
+    if (isContentRef(value)) refs.push(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  if (terminal.status === "completed") visit(terminal.output);
+  return refs;
+}
+
 function terminalContent(value: ToolTerminal): ContentInput {
   return {
     type: "json",
@@ -429,6 +443,7 @@ async function stageResult(
       branchIndex,
       stageIndex,
       content: terminalContent(terminal),
+      outputContent: terminalOutputContent(terminal),
       metadata: {},
     }, { operationKey, identity: { deduplicationId: operationKey } })
   );
@@ -466,7 +481,7 @@ async function readTerminal(
   }>,
 ): Promise<{ terminal: ToolTerminal; stageIndex: number }> {
   const item = await context.collections.toolPlanStageResult?.get({ id }, {
-    content: true,
+    content: { fields: ["content"] },
   });
   if (!item) throw new Error(`Tool stage result '${id}' was not found.`);
   if (
@@ -967,6 +982,7 @@ export async function projectAndAdvanceToolPlan(
         branchIndex: metadata.planIndex,
         stageIndex: metadata.stageIndex,
         content: terminalContent(terminal),
+        outputContent: terminalOutputContent(terminal),
         metadata: {},
       }, { operationKey: resultKey, identity: { deduplicationId: resultKey } });
       await branches.commands.settleStage({

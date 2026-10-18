@@ -20,6 +20,7 @@ export const toolPlanStageResultCollection: CollectionDefinition =
         branchIndex: { type: "integer" },
         stageIndex: { type: "integer" },
         content: contentSequenceSchema,
+        outputContent: contentSequenceSchema,
         metadata: metadataSchema,
         ...timestampsSchema,
       },
@@ -35,8 +36,8 @@ export const toolPlanStageResultCollection: CollectionDefinition =
         "updatedAt",
       ],
     } as const,
-    defaults: { content: [], metadata: {} },
-    content: { fields: ["content"] },
+    defaults: { content: [], outputContent: [], metadata: {} },
+    content: { fields: ["content", "outputContent"] },
     indexes: ["planId", ["planId", "branchIndex", "stageIndex"]],
   });
 

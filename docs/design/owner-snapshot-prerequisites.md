@@ -151,6 +151,49 @@ managed-generation forwarding and actual owner historical-read rules/expiry
 remain separate. No newer full Copilotz acceptance or owner activation is
 claimed.
 
+## Managed generation forwarding
+
+The optional internal `SqlSession.withReadSnapshot` capability forwards one
+backend callback resource through the existing persistence generation reference.
+It is distinct from the existing short `readSnapshot` selection transaction. An
+absent backend capability refuses; there is no ordinary-read fallback. Published
+dependency pins are unchanged, so acceptance uses the reviewed sibling backend
+source explicitly.
+
+A generation has one lifetime signal. Retirement revokes retained snapshot and
+current-state handles immediately, before recovery observers or reconnection
+waits. Each executor checks the selected generation and cancellation before and
+after awaited results. The callback remains pinned to its original database
+until the backend finishes its actual scope cleanup. A replacement generation
+can serve new operations, but never receives a replay of the old snapshot or
+callback. Caller cancellation is captured once and does not itself trigger
+reconnection just because its reason resembles a connection error.
+
+PostgreSQL forwards the separate current-transaction lane; default in-process
+PGlite forwards the exclusive snapshot lane. Both accept trusted compiled SQL
+only. This internal seam supplies no historical Collection grant, owner policy,
+resource expiry, or worker-facing SQL API.
+
+The existing persistence shutdown API suppresses database close errors. This
+increment does not reinterpret its resolved close promise as proof of physical
+cleanup. Backend snapshot cleanup errors still propagate from the scope; a
+complete owner resource release must rely on its actual backend lifecycle rather
+than a successful generic persistence shutdown return.
+
+Independent frozen generation acceptance passes 41 cases plus five steps on
+actual PostgreSQL and PGlite, and four unchanged reviewer probes. Static checks,
+all candidate/dependency hashes and disposable database export/drop/stop pass.
+The final facade cancellation and reentrant final-witness failures are retained
+alongside their corrections. Final cancellation is checked before the last
+generation witness, so caller signal methods cannot retire the database after
+that witness and still disclose a result.
+
+Coverage includes retirement during retained reads/current callbacks, cleanup
+ordering, local cancellation, capability absence and independent PostgreSQL
+current transactions while historical snapshot rows remain stable. Generic
+close-error suppression remains the documented existing limit. These scoped
+checks do not replace the owner local/worker activation tests below.
+
 ## Remaining backend and authority gates
 
 A read-only REPEATABLE READ snapshot owns a separate transaction outside the

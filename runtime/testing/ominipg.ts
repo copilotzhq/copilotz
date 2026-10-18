@@ -23,6 +23,9 @@ export async function createTestDatabase(
     ...(managed.session.readSnapshot
       ? { readSnapshot: managed.session.readSnapshot }
       : {}),
+    ...(managed.session.withReadSnapshot
+      ? { withReadSnapshot: managed.session.withReadSnapshot }
+      : {}),
     ...(managed.session.listen ? { listen: managed.session.listen } : {}),
     close: managed.close,
   } as const);

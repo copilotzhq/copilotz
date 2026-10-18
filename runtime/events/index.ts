@@ -29,7 +29,12 @@ export {
 } from "./schema.ts";
 export type { CoreSchemaValidation, CoreTableName } from "./schema.ts";
 export { createSqlSession } from "./session.ts";
-export type { SqlExecutor, SqlQueryResult, SqlSession } from "./session.ts";
+export type {
+  SqlExecutor,
+  SqlQueryResult,
+  SqlReadSnapshot,
+  SqlSession,
+} from "./session.ts";
 export type {
   SqlNotification,
   SqlNotificationSubscription,

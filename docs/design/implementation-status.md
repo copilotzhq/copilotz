@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 17 October 2026, 23:45 UTC.
+Updated: 18 October 2026, 00:20 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -24,7 +24,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Pooled SQL timeout progress          | Reviewed prerequisite   | Ominipg 77, Copilotz 31 plus five steps, four cleanup probes and one retained-listener diagnostic; reserved snapshot capacity remains open           |
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
-| Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; callback/generation/owner activation remain open                             |
+| Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -132,7 +132,8 @@ Independent scoped gates pass 102 Ominipg and 31 Copilotz cases plus five steps;
 a final test-only lint correction passes 25 actual-PostgreSQL pool cases, seven
 fault/causal probes and static checks. Cleanup retry and reentrant shutdown
 regressions are covered; failed physical cleanup is never treated as success.
-The callback/control capability and owner snapshot activation remain open.
+The later callback checkpoint below exposes this control capability; owner
+snapshot activation remains open.
 
 The native PGlite prerequisite now reuses its transaction mutex, with sealed
 query lifetime, raw drain and explicit rollback. Actual idle-state/readiness and
@@ -147,8 +148,26 @@ It preserves independent PostgreSQL control-lane progress and native PGlite
 exclusivity, handles EOF/close without pin deadlock, and retains cleanup
 failures after resource removal. Accepted ordinary queued lane work still drains
 before graceful shutdown. Independent gates pass 136 Ominipg, 31 Copilotz plus
-five steps, eight reviewer probes and static checks. Client callback capability,
-generation forwarding and actual owner authorization are next.
+five steps, eight reviewer probes and static checks.
+
+The callback API now exposes exclusive PGlite and pooled snapshot/current
+scopes, including typed Drizzle forwarding. Captured cancellation and final
+query/COMMIT checks suppress late results; immediate admission rechecks prevent
+reentrant signal getters from overwriting a live scope or admitting after close.
+Independent acceptance passes 150 Ominipg, 31 committed Copilotz cases plus five
+steps, 11 client probes and four transaction controls, with static/hash/cleanup
+verification. Ominipg PR4 commit cac16762 and Verify39081896535 are green.
+External sync and packed-release suites remain outside this scoped gate.
+
+Managed-generation forwarding now passes independent scoped acceptance: 41 cases
+plus five steps on actual PostgreSQL/PGlite, four unchanged reviewer probes,
+static checks and full source/cleanup audits. The existing reference count pins
+one backend scope through cleanup, with immediate lifetime revocation on
+retirement and no replay onto a replacement generation. Final cancellation and
+generation-witness ordering defects found in review are fixed with causal
+regressions. Generic persistence close still suppresses database close errors;
+its successful return does not prove physical cleanup. Owner historical
+authorization, expiry and actual worker/local snapshot activation remain open.
 
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
@@ -190,6 +209,13 @@ what it simplifies and eliminates before adding machinery.
       drain and confirmed rollback
 - [x] Bounded snapshot engine/session resource flow: scoped lanes, prior-work
       drain, sync exclusion, cleanup quarantine, EOF/close and legacy lane drain
+- [x] Scoped backend callback API and typed Drizzle forwarding: captured
+      cancellation, reentrant admission protection, retained executor sealing
+      and actual raw cleanup; PostgreSQL/PGlite checked, CI green
+- [x] Managed-generation forwarding through existing references: immediate
+      revocation, final cancellation/witness checks, no replay or plain
+      fallback; actual PostgreSQL/PGlite scoped compatibility and fault probes
+      pass
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 06:06 UTC.
+Updated: 18 October 2026, 06:07 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -398,6 +398,10 @@ what it simplifies and eliminates before adding machinery.
       and current NULL-deadline attempts remain unchanged
 - [ ] Protected values, credential slots and scope-bound delivery
 - [ ] Cross-owner operations and remaining wire/device contracts
+
+- [x] Preserve accepted object-store parts when an identical append retry wins
+      after a stale loser read (S3/GCS-compatible mocks and legacy compatibility
+      checked)
 
 ## 5. Views, providers and clients
 

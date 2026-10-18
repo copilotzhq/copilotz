@@ -96,6 +96,24 @@ identifies missing ownership of native PostgreSQL client/pool error events. That
 Ominipg correction remains a blocker to end-to-end fault containment; the
 physical transaction results are not a blanket clean integration claim.
 
+## Legacy object-store append race correction
+
+While preparing the S3 physical path, a response-held test reproduced an
+existing same-writer retry race in both S3 and GCS-compatible modes. A losing
+append read stale metadata, then deleted an immutable part that an identical
+retry had just committed. The resulting accepted body was unreadable.
+
+Cleanup now requires observed metadata from a different reservation/generation
+and an explicit absence of that key from its accepted parts. Same-writer or
+missing metadata retains the speculative part. The existing different-writer
+takeover cleanup assertion remains unchanged. This is a narrow legacy safety
+correction, not owner S3 adapter activation.
+
+Independent evidence: both original causal failures reproduced; the corrected
+complete S3 file passes 16 cases and related legacy content passes 61, with no
+failures/skips. Lint, format and all frozen source/dependency hashes pass. Tests
+use local S3/GCS-compatible mocks; no live-cloud or full-suite claim is made.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:

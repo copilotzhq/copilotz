@@ -17,18 +17,17 @@ import entry13 from "./collections/thread/index.ts";
 import entry14 from "./collections/tool-plan-branch/index.ts";
 import entry15 from "./collections/tool-plan-stage-result/index.ts";
 import entry16 from "./collections/tool-plan/index.ts";
-import entry17 from "./processors/dispatch-ask/index.ts";
-import entry18 from "./processors/message-input/index.ts";
-import entry19 from "./processors/message-router/index.ts";
-import entry20 from "./processors/project-agent-failure/index.ts";
-import entry21 from "./processors/project-text-result/index.ts";
-import entry22 from "./processors/project-tool-result/index.ts";
-import entry23 from "./processors/resume-compaction-route/index.ts";
-import entry24 from "./processors/tool-plan-coordinator/index.ts";
-import entry25 from "./resources/capabilities/default/index.ts";
-import entry26 from "./resources/toolResults/default/index.ts";
-import entry27 from "./resources/tools/ask/index.ts";
-import entry28 from "./resources/tools/read-tool-result/index.ts";
+import entry17 from "./processors/message-input/index.ts";
+import entry18 from "./processors/message-router/index.ts";
+import entry19 from "./processors/project-agent-failure/index.ts";
+import entry20 from "./processors/project-text-result/index.ts";
+import entry21 from "./processors/project-tool-result/index.ts";
+import entry22 from "./processors/resume-compaction-route/index.ts";
+import entry23 from "./processors/tool-plan-coordinator/index.ts";
+import entry24 from "./resources/capabilities/default/index.ts";
+import entry25 from "./resources/toolResults/default/index.ts";
+import entry26 from "./resources/tools/ask/index.ts";
+import entry27 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
 const definition = {
   id: "@copilotz/core",
@@ -56,25 +55,24 @@ const definition = {
     "spaces": entry8,
   },
   processors: {
-    "dispatchAsk": entry17,
-    "messageInput": entry18,
-    "messageRouter": entry19,
-    "projectAgentFailure": entry20,
-    "projectTextResult": entry21,
-    "projectToolResult": entry22,
-    "resumeCompactionRoute": entry23,
-    "toolPlanCoordinator": entry24,
+    "messageInput": entry17,
+    "messageRouter": entry18,
+    "projectAgentFailure": entry19,
+    "projectTextResult": entry20,
+    "projectToolResult": entry21,
+    "resumeCompactionRoute": entry22,
+    "toolPlanCoordinator": entry23,
   },
   resources: {
     "capabilities": {
-      "default": entry25,
+      "default": entry24,
     },
     "toolResults": {
-      "default": entry26,
+      "default": entry25,
     },
     "tools": {
-      "ask": entry27,
-      "readToolResult": entry28,
+      "ask": entry26,
+      "readToolResult": entry27,
     },
   },
 } as const;

@@ -145,9 +145,10 @@ Deno.test("pending compaction aborts without advancing its checkpoint", async ()
     externalId: "north",
   };
   const resource = memoryContextResource;
+  controller.abort(reason);
   await assertRejects(
     async () =>
-      await resource.compact!({
+      await resource.reserveCompact!({
         agent: { id: "north" },
         participant,
         thread: { id: "thread" },
@@ -180,44 +181,50 @@ Deno.test("pending compaction aborts without advancing its checkpoint", async ()
     Error,
     "cancelled compaction",
   );
-  assertEquals(reads, 1);
+  assertEquals(reads, 0);
   assertEquals(pending.status, "pending");
 });
 
-Deno.test("memory requests repair for a pending checkpoint with no producer", async () => {
-  const checkpoint = {
-    id: "legacy-job-checkpoint",
+Deno.test("pending checkpoint declares its producer without requiring a task Message", async () => {
+  const pending = { id: "checkpoint", status: "pending" };
+  const participant = {
+    id: "agent",
+    agentId: "north",
+    participantType: "agent",
+  };
+  const input = {
+    context: {
+      namespace: "test",
+      operations: {
+        start: (input: { operationKey: string }) =>
+          Promise.resolve(`action-operation:test:${input.operationKey}`),
+      },
+      resources: { agents: { north: {} } },
+      collections: {
+        message: {
+          get: () =>
+            Promise.resolve({
+              id: "trigger",
+              threadId: "thread",
+              senderId: "human",
+            }),
+        },
+        participant: { get: () => Promise.resolve(participant) },
+        longTermMemory: { list: () => Promise.resolve([pending]) },
+      },
+    },
+    thread: { id: "thread" },
+    participant,
+    triggerMessageId: "trigger",
+    signal: new AbortController().signal,
+  } as never;
+  const reservation = await memoryContextResource.reserveCompact!(input);
+  assertEquals(reservation, {
     status: "pending",
-    metadata: { initiatorParticipantId: "scheduled-job-participant" },
-  };
-  let producer: { historyScopeId: string } | null = null;
-  const requests: { checkpointId: string }[] = [];
-  const context = {
-    collections: {
-      longTermMemory: {
-        get: () => Promise.resolve(checkpoint),
-      },
-      message: { get: () => Promise.resolve(producer) },
-    },
-    actions: {
-      request_memory_checkpoint_recovery: (input: { checkpointId: string }) => {
-        requests.push(input);
-        return Promise.resolve({ checkpointId: input.checkpointId });
-      },
-    },
-  };
-  const input = { context } as never;
-  await memoryContextResource.recoverCompact!(
-    input,
-    checkpoint.id,
-  );
-  assertEquals(requests, [{ checkpointId: checkpoint.id }]);
-
-  // A pending checkpoint with its expected producer is healthy regardless of
-  // age. The recovery request processor rechecks this same condition.
-  producer = { historyScopeId: checkpoint.id };
-  await memoryContextResource.recoverCompact!(input, checkpoint.id);
-  assertEquals(requests.length, 1);
+    checkpointId: "checkpoint",
+    operationId: "action-operation:test:memory:checkpoint:producer",
+  });
+  assertEquals(await memoryContextResource.reserveCompact!(input), reservation);
 });
 
 Deno.test("foreground compaction skips an already-consumed pending checkpoint", async () => {
@@ -247,6 +254,11 @@ Deno.test("foreground compaction skips an already-consumed pending checkpoint", 
   const next = checkpoint("successor", "later");
   let reservations = 0;
   const context = {
+    namespace: "test",
+    operations: {
+      start: (input: { operationKey: string }) =>
+        Promise.resolve(`action-operation:test:${input.operationKey}`),
+    },
     resources: { agents: { west: { id: "west" } } },
     collections: {
       message: {
@@ -272,19 +284,31 @@ Deno.test("foreground compaction skips an already-consumed pending checkpoint", 
       },
     },
   };
-  assertEquals(
-    await memoryContextResource.compact!({
-      context,
-      agent: { id: "west" },
-      participant,
-      thread: { id: "thread" },
-      triggerMessageId: "trigger",
-      historyAfterMessageId: "covered",
-      historyLimitEstimatedTokens: 80_000,
-      signal: new AbortController().signal,
-    } as never),
-    true,
-  );
+  const input = {
+    context,
+    agent: { id: "west" },
+    participant,
+    thread: { id: "thread" },
+    triggerMessageId: "trigger",
+    historyAfterMessageId: "covered",
+    historyLimitEstimatedTokens: 80_000,
+    signal: new AbortController().signal,
+  } as never;
+  assertEquals(await memoryContextResource.reserveCompact!(input), {
+    status: "pending",
+    checkpointId: old.id,
+    operationId: `action-operation:test:memory:${old.id}:producer`,
+  });
+  assertEquals(await memoryContextResource.checkCompact!(input, old.id), {
+    status: "ready",
+    advances: false,
+  });
+  const nextReservation = await memoryContextResource.reserveCompact!(input);
+  assertEquals(nextReservation.status, "pending");
+  assertEquals(await memoryContextResource.checkCompact!(input, next.id), {
+    status: "ready",
+    advances: true,
+  });
   assertEquals(reservations, 2);
 });
 
@@ -306,7 +330,6 @@ Deno.test("memory settles preparation failure only for its authenticated private
   const updates: unknown[] = [];
   const context = {
     signal: new AbortController().signal,
-    signalDeferredWait: () => Promise.resolve(),
     collections: {
       message: { get: () => Promise.resolve(task) },
       longTermMemory: {

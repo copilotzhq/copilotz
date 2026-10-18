@@ -91,10 +91,12 @@ export type EventStatement<T> = Readonly<{
 
 export type CommitEventMutationOptions<T> = {
   draft: DurableEventDraft;
+  /** Stable runtime-owned root event identity. */
+  eventId?: string;
   consumers: readonly DurableConsumerObligation[];
   maxAttempts?: number;
   /** Runtime-owned lifecycle admission, never derived from event metadata. */
-  admission?: Readonly<{ openActionGroup?: boolean; cancellation?: boolean }>;
+  admission?: Readonly<{ cancellation?: boolean }>;
   /** Join an already-open SQL transaction instead of opening a nested one. */
   transaction?: SqlExecutor;
   /** An event body written by the event's own statement. */
@@ -676,7 +678,7 @@ export function createEventStore(
     };
     const encoded = encodeDraft(draft);
     const consumers = uniqueConsumers(mutation.consumers);
-    const eventId = createId();
+    const eventId = mutation.eventId ?? createId();
     const settlementScopeId = draft.settlementScopeId?.trim() || eventId;
     const correlationId = draft.correlationId ?? eventId;
     const createdAt = (draft.createdAt ? new Date(draft.createdAt) : now())
@@ -705,25 +707,11 @@ export function createEventStore(
       const admission = options.admitOperationEventSql?.({
         namespace: draft.namespace,
         operationId: settlementScopeId,
-        requireScope: mutation.admission?.openActionGroup === true,
         cancellationTerminal: mutation.admission?.cancellation === true,
       }, param);
       const cancelled = mutation.admission?.cancellation === true
         ? "TRUE"
         : admission?.cancelled ?? "FALSE";
-      const group = draft.actionScopeId?.trim();
-      const openingGroup = mutation.admission?.openActionGroup === true;
-      const groupCtes = group && !openingGroup
-        ? [`admitted_action_group AS MATERIALIZED (
-        SELECT action_run_id FROM ${tables.open_actions}
-        WHERE namespace = ${param(draft.namespace)} AND action_run_id = ${
-          param(group)
-        }
-          AND scope_id = ${param(settlementScopeId)}
-          AND state = 'deferred' AND EXISTS (SELECT 1 FROM event_operation_admission)
-        FOR UPDATE
-      )`]
-        : [];
       const lease = draft.deliveryLease;
       const insertGate = [
         "EXISTS (SELECT 1 FROM event_admission)",
@@ -761,22 +749,16 @@ export function createEventStore(
         `event_operation_admission AS MATERIALIZED (SELECT 1 WHERE ${
           admission?.gate ?? "TRUE"
         })`,
-        ...groupCtes,
-        `event_group_admission AS MATERIALIZED (SELECT 1 FROM event_operation_admission ${
-          group && !openingGroup
-            ? `WHERE EXISTS (SELECT 1 FROM admitted_action_group) OR ${cancelled}`
-            : ""
-        })`,
         ...(lease
           ? [`event_delivery_admission AS MATERIALIZED (
           SELECT id FROM ${tables.event_deliveries}
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
             AND lease_owner = ${param(lease.owner)} AND lease_expires_at > NOW()
-            AND EXISTS (SELECT 1 FROM event_group_admission) FOR UPDATE
+            AND EXISTS (SELECT 1 FROM event_operation_admission) FOR UPDATE
         )`]
           : []),
         `event_admission AS MATERIALIZED (SELECT 1 FROM ${
-          lease ? "event_delivery_admission" : "event_group_admission"
+          lease ? "event_delivery_admission" : "event_operation_admission"
         })`,
         ...statement?.ctes ?? [],
         `inserted_event AS (

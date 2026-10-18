@@ -78,7 +78,7 @@ export type CollectionMutationIdentity = Readonly<{
   correlationId?: string;
   deduplicationId?: string;
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
   deliveryLease?: DeliveryLease;
   metadata?: Record<string, unknown>;

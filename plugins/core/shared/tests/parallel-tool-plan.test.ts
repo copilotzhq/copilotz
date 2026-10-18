@@ -102,7 +102,11 @@ async function waitForIdle(
         `Tool-plan workflow dead-lettered: ${JSON.stringify(failures)}`,
       );
     }
-    if (settlement.unsettled === 0) {
+    const operation = await engine.operations.get(NAMESPACE, rootEventId);
+    if (
+      operation &&
+      ["completed", "failed", "cancelled"].includes(operation.state)
+    ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));

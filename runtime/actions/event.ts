@@ -6,7 +6,7 @@ import type {
 
 const ACTION_STATUSES = [
   "invoked",
-  "deferred",
+  "awaiting",
   "progress",
   "completed",
   "failed",
@@ -105,15 +105,24 @@ function strictJsonObject(value: unknown): value is Record<string, unknown> {
     strictJsonValue(value, new WeakSet<object>());
 }
 
-function statusKeys(status: ActionStatus, nested: boolean): readonly string[] {
+function statusKeys(
+  status: ActionStatus,
+  nested: boolean,
+  observing: boolean,
+): readonly string[] {
   const base = nested
     ? [...BASE_DATA_KEYS, "parentActionRunId"]
     : BASE_DATA_KEYS;
   switch (status) {
     case "invoked":
       return base;
-    case "deferred":
-      return [...base, "work", "progressIndex"];
+    case "awaiting":
+      return [
+        ...base,
+        "handoff",
+        observing ? "operationId" : "start",
+        "progressIndex",
+      ];
     case "progress":
       return [...base, "progress", "progressIndex"];
     case "completed":
@@ -140,7 +149,7 @@ function lifecycleDeduplicationId(
   status: ActionStatus,
   progressIndex?: number,
 ): string {
-  if (status === "deferred") return `${actionRunId}:action:deferred`;
+  if (status === "awaiting") return `${actionRunId}:action:awaiting`;
   if (status === "invoked") return `${actionRunId}:action:invoked`;
   if (status === "progress") {
     return `${actionRunId}:action:progress:${String(progressIndex)}`;
@@ -200,14 +209,19 @@ export function parseActionLifecycleEvent(
     (!nonEmptyText(lifecycle.parentActionRunId) ||
       lifecycle.parentActionRunId !== lifecycle.parentActionRunId.trim())
   ) return null;
-  if (!hasExactKeys(lifecycle, statusKeys(actionStatus, hasParent))) {
+  if (
+    !hasExactKeys(
+      lifecycle,
+      statusKeys(actionStatus, hasParent, "operationId" in lifecycle),
+    )
+  ) {
     return null;
   }
   if (!strictJsonObject(lifecycle.metadata)) return null;
   if (
-    (actionStatus === "progress" || actionStatus === "deferred") &&
+    (actionStatus === "progress" || actionStatus === "awaiting") &&
     (!Number.isSafeInteger(lifecycle.progressIndex) ||
-      Number(lifecycle.progressIndex) < (actionStatus === "deferred" ? 0 : 1))
+      Number(lifecycle.progressIndex) < (actionStatus === "awaiting" ? 0 : 1))
   ) return null;
 
   const namespace = event.namespace;
@@ -265,6 +279,10 @@ export function isRegisteredActionLifecycleEventType(
   actions: Readonly<Record<string, AnyActionDefinition>>,
 ): boolean {
   const normalized = eventType.trim();
+  if (
+    normalized === "copilotz.action.start" ||
+    normalized === "copilotz.action.resume"
+  ) return true;
   return Object.values(actions).some((action) =>
     ACTION_STATUSES.some((status) => normalized === `${action.id}.${status}`)
   );
@@ -275,7 +293,7 @@ export function isReservedActionLifecycleDeduplicationId(
   deduplicationId: string | undefined,
 ): boolean {
   const normalized = deduplicationId?.trim() ?? "";
-  return /^.+:action:(?:invoked|deferred|resolve(?::[1-9][0-9]*)?|terminal|progress:[1-9][0-9]*)$/
+  return /^.+:(?:action:(?:invoked|awaiting|terminal|progress:[1-9][0-9]*)|start|resume)$/
     .test(
       normalized,
     );

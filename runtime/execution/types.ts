@@ -142,7 +142,7 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
   /** Internal runtime consumer, independent of plugin registration. */
-  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
+  executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   leaseMs?: number;
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
@@ -183,7 +183,7 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
   /** Internal runtime consumer, independent of plugin registration. */
-  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
+  executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
   /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */

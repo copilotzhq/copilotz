@@ -2,9 +2,11 @@ import { memoryConfig } from "../../resources/memory/config/index.ts";
 /** Dispatches a scoped Core Agent turn for a reserved checkpoint. @module */
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { MemoryProcessorContext } from "../../shared/contracts.ts";
-import { settleCheckpointError } from "../../shared/checkpoints.ts";
+import {
+  memoryCheckpointOperation,
+  settleCheckpointError,
+} from "../../shared/checkpoints.ts";
 import { record } from "../../shared/input.ts";
-import { dispatchMemoryCheckpoint } from "../../shared/dispatch.ts";
 
 export const dispatchMemoryConsolidationProcessor: Processor<
   MemoryProcessorContext
@@ -21,7 +23,7 @@ export const dispatchMemoryConsolidationProcessor: Processor<
     });
     if (!checkpoint || checkpoint.status !== "pending") return;
     if (record(checkpoint.metadata).onDemand === true) return;
-    await dispatchMemoryCheckpoint(context, checkpoint);
+    await memoryCheckpointOperation(context, checkpoint.id);
   },
   async onError(error, event, context) {
     if (!event.durable || !event.subject?.id) return false;

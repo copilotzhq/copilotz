@@ -1,4 +1,4 @@
-import { ACTION_RESOLVER_CONSUMER } from "../actions/deferred-work.ts";
+import { ACTION_CONTINUATION_CONSUMER } from "../actions/continuation-work.ts";
 import type { EventDelivery } from "../events/index.ts";
 import { isNonRetryableError } from "../failure.ts";
 import { readViews } from "../collections/read-view.ts";
@@ -104,7 +104,7 @@ export function createDeliveryWorkload(
   options: CreateDeliveryWorkloadOptions,
 ): DeliveryWorkload {
   if (!options.store && !options.resolveStore) {
-    throw new TypeError("Delivery workload requires a store resolver.");
+    throw new TypeError("Delivery workload requires a store continuation.");
   }
   const leaseMs = boundedPositive(options.leaseMs, DEFAULT_LEASE_MS, "leaseMs");
   const heartbeatMs = boundedPositive(
@@ -206,13 +206,13 @@ export function createDeliveryWorkload(
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
       }
-      const resolver = delivery.consumerId === ACTION_RESOLVER_CONSUMER
-        ? options.resolveDeferredAction
+      const continuation = delivery.consumerId === ACTION_CONTINUATION_CONSUMER
+        ? options.executeContinuation
         : undefined;
-      const processor = resolver
+      const processor = continuation
         ? undefined
         : options.registry.processorForConsumer(delivery.consumerId);
-      if (!resolver && !processor) {
+      if (!continuation && !processor) {
         throw new Error(
           `No processor is registered for consumer '${delivery.consumerId}'.`,
         );
@@ -271,8 +271,8 @@ export function createDeliveryWorkload(
         namespace: metadata.namespace,
       });
       abort.signal.throwIfAborted();
-      if (resolver) {
-        await resolver(base);
+      if (continuation) {
+        await continuation(base);
       } else {
         const context = await options.createContext(base);
         abort.signal.throwIfAborted();

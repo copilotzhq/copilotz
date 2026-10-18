@@ -87,7 +87,7 @@ export function createDeliveryExecutor(
     resolveStore: options.resolveStore,
     registry: options.registry,
     createContext: options.createContext,
-    resolveDeferredAction: options.resolveDeferredAction,
+    executeContinuation: options.executeContinuation,
     leaseMs: options.leaseMs,
     heartbeatMs: options.heartbeatMs,
     scheduler: options.scheduler,

@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 10:28 UTC.
+Updated: 18 October 2026, 10:42 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -11,11 +11,16 @@ production-ready. All changes remain draft: **no merge or publication**.
 ## Current priority
 
 The 18 October [retirement review](refactor-cleanup.md) prioritizes real caller
-migration and deletion over additional isolated owner components. Finish the
-now-reviewed append/checkpoint gate, remove the audited dormant classifier, then
-move the host off the full legacy catalog/recovery dependency with actual
-execution evidence. Compatibility tests preserve behavior; permanent dual
-runtimes are not a goal.
+migration and deletion over additional isolated owner components. The reviewed
+append/checkpoint gate is pushed and the dormant classifier is removed with its
+missing safety cases moved to actual startup. Next, move the host off the full
+legacy catalog/recovery dependency with actual execution evidence. Compatibility
+tests preserve behavior; permanent dual runtimes are not a goal.
+
+The classifier cleanup preserves the used alarm identity and target type. Its
+four missing safety counterexamples now exercise the surviving startup path. It
+adds no replacement service or mode. Full-static reachability still reports
+eight unwired modules; this is scoped cleanup acceptance, not a release gate.
 
 ## Current work
 
@@ -37,7 +42,7 @@ runtimes are not a goal.
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
 | Content writer lifetime              | WIP: stores/schema checked    | [Physical stores and fresh owner schema](owner-content-lifetime-plan.md) checked; commands, execution and package wiring remain open                                                  |
-| Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
+| Architecture cleanup                 | In progress                   | Dormant classifier removed: net604 production lines; independent PG51/PGlite51 pass; actual host catalog migration next                                                               |
 
 A cloud runner restart restored an older workspace. The pushed manager and
 reconstructed integration have since completed fresh scoped PostgreSQL/PGlite

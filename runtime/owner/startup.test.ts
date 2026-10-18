@@ -602,6 +602,122 @@ test("startup keeps claimed, orphan, foreign and unsupported alarm evidence as d
   }
 });
 
+test("startup preserves contradictory terminal, dangling Action and leased Processor evidence", async () => {
+  for (
+    const kind of [
+      "terminal-without-history",
+      "dangling-action",
+      "leased-processor",
+    ] as const
+  ) {
+    const f = await fixture();
+    try {
+      const ref = await f.seed("unresolved", kind === "leased-processor");
+      if (kind === "leased-processor") {
+        const { actionId: _actionId, executionId: _executionId, ...base } = f
+          .binding(ref);
+        const binding = {
+          ...base,
+          kind: "processor" as const,
+          processorId: "observe",
+        };
+        await f.current.execute(f.caller, {
+          kind: "assignment.bind",
+          domain: "incarnation",
+          key: `${ownerAssignmentKey("owner", binding)}:assignment.bind`,
+          intent: binding,
+        });
+        await f.db.query(
+          "UPDATE event_deliveries SET status='leased',attempts=1,lease_owner='old',lease_expires_at=$1 WHERE id=$2",
+          ["2020-01-02T00:00:00Z", ref.deliveryId],
+        );
+      } else if (kind === "dangling-action") {
+        await f.claim(ref);
+        await f.db.query(
+          "UPDATE open_actions SET owner_delivery_id='missing-delivery' WHERE action_run_id=$1",
+          [ref.runId],
+        );
+      } else {
+        await f.bind(ref);
+        await f.db.query(
+          "UPDATE event_deliveries SET status='succeeded',settled_at=$1 WHERE id=$2",
+          [start, ref.deliveryId],
+        );
+      }
+      const before =
+        (await f.db.query("SELECT * FROM event_deliveries WHERE id=$1", [
+          ref.deliveryId,
+        ])).rows;
+      await f.takeover();
+      const result = (await f.repair()).result as {
+        blockers: {
+          kind: string;
+          namespace: string | null;
+          id: string;
+          reason: string;
+        }[];
+      };
+      assert.ok(result.blockers.length, kind);
+      if (kind === "dangling-action") {
+        assert.ok(
+          result.blockers.some((row) =>
+            row.kind === "action" && row.id === ref.runId &&
+            row.namespace === ref.namespace &&
+            row.reason === "open_action_recovery_required"
+          ),
+        );
+      }
+      await assert.rejects(f.proof(), /unresolved/);
+      assert.deepEqual(
+        (await f.db.query("SELECT * FROM event_deliveries WHERE id=$1", [
+          ref.deliveryId,
+        ])).rows,
+        before,
+      );
+      assert.equal(
+        (await f.db.query<{ retired: boolean }>(
+          "SELECT retired FROM owner_assignments",
+        )).rows[0].retired,
+        false,
+      );
+      assert.equal(
+        (await f.db.query("SELECT 1 FROM owner_alarms WHERE name=$1", [
+          JSON.stringify(["host.delivery", ref.namespace, ref.deliveryId]),
+        ])).rows.length,
+        0,
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("startup alarm growth beyond capacity rolls back without a repair receipt", async () => {
+  const f = await fixture({ maxItems: 1 });
+  try {
+    await f.db.query(
+      "INSERT INTO owner_alarms(owner,name,due_at) VALUES('owner','unknown-alarm',$1)",
+      [start],
+    );
+    const before = (await f.db.query("SELECT * FROM owner_alarms")).rows;
+    await f.takeover();
+    const receiptCount =
+      (await f.db.query("SELECT * FROM owner_receipts")).rows;
+    await assert.rejects(f.repair(), /Startup alarm capacity exceeded/);
+    assert.deepEqual(
+      (await f.db.query("SELECT * FROM owner_alarms")).rows,
+      before,
+    );
+    assert.deepEqual(
+      (await f.db.query("SELECT * FROM owner_receipts")).rows,
+      receiptCount,
+    );
+    await assert.rejects(f.proof(), /Startup alarm capacity exceeded/);
+  } finally {
+    await f.close();
+  }
+});
+
 test("startup refuses incomplete row/aggregate-byte inventory and missing schema without provisioning", async () => {
   for (const kind of ["rows", "bytes", "schema"] as const) {
     const f = await fixture({

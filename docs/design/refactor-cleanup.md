@@ -141,7 +141,7 @@ merely because the owner path does not call a module: public embedded, engine
 and standalone exports still do. The next migration must name and move those
 callers.
 
-### Immediate deletion candidate: dormant reconciliation classifier
+### Retired dormant reconciliation classifier
 
 `createOwnerReconciliation`, its inventory/classify command kinds, cursor/page/
 classification types and key helper have no production registration or public
@@ -150,13 +150,48 @@ lost-Action recovery import the target union and exact durable alarm encoder
 from that file; those must remain unchanged.
 
 The existing exhaustive startup proof/repair replaces the unused paginated
-classifier's role. Before removing it, carry remaining counterexamples into the
-live startup path: succeeded status without canonical lifecycle, dangling
-open_actions owner delivery, a leased Processor and aggregate added-alarm
-overflow rollback. Its private pagination and classifier-receipt API can retire
-with the unused factory. This removal is separate from the following fixed-owner
-catalog migration; it must not be reported complete before tests and caller
-checks pass.
+classifier's role. Its remaining counterexamples now run through actual startup:
+succeeded status without canonical lifecycle, dangling open_actions owner
+delivery, a leased Processor and aggregate added-alarm capacity refusal. Private
+pagination and classifier-receipt semantics retire with the unused factory.
+
+### Dormant classifier removal: scoped acceptance
+
+The accepted change removes a net 604 production lines while preserving the
+original target union and byte-identical alarm encoder. The old factory-only
+suite is replaced by one alarm identity test; three previously unmatched
+negatives now execute through actual startup proof/repair, and a fourth case
+verifies added-alarm pre-write capacity refusal with unchanged durable alarms
+and receipts.
+
+Behavioral mapping for the retired fixture:
+
+- Never-started, current/future and ordinary pending reservations: existing
+  startup reservation and alarm-repair tests
+- Claimed Action/effects and lost work: existing startup blockers and actual
+  lost-Action recovery tests
+- Canonical terminal versus delivery status alone: existing canonical-history
+  test plus the new terminal-without-history startup counterexample
+- Orphan assignments, missing source and dangling open Action: existing startup
+  source/graph checks plus the new independently discovered dangling-action case
+- Leased prior Processor: new startup case proves no delivery mutation, attempt
+  reset, assignment retirement, delivery wake or readiness
+- Atomic repair, unknown COMMIT, changed authority and current-state reproof:
+  existing startup transaction tests and tagged lost-Action control tests
+- Alarm growth: new one-existing-alarm/maxItems-one case reaches final capacity
+  refusal after inventory succeeds and leaves no repair receipt
+- Local-placement retained history: existing owner-host local recovery refusal
+- Pagination cursors, classifier dispositions/receipts and its separate
+  maxAlarms option: intentionally retired with the unused private API
+
+No replacement retry/classifier service or new configuration option is added.
+Independent scoped validation passes 51 tests on PostgreSQL and 51 on PGlite.
+Removing only standalone open_actions discovery in evidence copies fails the new
+exact-reason assertion on both backends, proving the moved counterexample
+exercises that path. All 102 owned databases were exported/dropped; PostgreSQL
+stopped with no sessions or leftovers, and source/dependency hashes match. The
+same eight-module package reachability blocker remains. The separate host
+catalog migration has not started in this checkpoint.
 
 ## Required evidence for each cleanup checkpoint
 

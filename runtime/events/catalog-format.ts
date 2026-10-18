@@ -2,6 +2,8 @@
 import type { SqlExecutor } from "./session.ts";
 
 export const OPERATION_CATALOG_FINGERPRINT = "action-obligations-v1";
+/** Private fresh-only owner content format; legacy entrypoints never accept it. */
+export const OWNER_CONTENT_CATALOG_FINGERPRINT = "owner-content-v1";
 
 /** metadataTable must be an internally quoted, schema-qualified identifier. */
 export function operationCatalogFormatSql(

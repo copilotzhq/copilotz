@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 07:51 UTC.
+Updated: 18 October 2026, 08:25 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -27,7 +27,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: physical stores checked  | [Memory/SQL/S3 physical stores](owner-content-lifetime-plan.md) checked; owner catalog, execution and package wiring remain open                                                      |
+| Content writer lifetime              | WIP: stores/schema checked    | [Physical stores and fresh owner schema](owner-content-lifetime-plan.md) checked; commands, execution and package wiring remain open                                                  |
 | Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -39,9 +39,13 @@ activation. SQL format isolation, memory/database/S3 physical stores and legacy
 catalog admission guards now have scoped passing checks. The latest corrected
 catalog gate passes 33 PostgreSQL and 31 PGlite cases plus two PostgreSQL-only
 skips, including all 15 formerly blocked settlement cases on each backend. The
-unchanged full-static package-surface guard still refuses five modules without
-genuine host wiring. Fresh owner stream schema, catalog authority/alarms and
-actual content execution routing remain open.
+new private fresh owner catalog schema separately passes 61 PostgreSQL and 53
+PGlite cases with 58 steps on each backend and eight explicit PostgreSQL skips.
+All five causal old-version defects remain recorded beside corrected passes. The
+unchanged full-static package-surface guard now refuses seven private modules
+awaiting genuine host wiring. Receipt-free checkpoint mutations, reservation
+confirmation, catalog authority/alarms and actual content execution routing
+remain open.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -417,7 +421,7 @@ what it simplifies and eliminates before adding machinery.
 - [x] Shared private 1 MiB range-read admission before I/O across memory, SQL
       and S3; larger reads require paging
 - [ ] Wire private physical stores into real owner catalog/execution
-      composition; clear the unchanged five-module package-surface failure
+      composition; clear the unchanged seven-module package-surface failure
       through that wiring
 
 - [x] Legacy catalog format admission guards: composed event/index SQL,
@@ -426,6 +430,15 @@ what it simplifies and eliminates before adding machinery.
 - [x] Repair the pre-existing settlement fixture to use exact owner attempts for
       delivery mutations; all 15 cases pass on both backends without restoring
       leases or weakening assertions
+
+- [x] Private fresh owner stream format, exact retained-layout validation,
+      reserving phase and legacy DDL reuse; independent PostgreSQL/PGlite
+      schema, mutation and provisioning-race checks pass without host activation
+- [ ] Registered receipt-free checkpoint mutation on the existing owner queue,
+      with current lifetime fences and no automatic receipts or sequence events
+- [ ] Catalog-first reservation, physical confirmation and visibility through
+      the same local/worker content coordinator; hidden failed reservations and
+      accepted-prefix-only observation
 
 ## 5. Views, providers and clients
 

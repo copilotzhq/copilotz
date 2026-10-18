@@ -1,4 +1,9 @@
 import {
+  lifecycleIndexStatements,
+  operationCatalogSchemaStatements,
+  selectionSchemaStatements,
+} from "./catalog-schema.ts";
+import {
   assertOperationCatalogFormat,
   OPERATION_CATALOG_FINGERPRINT,
   operationCatalogFormatSql,
@@ -809,33 +814,9 @@ async function provisionSelectionTables(
   transaction: SqlExecutor,
   tables: OperationCatalogTables,
 ): Promise<void> {
-  await transaction.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_events_ordinal_idx"
-    ON ${tables.operationEvents} (namespace, operation_id, event_ordinal)`,
-  );
-  await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.selectionHeads} (
-    namespace TEXT NOT NULL,
-    selection_key TEXT NOT NULL,
-    change_ordinal BIGINT NOT NULL CHECK (change_ordinal >= 0),
-    PRIMARY KEY (namespace, selection_key)
-  )`);
-  await transaction.query(
-    `CREATE TABLE IF NOT EXISTS ${tables.selectionOperations} (
-    namespace TEXT NOT NULL,
-    selection_key TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
-    change_ordinal BIGINT NOT NULL CHECK (change_ordinal >= 1),
-    PRIMARY KEY (namespace, selection_key, operation_id)
-  )`,
-  );
-  await transaction.query(
-    `CREATE INDEX IF NOT EXISTS "copilotz_operation_selections_changes_idx"
-    ON ${tables.selectionOperations} (namespace, selection_key, change_ordinal, operation_id)`,
-  );
-  await transaction.query(
-    `CREATE INDEX IF NOT EXISTS "copilotz_operation_selections_operation_idx"
-    ON ${tables.selectionOperations} (namespace, operation_id, selection_key)`,
-  );
+  for (const statement of selectionSchemaStatements(tables)) {
+    await transaction.query(statement);
+  }
 }
 
 function observationKeys(
@@ -850,19 +831,6 @@ function observationKeys(
   }
   return [...new Set(value.map((key) => requiredText(key, "Observation key")))]
     .sort();
-}
-
-/** Additive operational tables; the Core Event schema is unchanged. */
-function lifecycleIndexStatements(
-  tables: OperationCatalogTables,
-): readonly string[] {
-  return [
-    `CREATE INDEX IF NOT EXISTS "copilotz_operations_live_idx"
-     ON ${tables.operations} (updated_at, operation_id) WHERE state IN ('accepted','running')`,
-    `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_action_scope_idx"
-     ON ${tables.operationStreams} (namespace, operation_id, ((descriptor -> 'metadata' ->> 'sourceActionScopeId')))
-     WHERE (descriptor -> 'metadata' ->> 'sourceActionScopeId') IS NOT NULL`,
-  ];
 }
 
 export async function provisionOperationCatalog(
@@ -898,123 +866,7 @@ export async function provisionOperationCatalog(
         );
       }
     }
-    await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.metadata} (
-      singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-      fingerprint TEXT NOT NULL CHECK (fingerprint = '${OPERATION_CATALOG_FINGERPRINT}')
-    )`);
-    await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.operations} (
-      operation_id TEXT PRIMARY KEY,
-      namespace TEXT NOT NULL,
-      root_event_id TEXT NOT NULL,
-      visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),
-      correlation_id TEXT NOT NULL,
-      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-      next_stream_ordinal BIGINT NOT NULL DEFAULT 1,
-      next_event_ordinal BIGINT NOT NULL DEFAULT 1,
-      observation_keys TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
-      state TEXT NOT NULL CHECK (state IN ('accepted','running','completed','failed','cancelled')),
-      accepted_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL,
-      completed_at TIMESTAMPTZ,
-      cancellation_requested_at TIMESTAMPTZ,
-      cancellation_reason TEXT
-    )`);
-    await transaction.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operations_public_root_idx"
-       ON ${tables.operations} (root_event_id) WHERE visibility = 'public'`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operations_namespace_updated_idx"
-      ON ${tables.operations} (namespace, updated_at, operation_id)`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operations_metadata_idx"
-      ON ${tables.operations} USING GIN (metadata jsonb_path_ops)`,
-    );
-    await transaction.query(
-      `CREATE TABLE IF NOT EXISTS ${tables.operationEvents} (
-      namespace TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      event_id TEXT NOT NULL UNIQUE,
-      event_position BIGINT NOT NULL,
-      event_ordinal BIGINT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL,
-      PRIMARY KEY (namespace, operation_id, event_id)
-    )`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operation_events_position_idx"
-      ON ${tables.operationEvents} (namespace, operation_id, event_position)`,
-    );
-    await provisionSelectionTables(transaction, tables);
-    await transaction.query(
-      `CREATE TABLE IF NOT EXISTS ${tables.operationStreams} (
-      namespace TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      replay_key BIGSERIAL NOT NULL UNIQUE,
-      stream_ordinal BIGINT NOT NULL,
-      stream_id TEXT NOT NULL,
-      semantic_stream_id TEXT NOT NULL,
-      body_id TEXT NOT NULL,
-      descriptor JSONB NOT NULL,
-      state TEXT NOT NULL CONSTRAINT copilotz_operation_streams_state_check
-        CHECK (state IN ('open','terminating','terminal')),
-      outcome TEXT CONSTRAINT copilotz_operation_streams_outcome_check
-        CHECK (outcome IN ('completed','failed','cancelled','superseded','abandoned')),
-      availability TEXT NOT NULL DEFAULT 'retained'
-        CONSTRAINT copilotz_operation_streams_availability_check
-        CHECK (availability IN ('retained','purge_pending','purged','missing')),
-      capture TEXT CONSTRAINT copilotz_operation_streams_capture_check
-        CHECK (capture IN ('complete','truncated')),
-      committed_offset BIGINT NOT NULL DEFAULT 0 CHECK (committed_offset >= 0),
-      digest TEXT,
-      asset_id TEXT,
-      asset_retention TEXT CHECK (asset_retention IN ('canonical','observation')),
-      terminal_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (namespace, operation_id, stream_id),
-      UNIQUE (namespace, stream_id),
-      UNIQUE (namespace, operation_id, stream_ordinal),
-      CONSTRAINT copilotz_operation_streams_terminal_check CHECK (
-        (state = 'open' AND outcome IS NULL AND capture IS NULL
-          AND terminal_at IS NULL AND availability = 'retained')
-        OR
-        (state = 'terminating' AND outcome IS NOT NULL
-          AND capture IS NOT NULL AND terminal_at IS NULL
-          AND availability = 'retained'
-          AND (outcome <> 'completed' OR capture = 'complete'))
-        OR
-        (state = 'terminal' AND outcome IS NOT NULL AND capture IS NOT NULL
-          AND terminal_at IS NOT NULL
-          AND (outcome <> 'completed' OR capture = 'complete')
-          AND (asset_retention <> 'canonical' OR outcome = 'completed'))
-      )
-    )`,
-    );
-    await transaction.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_streams_replay_key_idx"
-       ON ${tables.operationStreams} (replay_key)`,
-    );
-    await transaction.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_streams_ordinal_idx"
-       ON ${tables.operationStreams} (namespace, operation_id, stream_ordinal)`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_semantic_idx"
-       ON ${tables.operationStreams} (namespace, operation_id, semantic_stream_id)`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_body_idx"
-       ON ${tables.operationStreams} (body_id)`,
-    );
-    await transaction.query(
-      `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_retention_idx"
-      ON ${tables.operationStreams} (
-        asset_retention, availability, namespace, operation_id, stream_id
-      ) WHERE state = 'terminal'`,
-    );
-    for (const statement of lifecycleIndexStatements(tables)) {
+    for (const statement of operationCatalogSchemaStatements(tables)) {
       await transaction.query(statement);
     }
     await transaction.query(

@@ -284,6 +284,68 @@ public content activation is claimed.
 Owner stream fields, fresh owner-format provisioning, commands/alarms and real
 content execution routing remain the next coordinated work.
 
+## Private owner catalog schema checkpoint
+
+The next unactivated schema uses one closed legacy/owner DDL builder. The twenty
+legacy CREATE statements and their ordering remain byte-identical. The fresh
+`owner-content-v1` variant adds the reviewed binding fields to the existing
+operation stream table, with finite protection deadlines, safe original
+generation/epoch/attempt bounds, descriptor coordinates and one physical copy
+per backend/body identity. An owner-only `reserving` lifecycle phase records
+catalog-first intent before external physical reserve. The future owner
+confirmation handler must be the only path that moves it to `open` and publishes
+the descriptor. An absent body during reservation is unresolved creation; after
+confirmed publication it is unavailable content, not permission to recreate or
+adopt it. Owner observation/follower wiring must exclude `reserving` rows;
+existing legacy read paths are not that proof.
+
+No owner epoch foreign key is added: opening epochs must remain historical when
+the owner advances.
+
+Fresh provisioning takes the common schema lock before the catalog lock. It
+refuses legacy, unmarked, partial or orphan catalog relations before DDL. Core
+may be absent or already fully provisioned and empty; its six data tables are
+locked through marker commit, and RLS-enabled core is refused. The five reserved
+owner tables and either physical body table are not adopted. An identical
+retained owner catalog is validated without repair or fresh-data emptiness
+checks.
+
+The private read-only validator checks all six catalog tables, their full
+columns/defaults, validated constraints, index predicates/operator classes,
+collations and ordering, and the exact owned replay sequence. Its mutable
+sequence position is not a format invariant. Public or search-path-visible
+sequence names retain the same identity. Unexpected identifiers are accumulated
+as data in null-prototype dictionaries. The fixed layout inventory is committed
+with the closed DDL; it is never learned from the schema being reopened.
+
+The SQL placement-binding representation is bounded to 32 KiB before driver
+materialization. The existing placement parser's 16 KiB canonical JSON limit
+remains the semantic command limit; the extra SQL space accommodates JSONB text
+formatting. This schema-only slice does not grant command authority or establish
+immutable-descriptor replay; the upcoming command handlers must enforce those.
+
+Exclusive fresh setup is still required. Existing owner command/assignment
+provisioners do not yet take the common schema lock, so this catalog transaction
+does not serialize a competing owner provisioner. Coordinated activation must
+hold the shared admission boundary across the complete sequence. Physical SQL
+storage remains in its separately validated namespace. Current host catalog
+instances, event hooks and core admission stay legacy-bound until the actual
+owner-content route is ready; merely swapping a provisioner would be invalid.
+
+Independent scope passes 61 PostgreSQL cases and 53 PGlite cases with 58 steps
+on each backend and eight explicit PostgreSQL-only skips. The complete matrix
+includes fresh rollback, read-only reopen, retained/partial/core refusal, exact
+legacy DDL, damaged layouts, Unicode/binding byte bounds, SQL microseconds and
+held provisioning/core-writer races. Five matched old-version defects fail as
+expected and pass on the correction on each backend: visible sequence defaults,
+prototype-named columns/constraints, core FORCE RLS and timestamp precision.
+
+Six-file typecheck/lint/format and frozen hashes pass. All 57 fixture databases
+plus the coordinator were exported and dropped, with PostgreSQL stopped. The
+unchanged full-static task refuses seven private modules still awaiting real
+host wiring; generated/core-ownership checks pass separately. No public content
+activation or whole-suite acceptance is claimed.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:
@@ -329,6 +391,37 @@ repair unmarked, partial or legacy schemas.
 Keep public stream/content admission closed until the following slices prove
 accepted-prefix and completion behavior. Do not create another stream catalog,
 attempt registry, generic command bus, or permanent lease-mode toggle.
+
+### Next execution handshake and simplification direction
+
+Keep physical I/O outside owner SQL handlers: rollback may retry a handler, and
+using the same physical SQL session inside its owner transaction can deadlock.
+The shared coordinator should durably record `reserving`, perform the exact
+physical reservation outside the queue, then reauthorize and confirm `open`.
+Unknown reserve may retry only the original identity. Failed unconfirmed rows
+stay hidden while their revocation advances; turning them into visible terminal
+streams would incorrectly publish a descriptor that was never confirmed.
+
+Use the existing reverse worker-call route and local-port call lifetime wrapper.
+A closed content capability can call a separately registered receipt-free
+mutation class on the existing owner boundary. It must retain the same queue,
+epoch fence, savepoint, current authorization and post-COMMIT checks. Generic
+worker command/projection calls must not reach physical-confirmation handlers;
+only the coordinator may supply owner-observed physical evidence. No new command
+bus, worker SQL access, receipt table or attempt registry is needed.
+
+The current JSON call limit is 1,100,000 bytes. A base64-encoded 1 MiB part does
+not fit. Transport integration must use a smaller explicit chunk bound or the
+same stream with bounded binary framing; it must not silently raise all command
+limits. Physical adapter bounds remain independent of that transport choice.
+
+The next logical seal coordinator can use the physical generation fence plus
+bounded verification of only the accepted catalog prefix. The original F9 text
+names a physical `seal` and sealed head; mapping that guarantee to catalog seal
+intent/acceptance and the existing immutable fenced copy is an explicit contract
+refinement still requiring implementation and evidence. Do not add a second
+physical ready/digest state merely to mirror authoritative catalog state, and do
+not accept tentative tail bytes as part of the logical seal.
 
 ## 2. Checkpoints, accepted seals and recovery
 

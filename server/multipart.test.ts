@@ -21,7 +21,6 @@ function completedTerminal(
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
     availability: "retained" as const,
-    capture: "complete" as const,
     offset,
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));
@@ -352,8 +351,8 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
     }),
     terminal: Promise.resolve(Object.freeze({
       outcome: "cancelled",
+      reason: "superseded",
       availability: "retained",
-      capture: "truncated",
       offset: 7,
       terminalAt: "2026-09-01T12:00:00.000Z",
     })),
@@ -386,6 +385,19 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
   assertEquals(
     terminal?.kind === "stream-error" && terminal.terminal.outcome,
     "cancelled",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" && terminal.terminal.reason,
+    "superseded",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" && terminal.terminal.code,
+    "stream_cancelled",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" &&
+      Object.hasOwn(terminal.terminal, "capture"),
+    false,
   );
   assertEquals(terminal?.kind === "stream-error" && terminal.offset, 7);
   assertEquals(

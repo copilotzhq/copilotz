@@ -216,7 +216,7 @@ export function createProcessorContext(
           operationId: settlementScopeId,
           streamId: stream.id,
           outcome: input.outcome,
-          capture: input.capture,
+          ...(input.reason ? { reason: input.reason } : {}),
         });
       if (!terminalizing) {
         const current = await options.operationCatalog.getStream(
@@ -243,7 +243,6 @@ export function createProcessorContext(
           {
             outcome: "completed",
             availability: "retained",
-            capture: "complete",
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -270,7 +269,7 @@ export function createProcessorContext(
           {
             outcome: input.outcome,
             availability: "retained",
-            capture: input.capture,
+            ...(input.reason ? { reason: input.reason } : {}),
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -286,7 +285,7 @@ export function createProcessorContext(
           streamId: stream.id,
           body,
           outcome: input.outcome,
-          capture: input.capture,
+          ...(input.reason ? { reason: input.reason } : {}),
         })
       ) {
         throw new Error(

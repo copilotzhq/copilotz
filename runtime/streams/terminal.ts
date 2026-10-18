@@ -1,3 +1,4 @@
+import { isStreamTerminalStatus } from "./observation.ts";
 import type { StreamErrorOutput, StreamTerminalStatus } from "./types.ts";
 
 /** Projects catalog settlement into a bounded runtime-neutral error boundary. */
@@ -7,8 +8,8 @@ export function streamErrorOutput(
 ): StreamErrorOutput | null {
   const streamId = streamIdInput.trim();
   if (!streamId) throw new TypeError("Stream terminal id must be non-empty.");
-  if (!Number.isSafeInteger(terminal.offset) || terminal.offset < 0) {
-    throw new TypeError("Stream terminal offset is invalid.");
+  if (!isStreamTerminalStatus(terminal)) {
+    throw new TypeError("Stream terminal status is invalid.");
   }
   if (
     terminal.outcome === "completed" &&
@@ -18,11 +19,7 @@ export function streamErrorOutput(
     ? "stream_unavailable" as const
     : terminal.outcome === "failed"
     ? "stream_failed" as const
-    : terminal.outcome === "cancelled"
-    ? "stream_cancelled" as const
-    : terminal.outcome === "superseded"
-    ? "stream_superseded" as const
-    : "stream_abandoned" as const;
+    : "stream_cancelled" as const;
   return ({
     type: "stream.error",
     streamId,
@@ -30,7 +27,10 @@ export function streamErrorOutput(
     code,
     outcome: terminal.outcome,
     availability: terminal.availability,
-    capture: terminal.capture,
+    ...(terminal.reason ? { reason: terminal.reason } : {}),
+    ...(terminal.availabilityReason
+      ? { availabilityReason: terminal.availabilityReason }
+      : {}),
     terminalAt: terminal.terminalAt,
   } as const);
 }

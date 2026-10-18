@@ -8,6 +8,37 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Stream taxonomy upgrade
+
+The stream catalog now uses fingerprint `stream-taxonomy-v2`. Stop admission,
+confirm that active work has drained, and stop all old writers before calling
+`upgradeOperationCatalog(session, schema)` from `@copilotz/copilotz/streams` for
+each existing schema. Startup rejects the previous catalog marker; it never
+converts rows implicitly. The upgrade is transactional and repeatable and
+preserves stream identities, offsets, digests, ordering and settlement times.
+
+| Previous value               | New value                                 |
+| ---------------------------- | ----------------------------------------- |
+| Outcome `superseded`         | `cancelled`, `reason: "superseded"`       |
+| Outcome `abandoned`          | `failed`, `reason: "abandoned"`           |
+| Availability `purge_pending` | `retained`, internal cleanup pending      |
+| Availability `missing`       | `purged`, `availabilityReason: "missing"` |
+| Availability `purged`        | `purged`, `availabilityReason: "deleted"` |
+
+The upgrade drops the `capture` column and replaces the old constraints.
+`completed` means complete. Failed and cancelled streams retain their prefix.
+The existing catalog upgrades from `retained-terminal-streams` and
+`indexed-observation-ordinals-v1` also finish on this schema. When upgrading an
+older Action schema, upgrade the catalog first, then run the Action lifecycle
+upgrade described below.
+
+Deploy the client protocol and server together. Remove `capture` from terminal
+fixtures and consumers. Replace the `stream_superseded` and `stream_abandoned`
+error branches with `stream_cancelled` and `stream_failed`, inspecting `reason`
+when needed. Treat `stream_unavailable` independently of the logical outcome;
+its `availabilityReason` explains whether bytes were lost or deleted. Preserve
+byte offsets, per-attempt lanes and checkpoint application during this change.
+
 ## 0.88.0: durable compaction waits
 
 Foreground memory compaction now records a durable wait and releases its worker

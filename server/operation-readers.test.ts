@@ -33,8 +33,10 @@ async function until(check: () => boolean) {
   }
 }
 
-async function fixture() {
-  const body = createMemoryBodyStore();
+async function fixture(
+  bodyOptions: Parameters<typeof createMemoryBodyStore>[0] = {},
+) {
+  const body = createMemoryBodyStore(bodyOptions);
   const writer = await body.reserve({
     bodyId: "body",
     mediaType: "text/plain",
@@ -216,6 +218,19 @@ async function fixture() {
   return {
     application,
     counts,
+    async loseBytes() {
+      const head = await body.head({ bodyId: "body" });
+      assert(head?.state === "ready");
+      assertEquals(
+        await body.maintenance.delete({
+          bodyId: "body",
+          expectedState: "ready",
+          expectedMaintenanceVersion: head.maintenanceVersion,
+          idleForMs: 0,
+        }),
+        true,
+      );
+    },
     eventData(next: typeof eventData) {
       eventData = next;
     },
@@ -242,7 +257,6 @@ async function fixture() {
         ...record,
         state: "terminal",
         outcome: "completed",
-        capture: "complete",
         terminalAt: "2026-10-06T00:00:01Z",
       };
       completed = true;
@@ -866,6 +880,41 @@ Deno.test("detachment and shutdown discard undrained renewal prefixes after rele
     await attachment.drained;
     assertEquals(drained, true);
     await assertRejects(() => stream.payload.getReader().read());
+    await readers.close();
+  }
+});
+
+Deno.test("missing retained stream bytes fail reads without rewriting completion", async () => {
+  const f = await fixture({ protectionMs: 0 });
+  await f.append("complete bytes");
+  await f.complete();
+  await f.loseBytes();
+  const before = await f.application.operations.getStream(
+    "tenant",
+    "op",
+    "lane",
+  );
+  const readers = createSharedOperationReaders(f.application, fast);
+  const attachment = await readers.attach({ operationId: "op" });
+  const done = attachment.done.catch(() => undefined);
+  try {
+    const output = (await attachment.outputs.getReader().read())
+      .value as StreamOutput;
+    const error = await assertRejects(() =>
+      new Response(output.payload).text()
+    );
+    assertEquals(
+      (error as { code?: string }).code,
+      "operation_stream_unavailable",
+    );
+    assertEquals(
+      await f.application.operations.getStream("tenant", "op", "lane"),
+      before,
+    );
+    assertEquals(before?.outcome, "completed");
+  } finally {
+    await attachment.detach();
+    await done;
     await readers.close();
   }
 });

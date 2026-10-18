@@ -118,6 +118,8 @@ export async function createHttpOperations(
               limit: 1000,
             });
             for (const stream of page) {
+              // Coverage follows the logical terminal offset even after bytes
+              // become purged; cleanup progress never changes this boundary.
               if (
                 stream.state === "terminal" &&
                 covered.has(

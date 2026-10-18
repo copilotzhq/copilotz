@@ -185,6 +185,12 @@ async function* decodeFrames(
 
 function parseOutput(payload: Uint8Array): RuntimeOutputDescriptor {
   const value = jsonRecord(JSON.parse(decoder.decode(payload)), "Event frame");
+  // Workers publish descriptors; only the catalog supplies stream terminals.
+  if (value.type === "stream.output" && !isStreamOutputDescriptor(value)) {
+    throw new TypeError(
+      "Copilotz work output contains an invalid stream descriptor.",
+    );
+  }
   if (isStreamOutputDescriptor(value)) {
     const descriptor = createStreamOutputDescriptor({
       id: value.streamId,

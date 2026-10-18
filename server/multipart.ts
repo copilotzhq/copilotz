@@ -337,8 +337,11 @@ export function applicationOutputsMultipartResponse(
       if (cancelled || !terminal) return;
       const streamError = streamErrorOutput(output.streamId, terminal);
       const terminalOffset = terminal.offset;
-      if (streamError === null && terminalOffset !== offset) {
-        throw new Error("Completed stream Body ended at an invalid offset.");
+      if (
+        terminal.availability === "retained" && terminalOffset > offset ||
+        streamError === null && terminalOffset !== offset
+      ) {
+        throw new Error("Retained stream Body ended at an invalid offset.");
       }
       if (streamError) {
         await writePart(

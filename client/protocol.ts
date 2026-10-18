@@ -1,5 +1,7 @@
 /** Browser-safe, backpressured decoding of canonical multipart frames. @module */
 
+import { isStreamTerminalStatus } from "../runtime/streams/observation.ts";
+import { streamErrorOutput } from "../runtime/streams/terminal.ts";
 import { MAX_LOGICAL_OUTPUT_BYTES } from "../runtime/streams/limits.ts";
 export { OBSERVATION_FRAME_CAPACITY_CODE } from "../runtime/streams/limits.ts";
 
@@ -245,16 +247,16 @@ export async function* decodeObservation(
           const terminal = object(bytes);
           if (
             terminal.offset !== offset ||
-            !["completed", "failed", "cancelled", "superseded", "abandoned"]
-              .includes(String(terminal.outcome)) ||
-            !["retained", "purge_pending", "purged", "missing"].includes(
-              String(terminal.availability),
-            ) ||
-            !["complete", "truncated"].includes(String(terminal.capture)) ||
-            typeof terminal.terminalAt !== "string" ||
-            !Number.isFinite(Date.parse(terminal.terminalAt)) ||
+            !isStreamTerminalStatus(terminal) ||
+            (kind === "stream-error" &&
+              ((terminal.outcome === "completed" &&
+                terminal.availability === "retained") ||
+                terminal.type !== "stream.error" ||
+                terminal.streamId !== streamId ||
+                terminal.code !==
+                  streamErrorOutput(streamId, terminal)?.code)) ||
             (kind === "stream-end" && (terminal.outcome !== "completed" ||
-              terminal.capture !== "complete" ||
+              terminal.availability !== "retained" ||
               (expected !== undefined && offset !== expected)))
           ) {
             throw new ProtocolError("Invalid stream terminal.");

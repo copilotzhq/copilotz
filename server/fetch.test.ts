@@ -22,7 +22,6 @@ function completedTerminal(offset: number) {
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
     availability: "retained" as const,
-    capture: "complete" as const,
     offset,
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));

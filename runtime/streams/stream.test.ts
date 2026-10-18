@@ -164,7 +164,7 @@ Deno.test("published stream abort freezes and replays its committed prefix", asy
       callbacks.push("published");
     },
     onTerminalizing(_opened, terminal) {
-      callbacks.push(`terminalizing:${terminal.outcome}:${terminal.capture}`);
+      callbacks.push(`terminalizing:${terminal.outcome}`);
     },
     onTerminate(_opened, body, terminal) {
       callbacks.push(`terminal:${terminal.outcome}:${body?.state ?? "purged"}`);
@@ -188,7 +188,7 @@ Deno.test("published stream abort freezes and replays its committed prefix", asy
   assertEquals(head.state, "incomplete");
   assertEquals(callbacks, [
     "published",
-    "terminalizing:cancelled:truncated",
+    "terminalizing:cancelled",
     "terminal:cancelled:incomplete",
   ]);
   const follower = await stream.follow({ id: "failed-prefix" });
@@ -251,7 +251,7 @@ Deno.test("execution teardown marks a leaked published writer abandoned", async 
       publication.established();
     },
     onTerminate(_opened, _body, terminal) {
-      settle(terminal.outcome);
+      settle(`${terminal.outcome}:${terminal.reason}`);
     },
   });
   const writer = await stream.open({
@@ -265,7 +265,7 @@ Deno.test("execution teardown marks a leaked published writer abandoned", async 
   });
   lifetime.abort(new Error("execution ended"));
 
-  assertEquals(await settled, "abandoned");
+  assertEquals(await settled, "failed:abandoned");
   assertEquals(
     (await store.head({
       bodyId: "content-streams/tenant-a/leaked-after-success",
@@ -287,7 +287,7 @@ Deno.test("lost durable ownership fences the physical writer", async () => {
       throw new ContentStreamOwnershipLostError(opened.id);
     },
     onTerminate(_opened, _body, terminal) {
-      terminalOutcome = terminal.outcome;
+      terminalOutcome = `${terminal.outcome}:${terminal.reason}`;
     },
   });
   const writer = await stream.open({
@@ -309,7 +309,7 @@ Deno.test("lost durable ownership fences the physical writer", async () => {
     new TextDecoder().decode(await streamBytes(follower.body)),
     "zombie",
   );
-  assertEquals(terminalOutcome, "superseded");
+  assertEquals(terminalOutcome, "cancelled:superseded");
   assertEquals(
     (await store.head({
       bodyId: "content-streams/tenant-a/superseded-writer",

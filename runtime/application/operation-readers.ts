@@ -6,6 +6,8 @@ import type {
   ApplicationOutput,
   InternalCopilotzApplication,
 } from "./types.ts";
+import type { ReadBodyRangeInput } from "../content/body-store.ts";
+import { isContentError } from "../content/errors.ts";
 import type { CopilotzEngineDatabaseScope } from "../engine/types.ts";
 import type {
   OperationChangeDetail,
@@ -35,6 +37,22 @@ export type OperationReaderOptions = Readonly<{
 
 function failure(code: string, status: number, message: string) {
   return Object.assign(new Error(message), { code, status });
+}
+
+async function readStreamRange(
+  streams: CopilotzEngineDatabaseScope["streams"],
+  input: ReadBodyRangeInput,
+): Promise<Uint8Array | null> {
+  try {
+    return await streams.readCommittedRange(input);
+  } catch (error) {
+    if (!isContentError(error) || error.code !== "asset_not_found") throw error;
+    throw failure(
+      "operation_stream_unavailable",
+      503,
+      "Committed operation stream bytes are unavailable.",
+    );
+  }
 }
 
 function requiredText(value: unknown, label: string): string {
@@ -516,13 +534,13 @@ export function createSharedOperationReaders(
           current.committedOffset,
           lane.offset + limits.bodyReadBytes,
         );
-        const bytes = await runtime.streams.readCommittedRange({
+        const bytes = await readStreamRange(runtime.streams, {
           bodyId: current.bodyId,
           offset: lane.offset,
           end,
         });
-        if (bytes === null) break;
-        if (bytes.byteLength !== end - lane.offset) {
+        if (bytes === null && current.state !== "terminal") break;
+        if (bytes === null || bytes.byteLength !== end - lane.offset) {
           throw failure(
             "operation_stream_unavailable",
             503,
@@ -545,7 +563,10 @@ export function createSharedOperationReaders(
       lane.terminal.resolve({
         outcome: record.outcome ?? "completed",
         availability: record.availability,
-        capture: record.capture ?? "complete",
+        ...(record.reason ? { reason: record.reason } : {}),
+        ...(record.availabilityReason
+          ? { availabilityReason: record.availabilityReason }
+          : {}),
         offset: record.committedOffset,
         terminalAt: record.terminalAt ?? record.updatedAt,
       });
@@ -795,7 +816,7 @@ export function createSharedOperationReaders(
                 record.availability !== "retained")
             ) {
               const end = Math.min(cutoff, offset + limits.bodyReadBytes);
-              const bytes = await hub.runtime.streams.readCommittedRange({
+              const bytes = await readStreamRange(hub.runtime.streams, {
                 bodyId: record.bodyId,
                 offset,
                 end,
@@ -1002,7 +1023,10 @@ export function createSharedOperationReaders(
               terminal: lane?.terminal.promise ?? Promise.resolve({
                 outcome: record.outcome ?? "completed",
                 availability: record.availability,
-                capture: record.capture ?? "complete",
+                ...(record.reason ? { reason: record.reason } : {}),
+                ...(record.availabilityReason
+                  ? { availabilityReason: record.availabilityReason }
+                  : {}),
                 offset: record.committedOffset,
                 terminalAt: record.terminalAt ?? record.updatedAt,
               }),

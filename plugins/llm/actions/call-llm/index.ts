@@ -2166,15 +2166,14 @@ async function settleInvocation(
 
 async function abortWriters(
   state: StreamState,
-  reason: unknown,
   outcome: "failed" | "cancelled" = "failed",
 ): Promise<void> {
-  const message = reason instanceof Error ? reason.message : String(reason);
+  const reason = outcome === "cancelled" ? "cancelled" : "provider_error";
   const writers = [...state.writers.values()];
   state.writers.clear();
   await Promise.all(writers.map(async (opening) => {
     const writer = await opening.catch(() => undefined);
-    await writer?.abort({ reason: message, outcome }).catch(() => undefined);
+    await writer?.abort({ reason, outcome }).catch(() => undefined);
   }));
 }
 
@@ -2191,7 +2190,7 @@ async function settleWriters(
     try {
       writer = await opening;
       if (failure !== undefined) {
-        await writer.abort({ reason: "Another LLM output stream failed." });
+        await writer.abort({ reason: "related_stream_failed" });
         continue;
       }
       const prepared = await writer.close({ assetId: `stream:${writer.id}` }, {
@@ -2210,7 +2209,8 @@ async function settleWriters(
     } catch (error) {
       failure ??= error;
       await writer?.abort({
-        reason: error instanceof Error ? error.message : String(error),
+        outcome: signal.aborted ? "cancelled" : "failed",
+        reason: signal.aborted ? "cancelled" : "seal_failed",
       }).catch(() => undefined);
     }
   }
@@ -2836,7 +2836,7 @@ async function executeLlmCall(
       attemptController.abort(error);
       if (attemptInput) disposeWithoutWaiting(attemptInput.dispose, error);
       const cancelled = isAbort(error, context.signal);
-      await abortWriters(streams, error, cancelled ? "cancelled" : "failed");
+      await abortWriters(streams, cancelled ? "cancelled" : "failed");
       let failure = error;
       const evidence = rejectedAttemptEvidence(error);
       let reported: readonly LlmAdapterAttempt[] = [] as const;

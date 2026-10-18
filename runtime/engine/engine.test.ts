@@ -528,17 +528,19 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 6);
-    assert(/pg_index/.test(observed[5]));
-    assertEquals(/information_schema\.columns/i.test(observed[0]), true);
-    assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
+    assertEquals(observed.length, 7);
+    assertEquals(/content_bodies/.test(observed[0]), true);
+    assertEquals(/column_name='format'/.test(observed[0]), true);
+    assert(/pg_index/.test(observed[6]));
+    assertEquals(/information_schema\.columns/i.test(observed[1]), true);
+    assertEquals(/copilotz_schema_metadata/i.test(observed[2]), true);
     assertEquals(
-      /to_regclass/i.test(observed[2]),
+      /to_regclass/i.test(observed[3]),
       true,
     );
-    assertEquals(/information_schema\.columns/i.test(observed[3]), true);
+    assertEquals(/information_schema\.columns/i.test(observed[4]), true);
     assertEquals(
-      /copilotz_operation_catalog_metadata/i.test(observed[4]),
+      /copilotz_operation_catalog_metadata/i.test(observed[5]),
       true,
     );
     assert(

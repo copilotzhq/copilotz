@@ -1,3 +1,4 @@
+import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
 import { advanceDeferredActions } from "../actions/deferred-work.ts";
 import {
   cancelScopeActions,
@@ -482,6 +483,7 @@ export function createDatabaseScope(
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
     maintenanceOptions = {},
   ) => {
+    await refuseOwnerPhysicalSchema(engine.session, databaseSchema);
     const recovery = await coordinator.recover({
       databaseSchema,
       namespace: maintenanceOptions.namespace,

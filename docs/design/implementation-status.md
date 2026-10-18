@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 05:29 UTC.
+Updated: 18 October 2026, 05:50 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -27,7 +27,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: private memory checked   | [Physical contract and memory fencing](owner-content-lifetime-plan.md) scoped tests pass; DB/S3, isolation and owner integration remain open                                          |
+| Content writer lifetime              | WIP: memory/schema checked    | [Memory fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; DB/S3 writers and owner integration remain open                                                    |
 | Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -35,8 +35,9 @@ reconstructed integration have since completed fresh scoped PostgreSQL/PGlite
 validation: final 34 host + 24 manager cases on each backend pass, with the
 original failed run retained. The sequential snapshot latency diagnostic is also
 complete. These scoped results do not imply full-suite acceptance or public
-activation. Current implementation work is the private content writer path;
-database/S3 storage, isolation and owner integration remain pending.
+activation. Current implementation work is the private content writer path; SQL
+format isolation is now independently checked; database/S3 writers and owner
+integration remain pending.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements

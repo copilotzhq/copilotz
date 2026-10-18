@@ -1,3 +1,4 @@
+import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
 import { executeActionResolution } from "../actions/resolve.ts";
 import {
   rearmDeferredAction,
@@ -107,6 +108,7 @@ export async function createCopilotzEngine(
       createBodyStorageRuntime(options.assets),
     ...(secretAdapter ? { secretAdapter } : {}),
   } as const;
+  await refuseOwnerPhysicalSchema(options.session, databaseSchema);
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   if (options.provisionDefaultDatabaseSchema === false) {
     await validateOperationCatalog(options.session, databaseSchema);
@@ -686,6 +688,7 @@ export async function createCopilotzEngine(
         try {
           // Selecting a tenant scope is a request-path operation. It must never
           // acquire DDL locks or implicitly create tenant infrastructure.
+          await refuseOwnerPhysicalSchema(options.session, normalized);
           await validateCopilotzSchema(options.session, normalized);
           await validateOperationCatalog(options.session, normalized);
           await validateCollectionIndexes(

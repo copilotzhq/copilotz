@@ -1,3 +1,4 @@
+import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
 import type {
   IncompleteBodyHead,
   ReadyBodyHead,
@@ -864,6 +865,12 @@ export async function provisionOperationCatalog(
   const schema = validateEventSchemaName(databaseSchema);
   const tables = createOperationCatalogTables(schema);
   await session.transaction(async (transaction) => {
+    // Serialize admission with both core and private physical provisioning.
+    await transaction.query(
+      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+      [schema, "copilotz-schema-provision"],
+    );
+    await refuseOwnerPhysicalSchema(transaction, schema);
     await transaction.query(
       "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
       [schema, "copilotz-operation-catalog"],

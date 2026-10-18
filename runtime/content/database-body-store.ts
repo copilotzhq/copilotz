@@ -1,3 +1,4 @@
+import { refuseOwnerPhysicalSchema } from "./physical-body-schema.ts";
 import {
   quoteEventIdentifier,
   type SqlExecutor,
@@ -351,9 +352,7 @@ export function createDatabaseBodyStore(
   const schema = quoteEventIdentifier(schemaName);
   const bodies = `${schema}."content_bodies"`;
   const parts = `${schema}."content_body_parts"`;
-  let ready: Promise<void> | undefined = options.provisioned
-    ? Promise.resolve()
-    : undefined;
+  let ready: Promise<void> | undefined;
 
   const provision = async () => {
     await session.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
@@ -388,13 +387,34 @@ export function createDatabaseBodyStore(
   };
 
   const ensure = () => {
-    // IF NOT EXISTS is not atomic: a concurrent creator can win the catalog
-    // insert, after which the tables exist and one more pass finds them.
-    ready ??= provision().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "";
-      if (!message.includes("violates unique constraint")) throw error;
-      return provision();
-    });
+    // A provisioned hint skips DDL only; it never bypasses format isolation.
+    ready ??= (async () => {
+      await refuseOwnerPhysicalSchema(session, schemaName);
+      if (!options.provisioned) {
+        try {
+          await provision();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (!message.includes("violates unique constraint")) throw error;
+          await provision();
+        }
+      }
+      // A missing-table hint cannot certify a format or cache an absent result.
+      const present = await session.query<
+        { bodies: string | null; parts: string | null }
+      >(
+        "SELECT to_regclass($1)::text AS bodies,to_regclass($2)::text AS parts",
+        [bodies, parts],
+      );
+      if (!present.rows[0]?.bodies || !present.rows[0]?.parts) {
+        throw createContentError(
+          "asset_storage_unavailable",
+          "Body tables are not provisioned.",
+        );
+      }
+      // Check the actual winning layout after a competing provisioner, too.
+      await refuseOwnerPhysicalSchema(session, schemaName);
+    })();
     return ready;
   };
 

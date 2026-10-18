@@ -46,6 +46,31 @@ No full static/integration pass is claimed for the new private modules before
 genuine host wiring. They are not exported through the public content entry
 point.
 
+## Private physical schema and legacy isolation checkpoint
+
+The standalone SQL physical schema now provisions only into an empty relation
+namespace and reopens only its exact retained format, without ALTER or repair.
+Core, catalog and physical provisioning share the existing schema admission
+lock. Legacy engine startup, additional scopes, maintenance and direct BodyStore
+operations refuse the owner physical format; a provisioned hint cannot bypass
+that check or cache absent tables.
+
+Final independent scoped evidence: 93 PostgreSQL compatibility cases and 85
+PGlite cases pass; six PostgreSQL adversarial groups and four applicable PGlite
+groups pass. Eight optional PostgreSQL cases and two pooled concurrency groups
+are explicitly skipped on PGlite and covered by PostgreSQL. Tests establish
+held-preflight/lock races, read-only refusal, all legacy mutators, and retained
+layout checks including identity/generated columns, unlogged tables and domains.
+Initial fixture failures and the causal identity-layout defect remain recorded.
+Normal typechecking, eight-file lint/format and source hashes pass. All 63
+fixture databases and their coordinator were exported/dropped; sessions and
+leftovers were absent and PostgreSQL stopped.
+
+This establishes storage-format isolation only. The database writer adapter is
+being implemented separately. S3, catalog-bound authority, owner renewal and
+execution routing remain pending; neither public content admission nor a
+production migration is enabled.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:

@@ -356,7 +356,12 @@ Deno.test({
     const schema = `catalog_query_pg_${
       crypto.randomUUID().replaceAll("-", "")
     }`;
-    const database = await createTestDatabase({ url: POSTGRES_URL! });
+    // Bulk-loading the indexed catalog is setup, separate from the query-plan
+    // bounds asserted below. Allow that fixture work a bounded longer deadline.
+    const database = await createTestDatabase({
+      url: POSTGRES_URL!,
+      requestTimeoutMs: 120_000,
+    });
     const captured: ExecutedQuery[] = [];
     const measuredQueries: CapturedQuery[] = [];
     try {

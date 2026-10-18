@@ -104,7 +104,8 @@ This map describes the current implementation.
 - The runtime owns generic lifecycle, composition, persistence, and execution
   mechanics; it never owns plugin business meaning.
 - Runtime production code never imports a concrete plugin.
-- Plugins compose Collections, Actions, Processors, Resources, and Adapters.
+- Plugins compose Collections, Actions, Processors, Resources, Adapters, and
+  Views.
 - Resources and Adapters remain separate composition/context roots and use
   direct property access, not locators or runtime dependency declarations.
 - Actions and Processors declare their expected context as ordinary TypeScript

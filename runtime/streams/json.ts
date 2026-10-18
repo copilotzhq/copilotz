@@ -1,87 +1,73 @@
-type JsonValue = null | boolean | number | string | JsonValue[] | {
+type JsonValue = null | boolean | number | string | readonly JsonValue[] | {
   readonly [key: string]: JsonValue;
 };
 
-function snapshotJson(
-  value: unknown,
-  ancestors = new Set<object>(),
-): JsonValue {
-  if (
-    value === null || typeof value === "boolean" || typeof value === "string"
-  ) {
-    return value;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (!value || typeof value !== "object") {
-    throw new TypeError(
-      "Stream output metadata must contain JSON values only.",
-    );
-  }
-  if (ancestors.has(value)) {
-    throw new TypeError("Stream output metadata must not contain cycles.");
-  }
-  if (Object.getOwnPropertySymbols(value).length) {
-    throw new TypeError("Stream output metadata must not contain symbol keys.");
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
-        throw new TypeError("Stream output metadata arrays must be plain.");
-      }
-      const names = Object.getOwnPropertyNames(value);
-      if (names.length !== value.length + 1 || names.at(-1) !== "length") {
-        throw new TypeError(
-          "Stream output metadata arrays must be dense without extra keys.",
-        );
-      }
-      const result: JsonValue[] = [];
-      for (let index = 0; index < value.length; index++) {
-        const key = String(index);
-        if (names[index] !== key) {
-          throw new TypeError("Stream output metadata arrays must be dense.");
-        }
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
-        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-          throw new TypeError(
-            "Stream output metadata must use enumerable data properties.",
-          );
-        }
-        result.push(snapshotJson(descriptor.value, ancestors));
-      }
-      return result;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      throw new TypeError("Stream output metadata objects must be plain.");
-    }
-    const result: Record<string, JsonValue> = {};
-    for (const key of Object.getOwnPropertyNames(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError(
-          "Stream output metadata must use enumerable data properties.",
-        );
-      }
-      Object.defineProperty(result, key, {
-        value: snapshotJson(descriptor.value, ancestors),
-        enumerable: true,
-        configurable: false,
-        writable: false,
-      });
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-/** Captures stream metadata as immutable, transport-safe JSON without accessors. */
+/** Captures data once, without invoking user getters, iterators or toJSON. */
 export function snapshotStreamMetadata(
   value: unknown,
+  limits: Readonly<
+    { maxDepth?: number; maxNodes?: number; maxBytes?: number }
+  > = {},
 ): Readonly<Record<string, unknown>> {
-  const snapshot = snapshotJson(value);
-  if (Array.isArray(snapshot)) {
-    throw new TypeError("Stream output metadata must be a plain object.");
+  const ancestors = new Set<object>();
+  let nodes = 0;
+  const fail = (): never => {
+    throw new TypeError("Stream metadata must be bounded plain JSON data.");
+  };
+  const visit = (item: unknown, depth: number): JsonValue => {
+    if (
+      ++nodes > (limits.maxNodes ?? 100_000) || depth > (limits.maxDepth ?? 64)
+    ) fail();
+    if (
+      item === null || typeof item === "boolean" || typeof item === "string"
+    ) return item;
+    if (typeof item === "number" && Number.isFinite(item)) return item;
+    if (!item || typeof item !== "object" || ancestors.has(item)) return fail();
+    const array = Array.isArray(item);
+    if (
+      Object.getPrototypeOf(item) !==
+        (array ? Array.prototype : Object.prototype)
+    ) fail();
+    const descriptors = Object.getOwnPropertyDescriptors(item);
+    const names = Reflect.ownKeys(descriptors);
+    if (names.some((name) => typeof name !== "string")) fail();
+    ancestors.add(item);
+    try {
+      if (array) {
+        const length = descriptors.length?.value;
+        if (
+          !Number.isSafeInteger(length) || length < 0 ||
+          names.length !== length + 1 || length > (limits.maxNodes ?? 100_000)
+        ) fail();
+        const result: JsonValue[] = [];
+        for (let index = 0; index < length; index++) {
+          const d = descriptors[String(index)];
+          if (!d || !d.enumerable || !("value" in d)) fail();
+          result.push(visit(d.value, depth + 1));
+        }
+        return Object.freeze(result);
+      }
+      const result: Record<string, JsonValue> = {};
+      for (const name of names as string[]) {
+        const d = descriptors[name];
+        if (!d.enumerable || !("value" in d)) fail();
+        Object.defineProperty(result, name, {
+          value: visit(d.value, depth + 1),
+          enumerable: true,
+        });
+      }
+      return Object.freeze(result);
+    } finally {
+      ancestors.delete(item);
+    }
+  };
+  const snapshot = visit(value, 0);
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    fail();
   }
+  if (
+    limits.maxBytes !== undefined &&
+    new TextEncoder().encode(JSON.stringify(snapshot)).length > limits.maxBytes
+  ) fail();
   return snapshot as Readonly<Record<string, unknown>>;
 }

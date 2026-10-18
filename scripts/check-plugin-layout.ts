@@ -56,6 +56,7 @@ export async function validateConcretePlugin(
         actions: "defineAction",
         collections: "defineCollection",
         processors: "defineProcessor",
+        views: "defineView",
       }[entry.category];
       if (
         primitive && !source.includes(primitive + "(") &&
@@ -86,6 +87,7 @@ export async function validateConcretePlugin(
     "processors",
     "resources",
     "adapters",
+    "views",
     "authoring",
   ]);
   for await (const entry of Deno.readDir(root)) {

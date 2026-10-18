@@ -3,7 +3,7 @@ import { markNonRetryable } from "../failure.ts";
 import { createCollectionValidationError } from "./errors.ts";
 
 type JsonSchema = Record<string, unknown>;
-type AjvValidator = ((value: unknown) => boolean) & {
+type AjvValidator = ((value: unknown) => unknown) & {
   errors?: readonly unknown[] | null;
 };
 
@@ -31,19 +31,41 @@ function createAjv() {
 
 const ajv = createAjv();
 
+/** This API is synchronous. Inspect metadata without invoking a getter, and
+ * refuse inherited declarations rather than allowing contradictory metadata.
+ * AJV rejects nested/referenced async schemas during synchronous compilation. */
+function assertSynchronous(value: object): void {
+  const marker = Object.getOwnPropertyDescriptor(value, "$async");
+  if (
+    marker ? !("value" in marker) || marker.value !== false : "$async" in value
+  ) {
+    throw new TypeError("Asynchronous JSON Schema validation is unsupported.");
+  }
+}
+
 export function validateAgainstJsonSchema(
   schema: object,
   value: unknown,
   label: string,
 ): void {
   try {
+    // Recheck even for a cached schema: later mutations cannot enable async work.
+    assertSynchronous(schema);
     let validator = validators.get(schema);
     if (!validator) {
       validator = ajv.compile(schema as JsonSchema) as AjvValidator;
+      assertSynchronous(validator);
       validators.set(schema, validator);
     }
+    assertSynchronous(validator);
     const candidate = structuredClone(value);
-    if (validator(candidate)) return;
+    const valid = validator(candidate);
+    if (valid === true) return;
+    if (valid !== false) {
+      throw new TypeError(
+        "JSON Schema validator must return a synchronous boolean.",
+      );
+    }
     const details = ajv.errorsText(validator.errors ?? [], { separator: "; " });
     const error = new TypeError(
       `${label} failed schema validation: ${details}`,

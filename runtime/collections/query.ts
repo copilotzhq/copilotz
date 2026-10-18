@@ -3,6 +3,10 @@ import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
+import {
+  type CollectionReadBudget,
+  queryCollectionRows,
+} from "./read-budget.ts";
 import type {
   CollectionGraphRelation,
   CollectionQuery,
@@ -71,22 +75,35 @@ async function resolveCursorAnchor(
   namespace: string,
   boundary: "after" | "before",
   cursor: string,
+  budget?: CollectionReadBudget,
+  sourceCheck?: string,
 ): Promise<CursorAnchorRow> {
   const params = [...filterParams, cursor];
   // Text preserves PostgreSQL's microseconds across the driver round trip;
   // decoding timestamptz as a JavaScript Date would truncate them.
-  const result = await executor.query<CursorAnchorRow>(
+  const rows = await queryCollectionRows<CursorAnchorRow>(
+    executor,
     `SELECT id${
       order.expression === "id"
         ? ""
-        : `, (${order.expression})::text AS order_value`
+        : `, (${
+          sourceCheck === undefined
+            ? order.expression
+            : `CASE WHEN (${sourceCheck}) IS TRUE THEN (${order.expression}) ELSE NULL END`
+        })::text AS order_value`
+    }${
+      sourceCheck === undefined
+        ? ""
+        : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
     }
        FROM ${table}
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
       LIMIT 1`,
     params,
+    budget,
+    { sourceChecked: sourceCheck !== undefined },
   );
-  const anchor = result.rows[0];
+  const anchor = rows[0];
   if (!anchor) {
     throw new RangeError(
       `Collection '${definition.name}' ${boundary} cursor '${cursor}' does not match the current query scope in namespace '${namespace}'.`,
@@ -239,7 +256,13 @@ export async function queryCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionQuery = {},
+  budget?: CollectionReadBudget,
+  /** Trusted fixed source check, never caller-authored SQL. */
+  sourceCheck?: string,
 ): Promise<readonly CollectionRecord[]> {
+  if (budget && query.include?.length) {
+    throw new TypeError("Bounded Collection reads do not hydrate relations.");
+  }
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
   for (const predicate of [query, ...(query.all ?? [])]) {
@@ -302,6 +325,8 @@ export async function queryCollectionRecords(
       namespace,
       boundary,
       cursor,
+      budget,
+      sourceCheck,
     );
     filters.push(cursorFilter(params, order, boundary, anchor));
   }
@@ -309,14 +334,25 @@ export async function queryCollectionRecords(
   const orderBy = order.expression === "id"
     ? `id ${order.direction}`
     : `(${order.expression}) ${order.direction}, id ${order.direction}`;
-  const result = await executor.query<NodeRow>(
-    `SELECT * FROM ${tables.nodes}
+  const rows = await queryCollectionRows<NodeRow>(
+    executor,
+    `SELECT ${
+      budget
+        ? `id, namespace, data, row_number() OVER (ORDER BY ${orderBy}) AS __collection_read_order${
+          sourceCheck === undefined
+            ? ""
+            : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
+        }`
+        : "*"
+    } FROM ${tables.nodes}
      WHERE ${filters.join(" AND ")}
      ORDER BY ${orderBy}
      LIMIT ${limit}`,
     params,
+    budget,
+    { ordered: budget !== undefined, sourceChecked: sourceCheck !== undefined },
   );
-  const records = result.rows.map(mapNode);
+  const records = rows.map(mapNode);
   if (!query.include?.length) return records;
 
   const hydrated = [];

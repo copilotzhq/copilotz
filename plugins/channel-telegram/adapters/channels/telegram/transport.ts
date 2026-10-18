@@ -68,12 +68,13 @@ export function createTelegramTransport(
       encodeURIComponent(required(config.botToken, "Telegram botToken"))
     }/${method}`;
   return ({
-    async call(config, method, body) {
+    async call(config, method, body, request) {
       return await parse(
         await fetcher(api(config, required(method, "Telegram method")), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
+          signal: request?.signal,
         }),
       );
     },

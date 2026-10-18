@@ -12,6 +12,7 @@ import {
   type CoreTableName,
   createCoreTableNames,
   EVENT_SCHEMA_VERSION,
+  quoteEventIdentifier,
 } from "./schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 import type {
@@ -127,7 +128,42 @@ export type CommitEventMutationResult<T> = Readonly<{
   deduplicated: boolean;
 }>;
 
+/** Internal command-local authority; never sourced from event metadata.
+ * Delivery lease owners must be unique host-issued dispatchAttemptIds, never
+ * reusable worker IDs. The command's authorize hook must revalidate the current
+ * assignment, including on receipt replay. Token reuse is not safe recovery. */
+export type OwnerEventCommitContext = Readonly<{
+  transaction: SqlExecutor;
+  ownerId: string;
+  epoch: number;
+  holderId: string;
+  commandTime: string;
+  /** Internal owner-controlled attempt, never inferred from transport or a NULL lease.
+   * Exact delivery/token authority is valid only under this command's epoch fence. */
+  ownerAttempt?: Readonly<{ deliveryId: string; attemptId: string }>;
+  /** Required before delivery mutations; insertion-only callers may omit it. */
+  afterCommit?(callback: () => void | Promise<void>): void;
+}>;
+
+/** Internal exact lost-attempt transition. The owner recovery command must first
+ * prove prior-epoch assignment/claim authority and effect-safe disposition. This
+ * data selects one row; it does not establish that a lost attempt is replay-safe. */
+export type OwnerLostDeliveryTransition = Readonly<{
+  namespace: string;
+  id: string;
+  eventId: string;
+  consumerId: string;
+  settlementScopeId: string;
+  actionScopeId?: string;
+  leaseOwner: string;
+  leaseExpiresAt: string | null;
+  attempts: number;
+  maxAttempts: number;
+  disposition: "retry" | "exhausted" | "cancelled";
+}>;
+
 export type CreateEventStoreOptions = {
+  ownerCommit?: OwnerEventCommitContext;
   session: SqlSession;
   schema?: string;
   createId?: () => string;
@@ -163,6 +199,8 @@ export type CreateEventStoreOptions = {
     >,
     param: (value: unknown) => string,
   ) => Readonly<{ ctes: readonly string[]; gate: string; cancelled?: string }>;
+  /** Read-only catalog format preflight, before duplicate recovery callbacks. */
+  assertOperationCatalog?(executor: SqlExecutor): Promise<void>;
   /** Additive operational index written in the same transaction as the Event. */
   indexOperationEvent?: (
     transaction: SqlExecutor,
@@ -278,6 +316,10 @@ export type EventStore = {
   recoverExpiredDeliveries(
     options?: { namespace?: string; limit?: number },
   ): Promise<readonly EventDelivery[]>;
+  /** Owner-only exact prior-attempt transition; never grants execution authority. */
+  recoverLostDelivery(
+    transition: OwnerLostDeliveryTransition,
+  ): Promise<EventDelivery | null>;
   nextRecoveryDelayMs(): Promise<number | null>;
   scopeSettlement(
     namespace: string,
@@ -364,6 +406,8 @@ function mapEvent(row: EventRow): DurableEvent {
     durable: true,
     id: String(row.id),
     position: String(row.position),
+    ...(row.owner_id == null ? {} : { ownerId: String(row.owner_id) }),
+    ...(row.seq == null ? {} : { seq: String(row.seq) }),
     schemaVersion: Number(row.schema_version),
     type: String(row.type),
     namespace: String(row.namespace),
@@ -594,7 +638,33 @@ function filtersForConsumers(
 export function createEventStore(
   options: CreateEventStoreOptions,
 ): EventStore {
-  const { session } = options;
+  const owner = options.ownerCommit ? { ...options.ownerCommit } : undefined;
+  const ownerAttempt = owner?.ownerAttempt
+    ? { ...owner.ownerAttempt }
+    : undefined;
+  if (
+    owner?.ownerAttempt !== undefined && (
+      !ownerAttempt || Object.keys(ownerAttempt).length !== 2 ||
+      [ownerAttempt.deliveryId, ownerAttempt.attemptId].some((value) =>
+        typeof value !== "string" || !value.trim() || value !== value.trim() ||
+        value.length > 1024
+      )
+    )
+  ) throw new TypeError("Invalid owner-controlled delivery attempt.");
+  const ownerUnsupported = (operation: string): never => {
+    throw createEventStoreError(
+      "event_transaction_unavailable",
+      `Owner command event store does not support ${operation}.`,
+    );
+  };
+  // Even consumers of store.session stay inside the command capability. There
+  // is no ambient transaction fallback or nested transaction publication.
+  const session: SqlSession = owner
+    ? {
+      query: (sql, params) => owner.transaction.query(sql, params),
+      transaction: () => ownerUnsupported("nested transactions"),
+    }
+    : options.session;
   const databaseSchema = options.schema ?? "public";
   const tables = createCoreTableNames(databaseSchema);
   const createId = options.createId ?? ulid;
@@ -604,8 +674,52 @@ export function createEventStore(
   const defaultMaxAttempts = boundedInteger(options.maxAttempts, 3, 1);
   const retryBaseMs = boundedInteger(options.retryBaseMs, 250, 0);
   const retryCapMs = boundedInteger(options.retryCapMs, 30_000, 0);
+  const lockSettlementScope = options.lockSettlementScope;
+  const settleActionOwners = options.settleActionOwners;
+  const assertOperationCatalog = options.assertOperationCatalog;
   const indexOperationEvent = options.indexOperationEvent;
   const indexOperationEventSql = options.indexOperationEventSql;
+  const commandTimestamp = (params: unknown[]): string =>
+    owner ? `$${params.push(owner.commandTime)}::timestamptz` : "NOW()";
+  const ownerDeliveryExecutor = async (
+    requirePublication = true,
+  ): Promise<SqlExecutor> => {
+    if (!owner) return session;
+    if (requirePublication && typeof owner.afterCommit !== "function") {
+      return ownerUnsupported("delivery mutations without afterCommit");
+    }
+    const fence = await owner.transaction.query(
+      `SELECT owner FROM ${quoteEventIdentifier(databaseSchema)}."owner_epochs"
+       WHERE owner = $1 AND epoch = $2 AND holder = $3 FOR UPDATE`,
+      [owner.ownerId, owner.epoch, owner.holderId],
+    );
+    if (!fence.rows.length) {
+      throw Object.assign(new Error("Owner delivery authority was lost."), {
+        name: "ActionOwnershipLost",
+        code: "ActionOwnershipLost",
+      });
+    }
+    return owner.transaction;
+  };
+  const deliveryMutationExecutor = (
+    attempt: string | undefined,
+    deliveryId?: string,
+  ): Promise<SqlExecutor> => {
+    if (owner && !ownerAttempt) {
+      return ownerUnsupported("delivery mutation without exact owner attempt");
+    }
+    if (
+      ownerAttempt &&
+      (deliveryId !== ownerAttempt.deliveryId ||
+        attempt !== ownerAttempt.attemptId)
+    ) {
+      return ownerUnsupported("a different owner delivery attempt");
+    }
+    if (owner && (typeof attempt !== "string" || !attempt.trim())) {
+      return ownerUnsupported("delivery mutations without an attempt token");
+    }
+    return ownerDeliveryExecutor();
+  };
 
   const deliveriesForEvent = async (
     executor: SqlExecutor,
@@ -626,6 +740,7 @@ export function createEventStore(
   ): Promise<CommitEventMutationResult<T>> => {
     const encoded = encodeDraft(options.draft);
     assertDuplicateMatches(event, options.draft, encoded);
+    await assertOperationCatalog?.(executor);
     const context = { transaction: executor, tables };
     const value = options.recoverDuplicate
       ? await options.recoverDuplicate(event, context)
@@ -667,20 +782,65 @@ export function createEventStore(
   const commitMutation = async <T>(
     mutation: CommitEventMutationOptions<T>,
   ): Promise<CommitEventMutationResult<T>> => {
+    if (owner && mutation.transaction !== owner.transaction) {
+      throw new Error(
+        "Owner event writes must join their command transaction.",
+      );
+    }
     validateDraft(mutation.draft);
     const draft = {
       ...mutation.draft,
       type: mutation.draft.type.trim(),
       namespace: mutation.draft.namespace.trim(),
       deduplicationId: mutation.draft.deduplicationId?.trim() || undefined,
+      deliveryLease: mutation.draft.deliveryLease
+        ? { ...mutation.draft.deliveryLease }
+        : undefined,
     };
+    if (owner && !ownerAttempt && draft.deliveryLease) {
+      return ownerUnsupported(
+        "delivery-bound append without exact owner attempt",
+      );
+    }
+    if (ownerAttempt) {
+      if (
+        draft.deliveryLease?.deliveryId !== ownerAttempt.deliveryId ||
+        draft.deliveryLease?.owner !== ownerAttempt.attemptId
+      ) {
+        throw Object.assign(
+          new Error("Event mutation requires its exact owner attempt."),
+          {
+            name: "ActionOwnershipLost",
+            code: "ActionOwnershipLost",
+          },
+        );
+      }
+      const executor = await ownerDeliveryExecutor(false);
+      const current = await executor.query(
+        `SELECT id FROM ${tables.event_deliveries}
+         WHERE id=$1 AND status='leased' AND lease_owner=$2
+           AND lease_expires_at IS NULL FOR UPDATE`,
+        [ownerAttempt.deliveryId, ownerAttempt.attemptId],
+      );
+      if (!current.rows.length) {
+        throw Object.assign(new Error("Local event authority was lost."), {
+          name: "ActionOwnershipLost",
+          code: "ActionOwnershipLost",
+        });
+      }
+    }
     const encoded = encodeDraft(draft);
     const consumers = uniqueConsumers(mutation.consumers);
     const eventId = createId();
     const settlementScopeId = draft.settlementScopeId?.trim() || eventId;
     const correlationId = draft.correlationId ?? eventId;
-    const createdAt = (draft.createdAt ? new Date(draft.createdAt) : now())
-      .toISOString();
+    const createdAt =
+      (owner
+        ? new Date(owner.commandTime)
+        : draft.createdAt
+        ? new Date(draft.createdAt)
+        : now())
+        .toISOString();
     const maxAttempts = boundedInteger(
       mutation.maxAttempts,
       defaultMaxAttempts,
@@ -741,6 +901,12 @@ export function createEventStore(
           ? `detached:${eventId}:${consumer.consumerId}`
           : settlementScopeId,
       }));
+      const commandTimestamp = owner
+        ? `${param(owner.commandTime)}::timestamptz`
+        : "NOW()";
+      const sequenceGate = owner
+        ? `EXISTS (SELECT 1 FROM owner_event_sequence)`
+        : "TRUE";
       const values = [
         param(eventId),
         param(EVENT_SCHEMA_VERSION),
@@ -755,6 +921,12 @@ export function createEventStore(
         param(correlationId),
         param(draft.deduplicationId ?? null),
         `${param(createdAt)}::timestamptz`,
+        ...(owner
+          ? [
+            param(owner.ownerId),
+            "(SELECT last_seq FROM owner_event_sequence)",
+          ]
+          : []),
       ].join(", ");
       const ctes = [
         ...admission?.ctes ?? [],
@@ -771,7 +943,11 @@ export function createEventStore(
           ? [`event_delivery_admission AS MATERIALIZED (
           SELECT id FROM ${tables.event_deliveries}
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
-            AND lease_owner = ${param(lease.owner)} AND lease_expires_at > NOW()
+            AND lease_owner = ${param(lease.owner)} AND ${
+            ownerAttempt
+              ? "lease_expires_at IS NULL"
+              : `lease_expires_at > ${commandTimestamp}`
+          }
             AND EXISTS (SELECT 1 FROM event_group_admission) FOR UPDATE
         )`]
           : []),
@@ -779,14 +955,32 @@ export function createEventStore(
           lease ? "event_delivery_admission" : "event_group_admission"
         })`,
         ...statement?.ctes ?? [],
+        ...(owner
+          ? [`owner_event_sequence AS (
+          UPDATE ${quoteEventIdentifier(databaseSchema)}."owner_epochs"
+          SET last_seq = last_seq + 1
+          WHERE owner = ${param(owner.ownerId)} AND epoch = ${
+            param(owner.epoch)
+          }
+            AND holder = ${param(owner.holderId)} AND (${insertGate || "TRUE"})
+            AND NOT EXISTS (
+              SELECT 1 FROM ${tables.events}
+              WHERE namespace = ${param(draft.namespace)}
+                AND deduplication_id = ${param(draft.deduplicationId ?? null)}
+            )
+          RETURNING last_seq
+        )`]
+          : []),
         `inserted_event AS (
            INSERT INTO ${tables.events} (
              id, schema_version, type, namespace,
              subject_type, subject_id, payload, delta,
-             metadata, causation_id, correlation_id, deduplication_id, created_at
+             metadata, causation_id, correlation_id, deduplication_id, created_at${
+          owner ? ", owner_id, seq" : ""
+        }
            ) ${
           insertGate
-            ? `SELECT ${values} WHERE ${insertGate}`
+            ? `SELECT ${values} WHERE (${insertGate}) AND ${sequenceGate}`
             : `VALUES (${values})`
         }
            ON CONFLICT (namespace, deduplication_id)
@@ -802,7 +996,7 @@ export function createEventStore(
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
                   delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' ELSE 'pending' END, 0, ${
           param(maxAttempts)
-        }, NOW(), NOW(), NOW(), CASE WHEN ${cancelled} THEN NOW() ELSE NULL END
+        }, ${commandTimestamp}, ${commandTimestamp}, ${commandTimestamp}, CASE WHEN ${cancelled} THEN ${commandTimestamp} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
              ${param(deliveryRows.map((row) => row.consumerId))}::text[],
@@ -821,7 +1015,7 @@ export function createEventStore(
                   ${param(EVENT_BODY_SCHEMA_VERSION)}, ${
           param(body.body)
         }::jsonb,
-                  ${param(body.digest)}, NOW()
+                  ${param(body.digest)}, ${commandTimestamp}
            FROM inserted_event
            ${
           tolerant ? "ON CONFLICT (namespace, event_body_id) DO NOTHING" : ""
@@ -1006,7 +1200,7 @@ export function createEventStore(
   };
 
   const getEvent = async (id: string): Promise<DurableEvent | null> => {
-    const recent = recentEvents.get(id)?.event;
+    const recent = owner ? undefined : recentEvents.get(id)?.event;
     if (recent) return structuredClone(recent);
     const result = await session.query<EventRow>(
       `SELECT * FROM ${tables.events} WHERE id = $1 LIMIT 1`,
@@ -1028,18 +1222,33 @@ export function createEventStore(
     owner: string;
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
-    const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
-    const params: unknown[] = [claim.id, claim.owner, leaseMs];
-    const result = await session.query<DeliveryRow>(
+    const executor = await deliveryMutationExecutor(claim.owner, claim.id);
+    if (ownerAttempt && claim.leaseMs !== undefined) {
+      return ownerUnsupported("per-job lease duration");
+    }
+    const leaseMs = ownerAttempt
+      ? undefined
+      : boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
+    const params: unknown[] = ownerAttempt
+      ? [claim.id, claim.owner]
+      : [claim.id, claim.owner, leaseMs];
+    const timestamp = commandTimestamp(params);
+    const result = await executor.query<DeliveryRow>(
       `UPDATE ${tables.event_deliveries}
        SET status = 'leased', attempts = attempts + 1,
            lease_owner = $2,
-           lease_expires_at = NOW() + ($3 * INTERVAL '1 millisecond'),
-           updated_at = NOW(), settled_at = NULL
+           lease_expires_at = ${
+        ownerAttempt ? "NULL" : `${timestamp} + ($3 * INTERVAL '1 millisecond')`
+      },
+           updated_at = ${timestamp}, settled_at = NULL
        WHERE id = $1 AND attempts < max_attempts
          AND (
-           (status IN ('pending', 'retry_wait') AND available_at <= NOW())
-           OR (status = 'leased' AND lease_expires_at <= NOW())
+           (status IN ('pending', 'retry_wait') AND available_at <= ${timestamp})
+           ${
+        ownerAttempt
+          ? ""
+          : `OR (status = 'leased' AND lease_expires_at <= ${timestamp})`
+      }
          )
        RETURNING *`,
       params,
@@ -1050,11 +1259,30 @@ export function createEventStore(
   const commitDeliverySettlement = async (
     current: EventDelivery,
     update: (transaction: SqlExecutor) => Promise<EventDelivery | null>,
+    schedulePublication = owner?.afterCommit,
   ): Promise<EventDelivery | null> => {
-    if (!options.settleActionOwners) return await update(session);
-    let afterCommit: (() => Promise<void>) | void;
+    if (owner) {
+      await lockSettlementScope?.(
+        owner.transaction,
+        current.settlementScopeId,
+      );
+      const result = await update(owner.transaction);
+      if (
+        result &&
+        ["succeeded", "cancelled", "dead_letter"].includes(result.status)
+      ) {
+        const publish = await settleActionOwners?.(
+          owner.transaction,
+          result,
+        );
+        if (publish) schedulePublication!(publish);
+      }
+      return result;
+    }
+    if (!settleActionOwners) return await update(session);
+    let afterCommit: (() => Promise<void>) | undefined;
     const settled = await session.transaction(async (transaction) => {
-      await options.lockSettlementScope?.(
+      await lockSettlementScope?.(
         transaction,
         current.settlementScopeId,
       );
@@ -1063,33 +1291,43 @@ export function createEventStore(
         result &&
         ["succeeded", "cancelled", "dead_letter"].includes(result.status)
       ) {
-        afterCommit = await options.settleActionOwners!(transaction, result);
+        afterCommit = await settleActionOwners(transaction, result) ??
+          undefined;
       }
       return result;
     });
-    await afterCommit!?.();
+    await afterCommit?.();
     return settled;
   };
 
   const settleDelivery = async (
     id: string,
     status: Extract<DeliveryStatus, "succeeded" | "cancelled">,
-    owner?: string,
+    leaseOwner?: string,
   ): Promise<EventDelivery | null> => {
+    if (owner && !leaseOwner) {
+      return ownerUnsupported("delivery settlement without an attempt token");
+    }
+    await deliveryMutationExecutor(leaseOwner, id);
     const current = await getDelivery(id);
     if (!current) return null;
     const params: unknown[] = [id, status];
-    const ownerFilter = owner
-      ? `AND lease_owner = $${params.push(owner)} AND lease_expires_at > NOW()`
+    const timestamp = commandTimestamp(params);
+    const ownerFilter = leaseOwner
+      ? `AND lease_owner = $${params.push(leaseOwner)} AND ${
+        ownerAttempt
+          ? "lease_expires_at IS NULL"
+          : `lease_expires_at > ${timestamp}`
+      }`
       : "";
-    const allowed = status === "succeeded"
+    const allowed = status === "succeeded" || ownerAttempt
       ? "status = 'leased'"
       : "status IN ('pending', 'leased', 'retry_wait')";
     return await commitDeliverySettlement(current, async (transaction) => {
       const result = await transaction.query<DeliveryRow>(
         `UPDATE ${tables.event_deliveries}
          SET status = $2, lease_owner = NULL, lease_expires_at = NULL,
-             updated_at = NOW(), settled_at = NOW()
+             updated_at = ${timestamp}, settled_at = ${timestamp}
          WHERE id = $1 AND ${allowed} ${ownerFilter} RETURNING *`,
         params,
       );
@@ -1106,12 +1344,13 @@ export function createEventStore(
       limit?: number;
     } = {},
   ): Promise<readonly EventDelivery[]> => {
+    const params: unknown[] = [];
+    const timestamp = commandTimestamp(params);
     const conditions = [
-      `((d.status IN ('pending', 'retry_wait') AND d.available_at <= NOW())
-        OR (d.status = 'leased' AND d.lease_expires_at <= NOW()))`,
+      `((d.status IN ('pending', 'retry_wait') AND d.available_at <= ${timestamp})
+        OR (d.status = 'leased' AND d.lease_expires_at <= ${timestamp}))`,
       "d.attempts < d.max_attempts",
     ];
-    const params: unknown[] = [];
     if (listOptions.namespace) {
       params.push(listOptions.namespace);
       conditions.push(`e.namespace = $${params.length}`);
@@ -1140,11 +1379,14 @@ export function createEventStore(
     consumerIds?: readonly string[];
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
+    if (owner) return ownerUnsupported("owner claimNext");
+    const executor = await deliveryMutationExecutor(claim.owner);
     const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
     const params: unknown[] = [claim.owner, leaseMs];
+    const timestamp = commandTimestamp(params);
     const conditions = [
-      `((d.status IN ('pending', 'retry_wait') AND d.available_at <= NOW())
-        OR (d.status = 'leased' AND d.lease_expires_at <= NOW()))`,
+      `((d.status IN ('pending', 'retry_wait') AND d.available_at <= ${timestamp})
+        OR (d.status = 'leased' AND d.lease_expires_at <= ${timestamp}))`,
       "d.attempts < d.max_attempts",
     ];
     if (claim.namespace) {
@@ -1158,7 +1400,7 @@ export function createEventStore(
     );
     if (consumerFilter) conditions.push(consumerFilter);
 
-    const result = await session.query<DeliveryRow>(
+    const result = await executor.query<DeliveryRow>(
       `WITH candidate AS (
         SELECT d.id FROM ${tables.event_deliveries} d
         JOIN ${tables.events} e ON e.id = d.event_id
@@ -1170,8 +1412,8 @@ export function createEventStore(
       UPDATE ${tables.event_deliveries} AS d
       SET status = 'leased', attempts = d.attempts + 1,
           lease_owner = $1,
-          lease_expires_at = NOW() + ($2 * INTERVAL '1 millisecond'),
-          updated_at = NOW(), settled_at = NULL
+          lease_expires_at = ${timestamp} + ($2 * INTERVAL '1 millisecond'),
+          updated_at = ${timestamp}, settled_at = NULL
       FROM candidate
       WHERE d.id = candidate.id
       RETURNING d.*`,
@@ -1182,7 +1424,7 @@ export function createEventStore(
 
   return {
     databaseSchema,
-    session: options.session,
+    session,
     tables,
     commitMutation,
     append(draft, consumerIds = [], appendOptions = {}) {
@@ -1202,6 +1444,9 @@ export function createEventStore(
       return loadDuplicate(session, namespace, deduplicationId);
     },
     async listEvents(listOptions, executor = session) {
+      if (owner && executor !== session && executor !== owner.transaction) {
+        return ownerUnsupported("reads outside the command transaction");
+      }
       const conditions = ["namespace = $1"];
       const params: unknown[] = [listOptions.namespace];
       if (listOptions.metadata) {
@@ -1277,19 +1522,23 @@ export function createEventStore(
     claimDelivery,
     claimNext,
     async heartbeatDelivery(heartbeat) {
+      if (owner) return ownerUnsupported("owner heartbeat");
+      const executor = await deliveryMutationExecutor(heartbeat.owner);
       const leaseMs = boundedInteger(
         heartbeat.leaseMs,
         defaultLeaseMs,
         0,
       );
-      const result = await session.query<{ id: string }>(
+      const params: unknown[] = [heartbeat.id, heartbeat.owner, leaseMs];
+      const timestamp = commandTimestamp(params);
+      const result = await executor.query<{ id: string }>(
         `UPDATE ${tables.event_deliveries}
-         SET lease_expires_at = NOW() + ($3 * INTERVAL '1 millisecond'),
-             updated_at = NOW()
+         SET lease_expires_at = ${timestamp} + ($3 * INTERVAL '1 millisecond'),
+             updated_at = ${timestamp}
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-           AND lease_expires_at > NOW()
+           AND lease_expires_at > ${timestamp}
          RETURNING id`,
-        [heartbeat.id, heartbeat.owner, leaseMs],
+        params,
       );
       return result.rows.length === 1;
     },
@@ -1300,6 +1549,7 @@ export function createEventStore(
       return settleDelivery(id, "cancelled", owner);
     },
     async failDelivery(failure) {
+      await deliveryMutationExecutor(failure.owner, failure.id);
       const current = await getDelivery(failure.id);
       if (
         !current || current.status !== "leased" ||
@@ -1317,6 +1567,14 @@ export function createEventStore(
       );
       const retryable = failure.retryable ??
         errorRetryability(failure.error) ?? true;
+      const params: unknown[] = [
+        failure.id,
+        failure.owner,
+        backoffMs,
+        JSON.stringify(serializeError(failure.error, retryable)),
+        retryable,
+      ];
+      const timestamp = commandTimestamp(params);
       return await commitDeliverySettlement(current, async (transaction) => {
         const result = await transaction.query<DeliveryRow>(
           `UPDATE ${tables.event_deliveries}
@@ -1324,21 +1582,19 @@ export function createEventStore(
                            THEN 'dead_letter' ELSE 'retry_wait' END,
              available_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
                THEN available_at
-               ELSE NOW() + ($3 * INTERVAL '1 millisecond') END,
+               ELSE ${timestamp} + ($3 * INTERVAL '1 millisecond') END,
              lease_owner = NULL, lease_expires_at = NULL,
-             last_error = $4::jsonb, updated_at = NOW(),
+             last_error = $4::jsonb, updated_at = ${timestamp},
              settled_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
-               THEN NOW() ELSE NULL END
+               THEN ${timestamp} ELSE NULL END
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-           AND lease_expires_at > NOW()
+           AND ${
+            ownerAttempt
+              ? "lease_expires_at IS NULL"
+              : `lease_expires_at > ${timestamp}`
+          }
          RETURNING *`,
-          [
-            failure.id,
-            failure.owner,
-            backoffMs,
-            JSON.stringify(serializeError(failure.error, retryable)),
-            retryable,
-          ],
+          params,
         );
         return result.rows[0]
           ? mapDelivery(result.rows[0], databaseSchema)
@@ -1347,34 +1603,46 @@ export function createEventStore(
     },
     listRecoverable,
     async recoverExpiredDeliveries(recovery = {}) {
-      const candidates = await session.query<DeliveryRow>(
+      if (owner) {
+        return ownerUnsupported("expiry recovery in the owner path");
+      }
+      // Only the remaining non-owner legacy executor performs timed recovery.
+      const executor = session;
+      const limit = boundedInteger(recovery.limit, 100, 1);
+      const params: unknown[] = [
+        recovery.namespace ?? null,
+        limit,
+      ];
+      const timestamp = commandTimestamp(params);
+      const candidates = await executor.query<DeliveryRow>(
         `SELECT d.* FROM ${tables.event_deliveries} AS d
          JOIN ${tables.events} AS e ON e.id = d.event_id
-         WHERE d.status = 'leased' AND d.lease_expires_at <= NOW()
+         WHERE d.status = 'leased' AND d.lease_expires_at <= ${timestamp}
            AND d.attempts >= d.max_attempts
            AND ($1::text IS NULL OR e.namespace = $1)
          ORDER BY d.lease_expires_at, d.id LIMIT $2`,
-        [recovery.namespace ?? null, boundedInteger(recovery.limit, 100, 1)],
+        params,
       );
       const recovered: EventDelivery[] = [];
       for (const row of candidates.rows) {
         const delivery = await commitDeliverySettlement(
           mapDelivery(row, databaseSchema),
           async (transaction) => {
+            const params: unknown[] = [
+              row.id,
+              JSON.stringify({
+                name: "DeliveryLeaseExpired",
+                message: "The delivery lease expired after its final attempt.",
+              }),
+            ];
+            const timestamp = commandTimestamp(params);
             const result = await transaction.query<DeliveryRow>(
               `UPDATE ${tables.event_deliveries}
              SET status = 'dead_letter', lease_owner = NULL, lease_expires_at = NULL,
-               last_error = $2::jsonb, updated_at = NOW(), settled_at = NOW()
-             WHERE id = $1 AND status = 'leased' AND lease_expires_at <= NOW()
+               last_error = $2::jsonb, updated_at = ${timestamp}, settled_at = ${timestamp}
+             WHERE id = $1 AND status = 'leased' AND lease_expires_at <= ${timestamp}
                AND attempts >= max_attempts RETURNING *`,
-              [
-                row.id,
-                JSON.stringify({
-                  name: "DeliveryLeaseExpired",
-                  message:
-                    "The delivery lease expired after its final attempt.",
-                }),
-              ],
+              params,
             );
             return result.rows[0]
               ? mapDelivery(result.rows[0], databaseSchema)
@@ -1385,15 +1653,139 @@ export function createEventStore(
       }
       return recovered;
     },
+    async recoverLostDelivery(input) {
+      // This method is deliberately unavailable to legacy stores and to a live
+      // attempt capability. A worker receives neither SQL nor this method.
+      if (!owner || ownerAttempt) {
+        return ownerUnsupported("lost-attempt recovery without owner control");
+      }
+      const transition = { ...input };
+      const required = [
+        "namespace",
+        "id",
+        "eventId",
+        "consumerId",
+        "settlementScopeId",
+        "leaseOwner",
+        "leaseExpiresAt",
+        "attempts",
+        "maxAttempts",
+        "disposition",
+      ];
+      const expected = transition.actionScopeId === undefined
+        ? required
+        : [...required, "actionScopeId"];
+      if (
+        Object.keys(transition).sort().join(",") !==
+          expected.sort().join(",") ||
+        [
+          transition.namespace,
+          transition.id,
+          transition.eventId,
+          transition.consumerId,
+          transition.settlementScopeId,
+          transition.leaseOwner,
+          transition.actionScopeId ?? "scope",
+        ]
+          .some((value) =>
+            typeof value !== "string" || !value.trim() ||
+            value !== value.trim() || value.length > 1024
+          ) ||
+        (transition.leaseExpiresAt !== null && (
+          typeof transition.leaseExpiresAt !== "string" ||
+          transition.leaseExpiresAt.length > 128 ||
+          !Number.isFinite(Date.parse(transition.leaseExpiresAt))
+        )) ||
+        !Number.isSafeInteger(transition.attempts) || transition.attempts < 1 ||
+        !Number.isSafeInteger(transition.maxAttempts) ||
+        transition.maxAttempts < 1 ||
+        !["retry", "exhausted", "cancelled"].includes(transition.disposition)
+      ) throw new TypeError("Invalid lost delivery transition.");
+      if (
+        typeof lockSettlementScope !== "function" ||
+        (transition.disposition !== "retry" &&
+          typeof settleActionOwners !== "function")
+      ) {
+        return ownerUnsupported(
+          "lost-attempt recovery without canonical settlement hooks",
+        );
+      }
+      await ownerDeliveryExecutor();
+      const current = await getDelivery(transition.id);
+      if (!current) return null;
+      return await commitDeliverySettlement(current, async (transaction) => {
+        const params: unknown[] = [
+          transition.id,
+          transition.eventId,
+          transition.consumerId,
+          transition.settlementScopeId,
+          transition.actionScopeId ?? null,
+          transition.leaseOwner,
+          transition.leaseExpiresAt,
+          transition.attempts,
+          transition.maxAttempts,
+          transition.namespace,
+          owner.ownerId,
+        ];
+        const timestamp = commandTimestamp(params);
+        const retry = transition.disposition === "retry";
+        const status = retry
+          ? "retry_wait"
+          : transition.disposition === "cancelled"
+          ? "cancelled"
+          : "dead_letter";
+        const attemptCondition = retry
+          ? "attempts < max_attempts"
+          : transition.disposition === "exhausted"
+          ? "attempts >= max_attempts"
+          : "TRUE";
+        const error = transition.disposition === "exhausted"
+          ? `$${
+            params.push(JSON.stringify({
+              name: transition.leaseExpiresAt === null
+                ? "AttemptLost"
+                : "DeliveryLeaseExpired",
+              message: transition.leaseExpiresAt === null
+                ? "The delivery attempt was lost after its final attempt."
+                : "The delivery lease was lost after its final attempt.",
+            }))
+          }::jsonb`
+          : "";
+        // Do not fabricate expiry or backoff. In particular, availability,
+        // attempts and max_attempts are unchanged; only the next genuine claim
+        // consumes an attempt. The old lease may still have time remaining.
+        const result = await transaction.query<DeliveryRow>(
+          `UPDATE ${tables.event_deliveries} AS d
+           SET status = '${status}', lease_owner = NULL, lease_expires_at = NULL,
+             updated_at = ${timestamp}, settled_at = ${
+            retry ? "NULL" : timestamp
+          }
+             ${error ? `,last_error = ${error}` : ""}
+           WHERE d.id=$1 AND d.event_id=$2 AND d.consumer_id=$3
+             AND d.settlement_scope_id=$4 AND d.action_scope_id IS NOT DISTINCT FROM $5::text
+             AND d.status='leased' AND d.lease_owner=$6
+             AND d.lease_expires_at IS NOT DISTINCT FROM $7::timestamptz
+             AND d.attempts=$8 AND d.max_attempts=$9 AND ${attemptCondition}
+             AND EXISTS(SELECT 1 FROM ${tables.events} e WHERE e.id=d.event_id
+               AND e.namespace=$10 AND e.owner_id=$11)
+           RETURNING d.*`,
+          params,
+        );
+        return result.rows[0]
+          ? mapDelivery(result.rows[0], databaseSchema)
+          : null;
+      });
+    },
     async nextRecoveryDelayMs() {
       const params: unknown[] = [];
+      const timestamp = commandTimestamp(params);
       // Keep an empty queue's NULL so recovery can stop; clamp due work below.
       const result = await session.query<{
         delay_ms: string | number | null;
       }>(
         `SELECT EXTRACT(EPOCH FROM (
            MIN(CASE WHEN status = 'leased' THEN lease_expires_at ELSE available_at END)
-           - NOW()
+           - ${timestamp}
          )) * 1000 AS delay_ms
          FROM ${tables.event_deliveries}
          WHERE status = 'leased'
@@ -1466,9 +1858,10 @@ export function createEventStore(
       });
     },
     async cancelScope(namespace, settlementScopeId, reason) {
-      let afterCommit: (() => Promise<void>) | void;
+      if (owner) return ownerUnsupported("scope cancellation");
+      let afterCommit: (() => Promise<void>) | undefined;
       const result = await session.transaction(async (transaction) => {
-        await options.lockSettlementScope?.(transaction, settlementScopeId);
+        await lockSettlementScope?.(transaction, settlementScopeId);
         const cancelled = await transaction.query<{ id: string }>(
           `UPDATE ${tables.event_deliveries} AS delivery
            SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
@@ -1487,13 +1880,14 @@ export function createEventStore(
           namespace,
           operationId: settlementScopeId,
           reason: reason ?? "cancelled",
-        });
+        }) ?? undefined;
         return cancelled.rows.length;
       });
-      await afterCommit!?.();
+      await afterCommit?.();
       return result;
     },
     async compactDeliveries(compactOptions = {}) {
+      if (owner) return ownerUnsupported("delivery compaction");
       if (compactOptions.retentionMs === null) {
         return { deliveries: 0 };
       }

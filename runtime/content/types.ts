@@ -101,6 +101,22 @@ export interface ContentRef {
   metadata?: Record<string, unknown>;
 }
 
+/** Data-only pointer to catalog-protected generated output, before a domain
+ * record adopts it. These immutable claims support equivalence checks, but are
+ * not authority: the owner resolves the descriptor and verifies provenance.
+ * Semantic metadata and physical locations remain in the owner catalog. */
+export type PendingContentRef = Readonly<{
+  type: "content.pending";
+  pendingRef: string;
+  mediaType: string;
+  byteLength: number;
+  digest: `sha256:${string}`;
+}>;
+
+/** Producer outputs may refer to pending content; persisted domain content may not. */
+export type GeneratedContentSequence =
+  readonly (ContentRef | PendingContentRef)[];
+
 /** Ordered canonical content owned by a message, tool, event, or document. */
 export type ContentSequence = readonly ContentRef[];
 
@@ -300,3 +316,12 @@ export type ContentJsonValue =
   | { [key: string]: ContentJsonValue };
 /** Decoded body value shared by Actions and Collections. */
 export type ContentBodyValue = ContentJsonValue | Uint8Array;
+
+/** Final reference and Asset semantics captured before physical sealing. */
+export type PendingContentDescriptor = Readonly<{
+  reference: Readonly<Omit<ContentRef, "assetId" | "mediaType">>;
+  asset: Readonly<{
+    origin?: AssetOrigin;
+    metadata: Readonly<Record<string, unknown>>;
+  }>;
+}>;

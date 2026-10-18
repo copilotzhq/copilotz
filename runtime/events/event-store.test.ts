@@ -822,6 +822,91 @@ for (
       }
     },
   });
+
+  for (
+    const bound of [{ count: 8, limit: 7, recovered: 7 }, {
+      count: 101,
+      limit: undefined,
+      recovered: 100,
+    }]
+  ) {
+    Deno.test({
+      name: `legacy expiry recovery preserves namespace and ${
+        bound.limit ?? "default"
+      } limit (${backend.name})`,
+      ignore: backend.ignore,
+      async fn() {
+        const schema = `legacy_expiry_${
+          crypto.randomUUID().replaceAll("-", "")
+        }`;
+        const fixture = await createFixture(backend.url, schema);
+        try {
+          const excluded: string[] = [];
+          const seed = async (
+            namespace: string,
+            maxAttempts = 1,
+            leaseMs = 0,
+          ) => {
+            const result = await fixture.store.append(
+              { type: "test.expiry", namespace, payload: {} },
+              ["worker"],
+              { maxAttempts },
+            );
+            const id = result.deliveries[0].id;
+            await fixture.store.claimDelivery({
+              id,
+              owner: `attempt:${id}`,
+              leaseMs,
+            });
+            return id;
+          };
+          excluded.push(
+            await seed("tenant-b"),
+            await seed("tenant-a", 2),
+            await seed("tenant-a", 1, 60_000),
+          );
+          const ids: string[] = [];
+          for (let i = 0; i < bound.count; i++) {
+            ids.push(await seed("tenant-a"));
+          }
+          const excludedBefore = await Promise.all(
+            excluded.map((id) => fixture.store.getDelivery(id)),
+          );
+          const recovered = await fixture.store.recoverExpiredDeliveries({
+            namespace: "tenant-a",
+            ...(bound.limit === undefined ? {} : { limit: bound.limit }),
+          });
+          assertEquals(recovered.length, bound.recovered);
+          assert(
+            recovered.every((d) =>
+              ids.includes(d.id) && d.status === "dead_letter" &&
+              d.attempts === 1
+            ),
+          );
+          assertEquals(
+            await Promise.all(
+              excluded.map((id) => fixture.store.getDelivery(id)),
+            ),
+            excludedBefore,
+          );
+          assertEquals(
+            (await fixture.store.listDeliveries({ ids })).filter((d) =>
+              d.status === "leased"
+            ).length,
+            bound.count - bound.recovered,
+          );
+        } finally {
+          try {
+            if (backend.name === "PostgreSQL") {
+              await fixture.session.query(`DROP SCHEMA "${schema}" CASCADE`);
+            }
+          } finally {
+            await closeFixture(fixture);
+          }
+        }
+      },
+    });
+  }
 }
 
 Deno.test("delivery recovery and claims order by availability, creation time, then ID", async () => {

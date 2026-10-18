@@ -26,6 +26,7 @@ export type OminipgDatabaseLike = Readonly<{
     channel: string,
     handler: (notification: SqlNotification) => void,
   ): Promise<SqlNotificationSubscription>;
+  withReadSnapshot?: SqlSession["withReadSnapshot"];
   close(): Promise<void>;
 }>;
 

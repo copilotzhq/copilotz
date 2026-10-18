@@ -146,7 +146,9 @@ export type {
   ContentRole,
   ContentSequence,
   DurableContentInput,
+  GeneratedContentSequence,
   NormalizeContentOptions,
+  PendingContentRef,
   PreparedAsset,
   PreparedContent,
   PublishAssetInput,
@@ -157,13 +159,18 @@ export type {
 export { type ContentValue, resolveContentInputs } from "./values.ts";
 
 export {
+  capturePendingContentRef,
   contentRefSchema,
   contentSequenceSchema,
+  generatedContentSequenceSchema,
   isContentRef,
+  isPendingContentRef,
+  pendingContentRefSchema,
 } from "./schema.ts";
 
 export {
   type ContentWireInput,
   decodeContent,
+  decodeGeneratedContent,
   encodeContent,
 } from "./codec.ts";

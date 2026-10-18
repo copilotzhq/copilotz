@@ -1,3 +1,4 @@
+import { assertOperationCatalogFormat } from "./catalog-format.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
 export const EVENT_SCHEMA_VERSION = 7;
@@ -217,11 +218,32 @@ async function classifySchema(
       WHERE table_schema = $1
         AND table_name IN (
           'nodes', 'edges', 'events', 'event_bodies', 'event_deliveries',
-          'copilotz_schema_metadata'
-        )`,
+          'copilotz_schema_metadata', 'copilotz_operation_catalog_metadata'
+        )
+      UNION ALL
+      SELECT '__private_content_format__' AS table_name
+        FROM information_schema.columns
+       WHERE table_schema=$1 AND table_name='content_bodies' AND column_name='format'`,
     [schema],
   );
   const tables = new Set(result.rows.map((row) => row.table_name));
+  // A private physical-only schema must not become a legacy engine schema.
+  // This check also runs under the shared provisioning lock after preflight.
+  if (tables.has("__private_content_format__")) return "incompatible";
+  if (tables.delete("copilotz_operation_catalog_metadata")) {
+    try {
+      await assertOperationCatalogFormat(
+        executor,
+        `${quoteEventIdentifier(schema)}."copilotz_operation_catalog_metadata"`,
+      );
+    } catch (error) {
+      if (
+        (error as { code?: string }).code ===
+          "copilotz_operation_catalog_schema_unsupported"
+      ) return "incompatible";
+      throw error;
+    }
+  }
   if (tables.size === 0) return "fresh";
   if (!tables.has("copilotz_schema_metadata")) {
     return "incompatible";

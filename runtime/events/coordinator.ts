@@ -52,6 +52,8 @@ export type EventPublisher = (
 
 export type CreateEventCoordinatorOptions = Readonly<{
   store: EventStore;
+  /** Owner output gates schedule durable work without waiting for execution slots. */
+  scheduleOnly?: boolean;
   registry: PluginRegistry;
   executor: DeliveryExecutor;
   publish?: EventPublisher;
@@ -104,7 +106,7 @@ export function createEventCoordinator(
       result.event.metadata.sourceStreamId,
       result.event.metadata.sourceLiveDispatchId,
     ].some((value) => typeof value === "string" && value.trim().length > 0);
-    if (workerOriginated) {
+    if (workerOriginated || options.scheduleOnly === true) {
       for (const delivery of actionable) {
         options.executor.scheduleDelivery(delivery);
       }

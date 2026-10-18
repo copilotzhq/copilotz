@@ -8,13 +8,15 @@ status: stable
 
 # Getting Started with Copilotz
 
-Copilotz is a generic application runtime built from five primitives:
+Copilotz is a generic application runtime built from six primitives:
 
 - **Collections** hold application state.
 - **Actions** are named operations with a tracked lifecycle.
 - **Processors** react to Events.
 - **Resources** are declarative configuration that plugins read.
 - **Adapters** supply host or provider implementations.
+- **Views** supply scoped presentations through the experimental
+  [one-shot text foundation](views.md). The guide below does not require Views.
 
 Plugins compose these primitives, and Events connect them. The runtime records
 Events and Action lifecycles and coordinates the work they trigger, so you can

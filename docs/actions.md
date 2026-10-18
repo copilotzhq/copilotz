@@ -449,9 +449,13 @@ effects.
   delivery. Prefix their keys with `context.operationKey`, as `saveNote` does.
 - **`context.content.prepare`** keys are prefixed with the Action call
   automatically; pass a short local key.
-- **External effects** (email, payments, third-party APIs) are outside the
-  runtime's records. Give each one the provider's own idempotency key, derived
-  from `context.operationKey`, so a re-run `execute` cannot repeat the effect.
+- **External effects on legacy hosts** (email, payments, third-party APIs) are
+  not covered by Action lifecycle receipts. A stable provider idempotency key
+  derived from `context.operationKey` can help only to the extent guaranteed by
+  that provider's actual contract. It does not make arbitrary Action replay
+  safe. The owner refactor uses the
+  [effect protocol below](#owner-bound-external-effects-refactor-preview) to
+  distinguish first dispatch, uncertainty and confirmed outcomes.
 
 ### Content declarations
 
@@ -498,6 +502,201 @@ it, and nothing erases it afterwards. Accept secrets through a schema-aware
 entry, such as an Action exposed over HTTP by `serverPlugin`, whose route
 validates input against the Action's schema, rather than through generic Events
 or a custom route that forwards them to `app.send`.
+
+## Owner-bound external effects (refactor preview)
+
+The owner-backed registered Action worker exposes `context.effect`. This is an
+internal execution seam in the owner refactor, not a claim that the existing
+public application factory or all provider adapters already use it. Legacy hosts
+that have no owner effect port throw `action_effect_unavailable` when it is
+used; they do not create a local substitute receipt store.
+
+An effect step is a stable name within the Action run, independent of delivery
+attempt, worker, connection and owner epoch:
+
+- `await context.effect.begin(step)` returns `proceed` only for a fresh, known
+  committed begin whose transport completed. Only that result permits one
+  provider dispatch
+- A confirmed step returns `replay` with its safe durable outcome. It never
+  grants another dispatch
+- A begun step invokes the Action's declared `reconcile(step, context)` outside
+  the owner transaction. Missing or unresolved reconciliation fails with the
+  fixed `effect_indeterminate` code
+- `confirm(step, outcome)` records an outcome through the restricted settlement
+  port. Use public data or an owner-approved durable reference, never protected
+  plaintext
+- `notStarted(step, { source, reference })` requires evidence independently
+  verified by the owner against dispatch facts. A provider lookup returning
+  nothing, worker prose, or a guessed receipt ID is not such proof. That step
+  remains closed; a deliberately retried dispatch needs a new deterministic step
+- `inspect(step)` reads freshly authorized state and never grants dispatch
+
+`reconcile` returns exactly one of:
+
+```ts
+{ status: "confirmed", outcome: safeOutcome }
+{ status: "not_started", evidence: { source, reference } }
+{ status: "indeterminate" }
+```
+
+The runtime records the explicit result through current owner authority, then
+returns replay or closed state. Reconciliation runs at most once per live
+attempt/step; concurrent recovery coalesces, but fresh `begin` calls never share
+one `proceed` permission. Calling `context.effect.begin` recursively for the
+same step inside its reconciliation is refused. Use the context passed to that
+hook; calling a captured earlier context recursively is not a supported pattern.
+Manual `confirm` and `notStarted` remain available in ordinary execution;
+conflicting settlement is refused by the owner.
+
+For example, a provider adapter can query by the same stable request identity
+that it uses to send. The adapter below is supplied by the application's trusted
+resource composition; it is not implemented by `defineAction`:
+
+```ts
+import { defineAction } from "@copilotz/copilotz";
+import type { ActionContext } from "@copilotz/copilotz";
+
+interface MessageContext extends ActionContext {
+  readonly resources: {
+    readonly provider: {
+      send(
+        request: { id: string; text: string; signal: AbortSignal },
+      ): Promise<{ messageId: string }>;
+      lookup(
+        id: string,
+        signal: AbortSignal,
+      ): Promise<{ messageId: string } | undefined>;
+    };
+  };
+}
+
+export const sendMessage = defineAction({
+  id: "messages.send",
+  async execute(input: { text: string }, context: MessageContext) {
+    const step = "send:v1";
+    const begun = await context.effect.begin(step);
+    if (begun.status === "replay") return begun.outcome;
+    if (begun.status !== "proceed") throw new Error("Effect step is closed");
+    const outcome = await context.resources.provider.send({
+      id: `${context.action.runId}/${step}`,
+      text: input.text,
+      signal: context.signal,
+    });
+    await context.effect.confirm(step, outcome);
+    return outcome;
+  },
+  async reconcile(step, context) {
+    const outcome = await context.resources.provider.lookup(
+      `${context.action.runId}/${step}`,
+      context.signal,
+    );
+    return outcome
+      ? { status: "confirmed", outcome }
+      : { status: "indeterminate" };
+  },
+});
+```
+
+Cancellation, a lost lease and the end of the invocation close its capabilities.
+A lost begin or settlement reply remains unknown even if application code
+catches its error; it cannot be converted into an ordinary successful or failed
+terminal. Effect calls join the worker's bounded pending-call drain, including
+calls the Action forgot to await. Await them in application code so the provider
+result and errors can be handled explicitly.
+
+The internal registered-owner path now gates a lost attempt while delivery
+attempts remain. Its immutable claim captures bounded effect step/state
+references without hydrating outcomes. Every previously begun step must be
+confirmed or independently verified not-started before business execution or new
+mutation can resume. The worker performs declared reconciliation first; the
+owner independently enforces the same barrier, so a worker cannot bypass it. A
+newly begun effect after recovery must also settle before successful Action
+completion. Failure or cancellation never proves an external effect was absent
+and does not erase its begun evidence.
+
+This transitional path requires an internal, current host assertion that the
+registered Action and its adapters have been converted to the effect protocol.
+It defaults to refusal (`effect_indeterminate`), including when no receipt
+exists. It is not a public retry policy or an author-supplied safety flag.
+Actual external-effect adapters still need conversion. The private owner-only
+exhausted-delivery sweep uses the existing fenced failure path, preserves
+`DeliveryLeaseExpired` on the delivery and leaves effect receipts intact. A
+begun effect yields a fixed `effect_indeterminate` Action failure; a durable
+scope cancellation takes precedence. Exhaustion grants no new mutation attempt
+or provider dispatch. The delivery default remains three attempts; recording a
+failed Action terminal does not authorize rerunning it.
+
+Recovery registers ordinary failure/cancellation consumers, the terminal event,
+body, receipt, sequence and settlement alarm atomically, publishing and waking
+only after the outer commit. This does not yet implement the new
+`awaitOperation` resumption protocol or startup/takeover readiness and
+scheduling; those remain separate integration work.
+
+A run is limited to 100 distinct effect steps; the owner enforces this before a
+fresh begin. The inventory returns only bounded safe references and refuses
+malformed or oversized history. This bounds returned data, not database work:
+the exact-key-prefix query still needs an indexed query-plan and scale proof
+against large owner receipt histories before production readiness.
+
+### Named owner preparation
+
+The connected invocation capability also has an additive data-only method:
+
+```ts
+await ctx.actions.reply.prepareNamed(
+  { preparation: "notes.reply-context", recordId: note.id, mode: "context" },
+  { operationKey: "reply" },
+);
+```
+
+The bound Action supplies the target. The owner checks that target against its
+fixed preparation registration before fresh capture or compatible replay. The
+request carries a registered name, record identifier and semantic mode; it
+cannot carry a renderer, factory, source record, namespace or caller authority.
+The explicit nonblank `operationKey` names the call in the parent invocation.
+The returned promise resolves to the child Action's normal output. Existing
+`prepare(factory, options)` retains its separate meaning.
+
+This requires a live parent-bound preparation capability and owner registration.
+Root ingress, legacy hosts and drivers without that capability refuse with
+`action_prepare_unavailable` before admission. A storage-backed owner can opt in
+through `storage.preparation`: `records` registers ordinary Collection aliases
+and their current record/projection/original-version policies; `registrations`
+binds each preparation name to a source, target Action alias, View `shows`,
+allowed modes and a pure text-to-input mapper. `projectResource` and
+`authorizeResource` explicitly govern any registered resources. This
+configuration belongs to the owner and never crosses the worker connection.
+
+The source can be written through normal owner-backed `ctx.transaction` calls.
+The first preparation selects the View (or the normal generic fallback over its
+authorized ordinary projection), renders once and captures the mapped input in
+the child's existing requested-event body. Compatible reuse reauthorizes that
+ORIGINAL projection and resource version without reading today's values into the
+capture or rerendering. Current record visibility alone is insufficient:
+`records.authorizeReference` must permit the entire original projected value for
+the current audience and purpose. Child claim/input, mutation and result release
+retain that permission gate. Safe terminal settlement remains possible after
+input/result permission is revoked.
+
+This initial host registration supports ordinary records and ordinary mapped
+input only. ContentRefs, protected formats, default channel rendering and full
+content catalog integration still require their separate conversion. Bounded
+resume supports a closed ordinary-record prepared child of a closed, root,
+non-prepared ordinary Action when the registered preparation/source/target/mode
+and complete lifecycle/receipt evidence match. Startup preserves the original
+capture without rerendering or inventing a live caller for source authorization.
+Root terminal replay still requires current root-result permission; a new live
+preparation, child input or child result still requires its current
+original-value permission. Pending/open prepared work, nested or Processor
+parents, prepared ancestry and content/protected captures remain unsupported.
+Parent and child need available execution capacity; exhaustion refuses boundedly
+rather than granting extra capacity or bypassing policy.
+
+A local timeout stops waiting, not an already-admitted child. A possibly
+committed admission remains unknown and is never automatically retried; its
+underlying call retains bounded capacity until it actually settles. Invocation
+completion drains named calls even if business code forgets to await them, and
+caught unknown outcomes cannot become a successful terminal.
 
 ## What this unlocks
 

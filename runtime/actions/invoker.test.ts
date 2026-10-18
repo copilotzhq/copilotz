@@ -913,3 +913,34 @@ for (
     }
   });
 }
+
+Deno.test("legacy Action caller refuses named preparation before lifecycle admission", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let executed = 0;
+  const actions = createActionCallers({
+    action: defineAction({
+      id: "test.named.unavailable",
+      execute() {
+        executed++;
+        return null;
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "unavailable",
+    createContext: invocationContext,
+  });
+  await assertRejects(
+    () =>
+      actions.action.prepareNamed({
+        preparation: "context.note",
+        recordId: "note",
+        mode: "context",
+      }, { operationKey: "key" }),
+    Error,
+    "action_prepare_unavailable",
+  );
+  assertEquals(executed, 0);
+  assertEquals(emitted, []);
+});

@@ -1,3 +1,4 @@
+import { sliceBodyChunks as sliceChunks } from "./body-chunks.ts";
 import { createContentError } from "./errors.ts";
 import { digestContent } from "./digest.ts";
 import type { AssetOrigin } from "./types.ts";
@@ -507,31 +508,6 @@ function validateHead(
   }
 }
 
-function sliceChunks(
-  chunks: readonly Uint8Array[],
-  start: number,
-  end: number,
-): Uint8Array {
-  const length = Math.max(0, end - start);
-  const output = new Uint8Array(length);
-  let cursor = 0;
-  let skipped = 0;
-  for (const chunk of chunks) {
-    const next = skipped + chunk.byteLength;
-    if (next <= start) {
-      skipped = next;
-      continue;
-    }
-    const from = Math.max(0, start - skipped);
-    const to = Math.min(chunk.byteLength, end - skipped);
-    output.set(chunk.subarray(from, to), cursor);
-    cursor += to - from;
-    skipped = next;
-    if (skipped >= end) break;
-  }
-  return output;
-}
-
 export function createMemoryBodyStore(
   options: Readonly<{ backendId?: string; protectionMs?: number }> = {},
 ): BodyStore {
@@ -548,7 +524,7 @@ export function createMemoryBodyStore(
       leaseExpiresAt: number;
       updatedAt: number;
       chunks: Uint8Array[];
-      appendIds: Map<string, Uint8Array>;
+      appendIds: Map<string, Readonly<{ offset: number; bytes: Uint8Array }>>;
     }
   >();
   const withLease = (
@@ -816,12 +792,13 @@ export function createMemoryBodyStore(
       }
       const duplicate = entry.appendIds.get(input.appendId);
       if (duplicate) {
-        const same = duplicate.byteLength === input.bytes.byteLength &&
-          duplicate.every((byte, index) => byte === input.bytes[index]);
+        const same = duplicate.offset === input.expectedOffset &&
+          duplicate.bytes.byteLength === input.bytes.byteLength &&
+          duplicate.bytes.every((byte, index) => byte === input.bytes[index]);
         if (!same) {
           throw createContentError(
             "asset_conflict",
-            "Progressive append id was reused with different bytes.",
+            "Progressive append id was reused with a different offset or bytes.",
           );
         }
         return Promise.resolve(
@@ -849,7 +826,10 @@ export function createMemoryBodyStore(
       } as const;
       const bytes = input.bytes.slice();
       entry.chunks.push(bytes);
-      entry.appendIds.set(input.appendId, bytes);
+      entry.appendIds.set(input.appendId, {
+        offset: input.expectedOffset,
+        bytes,
+      });
       mutable.set(input.writer.bodyId, {
         head,
         leaseExpiresAt,

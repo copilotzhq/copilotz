@@ -12,12 +12,27 @@ import { publicActionLifecycleData } from "./protected-lifecycle.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
 
+/** Delivery recovery needs an explicit stream hook; an event-only owner catalog
+ * cannot silently satisfy this dependency. */
+export type ActionRecoveryCatalog = Pick<
+  OperationCatalog,
+  "failDeliveryStreams"
+>;
 type RecoveryOptions = Readonly<{
   store: EventStore;
   coordinator: EventCoordinator;
-  catalog: OperationCatalog;
+  catalog: ActionRecoveryCatalog;
   actions: Readonly<Record<string, AnyActionDefinition>>;
   protectedValues?: ProtectedValueRuntime;
+  /** Owner-command clock shared by lifecycle, cancellation and stream recovery. */
+  commandTime?: string;
+  /** Optional concrete-owner facts, read under its fenced transaction. These
+   * are never accepted from a worker command payload. Legacy hosts omit them. */
+  deliveryCancellation?: Readonly<{ namespace: string; operationId: string }>;
+  hasUnresolvedEffect?(
+    transaction: SqlExecutor,
+    ref: Readonly<{ namespace: string; actionRunId: string }>,
+  ): boolean | Promise<boolean>;
 }>;
 type ScopeCancellation = Readonly<
   { namespace: string; operationId: string; reason: string }
@@ -34,7 +49,13 @@ export async function recoverDeliveryActions(
 
 /** Explicit cancellation settles every live Action, including deferred ones. */
 export async function cancelScopeActions(
-  options: RecoveryOptions,
+  options:
+    & RecoveryOptions
+    & Readonly<{
+      catalog:
+        & ActionRecoveryCatalog
+        & Pick<OperationCatalog, "requestCancellation">;
+    }>,
   transaction: SqlExecutor,
   scope: ScopeCancellation,
 ): Promise<() => Promise<void>> {
@@ -43,6 +64,7 @@ export async function cancelScopeActions(
     scope.namespace,
     scope.operationId,
     scope.reason,
+    options.commandTime,
   );
   return await recoverActions(options, transaction, undefined, scope);
 }
@@ -54,6 +76,14 @@ async function recoverActions(
   scope?: ScopeCancellation,
 ): Promise<() => Promise<void>> {
   const { store, coordinator } = options;
+  if (
+    options.deliveryCancellation && (!delivery ||
+      options.deliveryCancellation.operationId !== delivery.settlementScopeId)
+  ) {
+    throw new TypeError(
+      "Recovery cancellation must match the exact delivery scope.",
+    );
+  }
   const open = await transaction.query<{
     namespace: string;
     action_run_id: string;
@@ -93,14 +123,34 @@ async function recoverActions(
         `Action obligation '${row.action_run_id}' has an invalid invoked receipt.`,
       );
     }
+    const cancellation = scope ?? options.deliveryCancellation;
+    if (
+      cancellation && (cancellation.namespace !== row.namespace ||
+        cancellation.operationId !== row.scope_id)
+    ) {
+      throw new TypeError(
+        "Recovery cancellation must match the captured Action scope.",
+      );
+    }
+    const effectIndeterminate = options.hasUnresolvedEffect
+      ? await options.hasUnresolvedEffect(transaction, {
+        namespace: row.namespace,
+        actionRunId: row.action_run_id,
+      })
+      : false;
+    if (typeof effectIndeterminate !== "boolean") {
+      throw new TypeError("Owner effect recovery facts must be complete.");
+    }
+    const cancelled = Boolean(cancellation) || delivery?.status === "cancelled";
+    const abandoned = delivery?.status === "succeeded";
     const append = createActionLifecycleAppender({
       ...options,
       transaction,
-      writer: scope
+      writer: cancellation
         ? {
           kind: "cancellation",
-          namespace: scope.namespace,
-          operationId: scope.operationId,
+          namespace: cancellation.namespace,
+          operationId: cancellation.operationId,
         }
         : { kind: "recovery", deliveryId: delivery!.id },
     });
@@ -113,28 +163,33 @@ async function recoverActions(
       },
       metadata: {
         ...row.metadata,
-        actionTerminalSource: scope
+        actionTerminalSource: cancellation
           ? "scope_cancellation"
           : "delivery_recovery",
         ...(delivery ? { sourceDeliveryId: delivery.id } : {}),
       },
     });
-    const cancelled = Boolean(scope) || delivery?.status === "cancelled";
-    const abandoned = delivery?.status === "succeeded";
     await lifecycle.emit({
       ...invoked,
       status: cancelled ? "cancelled" : "failed",
       error: {
         name: cancelled
           ? "AbortError"
+          : effectIndeterminate
+          ? "ActionEffectIndeterminate"
           : abandoned
           ? "ActionAbandoned"
           : "ActionDeliveryExhausted",
         message: cancelled
           ? "The owning delivery was cancelled."
+          : effectIndeterminate
+          ? "The owning delivery ended with an unresolved external effect."
           : abandoned
           ? "The owning delivery finished without completing this Action."
           : "The owning delivery permanently failed before completing this Action.",
+        ...(!cancelled && effectIndeterminate
+          ? { code: "effect_indeterminate" }
+          : {}),
       },
       causationId: row.causation_id ?? undefined,
       correlationId: row.correlation_id,
@@ -147,7 +202,10 @@ async function recoverActions(
     await options.catalog.failDeliveryStreams(transaction, {
       deliveryId: delivery.id,
       operationId: delivery.settlementScopeId,
-      outcome: delivery.status === "cancelled" ? "cancelled" : "failed",
+      outcome: delivery.status === "cancelled" || options.deliveryCancellation
+        ? "cancelled"
+        : "failed",
+      commandTime: options.commandTime,
     });
   }
   return async () => {

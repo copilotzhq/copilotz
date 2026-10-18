@@ -1,3 +1,4 @@
+import { OWNER_PHYSICAL_OBJECT_ROOT } from "./physical-object-namespace.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 
 import { createMemoryBodyStore } from "./body-store.ts";
@@ -69,6 +70,7 @@ function createMockGcs(
     arrived: ReturnType<typeof deferred>;
     released: ReturnType<typeof deferred>;
   }> = [];
+  const responseGates: typeof requestGates = [];
   let failedDeletePath: string | undefined;
   let partGetGate:
     | {
@@ -286,7 +288,7 @@ function createMockGcs(
           progressiveMetaGetRequests++;
         }
         const existing = objects.get(path);
-        return existing
+        const response = existing
           ? new Response(existing.bytes.slice().buffer, {
             headers: {
               "content-length": String(existing.bytes.byteLength),
@@ -314,6 +316,16 @@ function createMockGcs(
             },
           })
           : gcsError(404, "NoSuchKey");
+        const gateIndex = responseGates.findIndex((gate) =>
+          gate.method === request.method &&
+          requestTarget.includes(gate.pathIncludes)
+        );
+        if (gateIndex >= 0) {
+          const [gate] = responseGates.splice(gateIndex, 1);
+          gate.arrived.resolve();
+          await gate.released.promise;
+        }
+        return response;
       }
       if (request.method === "DELETE") {
         deleteRequests++;
@@ -370,6 +382,14 @@ function createMockGcs(
       const arrived = deferred();
       const released = deferred();
       requestGates.push({ method, pathIncludes, arrived, released });
+      return Object.freeze({
+        arrived: arrived.promise,
+        release: released.resolve,
+      });
+    },
+    blockNextResponse(method: string, pathIncludes: string) {
+      const arrived = deferred(), released = deferred();
+      responseGates.push({ method, pathIncludes, arrived, released });
       return Object.freeze({
         arrived: arrived.promise,
         release: released.resolve,
@@ -1434,3 +1454,132 @@ Deno.test("GCS maintenance collects late orphan parts without touching active st
     await gcs.shutdown();
   }
 });
+
+for (const provider of ["s3", "gcs"] as const) {
+  Deno.test(`${provider} losing append cannot delete an identical retry's committed part`, async () => {
+    const mock = createMockGcs();
+    const releases: Array<() => void> = [];
+    try {
+      const store = provider === "s3"
+        ? createS3CasStore(mock.endpoint)
+        : createGcsStore(mock.endpoint);
+      const bodyId = "copilotz/schemas/test/assets/same-writer-replay-race";
+      const writer = await store.reserve({ bodyId, mediaType: "text/plain" });
+      const request = {
+        writer,
+        expectedOffset: 0,
+        appendId: "same-append",
+        bytes: new TextEncoder().encode("accepted bytes"),
+      };
+      const put = mock.blockNextRequest("PUT", ".progressive/meta.json");
+      releases.push(put.release);
+      const losing = store.append(request).then(
+        (value) => ({ value, error: undefined }),
+        (error) => ({ value: undefined, error }),
+      );
+      await put.arrived;
+      await store.renew({ writer });
+      const stale = mock.blockNextResponse("GET", ".progressive/meta.json");
+      releases.push(stale.release);
+      put.release();
+      await stale.arrived;
+      const winner = await store.append(request);
+      assertEquals(winner.endOffset, request.bytes.byteLength);
+      stale.release();
+      const loss = await losing;
+      assertEquals((loss.error as ContentError)?.code, "asset_conflict");
+      assertEquals(
+        await store.readRange({
+          bodyId,
+          offset: 0,
+          end: request.bytes.byteLength,
+        }),
+        request.bytes,
+      );
+    } finally {
+      for (const release of releases) release();
+      await mock.shutdown();
+    }
+  });
+}
+
+for (const provider of ["s3", "gcs"] as const) {
+  Deno.test(`${provider} legacy requests and orphan maintenance exclude owner physical keys`, async () => {
+    const mock = createMockGcs();
+    try {
+      const store = provider === "s3"
+        ? createS3CasStore(mock.endpoint)
+        : createGcsStore(mock.endpoint);
+      const bytes = new TextEncoder().encode("ordinary");
+      const digest = await digestContent(bytes);
+      await store.put({
+        bodyId: "ordinary",
+        mediaType: "text/plain",
+        bytes,
+        digest,
+      });
+      const ordinary = mock.objects.get("ordinary")!;
+      const bodyId = `${OWNER_PHYSICAL_OBJECT_ROOT}scope/body`;
+      const keys = [
+        `${bodyId}.progressive/parts/orphan`,
+        `${bodyId}/meta.json`,
+        `${bodyId}/parts/orphan`,
+      ];
+      for (const key of keys) {
+        mock.objects.set(key, {
+          ...ordinary,
+          modified: new Date(0).toUTCString(),
+        });
+      }
+      const writer = await store.reserve({
+        bodyId: "ordinary-open",
+        mediaType: "text/plain",
+      });
+      const before = new Map(mock.objects);
+      const deletes = mock.deleteRequests;
+      const listed = await store.maintenance.list({
+        states: ["ready", "aborted"],
+        limit: 20,
+        idleForMs: 0,
+      });
+      assertEquals(listed.bodies.map((body) => body.bodyId), ["ordinary"]);
+      for (const forbidden of [bodyId, `ordinary/../${bodyId}`]) {
+        await assertRejects(() =>
+          store.put({
+            bodyId: forbidden,
+            mediaType: "text/plain",
+            bytes,
+            digest,
+          })
+        );
+        await assertRejects(() => store.head({ bodyId: forbidden }));
+        await assertRejects(() =>
+          store.reserve({ bodyId: forbidden, mediaType: "text/plain" })
+        );
+        await assertRejects(() =>
+          store.append({
+            writer: { ...writer, bodyId: forbidden },
+            expectedOffset: 0,
+            appendId: "a",
+            bytes,
+          })
+        );
+        await assertRejects(() =>
+          store.abort({ writer: { ...writer, bodyId: forbidden } })
+        );
+        await assertRejects(() =>
+          store.maintenance.delete({
+            bodyId: forbidden,
+            expectedState: "aborted",
+            expectedMaintenanceVersion: 1,
+            idleForMs: 0,
+          })
+        );
+      }
+      assertEquals(mock.objects, before);
+      assertEquals(mock.deleteRequests, deletes);
+    } finally {
+      await mock.shutdown();
+    }
+  });
+}

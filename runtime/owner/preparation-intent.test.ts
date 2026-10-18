@@ -1,0 +1,65 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { ownerPreparationIntent } from "./preparation-intent.ts";
+
+const facts = () => ({
+  preparation: "channelText",
+  operationKey: "reply",
+  parentOperationKey: "parent",
+  source: "messages",
+  recordId: "message-1",
+  actionId: "fixture.send",
+  hints: { mode: "channel", renderer: "text" as const },
+});
+test("preparation semantic intent preserves the existing pinned command digest", async () => {
+  assert.deepEqual(await ownerPreparationIntent(facts()), {
+    encoding: "copilotz.preparation.v1",
+    digest:
+      "sha256:95398fa5240dc9dc7e9eaf8a5a46db15c60481e8511645c44f48fbb8a14dbc1c",
+  });
+  const first = await ownerPreparationIntent(facts());
+  for (
+    const key of [
+      "preparation",
+      "operationKey",
+      "parentOperationKey",
+      "source",
+      "recordId",
+      "actionId",
+    ] as const
+  ) {
+    assert.notDeepEqual(
+      await ownerPreparationIntent({ ...facts(), [key]: "other" }),
+      first,
+    );
+  }
+  assert.notDeepEqual(
+    await ownerPreparationIntent({
+      ...facts(),
+      hints: { mode: "other", renderer: "text" },
+    }),
+    first,
+  );
+});
+test("preparation intent snapshots before digest and never invokes accessors", async () => {
+  const original = facts();
+  const pending = ownerPreparationIntent(original);
+  original.recordId = "changed";
+  original.hints.mode = "changed";
+  assert.deepEqual(await pending, await ownerPreparationIntent(facts()));
+  let invoked = 0;
+  const accessor = {
+    ...facts(),
+    get recordId() {
+      invoked++;
+      return "record";
+    },
+  };
+  await assert.rejects(ownerPreparationIntent(accessor));
+  assert.equal(invoked, 0);
+  for (const extra of ["assignmentId", "namespace", "viewHash", "rendered"]) {
+    await assert.rejects(
+      ownerPreparationIntent({ ...facts(), [extra]: "unsupported" }),
+    );
+  }
+});

@@ -11,6 +11,7 @@ import * as content from "../../runtime/content/index.ts";
 import * as streams from "../../runtime/streams/index.ts";
 import * as events from "../../runtime/events/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
+import * as views from "@copilotz/copilotz/views";
 import * as persistence from "../../runtime/persistence/index.ts";
 import * as server from "../../server/index.ts";
 import * as tools from "../../plugins/core/index.ts";
@@ -61,6 +62,9 @@ Deno.test("package root exposes runtime APIs without feature plugins", () => {
     "createContentResolver",
     "definePlugin",
     "defineProcessor",
+    "defineView",
+    "createViewResolver",
+    "createTextRenderer",
     "createEventStore",
     "createCopilotzEngine",
     "createCopilotzPersistence",
@@ -112,6 +116,7 @@ Deno.test("package root exposes runtime APIs without feature plugins", () => {
       ["streams", streams],
       ["events", events],
       ["plugins", plugins],
+      ["views", views],
       ["engine", engine],
       ["persistence", persistence],
     ] as const

@@ -1,0 +1,226 @@
+--- a/foundations/F5-owner-contract.md
++++ b/foundations/F5-owner-contract.md
+@@ -1,4 +1,6 @@
+ # F5: The owner execution model
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **approved (2026-10-14); audit cuts D1–D2 applied** (`AUDIT-2026-10-14.md`). An owner is addressed by an opaque id; Compass chooses which ids exist (F7 §1). Content and streams are in F9. Parameters and cases are in `conformance/F5-owner-contract.md`.
+ 
+@@ -17,7 +19,7 @@
+ | **Single live instance** | at most one holder of that id's current **epoch** (§6) |
+ | **Serialized commands, concurrent execution** | storage work is serialized; awaiting external I/O is not |
+ | **Output gate** | nothing is visible before the outer commit containing it is durable (§2) |
+-| **Durable alarms** | they **wake** the owner. They're triggers, not the work. When an alarm fires, the owner runs today's commands: a due **schedule occurrence** (occurrence identity, exact-due claim, misfire skipping, manual and paused runs, all unchanged; REGISTER §1), delivery availability, worker lease deadlines, settlement and reconciliation. Each command then sets the next alarm to the earliest pending time. Alarms are per owner and replace the global scheduler tick. |
++| **Durable alarms** | they **wake** the owner. They're triggers, not the work. When an alarm fires, the owner runs today's commands: a due **schedule occurrence** (occurrence identity, exact-due claim, misfire skipping, manual and paused runs, all unchanged; REGISTER §1), delivery availability, explicit attempt-loss recovery, owner-driven content protection, settlement and reconciliation. Each command then sets the next alarm to the earliest pending time. Alarms are per owner and replace the global scheduler tick. |
+ 
+ ## 2. Commands
+ 
+@@ -64,14 +66,16 @@
+ - **Operations:** states, cancellation precedence, and "completed doesn't certify success"; internal visibility for detached work; the thread feed (observation keys and selections); 24-hour replay retention.
+ - **Completion boundaries:** an ordinary invocation waits for its terminal receipt; the HTTP result also waits for the Action's own streams; an operation completes when it settles.
+ 
+-### 4.2 Attempt authority and leases
++### 4.2 Owner-controlled attempt authority
+ 
+ | Execution | Liveness and authority | On owner takeover |
+ |---|---|---|
+-| **Local** | attempt identity plus epoch; no wall-clock lease, no heartbeat | older-epoch `leased` deliveries are lost |
+-| **Worker** | lease and heartbeat within an epoch; heartbeats are commands (and renew the worker's open bodies, F9 §3); a failed heartbeat aborts | older-epoch attempts are invalid for mutation; receipt lookup stays allowed (§7) |
++| **Local** | exact current assignment/attempt and owner epoch, plus the private local invocation witness; no per-job lease or renewal heartbeat | older-epoch running attempts lose mutation authority; exact predecessor retirement and recovery eligibility are required |
++| **Worker** | exact current assignment/attempt, owner epoch and authenticated current Started session; no per-job lease or renewal command | older-epoch attempts lose mutation authority; receipt lookup retains its separate rules (§7) |
+ 
+-**A lost attempt is recovered according to its effect state** (§4.5). With no effect begun and attempts remaining, it is reclaimed directly, with attempts incremented. Exhausted work recovers with `DeliveryLeaseExpired`, and recovery terminals and continuations are registered atomically.
++**A lost attempt is recovered according to its effect state** (§4.5). With no effect begun and attempts remaining, a successor may be admitted only after exact predecessor retirement and recovery eligibility, preserving attempt counts and retry availability/backoff for both placements. Exhausted new owner-controlled work recovers with `AttemptLost`; retained `DeliveryLeaseExpired` histories require explicit compatibility handling, and recovery terminals and continuations are registered atomically.
++
++Connection liveness and optional execution deadlines can revoke an attempt but do not prove physical quiescence or an external effect outcome. Retry availability/backoff and content protection keep their independent clocks. The owner renews quiet valid writers in both placements (F9 §3.1).
+ 
+ ### 4.3 Settlement in two phases
+ 1. **Schedule:** a command that changes outstanding work schedules a settlement check.
+--- a/foundations/F9-content-and-streams.md
++++ b/foundations/F9-content-and-streams.md
+@@ -1,4 +1,6 @@
+ # F9: Content and streams
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **approved (2026-10-14); audit cuts D3–D6 and D12 applied** (`AUDIT-2026-10-14.md`). Limits and cases are in `conformance/F9-content-and-streams.md`.
+ 
+@@ -36,7 +38,7 @@
+ 
+ ### 3.1 Protection, renewal, revocation
+ - Protection is an absolute deadline in the catalog.
+-- Renewal is an owner command, independent of the writer's I/O: the owner renews local writers, and a worker's heartbeat renews its own.
++- Renewal is an owner command, driven by the owner independently of writer I/O or worker-job heartbeats. One bounded owner alarm renews quiet valid writers in both placements. Each renewal proves the catalog-bound exact current attempt; a worker additionally requires its current authenticated Started session. Revocation stops renewal. An append or reconnect cannot restore writer authority.
+ - Revocation goes `revoking` → `fence` → `revoked`, totally ordered against renewal. Authority is reassigned only after `revoked`.
+ 
+ ### 3.2 Appends and checkpoints
+--- a/foundations/REGISTER.md
++++ b/foundations/REGISTER.md
+@@ -1,4 +1,6 @@
+ # Guarantee register
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **draft for decision (2026-10-13)**.
+ 
+@@ -84,7 +86,7 @@
+ 
+ | Mechanism | Replaced by |
+ |---|---|
+-| Delivery leases and heartbeats for local execution; `SKIP LOCKED` claims | owner scheduler plus epoch (worker leases stay) |
++| Per-job delivery leases/renewals for local and worker execution; `SKIP LOCKED` claims | exact owner-controlled assignment/attempt/epoch authority, plus the current authenticated worker session; explicit attempt-loss recovery |
+ | Deferred-group admission fences; operation and selection allocation locks | serialized commands |
+ | Schema, index and catalog provisioning locks; Compass provisioning lease | owner-local activation and upgrade |
+ | Shared body-ownership and materialization advisory locks | owner-local retirement protocol (F5 §5.3) |
+--- a/foundations/F4-trust-and-authorization.md
++++ b/foundations/F4-trust-and-authorization.md
+@@ -1,4 +1,6 @@
+ # F4: Trust and authorization
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **approved (2026-10-14); audit cuts D9–D10 applied** (`AUDIT-2026-10-14.md`); **amended 2026-10-16: worker grants (§5.1) replace the worker/remote split.** A product's credential names and channel providers are that product's adapters. Cases are in `conformance/F4-trust-and-authorization.md`.
+ 
+@@ -85,7 +87,7 @@
+ 
+ - **Executing versus initiating.** Delegated work carries **both** identities: the **executing** participant and the **initiating** participant. The initiator is not necessarily a human.
+ - **Authority** is the executing agent's **current** thread and Space, plus its **composed capabilities** (explicit selections; a missing selection grants nothing; an agent can't grant itself) **∩** the Actions the operation allows. Each tool stage rechecks the current grant. Initiator departure does not revoke an agent that still has its own authority. Creator departure does not revoke a developer key. Human access always re-reads membership.
+-- **Bound to the attempt** (F5 §4.2): a delegated scope is valid only while its attempt is current (within the epoch, plus a live lease for workers). Takeover or lease loss ends it. It has no wall-clock expiry of its own.
++- **Bound to the attempt** (F5 §4.2): a delegated scope is valid only while its attempt is current (exact assignment/attempt and owner epoch, plus the current authenticated Started session for workers). Takeover or explicit attempt/session loss ends it. It has no wall-clock expiry of its own.
+ - **Kept:** derived `ask` and `readToolResult` grants; stable Action identity on recovery; both agents' thread participation when a tool calls another agent; private nesting with a bounded depth; `ask` to self is refused.
+ 
+ ## 5.1 Worker grants
+@@ -94,7 +96,7 @@
+ - **Values:** the protected-value slots it may receive, per attempt (F9 §8).
+ - **Kind grants:** computer and connector bindings, as today.
+ 
+-Grants are bound to the attempt like delegation (§5). Takeover or lease loss ends them.
++Grants are bound to the attempt like delegation (§5). Takeover or explicit attempt/session loss ends them.
+ 
+ ## 6. Revocation: what it reaches
+ 
+--- a/foundations/F2-glossary.md
++++ b/foundations/F2-glossary.md
+@@ -1,4 +1,6 @@
+ # F2: Glossary
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **approved (2026-10-14); amended 2026-10-16: "remote" removed, a worker's trust comes from its grants** (previous text: `history/archive/pre-worker-scopes-2026-10-16/`).
+ 
+@@ -14,7 +16,7 @@
+ | **Owner** | The single active instance for an opaque id (F5). It runs commands serially (execution stays concurrent), assigns that id's change sequence, authorizes inside commands, holds connections and fans out changes. **The only writer of the state it owns.** Compass assigns one to each tenant schema and one to the directory (F7 §1). | worker |
+ | **Owner host** | A process (or Durable Object platform) that hosts many owners. | — |
+ | **Epoch** | A number that increases every time a schema's ownership changes. A write from a stale epoch is rejected. | the change sequence |
+-| **Fencing** | A stale epoch cannot mutate: epoch-checked writes, and self-fencing on lease loss. A recorded receipt stays readable (F5 §7). | — |
++| **Fencing** | A stale epoch or execution attempt cannot mutate: epoch-checked writes and exact current attempt/session fences. Any future hosting lease self-fences its owner; it is not a per-job execution lease. A recorded receipt stays readable (F5 §7). | — |
+ | **Gateway** | A stateless role: authenticates callers and routes requests and connections to owners. | owner host |
+ | **Worker** | A **connected compute session** that executes work for an owner, over Oxian's worker protocol. Copilotz's Action workers, a **computer** and a **connector** are all workers. **What a worker may do comes only from its scope's grants** (F4 §5.1), and a worker with no grants gets nothing: its output is untrusted input. With the `ctx` grant it has the same `ctx` as an owner (F5 §7), and its writes are commands the owner commits. | owner; a client (it calls, it doesn't execute work) |
+ | **Admission** | Turning an incoming request or connection into a trusted **scope** through a host-provided callback (`authenticate` for requests, `admit` for connections). | authorization |
+--- a/foundations/F7-storage-and-ownership.md
++++ b/foundations/F7-storage-and-ownership.md
+@@ -1,4 +1,6 @@
+ # F7: Storage and ownership
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **approved (2026-10-14); audit cuts D2 and D11 applied** (`AUDIT-2026-10-14.md`). Cases and rehearsal mechanics are in `conformance/F7-storage-and-ownership.md`.
+ 
+@@ -89,7 +91,7 @@
+ 4. **Copy each owner's events, number them, then lock the log.** Event ids and every dependent reference are preserved. `seq` is backfilled per final owner, and event immutability is restored before activation.
+ 5. **Re-bind protected values that moved,** in the same copy. The binding is schema, namespace, `ownerId`, and slot. `ownerId` is the domain record that owns the secret, not the directory or tenant owner. Slot stays unless the manifest says it moved. The body and every reference move atomically. Historical receipts stay readable.
+ 6. **Migrate content** (F9 §6.4): classify by producer, decide assets with no producer, move locations to logical bodies, remove `@copilotz/action-content` and its maintenance.
+-7. **Seed every pending deadline** on each tenant and on the directory: schedules, delivery availability, leases, settlement, reconciliation, and content retention.
++7. **Seed every pending deadline** on each tenant and on the directory: schedules, delivery availability, optional execution deadlines, content protection, settlement, reconciliation, and content retention. Connection liveness remains distinct; there is no per-job renewal deadline.
+ 8. **Reconcile, then activate.**
+ 
+ **Routing, decided before activation.** Identity reads `{ namespace: "public", databaseSchema: "public" }`. The public tenant's id, namespace, and schema are `tenant_public`. Sign-in and session transfer go to the directory. Changing the default tenant constant does not retarget identity.
+--- a/foundations/OWNER-DESIGN.md
++++ b/foundations/OWNER-DESIGN.md
+@@ -1,4 +1,6 @@
+ # Owner model: design note
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Status: **proposal, revision 3 (2026-10-16), not a spec.** It replaces the scope of `PHASE2-PLAN.md` and `PHASE3-PLAN.md`, which get rewritten from it. Revision 2 is preserved at `history/archive/owner-design-r2-2026-10-16.md`. This revision applies the invariant and coverage clarifications from `history/reviews/owner-design-review-r2.md` and its independent `owner-design-review-r2-code-check.md`, including the corrected HTTP-wrapper semantics. **Astra re-review passed, conditional on the four §11 decisions (`history/reviews/owner-design-review-r3.md`). The user approved §11.1 and §11.2 on 2026-10-16; §11.3–11.4 remain pending.** No frozen spec, approved decision or implementation is changed by this proposal; plan approval and branch choice still precede implementation. Sources also include the three `owner-model-brainstorm` reviews, `phase2-audit.md`, and `HANDOFF.md` §7.2.
+ 
+@@ -48,7 +50,7 @@
+ | **Storage location** | Proposed `(database, schema)` resolution separately from placement; decision §11.3 remains pending. |
+ | **Placement** | Static assignment first. Routing never grants ownership. Named dispatch targets the ready holder of the opaque owner ID; if unavailable it waits or refuses, never falling back to another session advertising the owner type. Ordinary workloads keep today's fallback (`dispatch.ts:130–157` still reserves when `assign` returns undefined). |
+ | **Transport** | In-process events or WebSocket, one invocation interface. **Approved worker calls back to an owner** use the existing connection, authenticated and scoped by grants. Owner/control calls must not queue behind executions they unblock, and the complete HTTP/Action flow must progress or refuse boundedly under saturation (§8). Today only the Hypervisor may send `work.open` (`protocol/types.ts:207–230`); the extension is approved in §11.2 and remains to be specified and implemented. Existing flow control, reservation, cancellation, drain, half-close, resume and ambiguity guarantees remain required. |
+-| **Epochs and connections** | Keep distinct: stable `workerId`; provisioned control-plane `attemptId` (stable across process restarts); worker-incarnation `epoch`; connection fence (`connectionId`, `sessionGeneration`); Copilotz execution attempt/lease; owner ID/epoch. Today's worker identity and connection fence are separate (`protocol/types.ts:21–31`, `supervisor/types.ts:54–66`). One connection may serve several owners; reconnecting is not acquiring. |
++| **Epochs and connections** | Keep distinct: stable `workerId`; provisioned control-plane `attemptId` (stable across process restarts); worker-incarnation `epoch`; connection fence (`connectionId`, `sessionGeneration`); Copilotz exact owner-controlled execution attempt; owner ID/epoch. Today's worker identity and connection fence are separate (`protocol/types.ts:21–31`, `supervisor/types.ts:54–66`). One connection may serve several owners; reconnecting is not acquiring. |
+ | **Lifecycle** | An owner becomes routable only after readiness (F5 §6.5). Activation, retirement and alarm discovery belong to the host. |
+ | **Live changes** | Gap-free sequence, atomic attach, reset on failed push, a repair reader, heartbeats carrying the head (F5 §8). |
+ | **Capacity** | Bounded command queue with backpressure, execution slots per host, bounded caches and snapshot sessions, connection budget per host (F5 §9). Needed for pinned shards too. |
+@@ -93,7 +95,7 @@
+ 
+ ### 5.5 Authority and protected-value delivery
+ 
+-- **Before delivery:** authenticate the recipient and check the required grants for its assigned work. An advertised workload or placement is not authority. Copilotz Action/Processor/HTTP-handler placement on a worker requires its admitted `ctx` grant; protected-value slots remain separate grants. The effective work binding includes worker identity, current connection fence, owner ID/epoch, execution attempt/lease and admitted grants.
++- **Before delivery:** authenticate the recipient and check the required grants for its assigned work. An advertised workload or placement is not authority. Copilotz Action/Processor/HTTP-handler placement on a worker requires its admitted `ctx` grant; protected-value slots remain separate grants. The effective work binding includes worker identity, current connection fence, owner ID/epoch, exact current execution attempt/session and admitted grants.
+ - **HTTP forwarding:** preserve the original authenticated principal, authorized endpoint, route-specific exposure, constraints and provenance. A worker's `ctx` grant cannot replace them. A generic client request cannot bypass its direct route's exposure, while an authorized wrapper can intentionally invoke installed internal Actions without directly exposing every downstream Action. This keeps today's wrapper behavior (`copilotz/server/facade.ts:145–208`). Ordinary admitted internal `ctx` calls retain their authority.
+ - **Protected values:** a slot grant names the protected binding (schema, namespace, domain owner and slot), not just a generic field such as `input`. Input/event delivery, nested results, recovery reads, metadata/progress/error handling and framework-mediated forwarding all respect the recipient attempt's slot grants. Work input or returned data never widens those grants.
+ - **Capture and publication:** only the owner decrypts and seals protected values. Protected outputs are sealed before durable publication; ordinary receipts and observation frames keep safe references/public representations. Retries reuse the first capture but receive plaintext only under the retry's valid slot grant. Reading a receipt does not confer hydration authority. Existing explicitly authorized HTTP result reads remain distinct from public observation frames; this proposal does not remove them (`server/facade.ts:348–357`, `server/operations.ts:42–59`).
+--- a/foundations/conformance/F5-owner-contract.md
++++ b/foundations/conformance/F5-owner-contract.md
+@@ -1,4 +1,6 @@
+ # Conformance: F5 owner contract
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Each case pins a rule in `F5-owner-contract.md`. The bar is one test per REGISTER §1 guarantee, as mapped in `MAP.md`.
+ 
+@@ -37,7 +39,7 @@
+ ## Cases
+ 
+ - A stale epoch's command fails during takeover.
+-- **Group commit:** whole-group rollback; one failing command; a lease expiry crossed inside a group; **a lost `COMMIT` response in a group mixing a compatible duplicate, a rejected conflicting duplicate, a success and a failure**, under both committed and aborted outcomes, including the owner dying mid-commit. After the successor activates, every command with a receipt returns it, and every command without one runs again exactly once.
++- **Group commit:** whole-group rollback; one failing command; an exact attempt/session revocation crossed inside a group; **a lost `COMMIT` response in a group mixing a compatible duplicate, a rejected conflicting duplicate, a success and a failure**, under both committed and aborted outcomes, including the owner dying mid-commit. After the successor activates, every command with a receipt returns it, and every command without one runs again exactly once.
+ - **Stream progress:** checkpoints advance the catalog offset without adding changes to the sequence or a receipt row; a dropped offset push is caught by the heartbeat's payload position.
+ - **Identity domains:** a retry keeps its logical mutation receipts while allocating a **fresh** stream. Heartbeats and alarms never deduplicate against each other.
+ - Two-phase settlement with work admitted during the drain.
+@@ -54,3 +56,10 @@
+ - A dropped last update is detected by the heartbeat head.
+ - The shard map prevents ownership thrash.
+ - Alarms drive schedule occurrences with today's semantics.
++
++## Owner-controlled attempt amendment
++
++- Both placements execute beyond the former per-job lease interval without renewal calls, receipts or running-attempt deadline updates.
++- Revocation during policy, receipt access, COMMIT or acknowledgement suppresses stale mutation/results; unknown commit stays unknown.
++- Exact predecessor retirement, effect reconciliation and retry eligibility precede successor admission. Disconnect alone never proves physical quiescence.
++- Optional deadlines, connection liveness and owner-driven content protection retain independent behavior.
+--- a/foundations/conformance/F9-content-and-streams.md
++++ b/foundations/conformance/F9-content-and-streams.md
+@@ -1,4 +1,6 @@
+ # Conformance: F9 content and streams
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
+ 
+ Each case pins a rule in `F9-content-and-streams.md`.
+ 
+@@ -34,3 +36,11 @@
+ - **Generated output:** pending descriptors for all three content roles; a crash between generation and projection; a retry after adoption committed; an expired pending descriptor is retired.
+ - **Captured inputs:** unchanged inputs replay successfully; deleted content fails `content_missing`.
+ - **Cutover:** classification, migration to producers, and asset locations moved to logical bodies.
++
++## Owner-driven quiet-writer protection
++
++- Quiet local/worker Action and Processor writers survive multiple protection periods on both transports without worker-job renewal calls.
++- Appends, append retries and reconnects never renew protection or revive an old attempt.
++- Each bounded owner renewal proves the catalog-bound exact attempt and current worker session where applicable; revocation during policy or commit refuses stale renewal.
++- Held/unknown physical fencing stays revoking and blocks reassignment; repeated recovery confirms the same generation fence before revoked.
++- Renewal pagination cannot starve later valid writers beyond their absolute protection deadlines.
+--- a/foundations/PHASE3-PLAN.md
++++ b/foundations/PHASE3-PLAN.md
+@@ -1,4 +1,8 @@
+ # Phase 3 plan: Copilotz kernel on Oxian
++
++> Recovery reconciliation, 18 October 2026: restored text predates the user-approved 17 October owner-controlled-attempt amendment. The current authority contract is recorded in `copilotz-views/docs/design/owner-attempt-authority.md`. Per-job leases/renewals are removed for both placements; independent connection liveness, optional execution deadlines and content-protection clocks remain. Original recovered text is preserved under `history/archive/pre-recovery-owner-attempt-reconciliation-2026-10-18`.
++
++> Historical phase allocations below are retained as history. Current coordinated runtime work and accepted scope are tracked in `copilotz-views/docs/design/implementation-status.md`; do not reintroduce worker-job leases from an older allocation.
+ 
+ Status: **paused and superseded in scope (2026-10-16); to be rewritten from `OWNER-DESIGN.md`.** The kernel below is a parallel implementation over `owner_records`, not today's runtime transactions as handlers. Its tests become cases (`OWNER-DESIGN.md` §9, §11.4). Do not start slice 10. Was: in progress (2026-10-14). Scope from `ROADMAP.md` Phase 3: the kernel inside owners, then storage, authorization, the wire protocol, and today's runtime contract tests. Repository: `copilotz`, branch `phase3/deliveries`. Oxian stays the generic owner (`@oxian/oxian-js`, branch `phase2/owner-core`).
+ 

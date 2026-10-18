@@ -1,3 +1,4 @@
+export { actionTransactionIdentity } from "./transaction-identity.ts";
 import {
   type ActionResolution,
   deferredAction,
@@ -27,7 +28,6 @@ import type {
   ActionMap,
   ActionPrepareFactory,
   ActionPrepareOptions,
-  ActionTransactionOptions,
   AnyActionDefinition,
   BoundActionCaller,
   RuntimeActionCallers,
@@ -117,7 +117,8 @@ export type CreateActionCallersOptions = Readonly<{
     }
   >;
   content?: RuntimeContent;
-  createInvocationKey?: (actionId: string) => string;
+  /** Root prefix; explicit keys must not depend on call ordering. */
+  createInvocationKey?: (actionId: string, operationKey?: string) => string;
   /** Stable root scope for deferred Action captures in one processor run. */
   invocationScope?: string;
   identity?: RuntimeIdentity;
@@ -160,36 +161,6 @@ function mergeIdentity(
     deduplicationId: child.deduplicationId ?? parent.deduplicationId,
     settlementScopeId: child.settlementScopeId ?? parent.settlementScopeId,
     actionScopeId: child.actionScopeId ?? parent.actionScopeId,
-  } as const);
-}
-
-/**
- * Carries causal authority into an Action-owned graph transaction. The
- * transaction keeps its own operation-derived deduplication identity unless
- * the Action explicitly supplies one for that transaction.
- */
-export function actionTransactionIdentity(
-  action: RuntimeIdentity | undefined,
-  transaction: ActionTransactionOptions["identity"],
-): ActionTransactionOptions["identity"] {
-  const causationId = transaction?.causationId ?? action?.causationId;
-  const correlationId = transaction?.correlationId ?? action?.correlationId;
-  const settlementScopeId = transaction?.settlementScopeId ??
-    action?.settlementScopeId;
-  const actionScopeId = transaction?.actionScopeId ?? action?.actionScopeId;
-  const deduplicationId = transaction?.deduplicationId;
-  const metadata = transaction?.metadata;
-  if (
-    !causationId && !correlationId && !settlementScopeId &&
-    !deduplicationId && !metadata && !actionScopeId
-  ) return undefined;
-  return ({
-    ...(causationId ? { causationId } : {}),
-    ...(correlationId ? { correlationId } : {}),
-    ...(deduplicationId ? { deduplicationId } : {}),
-    ...(settlementScopeId ? { settlementScopeId } : {}),
-    ...(actionScopeId ? { actionScopeId } : {}),
-    ...(metadata ? { metadata } : {}),
   } as const);
 }
 
@@ -354,7 +325,8 @@ function createFrame(
   const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
   const hostInvocationKey = parent || prepared
     ? undefined
-    : invoker.createInvocationKey?.(action.id)?.trim() || undefined;
+    : invoker.createInvocationKey?.(action.id, explicitKey)?.trim() ||
+      undefined;
   // Root prepared calls replay a durable capture, so neither their stable
   // operation key nor their lifecycle identity may depend on a host callback.
   // Lifecycle storage already isolates the fallback scope by namespace.
@@ -778,6 +750,13 @@ function actionCaller(
     }
   };
   const caller = Object.assign(invoke, {
+    prepareNamed(): Promise<never> {
+      return Promise.reject(
+        Object.assign(new Error("action_prepare_unavailable"), {
+          code: "action_prepare_unavailable",
+        }),
+      );
+    },
     async prepare(
       factory: ActionPrepareFactory<unknown>,
       options: ActionPrepareOptions,

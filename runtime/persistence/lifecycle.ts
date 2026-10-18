@@ -5,9 +5,12 @@ import {
 } from "./ominipg.ts";
 import { createOminipgSqlSession } from "./ominipg.ts";
 import type {
+  SqlExecutor,
   SqlNotification,
   SqlNotificationSubscription,
+  SqlReadSnapshot,
   SqlSession,
+  SqlSnapshotCleanup,
 } from "../events/index.ts";
 
 export type CopilotzDatabase = OminipgDatabaseLike;
@@ -320,6 +323,7 @@ type DatabaseGeneration = {
   database: CopilotzDatabase;
   active: number;
   retired: boolean;
+  lifetime: AbortController;
   closeTask?: Promise<void>;
   startClose?: () => void;
 };
@@ -384,8 +388,16 @@ async function openRecoverablePersistence(
     ...(lastError === undefined ? {} : { lastError }),
   } as const);
 
-  const closeGeneration = (value: DatabaseGeneration): Promise<void> => {
+  const closeGeneration = (
+    value: DatabaseGeneration,
+    reason: unknown = persistenceError(
+      "persistence_indeterminate",
+      value.id,
+      retryAfterSeconds,
+    ),
+  ): Promise<void> => {
     value.retired = true;
+    value.lifetime.abort(reason);
     if (!value.closeTask) {
       value.closeTask = new Promise<void>((resolve) => {
         value.startClose = () => {
@@ -463,6 +475,7 @@ async function openRecoverablePersistence(
       database,
       active: 0,
       retired: false,
+      lifetime: new AbortController(),
     };
     generations.add(current);
     lastError = undefined;
@@ -512,6 +525,9 @@ async function openRecoverablePersistence(
       retryAfterSeconds,
       error,
     );
+    // Revoke retained snapshot handles immediately, before reconnection or
+    // observers can await a replacement. Physical close still waits raw users.
+    void closeGeneration(failed, availability);
     unavailableNotifications = Promise.all([
       notify(
         lifecycle.onUnavailable ? [lifecycle.onUnavailable] : [],
@@ -602,11 +618,22 @@ async function openRecoverablePersistence(
   };
 
   const execute = async <T>(
-    operation: (database: CopilotzDatabase) => Promise<T>,
+    operation: (
+      database: CopilotzDatabase,
+      assertSelected: () => void,
+      lifetime: AbortSignal,
+    ) => Promise<T>,
+    localSignal?: AbortSignal,
+    onNotStarted?: () => void,
   ): Promise<T> => {
-    const selected = await acquire();
+    let selected: DatabaseGeneration;
     try {
-      const result = await operation(selected.database);
+      selected = await acquire();
+    } catch (error) {
+      onNotStarted?.();
+      throw error;
+    }
+    const assertSelected = () => {
       if (state !== "ready" || current !== selected || selected.retired) {
         throw persistenceError(
           "persistence_indeterminate",
@@ -614,9 +641,19 @@ async function openRecoverablePersistence(
           retryAfterSeconds,
         );
       }
+    };
+    try {
+      const result = await operation(
+        selected.database,
+        assertSelected,
+        selected.lifetime.signal,
+      );
+      localSignal?.throwIfAborted();
+      assertSelected();
       return result;
     } catch (error) {
       if (isCopilotzPersistenceError(error)) throw error;
+      if (localSignal?.aborted && error === localSignal.reason) throw error;
       if (unavailable(error)) {
         markUnavailable(error, selected);
         throw persistenceError(
@@ -638,6 +675,130 @@ async function openRecoverablePersistence(
     query: (sql, params) => execute((selected) => selected.query(sql, params)),
     transaction: (operation) =>
       execute((selected) => selected.transaction(operation)),
+    withReadSnapshot: (operation, options) => {
+      // Capture observations independently of later generation/result failures.
+      const observer = options?.onCleanup;
+      let reported = false;
+      const report = (outcome: SqlSnapshotCleanup) => {
+        if (reported) return;
+        reported = true;
+        try {
+          const result = observer?.(outcome);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => {});
+          }
+        } catch { /* Observation cannot replace the operation's outcome. */ }
+      };
+      let signal: AbortSignal | undefined;
+      try {
+        if (observer !== undefined && typeof observer !== "function") {
+          throw new TypeError("Snapshot cleanup observer must be a function.");
+        }
+        signal = options?.signal;
+        signal?.throwIfAborted();
+      } catch (error) {
+        report("confirmed");
+        throw error;
+      }
+      return execute(
+        async (selected, assertSelected, generationSignal) => {
+          let cleanup: SqlSnapshotCleanup = "confirmed";
+          let observations = 0;
+          try {
+            assertSelected();
+            const capability = selected.withReadSnapshot?.bind(selected);
+            if (!capability) {
+              throw new Error(
+                "The selected database does not support scoped snapshots.",
+              );
+            }
+            const lifetime = new AbortController();
+            const abort = () =>
+              lifetime.abort(
+                generationSignal.aborted
+                  ? generationSignal.reason
+                  : signal?.reason,
+              );
+            const reader = (executor: SqlExecutor): SqlExecutor => {
+              const query = executor.query.bind(executor);
+              return Object.freeze({
+                async query<
+                  TRow extends Record<string, unknown> = Record<
+                    string,
+                    unknown
+                  >,
+                >(
+                  sql: string,
+                  params?: unknown[],
+                ) {
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  const result = await query<TRow>(sql, params);
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  return result;
+                },
+              });
+            };
+            try {
+              generationSignal.addEventListener("abort", abort, { once: true });
+              signal?.addEventListener("abort", abort, { once: true });
+              if (generationSignal.aborted || signal?.aborted) abort();
+              // Once invoked, only the backend can confirm this scope's release.
+              cleanup = "unknown";
+              return await capability(async (scope) => {
+                assertSelected();
+                lifetime.signal.throwIfAborted();
+                const snapshot = reader(scope.snapshot);
+                const current = scope.kind === "pooled"
+                  ? scope.current.bind(scope)
+                  : undefined;
+                const wrapped: SqlReadSnapshot = scope.kind === "exclusive"
+                  ? { kind: "exclusive", snapshot }
+                  : scope.kind === "pooled"
+                  ? {
+                    kind: "pooled",
+                    snapshot,
+                    current: async (callback) => {
+                      assertSelected();
+                      lifetime.signal.throwIfAborted();
+                      const result = await current!(async (transaction) => {
+                        assertSelected();
+                        const value = await callback(reader(transaction));
+                        assertSelected();
+                        lifetime.signal.throwIfAborted();
+                        return value;
+                      });
+                      assertSelected();
+                      lifetime.signal.throwIfAborted();
+                      return result;
+                    },
+                  }
+                  : (() => {
+                    throw new Error("Unsupported database snapshot scope.");
+                  })();
+                return await operation(Object.freeze(wrapped));
+              }, {
+                signal: lifetime.signal,
+                onCleanup(outcome) {
+                  observations++;
+                  cleanup = observations === 1 && outcome === "confirmed"
+                    ? "confirmed"
+                    : "unknown";
+                },
+              });
+            } finally {
+              generationSignal.removeEventListener("abort", abort);
+              signal?.removeEventListener("abort", abort);
+            }
+          } finally {
+            report(cleanup);
+          }
+        },
+        signal,
+        () => report("confirmed"),
+      );
+    },
     async listen(channel, handler) {
       const subscription: RecoverableNotificationSubscription = {
         channel,

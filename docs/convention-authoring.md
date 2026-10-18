@@ -11,10 +11,10 @@ status: stable
 ## The pain
 
 A plugin that started as one `definePlugin` call keeps growing. Each new
-Collection, Action or Processor has to be added by hand to the plugin's
-`collections`, `actions` or `processors` map. Forgetting that line leaves a
-declaration that exists in the source but is never registered, and nothing
-complains until a caller finds `context.actions.saveNote` missing.
+Collection, Action, Processor or View has to be added by hand to the plugin's
+`collections`, `actions`, `processors` or `views` map. Forgetting that line
+leaves a declaration that exists in the source but is never registered, and
+nothing complains until a caller finds `context.actions.saveNote` missing.
 
 ## The problem
 
@@ -49,6 +49,7 @@ notes/
   collections/note/index.ts            default-exports defineCollection(...)
   actions/save-note/index.ts           default-exports defineAction(...)
   processors/capture-note/index.ts     default-exports defineProcessor(...)
+  views/note-summary/index.ts          default-exports defineView(...)
   shared/                              helpers reused by several leaves; never an entry
   plugin.generated.ts                  written by the build command; commit it
   dist/plugin.js                       optional bundle from a full build
@@ -61,8 +62,12 @@ A **leaf** is an `index.ts` file at an exact depth with a default export:
 | Collections | `collections/<name>/index.ts`           | `collections[<alias>]`            |
 | Actions     | `actions/<name>/index.ts`               | `actions[<alias>]`                |
 | Processors  | `processors/<name>/index.ts`            | `processors[<alias>]`             |
+| Views       | `views/<name>/index.ts`                 | `views[<alias>]`                  |
 | Resources   | `resources/<namespace>/<name>/index.ts` | `resources[<namespace>][<alias>]` |
 | Adapters    | `adapters/<namespace>/<name>/index.ts`  | `adapters[<namespace>][<alias>]`  |
+
+Views use the bounded [V1 foundation](views.md). This build still emits one
+composition; separate host-role outputs and live UI rendering are not included.
 
 Rules that follow from the build command:
 

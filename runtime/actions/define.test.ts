@@ -56,6 +56,7 @@ Deno.test("defineAction preserves optional schemas and execute typing", () => {
     Promise.resolve({ count: value.query.length });
   const boundCaller = Object.assign(caller, {
     prepare: () => Promise.resolve({ count: 0 }),
+    prepareNamed: () => Promise.resolve({ count: 0 }),
   });
   const callers: ActionCallers<{ search: typeof search }> = {
     search: boundCaller,
@@ -67,6 +68,7 @@ Deno.test("defineAction preserves optional schemas and execute typing", () => {
   assertEquals(input.query, "hello");
   assertEquals(output.count, 5);
   assertEquals(typeof callers.search, "function");
+  assertEquals(typeof callers.search.prepareNamed, "function");
 
   assertEquals(isActionDefinition(search), true);
 });
@@ -136,7 +138,10 @@ Deno.test("defineAction accepts only the one Action descriptor shape", () => {
 Deno.test("runtime Action aliases accept unknown input and invocation metadata", async () => {
   const dynamic = Object.assign(
     (input: unknown) => Promise.resolve(input),
-    { prepare: () => Promise.resolve(undefined) },
+    {
+      prepare: () => Promise.resolve(undefined),
+      prepareNamed: () => Promise.resolve(undefined),
+    },
   );
   const callers: RuntimeActionCallers = Object.freeze({ dynamic });
   const metadata: ActionInvocationMetadata = Object.freeze({
@@ -145,6 +150,7 @@ Deno.test("runtime Action aliases accept unknown input and invocation metadata",
   const input: unknown = { query: "hello" };
 
   assertEquals(await callers.dynamic(input, { metadata }), input);
+  assertEquals(typeof callers.dynamic.prepareNamed, "function");
 });
 
 Deno.test("semantic contexts retain exact Action caller inputs", () => {

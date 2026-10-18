@@ -143,10 +143,12 @@ export function isStreamTerminalStatus(
 ): value is StreamTerminalStatus & Readonly<Record<string, unknown>> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const terminal = value as Record<string, unknown>;
-  return ["completed", "failed", "cancelled"].includes(
-    String(terminal.outcome),
-  ) &&
-    ["retained", "purged"].includes(String(terminal.availability)) &&
+  return typeof terminal.outcome === "string" &&
+    ["completed", "failed", "cancelled"].includes(
+      terminal.outcome,
+    ) &&
+    typeof terminal.availability === "string" &&
+    ["retained", "purged"].includes(terminal.availability) &&
     !Object.hasOwn(terminal, "capture") &&
     !Object.hasOwn(terminal, "cleanupState") &&
     (terminal.reason === undefined ||

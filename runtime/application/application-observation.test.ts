@@ -70,13 +70,13 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     await db.query(
       `INSERT INTO "${schema}"."copilotz_operation_streams" (
          namespace, operation_id, stream_ordinal, stream_id, semantic_stream_id,
-         body_id, descriptor, state, outcome, availability, capture,
+         body_id, descriptor, state, outcome, availability,
          asset_retention, committed_offset, terminal_at, created_at, updated_at
        ) SELECT $1, $2, lane, 'lane-' || lane, 'lane-' || lane, 'body-' || lane,
           jsonb_set($3::jsonb, '{streamId}', to_jsonb('lane-' || lane)),
           CASE WHEN lane = 1002 THEN 'open' ELSE 'terminal' END,
           CASE WHEN lane = 1002 THEN NULL ELSE 'completed' END,
-          'retained', CASE WHEN lane = 1002 THEN NULL ELSE 'complete' END,
+          'retained',
           'observation', 0, CASE WHEN lane = 1002 THEN NULL ELSE NOW() END,
           NOW(), NOW()
        FROM generate_series(1, 1002) AS lane`,
@@ -277,10 +277,10 @@ Deno.test("attachment final pass includes a stream committed during the terminal
       await db.query(
         `INSERT INTO "${schema}"."copilotz_operation_streams" (
         namespace, operation_id, stream_ordinal, stream_id, semantic_stream_id,
-        body_id, descriptor, state, outcome, availability, capture,
+        body_id, descriptor, state, outcome, availability, availability_reason,
         asset_retention, committed_offset, terminal_at, created_at, updated_at
       ) VALUES ('tenant','operation',1,'late-stream','late-stream','late-body',$1::jsonb,
-        'terminal','completed','missing','complete','observation',0,NOW(),NOW(),NOW())`,
+        'terminal','completed','purged','missing','observation',0,NOW(),NOW(),NOW())`,
         [JSON.stringify(descriptor)],
       );
       await db.query(`UPDATE "${schema}"."copilotz_operations"

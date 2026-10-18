@@ -504,6 +504,8 @@ Deno.test("multipart validates simplified outcomes, causes and byte availability
       { ...error("failed", "provider_error"), code: "stream_cancelled" },
       { ...error("failed", "provider_error"), streamId: "other" },
       { ...error("failed", "provider_error"), type: "other" },
+      { ...error("failed", "provider_error"), outcome: ["failed"] },
+      { ...error("failed", "provider_error"), availability: ["retained"] },
       { ...error("completed", "invalid"), code: undefined },
     ]
   ) {

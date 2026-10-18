@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 13:50 UTC.
+Updated: 18 October 2026, 14:17 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -21,6 +21,14 @@ application migration. Preserve the current content safety checkpoint and
 complete the remaining functionality, recovery, public APIs, cleanup and library
 validation first. Preparing the acceptance contract can run alongside this;
 implementing the new project must not displace the unfinished refactor.
+
+The acceptance project must be **Node.js-based**, with `actions/`, `adapters/`,
+`collections/`, `processors/`, `views/` and `resources/` at its root. Its UI
+must be implemented **exclusively through Views**. Full-stack frontend
+capability is part of the current refactor; text-only Views or a separate
+hand-written UI containing a few Views do not satisfy this requirement. Node
+execution and actual browser evidence are separate from the existing Deno test
+evidence.
 
 ## Current priority
 

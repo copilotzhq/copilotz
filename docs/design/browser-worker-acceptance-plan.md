@@ -1,6 +1,6 @@
 # Finish the owner refactor through a browser-worker acceptance project
 
-Updated: 18 October 2026, 13:50 UTC.
+Updated: 18 October 2026, 14:17 UTC.
 
 ## Finish line and scope
 
@@ -8,11 +8,15 @@ Complete the owner-based Copilotz refactor, then migrate Compass, including its
 frontend, onto that foundation. A small project is the first end-to-end proof,
 not a substitute for completing the approved refactor backlog.
 
-The agreed first project has **two real agents, built-in and custom tools, a
-local server owner, and all authored Actions/Processors/agent work in the
-browser**. It consumes ordinary public package exports from a pinned draft
-dependency cohort. No internal owner-host imports, injected test-only transport
-factory, server execution fallback, or ordinary Action masquerading as an agent.
+The agreed first project is **Node.js-based**, with **two real agents, built-in
+and custom tools, a local Node.js server owner, and all authored Actions,
+Processors and agent work in the browser**. Its UI is implemented **exclusively
+through Views**. That full-stack frontend capability belongs to the current
+Copilotz refactor, not a separate hand-written UI application.
+
+The project consumes ordinary public package exports from a pinned draft cohort.
+No internal owner-host imports, injected test-only transport factory, server
+execution fallback, or ordinary Action masquerading as an agent.
 
 No merge, package publication, production deployment or production database
 migration is authorized by this plan.
@@ -22,12 +26,16 @@ migration is authorized by this plan.
 - Browser worker: both agents, agent delegation, model orchestration, authored
   Actions and Processors, browser-compatible built-in tools, custom tools, and
   frontend rendering
-- Local owner: trusted authorization, schema and transaction enforcement,
-  durable events/operations, content catalog/storage, subscriptions and work
-  dispatch
+- Local Node.js owner: trusted authorization, schema and transaction
+  enforcement, durable events/operations, content catalog/storage, subscriptions
+  and work dispatch
 - Collection commands from browser code travel through the owner connection; the
   browser never opens the owner's database
-- View data selection remains owner-authorized; UI rendering runs in the browser
+- View data selection remains owner-authorized; UI rendering runs in the
+  browser. Screens, layout, navigation, forms, interactions, state and reactive
+  updates are expressed through Views and framework-provided bindings. A
+  separate hand-written UI application with a few embedded Views does not
+  satisfy this goal
 - When no browser worker is available, browser-assigned work remains pending or
   follows its explicit interruption policy. The server must not silently run it
 - Browser credentials/CORS are explicit constraints. The first built-in tools
@@ -51,14 +59,28 @@ Use a deterministic model provider for repeatable CI, preserving the real Core
 agent, tool, content and execution pipeline. Add one real-provider smoke test
 through an approved credential path before claiming complete application proof.
 
-Suggested project layout (separate from the library test harness):
+Required project structure follows Copilotz primitives at the project root:
 
-- `shared/`: agents, tools, Actions, Processors, Collections and Views
-- `owner/`: server entry, local persistence and trusted admission policy
-- `web/`: UI entry and dedicated browser worker entry
+- `actions/`: custom durable business Actions
+- `adapters/`: provider and integration adapters
+- `collections/`: task/document definitions
+- `processors/`: committed-event processing
+- `views/`: **all** authored frontend UI, layout and interaction
+- `resources/`: both agent definitions, tool resources and configuration
+- Root `application.ts` and `worker.ts`: minimal Node owner/browser-worker
+  bootstraps
+- Root `copilotz.json`, `package.json` and Node-compatible build configuration
 - `tests/`: external process/browser acceptance tests
-- `deno.json` / frontend package manifest: exact draft dependency cohort
-- `README.md`: clean-checkout run, reset, test and failure-reproduction commands
+- `README.md`: clean-checkout run/reset/test commands and draft dependency
+  cohort
+
+Do not replace this with a `shared/`, `owner/`, `web/` application architecture.
+The framework may generate its browser shell and mounting code, but authored UI
+belongs to Views. A rendering adapter may use React internally; that does not
+make a standalone React application an acceptable substitute for View
+primitives. The acceptance project's server/tooling must run on Node.js without
+requiring a Deno runtime installation. Deno-based library tests alone are not
+Node evidence.
 
 The intended DX remains one `createCopilotz`: storage configuration selects the
 owner; an owner connection selects a worker. The worker package entry must share
@@ -87,8 +109,14 @@ items in `implementation-status.md`:
   connected plugin workers and complete placement parity
 - Core/providers: real model/message routing, deferred preparation/agent work,
   content-aware providers, channel rendering/egress and remaining conversions
-- Views/clients: public HTTP/read/observation contracts, authorized live data,
-  browser/React support and removal of legacy-engine coupling from client APIs
+- Full-stack Views/clients: public HTTP/read/observation contracts, authorized
+  live data, frontend rendering/composition, navigation and interaction
+  bindings, browser state/subscriptions and removal of legacy-engine coupling
+  from client APIs. The complete application UI must be implementable
+  exclusively as Views
+- Node.js delivery: ordinary Node owner startup, npm-compatible package/build
+  surfaces and actual Node execution evidence for the validated dependency
+  cohort
 
 Finish the actual library functionality before moving into the new project. Do
 not leave the default factory on the old engine and call the refactor done.
@@ -116,7 +144,11 @@ publication.
 ### M2. Build the separate two-agent browser acceptance project
 
 - Consume public package artifacts from the exact validated draft cohort
-- Start a local server owner and connect a real dedicated browser worker over WS
+- Start a local Node.js owner and connect a real dedicated browser worker over
+  WS
+- Keep Actions, adapters, Collections, Processors, Views and resources at root
+- Author the entire frontend through Views, using only framework-generated
+  shell/bootstrap code
 - Run both agents, built-in/custom tools, Actions and Processors in the browser
 - Implement the full Researcher → Writer → document → Processor → live View flow
 - Use real Core and content behavior; no private imports, injected internal
@@ -144,8 +176,9 @@ checkout. Passing internal tests alone is insufficient.
 - Use the actual current Compass source and preserve its existing feature set
 - Start with a real chat → agent/tool → document → live UI vertical
 - Migrate remaining agents, workspace resources, jobs and integrations
-- Replace callback-driven frontend refreshes with authorized live Views where
-  appropriate; preserve navigation, drafts, auth and tenant isolation
+- Implement the migrated frontend through Views, including screens and
+  interaction; replace callback-driven refreshes with authorized live state
+  while preserving navigation, drafts, auth and tenant isolation
 - Rehearse schema/cutover behavior on disposable data before production approval
 
 Exit: the migrated Compass UI passes its own feature/recovery acceptance matrix
@@ -161,23 +194,23 @@ remain untriggered until that approval.
 
 ## Minimum external acceptance matrix
 
-| ID  | Scenario               | Required observable result                                  |
-| --- | ---------------------- | ----------------------------------------------------------- |
-| A01 | Clean start            | No external DB prerequisite; owner and browser worker ready |
-| A02 | Browser-only execution | Real agents/tools/Actions/Processors execute in browser     |
-| A03 | Two-agent flow         | Delegation completes and persists one document/task result  |
-| A04 | Built-in/custom tools  | Both real tool paths execute through ordinary Core          |
-| A05 | DB ownership           | No DB driver/storage capability in browser artifact         |
-| A06 | Completed content      | Ordered accepted output, terminal state and readback        |
-| A07 | Live Views             | Two browser observers update from committed state           |
-| A08 | Idempotent retry       | Lost submit reply does not duplicate the durable mutation   |
-| A09 | Worker loss            | No stale completion or silent server execution fallback     |
-| A10 | Reconnect/restart      | History and supported recovery survive process boundaries   |
-| A11 | Stop/detach            | Detach does not impersonate cancellation; Stop propagates   |
-| A12 | Scope isolation        | Unauthorized Views, body reads and mutations refuse         |
-| A13 | Actual drain           | Shutdown joins real raw calls and physical cleanup          |
-| A14 | Resource/load bounds   | Recorded SQL, latency and memory; bounded admission/drain   |
-| A15 | Compass parity         | Real migrated application/frontend acceptance matrix passes |
+| ID  | Scenario               | Required observable result                                                         |
+| --- | ---------------------- | ---------------------------------------------------------------------------------- |
+| A01 | Clean start            | Node.js server/tooling; no Deno or external DB prerequisite; owner/browser ready   |
+| A02 | Browser-only execution | Real agents/tools/Actions/Processors execute in browser                            |
+| A03 | Two-agent flow         | Delegation completes and persists one document/task result                         |
+| A04 | Built-in/custom tools  | Both real tool paths execute through ordinary Core                                 |
+| A05 | DB ownership           | No DB driver/storage capability in browser artifact                                |
+| A06 | Completed content      | Ordered accepted output, terminal state and readback                               |
+| A07 | Live Views             | Entire UI is authored via Views; two browser observers update from committed state |
+| A08 | Idempotent retry       | Lost submit reply does not duplicate the durable mutation                          |
+| A09 | Worker loss            | No stale completion or silent server execution fallback                            |
+| A10 | Reconnect/restart      | History and supported recovery survive process boundaries                          |
+| A11 | Stop/detach            | Detach does not impersonate cancellation; Stop propagates                          |
+| A12 | Scope isolation        | Unauthorized Views, body reads and mutations refuse                                |
+| A13 | Actual drain           | Shutdown joins real raw calls and physical cleanup                                 |
+| A14 | Resource/load bounds   | Recorded SQL, latency and memory; bounded admission/drain                          |
+| A15 | Compass parity         | Full Compass frontend uses Views and its feature/recovery acceptance matrix passes |
 
 Internal regressions remain valuable supporting evidence. Implementation work
 first completes the current approved refactor backlog. These consumer scenarios

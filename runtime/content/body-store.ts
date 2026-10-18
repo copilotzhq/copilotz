@@ -548,7 +548,7 @@ export function createMemoryBodyStore(
       leaseExpiresAt: number;
       updatedAt: number;
       chunks: Uint8Array[];
-      appendIds: Map<string, Uint8Array>;
+      appendIds: Map<string, Readonly<{ offset: number; bytes: Uint8Array }>>;
     }
   >();
   const withLease = (
@@ -816,12 +816,13 @@ export function createMemoryBodyStore(
       }
       const duplicate = entry.appendIds.get(input.appendId);
       if (duplicate) {
-        const same = duplicate.byteLength === input.bytes.byteLength &&
-          duplicate.every((byte, index) => byte === input.bytes[index]);
+        const same = duplicate.offset === input.expectedOffset &&
+          duplicate.bytes.byteLength === input.bytes.byteLength &&
+          duplicate.bytes.every((byte, index) => byte === input.bytes[index]);
         if (!same) {
           throw createContentError(
             "asset_conflict",
-            "Progressive append id was reused with different bytes.",
+            "Progressive append id was reused with a different offset or bytes.",
           );
         }
         return Promise.resolve(
@@ -849,7 +850,10 @@ export function createMemoryBodyStore(
       } as const;
       const bytes = input.bytes.slice();
       entry.chunks.push(bytes);
-      entry.appendIds.set(input.appendId, bytes);
+      entry.appendIds.set(input.appendId, {
+        offset: input.expectedOffset,
+        bytes,
+      });
       mutable.set(input.writer.bodyId, {
         head,
         leaseExpiresAt,

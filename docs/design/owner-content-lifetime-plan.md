@@ -66,10 +66,35 @@ Normal typechecking, eight-file lint/format and source hashes pass. All 63
 fixture databases and their coordinator were exported/dropped; sessions and
 leftovers were absent and PostgreSQL stopped.
 
-This establishes storage-format isolation only. The database writer adapter is
-being implemented separately. S3, catalog-bound authority, owner renewal and
+This establishes storage-format isolation only. The database writer adapter has
+separate scoped results below. S3, catalog-bound authority, owner renewal and
 execution routing remain pending; neither public content admission nor a
 production migration is enabled.
+
+## Private database writer checkpoint
+
+The private database adapter now uses real transactions for create-only reserve,
+offset/byte-bound append replay and readable, idempotent fencing, including
+absent-key tombstones. It retains the original reservation generation and
+exposes its successor only in a fenced head. It never renews, reassigns, adopts
+or deletes a tentative tail. Indexed range selection proves contiguous coverage
+from metadata before transferring payload bytes; malformed coverage returns no
+payload and refuses the read.
+
+Independent scoped gates pass 113 PostgreSQL and 105 PGlite compatibility cases,
+14 PostgreSQL adversarial cases and three applicable PGlite cases. Eight
+PostgreSQL-only compatibility cases remain explicit PGlite skips. The PostgreSQL
+gate covers held row/unique-insert race orders and ten real COMMIT-loss
+outcomes, including a successor fence waiting for an unresolved append
+transaction. Normal typecheck, lint/format, hashes and disposable database
+cleanup pass.
+
+A separate provider-only control reproduces late uncaught error text without
+this adapter. Bare Deno exits successfully after cleanup and its exception
+monitor does not fire, so host termination is not demonstrated. Source review
+identifies missing ownership of native PostgreSQL client/pool error events. That
+Ominipg correction remains a blocker to end-to-end fault containment; the
+physical transaction results are not a blanket clean integration claim.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

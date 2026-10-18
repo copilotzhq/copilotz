@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 05:50 UTC.
+Updated: 18 October 2026, 06:06 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -27,7 +27,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: memory/schema checked    | [Memory fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; DB/S3 writers and owner integration remain open                                                    |
+| Content writer lifetime              | WIP: DB physical checked      | [Memory/DB fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; provider fault containment, S3 and owner integration remain open                                |
 | Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -451,6 +451,9 @@ what it simplifies and eliminates before adding machinery.
       documentation
 - [ ] Obtain explicit merge/publication approval; no release is currently
       authorized
+
+- [ ] Contain native PostgreSQL client/pool error events through existing
+      diagnostics without changing unknown COMMIT or cleanup accounting
 
 ## 7. Consolidation and legacy retirement
 

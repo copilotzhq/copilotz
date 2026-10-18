@@ -541,42 +541,54 @@ stopped. The real invocation's checkpoint-failure latch, serialization/cadence,
 raw-call lifetime and final route witness still require integration. An internal
 receipt replay test does not authorize a failed authored invocation to resume.
 
-## Actual owner host catalog migration: validation in progress
+## Actual owner host catalog migration: reviewed checkpoint
 
 The actual host now constructs the six-member owner core and provisions or
 validates the fixed owner format. Startup validates the same retained layout.
 Ordinary Action and Processor event admission/indexing runs through that core.
 Only execution and terminal recovery receive an explicit recovery hook: it uses
 the same transaction and refuses any stream row in the operation, including
-hidden or revoked rows. It is never a silent no-op or a fallback to legacy
-stream mutation.
+hidden or revoked rows. It never falls back to legacy stream mutation.
 
 Owner settlement reads require the owner fingerprint and refuse stream evidence
 before both live and terminal shortcuts. The final UPDATE independently checks
-all-state absence, covering rows admitted after lifecycle append. Startup keeps
-its existing durable unsupported-stream blocker alarms before calling this
-helper. Public legacy catalog reconciliation keeps its original predicate.
+all-state absence after lifecycle append. Startup keeps its existing durable
+unsupported-stream blocker alarms before calling this helper. Public legacy
+catalog reconciliation retains its original predicate.
 
-This activates the ordinary owner catalog, not stream execution or
-public/default composition. Legacy-format schemas are rejected without
-conversion. Real stream recovery replaces the explicit content refusal only when
-physical fencing and catalog acceptance are integrated. Existing exclusive
-fresh-setup requirements remain unchanged; this is not a production migration
-protocol.
+Fresh host setup holds the existing shared schema-provision lock in one outer
+SQL transaction, with all four existing provisioners joining it. An existing
+catalog metadata relation selects exact validation-only reopen, even if its
+marker is malformed or missing. Fully committed setup with no epoch can be
+retried explicitly after a lost acknowledgement; partial or foreign formats are
+never repaired. Acquisition and readiness retain their separate fences. The
+standalone provisioners do not acquire a new generic migration protocol.
 
-Root checks pass actual Processor flows, both-transport local Actions, canonical
-resume, all-state stream refusal and same-transaction rollback. The
-pre-bootstrap-correction independent PostgreSQL matrix passes 364 cases; its two
-guard-removal controls fail at the intended assertions, and 449 owned databases
-across that matrix and bootstrap probes were exported/dropped. The
-interrupted-setup failures were reproduced on both backends. Corrected root
-bootstrap checks pass six cases, including all four provisioning rollback
-stages. Targeted corrected PostgreSQL and a final-source broad PGlite gate are
-pending; these are separate snapshots, not a coherent full-suite claim.
-Full-static reachability now finds six unwired modules rather than eight through
-genuine owner catalog/schema consumers. Earlier fixture provisioning,
-error-cause and conservative capacity-expectation failures remain recorded;
-production checks and capacity semantics were not relaxed to make them pass.
+Physical namespace separation is enforced by the shared catalog validator before
+startup inventory. Coexisting content_bodies/content_body_parts cause schema
+refusal, not physical-storage blocker-alarm repair. Two stable resolved alarm
+identities remain repairable once validation proves those relations absent,
+without repeating SQL existence scans. Core event_bodies evidence remains
+independently checked.
+
+Independent pre-bootstrap-correction PostgreSQL evidence passes 364 cases and
+preserves two failing guard-removal controls. Interrupted setup was reproduced
+on both backends; 449 owned databases across those runs were exported/dropped.
+Corrected acceptance passes 70 PostgreSQL tests plus 46 schema steps and 381
+PGlite tests plus 46 steps, with one explicit PostgreSQL-only skip.
+Saved-old-host interruption controls fail on both backends while corrected
+controls pass. All 103 corrected-stage owned databases were exported/dropped,
+PostgreSQL stopped, and source/dependency hashes match. These are separate
+snapshots, not a coherent full-suite claim. Full-static reachability now finds
+six unwired modules rather than eight through genuine owner catalog/schema
+consumers.
+
+Earlier fixture provisioning, generic-query typing, multi-statement fixture,
+error-cause and conservative capacity-expectation failures remain recorded.
+Production checks and capacity semantics were not relaxed. This activates the
+ordinary owner catalog, not stream execution, public/default composition or a
+production migration. Real content recovery replaces the explicit no-stream
+refusal only when fencing and catalog acceptance are integrated.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

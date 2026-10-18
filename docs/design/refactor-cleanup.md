@@ -194,7 +194,7 @@ stopped with no sessions or leftovers, and source/dependency hashes match. The
 same eight-module package reachability blocker remains. The separate host
 catalog migration has not started in this checkpoint.
 
-### Actual owner catalog migration: candidate under validation
+### Actual owner catalog migration: scoped acceptance
 
 The host now imports the fixed six-member owner core instead of constructing the
 full legacy catalog. Its ordinary consumers share that core; only execution and
@@ -212,10 +212,13 @@ identities remain. One test-only owner catalog fixture replaces repeated
 provisioning/recovery scaffolding; it adds no production mode or facade.
 
 Independent pre-correction PostgreSQL evidence passes 364 cases. The reproduced
-interrupted-bootstrap defect is fixed and root bootstrap regressions pass;
-corrected backend acceptance is pending. Six modules still need genuine content
-execution consumers. Public/default composition and actual stream recovery are
-not completed by this migration.
+interrupted-bootstrap defect is fixed. Corrected acceptance passes 70 PostgreSQL
+and 381 PGlite tests, each with 46 schema steps; PGlite has one explicit
+PostgreSQL-only skip. Saved-old-host controls preserve the causal failure. All
+103 corrected-stage owned databases were exported/dropped, PostgreSQL stopped,
+and frozen source/dependency hashes match. Six modules still need genuine
+content execution consumers. Public/default composition and actual stream
+recovery are not completed by this migration.
 
 ## Required evidence for each cleanup checkpoint
 

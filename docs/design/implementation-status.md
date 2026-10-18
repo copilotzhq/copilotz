@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 11:09 UTC.
+Updated: 18 October 2026, 11:29 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -14,20 +14,24 @@ The 18 October [retirement review](refactor-cleanup.md) prioritizes real caller
 migration and deletion over additional isolated owner components. The reviewed
 append/checkpoint gate is pushed and the dormant classifier is removed with its
 missing safety cases moved to actual startup. The actual host now uses the fixed
-owner core; corrected backend validation is running before scoped acceptance.
-Compatibility tests preserve behavior; permanent dual runtimes are not a goal.
+owner core with scoped backend acceptance. Next, integrate content lifetime
+through real invocation routes, cleanup and settlement together. Compatibility
+tests preserve behavior; permanent dual runtimes are not a goal.
 
 The classifier cleanup preserves the used alarm identity and target type. Its
 four missing safety counterexamples now exercise the surviving startup path. It
-adds no replacement service or mode. Full-static reachability still reports
-eight unwired modules; this is scoped cleanup acceptance, not a release gate.
+adds no replacement service or mode. At that cleanup checkpoint, full-static
+reachability reported eight unwired modules; that was scoped cleanup acceptance,
+not a release gate.
 
-The host-catalog candidate has 364 passing pre-correction PostgreSQL cases and
-root passing actual execution/negative checks. Interrupted provisioning exposed
-a real retry defect; setup now commits atomically and reopens by validation
-only. Six focused corrected root cases pass. Targeted corrected PostgreSQL and
-one final-source broad PGlite run are pending. The package reachability guard
-now reports six unwired modules, down from eight through real host imports.
+The host-catalog migration is independently accepted in scope: corrected
+PostgreSQL 70 tests plus 46 schema steps, final-source PGlite 381 tests plus 46
+steps and one explicit PostgreSQL-only skip. The earlier 364-case PostgreSQL
+matrix remains pre-correction evidence. Interrupted setup was reproduced on both
+backends and fixed with atomic provisioning plus validation-only reopen. The
+corrected stage exported/dropped 103 owned databases and stopped PostgreSQL;
+source/dependency hashes match. Six modules still need real content consumers,
+down from eight through actual host imports. This is not a full-suite gate.
 
 ## Current work
 
@@ -49,7 +53,7 @@ now reports six unwired modules, down from eight through real host imports.
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
 | Content writer lifetime              | WIP: stores/schema checked    | [Physical stores and fresh owner schema](owner-content-lifetime-plan.md) checked; commands, execution and package wiring remain open                                                  |
-| Architecture cleanup                 | In progress                   | Dormant classifier removed; actual host fixed-core migration implemented with atomic setup, corrected backend validation pending                                                      |
+| Architecture cleanup                 | In progress                   | Dormant classifier retired; actual host fixed-core/atomic setup accepted: corrected PG70/PGlite381; real content routes next                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
 reconstructed integration have since completed fresh scoped PostgreSQL/PGlite
@@ -551,8 +555,8 @@ published dependency pins and public activation remain unchanged.
 
 - [x] Remove dormant reconciliation classifier and duplicate fixture; carry four
       missing safety cases into actual startup, with independent PG51/PGlite51
-- [ ] Migrate actual owner host/startup/settlement to fixed owner catalog;
-      implementation and atomic-setup correction done, backend review pending
+- [x] Migrate actual owner host/startup/settlement to fixed owner catalog;
+      atomic setup/retry and refusal gates accepted: corrected PG70/PGlite381
 
 - [x] Measure the PR additions and distinguish production code from tests/docs
 - [x] Document each legacy runtime's proposed replacement and deletion gates in

@@ -1,6 +1,6 @@
 # Finish the owner refactor through a browser-worker acceptance project
 
-Updated: 18 October 2026, 13:45 UTC.
+Updated: 18 October 2026, 13:50 UTC.
 
 ## Finish line and scope
 
@@ -66,88 +66,98 @@ that implementation while keeping database/server modules out of its artifact.
 
 ## Ordered delivery milestones
 
-### M0. Freeze the contract and bootstrap the consumer
+**Required order: finish the current complete owner refactor → run the new
+browser project as its end-to-end acceptance gate → migrate Compass/frontend.**
+The acceptance contract can be prepared now. Building a new application must not
+replace the unfinished implementation or reduce the approved backlog.
 
-- Preserve the current content safety work as an explicitly unaccepted draft
-- Record exact Copilotz/Oxian/Ominipg commits and artifact/import mappings
-- Scaffold the separate project and browser test runner
-- Exercise the public owner and browser-worker construction path first
-- Report unsupported public APIs as failing consumer scenarios, not workarounds
+### M0. Finish the current owner-based implementation
 
-Exit: a clean checkout starts the local owner, loads the browser and connects a
-real browser worker over WebSocket through the intended public API. Runtime
-records demonstrate owner execution; the old embedded branch cannot satisfy it.
+Complete every remaining approved library workstream, retaining the detailed
+items in `implementation-status.md`:
 
-### M1. Complete the genuine two-agent execution path
+- Content: finish current lifetime safety, successful close/seal, retain/follow,
+  accepted-prefix readback, current copies, promotion and retained references
+- Recovery: retained history/takeover, replay of already-admitted stages,
+  continuation/parked execution, durable handoff, cancellation and settlement
+- Data/authority: remaining read/query/vector/snapshot/subscription integration,
+  protected values/credential slots, cross-owner and remaining wire contracts
+- Public composition: one supported `createCopilotz` construction model,
+  ordinary embedded defaults without an external DB, owner-only serving,
+  connected plugin workers and complete placement parity
+- Core/providers: real model/message routing, deferred preparation/agent work,
+  content-aware providers, channel rendering/egress and remaining conversions
+- Views/clients: public HTTP/read/observation contracts, authorized live data,
+  browser/React support and removal of legacy-engine coupling from client APIs
 
-- Enable ordinary Core composition, preparation/deferred resolution and child
-  work
-- Complete successful stream close/seal, retain/follow and content readback;
-  abort-only streams do not satisfy real agent execution
-- Connect built-in/custom tools and custom Processor execution in the browser
-- Route all persistent mutations and reads through the owner
+Finish the actual library functionality before moving into the new project. Do
+not leave the default factory on the old engine and call the refactor done.
 
-Exit: the full Researcher → Writer → document → Processor workflow completes,
-with durable results and accepted output. Browser/server traces establish where
-work executed. A server-side authored-work fallback deliberately fails the test.
+Exit: each remaining requirement has implementation and scoped evidence, or is
+still explicitly open. Any proposed scope change requires a decision; absence
+from the small demo does not justify deferral.
 
-### M2. Complete public frontend data and observation APIs
+### M1. Consolidate, retire and validate the completed refactor
 
-- Adapt the existing generic server/client contract to owner application
-  services
-- Provide authorized list/detail Views and live subscriptions
-- Implement reconnect/checkpoint repair and preserve local unsaved drafts
-- Verify scope filtering before pagination or content disclosure
+- Migrate all still-supported library/plugin callers and remove replaced
+  composition branches, wrappers, option types and lease-era responsibility
+- Reconcile every unchecked item across all seven checklist workstreams
+- Pass public package reachability and browser/worker role boundaries without
+  weakening allowlists or exporting private implementations solely for the guard
+- Complete backend, recovery/failure, full regression and resource-bound gates
+- Establish the supported protection/capacity envelope, preserving prior
+  overload evidence rather than hiding it through test timing changes
+- Record the exact draft dependency cohort and migration/operational docs
 
-Exit: two authorized browser observers see the committed document/task update
-without tool-name refresh counters or manual refresh. Reload/reconnect preserves
-history and does not duplicate mutations. An unauthorized scope sees no data.
+Exit: current refactor implementation and library validation are complete,
+**pending the separate end-to-end acceptance gate below**. No merge or
+publication.
 
-### M3. Finish owner recovery and lifecycle parity
+### M2. Build the separate two-agent browser acceptance project
 
-- Retry the same submission after a lost reply; verify one durable mutation
-- Disconnect/terminate a browser worker during tool/Processor/stream work
-- Restart the owner and restore completed history and supported interrupted work
-- Distinguish observer detach, explicit Stop and worker disappearance
-- Prove cancellation, pending work, retry, continuation and physical cleanup
-- Test a second browser worker taking eligible work without reviving the old
-  attempt
+- Consume public package artifacts from the exact validated draft cohort
+- Start a local server owner and connect a real dedicated browser worker over WS
+- Run both agents, built-in/custom tools, Actions and Processors in the browser
+- Implement the full Researcher → Writer → document → Processor → live View flow
+- Use real Core and content behavior; no private imports, injected internal
+  factories, fake browser execution or server business-work fallback
+- Add clean-checkout run/reset/test commands and browser/server traces
 
-Exit: each failure has a documented expected result, persisted evidence and an
-external test. Unknown outcomes stay explicit. No test adopts a tentative stream
-suffix or assumes exactly-once execution of an arbitrary external side effect.
+Exit: one actual browser workflow completes through the intended public API with
+owner-owned persistence and truthful streamed/completed content.
 
-### M4. Finish the complete refactor and retire replaced paths
+### M3. Run the outside-in acceptance gate
 
-- Map every unchecked item in `implementation-status.md` to an implementation
-  and acceptance test; uncovered approved scope remains open
-- Complete remaining query/vector/protected-value/content/provider contracts,
-  public placement/default composition and supported recovery semantics
-- Make normal embedded/default construction use the same completed owner model;
-  no external PostgreSQL service becomes a prerequisite
-- Remove replaced composition branches, wrappers and lease-era responsibility
-  once all their still-supported callers are migrated
-- Pass package reachability and browser/worker role boundaries without weakening
-  allowlists or exporting private implementations just to satisfy the checker
-- Run coherent backend, full regression, failure/load and resource-bound gates
+- Exercise every applicable A01–A14 scenario below in real browser/processes
+- Test two observers, lost replies, reconnect, worker termination, owner
+  restart, explicit Stop, retained history, live Views and scope/credential
+  isolation
+- Keep the deterministic provider for repeatability and add an approved real
+  provider smoke test without browser-bundled long-lived secrets
+- Any newly exposed implementation gap returns to M0/M1 before acceptance
 
-Exit: the small project passes and the complete refactor checklist is
-reconciled. The demo alone cannot mark unrelated open requirements complete. Any
-scope change needs an explicit decision rather than an implicit deferral.
+Exit: another developer can reproduce the end-to-end checks from a clean
+checkout. Passing internal tests alone is insufficient.
 
-### M5. Migrate Compass and refactor its frontend
+### M4. Migrate Compass and refactor its frontend
 
 - Use the actual current Compass source and preserve its existing feature set
 - Start with a real chat → agent/tool → document → live UI vertical
-- Migrate its remaining agents, workspace resources, jobs and integrations
+- Migrate remaining agents, workspace resources, jobs and integrations
 - Replace callback-driven frontend refreshes with authorized live Views where
   appropriate; preserve navigation, drafts, auth and tenant isolation
 - Rehearse schema/cutover behavior on disposable data before production approval
 
-Exit: the migrated Compass UI passes its own feature and recovery acceptance
-matrix against the new architecture. Final review includes reproducible
-commands, exact dependency versions, migration/operations documentation and
-explicit merge/publication/deployment approval.
+Exit: the migrated Compass UI passes its own feature/recovery acceptance matrix
+against the completed owner architecture (A15).
+
+### M5. Final review and explicitly approved release
+
+Present exact dependency versions, reproducible commands, test/failure evidence,
+retirement diff, migration requirements and rollback/operational guidance.
+Obtain explicit approval before dependency merges/publication, Compass
+deployment or production database changes. Existing release pipelines must
+remain untriggered until that approval.
 
 ## Minimum external acceptance matrix
 
@@ -169,9 +179,9 @@ explicit merge/publication/deployment approval.
 | A14 | Resource/load bounds   | Recorded SQL, latency and memory; bounded admission/drain   |
 | A15 | Compass parity         | Real migrated application/frontend acceptance matrix passes |
 
-Internal regressions remain valuable supporting evidence. New implementation
-work should be tied to one of these consumer scenarios or an explicit item of
-the complete approved refactor backlog.
+Internal regressions remain valuable supporting evidence. Implementation work
+first completes the current approved refactor backlog. These consumer scenarios
+provide the subsequent end-to-end acceptance criteria.
 
 ## Known checkpoint limits
 

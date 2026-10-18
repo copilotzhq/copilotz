@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 13:45 UTC.
+Updated: 18 October 2026, 13:50 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -10,15 +10,17 @@ production-ready. All changes remain draft: **no merge or publication**.
 
 ## Acceptance-driven finish plan
 
-The latest direction is to complete the full owner refactor using a separate
-**two-agent browser-worker project** as the first public-consumer proof, then
-migrate Compass including its frontend. The local server owns persistence;
+The latest explicit order is: **finish the current complete owner refactor, then
+run a separate two-agent browser-worker project as end-to-end acceptance, then
+migrate Compass including its frontend**. The local server owns persistence;
 authored Actions, Processors, agents and compatible tools run in the browser.
 See the
 [concrete milestones and acceptance matrix](browser-worker-acceptance-plan.md).
 The smaller app does not replace any approved refactor scope or the later full
-application migration. Preserve the current content safety checkpoint, then
-prioritize gaps exposed through the real public construction/agent/UI path.
+application migration. Preserve the current content safety checkpoint and
+complete the remaining functionality, recovery, public APIs, cleanup and library
+validation first. Preparing the acceptance contract can run alongside this;
+implementing the new project must not displace the unfinished refactor.
 
 ## Current priority
 

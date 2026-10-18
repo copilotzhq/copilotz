@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 08:25 UTC.
+Updated: 18 October 2026, 08:45 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -43,9 +43,11 @@ new private fresh owner catalog schema separately passes 61 PostgreSQL and 53
 PGlite cases with 58 steps on each backend and eight explicit PostgreSQL skips.
 All five causal old-version defects remain recorded beside corrected passes. The
 unchanged full-static package-surface guard now refuses seven private modules
-awaiting genuine host wiring. Receipt-free checkpoint mutations, reservation
-confirmation, catalog authority/alarms and actual content execution routing
-remain open.
+awaiting genuine host wiring. The private receipt-free mutation boundary now
+separately passes 194 PostgreSQL and 187 PGlite cases with seven explicit
+PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Actual
+stream checkpoint authority, reservation confirmation, catalog alarms and
+content execution routing remain open.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -434,11 +436,12 @@ what it simplifies and eliminates before adding machinery.
 - [x] Private fresh owner stream format, exact retained-layout validation,
       reserving phase and legacy DDL reuse; independent PostgreSQL/PGlite
       schema, mutation and provisioning-race checks pass without host activation
-- [ ] Registered receipt-free checkpoint mutation on the existing owner queue,
-      with current lifetime fences and no automatic receipts or sequence events
+- [x] Private registered receipt-free mutation boundary on the existing owner
+      queue, with current lifetime fences and no automatic receipts or sequence
+      events; scoped PostgreSQL/PGlite and real COMMIT-loss checks pass
 - [ ] Catalog-first reservation, physical confirmation and visibility through
-      the same local/worker content coordinator; hidden failed reservations and
-      accepted-prefix-only observation
+      the same local/worker content coordinator; confirmation-time ordinals,
+      hidden failed reservations and accepted-prefix-only observation
 
 ## 5. Views, providers and clients
 

@@ -67,6 +67,18 @@ export type OwnerProjectionHandler = (
     Pick<OwnerCommandContext, "tx" | "caller" | "commandTime" | "signal">
   >,
 ) => OwnerJson | Promise<OwnerJson>;
+/** Trusted receipt-free SQL mutation. Its durable target supplies exact replay
+ * semantics (for stream checkpoints, the committed offset). No physical I/O:
+ * a definitively rolled-back group may rerun the handler. */
+export type OwnerCheckpointHandler = (
+  input: OwnerJson,
+  context: Readonly<
+    Pick<
+      OwnerCommandContext,
+      "tx" | "caller" | "commandTime" | "signal" | "ownerCommit" | "afterCommit"
+    >
+  >,
+) => OwnerJson | Promise<OwnerJson>;
 export type OwnerCommandOutcome = Readonly<
   { status: "committed" | "duplicate"; result: OwnerJson }
 >;
@@ -80,6 +92,8 @@ export type OwnerCommandBoundaryOptions = Readonly<{
   holderId: string;
   handlers: Readonly<Record<string, OwnerCommandHandler>>;
   projections?: Readonly<Record<string, OwnerProjectionHandler>>;
+  /** Private core registration; never dispatched through generic command/project. */
+  checkpoints?: Readonly<Record<string, OwnerCheckpointHandler>>;
   inputDefinitions?: Readonly<Record<string, OwnerCommandInputDefinition>>;
   /** Revalidate current assignment/session/execution authority under the owner
    * lock. Bind key to its stable invocation and semantic target (e.g. namespace)
@@ -102,7 +116,7 @@ export type OwnerCommandBoundaryOptions = Readonly<{
     commandTime: string,
   ): boolean;
   /** Optional explicit scope for the private fence. Omitted means all commands.
-   * Entries must be distinct registered command/projection kinds. */
+   * Entries must be distinct registered command/projection/checkpoint kinds. */
   currentAuthorizationKinds?: readonly string[];
   authenticateReceipt(
     tx: SqlExecutor,
@@ -138,6 +152,12 @@ export type OwnerCommandBoundary = Readonly<{
     input: OwnerJson,
     options?: OwnerCommandExecuteOptions,
   ): Promise<OwnerJson>;
+  checkpoint(
+    caller: OwnerCaller,
+    kind: string,
+    input: OwnerJson,
+    options?: OwnerCommandExecuteOptions,
+  ): Promise<OwnerJson>;
   readReceipt(
     caller: OwnerCaller,
     identity: Readonly<{ domain: OwnerIdentityDomain; key: string }>,
@@ -145,8 +165,9 @@ export type OwnerCommandBoundary = Readonly<{
   stop(reason?: unknown): void;
 }>;
 
+type PendingMode = "command" | "projection" | "checkpoint";
 type Pending = {
-  projection: boolean;
+  mode: PendingMode;
   inputCommand: boolean;
   rawInput?: OwnerJson;
   caller: OwnerCaller;
@@ -351,6 +372,7 @@ export function createOwnerCommandBoundary(
   const tables = ownerTableNames(schema);
   const handlers = new Map(Object.entries(options.handlers));
   const projections = new Map(Object.entries(options.projections ?? {}));
+  const checkpoints = new Map(Object.entries(options.checkpoints ?? {}));
   const normalizers = new Map(
     Object.entries(options.inputDefinitions ?? {}).map(([kind, definition]) =>
       [kind, definition?.normalize] as const
@@ -372,6 +394,25 @@ export function createOwnerCommandBoundary(
   if ([...projections.keys()].some((kind) => handlers.has(kind))) {
     throw new TypeError("Owner command and projection names must be distinct.");
   }
+  if (
+    [...checkpoints.values()].some((handler) => typeof handler !== "function")
+  ) {
+    throw new TypeError("Owner checkpoints must be functions.");
+  }
+  if (
+    [...checkpoints.keys()].some((kind) =>
+      handlers.has(kind) || projections.has(kind)
+    )
+  ) {
+    throw new TypeError(
+      "Owner command, projection and checkpoint names must be distinct.",
+    );
+  }
+  if (checkpoints.size && !isCurrentAuthorization) {
+    throw new TypeError(
+      "Owner checkpoints require a current authorization fence.",
+    );
+  }
   const requestedAuthorizationKinds = options.currentAuthorizationKinds;
   let currentAuthorizationKinds: ReadonlySet<string> | undefined;
   if (requestedAuthorizationKinds !== undefined) {
@@ -382,7 +423,7 @@ export function createOwnerCommandBoundary(
     if (
       !isCurrentAuthorization || typeof count !== "number" ||
       !Number.isSafeInteger(count) || count < 1 ||
-      count > handlers.size + projections.size
+      count > handlers.size + projections.size + checkpoints.size
     ) {
       throw new TypeError(
         "Current authorization kinds require a fence and a nonempty registered allowlist.",
@@ -401,7 +442,9 @@ export function createOwnerCommandBoundary(
       }
       const kind: unknown = descriptor.value;
       nonempty(kind, "currentAuthorizationKind");
-      if (!handlers.has(kind) && !projections.has(kind)) {
+      if (
+        !handlers.has(kind) && !projections.has(kind) && !checkpoints.has(kind)
+      ) {
         throw new TypeError("Current authorization kind is not registered.");
       }
       captured.push(kind);
@@ -410,6 +453,14 @@ export function createOwnerCommandBoundary(
     if (currentAuthorizationKinds.size !== captured.length) {
       throw new TypeError("Current authorization kinds must be distinct.");
     }
+  }
+  if (
+    currentAuthorizationKinds &&
+    [...checkpoints.keys()].some((kind) => !currentAuthorizationKinds.has(kind))
+  ) {
+    throw new TypeError(
+      "Every owner checkpoint requires the current authorization fence.",
+    );
   }
   const maxGroup = options.maxGroup ?? 32;
   const maxQueue = options.maxQueue ?? 128;
@@ -489,11 +540,10 @@ export function createOwnerCommandBoundary(
   function complete(items: Completion[]): void {
     for (const item of items) {
       outstanding--;
-      item.pending.removeAbort?.();
-      if (item.failed) item.pending.reject(item.error);
-      else {
-        try {
-          if (item.pending.projection) {
+      try {
+        if (item.failed) item.pending.reject(item.error);
+        else {
+          if (item.pending.mode !== "command") {
             // Ephemeral data has no durable delivery entitlement after COMMIT.
             assertAcquired();
             checkPendingAbort(item.pending);
@@ -502,9 +552,13 @@ export function createOwnerCommandBoundary(
           // eligible even if its current caller can no longer see the result.
           item.checkAuthorization?.();
           item.pending.resolve(item.outcome!);
-        } catch (error) {
-          item.pending.reject(error);
         }
+      } catch (error) {
+        item.pending.reject(error);
+      } finally {
+        // The final fence may synchronously abort this request. Keep its listener
+        // attached until the reply decision has observed that cancellation.
+        item.pending.removeAbort?.();
       }
       if (!item.callbacks.length) postCommitReserved--;
       else publications.push(item.callbacks);
@@ -683,7 +737,7 @@ export function createOwnerCommandBoundary(
                   }
                   : undefined;
                 checkAuthorization?.();
-                const receipt = pending.projection
+                const receipt = pending.mode !== "command"
                   ? { rows: [] }
                   : await tx.query<
                     { kind: string; intent: OwnerJson; result: OwnerJson }
@@ -734,7 +788,7 @@ export function createOwnerCommandBoundary(
                       commandTime,
                     },
                     afterCommit(callback) {
-                      if (pending.projection) {
+                      if (pending.mode === "projection") {
                         throw new TypeError("Projections cannot publish.");
                       }
                       if (!active) {
@@ -760,7 +814,7 @@ export function createOwnerCommandBoundary(
                   checkPendingAbort(pending);
                   assertAcquired();
                   const result = copyJson(
-                    pending.projection
+                    pending.mode === "projection"
                       ? await projections.get(pending.command.kind)!(
                         copyJson(pending.command.intent),
                         {
@@ -770,6 +824,18 @@ export function createOwnerCommandBoundary(
                           signal: pending.handlerSignal,
                         },
                       )
+                      : pending.mode === "checkpoint"
+                      ? await checkpoints.get(pending.command.kind)!(
+                        copyJson(pending.command.intent),
+                        {
+                          tx,
+                          caller: copyCaller(pending.caller),
+                          commandTime,
+                          signal: pending.handlerSignal,
+                          ownerCommit: context.ownerCommit,
+                          afterCommit: context.afterCommit,
+                        },
+                      )
                       : await handlers.get(pending.command.kind)!(
                         copyJson(pending.command.intent),
                         context,
@@ -777,7 +843,7 @@ export function createOwnerCommandBoundary(
                   );
                   checkPendingAbort(pending);
                   checkAuthorization?.();
-                  if (!pending.projection) {
+                  if (pending.mode === "command") {
                     await tx.query(
                       `INSERT INTO ${tables.receipts}(owner,principal_kind,principal_id,domain,key,kind,intent,result) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
                       [
@@ -795,7 +861,7 @@ export function createOwnerCommandBoundary(
                   outcome = { status: "committed", result };
                 }
                 checkAuthorization?.();
-                if (!pending.projection) {
+                if (pending.mode === "command") {
                   // Compatible authorized replay associates only this exact tagged
                   // principal. Generic cross-epoch reads remain worker-only.
                   await tx.query(
@@ -872,7 +938,7 @@ export function createOwnerCommandBoundary(
       } else {
         const unknown = isIndeterminate(error) ? error : failure(
           "owner_commit_unknown",
-          "Owner transaction outcome is unknown; this holder must stop and receipts decide recovery.",
+          "Owner transaction outcome is unknown; this holder must stop and recovery must inspect durable state.",
           error,
         );
         stop(unknown);
@@ -900,7 +966,7 @@ export function createOwnerCommandBoundary(
     caller: OwnerCaller,
     command: OwnerCommand,
     execution: OwnerCommandExecuteOptions = {},
-    projection = false,
+    mode: PendingMode = "command",
     inputCommand = false,
   ): Promise<OwnerCommandOutcome> {
     const sourceSignal = execution.signal;
@@ -911,13 +977,21 @@ export function createOwnerCommandBoundary(
       nonempty(command.kind, "kind");
       nonempty(command.key, "key");
       domain(command.domain);
-      if (!(projection ? projections : handlers).has(command.kind)) {
+      if (
+        !(mode === "projection"
+          ? projections
+          : mode === "checkpoint"
+          ? checkpoints
+          : handlers).has(command.kind)
+      ) {
         throw failure(
           "owner_command_invalid",
           "Command kind is not registered.",
         );
       }
-      if (!projection && normalizers.has(command.kind) !== inputCommand) {
+      if (
+        mode === "command" && normalizers.has(command.kind) !== inputCommand
+      ) {
         throw failure(
           "owner_command_invalid",
           "Command input route does not match its definition.",
@@ -955,7 +1029,7 @@ export function createOwnerCommandBoundary(
         postCommitReserved++;
         const handlerController = new AbortController();
         const pending: Pending = {
-          projection,
+          mode,
           inputCommand,
           rawInput,
           caller: authenticated,
@@ -1090,7 +1164,7 @@ export function createOwnerCommandBoundary(
           intent: command.input,
         },
         execution,
-        false,
+        "command",
         true,
       ),
     async project(caller, kind, input, execution) {
@@ -1103,7 +1177,21 @@ export function createOwnerCommandBoundary(
           intent: input,
         },
         execution,
-        true,
+        "projection",
+      );
+      return outcome.result;
+    },
+    async checkpoint(caller, kind, input, execution) {
+      const outcome = await enqueue(
+        caller,
+        {
+          kind,
+          domain: "occurrence",
+          key: crypto.randomUUID(),
+          intent: input,
+        },
+        execution,
+        "checkpoint",
       );
       return outcome.result;
     },

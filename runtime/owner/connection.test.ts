@@ -88,6 +88,12 @@ function recordingBoundary(
     acquire: () => Promise.resolve(1),
     stop() {},
     project: () => Promise.reject(new Error("Unused projection capability")),
+    checkpoint: () =>
+      Promise.reject(
+        new Error(
+          "Private checkpoint capability is unavailable over this route",
+        ),
+      ),
     executeInput: () =>
       Promise.reject(new Error("Unused registered input capability")),
     execute: () =>

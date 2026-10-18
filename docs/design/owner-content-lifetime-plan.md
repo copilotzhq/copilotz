@@ -346,6 +346,48 @@ unchanged full-static task refuses seven private modules still awaiting real
 host wiring; generated/core-ownership checks pass separately. No public content
 activation or whole-suite acceptance is claimed.
 
+## Private receipt-free boundary checkpoint
+
+The existing owner command boundary now has a private, separately registered
+receipt-free mutation class. It shares the same bounded queue, owner epoch/
+holder fence, savepoints, authorization, cancellation and publication handling.
+Its kinds are disjoint from ordinary commands and projections; generic worker
+command/project calls cannot dispatch them. Every registered checkpoint must
+have the synchronous current-authorization fence, including when an explicit
+kind allowlist is supplied.
+
+The handler receives only the scoped SQL executor, captured caller/clock/signal,
+owner commit context and after-commit registration. It receives no command
+receipt identity or input normalizer. Automatic receipt lookup, receipt insert
+and reader association are skipped. The handler's own durable target must supply
+its replay semantics. Physical I/O remains forbidden by the trusted-core
+contract because a definitively rolled-back group can retry a handler; this is
+not a SQL sandbox.
+
+A reproduced shared completion defect was corrected: removing the source abort
+listener before the final private fence let that fence abort the request and
+still return a reply. The listener now remains until the final reply decision
+and is removed in `finally`. Checkpoint, fenced-command and projection
+regression cases all reject the cancelled reply while retaining genuinely
+committed data and confirmed publication. Existing unfenced committed-command
+acknowledgement semantics remain checked.
+
+Independent complete scope passes 194 PostgreSQL cases and 187 PGlite cases with
+seven explicit PostgreSQL-only skips. The old cancellation control fails as
+expected and its correction passes on both backends. Two genuine PostgreSQL
+COMMIT-loss probes establish committed and aborted target states, stopped
+holders, no automatic handler replay/publication and exact epoch-2 recovery
+without checkpoint receipts/readers/events. Each fault has one owned provider
+diagnostic and no uncaught-monitor event. All 128 owned databases were exported,
+dropped and verified absent, with PostgreSQL stopped.
+
+Three-file typecheck/lint/format and frozen hashes pass. The unchanged aggregate
+static task still stops at the same seven unwired private modules; component
+checks pass separately. These are boundary mechanics and target fixtures, not
+implemented stream attempt/generation authority, physical confirmation, offset
+replay, seal acceptance or host activation. Those remain the next coordinated
+work.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:
@@ -409,6 +451,28 @@ epoch fence, savepoint, current authorization and post-COMMIT checks. Generic
 worker command/projection calls must not reach physical-confirmation handlers;
 only the coordinator may supply owner-observed physical evidence. No new command
 bus, worker SQL access, receipt table or attempt registry is needed.
+
+Owner publication needs one further schema refinement before activation:
+`stream_ordinal` must remain NULL while reserving and be allocated from the
+existing operation counter only in the confirmation transaction. Otherwise a
+later reservation can publish first, advance an observer's cursor, and cause an
+earlier hidden ordinal to be missed forever. The physical replay key may remain
+reservation-time identity; its legacy maintenance scan is cyclic, not a public
+publication watermark. Confirmation must also index the stream-open lifecycle
+fact atomically so existing selection revisions advance, then publish the hint
+after COMMIT. Offset checkpoints do not advance semantic sequence/revisions.
+
+Reuse the catalog's operation/event core through a physically narrow private
+owner object. A global format switch on the full legacy catalog is unsafe:
+legacy cancellation and failure recovery can change stream state without a
+physical fence, and its readers do not know reservation visibility. Direct owner
+consumers need only format assertion, operation locking and event admission/
+indexing, but Action recovery also calls stream-failure hooks transitively.
+Those hooks and standalone settlement SQL need explicit owner-aware composition.
+Active or revoking reservations block settlement; confirmed revoked, never
+published reservations may remain hidden tombstones without blocking forever.
+Published open/terminating streams still block. Preserve the existing rule that
+operation completion is distinct from every child succeeding.
 
 The current JSON call limit is 1,100,000 bytes. A base64-encoded 1 MiB part does
 not fit. Transport integration must use a smaller explicit chunk bound or the

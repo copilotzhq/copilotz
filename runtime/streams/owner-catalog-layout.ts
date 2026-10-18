@@ -18,8 +18,9 @@ export const OWNER_CATALOG_LAYOUT = {
       "namespace": ["text", "NO", null],
       "logical_body_id": ["text", "NO", null],
       "owner_id": ["text", "NO", null],
-      "producer_operation_id": ["text", "NO", null],
+      "settlement_scope_id": ["text", "NO", null],
       "producer_stream_id": ["text", "YES", null],
+      "producer": ["jsonb", "NO", null],
       "media_type": ["text", "NO", null],
       "byte_length": ["bigint", "NO", null],
       "digest": ["text", "NO", null],
@@ -137,6 +138,10 @@ export const OWNER_CATALOG_LAYOUT = {
       "owner_body_length_check": [
         "c",
         "CHECK (byte_length >= 0 AND byte_length <= '9007199254740991'::bigint)",
+      ],
+      "owner_body_producer_check": [
+        "c",
+        "CHECK ((jsonb_typeof(producer) = 'object'::text AND octet_length(producer::text) <= 16384) IS TRUE)",
       ],
       "owner_body_promotion_check": [
         "c",
@@ -341,7 +346,7 @@ export const OWNER_CATALOG_LAYOUT = {
         "btree",
         false,
         false,
-        ["owner_id", "producer_operation_id"],
+        ["owner_id", "settlement_scope_id"],
         ["pg_catalog.text_ops", "pg_catalog.text_ops"],
         ["pg_catalog.default", "pg_catalog.default"],
         "0 0",

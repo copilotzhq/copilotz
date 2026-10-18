@@ -838,6 +838,38 @@ accepted pending result after a lost reply. Current-epoch cleanup works, while
 cross-epoch recovery, public close, successful completion barriers, logical
 readback, atomic domain adoption and replay-window protection remain open.
 
+## Pending pointers and durable producer provenance
+
+The next private increment adds a closed `PendingContentRef` containing only its
+opaque pending reference, media type, byte length and digest. Semantic
+descriptors remain in the catalog. Generated-content decoding explicitly permits
+this pointer; ordinary Asset decoding and persisted `ContentSequence` remain
+Asset-only. Capture uses detached data descriptors, without caller getter,
+iterator, map or species dispatch. The pointer and its claims never grant
+adoption permission.
+
+The producer can inspect its own seal status under current exact invocation
+authority. Completed status requires the derived logical/pending identities,
+accepted offset/digest/media type, matching producer facts and an unretired
+body. It returns no physical placement, Asset ID or ownership claim.
+
+Body rows now call the inherited operation coordinate `settlement_scope_id` and
+retain a bounded, placement-neutral producer tuple derived from the stored
+binding. It contains logical Action run or Processor/source identity, delivery
+identity and ordinal. It does not retain session/dispatch coordinates as future
+permission. Recomputing the stream hash verifies incarnation coordinates, not
+all producer facts. Fresh adoption still needs current consumer authority and
+pinned immutable producer terminal/output plus causal-admission evidence. A
+shared settlement scope or a guessed pending pointer is insufficient. Once that
+evidence is pruned, only exact already-adopted replay can proceed under current
+domain authorization; this draft has not enabled that adoption path yet.
+
+Scoped testing: 90 broad coordinator/catalog/startup/codec tests plus 46 schema
+steps passed. After pure capture hardening, the affected codec/status boundaries
+were rerun separately. Public close, producer-output wiring, domain adoption and
+logical readback remain open; these diagnostics are not final library
+acceptance.
+
 ## 2. Checkpoints, accepted seals and recovery
 
 - Reuse catalog checkpoint SQL under a narrow internal owner mutation boundary

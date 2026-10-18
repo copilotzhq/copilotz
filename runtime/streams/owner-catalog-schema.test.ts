@@ -531,6 +531,14 @@ Deno.test("owner logical body metadata survives producer pruning and requires at
     await assertRejects(() =>
       db.query("UPDATE copilotz_operation_bodies SET digest='not-a-digest'")
     );
+    await assertRejects(() =>
+      db.query("UPDATE copilotz_operation_bodies SET producer='[]'::jsonb")
+    );
+    await assertRejects(() =>
+      db.query("UPDATE copilotz_operation_bodies SET producer=$1::jsonb", [
+        JSON.stringify({ value: "x".repeat(16384) }),
+      ])
+    );
     for (const invalid of ["NULL", "'infinity'::timestamptz"]) {
       await assertRejects(() =>
         db.query(

@@ -1781,3 +1781,178 @@ Deno.test("owner seal cannot record intent after authority is lost during hashin
       [],
     );
   }));
+
+Deno.test("owner seal status returns exact pending pointer under current producer authority", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    assertEquals(
+      await f.content.sealStatus(f.owner, f.caller, opened.streamId),
+      { state: "open", pending: null },
+    );
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    assertEquals(
+      await f.content.sealStatus(f.owner, f.caller, opened.streamId),
+      { state: "sealing", pending: null },
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const before = await f.counts();
+    const result = await f.content.sealStatus(
+      f.owner,
+      f.caller,
+      opened.streamId,
+    );
+    assertEquals(result.state, "completed");
+    assertEquals(Object.keys(result.pending!).sort(), [
+      "byteLength",
+      "digest",
+      "mediaType",
+      "pendingRef",
+      "type",
+    ]);
+    assertEquals(result.pending?.byteLength, 3);
+    assertEquals(
+      result.pending?.digest,
+      await digestContent(new TextEncoder().encode("abc")),
+    );
+    assertEquals(
+      await f.content.sealStatus(f.owner, f.caller, opened.streamId),
+      result,
+    );
+    assertEquals(await f.counts(), before);
+    f.setActive(false);
+    await assertRejects(() =>
+      f.content.sealStatus(f.owner, f.caller, opened.streamId)
+    );
+  }));
+Deno.test("owner seal status does not invent pending output after failed capture", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const { target } = await streamRow(f);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "failed",
+    });
+    assertEquals(
+      await f.content.sealStatus(f.owner, f.caller, opened.streamId),
+      { state: "failed", pending: null },
+    );
+  }));
+
+Deno.test("owner seal stores placement-neutral producer facts independently of public metadata and scope rows", () =>
+  fixture(async (f) => {
+    const opened = await f.content.open(f.owner, f.caller, {
+      ...input,
+      metadata: {
+        producer: { actionId: "forged" },
+        sourceActionRunId: "forged",
+      },
+    });
+    const { row: stream } = await streamRow(f);
+    const binding = stream.placement_binding as Record<string, unknown>;
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      0,
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const body = (await f.db.query(
+      "SELECT producer,settlement_scope_id FROM copilotz_operation_bodies",
+    )).rows[0];
+    assertEquals(body.producer, {
+      kind: "processor",
+      processorId: "fixture",
+      sourceEventId: binding.sourceEventId,
+      deliveryId: binding.deliveryId,
+      deliveryAttempt: 1,
+    });
+    assertEquals(body.settlement_scope_id, target.operationId);
+    await f.db.query("DELETE FROM copilotz_operation_streams");
+    await f.db.query("DELETE FROM copilotz_operations");
+    assertEquals(
+      (await f.db.query(
+        "SELECT producer,settlement_scope_id FROM copilotz_operation_bodies",
+      )).rows,
+      [body],
+    );
+  }));
+Deno.test("owner seal refuses substituted stream incarnation before physical cleanup", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    const { row } = await streamRow(f);
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET placement_binding=jsonb_set(placement_binding,'{deliveryId}',$1::jsonb)",
+      [JSON.stringify("other-delivery")],
+    );
+    let fences = 0;
+    f.setFence((writer) => {
+      fences++;
+      return f.physical.fence(writer);
+    });
+    await assertRejects(() => f.content.revoke(f.owner, cleanupCaller, target));
+    assertEquals(fences, 0);
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET placement_binding=$1::jsonb",
+      [JSON.stringify(row.placement_binding)],
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals((await streamRow(f)).row.outcome, "completed");
+  }));
+
+Deno.test("owner seal status refuses contradictory retained body evidence", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const original =
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows[0];
+    const patches = {
+      digest: `sha256:${"b".repeat(64)}`,
+      byte_length: 2,
+      media_type: "image/png",
+      pending_ref: "substituted",
+      logical_body_id: "substituted",
+      producer: JSON.stringify({ kind: "processor", processorId: "other" }),
+    };
+    for (const [field, value] of Object.entries(patches)) {
+      const cast = field === "producer" ? "::jsonb" : "";
+      await f.db.query(
+        `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
+        [value],
+      );
+      await assertRejects(() =>
+        f.content.sealStatus(f.owner, f.caller, opened.streamId)
+      );
+      await f.db.query(
+        `UPDATE copilotz_operation_bodies SET ${field}=$1${cast}`,
+        [
+          field === "producer"
+            ? JSON.stringify(original[field])
+            : original[field],
+        ],
+      );
+    }
+    assertEquals(
+      (await f.content.sealStatus(f.owner, f.caller, opened.streamId)).state,
+      "completed",
+    );
+  }));

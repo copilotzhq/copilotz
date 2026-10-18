@@ -195,8 +195,10 @@ export function operationCatalogSchemaStatements(
           namespace TEXT NOT NULL,
           logical_body_id TEXT NOT NULL,
           owner_id TEXT NOT NULL,
-          producer_operation_id TEXT NOT NULL,
+          settlement_scope_id TEXT NOT NULL,
           producer_stream_id TEXT,
+          producer JSONB NOT NULL CONSTRAINT owner_body_producer_check
+            CHECK ((jsonb_typeof(producer)='object' AND octet_length(producer::text)<=16384) IS TRUE),
           media_type TEXT NOT NULL,
           byte_length BIGINT NOT NULL CONSTRAINT owner_body_length_check
             CHECK (byte_length >= 0 AND byte_length <= 9007199254740991),
@@ -227,7 +229,7 @@ export function operationCatalogSchemaStatements(
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_pending_idx" ON ${tables.logicalBodies}(namespace,pending_ref)`,
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_adoption_idx" ON ${tables.logicalBodies}(namespace,adoption_key) WHERE adoption_key IS NOT NULL`,
         `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_asset_idx" ON ${tables.logicalBodies}(namespace,asset_id) WHERE asset_id IS NOT NULL`,
-        `CREATE INDEX IF NOT EXISTS "copilotz_operation_bodies_producer_idx" ON ${tables.logicalBodies}(owner_id,producer_operation_id)`,
+        `CREATE INDEX IF NOT EXISTS "copilotz_operation_bodies_producer_idx" ON ${tables.logicalBodies}(owner_id,settlement_scope_id)`,
         `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_renewal_idx"
        ON ${tables.operationStreams} (owner_id, protection_deadline, namespace, operation_id, stream_id)
        WHERE revocation_state <> 'revoked'`,

@@ -85,9 +85,9 @@ export async function insertTestOwnerBody(
 ) {
   await tx.query(
     `INSERT INTO public.copilotz_operation_bodies
-      (namespace,logical_body_id,owner_id,producer_operation_id,media_type,byte_length,digest,
+      (namespace,logical_body_id,owner_id,settlement_scope_id,producer,media_type,byte_length,digest,
        current_copy,pending_ref,pending_descriptor,protected_until,created_at,updated_at)
-     VALUES($1,'logical-fixture','owner',$2,'text/plain',0,$3,$4::jsonb,'pending-fixture',$5::jsonb,$7,$6,$6)`,
+     VALUES($1,'logical-fixture','owner',$2,$8::jsonb,'text/plain',0,$3,$4::jsonb,'pending-fixture',$5::jsonb,$7,$6,$6)`,
     [
       scope.namespace,
       scope.operationId,
@@ -104,6 +104,13 @@ export async function insertTestOwnerBody(
       }),
       "2026-10-18T00:00:00.000Z",
       "2026-10-19T00:00:00.000Z",
+      JSON.stringify({
+        kind: "processor",
+        processorId: "fixture",
+        sourceEventId: "event",
+        deliveryId: "delivery",
+        deliveryAttempt: 1,
+      }),
     ],
   );
 }

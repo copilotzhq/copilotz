@@ -1,3 +1,5 @@
+import { capturePendingContentRef } from "../content/schema.ts";
+import type { PendingContentRef } from "../content/types.ts";
 import { ownerTableNames } from "./schema.ts";
 /** Private catalog-first stream opening. Catalog rows are the durable replay
  * record; physical I/O never runs inside a retriable owner SQL handler. */
@@ -54,6 +56,7 @@ export const OWNER_STREAM_CONFIRM = "content.stream.confirm";
 export const OWNER_STREAM_WRITER = "content.stream.writer";
 export const OWNER_STREAM_APPEND_ACK = "content.stream.append-ack";
 export const OWNER_STREAM_CHECKPOINT = "content.stream.checkpoint";
+export const OWNER_STREAM_SEAL_STATUS = "content.stream.seal-status";
 export const OWNER_STREAM_SEAL_INTENT = "content.stream.seal-intent";
 export const OWNER_STREAM_RENEW = "content.stream.renew";
 export const OWNER_STREAM_SCAN = "content.stream.scan";
@@ -95,6 +98,7 @@ type OpeningAuthorized = Readonly<{
 type WriterAuthorized = Readonly<{
   mode: "writer";
   cleanup: boolean;
+  closing: boolean;
   scope: OwnerStreamScope;
   authority: OwnerAttemptAuthority;
   streamId: string;
@@ -106,6 +110,7 @@ type ControlAuthorized = Readonly<{
   target: OwnerStreamTarget;
   writer: PhysicalWriterIdentity;
   descriptor: StreamOutputDescriptor;
+  producer: OwnerJson | null;
   sealDigest: string | null;
   state: Row["state"];
   revocation: Row["revocation_state"];
@@ -280,7 +285,7 @@ function offsets(input: Record<string, unknown>) {
   return { startOffset, endOffset };
 }
 function identity(
-  scope: OwnerStreamScope,
+  scope: Pick<OwnerStreamScope, "binding">,
   ownerId: string,
 ): OwnerAttemptAuthority {
   const b = scope.binding;
@@ -293,6 +298,31 @@ function identity(
     dispatchAttemptId: b.dispatchAttemptId,
     deliveryId: b.deliveryId,
   };
+}
+/** Durable provenance facts only; current consumer authority and retained
+ * producer output/causal evidence are still required for fresh adoption. */
+function producerFacts(
+  binding: OwnerPlacementBinding,
+  deliveryAttempt: number,
+): OwnerJson {
+  if (!Number.isSafeInteger(deliveryAttempt) || deliveryAttempt < 1) refuse();
+  const source = {
+    sourceEventId: binding.sourceEventId,
+    deliveryId: binding.deliveryId,
+    deliveryAttempt,
+  };
+  return json(
+    "kind" in binding && binding.kind === "processor"
+      ? { kind: "processor", processorId: binding.processorId, ...source }
+      : {
+        kind: "action",
+        actionId: binding.actionId,
+        actionRunId: binding.placement === "owner-local"
+          ? binding.actionRunId
+          : binding.executionId,
+        ...source,
+      },
+  );
 }
 function published(
   row: Row,
@@ -762,6 +792,9 @@ export function createOwnerStreamReservations(
       const row = (await tx.query<
         {
           descriptor: StreamOutputDescriptor;
+          placement_binding: unknown;
+          semantic_stream_id: string | null;
+          delivery_attempt: string;
           digest: string | null;
           outcome: string | null;
           state: Row["state"];
@@ -776,6 +809,9 @@ export function createOwnerStreamReservations(
         `SELECT state,revocation_state,body_id,reservation_id,writer_generation::text,
           CASE WHEN outcome='completed' AND octet_length(descriptor::text)<=131072 THEN descriptor ELSE NULL END AS descriptor,
           CASE WHEN char_length(digest)=71 THEN digest ELSE NULL END AS digest,outcome,
+          CASE WHEN outcome='completed' AND octet_length(placement_binding::text)<=32768 THEN placement_binding ELSE NULL END AS placement_binding,
+          CASE WHEN outcome='completed' AND char_length(semantic_stream_id) BETWEEN 1 AND 1024 THEN semantic_stream_id ELSE NULL END AS semantic_stream_id,
+          delivery_attempt::text,
           CASE WHEN char_length(descriptor->>'mediaType') BETWEEN 1 AND 1024 THEN descriptor->>'mediaType' ELSE NULL END AS media_type,committed_offset::text
          FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
          AND owner_id=$4 AND physical_backend_id=$5 AND opening_owner_epoch=$6 FOR UPDATE`,
@@ -801,6 +837,35 @@ export function createOwnerStreamReservations(
       ) {
         refuse("Seal descriptor is unavailable or exceeds its bound.");
       }
+      let producer: OwnerJson | null = null;
+      if (row.outcome === "completed") {
+        const binding = parseOwnerPlacementBinding(row.placement_binding);
+        const attempt = safeOffset(Number(row.delivery_attempt));
+        if (
+          attempt < 1 || binding.namespace !== target.namespace ||
+          (binding.placement === "owner-local" &&
+            (binding.ownerId !== ownerId ||
+              binding.epoch !== caller.ownerEpoch))
+        ) refuse("Seal producer identity is inconsistent.");
+        const expectedStream = await deriveWorkflowId(
+          "stream",
+          ownerId,
+          String(caller.ownerEpoch),
+          binding.namespace,
+          target.operationId,
+          binding.placement,
+          binding.deliveryId,
+          String(attempt),
+          ownerAttemptToken(identity({ binding }, ownerId)),
+          physicalIdentifier(row.semantic_stream_id),
+        );
+        if (expectedStream !== target.streamId) {
+          refuse(
+            "Seal producer does not match its original stream incarnation.",
+          );
+        }
+        producer = producerFacts(binding, attempt);
+      }
       const writer = capturePhysicalIdentity({
         bodyId: row.body_id,
         mediaType: row.media_type,
@@ -821,6 +886,7 @@ export function createOwnerStreamReservations(
         target,
         writer,
         descriptor: row.descriptor,
+        producer,
         sealDigest: row.outcome === "completed" ? row.digest : null,
         state: row.state,
         revocation: row.revocation_state,
@@ -838,6 +904,7 @@ export function createOwnerStreamReservations(
         OWNER_STREAM_APPEND_ACK,
         OWNER_STREAM_CHECKPOINT,
         OWNER_STREAM_SEAL_INTENT,
+        OWNER_STREAM_SEAL_STATUS,
       ].includes(command.kind)
     ) refuse();
     if (
@@ -847,12 +914,17 @@ export function createOwnerStreamReservations(
         OWNER_STREAM_CHECKPOINT,
         OWNER_STREAM_ABORT_TARGET,
         OWNER_STREAM_SEAL_INTENT,
+        OWNER_STREAM_SEAL_STATUS,
       ]
         .includes(command.kind)
     ) {
       const input = record(
         command.intent,
-        [OWNER_STREAM_WRITER, OWNER_STREAM_ABORT_TARGET].includes(command.kind)
+        [
+            OWNER_STREAM_WRITER,
+            OWNER_STREAM_ABORT_TARGET,
+            OWNER_STREAM_SEAL_STATUS,
+          ].includes(command.kind)
           ? ["streamId"]
           : command.kind === OWNER_STREAM_SEAL_INTENT
           ? ["streamId", "length", "digest"]
@@ -862,8 +934,13 @@ export function createOwnerStreamReservations(
       );
       const streamId = physicalIdentifier(input.streamId);
       const cleanup = command.kind === OWNER_STREAM_ABORT_TARGET;
+      const closing = command.kind === OWNER_STREAM_SEAL_STATUS;
       if (
-        ![OWNER_STREAM_WRITER, OWNER_STREAM_SEAL_INTENT].includes(
+        ![
+          OWNER_STREAM_WRITER,
+          OWNER_STREAM_SEAL_INTENT,
+          OWNER_STREAM_SEAL_STATUS,
+        ].includes(
           command.kind,
         ) && !cleanup
       ) offsets(input);
@@ -887,7 +964,7 @@ export function createOwnerStreamReservations(
          WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND owner_id=$4
            AND opening_owner_epoch=$5 AND delivery_attempt=$6 AND placement_binding=$7::jsonb
            AND physical_backend_id=$8 AND body_id=$9 AND reservation_id=$10 AND writer_generation=1
-           AND (($12 AND state<>'reserving') OR (NOT $12 AND state='open' AND revocation_state='active' AND protection_deadline>$11::timestamptz)) FOR UPDATE`,
+           AND ((($12 OR $13) AND state<>'reserving') OR (NOT $12 AND NOT $13 AND state='open' AND revocation_state='active' AND protection_deadline>$11::timestamptz)) FOR UPDATE`,
         [
           scope.binding.namespace,
           scope.delivery.settlementScopeId,
@@ -901,6 +978,7 @@ export function createOwnerStreamReservations(
           reservationId,
           time,
           cleanup,
+          closing,
         ],
       )).rows[0];
       if (!found) refuse();
@@ -914,6 +992,7 @@ export function createOwnerStreamReservations(
       authorized.set(tx, {
         mode: "writer",
         cleanup,
+        closing,
         scope,
         authority,
         streamId,
@@ -1265,6 +1344,63 @@ export function createOwnerStreamReservations(
     );
     return { committedOffset: endOffset };
   };
+  const sealStatus: OwnerCheckpointHandler = async (_value, context) => {
+    const a = writing(context.tx, context.caller);
+    if (!a.closing) refuse();
+    const logicalBodyId = await deriveWorkflowId("logical-body", a.streamId);
+    const pendingRef = await deriveWorkflowId("pending-content", a.streamId);
+    const found = (await context.tx.query<{
+      matches: boolean;
+      state: string;
+      outcome: string | null;
+      pending_ref: string | null;
+      media_type: string | null;
+      byte_length: string | null;
+      digest: string | null;
+    }>(
+      `SELECT s.state,s.outcome,
+       (b.logical_body_id=$4 AND b.pending_ref=$5 AND b.digest=s.digest
+        AND b.byte_length=s.committed_offset AND b.media_type=s.descriptor->>'mediaType'
+        AND b.producer=$6::jsonb AND b.retired_at IS NULL
+        AND s.capture='complete' AND s.revocation_state='revoked') AS matches,
+       CASE WHEN char_length(b.pending_ref) BETWEEN 1 AND 1024 THEN b.pending_ref END AS pending_ref,
+       CASE WHEN char_length(b.media_type) BETWEEN 1 AND 1024 THEN b.media_type END AS media_type,
+       b.byte_length::text,CASE WHEN char_length(b.digest)=71 THEN b.digest END AS digest
+       FROM ${tables.operationStreams} s LEFT JOIN ${tables.logicalBodies} b
+       ON b.namespace=s.namespace AND b.producer_stream_id=s.stream_id
+       AND b.owner_id=s.owner_id AND b.settlement_scope_id=s.operation_id
+       WHERE s.namespace=$1 AND s.operation_id=$2 AND s.stream_id=$3 LIMIT 2`,
+      [
+        a.scope.binding.namespace,
+        a.scope.delivery.settlementScopeId,
+        a.streamId,
+        logicalBodyId,
+        pendingRef,
+        JSON.stringify(
+          producerFacts(a.scope.binding, a.scope.delivery.attempts),
+        ),
+      ],
+    )).rows;
+    if (found.length !== 1) refuse("Seal result is ambiguous or unavailable.");
+    const row = found[0];
+    if (row.state === "open") return { state: "open", pending: null };
+    if (row.state === "terminating") return { state: "sealing", pending: null };
+    if (row.state !== "terminal") refuse();
+    if (row.outcome !== "completed") return { state: "failed", pending: null };
+    if (row.matches !== true) {
+      refuse("Pending result contradicts its accepted stream.");
+    }
+    return json({
+      state: "completed",
+      pending: capturePendingContentRef({
+        type: "content.pending",
+        pendingRef: row.pending_ref,
+        mediaType: row.media_type,
+        byteLength: Number(row.byte_length),
+        digest: row.digest,
+      }),
+    });
+  };
   // Existing terminating/completed fields and digest are the durable seal
   // intent. No second physical ready state or per-body writer is introduced.
   const sealIntent: OwnerCheckpointHandler = async (value, context) => {
@@ -1410,9 +1546,9 @@ export function createOwnerStreamReservations(
         });
         await context.tx.query(
           `INSERT INTO ${tables.logicalBodies}
-          (namespace,logical_body_id,owner_id,producer_operation_id,producer_stream_id,
+          (namespace,logical_body_id,owner_id,settlement_scope_id,producer_stream_id,producer,
            media_type,byte_length,digest,current_copy,pending_ref,pending_descriptor,protected_until,created_at,updated_at)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11::jsonb,$12::timestamptz + $13 * interval '1 millisecond',$12,$12)`,
+          VALUES($1,$2,$3,$4,$5,$14::jsonb,$6,$7,$8,$9::jsonb,$10,$11::jsonb,$12::timestamptz + $13 * interval '1 millisecond',$12,$12)`,
           [
             a.target.namespace,
             logicalBodyId,
@@ -1433,6 +1569,7 @@ export function createOwnerStreamReservations(
             JSON.stringify(descriptor),
             context.commandTime,
             protectionMs,
+            JSON.stringify(a.producer),
           ],
         );
       }
@@ -1605,6 +1742,7 @@ export function createOwnerStreamReservations(
       [OWNER_STREAM_APPEND_ACK]: appendAcknowledgement,
       [OWNER_STREAM_CHECKPOINT]: checkpoint,
       [OWNER_STREAM_SEAL_INTENT]: sealIntent,
+      [OWNER_STREAM_SEAL_STATUS]: sealStatus,
       [OWNER_STREAM_ABORT_TARGET]: (_input: OwnerJson, context: Context) => {
         const a = writing(context.tx, context.caller);
         if (!a.cleanup) refuse();
@@ -1696,6 +1834,45 @@ export function createOwnerStreamReservations(
         namespace: physicalIdentifier(result.namespace),
         operationId: physicalIdentifier(result.operationId),
         streamId: physicalIdentifier(result.streamId),
+      };
+    },
+    async sealStatus(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      streamId: string,
+      signal?: AbortSignal,
+    ): Promise<
+      Readonly<
+        {
+          state: "open" | "sealing" | "completed" | "failed";
+          pending: PendingContentRef | null;
+        }
+      >
+    > {
+      const value = record(
+        await boundary.checkpoint(
+          structuredClone(caller),
+          OWNER_STREAM_SEAL_STATUS,
+          { streamId: physicalIdentifier(streamId) },
+          { signal },
+        ),
+        ["state", "pending"],
+      );
+      if (
+        !["open", "sealing", "completed", "failed"].includes(
+          String(value.state),
+        )
+      ) refuse();
+      if (value.state === "completed") {
+        return {
+          state: "completed",
+          pending: capturePendingContentRef(value.pending),
+        };
+      }
+      if (value.pending !== null) refuse();
+      return {
+        state: value.state as "open" | "sealing" | "failed",
+        pending: null,
       };
     },
     async beginSeal(

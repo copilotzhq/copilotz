@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 06:07 UTC.
+Updated: 18 October 2026, 06:32 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -27,7 +27,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Snapshot engine/session resources    | Reviewed backend flow         | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; private owner integration reviewed below; public composition remains open                                     |
 | Owner snapshot host integration      | Reviewed private scope        | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; concurrent load/public activation remain open                                                  |
 | Snapshot latency diagnostic          | Initial measurements reviewed | [240 sequential selection samples](snapshot-selection-performance.md); concurrent load, capacity and public defaults remain open                                                      |
-| Content writer lifetime              | WIP: DB physical checked      | [Memory/DB fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; provider fault containment, S3 and owner integration remain open                                |
+| Content writer lifetime              | WIP: DB physical checked      | [Memory/DB fencing and SQL format isolation](owner-content-lifetime-plan.md) checked; S3 and owner integration remain open                                                            |
 | Architecture cleanup                 | In progress                   | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                                                          |
 
 A cloud runner restart restored an older workspace. The pushed manager and
@@ -36,7 +36,7 @@ validation: final 34 host + 24 manager cases on each backend pass, with the
 original failed run retained. The sequential snapshot latency diagnostic is also
 complete. These scoped results do not imply full-suite acceptance or public
 activation. Current implementation work is the private content writer path; SQL
-format isolation is now independently checked; database/S3 writers and owner
+format isolation and database writer scoped gates pass. The S3 writer and owner
 integration remain pending.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
@@ -456,8 +456,17 @@ what it simplifies and eliminates before adding machinery.
 - [ ] Obtain explicit merge/publication approval; no release is currently
       authorized
 
-- [ ] Contain native PostgreSQL client/pool error events through existing
+- [x] Contain native PostgreSQL client/pool error events through existing
       diagnostics without changing unknown COMMIT or cleanup accounting
+
+Provider fault ownership is independently accepted in
+[Ominipg PR4](https://github.com/AxionCompany/ominipg/pull/4), source
+`6ac94e8a1cffa65f09f8c90b6eeced28e76b9eb7`. The existing diagnostic route now
+owns borrowed/idle faults, preserves unknown COMMIT outcomes and retained
+cleanup accounting, and avoids duplicate scoped/global reporting. Same physical
+transaction probes pass with no uncaught output. Verify run39104252261 passed
+all five jobs (Deno, Node22/24, Bun and Cloudflare-shaped bundle checks);
+published dependency pins and public activation remain unchanged.
 
 ## 7. Consolidation and legacy retirement
 

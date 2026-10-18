@@ -89,12 +89,23 @@ outcomes, including a successor fence waiting for an unresolved append
 transaction. Normal typecheck, lint/format, hashes and disposable database
 cleanup pass.
 
-A separate provider-only control reproduces late uncaught error text without
-this adapter. Bare Deno exits successfully after cleanup and its exception
-monitor does not fire, so host termination is not demonstrated. Source review
-identifies missing ownership of native PostgreSQL client/pool error events. That
-Ominipg correction remains a blocker to end-to-end fault containment; the
-physical transaction results are not a blanket clean integration claim.
+A separate provider-only control reproduced late uncaught error text without
+this adapter. Bare Deno exited successfully after cleanup and its exception
+monitor did not fire, so host termination was not demonstrated. Source review
+identified missing ownership of native PostgreSQL client/pool error events.
+
+That correction is now independently accepted in
+[Ominipg PR4](https://github.com/AxionCompany/ominipg/pull/4), source
+`6ac94e8a1cffa65f09f8c90b6eeced28e76b9eb7`, with published pins unchanged. The
+same ten physical COMMIT-loss outcomes pass with zero uncaught output; the
+provider-only control reports exactly one public diagnostic while preserving API
+rejection and actual server COMMIT. Broader scoped gates pass 145 pure/PGlite
+and 164 actual-PG Ominipg cases, four real sync cases/twelve steps and five
+observer/sync probes. Full Ominipg static semantics and frozen hashes pass. All
+73 fixture databases plus coordinator and four fixture replication slots were
+exported/recorded and removed; sessions and leftovers were absent and the server
+stopped. Verify run39104252261 passed all five jobs. This is not a full Copilotz
+integration, package publication or public activation claim.
 
 ## Legacy object-store append race correction
 

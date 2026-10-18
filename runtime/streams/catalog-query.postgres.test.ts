@@ -356,7 +356,12 @@ Deno.test({
     const schema = `catalog_query_pg_${
       crypto.randomUUID().replaceAll("-", "")
     }`;
-    const database = await createTestDatabase({ url: POSTGRES_URL! });
+    // Bulk loading 239,200 indexed events can exceed the ordinary request
+    // timeout on local Postgres. Query row and buffer budgets below still apply.
+    const database = await createTestDatabase({
+      url: POSTGRES_URL!,
+      requestTimeoutMs: 120_000,
+    });
     const captured: ExecutedQuery[] = [];
     const measuredQueries: CapturedQuery[] = [];
     try {

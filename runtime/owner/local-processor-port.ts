@@ -1,4 +1,8 @@
 import {
+  createLocalSnapshotPort,
+  type LocalSnapshotResources,
+} from "./local-snapshot-port.ts";
+import {
   OWNER_COLLECTION_READ,
   parseOwnerCollectionReadRequest,
 } from "../execution/collection-read-call.ts";
@@ -76,6 +80,7 @@ function localReference(value: unknown): OwnerLocalProcessorAssignmentBinding {
 
 export function createOwnerLocalProcessorPort(
   options: Readonly<{
+    snapshots?: LocalSnapshotResources;
     boundary:
       & Pick<
         OwnerCommandBoundary,
@@ -207,7 +212,14 @@ export function createOwnerLocalProcessorPort(
   if (children && !executeInput) {
     throw new TypeError("Local children require owner input admission.");
   }
+  const snapshots = createLocalSnapshotPort({
+    resources: options.snapshots,
+    caller: localCaller,
+    calls,
+    check: invocation,
+  });
   return {
+    ...(snapshots ? { snapshots } : {}),
     async readCollection(request, callOptions) {
       invocation();
       const input = parseOwnerCollectionReadRequest(

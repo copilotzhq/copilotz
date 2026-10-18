@@ -1,4 +1,8 @@
 import {
+  createLocalSnapshotPort,
+  type LocalSnapshotResources,
+} from "./local-snapshot-port.ts";
+import {
   OWNER_COLLECTION_READ,
   parseOwnerCollectionReadRequest,
 } from "../execution/collection-read-call.ts";
@@ -78,6 +82,7 @@ function localReference(value: unknown): RegisteredLocalActionReference {
 
 export function createOwnerLocalActionPort(
   options: Readonly<{
+    snapshots?: LocalSnapshotResources;
     boundary: Pick<
       OwnerCommandBoundary,
       "execute" | "executeInput" | "project"
@@ -284,7 +289,14 @@ export function createOwnerLocalActionPort(
       }
     },
   };
+  const snapshots = createLocalSnapshotPort({
+    resources: options.snapshots,
+    caller: localCaller,
+    calls,
+    check: invocation,
+  });
   return {
+    ...(snapshots ? { snapshots } : {}),
     async readCollection(request, callOptions) {
       invocation();
       const input = parseOwnerCollectionReadRequest(

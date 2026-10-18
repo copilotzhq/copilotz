@@ -1,3 +1,4 @@
+import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 /** Private host composition for durable pre-Open reservations and reverse calls.
  * This module has no public package export and imports no unpublished Oxian API.
  * Install its hooks and wrapped admissions on the SAME Hypervisor, and dispatch
@@ -697,10 +698,14 @@ export function createOwnerDispatchBridge(
       binding: { ...witness.entry.binding! },
     };
   }
-  async function resolveStarted(tx: SqlExecutor, caller: OwnerCaller) {
+  async function resolveStarted(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    readMode: OwnerAuthorityReadMode = "locking",
+  ) {
     const witness = callerWitness(caller);
     if (!witness) return undefined;
-    const binding = await control.resolveStarted(tx, caller);
+    const binding = await control.resolveStarted(tx, caller, readMode);
     return binding && callerWitness(caller) === witness &&
         equalBinding(witness.entry.binding!, binding)
       ? binding
@@ -807,6 +812,22 @@ export function createOwnerDispatchBridge(
     currentStarted(caller: OwnerCaller): OwnerAssignmentBinding | undefined {
       const witness = callerWitness(caller);
       return witness ? structuredClone(witness.entry.binding!) : undefined;
+    },
+    /** Capture the persistent dispatch entry, not the opening call's witness. */
+    captureStartedLifetime(caller: OwnerCaller) {
+      const witness = callerWitness(caller);
+      if (!witness) return undefined;
+      const entry = witness.entry;
+      const lifetime = Object.freeze({
+        signal: AbortSignal.any([entry.abort.signal, entry.request.signal]),
+        isCurrent: () => currentEntry(entry),
+        matches(next: OwnerCaller) {
+          const fresh = callerWitness(next);
+          return fresh?.entry === entry && currentEntry(entry) &&
+            callerWitness(next) === fresh;
+        },
+      });
+      return callerWitness(caller) === witness ? lifetime : undefined;
     },
     resolveAssignment,
     wrapWorkerCalls,

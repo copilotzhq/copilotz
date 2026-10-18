@@ -1,3 +1,4 @@
+import { captureSnapshotCalls } from "./snapshot-capability.ts";
 import type { RegisteredInvocationCalls } from "./registered-invocation.ts";
 /** Internal ordinary-JSON Action execution over named, host-bound owner ports.
  * No public worker factory or complete Action lifecycle is implied. */
@@ -56,6 +57,7 @@ export type RegisteredExecutionProjection = Readonly<{
  * current assignment, session, attempt and epoch before exposing input. */
 export type RegisteredOwnerExecutionPort = Readonly<{
   readCollection?: RegisteredInvocationCalls["readCollection"];
+  snapshots?: RegisteredInvocationCalls["snapshots"];
   /** Separately admitted effect routes, bound to this live assignment. Missing
    * capability refuses ctx.effect; never substitutes worker-local receipts. */
   effects?: OwnerEffectPort;
@@ -297,6 +299,7 @@ export function createRegisteredActionWorker(
         : undefined;
       const execute = port.execute.bind(port);
       const readCollection = port.readCollection?.bind(port);
+      const snapshots = captureSnapshotCalls(port.snapshots);
       let completion: RegisteredExecutionCompletion;
       try {
         completion = await runRegisteredActionInvocation({
@@ -321,6 +324,7 @@ export function createRegisteredActionWorker(
           calls: {
             execute,
             ...(readCollection ? { readCollection } : {}),
+            ...(snapshots ? { snapshots } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>

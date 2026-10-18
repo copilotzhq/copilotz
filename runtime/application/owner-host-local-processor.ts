@@ -1,3 +1,5 @@
+import type { LocalSnapshotResources } from "../owner/local-snapshot-port.ts";
+import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 /** Private same-owner local Processor composition. Host wiring owns scheduling,
  * SQL due-time eligibility and durable retry alarms. No public placement API. */
 import { createOperationCatalogTables } from "../streams/catalog.ts";
@@ -184,6 +186,7 @@ export function captureOwnerHostLocalProcessors(
 }
 export function createOwnerHostLocalProcessors(
   options: Readonly<{
+    snapshots?: LocalSnapshotResources;
     configuration: ReturnType<typeof captureOwnerHostLocalProcessors>;
     registry: PluginRegistry;
     schema: string;
@@ -204,6 +207,7 @@ export function createOwnerHostLocalProcessors(
     requestWake(): void;
   }>,
 ) {
+  const snapshotResources = options.snapshots;
   const {
     registry,
     schema,
@@ -225,9 +229,26 @@ export function createOwnerHostLocalProcessors(
     p = controlCaller.principal;
   if (p.kind !== "owner-control") refuse();
   const { ownerId, epoch, holderId } = p;
-  const executeInput = options.boundary.executeInput.bind(options.boundary);
-  const execute = options.boundary.execute.bind(options.boundary),
-    project = options.boundary.project.bind(options.boundary);
+  const rawExecute = options.boundary.execute.bind(options.boundary);
+  const execute: typeof rawExecute = (caller, command, callOptions) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawExecute(caller, command, callOptions);
+  };
+  const rawExecuteInput = options.boundary.executeInput.bind(options.boundary);
+  const executeInput: typeof rawExecuteInput = (
+    caller,
+    command,
+    callOptions,
+  ) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawExecuteInput(caller, command, callOptions);
+  };
+  const rawProject = options.boundary.project.bind(options.boundary);
+  const project: typeof rawProject = (caller, kind, input, callOptions) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawProject(caller, kind, input, callOptions);
+  };
+
   const operationTables = createOperationCatalogTables(schema);
   const tables = createCoreTableNames(schema),
     assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
@@ -331,13 +352,14 @@ export function createOwnerHostLocalProcessors(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerLocalProcessorAssignment | undefined> {
-    const binding = await assignments.resolveLocal(tx, caller);
+    const binding = await assignments.resolveLocal(tx, caller, readMode);
     if (
       !binding || binding.kind !== "processor" || !selects(binding.processorId)
     ) return undefined;
     const permission = await grants(tx, binding, "current", time);
-    const again = await assignments.resolveLocal(tx, caller),
+    const again = await assignments.resolveLocal(tx, caller, readMode),
       privateEntry = controller.resolveCurrent(caller);
     if (
       !permission || !again || !privateEntry || !exact(binding, again) ||
@@ -354,6 +376,7 @@ export function createOwnerHostLocalProcessors(
     selects,
     stop,
     current: controller.resolveCurrent,
+    captureLifetime: controller.captureCurrentLifetime,
     resolve,
     processor: {
       authorizeStart,
@@ -512,6 +535,7 @@ export function createOwnerHostLocalProcessors(
         onIndeterminate(error);
       });
       const port = createOwnerLocalProcessorPort({
+        snapshots: snapshotResources,
         boundary: {
           execute: (caller, command, callOptions) =>
             command.kind === "owner.local-processor-start"

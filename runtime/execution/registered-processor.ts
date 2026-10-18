@@ -1,3 +1,5 @@
+import type { OwnerSnapshotPort } from "../owner/connection.ts";
+import { captureSnapshotCalls } from "./snapshot-capability.ts";
 import {
   OWNER_COLLECTION_READ,
   parseOwnerCollectionReadRequest,
@@ -48,6 +50,7 @@ export type RegisteredProcessorProjection = Readonly<{
 }>;
 export type RegisteredProcessorOwnerPort = Readonly<{
   readCollection?: RegisteredInvocationCalls["readCollection"];
+  snapshots?: RegisteredInvocationCalls["snapshots"];
   claim(
     assignment: RegisteredProcessorAssignment,
     options: OwnerCommandExecuteOptions,
@@ -202,6 +205,7 @@ export function createRegisteredProcessorOwnerPort(
   options: Readonly<{
     ownerId: string;
     port: Readonly<{
+      snapshots?: OwnerSnapshotPort;
       execute(
         command: OwnerCommand,
         options?: OwnerCommandExecuteOptions,
@@ -251,7 +255,9 @@ export function createRegisteredProcessorOwnerPort(
     if (found.kind !== "processor.complete") refuse();
     return receipt(found.result, ref);
   };
+  const snapshots = captureSnapshotCalls(options.port.snapshots);
   return {
+    ...(snapshots ? { snapshots } : {}),
     async claim(hint, callOptions) {
       const input = snapshot(hint);
       text(input.assignmentId);
@@ -436,6 +442,7 @@ export function createRegisteredProcessorWorker(
       const prepareAction = port.prepareAction?.bind(port);
       const execute = port.execute.bind(port);
       const readCollection = port.readCollection?.bind(port);
+      const snapshots = captureSnapshotCalls(port.snapshots);
       let result: RegisteredProcessorCompletion;
       try {
         result = await runRegisteredProcessorInvocation({
@@ -461,6 +468,7 @@ export function createRegisteredProcessorWorker(
           calls: {
             execute,
             ...(readCollection ? { readCollection } : {}),
+            ...(snapshots ? { snapshots } : {}),
             ...(prepareAction
               ? {
                 prepareAction: (input, callOptions) =>

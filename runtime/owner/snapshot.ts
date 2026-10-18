@@ -432,6 +432,7 @@ export function createOwnerSnapshotResources(
       id: string,
       caller: OwnerCaller,
       input: unknown,
+      signal?: AbortSignal,
     ): Promise<OwnerJson> {
       const r = active;
       if (!r || r.id !== id || r.phase !== "open") {
@@ -442,10 +443,19 @@ export function createOwnerSnapshotResources(
       if (!capacity()) {
         throw failure("owner_snapshot_capacity");
       }
+      if (signal && !(signal instanceof AbortSignal)) {
+        throw new TypeError("Snapshot read signal required.");
+      }
+      const cancel = () => seal(r, failure("owner_snapshot_cancelled"));
       pendingReads++;
       r.pending++;
       arm(r);
       try {
+        if (signal) {
+          addAbortListener.call(signal, "abort", cancel, { once: true });
+          if (aborted(signal)) cancel();
+        }
+        current(r, who);
         const plan = prepare(input);
         const allowed = () =>
           authority(r, who, async (tx, time, mode) => {
@@ -487,6 +497,7 @@ export function createOwnerSnapshotResources(
         seal(r, error);
         throw error;
       } finally {
+        if (signal) removeAbortListener.call(signal, "abort", cancel);
         pendingReads--;
         r.pending--;
         r.touched = performance.now();
@@ -511,6 +522,13 @@ export function createOwnerSnapshotResources(
       await r.finished.promise;
       if (r.error !== closed) throw r.error ?? failure("owner_snapshot_closed");
       witness(r, who);
+    },
+    /** Refuse a same-attempt ordinary call before it can wait for owned capacity. */
+    assertOrdinaryAllowed(caller: OwnerCaller): void {
+      const r = active;
+      if (r && affirm(() => r.lifetime.matches(structuredClone(caller)))) {
+        throw failure("owner_snapshot_nested_call");
+      }
     },
     stop,
   });

@@ -1,8 +1,24 @@
 # Owner snapshot prerequisites
 
-Ordinary registered Collection reads are implemented. Registered `readSnapshot`
-remains unavailable: this document records the prerequisites for F5 snapshot
-sessions, not an activated API or a weaker replacement.
+Ordinary registered Collection reads are implemented. The private, opt-in
+registered `readSnapshot` integration is a work-in-progress candidate. Public
+activation and acceptance remain gated; no weaker snapshot fallback is provided.
+
+## Cloud recovery checkpoint — 18 October 2026, 02:33 UTC
+
+A cloud runner restart restored an older workspace. The last pushed manager
+checkpoint and accepted sibling dependencies were restored at their exact remote
+commits. The newer integration source has been reconstructed from the recorded
+edits: persistent execution lifetime capture, queue-free resource calls,
+read-only callback sealing, local raw-call tracking and uncertainty propagation.
+The narrow worker role allowlist includes only the pure callback helper.
+
+The reconstructed source passes the owner host/worker type check and
+changed-file lint. Its new tests and evidence still need restoration and
+rerunning; earlier pre-restart results do not certify this reconstructed source.
+Prior local validation logs are absent from the restored workspace. This is an
+explicitly unaccepted WIP checkpoint to preserve the source while verification
+continues. No merge or package publication is authorized.
 
 ## Shared transaction lifetime
 

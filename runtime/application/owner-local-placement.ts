@@ -18,10 +18,12 @@ import type {
 } from "../execution/registered-local.ts";
 
 type Reference = OwnerLocalActionAssignmentBinding;
-type Driver = Pick<
-  ReturnType<typeof createRegisteredLocalActionExecution>,
-  "quiescent" | "revoke"
->;
+type Driver =
+  & Pick<
+    ReturnType<typeof createRegisteredLocalActionExecution>,
+    "quiescent" | "revoke"
+  >
+  & Readonly<{ invocationSignal?: AbortSignal }>;
 export type OwnerLocalPlacementEntry = Readonly<{
   readonly reference: Reference;
   readonly controlCaller: OwnerCaller;
@@ -120,6 +122,7 @@ export function createOwnerLocalPlacementController(
     throw failure("Bounded entry count required.");
   }
   type State = {
+    invocationSignal?: AbortSignal;
     reference: Reference;
     caller: string;
     startCaller: string;
@@ -281,13 +284,25 @@ export function createOwnerLocalPlacementController(
         }
         const drained = driver.quiescent;
         const revokeMethod = driver.revoke;
+        const suppliedSignal = driver.invocationSignal;
         if (
-          !(drained instanceof Promise) || typeof revokeMethod !== "function"
+          !(drained instanceof Promise) || typeof revokeMethod !== "function" ||
+          suppliedSignal !== undefined &&
+            !(suppliedSignal instanceof AbortSignal)
         ) {
           throw failure("Actual driver lifetime required.");
         }
+        const signal = suppliedSignal && AbortSignal.any([suppliedSignal]);
+        const capturedRevoke = Function.prototype.bind.call(
+          revokeMethod,
+          driver,
+        );
+        if (driverAttached || state.startPromise || !state.current()) {
+          throw failure("Driver attachment changed during capture.");
+        }
         driverAttached = true;
-        revokeDriver = revokeMethod.bind(driver);
+        state.invocationSignal = signal;
+        revokeDriver = capturedRevoke;
         Promise.prototype.then.call(drained, () => {
           quiescent = true;
           revoke(failure("Local driver quiescent."));
@@ -399,23 +414,46 @@ export function createOwnerLocalPlacementController(
     if (!current()) revoke(failure("Owner lifetime lost during reservation."));
     return handle;
   };
+  const currentState = (caller: OwnerCaller): State | undefined => {
+    try {
+      const data = copy(caller), p = data.principal;
+      ownerPrincipalIdentity(p);
+      if (p.kind !== "owner-local") return undefined;
+      const state = entries.get(p.deliveryId);
+      return state?.startObserved && !state.terminal && state.current() &&
+          canonical(data) === state.caller && state.startObserved &&
+          !state.terminal
+        ? state
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   return {
     reserve,
     stop,
-    resolveCurrentLocal(caller: OwnerCaller): Reference | undefined {
+    /** Driver invocation lifetime ends before its separately authorized settlement. */
+    captureCurrentLifetime(caller: OwnerCaller) {
+      let who: OwnerCaller;
       try {
-        const data = copy(caller);
-        const p = data.principal;
-        ownerPrincipalIdentity(p);
-        if (p.kind !== "owner-local") return undefined;
-        const state = entries.get(p.deliveryId);
-        return state?.startObserved && !state.terminal && state.current() &&
-            canonical(data) === state.caller
-          ? copy(state.reference)
-          : undefined;
+        who = copy(caller);
       } catch {
         return undefined;
       }
+      const state = currentState(who), signal = state?.invocationSignal;
+      if (!state || !signal || signal.aborted) return undefined;
+      const live = (next: OwnerCaller) =>
+        currentState(next) === state && !signal.aborted;
+      const lifetime = Object.freeze({
+        signal: AbortSignal.any([signal]),
+        isCurrent: () => live(who),
+        matches: live,
+      });
+      return live(who) ? lifetime : undefined;
+    },
+    resolveCurrentLocal(caller: OwnerCaller): Reference | undefined {
+      const state = currentState(caller);
+      return state ? copy(state.reference) : undefined;
     },
     authorizeStart(
       tx: SqlExecutor,

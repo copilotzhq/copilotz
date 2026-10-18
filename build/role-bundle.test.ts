@@ -44,6 +44,7 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         "runtime/execution/registered-processor-invocation.ts",
         "runtime/execution/collection-read-call.ts",
         "runtime/execution/collection-read-capability.ts",
+        "runtime/execution/snapshot-capability.ts",
         "runtime/owner/ordinary-value.ts",
       ]
     ) {
@@ -52,6 +53,8 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
     for (
       const path of [
         "runtime/owner/collection-read.ts",
+        "runtime/owner/snapshot.ts",
+        "runtime/owner/local-snapshot-port.ts",
         "runtime/owner/ordinary-source-sql.ts",
         "runtime/collections/query.ts",
         "runtime/collections/aggregate.ts",

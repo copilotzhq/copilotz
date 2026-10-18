@@ -1,3 +1,5 @@
+import type { LocalSnapshotResources } from "../owner/local-snapshot-port.ts";
+import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 import { ownConfiguration } from "./owner-local-configuration.ts";
 /** Private fresh-only local Action composition. No public placement option,
  * worker identity or restart adoption. Effects and named preparation reuse the
@@ -259,6 +261,7 @@ export function createOwnerHostCommandContexts(
 
 export function createOwnerHostLocalActions(
   options: Readonly<{
+    snapshots?: LocalSnapshotResources;
     configuration: ReturnType<typeof captureOwnerHostLocalActions>;
     registry: PluginRegistry;
     schema: string;
@@ -276,6 +279,7 @@ export function createOwnerHostLocalActions(
     onIndeterminate(error: unknown): void;
   }>,
 ) {
+  const snapshotResources = options.snapshots;
   const {
     registry,
     schema,
@@ -295,9 +299,25 @@ export function createOwnerHostLocalActions(
   if (p.kind !== "owner-control") refuse();
   const { ownerId, epoch, holderId } = p;
   const boundary = options.boundary;
-  const execute = boundary.execute.bind(boundary);
-  const executeInput = boundary.executeInput.bind(boundary);
-  const project = boundary.project.bind(boundary);
+  const rawExecute = boundary.execute.bind(boundary);
+  const execute: typeof rawExecute = (caller, command, callOptions) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawExecute(caller, command, callOptions);
+  };
+  const rawExecuteInput = boundary.executeInput.bind(boundary);
+  const executeInput: typeof rawExecuteInput = (
+    caller,
+    command,
+    callOptions,
+  ) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawExecuteInput(caller, command, callOptions);
+  };
+  const rawProject = boundary.project.bind(boundary);
+  const project: typeof rawProject = (caller, kind, input, callOptions) => {
+    snapshotResources?.assertOrdinaryAllowed(caller);
+    return rawProject(caller, kind, input, callOptions);
+  };
   const tables = createCoreTableNames(schema);
   const controller = createOwnerLocalPlacementController({
     controlCaller,
@@ -349,13 +369,14 @@ export function createOwnerHostLocalActions(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerLocalExecutionAssignment | undefined> {
-    const binding = await assignments.resolveLocal(tx, caller);
+    const binding = await assignments.resolveLocal(tx, caller, readMode);
     if (!binding || binding.kind !== "action" || !selects(binding.actionId)) {
       return undefined;
     }
     const permission = await grants(tx, binding, "current", time);
-    const again = await assignments.resolveLocal(tx, caller);
+    const again = await assignments.resolveLocal(tx, caller, readMode);
     if (!permission || !again || !exact(binding, again)) return undefined;
     const source = (await tx.query<{
       id: string;
@@ -414,6 +435,7 @@ export function createOwnerHostLocalActions(
     selects,
     stop: controller.stop,
     current: controller.resolveCurrentLocal,
+    captureLifetime: controller.captureCurrentLifetime,
     resolve,
     execution: {
       authorizeStart,
@@ -462,6 +484,7 @@ export function createOwnerHostLocalActions(
         ownerLocalActionStartKey(binding),
       );
       const port = createOwnerLocalActionPort({
+        snapshots: snapshotResources,
         boundary: {
           execute: (caller, command, callOptions) =>
             command.kind === "owner.local-start"

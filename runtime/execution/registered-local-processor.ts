@@ -1,3 +1,4 @@
+import { captureSnapshotCalls } from "./snapshot-capability.ts";
 /** One owner-local Processor attempt. The host owns generations, retry wakes,
  * durable authority and capacity; neither a receipt nor quiescence grants them. */
 import { assertJsonValue } from "../json.ts";
@@ -57,6 +58,7 @@ export type RegisteredLocalProcessorPort = Readonly<{
   invokeAction?: RegisteredInvocationCalls["invokeAction"];
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
   readCollection?: RegisteredInvocationCalls["readCollection"];
+  snapshots?: RegisteredInvocationCalls["snapshots"];
   sealInvocationCalls(): void;
   drainRawCalls(): Promise<void>;
   settlementState(
@@ -332,6 +334,18 @@ export function createRegisteredLocalProcessorExecution(
   const invokeAction = owner.invokeAction?.bind(owner);
   const prepareAction = owner.prepareAction?.bind(owner);
   const readCollection = owner.readCollection?.bind(owner);
+  const snapshots = captureSnapshotCalls(owner.snapshots, async (work) => {
+    check();
+    try {
+      const result = await work();
+      check();
+      return result;
+    } catch (error) {
+      if (unknown(error)) throw indeterminate(error);
+      current();
+      throw error;
+    }
+  });
   const state = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -543,6 +557,7 @@ export function createRegisteredLocalProcessorExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(snapshots ? { snapshots } : {}),
                 ...(readCollection
                   ? {
                     readCollection: (input, callOptions) =>
@@ -631,6 +646,8 @@ export function createRegisteredLocalProcessorExecution(
     }
   };
   return {
+    /** Private composition capability; invocation end precedes settlement drain. */
+    invocationSignal: AbortSignal.any([exposed.signal]),
     run(): Promise<RegisteredLocalProcessorResult> {
       return running ??= Promise.resolve().then(run);
     },

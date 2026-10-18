@@ -27,6 +27,7 @@ const PROTOCOL = "copilotz.owner.v1";
 const FEATURES = ["commands", "projections", "settlement"] as const;
 const COMPLETE = "copilotz.owner.complete";
 const PROJECT = "copilotz.owner.project";
+const SNAPSHOT = "copilotz.owner.snapshot";
 const RECEIPT = "copilotz.owner.receipt";
 const LIMIT = 1_100_000;
 const ERROR_CODES = new Set([
@@ -51,7 +52,51 @@ const ERROR_CODES = new Set([
   "effect_step_limit",
   "effect_data_invalid",
   "effect_indeterminate",
+  "owner_snapshot_unavailable",
+  "owner_snapshot_closed",
+  "owner_snapshot_expired",
+  "owner_snapshot_cancelled",
+  "owner_snapshot_capacity",
+  "owner_snapshot_cleanup_unknown",
+  "owner_snapshot_nested_call",
 ]);
+export type OwnerSnapshotPort = Readonly<{
+  open(
+    options?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+  ): Promise<string>;
+  read(
+    id: string,
+    request: OwnerJson,
+    options?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+  ): Promise<OwnerJson>;
+  close(
+    id: string,
+    options?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+  ): Promise<void>;
+}>;
+export type OwnerSnapshotCall =
+  | Readonly<{ operation: "open" }>
+  | Readonly<{ operation: "read"; id: string; request: OwnerJson }>
+  | Readonly<{ operation: "close"; id: string }>;
+function snapshotCall(value: unknown): OwnerSnapshotCall {
+  const input = object(value);
+  const allowed = input.operation === "open"
+    ? ["operation"]
+    : input.operation === "read"
+    ? ["operation", "id", "request"]
+    : input.operation === "close"
+    ? ["operation", "id"]
+    : [];
+  if (
+    !allowed.length || Object.keys(input).length !== allowed.length ||
+    allowed.some((key) => !Object.hasOwn(input, key)) ||
+    input.operation !== "open" &&
+      (typeof input.id !== "string" || !input.id || input.id.length > 128)
+  ) {
+    throw new TypeError("Invalid snapshot resource request.");
+  }
+  return structuredClone(input) as OwnerSnapshotCall;
+}
 export type OwnerActionCallRequest = Readonly<{
   actionAlias: string;
   input: OwnerJson;
@@ -193,6 +238,19 @@ function receiptIdentity(value: unknown): ReceiptIdentity {
 export function createOwnerWorkerCallAdmission(
   options: Readonly<{
     resolveOwner(ownerId: string): OwnerCommandBoundary | undefined;
+    /** Exact private attempt authentication without command-queue grant lookup.
+     * Resource operations perform current SQL authorization in their own scope. */
+    snapshots?: Readonly<{
+      resolveCaller(
+        context: OwnerWorkerCallContext,
+        ownerId: string,
+      ): OwnerCaller | undefined;
+      run(
+        caller: OwnerCaller,
+        request: OwnerSnapshotCall,
+        signal: AbortSignal,
+      ): Promise<OwnerJson>;
+    }>;
     /** Optional inert readiness admission: authenticate this exact session and
      * return true only after actual owner reconciliation/handler readiness. */
     authorizeReadiness?(
@@ -247,6 +305,9 @@ export function createOwnerWorkerCallAdmission(
       >;
   }>,
 ) {
+  const snapshotRoutes = options.snapshots;
+  const resolveSnapshot = snapshotRoutes?.resolveCaller.bind(snapshotRoutes);
+  const runSnapshot = snapshotRoutes?.run.bind(snapshotRoutes);
   const admit = async (
     context: OwnerWorkerCallContext,
     recoveryOnly: boolean,
@@ -259,7 +320,7 @@ export function createOwnerWorkerCallAdmission(
       context.workload !== EFFECT_SETTLE &&
       context.workload !== EFFECT_STATE && context.workload !== CHILD_ACTION &&
       context.workload !== CHILD_PREPARATION &&
-      context.workload !== CHILD_RESULT
+      context.workload !== CHILD_RESULT && context.workload !== SNAPSHOT
     ) {
       return undefined;
     }
@@ -278,6 +339,18 @@ export function createOwnerWorkerCallAdmission(
     if (!owner) return undefined;
     const currentOwner = () =>
       owner.state === "acquired" && options.resolveOwner(ownerId) === owner;
+    const isSnapshot = context.workload === SNAPSHOT;
+    if (
+      isSnapshot &&
+      (!context.parent || !resolveSnapshot || !runSnapshot || !currentOwner())
+    ) return undefined;
+    const snapshotCaller = isSnapshot
+      ? resolveSnapshot!(context, ownerId)
+      : undefined;
+    if (
+      isSnapshot &&
+      (!snapshotCaller || !currentOwner() || context.signal.aborted)
+    ) return undefined;
     const isReadiness = context.workload === READY;
     if (
       isReadiness && (context.parent || !currentOwner() ||
@@ -310,6 +383,7 @@ export function createOwnerWorkerCallAdmission(
     const isCommand = context.workload === COMMAND || isCompletion ||
       isEffectSettlement;
     const isAssigned = context.workload !== RECEIPT && !isReadiness &&
+      !isSnapshot &&
       !ingressRoute;
     if (isAssigned && !context.parent) return undefined;
     const assignment = isAssigned
@@ -322,13 +396,19 @@ export function createOwnerWorkerCallAdmission(
           ? assignment.settlementGranted !== true
           : assignment.ctxGranted !== true))
     ) return undefined;
-    const caller = isAssigned ? assignment!.caller : ingressRoute ? ingress! : {
-      principal: {
-        kind: "worker" as const,
-        workerId: context.fence.identity.workerId,
-      },
-      ownerEpoch: 0,
-    };
+    const caller = isSnapshot
+      ? snapshotCaller!
+      : isAssigned
+      ? assignment!.caller
+      : ingressRoute
+      ? ingress!
+      : {
+        principal: {
+          kind: "worker" as const,
+          workerId: context.fence.identity.workerId,
+        },
+        ownerEpoch: 0,
+      };
     if (
       !caller || caller.principal.kind !== "worker" ||
       caller.principal.workerId !== context.fence.identity.workerId
@@ -356,6 +436,27 @@ export function createOwnerWorkerCallAdmission(
             throw new TypeError("Ingress authority is no longer current.");
           }
           signal.throwIfAborted();
+        }
+        if (isSnapshot) {
+          const fresh = resolveSnapshot!(context, ownerId);
+          if (
+            !fresh || JSON.stringify(fresh) !== JSON.stringify(admitted) ||
+            !currentOwner()
+          ) throw new TypeError("Snapshot caller is no longer current.");
+          const result = await runSnapshot!(
+            admitted,
+            snapshotCall(payload),
+            signal,
+          );
+          const finalCaller = resolveSnapshot!(context, ownerId);
+          if (
+            !finalCaller ||
+            JSON.stringify(finalCaller) !== JSON.stringify(admitted) ||
+            !currentOwner()
+          ) throw new TypeError("Snapshot authority is no longer current.");
+          signal.throwIfAborted();
+          context.signal.throwIfAborted();
+          return encode({ ok: true, value: result });
         }
         if (isReadiness) {
           const request = object(payload);
@@ -777,6 +878,58 @@ export function createOwnerConnection(
     ): Promise<OwnerJson> {
       return await call(EFFECT_STATE, reference, callOptions) as OwnerJson;
     },
+    snapshots: {
+      async open(
+        callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+      ): Promise<string> {
+        const result = await call(SNAPSHOT, { operation: "open" }, callOptions);
+        if (typeof result !== "string" || !result || result.length > 128) {
+          throw new TypeError("Invalid snapshot resource reply.");
+        }
+        return result;
+      },
+      async read(
+        id: string,
+        request: OwnerJson,
+        callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+      ): Promise<OwnerJson> {
+        return await call(
+          SNAPSHOT,
+          snapshotCall({ operation: "read", id, request }),
+          callOptions,
+        ) as OwnerJson;
+      },
+      async close(
+        id: string,
+        callOptions?: Readonly<{ signal?: AbortSignal; deadlineAtMs?: number }>,
+      ): Promise<void> {
+        try {
+          const result = await call(
+            SNAPSHOT,
+            snapshotCall({ operation: "close", id }),
+            callOptions,
+          );
+          if (result !== null) {
+            throw new TypeError("Invalid snapshot close reply.");
+          }
+        } catch (error) {
+          // Refusal is distinct from an unobserved transport close. Neither
+          // releases owner capacity; only the actual resource does that.
+          if (
+            error instanceof OwnerCallRejected && error.outcome === "refused"
+          ) throw error;
+          throw Object.assign(
+            new Error("Snapshot cleanup reply is unavailable.", {
+              cause: error,
+            }),
+            {
+              code: "owner_snapshot_cleanup_unknown",
+              indeterminate: true,
+            },
+          );
+        }
+      },
+    } satisfies OwnerSnapshotPort,
     async project(
       kind: string,
       input: OwnerJson,

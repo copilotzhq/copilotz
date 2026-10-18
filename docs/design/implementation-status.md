@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 01:54 UTC.
+Updated: 18 October 2026, 02:33 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -25,8 +25,16 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
 | Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
-| Owner snapshot resource manager      | WIP: scoped checks pass | Actual PG/PGlite lifecycle/epoch/probe gates pass; strict package reachability is blocked until genuine host routing is wired                        |
+| Owner snapshot resource manager      | Reconstructed WIP       | Host/worker type check and changed lint pass; restore regression tests and rerun actual PG/PGlite integration, failure and artifact gates            |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
+
+A cloud runner restart restored an older workspace. The exact pushed manager
+checkpoint was recovered and newer integration source reconstructed. Only the
+new source type-check/lint gates are confirmed after recovery; the earlier
+pre-restart runtime results are historical, not acceptance of this
+reconstruction. Restoring regression tests and independent PostgreSQL/PGlite
+validation is the current task. The snapshot item stays unchecked and the PR
+stays draft.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements

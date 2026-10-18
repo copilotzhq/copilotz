@@ -36,6 +36,7 @@ const runtimeModules = new Set([
   "runtime/execution/child-action-port.ts",
   "runtime/execution/collection-read-call.ts",
   "runtime/execution/collection-read-capability.ts",
+  "runtime/execution/snapshot-capability.ts",
   "runtime/execution/preparation-call.ts",
   "runtime/execution/owner-port.ts",
   "runtime/execution/recovery.ts",

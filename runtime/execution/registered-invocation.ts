@@ -1,3 +1,4 @@
+import type { OwnerSnapshotPort } from "../owner/connection.ts";
 /** Internal placement-neutral invocation data and trusted, prebound calls.
  * A projection is ordinary data, never authority. The placement driver owns
  * admission, private lifetime, cancellation, settlement and receipt recovery. */
@@ -65,6 +66,7 @@ export type RegisteredInvocationLifetime = Readonly<{
   exposedSignal: AbortSignal;
 }>;
 export type RegisteredInvocationCalls = Readonly<{
+  snapshots?: OwnerSnapshotPort;
   readCollection?(
     request: OwnerCollectionReadRequest,
     options: OwnerCommandExecuteOptions,

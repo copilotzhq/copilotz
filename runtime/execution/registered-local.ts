@@ -1,3 +1,4 @@
+import { captureSnapshotCalls } from "./snapshot-capability.ts";
 /** Dormant, fresh-only owner-local Action driver. This owns one invocation,
  * never host capacity, durable authority, retries or receipt recovery. */
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -66,6 +67,7 @@ export type RegisteredLocalActionPort = Readonly<{
   invokeAction?: RegisteredInvocationCalls["invokeAction"];
   prepareAction?: RegisteredInvocationCalls["prepareAction"];
   readCollection?: RegisteredInvocationCalls["readCollection"];
+  snapshots?: RegisteredInvocationCalls["snapshots"];
   /** Synchronously stop new invocation registrations, retaining only narrowly
    * authorized already-admitted settlement and driver terminal/state calls. */
   sealInvocationCalls(): void;
@@ -230,6 +232,8 @@ function unknownOutcome(error: unknown): boolean {
 export function createRegisteredLocalActionExecution(
   options: RegisteredLocalActionOptions,
 ): Readonly<{
+  /** Private invocation revocation; does not certify raw drain or end settlement. */
+  invocationSignal: AbortSignal;
   run(): Promise<RegisteredLocalActionResult>;
   /** Trusted hint only after known committed scope cancellation. The current
    * settlement projection must still independently establish cancellation. */
@@ -253,6 +257,7 @@ export function createRegisteredLocalActionExecution(
   const invokeAction = owner.invokeAction?.bind(owner);
   const prepareAction = owner.prepareAction?.bind(owner);
   const readCollection = owner.readCollection?.bind(owner);
+  const snapshots = captureSnapshotCalls(owner.snapshots, (work) => call(work));
   const settlementState = owner.settlementState.bind(owner);
   const complete = owner.complete.bind(owner);
   const seal = owner.sealInvocationCalls.bind(owner);
@@ -501,6 +506,7 @@ export function createRegisteredLocalActionExecution(
                 exposedSignal: exposed.signal,
               },
               calls: {
+                ...(snapshots ? { snapshots } : {}),
                 ...(readCollection
                   ? {
                     readCollection: (input, callOptions) =>
@@ -581,6 +587,8 @@ export function createRegisteredLocalActionExecution(
     }
   };
   return {
+    /** Private composition capability; invocation end precedes settlement drain. */
+    invocationSignal: AbortSignal.any([exposed.signal]),
     run() {
       // Publish the first promise before any callback can reenter run().
       pending ??= Promise.resolve().then(run);

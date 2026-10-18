@@ -1,3 +1,8 @@
+import {
+  createOwnerSnapshotResources,
+  type OwnerHistoricalReadPolicy,
+} from "../owner/snapshot.ts";
+import type { OwnerAuthorityReadMode } from "../owner/authority-read.ts";
 /** Private ordinary Action/Processor host. Every worker, including embedded
  * workers, uses the same Oxian transport. A private fresh-owner bundle selects
  * local Actions and same-owner Processor generations without public activation.
@@ -300,6 +305,13 @@ export type OwnerHostOptions = Readonly<{
   registry: PluginRegistry;
   policy: OwnerHostPolicy;
   preparation?: OwnerHostPreparationOptions;
+  /** Private opt-in selection scopes; load evidence must choose production limits. */
+  snapshots?: Readonly<{
+    authorizeHistorical: OwnerHistoricalReadPolicy;
+    idleTimeoutMs: number;
+    maxLifetimeMs: number;
+    maxPendingReads: number;
+  }>;
   transport: Omit<HypervisorOptions, "workerCalls">;
   createTransport(
     options: OwnerHostTransportOptions,
@@ -435,6 +447,29 @@ export async function createOwnerHost(
     throw new TypeError(
       "Private terminal recovery requires resume without local placement.",
     );
+  }
+  const snapshotConfiguration = options.snapshots === undefined
+    ? undefined
+    : ownConfiguration(options.snapshots, [
+      "authorizeHistorical",
+      "idleTimeoutMs",
+      "maxLifetimeMs",
+      "maxPendingReads",
+    ]);
+  if (
+    snapshotConfiguration &&
+    (typeof snapshotConfiguration.authorizeHistorical !== "function" ||
+      [
+        snapshotConfiguration.idleTimeoutMs,
+        snapshotConfiguration.maxLifetimeMs,
+        snapshotConfiguration.maxPendingReads,
+      ]
+        .some((value) =>
+          typeof value !== "number" || !Number.isSafeInteger(value) ||
+          value < 1 || value > 2_147_483_647
+        ))
+  ) {
+    throw new TypeError("Invalid private snapshot configuration.");
   }
   const terminalConfiguration = terminalRecovery === undefined
     ? undefined
@@ -598,6 +633,7 @@ export async function createOwnerHost(
     | ReturnType<typeof createOwnerHostLocalProcessors>
     | undefined;
   let localControlToken: string | undefined;
+  let snapshots: ReturnType<typeof createOwnerSnapshotResources> | undefined;
   const settlements = new Map<string, OperationSettlementScope>();
   let pumping = false;
   let settlementPump: Promise<void> | undefined;
@@ -647,6 +683,7 @@ export async function createOwnerHost(
     clearTimeout(alarmTimer);
     local?.stop(error);
     localProcessor?.stop(error);
+    void snapshots?.stop().catch(report);
     if (localControlToken) controlTokens.delete(localControlToken);
     owner?.stop(error);
     abort.abort(error);
@@ -846,8 +883,9 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ) {
-    const binding = await bridge.resolveStarted(tx, caller);
+    const binding = await bridge.resolveStarted(tx, caller, readMode);
     if (!binding || !ready()) {
       return undefined;
     }
@@ -868,18 +906,21 @@ export async function createOwnerHost(
       time,
     );
     const grants = returnedGrants && copy(returnedGrants);
-    if (!grants || !await bridge.resolveStarted(tx, caller)) return undefined;
+    if (!grants || !await bridge.resolveStarted(tx, caller, readMode)) {
+      return undefined;
+    }
     return { binding: copy(binding), grants };
   }
   async function resolveExecution(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerExecutionAssignment | undefined> {
     if (caller.principal.kind === "owner-local") {
-      return await local?.resolve(tx, caller, time);
+      return await local?.resolve(tx, caller, time, readMode);
     }
-    const current = await resolveCurrentAssignment(tx, caller, time);
+    const current = await resolveCurrentAssignment(tx, caller, time, readMode);
     if (!current || "kind" in current.binding) return undefined;
     const { binding, grants } = current;
     const source = (await tx.query<
@@ -938,8 +979,9 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerProcessorAssignment | undefined> {
-    const current = await resolveCurrentAssignment(tx, caller, time);
+    const current = await resolveCurrentAssignment(tx, caller, time, readMode);
     if (!current || !("kind" in current.binding)) return undefined;
     const { binding, grants } = current;
     return {
@@ -1261,8 +1303,8 @@ export async function createOwnerHost(
     ...(processorConfiguration
       ? {
         local: {
-          resolveAssignment: (tx, caller, time) =>
-            localProcessor?.resolve(tx, caller, time),
+          resolveAssignment: (tx, caller, time, readMode) =>
+            localProcessor?.resolve(tx, caller, time, readMode),
           authorizeStart: (tx, caller, binding, facts, time) =>
             localProcessor?.processor.authorizeStart(
               tx,
@@ -1335,10 +1377,16 @@ export async function createOwnerHost(
     tx: SqlExecutor,
     caller: OwnerCaller,
     time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
   ): Promise<OwnerChildActionBinding | undefined> {
     if (caller.principal.kind === "owner-local") {
       if (local?.current(caller)) {
-        const assignment = await execution.authorizeLive(tx, caller, time);
+        const assignment = await execution.authorizeLive(
+          tx,
+          caller,
+          time,
+          readMode,
+        );
         return assignment.placement === "owner-local"
           ? { kind: "action", assignment }
           : undefined;
@@ -1348,24 +1396,25 @@ export async function createOwnerHost(
         tx,
         caller,
         time,
+        readMode,
       );
       return "placement" in assignment &&
           assignment.placement === "owner-local"
         ? { kind: "processor", assignment }
         : undefined;
     }
-    const current = await bridge.resolveStarted(tx, caller);
+    const current = await bridge.resolveStarted(tx, caller, readMode);
     if (!current) return undefined;
     return "kind" in current
       ? {
         kind: "processor",
-        assignment:
-          (await processor.authorizeLive(tx, caller, time)).assignment,
+        assignment: (await processor.authorizeLive(tx, caller, time, readMode))
+          .assignment,
       }
       : {
         kind: "action",
         assignment: workerAssignment(
-          await execution.authorizeLive(tx, caller, time),
+          await execution.authorizeLive(tx, caller, time, readMode),
         ),
       };
   }
@@ -2339,6 +2388,29 @@ export async function createOwnerHost(
     },
     onPostCommitError: report,
   });
+  if (snapshotConfiguration) {
+    snapshots = createOwnerSnapshotResources({
+      session,
+      schema,
+      registry,
+      owner,
+      ownerId,
+      holderId,
+      now,
+      idleTimeoutMs: snapshotConfiguration.idleTimeoutMs as number,
+      maxLifetimeMs: snapshotConfiguration.maxLifetimeMs as number,
+      maxPendingReads: snapshotConfiguration.maxPendingReads as number,
+      authorizeHistorical: snapshotConfiguration
+        .authorizeHistorical as OwnerHistoricalReadPolicy,
+      resolve: resolveInvocation,
+      capture(caller) {
+        return caller.principal.kind === "owner-local"
+          ? local?.captureLifetime(caller) ??
+            localProcessor?.captureLifetime(caller)
+          : bridge.captureStartedLifetime(caller);
+      },
+    });
+  }
   // Boundary self-fencing (including ingress COMMIT uncertainty) can happen
   // without a dispatched Work failure. Observe the authoritative transition;
   // diagnostics and transport capacity refusals are not terminal signals.
@@ -2527,6 +2599,35 @@ export async function createOwnerHost(
     }, 1000);
   }
   const calls = createOwnerWorkerCallAdmission({
+    ...(snapshots
+      ? {
+        snapshots: {
+          resolveCaller(context: OwnerWorkerCallContext, id: string) {
+            if (id !== ownerId || !ready()) return undefined;
+            return bridge.resolveAssignment(context, id)?.caller;
+          },
+          async run(
+            caller: OwnerCaller,
+            request: import("../owner/connection.ts").OwnerSnapshotCall,
+            signal: AbortSignal,
+          ): Promise<OwnerJson> {
+            if (request.operation === "open") {
+              return await snapshots!.open(caller, signal);
+            }
+            if (request.operation === "read") {
+              return await snapshots!.read(
+                request.id,
+                caller,
+                request.request,
+                signal,
+              );
+            }
+            await snapshots!.close(request.id, caller);
+            return null;
+          },
+        },
+      }
+      : {}),
     resolveOwner: (id) => id === ownerId && ready() ? owner : undefined,
     async authorizeReadiness(context, id) {
       return id === ownerId && current(context.fence) &&
@@ -2576,6 +2677,7 @@ export async function createOwnerHost(
     async resolveAssignment(context, id) {
       const found = bridge.resolveAssignment(context, id);
       if (!found || !ready()) return undefined;
+      snapshots?.assertOrdinaryAllowed(found.caller);
       // Grant lookup is re-run with the exact started witness under the fence.
       const grants = await control((caller) =>
         owner.project(
@@ -2770,6 +2872,7 @@ export async function createOwnerHost(
       localControlToken = crypto.randomUUID();
       controlTokens.set(localControlToken, { purpose: "local-start" });
       const shared = {
+        snapshots,
         registry,
         schema,
         boundary: owner,
@@ -2888,6 +2991,7 @@ export async function createOwnerHost(
         // Transport cleanup may fail independently of actual local/raw work.
         // Keep waiting for that work, and preserve the original shutdown error.
         const cleanup = await Promise.allSettled([
+          Promise.resolve().then(() => snapshots?.stop()),
           Promise.resolve().then(() => transport!.shutdown(reason)),
           (async () => {
             await Promise.allSettled([...runningTasks]);

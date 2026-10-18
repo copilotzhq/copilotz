@@ -23,10 +23,12 @@ import {
 } from "../execution/registered-local-processor.ts";
 
 type Reference = OwnerLocalProcessorAssignmentBinding;
-type Driver = Pick<
-  ReturnType<typeof createRegisteredLocalProcessorExecution>,
-  "quiescent" | "revoke"
->;
+type Driver =
+  & Pick<
+    ReturnType<typeof createRegisteredLocalProcessorExecution>,
+    "quiescent" | "revoke"
+  >
+  & Readonly<{ invocationSignal?: AbortSignal }>;
 export type OwnerLocalProcessorPlacementEntry = Readonly<{
   reference: Reference;
   attemptOrdinal: number;
@@ -142,6 +144,7 @@ export function createOwnerLocalProcessorPlacementController(
     typeof predecessorRetired !== "function"
   ) throw failure("Bounded ledger and predecessor proof required.");
   type State = {
+    invocationSignal?: AbortSignal;
     reference: Reference;
     ordinal: number;
     previous?: State;
@@ -340,11 +343,22 @@ export function createOwnerLocalProcessorPlacementController(
           throw failure("Driver attachment refused.");
         }
         const drained = driver.quiescent, method = driver.revoke;
-        if (!(drained instanceof Promise) || typeof method !== "function") {
+        const suppliedSignal = driver.invocationSignal;
+        if (
+          !(drained instanceof Promise) || typeof method !== "function" ||
+          suppliedSignal !== undefined &&
+            !(suppliedSignal instanceof AbortSignal)
+        ) {
           throw failure("Actual driver lifetime required.");
         }
+        const signal = suppliedSignal && AbortSignal.any([suppliedSignal]);
+        const capturedRevoke = Function.prototype.bind.call(method, driver);
+        if (state.driverAttached || state.startPromise || !state.current()) {
+          throw failure("Driver attachment changed during capture.");
+        }
         state.driverAttached = true;
-        revokeDriver = method.bind(driver);
+        state.invocationSignal = signal;
+        revokeDriver = capturedRevoke;
         Promise.prototype.then.call(drained, () => {
           state.quiescent = true;
           state.revoke(failure("Processor driver quiescent."));
@@ -490,24 +504,49 @@ export function createOwnerLocalProcessorPlacementController(
     state.driverAttached && !!state.startPromise && state.rawPending &&
     !state.startKnown && !state.startObserved && state.current() &&
     same(bound, state.reference) && canonical(caller) === state.startCaller;
+  const currentState = (caller: OwnerCaller): State | undefined => {
+    try {
+      const data = copy(caller), p = data.principal;
+      ownerPrincipalIdentity(p);
+      if (p.kind !== "owner-local") return undefined;
+      const state = latest.get(p.deliveryId);
+      return state?.startObserved && !state.end && state.current() &&
+          canonical(data) === state.caller && state.startObserved && !state.end
+        ? state
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   return {
     reserve,
     stop,
-    resolveCurrent(
-      caller: OwnerCaller,
-    ): Readonly<{ reference: Reference; attemptOrdinal: number }> | undefined {
+    /** Driver invocation lifetime ends before its separately authorized settlement. */
+    captureCurrentLifetime(caller: OwnerCaller) {
+      let who: OwnerCaller;
       try {
-        const data = copy(caller);
-        ownerPrincipalIdentity(data.principal);
-        if (data.principal.kind !== "owner-local") return undefined;
-        const s = latest.get(data.principal.deliveryId);
-        return s?.startObserved && !s.end && s.current() &&
-            canonical(data) === s.caller
-          ? { reference: copy(s.reference), attemptOrdinal: s.ordinal }
-          : undefined;
+        who = copy(caller);
       } catch {
         return undefined;
       }
+      const state = currentState(who), signal = state?.invocationSignal;
+      if (!state || !signal || signal.aborted) return undefined;
+      const live = (next: OwnerCaller) =>
+        currentState(next) === state && !signal.aborted;
+      const lifetime = Object.freeze({
+        signal: AbortSignal.any([signal]),
+        isCurrent: () => live(who),
+        matches: live,
+      });
+      return live(who) ? lifetime : undefined;
+    },
+    resolveCurrent(
+      caller: OwnerCaller,
+    ): Readonly<{ reference: Reference; attemptOrdinal: number }> | undefined {
+      const state = currentState(caller);
+      return state
+        ? { reference: copy(state.reference), attemptOrdinal: state.ordinal }
+        : undefined;
     },
     isCurrent(
       caller: OwnerCaller,

@@ -1,3 +1,4 @@
+import { createRegisteredReadSnapshot } from "./snapshot-capability.ts";
 import { createCollectionReadCapability } from "./collection-read-capability.ts";
 import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 /** Ordinary Processor context/invocation kernel, independent of placement.
@@ -151,6 +152,14 @@ export async function runRegisteredProcessorInvocation(
     }));
     return task;
   };
+  const readSnapshot = createRegisteredReadSnapshot({
+    collections: registry.collections,
+    port: options.calls.snapshots,
+    signal: commandSignal,
+    check,
+    unsupported,
+    track,
+  });
   const planner = createOwnerTransactionPlanner({
     collections: registry.collections,
     identity: {
@@ -356,7 +365,7 @@ export async function runRegisteredProcessorInvocation(
       signal: exposedSignal,
       now: () => new Date(),
       transaction,
-      readSnapshot: unsupported,
+      readSnapshot: readSnapshot as RuntimeContext["readSnapshot"],
       signalDeferredWait: unsupported,
     } as unknown as ProcessorContext;
     try {

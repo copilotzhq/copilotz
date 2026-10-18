@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 02:33 UTC.
+Updated: 18 October 2026, 03:32 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -25,7 +25,7 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Accounted snapshot pool capacity     | Reviewed prerequisite   | One existing pool, bounded pair admission; full scoped 102 Ominipg/31 Copilotz plus five steps; final 25 PG pool cases, seven probes and static pass |
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
 | Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
-| Owner snapshot resource manager      | Reconstructed WIP       | Host/worker type check and changed lint pass; restore regression tests and rerun actual PG/PGlite integration, failure and artifact gates            |
+| Owner snapshot host integration      | Review: two failures    | PG host34 pass; PGlite host33 pass/1 readiness failure; cancellation-code test correction pending replay; full static and role12 pass                |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 A cloud runner restart restored an older workspace. The exact pushed manager
@@ -212,17 +212,22 @@ Generic persistence close still supplies no physical-release proof. The owner
 resource manager is now being implemented; historical permission and actual
 worker/local invocation routing are not activated yet.
 
-The private owner snapshot manager is a WIP integration checkpoint. The
-corrected candidate passes 21 repository cases on each backend, 45
-lifecycle/Collection compatibility cases, the unchanged PostgreSQL epoch
-regression and six final reviewer probes on each backend. Exact cleanup and
-separate global read/authority budgets survive cancellation and detached
-continuations. Final current-lane policy cannot replace the durable owner epoch
-and disclose old data. Original causal failures and the corrected stale reviewer
-injection indices are retained. The strict package-surface gate still fails
-because no production caller reaches the manager. Actual worker/local lifetime
-capture and queue-free host routing are next; this work is not checked complete,
-exported artificially or publicly active.
+The private snapshot host integration has been reconstructed and safely pushed
+at `8bad28e26d23796c88d8f1ffd2b6748af489d851`, identical source tree
+`042c05c2e0896a0f052d6adcd8af39e5cb543571`. It captures existing local/worker
+lifetimes, routes open/read/close outside the ordinary command queue, and wires
+registered Action/Processor callbacks. Host shutdown joins independently owned
+SQL cleanup. Missing cleanup proof quarantines the resource and stops owner
+admission, including after invocation revocation.
+
+Fresh independent review passes PostgreSQL host34, eight probes and35
+compatibility cases; PGlite manager24 and seven probes (one explicit pooled-only
+skip); pure209, role12, changed lint/format and the unchanged full static gate.
+Two failures remain visible: PostgreSQL manager/connection/dispatch102 pass and
+one backend-specific cancellation-code assertion; PGlite host33 pass and one
+local Processor grant-loss readiness failure. The cancellation assertion has a
+reviewed test-only correction awaiting replay; the readiness failure is being
+diagnosed. This is not a new full-suite pass or production acceptance.
 
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
@@ -280,9 +285,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Explicit backend snapshot cleanup outcome and generation-safe forwarding;
       known release stays separate from cancellation/errors, with missing or
       duplicate reporting fail-closed and no new wire operation
-- [ ] Owner snapshot manager and genuine host integration: lifecycle/epoch
-      scoped checks pass; production reachability, private lifetime capture,
-      queue-free local/worker routing and registered callback flow remain open
+- [ ] Owner snapshot manager and genuine host integration: actual routing and
+      callback flow implemented; package reachability passes; complete review
+      after cancellation fixture replay and PGlite readiness failure diagnosis
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

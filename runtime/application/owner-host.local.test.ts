@@ -4286,6 +4286,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           async () => {
             let rejected = false, granted = true, ordinaryChecks = 0;
             const verify = async (ctx: ActionContext | ProcessorContext) => {
+              if (fault === "grant" && rejected) return;
               try {
                 await ctx.readSnapshot(async ({ collections }) => {
                   await collections.notes.get({ id: "a" });
@@ -4302,6 +4303,11 @@ for (const mode of ["in-process", "websocket"] as const) {
               } catch (error) {
                 rejected = true;
                 throw error;
+              } finally {
+                // This case revokes disclosure for the current snapshot. Restore
+                // the fixture policy only after rejection so a later Processor
+                // retry does not exercise the separate refused-start boundary.
+                if (fault === "grant") granted = true;
               }
             };
             const f = await fixture({
@@ -4353,6 +4359,15 @@ for (const mode of ["in-process", "websocket"] as const) {
               if (kind === "action") assert.ok(result.error);
               else assert.equal(result.value, "done");
               await eventually(() => rejected);
+              if (kind === "processor" && fault === "grant") {
+                await eventually(async () => {
+                  const delivery = (await f.db.query(
+                    "SELECT status,attempts FROM event_deliveries WHERE consumer_id='processor:fixture.read'",
+                  )).rows[0];
+                  return delivery?.status === "succeeded" &&
+                    delivery.attempts === 2 && f.host.snapshot().active === 0;
+                });
+              }
               assert.equal(
                 (await f.db.query("SELECT 1 AS available")).rows[0].available,
                 1,

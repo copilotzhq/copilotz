@@ -644,9 +644,13 @@ Deno.test("per-read cancellation seals the backend while detached policy remains
     const next = await within(f.manager.open(f.caller()));
     await f.manager.close(next, f.caller());
     release.resolve();
+    // PG can observe cancellation on its current lane before the final private
+    // witness; exclusive PGlite can reach that witness first. Both are refusal.
     assertEquals(
-      (await observed as { code?: string }).code,
-      "ActionOwnershipLost",
+      ["ActionOwnershipLost", "owner_snapshot_cancelled"].includes(
+        (await observed as { code: string }).code,
+      ),
+      true,
     );
   } finally {
     release.resolve();

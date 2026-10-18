@@ -40,7 +40,7 @@ export const OWNER_CATALOG_LAYOUT = {
       "namespace": ["text", "NO", null],
       "operation_id": ["text", "NO", null],
       "replay_key": ["bigint", "NO", "<owned replay sequence>"],
-      "stream_ordinal": ["bigint", "NO", null],
+      "stream_ordinal": ["bigint", "YES", null],
       "stream_id": ["text", "NO", null],
       "semantic_stream_id": ["text", "NO", null],
       "body_id": ["text", "NO", null],
@@ -200,9 +200,21 @@ export const OWNER_CATALOG_LAYOUT = {
         "u",
         "UNIQUE (physical_backend_id, body_id)",
       ],
+      "owner_stream_publication_ordinal_check": [
+        "c",
+        "CHECK ((state = 'reserving'::text AND stream_ordinal IS NULL OR state <> 'reserving'::text AND stream_ordinal >= 1 AND stream_ordinal <= '9007199254740991'::bigint) IS TRUE)",
+      ],
+      "owner_stream_reservation_offset_check": [
+        "c",
+        "CHECK (state <> 'reserving'::text OR committed_offset = 0)",
+      ],
       "owner_stream_revocation_check": [
         "c",
         "CHECK (revocation_state = ANY (ARRAY['active'::text, 'revoking'::text, 'revoked'::text]))",
+      ],
+      "owner_stream_terminal_revocation_check": [
+        "c",
+        "CHECK (state <> 'terminal'::text OR revocation_state = 'revoked'::text)",
       ],
     },
     "copilotz_operations": {

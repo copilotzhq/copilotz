@@ -102,7 +102,7 @@ export function operationCatalogSchemaStatements(
       namespace TEXT NOT NULL,
       operation_id TEXT NOT NULL,
       replay_key BIGSERIAL NOT NULL UNIQUE,
-      stream_ordinal BIGINT NOT NULL,
+      stream_ordinal BIGINT${owner ? "" : " NOT NULL"},
       stream_id TEXT NOT NULL,
       semantic_stream_id TEXT NOT NULL,
       body_id TEXT NOT NULL,
@@ -131,6 +131,10 @@ export function operationCatalogSchemaStatements(
         AND descriptor ->> 'namespace' = namespace
         AND descriptor ->> 'streamId' = stream_id) IS TRUE),
       CONSTRAINT owner_stream_offset_check CHECK (committed_offset <= 9007199254740991),
+      CONSTRAINT owner_stream_publication_ordinal_check CHECK (((state = 'reserving' AND stream_ordinal IS NULL)
+        OR (state <> 'reserving' AND stream_ordinal >= 1 AND stream_ordinal <= 9007199254740991)) IS TRUE),
+      CONSTRAINT owner_stream_reservation_offset_check CHECK (state <> 'reserving' OR committed_offset = 0),
+      CONSTRAINT owner_stream_terminal_revocation_check CHECK (state <> 'terminal' OR revocation_state = 'revoked'),
       CONSTRAINT owner_stream_physical_key UNIQUE (physical_backend_id,body_id),`
         : ""
     }

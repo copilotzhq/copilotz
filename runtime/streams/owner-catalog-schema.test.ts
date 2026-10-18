@@ -306,7 +306,7 @@ Deno.test("owner catalog constrains original writer identity, finite deadlines a
     const base = {
       namespace: "tenant",
       operation_id: "operation",
-      stream_ordinal: 1,
+      stream_ordinal: null,
       stream_id: "stream",
       semantic_stream_id: "lane",
       body_id: "body",
@@ -333,11 +333,21 @@ Deno.test("owner catalog constrains original writer identity, finite deadlines a
         `INSERT INTO "${schema}".copilotz_operation_streams (${
           entries.map(([key]) => key).join(",")
         }) VALUES (${entries.map((_, i) => `$${i + 1}`).join(",")})`,
-        entries.map(([, v]) => typeof v === "object" ? JSON.stringify(v) : v),
+        entries.map(([, v]) =>
+          v !== null && typeof v === "object" ? JSON.stringify(v) : v
+        ),
       );
     };
     for (
       const [name, patch] of Object.entries({
+        reservedOrdinal: { stream_ordinal: 1 },
+        unconfirmedOffset: { committed_offset: 1 },
+        publishedWithoutOrdinal: { state: "open" },
+        zeroPublishedOrdinal: { state: "open", stream_ordinal: 0 },
+        unsafePublishedOrdinal: {
+          state: "open",
+          stream_ordinal: "9007199254740992",
+        },
         epoch: { opening_owner_epoch: 0 },
         attempt: { delivery_attempt: 0 },
         generation: { writer_generation: 9007199254740991 },
@@ -371,7 +381,7 @@ Deno.test("owner catalog constrains original writer identity, finite deadlines a
     );
     // Schema-only transition. Actual owner confirmation/publication is a later gate.
     await db.query(
-      `UPDATE "${schema}".copilotz_operation_streams SET state='open'`,
+      `UPDATE "${schema}".copilotz_operation_streams SET state='open',stream_ordinal=1`,
     );
     assertEquals(
       (await db.query(
@@ -382,6 +392,7 @@ Deno.test("owner catalog constrains original writer identity, finite deadlines a
     await assertRejects(() =>
       insert({
         stream_id: "other",
+        state: "open",
         stream_ordinal: 2,
         descriptor: {
           type: "stream.output",
@@ -407,6 +418,85 @@ Deno.test("owner catalog validates replay sequence identity with public and visi
       await tx.query(`SET LOCAL search_path TO "${schema}",pg_catalog`);
       await validateOwnerContentCatalog(tx, schema);
     });
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("owner publication schema supports confirmation-order ordinals and hidden revoked reservations", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  try {
+    const schema = schemaName();
+    await provisionOwnerContentCatalog(db, schema);
+    const table = `"${schema}".copilotz_operation_streams`;
+    for (const id of ["first", "second", "failed"]) {
+      await db.query(
+        `INSERT INTO ${table}
+        (namespace,operation_id,stream_id,semantic_stream_id,body_id,descriptor,
+         owner_id,opening_owner_epoch,delivery_attempt,placement_binding,
+         physical_backend_id,reservation_id,writer_generation,protection_deadline,
+         revocation_state,state)
+        VALUES ('tenant','operation',$1,$1,$1,
+          jsonb_build_object('type','stream.output','namespace','tenant','streamId',$1::text),
+          'owner',1,1,'{"namespace":"tenant"}','db',$1,1,NOW(),'active','reserving')`,
+        [id],
+      );
+    }
+    const published = async (after: number) =>
+      (await db.query(
+        `SELECT stream_id,stream_ordinal::integer AS ordinal FROM ${table}
+       WHERE stream_ordinal > $1 ORDER BY stream_ordinal`,
+        [after],
+      )).rows;
+    assertEquals(await published(0), []);
+    // These fixture updates prove the layout only. The actual confirmation command
+    // must allocate from the operation counter and publish its event atomically.
+    await db.query(
+      `UPDATE ${table} SET state='open',stream_ordinal=1 WHERE stream_id='second'`,
+    );
+    assertEquals(await published(0), [{ stream_id: "second", ordinal: 1 }]);
+    await db.query(
+      `UPDATE ${table} SET state='open',stream_ordinal=2 WHERE stream_id='first'`,
+    );
+    assertEquals(await published(1), [{ stream_id: "first", ordinal: 2 }]);
+    await db.query(
+      `UPDATE ${table} SET revocation_state='revoked' WHERE stream_id='failed'`,
+    );
+    assertEquals(
+      (await db.query(
+        `SELECT stream_ordinal,state FROM ${table} WHERE stream_id='failed'`,
+      )).rows,
+      [{ stream_ordinal: null, state: "reserving" }],
+    );
+    await assertRejects(() =>
+      db.query(
+        `UPDATE ${table} SET stream_ordinal=NULL WHERE stream_id='first'`,
+      )
+    );
+    await assertRejects(() =>
+      db.query(`UPDATE ${table} SET stream_ordinal=1 WHERE stream_id='first'`)
+    );
+    await assertRejects(() =>
+      db.query(
+        `UPDATE ${table} SET state='terminal',outcome='completed',capture='complete',terminal_at=NOW() WHERE stream_id='first'`,
+      )
+    );
+    await db.query(
+      `UPDATE ${table} SET revocation_state='revoking' WHERE stream_id='first'`,
+    );
+    await assertRejects(() =>
+      db.query(
+        `UPDATE ${table} SET state='terminal',outcome='completed',capture='complete',terminal_at=NOW() WHERE stream_id='first'`,
+      )
+    );
+    await db.query(
+      `UPDATE ${table} SET revocation_state='revoked',state='terminal',outcome='completed',capture='complete',terminal_at=NOW() WHERE stream_id='first'`,
+    );
+    assertEquals(await published(0), [{ stream_id: "second", ordinal: 1 }, {
+      stream_id: "first",
+      ordinal: 2,
+    }]);
+    await validateOwnerContentCatalog(db, schema);
   } finally {
     await db.close();
   }

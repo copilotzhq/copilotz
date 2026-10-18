@@ -421,6 +421,33 @@ runs. The unchanged full-static guard still refuses seven private modules
 awaiting real host wiring; component checks pass. This checkpoint adds no host
 activation or stream recovery behavior.
 
+## Confirmation-order schema reviewed checkpoint
+
+Owner-format reservations now keep a NULL stream ordinal and zero committed
+bytes until physical confirmation. Published states require a positive safe
+ordinal; terminal rows require recorded revocation. Multiple hidden reservations
+can coexist under the existing unique indexes. This permits confirmation-order
+allocation so a later reservation that publishes first cannot hide an earlier
+reservation behind a reader's cursor. Legacy DDL remains unchanged.
+
+Root schema tests pass eight cases with 46 steps, including reversed publication
+order, hidden revoked reservations and refusal of nonzero unconfirmed offsets.
+These tests use explicit fixture transitions: actual confirmation must still
+allocate the operation ordinal and index publication atomically, preserve it on
+replay, and prove physical evidence before recording revocation. Existing exact
+retained-layout validation must refuse the previous private shape without
+repair. Independent validation passes 72 PostgreSQL tests with 63 steps, and 64
+PGlite tests with 63 steps plus eight explicit PostgreSQL-only skips. Both
+backends reproduce acceptance of an invalid positive reserving offset in the
+preceding candidate and refusal in the final candidate. Exact prior owner
+layouts are refused without repair; all 72 state/ordinal/revocation
+combinations, confirmation-order fixture rollback and legacy DDL equality are
+covered. All 58 owned databases were exported/dropped, with no remaining
+sessions/databases and PostgreSQL stopped. Normal checks and source/dependency
+hashes pass; unchanged full-static still refuses seven unwired modules. No real
+confirmation command, physical fencing proof or observation routing is activated
+by these row checks.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:
@@ -485,15 +512,15 @@ worker command/projection calls must not reach physical-confirmation handlers;
 only the coordinator may supply owner-observed physical evidence. No new command
 bus, worker SQL access, receipt table or attempt registry is needed.
 
-Owner publication needs one further schema refinement before activation:
-`stream_ordinal` must remain NULL while reserving and be allocated from the
-existing operation counter only in the confirmation transaction. Otherwise a
-later reservation can publish first, advance an observer's cursor, and cause an
-earlier hidden ordinal to be missed forever. The physical replay key may remain
-reservation-time identity; its legacy maintenance scan is cyclic, not a public
-publication watermark. Confirmation must also index the stream-open lifecycle
-fact atomically so existing selection revisions advance, then publish the hint
-after COMMIT. Offset checkpoints do not advance semantic sequence/revisions.
+The reviewed schema keeps `stream_ordinal` NULL while reserving. Before
+activation, the confirmation transaction must allocate it from the existing
+operation counter. Otherwise a later reservation can publish first, advance an
+observer's cursor, and cause an earlier hidden ordinal to be missed forever. The
+physical replay key may remain reservation-time identity; its legacy maintenance
+scan is cyclic, not a public publication watermark. Confirmation must also index
+the stream-open lifecycle fact atomically so existing selection revisions
+advance, then publish the hint after COMMIT. Offset checkpoints do not advance
+semantic sequence/revisions.
 
 Reuse the catalog's operation/event core through a physically narrow private
 owner object. A global format switch on the full legacy catalog is unsafe:

@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 00:42 UTC.
+Updated: 18 October 2026, 00:56 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -177,8 +177,19 @@ one baseline bigint-count assertion mismatch. The test-only portable correction
 then passes 35 PostgreSQL cases and the corrected PGlite case, with static,
 source-hash and database-cleanup checks. No coherent 236-case rerun is claimed.
 The mode does not supply an epoch fence or prove exclusivity: host snapshot
-routing and historical permissions remain open. A shared bounded Collection
-query evaluator is being factored without adding a second policy engine.
+routing and historical permissions remain open.
+
+Ordinary Collection reads now share a bounded prepared evaluator with a private
+synchronous finalizer. Final authorization precedes output
+validation/disclosure, preserving error precedence after revocation without a
+second query compiler. Independent final gates pass 184 PostgreSQL
+SQL/authority/host/helper cases, 42 PGlite cases with three PG-only skips
+covered separately, three reviewer probes and 12 role bundles. Static,
+source-hash and database-cleanup checks pass. The initial output-error
+precedence defect and two fixture forwarding corrections are preserved with
+their fixes. Historical grants, owner snapshot resource lifetime and
+worker/local activation are still next; performance benchmarks remain required
+before production acceptance.
 
 The next snapshot prerequisite must preserve F5 isolation and default PGlite
 behavior: PostgreSQL has separate pooled transactions, while PGlite serializes
@@ -230,6 +241,9 @@ what it simplifies and eliminates before adding machinery.
 - [x] Reuse assignment/Action/Processor authority checks in certified exclusive
       read-only scopes; default command/current-PostgreSQL locks preserved; host
       routing, epoch fencing and historical grants remain separate
+- [x] Shared bounded Collection evaluator and private synchronous finalizer;
+      final authorization preserves output-error precedence, with actual
+      worker/local read compatibility and protected-source/budget checks
 - [x] Actual worker Action/Processor/Collection/child-Action flow
 - [x] Current authority, assignment/claim, connection lifetime, cancellation and
       terminal settlement boundaries

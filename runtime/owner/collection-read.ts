@@ -57,19 +57,16 @@ function refuse(): never {
   });
 }
 
-export function createOwnerCollectionRead(
-  options: Readonly<{
-    schema: string;
-    registry: Pick<PluginRegistry, "collections">;
-    resolve(
-      tx: SqlExecutor,
-      caller: OwnerCaller,
-      time: string,
-    ): Promise<OwnerChildActionBinding | undefined>;
-    authorize?: OwnerCollectionReadPolicy;
-  }>,
-): OwnerProjectionHandler {
-  const { resolve, authorize } = options;
+/** Shared bounded Collection SQL evaluator. This owns no execution authority.
+ * The host must authorize before execution and recheck before finalization.
+ * The returned synchronous finalizer preserves authorization-before-output-error
+ * ordering without another await. Ordinary and snapshot reads share compilers,
+ * protected-source checks and transfer/output bounds. */
+export function createOwnerCollectionReadEvaluator(
+  options: Readonly<
+    { schema: string; registry: Pick<PluginRegistry, "collections"> }
+  >,
+) {
   const tables = createCoreTableNames(options.schema);
   const budget = Object.freeze({
     maxRowBytes: 262_144,
@@ -92,10 +89,80 @@ export function createOwnerCollectionRead(
         }),
       ]),
   );
-  return async (input, context) => {
+  return (input: unknown) => {
     const request = parseOwnerCollectionReadRequest(input);
     const definition = collections.get(request.collectionAlias);
-    if (!definition || !authorize) refuse();
+    if (!definition) refuse();
+    return Object.freeze({
+      request: structuredClone(request),
+      async execute(
+        tx: SqlExecutor,
+        namespace: string,
+        permitted: CollectionFilter,
+      ): Promise<() => OwnerJson> {
+        const result = request.operation === "aggregate"
+          ? await aggregateCollectionRecords(
+            tx,
+            tables,
+            definition,
+            namespace,
+            {
+              ...request.query,
+              all: [...(request.query.all ?? []), permitted],
+            },
+            budget,
+            OWNER_ORDINARY_SOURCE_SQL,
+          )
+          : await queryCollectionRecords(
+            tx,
+            tables,
+            definition,
+            namespace,
+            request.operation === "get"
+              ? { where: { id: request.id }, all: [permitted], limit: 1 }
+              : {
+                ...request.query,
+                all: [...(request.query.all ?? []), permitted],
+              },
+            budget,
+            OWNER_ORDINARY_SOURCE_SQL,
+          );
+        return () => {
+          const output = request.operation === "get"
+            ? result[0] ?? null
+            : result;
+          assertOwnerOrdinaryValue(output);
+          if (
+            new TextEncoder().encode(JSON.stringify(output)).length >
+              budget.maxResultBytes
+          ) {
+            throw new RangeError("Collection read exceeds its output budget.");
+          }
+          return structuredClone(output) as OwnerJson;
+        };
+      },
+    });
+  };
+}
+
+export function createOwnerCollectionRead(
+  options: Readonly<{
+    schema: string;
+    registry: Pick<PluginRegistry, "collections">;
+    resolve(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      time: string,
+    ): Promise<OwnerChildActionBinding | undefined>;
+    authorize?: OwnerCollectionReadPolicy;
+  }>,
+): OwnerProjectionHandler {
+  const { resolve, authorize } = options;
+  const prepare = createOwnerCollectionReadEvaluator(options);
+  return async (input, context) => {
+    const prepared = prepare(input);
+    const request = prepared.request;
+    if (!authorize) refuse();
     const { tx, commandTime: time, signal } = context;
     // Capture before any await; trusted policy receives detached data only.
     const caller = structuredClone(context.caller);
@@ -121,47 +188,13 @@ export function createOwnerCollectionRead(
     const permitted = await scope();
     if (!sameValue(facts(initial), facts(await live()))) refuse();
     const namespace = initial.assignment.namespace;
-    const result = request.operation === "aggregate"
-      ? await aggregateCollectionRecords(
-        tx,
-        tables,
-        definition,
-        namespace,
-        {
-          ...request.query,
-          all: [...(request.query.all ?? []), permitted],
-        },
-        budget,
-        OWNER_ORDINARY_SOURCE_SQL,
-      )
-      : await queryCollectionRecords(
-        tx,
-        tables,
-        definition,
-        namespace,
-        request.operation === "get"
-          ? { where: { id: request.id }, all: [permitted], limit: 1 }
-          : {
-            ...request.query,
-            all: [...(request.query.all ?? []), permitted],
-          },
-        budget,
-        OWNER_ORDINARY_SOURCE_SQL,
-      );
+    const finalize = await prepared.execute(tx, namespace, permitted);
     const finalScope = await scope();
-    // This live recheck deliberately follows the last awaited policy callback.
+    // Final authority follows query/policy awaits; output checks remain local.
     if (
       !sameValue(facts(initial), facts(await live())) ||
       !sameValue(permitted, finalScope)
     ) refuse();
-    const output = request.operation === "get" ? result[0] ?? null : result;
-    assertOwnerOrdinaryValue(output);
-    if (
-      new TextEncoder().encode(JSON.stringify(output)).length >
-        budget.maxResultBytes
-    ) {
-      throw new RangeError("Collection read exceeds its output budget.");
-    }
-    return structuredClone(output) as OwnerJson;
+    return finalize();
   };
 }

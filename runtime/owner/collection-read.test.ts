@@ -9,6 +9,7 @@ import { OWNER_COLLECTION_READ } from "../execution/collection-read-call.ts";
 import { createOwnerCommandBoundary, type OwnerJson } from "./boundary.ts";
 import {
   createOwnerCollectionRead,
+  createOwnerCollectionReadEvaluator,
   type OwnerCollectionReadPolicy,
 } from "./collection-read.ts";
 import type { OwnerChildActionBinding } from "./child-action.ts";
@@ -321,6 +322,57 @@ Deno.test("owner read refuses protected cursor anchors before using their order 
         }),
       TypeError,
       "protected data",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("shared Collection evaluator captures bounded query independently of policy metadata", async () => {
+  const f = await fixture();
+  try {
+    await f.put("a", { label: "public" });
+    await f.put("b", { label: "private" });
+    const prepare = createOwnerCollectionReadEvaluator({
+      schema: "public",
+      registry: f.registry,
+    });
+    const input = { collectionAlias: "notes", operation: "get", id: "a" };
+    const plan = prepare(input);
+    input.id = "b";
+    if (plan.request.operation !== "get") throw new Error("Expected get");
+    (plan.request as { id: string }).id = "b";
+    const record = (await plan.execute(f.db, "space", {
+      where: { label: "public" },
+    }))();
+    assertEquals((record as { id: string }).id, "a");
+    assertEquals(
+      (await prepare({ ...input, id: "b" }).execute(f.db, "space", {
+        where: { label: "public" },
+      }))(),
+      null,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("final read revocation takes precedence over local output-shape errors", async () => {
+  let calls = 0, revoke = true;
+  const f = await fixture(() => ++calls === 2 && revoke ? undefined : {});
+  try {
+    let nested: unknown = 0;
+    for (let index = 0; index < 40; index++) nested = { next: nested };
+    await f.put("deep", { label: "public", ref: nested });
+    const request = { collectionAlias: "notes", operation: "get", id: "deep" };
+    const denied = await assertRejects(() => f.read(request));
+    assertEquals((denied as { code?: string }).code, "ActionOwnershipLost");
+    calls = 0;
+    revoke = false;
+    const invalid = await assertRejects(() => f.read(request));
+    assertEquals(
+      (invalid as { code?: string }).code,
+      "ordinary_value_unsupported",
     );
   } finally {
     await f.close();

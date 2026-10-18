@@ -121,7 +121,7 @@ async function fixture(stage: "start" | "completion") {
       assert.equal(await helper.retryNamespace(context, delivery), "space");
     },
     local: {
-      resolveAssignment: (...args) => helper.resolve(...args),
+      resolveAssignment: (tx, caller, time) => helper.resolve(tx, caller, time),
       authorizeStart: (...args) => helper.processor.authorizeStart(...args),
       authorizeEvent: (...args) => helper.event(...args),
       isCurrent: (...args) => helper.processor.isCurrent(...args),

@@ -256,3 +256,51 @@ lifetimes must never become job leases, reassignment authority or automatic
 snapshot replay. Cancellation, takeover, host close, retained readers, nested
 use and unawaited calls require actual local/worker Action/Processor proofs on
 both transports before activation.
+
+## Shared bounded Collection evaluator
+
+Ordinary projection reads now use a prepared evaluator that captures the closed
+request and registered schema, then reuses the existing get/list/aggregate SQL
+compilers, protected-source checks and transfer/output bounds. It returns a
+private synchronous finalizer. The host performs its final authorization first,
+then validates and exposes output without another await. The evaluator grants no
+authority and must not be exposed to plugin code.
+
+This preserves error precedence: an output that exceeds the local ordinary-data
+guard must not reveal even an output-validity bit after access is revoked. An
+initial extraction moved that check too early; its causal failure is preserved
+and a real-table regression covers the correction. Two unchanged host fixtures
+also needed explicit three-argument forwarding after the prior authority mode
+extension; both are checked on actual PostgreSQL.
+
+The final frozen gate passes 184 PostgreSQL SQL/authority/host/helper cases, 42
+PGlite SQL cases with three PostgreSQL-only skips covered by the PG run, three
+reviewer probes and 12 role bundles. Full static checks, source/sibling hashes
+and coordinator database export, fixture database drops and server stop pass.
+Earlier inventory setup, fixture typecheck and causal failures remain recorded.
+This is shared evaluator acceptance, not historical-read permission or
+registered snapshot activation.
+
+## Performance boundary
+
+Snapshots are explicit, short selection scopes. Ordinary single reads do not
+reserve these resources. The current PostgreSQL design reserves two connections
+within the existing configured pool, one for the historical snapshot and one for
+current authorization. This is a cost of this authority design, not an intrinsic
+two-connection requirement for database snapshots. Saturated admission refuses
+rather than increasing pool size. Current authorization transactions and
+transport calls also add work per snapshot read; their latency is not yet
+benchmarked.
+
+Default PGlite holds its single certified engine exclusively until the scope
+closes, so unrelated database work waits. Finish selection before LLM/provider
+calls, remote content resolution or other slow application work. PostgreSQL
+long-lived transactions can retain obsolete row versions and impede vacuum; see
+the official
+[idle transaction timeout documentation](https://www.postgresql.org/docs/17/runtime-config-client.html#GUC-IDLE-IN-TRANSACTION-SESSION-TIMEOUT).
+
+Before production acceptance, measure ordinary versus snapshot latency and
+throughput under concurrent reads/writes, current-authority contention, pool
+occupancy/refusal, and PGlite queue delay at different callback durations. F5's
+idle/maximum lifetime settings require this load evidence. Expiry revokes use
+but does not prove cancellation of raw SQL or physical capacity release.

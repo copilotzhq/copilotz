@@ -1650,7 +1650,7 @@ async function localHelperFixture(
       reserveLocal: (...args) => helper.execution.reserveLocal(...args),
       retireLocal: (...args) => helper.execution.retireLocal(...args),
     },
-    resolveAssignment: (...args) => helper.resolve(...args),
+    resolveAssignment: (tx, caller, time) => helper.resolve(tx, caller, time),
     authorizeInput(tx, assignment, value, time) {
       if (assignment.placement !== "owner-local") {
         throw new Error("worker forbidden");

@@ -40,7 +40,7 @@ export type CreateCopilotzWorkerOptions =
 
 /** Private execution-role authority projected by the package factory. */
 export type InternalCopilotzWorker =
-  & Omit<Worker, "closed" | "stop">
+  & Pick<Worker, "ready" | "events" | "snapshot">
   & Readonly<{
     role: "worker";
     closed: Promise<WorkerResult>;

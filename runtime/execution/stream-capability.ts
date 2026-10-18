@@ -1,3 +1,4 @@
+import { streamContentKind } from "../streams/kind.ts";
 import {
   capturePendingContentDescriptor,
   capturePendingContentRef,
@@ -384,7 +385,7 @@ export function createRegisteredStreamCapability(
         close(value, closeOptions = {}) {
           aborted(closeOptions.signal);
           const {
-            kind = "text",
+            kind = streamContentKind(captured.mediaType),
             role,
             name,
             alt,
@@ -409,7 +410,17 @@ export function createRegisteredStreamCapability(
               },
             })),
           );
-          const fingerprint = JSON.stringify(descriptor);
+          // Captured descriptors contain immutable plain data, so object key
+          // order does not change close replay identity. Arrays remain ordered.
+          const fingerprint = JSON.stringify(
+            descriptor,
+            (_key, value) =>
+              value && typeof value === "object" && !Array.isArray(value)
+                ? Object.fromEntries(
+                  Object.keys(value).sort().map((key) => [key, value[key]]),
+                )
+                : value,
+          );
           if (closing) {
             if (fingerprint !== closeFingerprint) {
               return Promise.reject(

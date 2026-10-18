@@ -1,3 +1,4 @@
+import { streamContentKind } from "./kind.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import {
   createProgressiveBodyWriter,
@@ -7,7 +8,6 @@ import {
 import type { BodyStore, ReadyBodyHead } from "../content/body-store.ts";
 import type {
   AssetBodyLocation,
-  ContentKind,
   ContentRef,
   PreparedContent,
 } from "../content/types.ts";
@@ -92,18 +92,6 @@ function contentStreamBodyId(
   ].join("/");
 }
 
-function mediaKind(mediaType: string): ContentKind {
-  const normalized = mediaType.trim().toLowerCase();
-  if (normalized === "application/json" || normalized.endsWith("+json")) {
-    return "json";
-  }
-  if (normalized.startsWith("text/")) return "text";
-  if (normalized.startsWith("image/")) return "image";
-  if (normalized.startsWith("audio/")) return "audio";
-  if (normalized.startsWith("video/")) return "video";
-  return "file";
-}
-
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error
@@ -140,7 +128,7 @@ export function createContentStreamRuntime(
       if (!semanticId || !id || !mediaType || !role) {
         throw new TypeError("Content stream requires id, mediaType, and role.");
       }
-      const kind = input.kind ?? mediaKind(mediaType);
+      const kind = input.kind ?? streamContentKind(mediaType);
       const name = input.name?.trim();
       const alt = input.alt?.trim();
       const language = input.language?.trim();

@@ -23,7 +23,10 @@ import {
   assetIdFromRef,
   base64ToBytes,
   type ContentRef,
+  isPendingContentRef,
   parseDataUrl,
+  type PendingContentRef,
+  type PreparedContent,
 } from "@copilotz/copilotz/content";
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
 import { parse as parseYaml } from "../../../../dependencies/yaml.ts";
@@ -716,27 +719,35 @@ async function consumeNdjsonToolResponse(
       state.settled = true;
       closed.push({ channel, prepared });
     }
+    // Pending owner output remains a compact producer reference until the
+    // consuming domain mutation adopts it. Legacy ready bodies keep their
+    // existing materialization path during caller migration.
+    const ready: { channel: string; prepared: PreparedContent }[] = [];
+    const streams: Record<string, ContentRef | PendingContentRef> = {};
     for (const { channel, prepared } of closed) {
-      if (prepared.content.length !== 1) {
-        throw new TypeError(
-          `NDJSON channel '${channel}' must close with exactly one ContentRef.`,
-        );
+      if (isPendingContentRef(prepared)) {
+        streams[channel] = prepared;
+      } else {
+        if (prepared.content.length !== 1) {
+          throw new TypeError(
+            `NDJSON channel '${channel}' must close with exactly one ContentRef.`,
+          );
+        }
+        ready.push({ channel, prepared });
       }
     }
-    const combined = {
-      content: closed.map(({ prepared }) => prepared.content[0]),
-      assets: closed.flatMap(({ prepared }) => prepared.assets),
-    } as const;
-    const materialized = closed.length > 0
-      ? await context.content.materialize(combined)
+    const materialized = ready.length > 0
+      ? await context.content.materialize({
+        content: ready.map(({ prepared }) => prepared.content[0]),
+        assets: ready.flatMap(({ prepared }) => prepared.assets),
+      })
       : [];
-    if (materialized.length !== closed.length) {
+    if (materialized.length !== ready.length) {
       throw new TypeError(
         "NDJSON content materialization must return one ContentRef per channel.",
       );
     }
-    const streams: Record<string, ContentRef> = {};
-    closed.forEach(({ channel, prepared }, index) => {
+    ready.forEach(({ channel, prepared }, index) => {
       const ref = materialized[index];
       if (ref.assetId !== prepared.content[0].assetId) {
         throw new TypeError(

@@ -34,7 +34,43 @@ production deployment or production migration is authorized.
   `6b0fa6fde2f444e40a6d376d2eb8211e8b07d547`. It was inspected read-only, not
   migrated. Do not copy its private code into the public Copilotz PR.
 
-## Current integrated WIP, not accepted functionality
+## Local continuation — 18 October 2026
+
+The isolated Mac worktree started from Copilotz
+`16ed57672cf16a1721983630bb679dfddc75e720`, tree
+`017d3909e7ad6eebac90cba0776611a77acff9c2`, with the exact sibling revisions
+above. Original local worktrees and unpushed work remain untouched.
+
+The LLM now prepares final reference and Asset semantics before closing writers.
+It forwards a sealed pending pointer only when the final normalized media type,
+length and digest match; unmatched streams remain observations. The generated
+content, reasoning and native-reasoning output types accept pending pointers,
+while hydrated history stays Asset-only. NDJSON also preserves pending outputs.
+Omitted stream kinds use one shared media-type mapping, and equivalent reordered
+descriptor keys have the same close replay identity. A preparation failure drains
+writers which have not yet reached close.
+
+Validation: all 46 public exports type-check against the exact local sibling
+sources using:
+
+```sh
+node scripts/check-owner-cohort.mjs --oxian-source ../oxian-js --ominipg-source ../ominipg
+```
+
+The diagnostic uses an explicit standalone import map, verifies the public root
+graph contains both sibling sources and no published Oxian/Ominipg modules, then
+checks every public entry. An external `--config` alone was insufficient because
+nested package manifests restored published dependencies. Published package pins
+are unchanged. Plugin boundaries, forbidden-symbol checks and whitespace checks
+pass. No unit suite or acceptance app was run for this checkpoint.
+
+This remains WIP: registered owner content capture/read capabilities, forwarding
+through Message projection, atomic Collection adoption, recovery, public Node
+hosting, full interactive Views, acceptance and Compass remain unfinished. The
+legacy worker wrapper now declares only the Worker fields it actually exposes;
+it does not implicitly acquire the new host-call API.
+
+## Cloud handoff WIP, not accepted functionality
 
 The preceding checkpoint added shared successful-content settlement predicates
 and replay protection. Its scoped checks passed: 31 tests +46 schema steps, 3

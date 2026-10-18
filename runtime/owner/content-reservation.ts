@@ -1,3 +1,4 @@
+import { streamContentKind } from "../streams/kind.ts";
 import {
   capturePendingContentDescriptor,
   capturePendingContentRef,
@@ -233,19 +234,7 @@ function openInput(value: unknown): OpenInput {
   const id = physicalIdentifier(input.id);
   const mediaType = physicalIdentifier(input.mediaType);
   const role = physicalIdentifier(input.role);
-  const lower = mediaType.toLowerCase();
-  const kind = input.kind ??
-    (lower === "application/json" || lower.endsWith("+json")
-      ? "json"
-      : lower.startsWith("text/")
-      ? "text"
-      : lower.startsWith("image/")
-      ? "image"
-      : lower.startsWith("audio/")
-      ? "audio"
-      : lower.startsWith("video/")
-      ? "video"
-      : "file");
+  const kind = input.kind ?? streamContentKind(mediaType);
   const result = {
     ...input,
     id,

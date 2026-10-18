@@ -1,3 +1,4 @@
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineCollection } from "../collections/definition.ts";
@@ -7,10 +8,7 @@ import type { SqlExecutor } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
-import {
-  createOperationCatalog,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
+import { createOwnerOperationCatalogCore } from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { provisionOwnerAssignments } from "./assignments.ts";
 import { createOwnerCommandBoundary, type OwnerCaller } from "./boundary.ts";
@@ -103,11 +101,11 @@ async function fixture(
   const startup = createOwnerStartupProof(capturedOptions);
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   await provisionCopilotzSchema(db, "public");
-  await provisionOperationCatalog(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await provisionOwnerAssignments(db, "public");
   await provisionCollectionIndexes(db, "public", Object.values(collections));
-  const catalog = createOperationCatalog(db, "public");
+  const catalog = createOwnerOperationCatalogCore(db, "public");
   const executor: DeliveryExecutor = {
     ownership: "injected_dispatcher",
     workload: "startup-collection-fixture",

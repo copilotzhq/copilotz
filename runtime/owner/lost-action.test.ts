@@ -1,18 +1,16 @@
+import { createTestOwnerCatalog } from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
-import { createCoreSchemaStatements } from "../events/schema.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import { ownerClaimKey } from "../execution/owner-port.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { defineProcessor } from "../plugins/processor.ts";
-import {
-  createOperationCatalog,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createOwnerAssignmentControl,
@@ -80,8 +78,8 @@ async function fixture(
   } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
-  for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
-  await provisionOperationCatalog(db, "public");
+  await provisionCopilotzSchema(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await provisionOwnerAssignments(db, "public");
   const state = {
@@ -156,7 +154,7 @@ async function fixture(
       }),
     },
   });
-  const catalog = createOperationCatalog(db, "public");
+  const catalog = createTestOwnerCatalog(db, "public");
   const store = createEventStore({ session: db, schema: "public" });
   const control = createOwnerAssignmentControl({
     ownerId: "owner",

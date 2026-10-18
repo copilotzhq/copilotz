@@ -1,4 +1,4 @@
-/** Private fresh-only catalog format. No host activation or retained-schema repair. */
+/** Private owner catalog format. Fresh provisioning and validation-only reopen; no retained-schema repair. */
 import { OWNER_CONTENT_CATALOG_FINGERPRINT } from "../events/catalog-format.ts";
 import {
   createCoreTableNames,
@@ -196,12 +196,25 @@ async function readLayout(executor: SqlExecutor, schema: string) {
   };
 }
 
+async function assertSeparatePhysicalNamespace(
+  executor: SqlExecutor,
+  schema: string,
+): Promise<void> {
+  const physical = await executor.query(
+    `SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname=$1 AND c.relname IN ('content_bodies','content_body_parts') LIMIT 1`,
+    [schema],
+  );
+  if (physical.rows.length) incompatible();
+}
+
 export async function validateOwnerContentCatalog(
   executor: SqlExecutor,
   databaseSchema: string,
 ): Promise<OperationCatalogTables> {
   const schema = validateEventSchemaName(databaseSchema);
   const tables = createOperationCatalogTables(schema);
+  await assertSeparatePhysicalNamespace(executor, schema);
   const layout = await readLayout(executor, schema);
   if (JSON.stringify(layout) !== JSON.stringify(OWNER_CATALOG_LAYOUT)) {
     incompatible();
@@ -231,12 +244,7 @@ export async function provisionOwnerContentCatalog(
       schema,
       "copilotz-operation-catalog",
     ]);
-    const physical = await tx.query(
-      `SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname=$1 AND c.relname IN ('content_bodies','content_body_parts') LIMIT 1`,
-      [schema],
-    );
-    if (physical.rows.length) incompatible();
+    await assertSeparatePhysicalNamespace(tx, schema);
     const existing = await tx.query(
       `SELECT c.relname FROM pg_catalog.pg_class c
       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace

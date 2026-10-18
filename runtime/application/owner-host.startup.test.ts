@@ -1,3 +1,7 @@
+import { provisionOperationCatalog } from "../streams/catalog.ts";
+import { provisionOwnerCommandSchema } from "../owner/schema.ts";
+import { provisionOwnerAssignments } from "../owner/assignments.ts";
+import { insertTestOwnerStream } from "../testing/owner-catalog.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
@@ -215,7 +219,7 @@ test("owner startup proves orphan body emptiness before declared-index DDL", asy
           throw new Error("unexpected");
         },
       })),
-      /empty tables/,
+      { code: "owner_content_catalog_schema_incompatible" },
     );
     assert.equal(injected, true);
     assert.equal(indexes, 0);
@@ -724,5 +728,348 @@ test("owner resume stops on unknown acquisition, repair and final proof commits 
     }
   } finally {
     await db.close();
+  }
+});
+
+test("actual owner host refuses complete legacy formats before transport or epoch mutation", async () => {
+  for (
+    const initialization of ["fresh", {
+      mode: "resume",
+      expectedEpoch: 1,
+    }] as const
+  ) {
+    const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+    try {
+      await provisionCopilotzSchema(db, "public");
+      await provisionOperationCatalog(db, "public");
+      await provisionOwnerCommandSchema(db, "public");
+      await provisionOwnerAssignments(db, "public");
+      await db.query(
+        "INSERT INTO owner_epochs(owner,epoch,holder) VALUES('owner',1,'legacy')",
+      );
+      const before = (await db.query("SELECT * FROM owner_epochs")).rows;
+      let transport = 0;
+      await assert.rejects(
+        createOwnerHost(options(db, {
+          initialization,
+          createTransport() {
+            transport++;
+            throw new Error("unexpected transport");
+          },
+        })),
+        /catalog|format/i,
+      );
+      assert.equal(transport, 0);
+      assert.deepEqual(
+        (await db.query("SELECT * FROM owner_epochs")).rows,
+        before,
+      );
+      assert.equal(
+        (await db.query(
+          "SELECT fingerprint FROM copilotz_operation_catalog_metadata",
+        )).rows[0].fingerprint,
+        "action-obligations-v1",
+      );
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("actual owner resume retains hidden active and revoked stream blockers without serving", async () => {
+  for (const revocation of ["active", "revoked"] as const) {
+    const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+    let first: Awaited<ReturnType<typeof createOwnerHost>> | undefined;
+    try {
+      first = await createOwnerHost(options(db));
+      await first.close();
+      first = undefined;
+      await insertTestOwnerStream(db, {
+        namespace: "space",
+        operationId: "retained-operation",
+      }, { revocation });
+      const before =
+        (await db.query("SELECT * FROM copilotz_operation_streams")).rows;
+      let transport = 0;
+      await assert.rejects(
+        createOwnerHost(
+          options(db, {
+            holderId: "second",
+            initialization: { mode: "resume", expectedEpoch: 1 },
+            createTransport() {
+              transport++;
+              throw new Error("unexpected transport");
+            },
+          }),
+        ),
+        /startup|unresolved|unsupported|blocked/i,
+      );
+      assert.equal(transport, 0);
+      assert.deepEqual(
+        (await db.query("SELECT * FROM copilotz_operation_streams")).rows,
+        before,
+      );
+      assert.ok(
+        (await db.query(
+          "SELECT 1 FROM owner_alarms WHERE name LIKE '%reconciliation%'",
+        )).rows.length,
+      );
+    } finally {
+      await first?.close();
+      await db.close();
+    }
+  }
+});
+
+test("owner fresh setup rolls every provisioning stage back as one unit", async () => {
+  for (const stage of ["core", "catalog", "owner", "assignments"] as const) {
+    const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+    let host: Awaited<ReturnType<typeof createOwnerHost>> | undefined;
+    let injected = false, transports = 0;
+    const inventory = () =>
+      db.query(
+        "SELECT c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname",
+      );
+    const session: SqlSession = {
+      query: db.query,
+      transaction: (run) =>
+        db.transaction(async (tx) => {
+          const result = await run({
+            async query<
+              TRow extends Record<string, unknown> = Record<string, unknown>,
+            >(sql: string, params?: unknown[]) {
+              const value = await tx.query<TRow>(sql, params);
+              const hit = stage === "core"
+                ? sql.startsWith("INSERT INTO") &&
+                  sql.includes('"copilotz_schema_metadata"')
+                : stage === "catalog"
+                ? sql.startsWith("INSERT INTO") &&
+                  sql.includes('"copilotz_operation_catalog_metadata"')
+                : stage === "owner"
+                ? sql.includes("SELECT 1 FROM information_schema.tables") &&
+                  sql.includes("table_name='owner_assignments'")
+                : sql.includes("CREATE INDEX") &&
+                  sql.includes("owner_assignments_delivery_history");
+              if (!injected && hit) {
+                injected = true;
+                throw new Error(`injected setup ${stage}`);
+              }
+              return value;
+            },
+          });
+          return result;
+        }),
+    };
+    try {
+      const before = (await inventory()).rows;
+      await assert.rejects(
+        createOwnerHost(options(session, {
+          createTransport() {
+            transports++;
+            throw new Error("unexpected transport");
+          },
+        })),
+        new RegExp(`injected setup ${stage}`),
+      );
+      assert.equal(injected, true);
+      assert.equal(transports, 0);
+      assert.deepEqual((await inventory()).rows, before);
+      host = await createOwnerHost(options(db));
+      assert.equal(host.snapshot().ready, true);
+    } finally {
+      await host?.close();
+      await db.close();
+    }
+  }
+});
+
+test("owner fresh retry validates committed setup after lost acknowledgement without reprovisioning", async () => {
+  const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+  let host: Awaited<ReturnType<typeof createOwnerHost>> | undefined;
+  let injected = false, transports = 0;
+  const session: SqlSession = {
+    query: db.query,
+    transaction: async (run) => {
+      let setup = false;
+      const result = await db.transaction((tx) =>
+        run({
+          async query<
+            TRow extends Record<string, unknown> = Record<string, unknown>,
+          >(sql: string, params?: unknown[]) {
+            const value = await tx.query<TRow>(sql, params);
+            if (
+              sql.startsWith("INSERT INTO") &&
+              sql.includes('"copilotz_operation_catalog_metadata"')
+            ) setup = true;
+            return value;
+          },
+        })
+      );
+      if (setup && !injected) {
+        injected = true;
+        throw new Error("lost setup COMMIT acknowledgement");
+      }
+      return result;
+    },
+  };
+  try {
+    await assert.rejects(
+      createOwnerHost(options(session, {
+        createTransport() {
+          transports++;
+          throw new Error("unexpected transport");
+        },
+      })),
+      /lost setup COMMIT/,
+    );
+    assert.equal(injected, true);
+    assert.equal(transports, 0);
+    assert.equal((await db.query("SELECT * FROM owner_epochs")).rows.length, 0);
+    let ddl = 0;
+    const retry: SqlSession = {
+      query: db.query,
+      transaction: (run) =>
+        db.transaction((tx) =>
+          run({
+            query: (sql, params) => {
+              if (/^\s*(CREATE|ALTER|DROP)\b/.test(sql)) ddl++;
+              return tx.query(sql, params);
+            },
+          })
+        ),
+    };
+    // No declared Collection indexes here: this proves schema re-entry itself is validation-only.
+    const empty = createPluginRegistry({ actions: {} });
+    host = await createOwnerHost(options(retry, { registry: empty }));
+    assert.equal(host.snapshot().ready, true);
+    assert.equal(ddl, 0);
+    assert.equal(
+      Number((await db.query("SELECT epoch FROM owner_epochs")).rows[0].epoch),
+      1,
+    );
+  } finally {
+    await host?.close();
+    await db.close();
+  }
+});
+
+test("concurrent fresh owner hosts admit at most one epoch and transport", async () => {
+  const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+  const hosts: Awaited<ReturnType<typeof createOwnerHost>>[] = [];
+  let transports = 0;
+  try {
+    const base = options(db);
+    const results = await Promise.allSettled(
+      ["one", "two"].map((holderId) =>
+        createOwnerHost({
+          ...base,
+          holderId,
+          createTransport(config, lifecycle) {
+            transports++;
+            return base.createTransport(config, lifecycle);
+          },
+        })
+      ),
+    );
+    for (const result of results) {
+      if (result.status === "fulfilled") hosts.push(result.value);
+    }
+    assert.equal(hosts.length, 1);
+    assert.equal(transports, 1);
+    assert.equal((await db.query("SELECT * FROM owner_epochs")).rows.length, 1);
+    assert.equal(
+      Number((await db.query("SELECT epoch FROM owner_epochs")).rows[0].epoch),
+      1,
+    );
+  } finally {
+    await Promise.all(hosts.map((host) => host.close()));
+    await db.close();
+  }
+});
+
+test("owner catalog reopen refuses physical coexistence and incomplete setup without repair", async () => {
+  for (
+    const damage of [
+      "content_bodies",
+      "content_body_parts",
+      "missing-marker",
+      "missing-assignments",
+    ] as const
+  ) {
+    const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
+    let first: Awaited<ReturnType<typeof createOwnerHost>> | undefined;
+    try {
+      first = await createOwnerHost(options(db));
+      await first.close();
+      first = undefined;
+      if (damage === "missing-marker") {
+        await db.query("DELETE FROM copilotz_operation_catalog_metadata");
+      } else if (damage === "missing-assignments") {
+        await db.query("DROP TABLE owner_assignments");
+      } else {
+        await db.query(`CREATE TABLE ${damage}(id TEXT)`);
+        await db.query(`INSERT INTO ${damage} VALUES('retained')`);
+      }
+      const before = (await db.query(
+        "SELECT c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname",
+      )).rows;
+      const epoch = (await db.query("SELECT * FROM owner_epochs")).rows;
+      let ddl = 0, transports = 0;
+      const session: SqlSession = {
+        query: db.query,
+        transaction: (run) =>
+          db.transaction((tx) =>
+            run({
+              query: (sql, params) => {
+                if (/^\s*(CREATE|ALTER|DROP)\b/.test(sql)) ddl++;
+                return tx.query(sql, params);
+              },
+            })
+          ),
+      };
+      for (
+        const initialization of ["fresh", {
+          mode: "resume",
+          expectedEpoch: 1,
+        }] as const
+      ) {
+        await assert.rejects(
+          createOwnerHost(options(session, {
+            initialization,
+            createTransport() {
+              transports++;
+              throw new Error("unexpected transport");
+            },
+          })),
+          /catalog|schema|assignment/i,
+        );
+      }
+      assert.equal(ddl, 0);
+      assert.equal(transports, 0);
+      assert.deepEqual(
+        (await db.query(
+          "SELECT c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' ORDER BY c.relname",
+        )).rows,
+        before,
+      );
+      assert.deepEqual(
+        (await db.query("SELECT * FROM owner_epochs")).rows,
+        epoch,
+      );
+      if (damage === "missing-marker") {
+        assert.equal(
+          (await db.query("SELECT * FROM copilotz_operation_catalog_metadata"))
+            .rows.length,
+          0,
+        );
+      } else if (damage !== "missing-assignments") {
+        assert.deepEqual((await db.query(`SELECT * FROM ${damage}`)).rows, [{
+          id: "retained",
+        }]);
+      }
+    } finally {
+      await first?.close();
+      await db.close();
+    }
   }
 });

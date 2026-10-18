@@ -55,7 +55,12 @@ const plan = (withDrain = true) => ({
 test("settlement callback cannot mutate private authorized scope", async () => {
   const queries: unknown[][] = [];
   const tx: SqlExecutor = {
-    query(_sql, params) {
+    query(sql, params) {
+      if (sql.startsWith("SELECT fingerprint")) {
+        return Promise.resolve({
+          rows: [{ fingerprint: "owner-content-v1" }],
+        }) as never;
+      }
       queries.push(params ?? []);
       return Promise.resolve({ rows: [] });
     },

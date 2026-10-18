@@ -2868,9 +2868,13 @@ export async function readOperationSettlement(
   scope: OperationSettlementScope,
 ): Promise<OperationSettlementSnapshot | null> {
   const tables = createOperationCatalogTables(schema);
+  await assertOperationCatalogFormat(tx, tables.metadata, {
+    expected: OWNER_CONTENT_CATALOG_FINGERPRINT,
+  });
   const result = await tx.query<{
     state: OperationState;
     ready: boolean;
+    has_streams: boolean;
     outcome: OperationSettlementSnapshot["outcome"];
     root_event_id: string;
     correlation_id: string;
@@ -2881,11 +2885,18 @@ export async function readOperationSettlement(
     `SELECT operation.state, operation.root_event_id, operation.correlation_id,
       operation.next_event_ordinal, operation.next_stream_ordinal, operation.observation_keys,
       (${operationSettlementDrainedSql(schema)}) AS ready,
+      EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
+        WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id) AS has_streams,
       ${operationSettlementOutcomeSql(schema)} AS outcome
      FROM ${tables.operations} AS operation WHERE namespace=$1 AND operation_id=$2`,
     [scope.namespace, scope.operationId],
   );
   const row = result.rows[0];
+  // Until owner content settlement is integrated, even hidden/revoked rows and
+  // already-terminal operations require explicit refusal before any shortcut.
+  if (row?.has_streams) {
+    throw new Error("Owner content settlement is not yet supported.");
+  }
   return row
     ? {
       ...scope,
@@ -2918,7 +2929,9 @@ export async function terminalizeOperationSettlement(
   }>,
 ): Promise<OperationSettlementSnapshot | null> {
   const tables = createOperationCatalogTables(schema);
-  await assertOperationCatalogFormat(tx, tables.metadata);
+  await assertOperationCatalogFormat(tx, tables.metadata, {
+    expected: OWNER_CONTENT_CATALOG_FINGERPRINT,
+  });
   await tx.query(
     `SELECT operation_id FROM ${tables.operations}
      WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
@@ -2944,8 +2957,16 @@ export async function terminalizeOperationSettlement(
     `UPDATE ${tables.operations} AS operation SET state=$3, updated_at=${timestamp},
       completed_at=COALESCE(completed_at,${timestamp})
      WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
-       AND ${operationCatalogFormatSql(tables.metadata)}
-       AND ${operationSettlementDrainedSql(schema)} RETURNING operation_id`,
+       AND ${
+      operationCatalogFormatSql(
+        tables.metadata,
+        OWNER_CONTENT_CATALOG_FINGERPRINT,
+      )
+    }
+       AND ${operationSettlementDrainedSql(schema)}
+       AND NOT EXISTS (SELECT 1 FROM ${tables.operationStreams} AS stream
+         WHERE stream.namespace=operation.namespace AND stream.operation_id=operation.operation_id)
+       RETURNING operation_id`,
     params,
   );
   if (updated.rows.length !== 1) {

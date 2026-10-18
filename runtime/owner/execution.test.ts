@@ -4,7 +4,7 @@ import { defineAction } from "../actions/define.ts";
 import { createActionLifecycleLoader } from "../actions/persistence.ts";
 import { encodeEventBody } from "../events/body-store.ts";
 import type { AnyActionDefinition } from "../actions/types.ts";
-import { createOperationCatalog } from "../streams/catalog.ts";
+import { createOwnerOperationCatalogCore } from "../streams/catalog.ts";
 import { createOwnerOperationSettlement } from "./settlement.ts";
 import { createOwnerTransactionPlanner } from "./transaction.ts";
 import type { OwnerCommand, OwnerInputCommand, OwnerJson } from "./boundary.ts";
@@ -666,7 +666,7 @@ test("owner Action claim and completion schedule settlement atomically, but dupl
     ownerId: "owner",
     schema: "public",
     session: f.db,
-    catalog: createOperationCatalog(f.db),
+    catalog: createOwnerOperationCatalogCore(f.db, "public"),
     authorizeControl: () => true,
     selectDrains: () => [],
     authorizeDrain: () => false,
@@ -724,7 +724,7 @@ test("settlement scheduling failure rolls back claim, alarm, receipt and staged 
     ownerId: "owner",
     schema: "public",
     session: f.db,
-    catalog: createOperationCatalog(f.db),
+    catalog: createOwnerOperationCatalogCore(f.db, "public"),
     authorizeControl: () => true,
     selectDrains: () => [],
     authorizeDrain: () => false,

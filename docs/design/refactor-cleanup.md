@@ -110,11 +110,12 @@ The old-path edits mainly enforce format/namespace isolation so an old
 entrypoint cannot mutate a new owner's storage while both remain reachable. They
 are not a reason to retain the old execution architecture permanently.
 
-The real risk is integration lag. `owner-host.ts` still constructs the full old
-catalog, and the public factory still has embedded/gateway/worker branches
-beside its owner-backed branch. Eight private modules remain outside genuine
-host reachability after the reservation checkpoint. Additional isolated
-capabilities must not become the default way to progress this refactor.
+The audit identified integration lag: at that checkpoint `owner-host.ts` still
+constructed the full old catalog, and the public factory retained
+embedded/gateway/worker branches beside its owner-backed branch. Eight private
+modules remain outside genuine host reachability after the reservation
+checkpoint. Additional isolated capabilities must not become the default way to
+progress this refactor.
 
 The immediate sequencing rule is therefore:
 
@@ -145,9 +146,9 @@ callers.
 
 `createOwnerReconciliation`, its inventory/classify command kinds, cursor/page/
 classification types and key helper have no production registration or public
-barrel export. Only their own test fixture calls them. Production startup and
-lost-Action recovery import the target union and exact durable alarm encoder
-from that file; those must remain unchanged.
+barrel export before removal. Only their own test fixture called them.
+Production startup and lost-Action recovery import the target union and exact
+durable alarm encoder from that file; those must remain unchanged.
 
 The existing exhaustive startup proof/repair replaces the unused paginated
 classifier's role. Its remaining counterexamples now run through actual startup:
@@ -192,6 +193,29 @@ exercises that path. All 102 owned databases were exported/dropped; PostgreSQL
 stopped with no sessions or leftovers, and source/dependency hashes match. The
 same eight-module package reachability blocker remains. The separate host
 catalog migration has not started in this checkpoint.
+
+### Actual owner catalog migration: candidate under validation
+
+The host now imports the fixed six-member owner core instead of constructing the
+full legacy catalog. Its ordinary consumers share that core; only execution and
+terminal recovery receive the required same-transaction no-stream hook. That
+hook refuses hidden/revoked rows rather than silently calling retiring stream
+mutations. Owner settlement and startup validate the fixed format, with explicit
+unsupported-content refusal and unchanged legacy reconciliation outside the
+host.
+
+Fresh setup now reuses the four existing provisioners in one shared-lock SQL
+transaction. Complete pre-epoch setup reopens by validation only; partial and
+foreign formats refuse without repair. The physical namespace check is shared,
+and duplicate host/startup SQL scans are removed while stable resolved alarm
+identities remain. One test-only owner catalog fixture replaces repeated
+provisioning/recovery scaffolding; it adds no production mode or facade.
+
+Independent pre-correction PostgreSQL evidence passes 364 cases. The reproduced
+interrupted-bootstrap defect is fixed and root bootstrap regressions pass;
+corrected backend acceptance is pending. Six modules still need genuine content
+execution consumers. Public/default composition and actual stream recovery are
+not completed by this migration.
 
 ## Required evidence for each cleanup checkpoint
 

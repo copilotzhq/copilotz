@@ -12,7 +12,7 @@ import {
   ownerLostActionKey,
 } from "../owner/lost-action.ts";
 import { createOwnerOperationSettlement } from "../owner/settlement.ts";
-import { createOperationCatalog } from "../streams/catalog.ts";
+import { createTestOwnerCatalog } from "../testing/owner-catalog.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import { createOwnerHost } from "./owner-host.ts";
 import { createOwnerConnectedWorker } from "./owner-worker.ts";
@@ -207,7 +207,7 @@ for (const mode of ["in-process", "websocket"] as const) {
             }),
           },
         });
-        const catalog = createOperationCatalog(db, "public");
+        const catalog = createTestOwnerCatalog(db, "public");
         const settlement = createOwnerOperationSettlement({
           ownerId: "owner",
           schema: "public",

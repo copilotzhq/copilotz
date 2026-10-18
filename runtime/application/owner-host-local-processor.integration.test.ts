@@ -1,15 +1,13 @@
+import { createTestOwnerCatalog } from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 /** Actual SQL/boundary/helper composition. These holds occur after execute()
  * returns its committed outcome, so unrelated owner commands remain runnable. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createCoreSchemaStatements } from "../events/schema.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
 import { createEventStore } from "../events/store.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
-import {
-  createOperationCatalog,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createOwnerCommandBoundary,
@@ -54,8 +52,8 @@ function outcome<T>(promise: Promise<T>) {
 }
 async function fixture(stage: "start" | "completion") {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
-  for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
-  await provisionOperationCatalog(db, "public");
+  await provisionCopilotzSchema(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await provisionOwnerAssignments(db, "public");
   const control: OwnerCaller = {
@@ -93,7 +91,7 @@ async function fixture(stage: "start" | "completion") {
       }),
     },
   });
-  const catalog = createOperationCatalog(db, "public");
+  const catalog = createTestOwnerCatalog(db, "public");
   const contexts = createOwnerHostCommandContexts({
     ownerId: "owner",
     holderId: "holder",

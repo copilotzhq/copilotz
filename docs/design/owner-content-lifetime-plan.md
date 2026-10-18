@@ -324,13 +324,15 @@ remains the semantic command limit; the extra SQL space accommodates JSONB text
 formatting. This schema-only slice does not grant command authority or establish
 immutable-descriptor replay; the upcoming command handlers must enforce those.
 
-Exclusive fresh setup is still required. Existing owner command/assignment
-provisioners do not yet take the common schema lock, so this catalog transaction
-does not serialize a competing owner provisioner. Coordinated activation must
-hold the shared admission boundary across the complete sequence. Physical SQL
-storage remains in its separately validated namespace. Current host catalog
-instances, event hooks and core admission stay legacy-bound until the actual
-owner-content route is ready; merely swapping a provisioner would be invalid.
+At this schema-only checkpoint, exclusive fresh setup was required because the
+standalone owner command/assignment provisioners did not take the common schema
+lock. The later host integration now joins all four provisioners under that
+boundary; the standalone provisioners have not gained a generic migration or
+concurrent-setup protocol. Physical SQL storage remains in its separately
+validated namespace. At this schema-only checkpoint, host catalog instances and
+event hooks remained legacy-bound. The later host migration below changes the
+core, validation and settlement together; merely swapping a provisioner would be
+invalid.
 
 Independent scope passes 61 PostgreSQL cases and 53 PGlite cases with 58 steps
 on each backend and eight explicit PostgreSQL-only skips. The complete matrix
@@ -406,15 +408,15 @@ and startup terminal recovery keep that required hook in their types. No missing
 hook is converted into an optional no-op, and the owner event-only core cannot
 satisfy it by itself.
 
-The actual host still constructs the legacy catalog. Standalone settlement,
-owner stream revocation/recovery, nullable confirmation-time ordinals and
-visibility rules remain separate activation work. Root checks preserve the
-ordered legacy SQL/parameter capture and pass the existing format/stream
-compatibility plus direct private-format indexing tests. Independent validation
-passes 335 PostgreSQL cases and 324 PGlite cases with 11 explicit
-PostgreSQL-only skips. Exact ordered legacy SQL/parameter parity passes in both
-notification modes; transitive recovery type guards remain required. All 742
-owned fixture databases were exported and dropped, with zero remaining
+At this core-only checkpoint the host still constructed the legacy catalog.
+Standalone settlement, owner stream revocation/recovery, nullable
+confirmation-time ordinals and visibility rules remain separate activation work.
+Root checks preserve the ordered legacy SQL/parameter capture and pass the
+existing format/stream compatibility plus direct private-format indexing tests.
+Independent validation passes 335 PostgreSQL cases and 324 PGlite cases with 11
+explicit PostgreSQL-only skips. Exact ordered legacy SQL/parameter parity passes
+in both notification modes; transitive recovery type guards remain required. All
+742 owned fixture databases were exported and dropped, with zero remaining
 sessions/databases and the local PostgreSQL process stopped. The initial
 reviewer-fixture normalization error is preserved beside the corrected complete
 runs. The unchanged full-static guard still refuses seven private modules
@@ -532,11 +534,49 @@ protection expiry during either physical await suppresses acceptance.
 
 Root component and memory-adapter checks pass 29 tests. The original
 older-append replay failure and one mechanical test-only import error remain
-recorded beside corrected passes. Independent backend, COMMIT-loss and
-compatibility review is pending. The real invocation's checkpoint-failure latch,
-serialization/cadence, raw-call lifetime and final route witness still require
-integration. An internal receipt replay test does not authorize a failed
-authored invocation to resume.
+recorded beside corrected passes. Independent scope now passes 372 PostgreSQL
+and 357 PGlite cases plus 15 explicit PostgreSQL-only skips, including four real
+COMMIT outcomes; all 220 owned databases were exported/dropped and the service
+stopped. The real invocation's checkpoint-failure latch, serialization/cadence,
+raw-call lifetime and final route witness still require integration. An internal
+receipt replay test does not authorize a failed authored invocation to resume.
+
+## Actual owner host catalog migration: validation in progress
+
+The actual host now constructs the six-member owner core and provisions or
+validates the fixed owner format. Startup validates the same retained layout.
+Ordinary Action and Processor event admission/indexing runs through that core.
+Only execution and terminal recovery receive an explicit recovery hook: it uses
+the same transaction and refuses any stream row in the operation, including
+hidden or revoked rows. It is never a silent no-op or a fallback to legacy
+stream mutation.
+
+Owner settlement reads require the owner fingerprint and refuse stream evidence
+before both live and terminal shortcuts. The final UPDATE independently checks
+all-state absence, covering rows admitted after lifecycle append. Startup keeps
+its existing durable unsupported-stream blocker alarms before calling this
+helper. Public legacy catalog reconciliation keeps its original predicate.
+
+This activates the ordinary owner catalog, not stream execution or
+public/default composition. Legacy-format schemas are rejected without
+conversion. Real stream recovery replaces the explicit content refusal only when
+physical fencing and catalog acceptance are integrated. Existing exclusive
+fresh-setup requirements remain unchanged; this is not a production migration
+protocol.
+
+Root checks pass actual Processor flows, both-transport local Actions, canonical
+resume, all-state stream refusal and same-transaction rollback. The
+pre-bootstrap-correction independent PostgreSQL matrix passes 364 cases; its two
+guard-removal controls fail at the intended assertions, and 449 owned databases
+across that matrix and bootstrap probes were exported/dropped. The
+interrupted-setup failures were reproduced on both backends. Corrected root
+bootstrap checks pass six cases, including all four provisioning rollback
+stages. Targeted corrected PostgreSQL and a final-source broad PGlite gate are
+pending; these are separate snapshots, not a coherent full-suite claim.
+Full-static reachability now finds six unwired modules rather than eight through
+genuine owner catalog/schema consumers. Earlier fixture provisioning,
+error-cause and conservative capacity-expectation failures remain recorded;
+production checks and capacity semantics were not relaxed to make them pass.
 
 ## 1. Catalog authority, physical fence and bounded renewal
 

@@ -1,8 +1,10 @@
+import { createTestOwnerCatalog } from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext, AnyActionDefinition } from "../actions/types.ts";
 import { defineCollection } from "../collections/definition.ts";
-import { createCoreSchemaStatements } from "../events/schema.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createEventStore } from "../events/store.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
@@ -18,11 +20,7 @@ import {
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { definePlugin } from "../plugins/types.ts";
 import { defineProcessor } from "../plugins/processor.ts";
-import {
-  createOperationCatalog,
-  type OperationSettlementScope,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
+import type { OperationSettlementScope } from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { defineView } from "../views/index.ts";
@@ -110,8 +108,8 @@ export async function fixture(
   } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
-  for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
-  await provisionOperationCatalog(db, "public");
+  await provisionCopilotzSchema(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await db.query(
     `CREATE TABLE fixture_assignments (assignment_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
@@ -237,7 +235,7 @@ export async function fixture(
       }),
     ],
   });
-  const catalog = createOperationCatalog(db, "public");
+  const catalog = createTestOwnerCatalog(db, "public");
   const store = createEventStore({
     session: db,
     now: () => new Date(state.time),

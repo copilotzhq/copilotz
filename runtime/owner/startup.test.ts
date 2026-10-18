@@ -1,3 +1,8 @@
+import {
+  createTestOwnerCatalog,
+  insertTestOwnerStream,
+} from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";
@@ -10,10 +15,6 @@ import type { DeliveryExecutor } from "../execution/types.ts";
 import { ownerClaimKey, ownerCompletionKey } from "../execution/owner-port.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { defineProcessor } from "../plugins/processor.ts";
-import {
-  createOperationCatalog,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createOwnerAssignmentControl,
@@ -48,7 +49,7 @@ async function fixture(
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   await provisionCopilotzSchema(db, "public");
-  await provisionOperationCatalog(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await provisionOwnerAssignments(db, "public");
   const state = {
@@ -94,7 +95,7 @@ async function fixture(
       }),
     },
   });
-  const catalog = createOperationCatalog(session, "public");
+  const catalog = createTestOwnerCatalog(session, "public");
   const assignments = createOwnerAssignmentControl({
     ownerId: "owner",
     schema: "public",
@@ -803,14 +804,25 @@ test("startup refuses graph and content storage even without event obligations",
         }
       }
       await f.takeover();
+      if (kind === "content") {
+        await assert.rejects(f.repair(), {
+          code: "owner_content_catalog_schema_incompatible",
+        });
+        await assert.rejects(f.proof(), {
+          code: "owner_content_catalog_schema_incompatible",
+        });
+        assert.equal(
+          (await f.db.query("SELECT 1 FROM owner_alarms")).rows.length,
+          0,
+        );
+        continue;
+      }
       const result = (await f.repair()).result as {
         blockers: { reason: string; id: string }[];
       };
       assert.ok(result.blockers.some((blocker) =>
         blocker.reason ===
-          (kind === "content"
-            ? "content_storage_unsupported"
-            : kind === "orphan-body"
+          (kind === "orphan-body"
             ? "event_body_unsupported"
             : "graph_recovery_unsupported")
       ));
@@ -1039,5 +1051,73 @@ test("startup repairs are atomic, unknown COMMIT stops the instance, and proof a
     } finally {
       await f.close();
     }
+  }
+});
+
+test("startup persists blockers for hidden active and revoked owner streams", async () => {
+  for (const revocation of ["active", "revoked"] as const) {
+    const f = await fixture();
+    try {
+      const ref = await f.seed();
+      await insertTestOwnerStream(f.db, {
+        namespace: ref.namespace,
+        operationId: ref.sourceEventId,
+      }, { revocation });
+      const before =
+        (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows;
+      await f.takeover();
+      const result = (await f.repair()).result as {
+        blockers: { kind: string; reason: string }[];
+      };
+      assert.ok(
+        result.blockers.some((row) =>
+          row.kind === "stream" && row.reason === "stream_recovery_unsupported"
+        ),
+      );
+      await assert.rejects(f.proof(), /unresolved/);
+      assert.deepEqual(
+        (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows,
+        before,
+      );
+      assert.ok(
+        (await f.db.query("SELECT 1 FROM owner_alarms WHERE name=$1", [
+          ownerReconciliationAlarm("owner", {
+            kind: "stream",
+            namespace: ref.namespace,
+            id: "unsupported-stream",
+          }),
+        ])).rows.length,
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("startup clears physical-storage blocker alarms after shared schema proof establishes absence", async () => {
+  const f = await fixture();
+  try {
+    for (const name of ["content_bodies", "content_body_parts"]) {
+      await f.db.query(
+        "INSERT INTO owner_alarms(owner,name,due_at) VALUES('owner',$1,$2)",
+        [
+          ownerReconciliationAlarm("owner", {
+            kind: "blocker",
+            namespace: null,
+            id: `startup.${name}`,
+          }),
+          start,
+        ],
+      );
+    }
+    await f.takeover();
+    await f.repair();
+    await f.proof();
+    assert.equal(
+      (await f.db.query("SELECT 1 FROM owner_alarms")).rows.length,
+      0,
+    );
+  } finally {
+    await f.close();
   }
 });

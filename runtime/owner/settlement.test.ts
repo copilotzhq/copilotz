@@ -1,13 +1,14 @@
+import { insertTestOwnerStream } from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { createCoreSchemaStatements } from "../events/schema.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
 import { createEventStore } from "../events/store.ts";
 import type { SqlSession } from "../events/session.ts";
 import {
-  createOperationCatalog,
+  createOwnerOperationCatalogCore,
   type OperationSettlementScope,
-  provisionOperationCatalog,
 } from "../streams/catalog.ts";
 import {
   createOwnerCommandBoundary,
@@ -62,8 +63,8 @@ async function fixture(
   } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
-  for (const sql of createCoreSchemaStatements("public")) await db.query(sql);
-  await provisionOperationCatalog(db, "public");
+  await provisionCopilotzSchema(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   const state = {
     time: start,
@@ -90,6 +91,7 @@ async function fixture(
     gateRelease: deferred(),
     published: deferred(),
     statements: [] as string[],
+    streamRace: undefined as OperationSettlementScope | undefined,
   };
   const session: SqlSession = {
     query: db.query,
@@ -101,6 +103,18 @@ async function fixture(
             if (state.rejectSavepoint && sql.startsWith("RELEASE SAVEPOINT")) {
               state.rejectSavepoint = false;
               throw new Error("savepoint rollback");
+            }
+            if (
+              state.streamRace &&
+              sql.includes(
+                'UPDATE "public"."copilotz_operations" AS operation SET state=$3',
+              )
+            ) {
+              const target = state.streamRace;
+              state.streamRace = undefined;
+              await insertTestOwnerStream(tx, target, {
+                revocation: "revoked",
+              });
             }
             return await tx.query(sql, params);
           },
@@ -154,7 +168,7 @@ async function fixture(
       });
     }
   }
-  const catalog = createOperationCatalog(unavailable);
+  const catalog = createOwnerOperationCatalogCore(unavailable, "public");
   const settlement = createOwnerOperationSettlement({
     ownerId: "owner",
     schema: "public",
@@ -296,12 +310,10 @@ async function fixture(
         },
         cancel: async (data, ctx) => {
           const target = data as OperationSettlementScope;
-          await catalog.requestCancellation(
-            ctx.tx,
-            target.namespace,
-            target.operationId,
-            "cancelled",
-            ctx.commandTime,
+          await catalog.assertFormat(ctx.tx);
+          await ctx.tx.query(
+            "UPDATE copilotz_operations SET cancellation_requested_at=$3::timestamptz,updated_at=$3::timestamptz WHERE namespace=$1 AND operation_id=$2",
+            [target.namespace, target.operationId, ctx.commandTime],
           );
           await settlement.schedule(ctx, target);
           return null;
@@ -769,7 +781,7 @@ test("owner drain caller abort is bounded and does not free a noncooperative res
   }
 });
 
-test("owner settlement waits for delivery, open Action and open/terminating stream obligations", async () => {
+test("owner settlement waits for delivery and open Action obligations", async () => {
   const f = await fixture();
   try {
     const root = await f.seed({ status: "pending" });
@@ -791,48 +803,6 @@ test("owner settlement waits for delivery, open Action and open/terminating stre
     );
     assert.deepEqual(await f.run(root), { status: "pending" });
     await f.db.query("DELETE FROM open_actions WHERE action_run_id='open-run'");
-    const catalog = createOperationCatalog(f.db);
-    await catalog.openStream({
-      namespace: root.namespace,
-      operationId: root.operationId,
-      semanticStreamId: "stream",
-      bodyId: "body",
-      descriptor: {
-        type: "stream.output",
-        namespace: root.namespace,
-        streamId: "stream",
-        mediaType: "text/plain",
-        kind: "text",
-        role: "assistant",
-        metadata: { sourceDeliveryId: root.deliveryId },
-      },
-    });
-    assert.deepEqual(await f.run(root), { status: "pending" });
-    await f.db.transaction((tx) =>
-      f.catalog.failDeliveryStreams(tx, {
-        operationId: root.operationId,
-        deliveryId: root.deliveryId,
-        outcome: "failed",
-        commandTime: end,
-      })
-    );
-    assert.equal(
-      new Date(
-        (await f.db.query("SELECT updated_at FROM copilotz_operation_streams"))
-          .rows[0].updated_at as string,
-      ).toISOString(),
-      end,
-    );
-    assert.deepEqual(await f.run(root), { status: "pending" });
-    await catalog.markStreamUnavailable({
-      namespace: root.namespace,
-      operationId: root.operationId,
-      streamId: "stream",
-      outcome: "failed",
-      availability: "missing",
-    });
-    // Stream failure remains the stream's outcome; existing operation semantics
-    // do not turn a successfully delivered scope into a failed Action result.
     assert.deepEqual(await f.run(root), {
       status: "terminal",
       state: "completed",
@@ -843,70 +813,71 @@ test("owner settlement waits for delivery, open Action and open/terminating stre
   }
 });
 
-test("owner catalog cancellation and failed delivery stream timestamps use the captured clock", async () => {
+test("owner settlement refuses every stream state before live and terminal shortcuts", async () => {
+  for (
+    const state of ["reserving", "open", "terminating", "terminal"] as const
+  ) {
+    for (const operationTerminal of [false, true]) {
+      const f = await fixture();
+      try {
+        const root = await f.seed();
+        if (operationTerminal) await f.run(root);
+        await insertTestOwnerStream(f.db, root, {
+          state,
+          revocation: "revoked",
+        });
+        const before =
+          (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows;
+        const operation = await f.status(root);
+        const events = (await f.events()).rows;
+        const receipts =
+          (await f.db.query("SELECT * FROM owner_receipts")).rows;
+        await assert.rejects(
+          f.run(root),
+          /Owner content settlement is not yet supported/,
+        );
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows,
+          before,
+        );
+        assert.deepEqual(await f.status(root), operation);
+        assert.deepEqual((await f.events()).rows, events);
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM owner_receipts")).rows,
+          receipts,
+        );
+      } finally {
+        f.owner.stop();
+        await f.db.close();
+      }
+    }
+  }
+});
+
+test("owner final settlement guard rolls back lifecycle, sequence and receipt if a hidden stream appears", async () => {
   const f = await fixture();
   try {
     const root = await f.seed();
-    const catalog = createOperationCatalog(f.db);
-    await catalog.openStream({
-      namespace: root.namespace,
-      operationId: root.operationId,
-      semanticStreamId: "stream",
-      bodyId: "body",
-      descriptor: {
-        type: "stream.output",
-        namespace: root.namespace,
-        streamId: "stream",
-        mediaType: "text/plain",
-        kind: "text",
-        role: "assistant",
-        metadata: { sourceDeliveryId: root.deliveryId },
-      },
-    });
-    f.state.time = end;
-    await f.owner.execute(f.caller, {
-      kind: "cancel",
-      domain: "occurrence",
-      key: "clock-cancel",
-      intent: { namespace: root.namespace, operationId: root.operationId },
-    });
-    const operation = (await f.db.query(
-      "SELECT cancellation_requested_at,updated_at FROM copilotz_operations WHERE operation_id=$1",
-      [root.operationId],
-    )).rows[0];
-    const stream = (await f.db.query(
-      "SELECT outcome,updated_at FROM copilotz_operation_streams",
-    )).rows[0];
+    const before = (await f.db.query("SELECT * FROM copilotz_operations")).rows;
+    const receipts = (await f.db.query("SELECT * FROM owner_receipts")).rows;
+    f.state.streamRace = root;
+    await assert.rejects(f.run(root), /admitted work inside terminalization/);
+    assert.equal(f.state.streamRace, undefined);
+    assert.deepEqual(
+      (await f.db.query("SELECT * FROM copilotz_operations")).rows,
+      before,
+    );
+    assert.deepEqual(
+      (await f.db.query("SELECT * FROM owner_receipts")).rows,
+      receipts,
+    );
+    assert.equal((await f.events()).rows.length, 0);
     assert.equal(
-      new Date(operation.cancellation_requested_at as string).toISOString(),
-      end,
+      (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows
+        .length,
+      0,
     );
-    assert.equal(new Date(operation.updated_at as string).toISOString(), end);
-    assert.equal(new Date(stream.updated_at as string).toISOString(), end);
-    assert.equal(stream.outcome, "cancelled");
-    await assert.rejects(
-      f.db.transaction((tx) =>
-        f.catalog.failDeliveryStreams(tx, {
-          operationId: root.operationId,
-          deliveryId: root.deliveryId,
-          outcome: "failed",
-          commandTime: "invalid",
-        })
-      ),
-      /valid timestamp/,
-    );
-    await assert.rejects(
-      f.db.transaction((tx) =>
-        f.catalog.requestCancellation(
-          tx,
-          root.namespace,
-          root.operationId,
-          "cancelled",
-          "invalid",
-        )
-      ),
-      /valid timestamp/,
-    );
+    assert.equal(f.state.publications.length, 0);
   } finally {
     f.owner.stop();
     await f.db.close();

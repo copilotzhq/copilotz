@@ -1,3 +1,5 @@
+import { createTestOwnerCatalog } from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 /** Actual writer/scanner adapter proof. The ordinary source is a deterministic
  * trusted test port; it does not certify production source hydration or public
  * transport restart, which have their own integration acceptance gate. */
@@ -12,10 +14,6 @@ import type { DeliveryExecutor } from "../execution/types.ts";
 import { ownerClaimKey, ownerCompletionKey } from "../execution/owner-port.ts";
 import type { OwnerChildActionReference } from "../execution/child-action-port.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import {
-  createOperationCatalog,
-  provisionOperationCatalog,
-} from "../streams/catalog.ts";
 import { createOwnerCommandBoundary, type OwnerCaller } from "./boundary.ts";
 import {
   createOwnerAssignmentControl,
@@ -48,7 +46,7 @@ import { ownerReconciliationAlarm } from "./reconciliation.ts";
 async function fixture() {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
   await provisionCopilotzSchema(db, "public");
-  await provisionOperationCatalog(db, "public");
+  await provisionOwnerContentCatalog(db, "public");
   await provisionOwnerCommandSchema(db, "public");
   await provisionOwnerAssignments(db, "public");
   const state = {
@@ -75,7 +73,7 @@ async function fixture() {
       }),
     },
   });
-  const catalog = createOperationCatalog(db, "public");
+  const catalog = createTestOwnerCatalog(db, "public");
   const store = createEventStore({ session: db, schema: "public" });
   const assignments = createOwnerAssignmentControl({
     ownerId: "owner",

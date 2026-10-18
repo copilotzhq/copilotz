@@ -36,8 +36,8 @@ import {
   createOperationCatalogTables,
   type OperationSettlementScope,
   readOperationSettlement,
-  validateOperationCatalog,
 } from "../streams/catalog.ts";
+import { validateOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
 import { createOwnerAssignmentStorage } from "./assignment-storage.ts";
 import {
   type OwnerStoredAssignment,
@@ -481,17 +481,10 @@ export function createOwnerStartupProof(
         }
       }
     }
+    // Shared catalog validation already proved physical storage is separate.
+    // Keep stable resolved identities so obsolete blocker alarms can be removed.
     for (const name of ["content_bodies", "content_body_parts"]) {
-      const target = ref("blocker", null, `startup.${name}`);
-      const found = await tx.query<{ relation: string | null }>(
-        "SELECT to_regclass($1)::text AS relation",
-        [`${quoteEventIdentifier(schema)}.${quoteEventIdentifier(name)}`],
-      );
-      // Even an empty optional content table is not a supported/validated
-      // storage schema here. Never provision it or infer its compatibility.
-      if (found.rows[0].relation !== null) {
-        block(target, "content_storage_unsupported");
-      } else resolved.add(targetKey(target));
+      resolved.add(targetKey(ref("blocker", null, `startup.${name}`)));
     }
     const events = await rows(core.events);
     const bodies = await rows(core.event_bodies);
@@ -1460,12 +1453,7 @@ export function createOwnerStartupProof(
           true
       ) refuse();
       await validateCopilotzSchema(tx, schema);
-      await validateOperationCatalog({
-        query: tx.query.bind(tx),
-        transaction(): never {
-          throw new Error("Nested startup schema transaction.");
-        },
-      }, schema);
+      await validateOwnerContentCatalog(tx, schema);
       await validateOwnerCommandSchema(tx, schema, ownerId);
       await validateOwnerAssignments(tx, schema);
       const current = (await tx.query<

@@ -112,7 +112,7 @@ Deno.test("foreign catalog format refuses legacy stream and supplied-transaction
       bodyId: "private-body",
       descriptor,
     });
-    let hints = 0, callbacks = 0;
+    let hints = 0;
     const unsubscribe = await f.catalog.onChange(() => {
       hints++;
     });
@@ -179,24 +179,12 @@ Deno.test("foreign catalog format refuses legacy stream and supplied-transaction
             "cancel",
           )
         ),
-      () =>
-        f.db.transaction((tx) =>
-          terminalizeOperationSettlement(tx, f.schema, scope, {
-            commandTime: "2026-10-18T00:00:00Z",
-            expected: { nextEventOrdinal: "2", nextStreamOrdinal: "2" },
-            beforeTerminal() {
-              callbacks++;
-              return Promise.resolve();
-            },
-          })
-        ),
     ];
     for (const operation of operations) {
       await refused(operation);
       assertEquals(await f.snapshot(), before);
     }
     assertEquals(hints, 0);
-    assertEquals(callbacks, 0);
     unsubscribe();
   } finally {
     await f.db.close();
@@ -360,5 +348,33 @@ Deno.test("cached legacy scope refuses foreign format before recovery and mainte
     } finally {
       await f.db.close();
     }
+  }
+});
+
+Deno.test("owner settlement helper refuses the complete legacy format before callbacks", async () => {
+  const f = await fixture();
+  try {
+    await f.catalog.assertFormat();
+    const before = await f.snapshot();
+    let called = false;
+    await refused(() =>
+      f.db.transaction((tx) =>
+        terminalizeOperationSettlement(tx, f.schema, {
+          namespace: "tenant",
+          operationId: "operation",
+        }, {
+          commandTime: "2026-10-18T00:00:00Z",
+          expected: { nextEventOrdinal: "1", nextStreamOrdinal: "1" },
+          beforeTerminal() {
+            called = true;
+            return Promise.resolve();
+          },
+        })
+      )
+    );
+    assertEquals(called, false);
+    assertEquals(await f.snapshot(), before);
+  } finally {
+    await f.db.close();
   }
 });

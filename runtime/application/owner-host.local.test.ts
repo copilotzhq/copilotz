@@ -1,3 +1,4 @@
+import { OWNER_OPERATION_SETTLED_EVENT } from "../owner/settlement.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolveOxianSource } from "../../scripts/test-owner-connected.mjs";
@@ -1551,7 +1552,7 @@ for (
 
 // Actual-table proof of the production helper's held caller-facing start reply.
 // The SQL boundary remains real and its serialized pump is allowed to advance.
-import { createCoreSchemaStatements as localHelperCoreStatements } from "../events/schema.ts";
+import { provisionCopilotzSchema as localHelperCoreSchema } from "../events/schema.ts";
 import { createEventStore as localHelperEventStore } from "../events/store.ts";
 import type { DeliveryExecutor as LocalHelperExecutor } from "../execution/types.ts";
 import {
@@ -1563,9 +1564,10 @@ import { createOwnerExecutionCommands as localHelperExecution } from "../owner/e
 import { provisionOwnerAssignments as localHelperAssignments } from "../owner/assignments.ts";
 import { provisionOwnerCommandSchema as localHelperOwnerSchema } from "../owner/schema.ts";
 import {
-  createOperationCatalog as localHelperCatalog,
-  provisionOperationCatalog as localHelperCatalogSchema,
-} from "../streams/catalog.ts";
+  createTestOwnerCatalog as localHelperCatalog,
+  insertTestOwnerStream,
+} from "../testing/owner-catalog.ts";
+import { provisionOwnerContentCatalog as localHelperCatalogSchema } from "../streams/owner-catalog-schema.ts";
 import {
   captureOwnerHostLocalActions as captureLocalHelperOptions,
   createOwnerHostCommandContexts as createLocalHelperContexts,
@@ -1576,7 +1578,7 @@ async function localHelperFixture(
   extra: { revokeAfterTerminal?: boolean } = {},
 ) {
   const db = await createTestDatabase({ pgliteMemoryProfile: "low-memory" });
-  for (const sql of localHelperCoreStatements("public")) await db.query(sql);
+  await localHelperCoreSchema(db, "public");
   await localHelperCatalogSchema(db, "public");
   await localHelperOwnerSchema(db, "public");
   await localHelperAssignments(db, "public");
@@ -4485,6 +4487,106 @@ for (const shutdownFirst of [false, true]) {
           (result.error as { code?: string }).code,
           "owner_snapshot_cleanup_unknown",
         );
+      }
+    },
+  );
+}
+
+for (const fail of [false, true]) {
+  test(
+    `actual owner ${
+      fail ? "failure recovery" : "settlement"
+    } refuses a hidden revoked stream`,
+    { skip: !sourceRoot, timeout: 30000 },
+    async () => {
+      const entered = deferred(), release = deferred();
+      const f = await fixture({
+        registry: ordinaryRegistry(async (value) => {
+          entered.resolve();
+          await release.promise;
+          if (fail) throw new Error("authored failure");
+          return value;
+        }),
+      });
+      const invocation = outcome(
+        f.facade.actions.work("held", { operationKey: "content-guard" }),
+      );
+      try {
+        await entered.promise;
+        const rows =
+          (await f.db.query<{ namespace: string; settlement_scope_id: string }>(
+            "SELECT e.namespace,d.settlement_scope_id FROM event_deliveries d JOIN events e ON e.id=d.event_id WHERE d.status='leased' AND d.consumer_id='registered:fixture.local'",
+          )).rows;
+        assert.equal(rows.length, 1);
+        await insertTestOwnerStream(f.db, {
+          namespace: rows[0].namespace,
+          operationId: rows[0].settlement_scope_id,
+        }, { revocation: "revoked" });
+        const streams =
+          (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows;
+        const deliveries =
+          (await f.db.query("SELECT * FROM event_deliveries")).rows;
+        const actions = (await f.db.query("SELECT * FROM open_actions")).rows;
+        const events =
+          (await f.db.query("SELECT * FROM events ORDER BY id")).rows;
+        const completions = (await f.db.query(
+          "SELECT * FROM owner_receipts WHERE kind='execution.complete'",
+        )).rows;
+        release.resolve();
+        const expected = fail
+          ? "Owner content recovery is not yet supported"
+          : "Owner content settlement is not yet supported";
+        await eventually(() =>
+          f.errors.some((error) => {
+            let current: unknown = error;
+            for (let i = 0; i < 8 && current instanceof Error; i++) {
+              if (current.message.includes(expected)) return true;
+              current = current.cause;
+            }
+            return false;
+          })
+        );
+        await eventually(() => f.host.snapshot().recoveryRequired);
+        assert.equal(f.host.snapshot().active, 1);
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM copilotz_operation_streams")).rows,
+          streams,
+        );
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM event_deliveries")).rows,
+          deliveries,
+        );
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM open_actions")).rows,
+          actions,
+        );
+        assert.deepEqual(
+          (await f.db.query("SELECT * FROM events ORDER BY id")).rows,
+          events,
+        );
+        assert.deepEqual(
+          (await f.db.query(
+            "SELECT * FROM owner_receipts WHERE kind='execution.complete'",
+          )).rows,
+          completions,
+        );
+        assert.ok(
+          (await f.db.query<{ state: string }>(
+            "SELECT state FROM copilotz_operations",
+          )).rows.every((row) =>
+            row.state === "accepted" || row.state === "running"
+          ),
+        );
+        assert.equal(
+          (await f.db.query("SELECT 1 FROM events WHERE type=$1", [
+            OWNER_OPERATION_SETTLED_EVENT,
+          ])).rows.length,
+          0,
+        );
+      } finally {
+        release.resolve();
+        await f.close();
+        await invocation;
       }
     },
   );

@@ -39,12 +39,15 @@ import type { DeliveryExecutor } from "../execution/types.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import {
-  createOperationCatalog,
   createOperationCatalogTables,
+  createOwnerOperationCatalogCore,
   type OperationSettlementScope,
-  provisionOperationCatalog,
-  validateOperationCatalog,
 } from "../streams/catalog.ts";
+import {
+  provisionOwnerContentCatalog,
+  validateOwnerContentCatalog,
+} from "../streams/owner-catalog-schema.ts";
+import type { ActionRecoveryCatalog } from "../actions/recovery.ts";
 import {
   createOwnerActionAdmission,
   OWNER_ACTION_ADMISSION,
@@ -612,7 +615,24 @@ export async function createOwnerHost(
   const ownerTables = ownerTableNames(schema);
   const operationTables = createOperationCatalogTables(schema);
   const assignmentTable = `${quoteEventIdentifier(schema)}."owner_assignments"`;
-  const catalog = createOperationCatalog(session, schema);
+  const catalog = createOwnerOperationCatalogCore(session, schema);
+  // Content execution is still closed. Recovery may proceed only after proving
+  // the operation owns no stream rows, including hidden or already revoked ones.
+  const recoveryCatalog = Object.freeze(
+    {
+      ...catalog,
+      async failDeliveryStreams(tx, input) {
+        await catalog.assertFormat(tx);
+        const rows = await tx.query(
+          `SELECT 1 FROM ${operationTables.operationStreams} WHERE operation_id=$1 LIMIT 1`,
+          [input.operationId],
+        );
+        if (rows.rows.length) {
+          unavailable("Owner content recovery is not yet supported.");
+        }
+      },
+    } satisfies typeof catalog & ActionRecoveryCatalog,
+  );
   const abort = new AbortController();
   let notifyStopped!: () => void;
   const stopped = new Promise<void>((resolve) => notifyStopped = resolve);
@@ -1245,7 +1265,7 @@ export async function createOwnerHost(
     schema,
     session,
     registry,
-    catalog,
+    catalog: recoveryCatalog,
     executor,
     scheduleSettlement: settlement.schedule,
     resolveAssignment: resolveExecution,
@@ -1635,7 +1655,7 @@ export async function createOwnerHost(
       schema,
       session,
       registry,
-      catalog,
+      catalog: recoveryCatalog,
       executor,
       currentOwner() {
         return !initialized && !closed && !transport && !abort.signal.aborted &&
@@ -1668,12 +1688,7 @@ export async function createOwnerHost(
   });
   async function validateSchemas(tx: SqlExecutor) {
     await validateCopilotzSchema(tx, schema);
-    await validateOperationCatalog({
-      query: tx.query.bind(tx),
-      transaction(): never {
-        throw new Error("Nested validation transactions are forbidden.");
-      },
-    }, schema);
+    await validateOwnerContentCatalog(tx, schema);
     await validateOwnerCommandSchema(tx, schema, ownerId);
     await validateOwnerAssignments(tx, schema);
   }
@@ -1700,18 +1715,6 @@ export async function createOwnerHost(
     ) {
       if ((await tx.query(`SELECT 1 FROM ${table} LIMIT 1`)).rows.length) {
         unavailable("Fresh owner host requires empty tables.");
-      }
-    }
-    for (const name of ["content_bodies", "content_body_parts"]) {
-      if (
-        (await tx.query<{ relation: string | null }>(
-          "SELECT to_regclass($1)::text AS relation",
-          [`${quoteEventIdentifier(schema)}.${quoteEventIdentifier(name)}`],
-        )).rows[0]?.relation
-      ) {
-        unavailable(
-          "Fresh owner host does not support retained content storage.",
-        );
       }
     }
     if (!committed) {
@@ -2777,10 +2780,32 @@ export async function createOwnerHost(
   try {
     // Explicit fresh provisioning may prepare tables, but NEVER establishes readiness.
     if (initialization === "fresh") {
-      await provisionCopilotzSchema(session, schema);
-      await provisionOperationCatalog(session, schema);
-      await provisionOwnerCommandSchema(session, schema);
-      await provisionOwnerAssignments(session, schema);
+      await session.transaction(async (tx) => {
+        await tx.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1),hashtext($2))",
+          [schema, "copilotz-schema-provision"],
+        );
+        const existing = await tx.query<{ relation: string | null }>(
+          "SELECT to_regclass($1)::text AS relation",
+          [operationTables.metadata],
+        );
+        if (existing.rows[0]?.relation !== null) {
+          // A committed setup with no epoch can be retried explicitly. Existing
+          // partial/foreign formats are validated only, never repaired.
+          await validateSchemas(tx);
+          return;
+        }
+        // Provisioners join one SQL transaction, rather than committing partial
+        // formats between stages. Acquisition/readiness retain their own fence.
+        const setup: SqlSession = {
+          query: tx.query.bind(tx),
+          transaction: (run) => run(tx),
+        };
+        await provisionCopilotzSchema(setup, schema);
+        await provisionOwnerContentCatalog(setup, schema);
+        await provisionOwnerCommandSchema(setup, schema);
+        await provisionOwnerAssignments(setup, schema);
+      });
     } else {
       // Existing schemas are validated, never repaired or provisioned by resume.
       await validateSchemas(session);

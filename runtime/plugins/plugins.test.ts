@@ -1,3 +1,4 @@
+import { defineView } from "../views/index.ts";
 import {
   assert,
   assertEquals,
@@ -44,7 +45,7 @@ function processor(id: string, eventType = "message.created") {
   });
 }
 
-Deno.test("plugin definitions use direct identity and five keyed primitive maps", () => {
+Deno.test("plugin definitions use direct identity and six keyed primitive maps", () => {
   const model = { adapter: "openai", model: "gpt-5" };
   const adapter = { call: () => "ok" };
   const search = action("search.query");
@@ -65,6 +66,7 @@ Deno.test("plugin definitions use direct identity and five keyed primitive maps"
   assertStrictEquals(plugin.collections.documents, documents);
   assertStrictEquals(plugin.actions.search, search);
   assertStrictEquals(plugin.processors.indexDocument, indexDocument);
+  assertEquals(plugin.views, {});
   assertStrictEquals(plugin.resources.models.default, model);
   assertStrictEquals(plugin.adapters.llm.openai, adapter);
   assertEquals("manifest" in plugin, false);
@@ -489,5 +491,203 @@ Deno.test("plugin composition core stays runtime-neutral", async () => {
     assert(!/from\s+["']node:/.test(source));
     assert(!/loaders\/resources|runtime\/cli|server\//.test(source));
     assert(!/manifest|provides|PluginResourceType/.test(source));
+  }
+});
+
+Deno.test("Views compose across dependencies and application maps with exact inference", () => {
+  const board = defineView({
+    id: "board.context",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: { title: string }) => item.title,
+  });
+  const summary = defineView({
+    id: "board.summary",
+    shows: { list: "board" },
+    renderer: "text",
+    modes: ["context"],
+    render: (items: readonly { title: string }[]) => items.length,
+  });
+  const dependency = definePlugin({
+    id: "base",
+    version: "1",
+    views: { board },
+  });
+  const child = definePlugin({
+    id: "child",
+    version: "1",
+    plugins: [dependency],
+  });
+  const registry = createPluginRegistry({
+    plugins: [child],
+    views: { summary },
+  });
+  const typedBoard: typeof board = registry.views.board;
+  const typedSummary: typeof summary = registry.views.summary;
+  assertStrictEquals(typedBoard, board);
+  assertStrictEquals(typedSummary, summary);
+  assertStrictEquals(registry.resolveView("board", "context", "text"), board);
+  assertStrictEquals(
+    registry.resolveView({ list: "board" }, "context", "text"),
+    summary,
+  );
+  assertStrictEquals(
+    registry.resolveView("missing", "context", "text"),
+    undefined,
+  );
+  assertEquals(definePlugin({ id: "empty", version: "1" }).views, {});
+});
+
+Deno.test("View aliases and IDs cannot be overridden even by a preference", () => {
+  const first = defineView({
+    id: "board.first",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: () => "first",
+  });
+  const second = defineView({
+    ...first,
+    id: "board.second",
+    render: () => "second",
+  });
+  const root = definePlugin({
+    id: "root",
+    version: "1",
+    views: { board: first },
+  });
+  const resources = {
+    views: {
+      prefer: [{
+        shows: "board",
+        mode: "context",
+        renderer: "text",
+        view: "board.second",
+      }],
+    },
+  };
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        plugins: [root],
+        views: { board: second },
+        resources,
+      }),
+    TypeError,
+    "View alias 'board'",
+  );
+  assertThrows(
+    () => createPluginRegistry({ plugins: [root], views: { other: first } }),
+    TypeError,
+    "View id 'board.first'",
+  );
+});
+
+Deno.test("View resolution validates overlapping modes and the final Resource preference", () => {
+  const first = defineView({
+    id: "board.first",
+    shows: "board",
+    renderer: "text",
+    modes: ["context", "summary"],
+    render: () => "first",
+  });
+  const second = defineView({
+    ...first,
+    id: "board.second",
+    modes: ["context"],
+    render: () => "second",
+  });
+  const preference = (
+    view: string,
+  ) => [{ shows: "board", mode: "context", renderer: "text", view }];
+  const dependency = definePlugin({
+    id: "dependency",
+    version: "1",
+    views: { first, second },
+    resources: { views: { prefer: preference(first.id) } },
+  });
+  const registry = createPluginRegistry({
+    plugins: [dependency],
+    resources: { views: { prefer: preference(second.id) } },
+  });
+  assertStrictEquals(registry.resolveView("board", "context", "text"), second);
+  assertStrictEquals(registry.resolveView("board", "summary", "text"), first);
+  assertThrows(
+    () => createPluginRegistry({ views: { first, second } }),
+    TypeError,
+    "Ambiguous",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        plugins: [dependency],
+        resources: { views: { prefer: preference("missing.view") } },
+      }),
+    TypeError,
+    "matching candidate",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        views: { first },
+        resources: { views: { prefer: "board.first" } },
+      }),
+    TypeError,
+    "preference array",
+  );
+  assertThrows(
+    () =>
+      createPluginRegistry({
+        views: { first },
+        resources: {
+          views: {
+            prefer: [{
+              shows: "board",
+              mode: "context",
+              renderer: "react",
+              view: first.id,
+            }],
+          },
+        },
+      }),
+    TypeError,
+    "matching candidate",
+  );
+});
+
+Deno.test("invalid View maps, aliases, and definitions fail at plugin authoring", () => {
+  const base = { id: "invalid", version: "1" };
+  for (
+    const views of [[], null, { bad: {} }, {
+      "bad-alias": defineView({
+        id: "valid",
+        shows: "board",
+        renderer: "text",
+        modes: ["context"],
+        render: () => "",
+      }),
+    }]
+  ) {
+    assertThrows(
+      () =>
+        definePlugin(
+          { ...base, views } as unknown as Parameters<typeof definePlugin>[0],
+        ),
+      TypeError,
+      "views",
+    );
+  }
+});
+
+Deno.test("registry rejects missing or malformed View maps before composition", () => {
+  for (const views of [undefined, null, [], "invalid"]) {
+    const plugin = definePlugin({ id: "invalid.views", version: "1" });
+    Reflect.set(plugin, "views", views);
+    assertThrows(
+      () => createPluginRegistry({ plugins: [plugin] }),
+      TypeError,
+      "views must be an alias map",
+    );
   }
 });

@@ -149,6 +149,7 @@ export async function createCopilotzGateway(
       collections: options.collections,
       actions: options.actions,
       processors: options.processors,
+      views: options.views,
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,

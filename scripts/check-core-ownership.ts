@@ -16,7 +16,7 @@ export function coreOwnershipErrors(path: string, source: string): string[] {
         const init = declaration.initializer;
         if (
           init && ts.isCallExpression(init) &&
-          /^(defineAction|defineProcessor|defineCollection|definePlugin|createHttpAdapter)$/
+          /^(defineAction|defineProcessor|defineCollection|defineView|definePlugin|createHttpAdapter)$/
             .test(init.expression.getText(tree))
         ) {
           errors.push(

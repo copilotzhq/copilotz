@@ -1,3 +1,4 @@
+import type { ViewMap } from "../views/index.ts";
 import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
@@ -46,6 +47,7 @@ export type CreateCopilotzApplicationOptions =
     collections?: CollectionMap;
     actions?: import("../actions/types.ts").ActionMap;
     processors?: ProcessorMap;
+    views?: ViewMap;
     resources?: PluginResources;
     adapters?: PluginAdapters;
     /** Canonical asset body policy shared by every database scope. */
@@ -71,6 +73,7 @@ export type CopilotzComposition = Pick<
   | "collections"
   | "actions"
   | "processors"
+  | "views"
   | "resources"
   | "adapters"
   | "assets"

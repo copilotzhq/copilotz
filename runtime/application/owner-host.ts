@@ -2027,6 +2027,7 @@ export async function createOwnerHost(
         operationTables.operations,
         operationTables.operationEvents,
         operationTables.operationStreams,
+        operationTables.logicalBodies,
         operationTables.selectionHeads,
         operationTables.selectionOperations,
         assignmentTable,

@@ -1,3 +1,4 @@
+import { insertTestOwnerBody } from "../testing/owner-catalog.ts";
 import { createEventStore } from "../events/store.ts";
 import { provisionOwnerCommandSchema } from "../owner/schema.ts";
 import { provisionOwnerAssignments } from "../owner/assignments.ts";
@@ -497,6 +498,65 @@ Deno.test("owner publication schema supports confirmation-order ordinals and hid
       ordinal: 2,
     }]);
     await validateOwnerContentCatalog(db, schema);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("owner logical body metadata survives producer pruning and requires atomic adoption evidence", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  try {
+    await provisionOwnerContentCatalog(db, "public");
+    await db.query(
+      "INSERT INTO copilotz_operations(operation_id,namespace,root_event_id,correlation_id,state,accepted_at,updated_at) VALUES('producer','tenant','event','correlation','completed',NOW(),NOW())",
+    );
+    await insertTestOwnerBody(db, {
+      namespace: "tenant",
+      operationId: "producer",
+    });
+    await db.query(
+      "DELETE FROM copilotz_operations WHERE operation_id='producer'",
+    );
+    assertEquals(
+      (await db.query("SELECT logical_body_id FROM copilotz_operation_bodies"))
+        .rows,
+      [{ logical_body_id: "logical-fixture" }],
+    );
+    await assertRejects(() =>
+      db.query("UPDATE copilotz_operation_bodies SET asset_id='asset'")
+    );
+    await assertRejects(() =>
+      db.query("UPDATE copilotz_operation_bodies SET current_copy='[]'::jsonb")
+    );
+    await assertRejects(() =>
+      db.query("UPDATE copilotz_operation_bodies SET digest='not-a-digest'")
+    );
+    for (const invalid of ["NULL", "'infinity'::timestamptz"]) {
+      await assertRejects(() =>
+        db.query(
+          `UPDATE copilotz_operation_bodies SET protected_until=${invalid}`,
+        )
+      );
+    }
+    assertEquals(
+      (await db.query(
+        "SELECT protected_until > '2026-10-18'::timestamptz AS protected FROM copilotz_operation_bodies",
+      )).rows,
+      [{ protected: true }],
+    );
+    await db.query(
+      "UPDATE copilotz_operation_bodies SET adoption_key='message:one:content:0',adoption_fingerprint=$1,asset_id='asset',domain_owner_id='message:one',domain_owner_type='message'",
+      [`sha256:${"a".repeat(64)}`],
+    );
+    await validateOwnerContentCatalog(db, "public");
+    await db.query("DROP TABLE copilotz_operation_bodies");
+    await assertRejects(() => provisionOwnerContentCatalog(db, "public"));
+    assertEquals(
+      (await db.query(
+        "SELECT to_regclass('public.copilotz_operation_bodies') AS table_name",
+      )).rows,
+      [{ table_name: null }],
+    );
   } finally {
     await db.close();
   }

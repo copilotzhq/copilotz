@@ -119,6 +119,8 @@ export type OperationCatalogTables = Readonly<{
   operations: string;
   operationEvents: string;
   operationStreams: string;
+  /** Owner-format immutable bodies outlive prunable operation/stream records. */
+  logicalBodies: string;
   events: string;
   selectionHeads: string;
   selectionOperations: string;
@@ -737,6 +739,7 @@ export function createOperationCatalogTables(
     operations: table("copilotz_operations"),
     operationEvents: table("copilotz_operation_events"),
     operationStreams: table("copilotz_operation_streams"),
+    logicalBodies: table("copilotz_operation_bodies"),
     events: table("events"),
     selectionHeads: table("copilotz_operation_selection_heads"),
     selectionOperations: table("copilotz_operation_selections"),

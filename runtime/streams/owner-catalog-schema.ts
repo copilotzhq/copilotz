@@ -15,6 +15,7 @@ import { operationCatalogSchemaStatements } from "./catalog-schema.ts";
 import { OWNER_CATALOG_LAYOUT } from "./owner-catalog-layout.ts";
 
 const tableNames = [
+  "copilotz_operation_bodies",
   "copilotz_operation_catalog_metadata",
   "copilotz_operations",
   "copilotz_operation_events",

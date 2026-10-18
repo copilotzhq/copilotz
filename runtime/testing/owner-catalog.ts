@@ -77,3 +77,33 @@ export async function insertTestOwnerStream(
     ),
   );
 }
+
+/** Owner logical-body fixture; no physical bytes or domain adoption are implied. */
+export async function insertTestOwnerBody(
+  tx: import("../events/session.ts").SqlExecutor,
+  scope: { namespace: string; operationId: string },
+) {
+  await tx.query(
+    `INSERT INTO public.copilotz_operation_bodies
+      (namespace,logical_body_id,owner_id,producer_operation_id,media_type,byte_length,digest,
+       current_copy,pending_ref,pending_descriptor,protected_until,created_at,updated_at)
+     VALUES($1,'logical-fixture','owner',$2,'text/plain',0,$3,$4::jsonb,'pending-fixture',$5::jsonb,$7,$6,$6)`,
+    [
+      scope.namespace,
+      scope.operationId,
+      "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      JSON.stringify({
+        backendId: "fixture",
+        key: "physical-fixture",
+        versionToken: "version",
+      }),
+      JSON.stringify({
+        kind: "text",
+        role: "assistant",
+        mediaType: "text/plain",
+      }),
+      "2026-10-18T00:00:00.000Z",
+      "2026-10-19T00:00:00.000Z",
+    ],
+  );
+}

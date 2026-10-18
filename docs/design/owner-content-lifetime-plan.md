@@ -779,6 +779,31 @@ refinement still requiring implementation and evidence. Do not add a second
 physical ready/digest state merely to mirror authoritative catalog state, and do
 not accept tentative tail bytes as part of the logical seal.
 
+### Logical body records and pending protection
+
+18 October 14:30 UTC scoped groundwork evidence: 41 tests plus 46 schema steps
+passed in the memory physical-store, PGlite catalog and owner startup suites.
+Source review and changed-TypeScript lint passed. This does not establish
+successful close/adoption, PostgreSQL parity or final library acceptance.
+
+The current draft adds logical-body metadata inside OperationCatalog,
+independent of producer rows so pruning cannot erase current-copy or adoption
+evidence. This is schema groundwork; successful close, adoption and recovery are
+not enabled. A body's finite `protected_until` is a durable lower bound, not an
+expiration permission while its producer is unsettled. Settlement must extend it
+through actual completion plus the replay window before producer pruning is
+permitted. Retirement must honor the producer pin as well as that persisted
+deadline. Adopted lifetime is governed by domain ownership and catalog
+replay/protection rules. Plain execution references do not create ownership or
+retention.
+
+The exact-once adoption identity is the logical domain mutation **and content
+slot**, not one batch key reused for every body and not an attempt-scoped body
+ID. The existing domain graph remains ownership authority. The catalog row
+stores replay evidence, pending protection and current physical placement; it
+does not create a second independent ownership graph or a physical ready-state
+machine.
+
 ## 2. Checkpoints, accepted seals and recovery
 
 - Reuse catalog checkpoint SQL under a narrow internal owner mutation boundary

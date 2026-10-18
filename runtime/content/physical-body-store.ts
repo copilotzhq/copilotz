@@ -1,5 +1,6 @@
 /** Private F9 byte-storage contract. No leases, catalog decisions or successor writers. */
 import { createContentError } from "./errors.ts";
+import { createHash } from "node:crypto";
 
 export const OWNER_PHYSICAL_BODY_FORMAT = "owner-physical-v1" as const;
 export const PHYSICAL_APPEND_MAX_BYTES = 1024 * 1024;
@@ -160,4 +161,93 @@ export function samePhysicalWriter(
 ): boolean {
   return a.bodyId === b.bodyId && a.mediaType === b.mediaType &&
     a.reservationId === b.reservationId && a.generation === b.generation;
+}
+
+/** Owner-side integrity check over one catalog-accepted prefix. Physical stores
+ * never decide the accepted length, and no whole-body buffer is allocated. */
+export async function digestPhysicalPrefix(
+  store: Pick<PhysicalBodyStore, "head" | "readRange">,
+  original: PhysicalWriterIdentity,
+  length: number,
+  state: "open" | "fenced",
+  signal?: AbortSignal,
+): Promise<Readonly<{ head: PhysicalBodyHead; digest: `sha256:${string}` }>> {
+  if (state !== "open" && state !== "fenced") invalid();
+  const writer = capturePhysicalIdentity(original), accepted = integer(length);
+  const readHead = store.head.bind(store),
+    readRange = store.readRange.bind(store);
+  const cancelled = () => {
+    if (signal?.aborted) throw signal.reason;
+  };
+  const inspect = (raw: unknown): PhysicalBodyHead => {
+    if (raw === null) {
+      throw createContentError(
+        "asset_storage_unavailable",
+        "Physical prefix body is missing.",
+      );
+    }
+    const value = data(raw, [
+      "bodyId",
+      "mediaType",
+      "reservationId",
+      "generation",
+      "format",
+      "state",
+      "byteLength",
+      "versionToken",
+    ]);
+    if (
+      value.format !== OWNER_PHYSICAL_BODY_FORMAT || value.state !== state ||
+      value.bodyId !== writer.bodyId || value.mediaType !== writer.mediaType ||
+      value.reservationId !== writer.reservationId ||
+      value.generation !== writer.generation + (state === "fenced" ? 1 : 0) ||
+      integer(value.byteLength) < accepted
+    ) {
+      throw createContentError(
+        "asset_storage_unavailable",
+        "Physical prefix identity or length is unavailable.",
+      );
+    }
+    if (
+      typeof value.versionToken !== "string" || !value.versionToken ||
+      value.versionToken.length > 4096
+    ) invalid();
+    return Object.freeze(value as unknown as PhysicalBodyHead);
+  };
+  cancelled();
+  const before = inspect(await readHead(writer.bodyId));
+  cancelled();
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < accepted;) {
+    const end = Math.min(accepted, offset + PHYSICAL_READ_MAX_BYTES);
+    cancelled();
+    const bytes = await readRange({ bodyId: writer.bodyId, offset, end });
+    cancelled();
+    if (
+      !(bytes instanceof Uint8Array) ||
+      typedArrayLength.call(bytes) !== end - offset
+    ) {
+      throw createContentError(
+        "asset_storage_unavailable",
+        "Physical prefix read is incomplete.",
+      );
+    }
+    hash.update(bytes);
+    offset = end;
+  }
+  const after = inspect(await readHead(writer.bodyId));
+  cancelled();
+  if (
+    after.versionToken !== before.versionToken ||
+    after.byteLength !== before.byteLength
+  ) {
+    throw createContentError(
+      "asset_conflict",
+      "Physical prefix changed during verification.",
+    );
+  }
+  return Object.freeze({
+    head: after,
+    digest: `sha256:${hash.digest("hex")}` as const,
+  });
 }

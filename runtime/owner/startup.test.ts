@@ -1,5 +1,6 @@
 import {
   createTestOwnerCatalog,
+  insertTestOwnerBody,
   insertTestOwnerStream,
 } from "../testing/owner-catalog.ts";
 import { provisionOwnerContentCatalog } from "../streams/owner-catalog-schema.ts";
@@ -1116,6 +1117,35 @@ test("startup clears physical-storage blocker alarms after shared schema proof e
     assert.equal(
       (await f.db.query("SELECT 1 FROM owner_alarms")).rows.length,
       0,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("startup does not ignore logical bodies after producer metadata is pruned", async () => {
+  const f = await fixture();
+  try {
+    await insertTestOwnerBody(f.db, {
+      namespace: "tenant",
+      operationId: "pruned-producer",
+    });
+    const before =
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows;
+    await f.takeover();
+    const result = (await f.repair()).result as {
+      blockers: { kind: string; reason: string }[];
+    };
+    assert.ok(
+      result.blockers.some((row) =>
+        row.kind === "blocker" &&
+        row.reason === "logical_body_recovery_unsupported"
+      ),
+    );
+    await assert.rejects(f.proof(), /unresolved/);
+    assert.deepEqual(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      before,
     );
   } finally {
     await f.close();

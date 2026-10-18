@@ -5,6 +5,7 @@
  */
 export const OWNER_CATALOG_LAYOUT = {
   "relations": [
+    "copilotz_operation_bodies",
     "copilotz_operation_catalog_metadata",
     "copilotz_operation_events",
     "copilotz_operation_selection_heads",
@@ -13,6 +14,29 @@ export const OWNER_CATALOG_LAYOUT = {
     "copilotz_operations",
   ],
   "columns": {
+    "copilotz_operation_bodies": {
+      "namespace": ["text", "NO", null],
+      "logical_body_id": ["text", "NO", null],
+      "owner_id": ["text", "NO", null],
+      "producer_operation_id": ["text", "NO", null],
+      "producer_stream_id": ["text", "YES", null],
+      "media_type": ["text", "NO", null],
+      "byte_length": ["bigint", "NO", null],
+      "digest": ["text", "NO", null],
+      "current_copy": ["jsonb", "NO", null],
+      "pending_ref": ["text", "NO", null],
+      "pending_descriptor": ["jsonb", "NO", null],
+      "protected_until": ["timestamp with time zone", "NO", null],
+      "adoption_key": ["text", "YES", null],
+      "adoption_fingerprint": ["text", "YES", null],
+      "asset_id": ["text", "YES", null],
+      "domain_owner_id": ["text", "YES", null],
+      "domain_owner_type": ["text", "YES", null],
+      "pending_promotion": ["jsonb", "YES", null],
+      "retired_at": ["timestamp with time zone", "YES", null],
+      "created_at": ["timestamp with time zone", "NO", null],
+      "updated_at": ["timestamp with time zone", "NO", null],
+    },
     "copilotz_operation_catalog_metadata": {
       "singleton": ["boolean", "NO", "true"],
       "fingerprint": ["text", "NO", null],
@@ -85,6 +109,48 @@ export const OWNER_CATALOG_LAYOUT = {
     },
   },
   "constraints": {
+    "copilotz_operation_bodies": {
+      "copilotz_operation_bodies_pkey": [
+        "p",
+        "PRIMARY KEY (namespace, logical_body_id)",
+      ],
+      "owner_body_adoption_check": [
+        "c",
+        "CHECK (adoption_key IS NULL AND adoption_fingerprint IS NULL AND asset_id IS NULL AND domain_owner_id IS NULL AND domain_owner_type IS NULL OR adoption_key IS NOT NULL AND adoption_fingerprint IS NOT NULL AND asset_id IS NOT NULL AND domain_owner_id IS NOT NULL AND domain_owner_type IS NOT NULL)",
+      ],
+      "owner_body_adoption_fingerprint_check": [
+        "c",
+        "CHECK (adoption_fingerprint IS NULL OR adoption_fingerprint ~ '^sha256:[0-9a-f]{64}$'::text)",
+      ],
+      "owner_body_current_copy_check": [
+        "c",
+        "CHECK ((jsonb_typeof(current_copy) = 'object'::text AND octet_length(current_copy::text) <= 16384) IS TRUE)",
+      ],
+      "owner_body_descriptor_check": [
+        "c",
+        "CHECK ((jsonb_typeof(pending_descriptor) = 'object'::text AND octet_length(pending_descriptor::text) <= 65536) IS TRUE)",
+      ],
+      "owner_body_digest_check": [
+        "c",
+        "CHECK (digest ~ '^sha256:[0-9a-f]{64}$'::text)",
+      ],
+      "owner_body_length_check": [
+        "c",
+        "CHECK (byte_length >= 0 AND byte_length <= '9007199254740991'::bigint)",
+      ],
+      "owner_body_promotion_check": [
+        "c",
+        "CHECK (pending_promotion IS NULL OR (jsonb_typeof(pending_promotion) = 'object'::text AND octet_length(pending_promotion::text) <= 16384) IS TRUE)",
+      ],
+      "owner_body_protection_check": [
+        "c",
+        "CHECK (isfinite(protected_until))",
+      ],
+      "owner_body_retired_check": [
+        "c",
+        "CHECK (retired_at IS NULL OR isfinite(retired_at))",
+      ],
+    },
     "copilotz_operation_catalog_metadata": {
       "copilotz_operation_catalog_metadata_fingerprint_check": [
         "c",
@@ -230,6 +296,58 @@ export const OWNER_CATALOG_LAYOUT = {
     },
   },
   "indexes": {
+    "copilotz_operation_bodies": {
+      "copilotz_operation_bodies_adoption_idx": [
+        "btree",
+        true,
+        false,
+        ["namespace", "adoption_key"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        "adoption_key IS NOT NULL",
+      ],
+      "copilotz_operation_bodies_asset_idx": [
+        "btree",
+        true,
+        false,
+        ["namespace", "asset_id"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        "asset_id IS NOT NULL",
+      ],
+      "copilotz_operation_bodies_pending_idx": [
+        "btree",
+        true,
+        false,
+        ["namespace", "pending_ref"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        null,
+      ],
+      "copilotz_operation_bodies_pkey": [
+        "btree",
+        true,
+        true,
+        ["namespace", "logical_body_id"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        null,
+      ],
+      "copilotz_operation_bodies_producer_idx": [
+        "btree",
+        false,
+        false,
+        ["owner_id", "producer_operation_id"],
+        ["pg_catalog.text_ops", "pg_catalog.text_ops"],
+        ["pg_catalog.default", "pg_catalog.default"],
+        "0 0",
+        null,
+      ],
+    },
     "copilotz_operation_catalog_metadata": {
       "copilotz_operation_catalog_metadata_pkey": [
         "btree",

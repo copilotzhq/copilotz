@@ -191,6 +191,43 @@ export function operationCatalogSchemaStatements(
     ...lifecycleIndexStatements(tables),
     ...(owner
       ? [
+        `CREATE TABLE IF NOT EXISTS ${tables.logicalBodies} (
+          namespace TEXT NOT NULL,
+          logical_body_id TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          producer_operation_id TEXT NOT NULL,
+          producer_stream_id TEXT,
+          media_type TEXT NOT NULL,
+          byte_length BIGINT NOT NULL CONSTRAINT owner_body_length_check
+            CHECK (byte_length >= 0 AND byte_length <= 9007199254740991),
+          digest TEXT NOT NULL CONSTRAINT owner_body_digest_check
+            CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+          current_copy JSONB NOT NULL CONSTRAINT owner_body_current_copy_check
+            CHECK ((jsonb_typeof(current_copy)='object' AND octet_length(current_copy::text)<=16384) IS TRUE),
+          pending_ref TEXT NOT NULL,
+          pending_descriptor JSONB NOT NULL CONSTRAINT owner_body_descriptor_check
+            CHECK ((jsonb_typeof(pending_descriptor)='object' AND octet_length(pending_descriptor::text)<=65536) IS TRUE),
+          protected_until TIMESTAMPTZ NOT NULL CONSTRAINT owner_body_protection_check CHECK (isfinite(protected_until)),
+          adoption_key TEXT,
+          adoption_fingerprint TEXT CONSTRAINT owner_body_adoption_fingerprint_check
+            CHECK (adoption_fingerprint IS NULL OR adoption_fingerprint ~ '^sha256:[0-9a-f]{64}$'),
+          asset_id TEXT,
+          domain_owner_id TEXT,
+          domain_owner_type TEXT,
+          pending_promotion JSONB CONSTRAINT owner_body_promotion_check
+            CHECK (pending_promotion IS NULL OR (jsonb_typeof(pending_promotion)='object' AND octet_length(pending_promotion::text)<=16384) IS TRUE),
+          retired_at TIMESTAMPTZ CONSTRAINT owner_body_retired_check CHECK (retired_at IS NULL OR isfinite(retired_at)),
+          created_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL,
+          PRIMARY KEY(namespace,logical_body_id),
+          CONSTRAINT owner_body_adoption_check CHECK (
+            (adoption_key IS NULL AND adoption_fingerprint IS NULL AND asset_id IS NULL AND domain_owner_id IS NULL AND domain_owner_type IS NULL)
+            OR (adoption_key IS NOT NULL AND adoption_fingerprint IS NOT NULL AND asset_id IS NOT NULL AND domain_owner_id IS NOT NULL AND domain_owner_type IS NOT NULL))
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_pending_idx" ON ${tables.logicalBodies}(namespace,pending_ref)`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_adoption_idx" ON ${tables.logicalBodies}(namespace,adoption_key) WHERE adoption_key IS NOT NULL`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS "copilotz_operation_bodies_asset_idx" ON ${tables.logicalBodies}(namespace,asset_id) WHERE asset_id IS NOT NULL`,
+        `CREATE INDEX IF NOT EXISTS "copilotz_operation_bodies_producer_idx" ON ${tables.logicalBodies}(owner_id,producer_operation_id)`,
         `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_renewal_idx"
        ON ${tables.operationStreams} (owner_id, protection_deadline, namespace, operation_id, stream_id)
        WHERE revocation_state <> 'revoked'`,

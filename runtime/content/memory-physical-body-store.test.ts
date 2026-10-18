@@ -1,4 +1,8 @@
-import { PHYSICAL_READ_MAX_BYTES } from "./physical-body-store.ts";
+import { digestContent } from "./digest.ts";
+import {
+  digestPhysicalPrefix,
+  PHYSICAL_READ_MAX_BYTES,
+} from "./physical-body-store.ts";
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createMemoryPhysicalBodyStore } from "./memory-physical-body-store.ts";
 import {
@@ -372,4 +376,228 @@ Deno.test("memory physical ranges page at the shared 1 MiB bound", async () => {
     })
   );
   assertEquals((error as { code: string }).code, "content_invalid");
+});
+
+Deno.test("owner prefix digest is bounded and excludes a tentative tail", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  await store.reserve(writer);
+  const first = new Uint8Array(PHYSICAL_READ_MAX_BYTES).fill(3),
+    last = bytes("accepted-tail");
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "first",
+    bytes: first,
+  });
+  await store.append({
+    writer,
+    expectedOffset: first.length,
+    appendId: "last",
+    bytes: last,
+  });
+  const expected = new Uint8Array(first.length + last.length);
+  expected.set(first);
+  expected.set(last, first.length);
+  await store.append({
+    writer,
+    expectedOffset: expected.length,
+    appendId: "tentative",
+    bytes: bytes("unaccepted"),
+  });
+  const reads: number[] = [];
+  const observed = {
+    head: store.head,
+    readRange(input: Parameters<typeof store.readRange>[0]) {
+      reads.push(input.end - input.offset);
+      return store.readRange(input);
+    },
+  };
+  const before = await digestPhysicalPrefix(
+    observed,
+    writer,
+    expected.length,
+    "open",
+  );
+  assertEquals(before.digest, await digestContent(expected));
+  await store.fence(writer);
+  const after = await digestPhysicalPrefix(
+    observed,
+    writer,
+    expected.length,
+    "fenced",
+  );
+  assertEquals(after.digest, before.digest);
+  assertEquals(reads, [
+    PHYSICAL_READ_MAX_BYTES,
+    last.length,
+    PHYSICAL_READ_MAX_BYTES,
+    last.length,
+  ]);
+  assertEquals(after.head.byteLength, expected.length + "unaccepted".length);
+});
+Deno.test("owner prefix digest refuses short pages and changing versions", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  await store.reserve(writer);
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "a",
+    bytes: bytes("abc"),
+  });
+  await assertRejects(() =>
+    digestPhysicalPrefix(
+      {
+        head: store.head,
+        readRange: () => Promise.resolve(bytes("ab")),
+      },
+      writer,
+      3,
+      "open",
+    )
+  );
+  await assertRejects(() =>
+    digestPhysicalPrefix(
+      {
+        head: store.head,
+        async readRange(input) {
+          const read = await store.readRange(input);
+          await store.append({
+            writer,
+            expectedOffset: 3,
+            appendId: "later",
+            bytes: bytes("tail"),
+          });
+          return read;
+        },
+      },
+      writer,
+      3,
+      "open",
+    )
+  );
+});
+
+Deno.test("owner prefix verification validates state and identity before reading bytes", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  const head = await store.reserve(writer);
+  let reads = 0;
+  const observed = {
+    head: () => Promise.resolve(head),
+    readRange: () => {
+      reads++;
+      return Promise.resolve(new Uint8Array());
+    },
+  };
+  await refused(
+    () => digestPhysicalPrefix(observed, writer, 0, "sealed" as "open"),
+    "content_invalid",
+  );
+  for (
+    const patch of [
+      { bodyId: "other" },
+      { reservationId: "other" },
+      { generation: 8 },
+      { mediaType: "image/png" },
+      { state: "fenced" },
+    ]
+  ) {
+    await refused(
+      () =>
+        digestPhysicalPrefix(
+          {
+            ...observed,
+            head: () => Promise.resolve({ ...head, ...patch } as typeof head),
+          },
+          writer,
+          0,
+          "open",
+        ),
+      "asset_storage_unavailable",
+    );
+  }
+  assertEquals(reads, 0);
+  const result = await digestPhysicalPrefix(
+    {
+      ...observed,
+      head: () => Promise.resolve({ ...head, versionToken: "v".repeat(4096) }),
+    },
+    writer,
+    0,
+    "open",
+  );
+  assertEquals(result.digest, await digestContent(new Uint8Array()));
+});
+
+Deno.test("owner prefix verification stops after an aborted raw read settles", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  await store.reserve(writer);
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "bytes",
+    bytes: bytes("abc"),
+  });
+  const controller = new AbortController();
+  const reason = new Error("read cancelled");
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let settled = false, headReads = 0;
+  const work = digestPhysicalPrefix(
+    {
+      head: (id) => {
+        headReads++;
+        return store.head(id);
+      },
+      readRange: async (input) => {
+        started();
+        await gate;
+        return store.readRange(input);
+      },
+    },
+    writer,
+    3,
+    "open",
+    controller.signal,
+  ).then(
+    () => {
+      settled = true;
+      return null;
+    },
+    (error: unknown) => {
+      settled = true;
+      return error;
+    },
+  );
+  await entered;
+  controller.abort(reason);
+  await Promise.resolve();
+  assertEquals(settled, false);
+  release();
+  assertEquals(await work, reason);
+  assertEquals(headReads, 1);
+});
+
+Deno.test("owner prefix verification reports missing heads before and after read as unavailable", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  const head = await store.reserve(writer);
+  for (const missingAfter of [false, true]) {
+    let reads = 0;
+    await refused(() =>
+      digestPhysicalPrefix(
+        {
+          head: () =>
+            Promise.resolve(missingAfter && reads++ === 0 ? head : null),
+          readRange: store.readRange,
+        },
+        writer,
+        0,
+        "open",
+      ), "asset_storage_unavailable");
+  }
 });

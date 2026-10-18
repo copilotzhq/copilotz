@@ -494,6 +494,20 @@ export function createOwnerStartupProof(
     const operations = await rows(catalog.operations);
     const indices = await rows(catalog.operationEvents);
     const streams = await rows(catalog.operationStreams);
+    // Immutable bodies deliberately outlive operation pruning. Until their
+    // recovery/adoption reader is connected, an ordinary-history proof cannot
+    // ignore retained content just because no stream row remains.
+    const logicalContentTarget = ref(
+      "blocker",
+      null,
+      "startup.logical-content",
+    );
+    if (
+      (await tx.query(`SELECT 1 FROM ${catalog.logicalBodies} LIMIT 1`)).rows
+        .length
+    ) {
+      block(logicalContentTarget, "logical_body_recovery_unsupported");
+    } else resolved.add(targetKey(logicalContentTarget));
     const receipts = await rows(
       owner.receipts,
       "kind IN ('execution.claim','processor.claim') OR key LIKE '[\"execution.claim\",%' OR key LIKE '[\"processor.claim\",%' OR kind LIKE 'effect.%' OR left(key,10)='[\"effect\",' OR kind='action.child-prepare' OR key LIKE '[\"action.child-prepare\",%'",

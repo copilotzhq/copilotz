@@ -86,6 +86,46 @@ The intended DX remains one `createCopilotz`: storage configuration selects the
 owner; an owner connection selects a worker. The worker package entry must share
 that implementation while keeping database/server modules out of its artifact.
 
+## Full-stack implementation contract
+
+These choices complete the approved live Views contract. They do not replace
+owner-backed execution or authorize a parallel frontend runtime.
+
+- Bootstrap mounts one root navigation View. All authored layouts, screens,
+  forms, loading/error states and child composition remain in `views/`.
+  `ctx.show` resolves children through the existing plugin registry; route data
+  belongs to an ordinary Resource. Generated code only loads composition,
+  connects the public client, installs renderer/navigation adapters and mounts.
+- Preserve the pure one-shot text renderer. Add a separate live renderer session
+  with typed composition-derived Collections, Actions and resources. Renderer
+  output is not inert projected data and must not pass through the data snapshot
+  serializer. Projection and current viewer authorization remain mandatory.
+- Live Collection selections use owner-backed initial snapshot plus committed
+  change replay, reset and authorization semantics. Existing operation-selection
+  observation is not a general Collection subscription. Do not connect Views to
+  the legacy application/database facade to make the example work.
+- The renderer tracks read dependencies and owns nested identity, subscriptions,
+  invalidation and disposal. Sharing is bounded and requires identical selection
+  and authorization identities. Scope changes clear protected cached values
+  before a new identity renders; late results cannot repopulate old state.
+- View event handlers invoke typed Actions through existing public receipt,
+  idempotency and observation contracts. Render evaluation cannot submit
+  Actions. Retries reuse one logical submission identity. Navigation/unmount
+  detaches local waits; only explicit Stop requests durable cancellation.
+- Local form drafts and navigation state belong to mounted renderer state. Use
+  session-local drafts by default for the acceptance project. This does not
+  introduce another primitive or an authoritative application-level data store.
+- The Node consumer must install, build and start without a Deno executable.
+  Complete npm-compatible dependency/export resolution, Node-native build/role
+  output and a Node HTTP/WebSocket host adapter. Running a Deno-produced bundle
+  under Node is supporting evidence, not that consumer acceptance gate.
+
+Before the separate project begins, library tests must cover initial/replayed
+selections, revoked scopes, nested disposal, stale results, form submission
+retries, explicit cancellation versus detach, routing and Back/Forward, and
+server-free browser artifacts. The later real-browser acceptance repeats those
+behaviors across process and browser boundaries.
+
 ## Ordered delivery milestones
 
 **Required order: finish the current complete owner refactor → run the new

@@ -80,7 +80,12 @@ export function canonicalizeContentRefs(value: unknown): unknown {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, child]) => [
         key,
-        canonicalizeContentRefs(child),
+        // Inline JSON bodies are opaque application values, even when their
+        // children happen to have the shape of a resolved content reference.
+        key === "value" && (value as { kind?: unknown }).kind === "json" &&
+          !Object.hasOwn(value, "assetId")
+          ? structuredClone(child)
+          : canonicalizeContentRefs(child),
       ]),
     );
   }

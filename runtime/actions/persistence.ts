@@ -1,14 +1,5 @@
-import {
-  actionOwnershipStatement,
-  type ActionWriter,
-  combineActionStatements,
-} from "./ownership.ts";
+import { actionOwnershipStatement, type ActionWriter } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
-import {
-  composeActionInputRetention,
-  planActionInputRetention,
-  retainActionInputContent,
-} from "./content-retention.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -133,14 +124,7 @@ export function createActionLifecycleAppender(
         mediaType: "application/json" as const,
       },
     };
-    const retention = action
-      ? await planActionInputRetention(draft.namespace, action, data)
-      : undefined;
     const tables = options.store?.tables;
-    // The receipt's own statement retains the input Assets, unless protected
-    // values must be adopted in code beside them.
-    const inStatement = retention !== undefined && tables !== undefined &&
-      prepared.prepared.length === 0;
     return await options.coordinator.commitMutation({
       admission: {
         openActionGroup: data.status === "deferred",
@@ -152,26 +136,20 @@ export function createActionLifecycleAppender(
       ...(tables
         ? {
           statement: (param: (value: unknown) => string) =>
-            combineActionStatements([
-              actionOwnershipStatement(
-                { draft, data },
-                options.writer,
-                tables,
-                param,
-              ),
-              ...(inStatement
-                ? [composeActionInputRetention(retention!, tables, param)]
-                : []),
-            ]),
+            actionOwnershipStatement(
+              { draft, data },
+              options.writer,
+              tables,
+              param,
+            ),
         }
         : {}),
       ...(options.transaction
         ? { transaction: options.transaction, dispatch: false }
         : {}),
-      ...(!inStatement && (retention || prepared.prepared.length > 0)
+      ...(prepared.prepared.length > 0
         ? {
           mutate: async (context) => {
-            if (retention) await retainActionInputContent(context, retention);
             for (const value of prepared.prepared) {
               await options.protectedValues!.adopt(
                 context,

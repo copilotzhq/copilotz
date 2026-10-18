@@ -1,3 +1,4 @@
+import { createContentError, isContentError } from "../content/errors.ts";
 import { decodeContentBody } from "../content/decode.ts";
 import type { ContentKind } from "../content/types.ts";
 import type { ContentRef } from "../content/types.ts";
@@ -167,13 +168,60 @@ function encode(kind: string, value: unknown): Uint8Array {
     return new TextEncoder().encode(value);
   }
   if (kind === "json") {
-    const canonical = durableActionValue(value);
-    return new TextEncoder().encode(JSON.stringify(canonical));
+    return new TextEncoder().encode(JSON.stringify(value));
   }
-  if (!["text", "json"].includes(kind) && value instanceof Uint8Array) {
-    return value.slice();
+  if (!["text", "json"].includes(kind)) {
+    if (value instanceof Uint8Array) return value.slice();
+    // Binary inline values are JSON byte arrays in the captured receipt.
+    if (
+      Array.isArray(value) &&
+      value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)
+    ) return new Uint8Array(value);
   }
   throw new TypeError(`Invalid prepared '${kind}' content value.`);
+}
+
+/** Missing captured content is a failure, never a request to prepare new input. */
+async function readCaptured<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      isContentError(error) &&
+      (error.code === "asset_not_found" || error.code === "asset_deleted")
+    ) {
+      throw createContentError(
+        "content_missing",
+        "Captured Action content is missing.",
+        {
+          assetId: error.assetId,
+          namespace: error.namespace,
+          cause: error,
+        },
+      );
+    }
+    throw error;
+  }
+}
+
+/** Canonical receipt input, without opening the content it points to. */
+export function durableActionContentInput(
+  input: unknown,
+  declaration: ActionContentDeclaration,
+): unknown {
+  const snapshot = structuredClone(input);
+  for (const path of declaration.input) {
+    expandTextShorthand(snapshot, path.split("."));
+  }
+  for (const entry of actionContentSequences(snapshot, declaration).flat()) {
+    if (
+      entry && typeof entry === "object" && "value" in entry &&
+      entry.value instanceof Uint8Array
+    ) {
+      entry.value = Array.from(entry.value);
+    }
+  }
+  return durableActionValue(snapshot);
 }
 
 export async function prepareActionContentInput(
@@ -187,14 +235,10 @@ export async function prepareActionContentInput(
     expandTextShorthand(snapshot, path.split("."));
   }
   const entries = actionContentSequences(snapshot, declaration).flat();
-  if (entries.length && !content.authorize) {
-    throw new Error("Action content requires an authorization service.");
-  }
   if (entries.length > 4096) {
     throw new RangeError("Action content entry limit exceeded.");
   }
   const cached = new Map<string, Uint8Array>();
-  const hashes = new Map<string, string>();
   const refs: ContentRef[] = [];
   let bytesUsed = 0;
   const limit = declaration.byteLimit ?? 32 * 1024 * 1024;
@@ -215,7 +259,9 @@ export async function prepareActionContentInput(
   ];
   signal.throwIfAborted();
   const assets = new Map(
-    (await content.getMany(existingIds)).map((asset) => [asset.id, asset]),
+    (await readCaptured(() => content.getMany(existingIds))).map((
+      asset,
+    ) => [asset.id, asset]),
   );
   for (const entry of entries as Record<string, unknown>[]) {
     signal.throwIfAborted();
@@ -233,11 +279,18 @@ export async function prepareActionContentInput(
     if (entry.resolve === false && hasValue) {
       throw new TypeError("Reference-only content cannot include a value.");
     }
-    let asset = typeof entry.assetId === "string"
+    const asset = typeof entry.assetId === "string"
       ? assets.get(entry.assetId)
       : undefined;
-    if (entry.assetId !== undefined && !asset) {
-      throw new Error("Action content Asset was not found in this scope.");
+    if (entry.assetId !== undefined && (!asset || asset.state === "deleted")) {
+      throw createContentError(
+        "content_missing",
+        "Action content Asset was not found in this scope.",
+        {
+          assetId: String(entry.assetId),
+          namespace: asset?.namespace,
+        },
+      );
     }
     if (asset && (asset.state !== "ready" || asset.mediaType !== mediaType)) {
       throw new Error(
@@ -265,41 +318,33 @@ export async function prepareActionContentInput(
         if (kind !== "json") {
           throw new Error("Prepared content does not match its Asset.");
         }
-        const original =
-          (await content.resolveMany([entry as unknown as ContentRef]))[0];
+        const original = (await readCaptured(() =>
+          content.resolveMany([entry as unknown as ContentRef])
+        ))[0];
         if (!original || !sameActionValue(original.value, entry.value)) {
           throw new Error("Prepared content does not match its Asset.");
         }
         bytes = original.bytes;
       }
-      const key = `${mediaType}:${hash}`;
-      if (!asset) {
-        const duplicate = hashes.get(key);
-        if (duplicate) asset = assets.get(duplicate);
-        if (!asset) {
+      if (asset) {
+        if (!cached.has(asset.id)) {
           account(bytes.byteLength);
-          asset = await content.publish({ mediaType, body: bytes }, {
-            operationKey: `action-content:${key}`,
-          });
-          assets.set(asset.id, asset);
-          hashes.set(key, asset.id);
           cached.set(asset.id, bytes);
         }
-      }
-      if (!cached.has(asset.id)) {
+        // A supplied resolved reference remains a plain pointer in history.
+        delete entry.value;
+      } else {
         account(bytes.byteLength);
-        cached.set(asset.id, bytes);
+        if (entry.value instanceof Uint8Array) {
+          entry.value = Array.from(entry.value);
+        }
       }
-      entry.assetId = asset.id;
-      // Hash-based reuse must not turn knowledge of bytes into access authority.
-      if (!existingIds.includes(asset.id)) {
-        await content.authorize!(entry as unknown as ContentRef);
-      }
-      delete entry.value;
     } else if (!asset) {
       throw new TypeError("Content requires a value or an Asset reference.");
     }
-    if (entry.resolve !== false) refs.push(entry as unknown as ContentRef);
+    if (asset && entry.resolve !== false) {
+      refs.push(entry as unknown as ContentRef);
+    }
   }
   signal.throwIfAborted();
   const durableInput = durableActionValue(snapshot);
@@ -315,16 +360,28 @@ export async function prepareActionContentInput(
         ).values(),
       ];
       for (const ref of missing) account(assets.get(ref.assetId)!.byteLength);
-      const resolved = missing.length ? await content.resolveMany(missing) : [];
+      const resolved = missing.length
+        ? await readCaptured(() => content.resolveMany(missing))
+        : [];
       for (const item of resolved) cached.set(item.ref.assetId, item.bytes);
       signal.throwIfAborted();
       const execution = structuredClone(durableInput);
       for (const sequence of actionContentSequences(execution, declaration)) {
         for (const entry of sequence as Record<string, unknown>[]) {
           if (entry.resolve === false) continue;
+          if (Object.hasOwn(entry, "value")) {
+            if (!["text", "json"].includes(String(entry.kind))) {
+              entry.value = encode(String(entry.kind), entry.value);
+            }
+            continue;
+          }
           const id = String(entry.assetId);
           if (!cached.has(id)) {
-            throw new Error("Incomplete Action content hydration.");
+            throw createContentError(
+              "content_missing",
+              "Incomplete Action content hydration.",
+              { assetId: id },
+            );
           }
           const bytes = cached.get(id)!;
           entry.value = decodeContentBody(bytes, entry.kind as ContentKind, {

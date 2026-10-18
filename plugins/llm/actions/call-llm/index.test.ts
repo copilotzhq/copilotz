@@ -2156,6 +2156,10 @@ Deno.test("llm.call never falls back after publishing visible output", async () 
   assertEquals(backupCalls, 0);
   assertEquals(test.opened.length, 1);
   assert(test.opened[0].aborted);
+  assertEquals(test.opened[0].abortInput, {
+    outcome: "failed",
+    reason: "provider_error",
+  });
 });
 
 Deno.test("llm.call aborts and settles both invocation branches before fallback", async () => {
@@ -2323,7 +2327,10 @@ Deno.test("llm.call cancellation does not await non-cooperative result or frames
     "caller cancelled",
   ));
   assert(cancellationRequested);
-  assertEquals(test.opened[0]?.abortInput?.outcome, "cancelled");
+  assertEquals(test.opened[0]?.abortInput, {
+    outcome: "cancelled",
+    reason: "cancelled",
+  });
 });
 
 Deno.test("llm.call observes result rejection before acquiring a locked frame reader", async () => {

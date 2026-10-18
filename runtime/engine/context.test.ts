@@ -132,7 +132,6 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
   assertEquals(await stream.terminal, {
     outcome: "completed",
     availability: "retained",
-    capture: "complete",
     offset: 4,
     terminalAt: "2026-09-01T12:00:00.000Z",
   });
@@ -192,13 +191,12 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
     appendId: "local-failed:1",
     bytes: new TextEncoder().encode("partial"),
   });
-  await writer.abort({ outcome: "failed", capture: "truncated" });
+  await writer.abort({ outcome: "failed" });
 
   assertEquals(await new Response(stream.payload).text(), "partial");
   assertEquals(await stream.terminal, {
     outcome: "failed",
     availability: "retained",
-    capture: "truncated",
     offset: 7,
     terminalAt: "2026-09-01T12:01:00.000Z",
   });
@@ -316,9 +314,9 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
   assertExists(published);
   assertEquals(await new Response(published.payload).text(), "");
   assertEquals(await published.terminal, {
-    outcome: "abandoned",
+    outcome: "failed",
+    reason: "abandoned",
     availability: "retained",
-    capture: "truncated",
     offset: 0,
     terminalAt: "2026-09-01T12:02:00.000Z",
   });

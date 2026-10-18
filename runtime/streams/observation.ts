@@ -3,6 +3,7 @@ import type {
   ApplicationOutput,
   StreamOutput,
   StreamOutputDescriptor,
+  StreamTerminalStatus,
 } from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
 
@@ -134,4 +135,28 @@ export function isStreamOutput(
   return output.type === "stream.output" &&
     typeof (output as { payload?: { getReader?: unknown } }).payload
         ?.getReader === "function";
+}
+
+/** Validates the public terminal taxonomy at observation boundaries. */
+export function isStreamTerminalStatus(
+  value: unknown,
+): value is StreamTerminalStatus & Readonly<Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const terminal = value as Record<string, unknown>;
+  return ["completed", "failed", "cancelled"].includes(
+    String(terminal.outcome),
+  ) &&
+    ["retained", "purged"].includes(String(terminal.availability)) &&
+    !Object.hasOwn(terminal, "capture") &&
+    !Object.hasOwn(terminal, "cleanupState") &&
+    (terminal.reason === undefined ||
+      (typeof terminal.reason === "string" &&
+        Boolean(terminal.reason.trim()))) &&
+    (terminal.availability === "purged"
+      ? typeof terminal.availabilityReason === "string" &&
+        Boolean(terminal.availabilityReason.trim())
+      : terminal.availabilityReason === undefined) &&
+    Number.isSafeInteger(terminal.offset) && Number(terminal.offset) >= 0 &&
+    typeof terminal.terminalAt === "string" &&
+    Number.isFinite(Date.parse(terminal.terminalAt));
 }

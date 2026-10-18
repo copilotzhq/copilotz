@@ -210,8 +210,7 @@ Deno.test("final lease recovery atomically fails Actions and registers continuat
       operationId: f.root.event.id,
       streamId: "stream",
       outcome: "failed",
-      availability: "missing",
-      capture: "truncated",
+      availabilityReason: "missing",
     });
     for (const delivery of continuations) {
       assertExists(

@@ -509,32 +509,24 @@ export function createDatabaseScope(
       const intendedOutcome = stream.state === "terminating"
         ? stream.outcome
         : undefined;
-      if (!head) {
+      const failedOutcome = intendedOutcome && intendedOutcome !== "completed"
+        ? intendedOutcome
+        : "failed";
+      const reason = stream.reason ?? "abandoned";
+      if (
+        !head || head.state === "aborted" ||
+        head.byteLength < stream.committedOffset
+      ) {
         const transitioned = await options.operationCatalog
           .markStreamUnavailable({
             namespace: stream.namespace,
             operationId: stream.operationId,
             streamId: stream.streamId,
-            outcome: intendedOutcome === "completed"
-              ? "abandoned"
-              : intendedOutcome ?? "abandoned",
-            availability: "missing",
-            capture: stream.capture ?? "truncated",
-          });
-        if (transitioned) reconciledStreams += 1;
-        continue;
-      }
-      if (head.state === "aborted") {
-        const transitioned = await options.operationCatalog
-          .markStreamUnavailable({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: intendedOutcome === "completed"
-              ? "abandoned"
-              : intendedOutcome ?? "abandoned",
-            availability: "purged",
-            capture: stream.capture ?? "truncated",
+            outcome: failedOutcome,
+            reason,
+            availabilityReason: head?.state === "aborted"
+              ? "deleted"
+              : "missing",
           });
         if (transitioned) reconciledStreams += 1;
         continue;
@@ -548,56 +540,41 @@ export function createDatabaseScope(
         });
         if (transitioned) reconciledStreams += 1;
         else if (intendedOutcome && intendedOutcome !== "completed") {
-          const unavailable = await options.operationCatalog
-            .markStreamUnavailable({
-              namespace: stream.namespace,
-              operationId: stream.operationId,
-              streamId: stream.streamId,
-              outcome: intendedOutcome,
-              availability: "missing",
-              capture: stream.capture ?? "truncated",
-            });
-          if (unavailable) reconciledStreams += 1;
+          const terminated = await options.operationCatalog.terminateStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            outcome: intendedOutcome,
+            reason,
+            body: head,
+          });
+          if (terminated) reconciledStreams += 1;
         }
         continue;
       }
       if (head.state === "incomplete") {
-        const outcome = intendedOutcome === "completed"
-          ? undefined
-          : intendedOutcome ?? "abandoned";
-        const transitioned = outcome
-          ? await options.operationCatalog.terminateStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: head,
-            outcome,
-            capture: stream.capture ?? "truncated",
-          })
-          : await options.operationCatalog.markStreamUnavailable({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: "abandoned",
-            availability: "missing",
-            capture: "truncated",
-          });
+        // An incomplete physical body cannot certify a pending completion.
+        const transitioned = await options.operationCatalog.terminateStream({
+          namespace: stream.namespace,
+          operationId: stream.operationId,
+          streamId: stream.streamId,
+          body: head,
+          outcome: failedOutcome,
+          reason,
+        });
         if (transitioned) reconciledStreams += 1;
         continue;
       }
       if (head.writerLeaseRemainingMs > 0) continue;
       const outcome = intendedOutcome ??
-        (head.state === "sealing" ? "completed" : "abandoned");
-      const capture = outcome === "completed"
-        ? "complete"
-        : stream.capture ?? "truncated";
+        (head.state === "sealing" ? "completed" : "failed");
       if (
         !await options.operationCatalog.beginStreamTerminalization({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
           outcome,
-          capture,
+          ...(outcome !== "completed" ? { reason } : {}),
         })
       ) continue;
       const writer = await streamBodyStore.reserve({
@@ -630,7 +607,7 @@ export function createDatabaseScope(
             streamId: stream.streamId,
             body: incomplete,
             outcome,
-            capture,
+            reason,
           })
         ) reconciledStreams += 1;
       }
@@ -672,8 +649,8 @@ export function createDatabaseScope(
       engine.assetStorage?.adapter?.deployment.readyGarbageCollection ?? true;
     for (const stream of expired) {
       if (
-        stream.availability === "retained" &&
-        !await options.operationCatalog.markStreamPurgePending({
+        stream.cleanupState !== "pending" &&
+        !await options.operationCatalog.beginStreamCleanup({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
@@ -686,7 +663,17 @@ export function createDatabaseScope(
           store: streamBodyStore,
           body: head,
         });
-        retired = retirement.status !== "blocked";
+        if (retirement.status === "owned" && retirement.ownerType === "asset") {
+          await options.operationCatalog.retainStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            retention: "canonical",
+            assetId: retirement.ownerId,
+          });
+          continue;
+        }
+        retired = retirement.status === "deleted";
       } else if (head?.state === "incomplete" || head?.state === "aborted") {
         retired = await streamBodyStore.maintenance.delete({
           bodyId: head.bodyId,
@@ -697,19 +684,17 @@ export function createDatabaseScope(
       }
       if (!retired) {
         observationRetirementBlocked += 1;
-        // Purge is monotonic. A losing concurrent worker must never restore
-        // retained after another worker deleted the Body. Leaving the row
-        // purge_pending is crash-safe and makes the exact-CAS retirement
-        // retryable on the next maintenance pass.
+        // Keep cleanup pending until deletion is confirmed. A failed CAS may
+        // mean another worker won; the next pass checks the physical head.
         continue;
       }
-      // A graph-owned Ready Body remains under Asset authority. Other retained
-      // terminal Bodies were removed with exact state/version CAS above.
+      // Deletion was confirmed by exact state/version CAS or a missing head.
       if (
         await options.operationCatalog.pruneStream({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
+          availabilityReason: head === null ? "missing" : "deleted",
         })
       ) prunedCatalogEntries += 1;
     }

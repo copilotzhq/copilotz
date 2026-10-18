@@ -398,3 +398,40 @@ Deno.test("Gateway resolves stripped ProcessorEvent data after worker relay", as
     await database.close();
   }
 });
+
+Deno.test("worker stream descriptors cannot carry terminal taxonomy or capture state", async () => {
+  for (
+    const fields of [{ capture: "complete" }, { outcome: "superseded" }, {
+      availability: "purge_pending",
+    }, { cleanupState: "pending" }]
+  ) {
+    const payload = encoder.encode(JSON.stringify({
+      type: "stream.output",
+      namespace: "scope",
+      streamId: "lane",
+      mediaType: "text/plain",
+      kind: "text",
+      role: "assistant",
+      metadata: {},
+      ...fields,
+      durable: false,
+      payload: {},
+      correlationId: "operation",
+      createdAt: "2026-10-18T00:00:00Z",
+    }));
+    const bytes = new Uint8Array(7 + payload.length);
+    bytes.set(framedHeader(1, payload.length));
+    bytes.set(payload, 7);
+    const work = relayCopilotzWorkHandle(fakeFramedWork(bytes));
+    const completed = work.completed.catch(() => undefined);
+    const output = work.output.pipeTo(new WritableStream()).catch(() =>
+      undefined
+    );
+    await assertRejects(
+      () => work.metadata,
+      TypeError,
+      "invalid stream descriptor",
+    );
+    await Promise.all([completed, output]);
+  }
+});

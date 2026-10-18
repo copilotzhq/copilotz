@@ -591,12 +591,12 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
       `INSERT INTO "${databaseSchema}"."copilotz_operation_streams" (
          namespace, operation_id, stream_ordinal, stream_id,
          semantic_stream_id, body_id,
-         descriptor, state, outcome, availability, capture,
+         descriptor, state, outcome, availability,
          asset_retention, committed_offset, terminal_at,
          created_at, updated_at
        ) SELECT $1, $2, lane, 'lane-' || lane, 'lane-' || lane, 'body-' || lane,
                 jsonb_set($3::jsonb, '{streamId}', to_jsonb('lane-' || lane)),
-                'terminal', 'completed', 'retained', 'complete',
+                'terminal', 'completed', 'retained',
                 'observation', 1, NOW(), NOW(), NOW()
            FROM generate_series(1, 1001) AS lane`,
       [NAMESPACE, operationId, JSON.stringify(descriptor)],
@@ -692,7 +692,7 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
             bytes: new TextEncoder().encode("rejected bytes"),
             appendId: "retained-failed-prefix:1",
           });
-          await writer.abort({ outcome: "failed", capture: "complete" });
+          await writer.abort({ outcome: "failed", reason: "provider_error" });
         },
       }),
     },
@@ -721,12 +721,12 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
     assertEquals(await new Response(stream.payload).text(), "rejected bytes");
     assertEquals(await stream.terminal, {
       outcome: "failed",
+      reason: "provider_error",
       availability: "retained",
-      capture: "complete",
       offset: "rejected bytes".length,
       terminalAt:
         (await createOperationCatalog(db, `${SCHEMA}_retained_failed_prefix`)
-          .findStream(NAMESPACE, stream.streamId))!.terminalAt,
+          .findStream(NAMESPACE, stream.streamId))!.terminalAt!,
     });
     assertEquals(outputs.at(-1)?.type, "operation.completed");
     const catalog = createOperationCatalog(
@@ -734,7 +734,7 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
       `${SCHEMA}_retained_failed_prefix`,
     );
     assertEquals(
-      await catalog.markStreamPurgePending({
+      await catalog.beginStreamCleanup({
         namespace: NAMESPACE,
         operationId: sent.operationId,
         streamId: stream.streamId,
@@ -750,10 +750,12 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
       output.type === "stream.output"
     ) as StreamOutput | undefined;
     assertExists(tombstoned);
-    // purge_pending is a logical tombstone before physical CAS deletion, so a
-    // new replay cannot race garbage collection and acquire the old prefix.
-    assertEquals(await new Response(tombstoned.payload).text(), "");
-    assertEquals((await tombstoned.terminal)?.availability, "purge_pending");
+    // Pending cleanup is internal; retained bytes remain readable until deletion.
+    assertEquals(
+      await new Response(tombstoned.payload).text(),
+      "rejected bytes",
+    );
+    assertEquals((await tombstoned.terminal)?.availability, "retained");
   } finally {
     await application.shutdown();
     await closeDb(db);
@@ -1056,7 +1058,7 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
     });
     assertEquals(maintained.operations.expiredObservationStreams, 1);
     assertEquals(maintained.operations.observationRetirementBlocked, 0);
-    assertEquals(maintained.operations.prunedCatalogEntries, 1);
+    assertEquals(maintained.operations.prunedCatalogEntries, 0);
     assertExists(await store.head({ bodyId }));
     await application.content.assets.markDeleted(NAMESPACE, assetId);
     assertExists(await store.head({ bodyId }));
@@ -1085,7 +1087,7 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
         if (deleteCalls === 1) {
           // Simulate worker A winning the exact Body CAS immediately before
           // this worker B attempts the same snapshot. B must observe false and
-          // leave the catalog monotonic purge_pending, never restore retained.
+          // keep cleanup pending until physical deletion is confirmed.
           assertEquals(await baseStore.maintenance.delete(input), true);
           return false;
         }
@@ -1155,7 +1157,7 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
     assertEquals(
       (await catalog.getStream(NAMESPACE, sent.operationId, stream.streamId))
         ?.availability,
-      "purge_pending",
+      "retained",
     );
     // The next pass observes the missing physical Body and monotonically
     // completes the logical tombstone without another destructive call.

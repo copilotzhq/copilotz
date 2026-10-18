@@ -125,6 +125,25 @@ complete S3 file passes 16 cases and related legacy content passes 61, with no
 failures/skips. Lint, format and all frozen source/dependency hashes pass. Tests
 use local S3/GCS-compatible mocks; no live-cloud or full-suite claim is made.
 
+## Reserved object namespace prerequisite
+
+Legacy S3 and GCS-compatible body stores now refuse the reserved
+`__copilotz_owner_physical_v1__` path segment at their final raw-request
+boundary. All three listing consumers exclude it before classification or
+cleanup, including nested orphans without metadata. Native GCS checks its joined
+prefix/body key before token lookup or network access. Path aliases and corrupt
+legacy metadata cannot reference owner physical parts through legacy APIs.
+
+Shared S3 transport mechanics are extracted without changing their existing
+request semantics. No physical writer, lease policy or catalog is introduced by
+this prerequisite. Native GCS progressive support remains unavailable.
+
+Independent checked evidence: 81 repository cases and seven adversarial probes
+pass, with no failures/skips; three expected baseline failures are retained.
+Six-file lint/format and frozen source/dependency hashes pass. These tests use
+local mock object services and do not establish live-provider CAS behavior or
+full-suite acceptance.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:

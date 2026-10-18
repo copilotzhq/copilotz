@@ -1,3 +1,4 @@
+import { OWNER_PHYSICAL_OBJECT_ROOT } from "./physical-object-namespace.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 
 import { createMemoryBodyStore } from "./body-store.ts";
@@ -1497,6 +1498,87 @@ for (const provider of ["s3", "gcs"] as const) {
       );
     } finally {
       for (const release of releases) release();
+      await mock.shutdown();
+    }
+  });
+}
+
+for (const provider of ["s3", "gcs"] as const) {
+  Deno.test(`${provider} legacy requests and orphan maintenance exclude owner physical keys`, async () => {
+    const mock = createMockGcs();
+    try {
+      const store = provider === "s3"
+        ? createS3CasStore(mock.endpoint)
+        : createGcsStore(mock.endpoint);
+      const bytes = new TextEncoder().encode("ordinary");
+      const digest = await digestContent(bytes);
+      await store.put({
+        bodyId: "ordinary",
+        mediaType: "text/plain",
+        bytes,
+        digest,
+      });
+      const ordinary = mock.objects.get("ordinary")!;
+      const bodyId = `${OWNER_PHYSICAL_OBJECT_ROOT}scope/body`;
+      const keys = [
+        `${bodyId}.progressive/parts/orphan`,
+        `${bodyId}/meta.json`,
+        `${bodyId}/parts/orphan`,
+      ];
+      for (const key of keys) {
+        mock.objects.set(key, {
+          ...ordinary,
+          modified: new Date(0).toUTCString(),
+        });
+      }
+      const writer = await store.reserve({
+        bodyId: "ordinary-open",
+        mediaType: "text/plain",
+      });
+      const before = new Map(mock.objects);
+      const deletes = mock.deleteRequests;
+      const listed = await store.maintenance.list({
+        states: ["ready", "aborted"],
+        limit: 20,
+        idleForMs: 0,
+      });
+      assertEquals(listed.bodies.map((body) => body.bodyId), ["ordinary"]);
+      for (const forbidden of [bodyId, `ordinary/../${bodyId}`]) {
+        await assertRejects(() =>
+          store.put({
+            bodyId: forbidden,
+            mediaType: "text/plain",
+            bytes,
+            digest,
+          })
+        );
+        await assertRejects(() => store.head({ bodyId: forbidden }));
+        await assertRejects(() =>
+          store.reserve({ bodyId: forbidden, mediaType: "text/plain" })
+        );
+        await assertRejects(() =>
+          store.append({
+            writer: { ...writer, bodyId: forbidden },
+            expectedOffset: 0,
+            appendId: "a",
+            bytes,
+          })
+        );
+        await assertRejects(() =>
+          store.abort({ writer: { ...writer, bodyId: forbidden } })
+        );
+        await assertRejects(() =>
+          store.maintenance.delete({
+            bodyId: forbidden,
+            expectedState: "aborted",
+            expectedMaintenanceVersion: 1,
+            idleForMs: 0,
+          })
+        );
+      }
+      assertEquals(mock.objects, before);
+      assertEquals(mock.deleteRequests, deletes);
+    } finally {
       await mock.shutdown();
     }
   });

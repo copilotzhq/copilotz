@@ -1,4 +1,14 @@
-import { S3Client } from "@bradenmacdonald/s3-lite-client";
+import {
+  createS3TransportClient,
+  isAbsentError,
+  isConditionalRace,
+  parseStrongEtag,
+  requestPayload,
+} from "./s3-transport.ts";
+import {
+  isOwnerPhysicalObjectKey,
+  refuseOwnerPhysicalObjectKey,
+} from "./physical-object-namespace.ts";
 import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 import type {
@@ -58,11 +68,6 @@ export function s3BodyStoreReadyGarbageCollection(
   return configuredProvider(config) === "gcs";
 }
 
-function cleanEndpoint(value: string): string {
-  const url = new URL(value);
-  return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, "")}`;
-}
-
 function copilotzMetadataValue(
   headers: Headers,
   key: string,
@@ -85,26 +90,6 @@ function positiveInt64(value: string | null): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function requestErrorStatus(error: unknown): number | undefined {
-  return (error as { status?: number; statusCode?: number }).status ??
-    (error as { statusCode?: number }).statusCode;
-}
-
-function requestErrorCode(error: unknown): string | undefined {
-  return (error as { code?: string }).code;
-}
-
-function isAbsentError(error: unknown): boolean {
-  const status = requestErrorStatus(error);
-  const code = requestErrorCode(error);
-  return status === 404 || code === "NoSuchKey" || code === "NotFound";
-}
-
-function isConditionalRace(error: unknown): boolean {
-  const status = requestErrorStatus(error);
-  return status === 404 || status === 409 || status === 412;
 }
 
 function encodeCopySource(bucket: string, bodyId: string): string {
@@ -135,14 +120,6 @@ function assertStored(input: PutBodyInput, head: ReadyBodyHead): void {
       "Stored object does not match the canonical asset body.",
     );
   }
-}
-
-function requestPayload(
-  bytes: Uint8Array<ArrayBufferLike>,
-): Uint8Array<ArrayBuffer> {
-  return bytes.buffer instanceof ArrayBuffer
-    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    : new Uint8Array(bytes);
 }
 
 function skipStreamOffset(
@@ -180,15 +157,14 @@ export function createS3BodyStore(
     throw new TypeError("S3 backendId and bucket must be non-empty.");
   }
   const provider = configuredProvider(config);
-  const client = new S3Client({
-    endPoint: cleanEndpoint(config.endpoint),
-    region: config.region.trim() || "auto",
-    bucket,
-    accessKey: config.accessKeyId,
-    secretKey: config.secretAccessKey,
-    sessionToken: config.sessionToken,
-    pathStyle: config.pathStyle ?? true,
-  });
+  const client = createS3TransportClient(config, bucket);
+  // All convenience methods call this same instance method internally. Guard
+  // the final raw key, even when staging metadata is absent or malformed.
+  const rawRequest = client.makeRequest.bind(client);
+  client.makeRequest = (request) => {
+    refuseOwnerPhysicalObjectKey(request.objectName);
+    return rawRequest(request);
+  };
   const protectionMs = bodyProtectionMs(config.protectionMs);
 
   const parseReadyResponse = (
@@ -563,13 +539,6 @@ export function createS3BodyStore(
       cause === undefined ? {} : { cause },
     );
 
-  const parseStrongEtag = (value: string | null): string | undefined => {
-    const etag = value?.trim();
-    return etag && !etag.startsWith("W/") && /^"[^"\r\n]+"$/.test(etag)
-      ? etag
-      : undefined;
-  };
-
   const sameGuard = (left: SpillGuard, right: SpillGuard): boolean =>
     left.kind === "gcs" && right.kind === "gcs"
       ? left.generation === right.generation &&
@@ -883,6 +852,7 @@ export function createS3BodyStore(
         prefix: writerPrefix,
       })
     ) {
+      if (isOwnerPhysicalObjectKey(entry.key)) continue;
       keys.add(entry.key);
     }
     await mapBounded(
@@ -918,6 +888,7 @@ export function createS3BodyStore(
         prefix: stagingPrefix(bodyId),
       })
     ) {
+      if (isOwnerPhysicalObjectKey(entry.key)) continue;
       if (entry.key === stagingMetaKey(bodyId)) continue;
       entries.push(
         {
@@ -1907,6 +1878,7 @@ export function createS3BodyStore(
             prefix: input.prefix ?? "",
           })
         ) {
+          if (isOwnerPhysicalObjectKey(entry.key)) continue;
           if (entry.key.endsWith(".progressive/meta.json")) {
             if (
               !states.has("open") && !states.has("sealing") &&

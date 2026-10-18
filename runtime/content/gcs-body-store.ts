@@ -1,3 +1,4 @@
+import { refuseOwnerPhysicalObjectKey } from "./physical-object-namespace.ts";
 import { createFixedBodyStoreAdapter } from "./body-store.ts";
 import type {
   AbortBodyInput,
@@ -222,7 +223,9 @@ export function createGcsBodyStore(
         "GCS bodyId must be non-empty and cannot contain line breaks.",
       );
     }
-    return join(config.prefix, bodyId);
+    const objectKey = join(config.prefix, bodyId);
+    refuseOwnerPhysicalObjectKey(objectKey);
+    return objectKey;
   };
   const validateMediaType = (mediaType: string) => {
     if (!mediaType || mediaType.includes("\r") || mediaType.includes("\n")) {

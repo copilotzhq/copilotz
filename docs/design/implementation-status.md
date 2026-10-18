@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 06:32 UTC.
+Updated: 18 October 2026, 06:46 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -36,8 +36,10 @@ validation: final 34 host + 24 manager cases on each backend pass, with the
 original failed run retained. The sequential snapshot latency diagnostic is also
 complete. These scoped results do not imply full-suite acceptance or public
 activation. Current implementation work is the private content writer path; SQL
-format isolation and database writer scoped gates pass. The S3 writer and owner
-integration remain pending.
+format isolation and database writer scoped gates pass. Reserved object
+namespace isolation also passes its independent gate: 81 compatibility cases and
+seven adversarial probes. The S3 physical writer and owner integration remain
+pending.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -402,6 +404,10 @@ what it simplifies and eliminates before adding machinery.
 - [x] Preserve accepted object-store parts when an identical append retry wins
       after a stale loser read (S3/GCS-compatible mocks and legacy compatibility
       checked)
+
+- [x] Isolate reserved owner physical object keys from legacy S3/GCS reads,
+      writes and all maintenance listings; 81 checked compatibility cases and
+      seven independent probes pass, including metadata-free orphan aliases
 
 ## 5. Views, providers and clients
 

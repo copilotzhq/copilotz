@@ -193,10 +193,17 @@ async function fixture(
       state.published.resolve();
     },
   });
-  const store = (ctx: OwnerCommandContext) =>
+  const store = (ctx: OwnerCommandContext, deliveryId?: string) =>
     createEventStore({
       session: unavailable,
-      ownerCommit: { ...ctx.ownerCommit, afterCommit: ctx.afterCommit },
+      ownerCommit: {
+        ...ctx.ownerCommit,
+        afterCommit: ctx.afterCommit,
+        ...(deliveryId === undefined ? {} : {
+          ownerAttempt: { deliveryId, attemptId: `attempt:${deliveryId}` },
+        }),
+      },
+      assertOperationCatalog: catalog.assertFormat,
       admitOperationEventSql: catalog.admitEventSql,
       indexOperationEventSql: catalog.indexEventSql,
       indexOperationEvent: catalog.indexEvent,
@@ -235,26 +242,29 @@ async function fixture(
           };
           const delivery = result.deliveries[0];
           if (input.status !== "pending") {
-            await runtime.claimDelivery({
+            const deliveryRuntime = store(ctx, delivery.id);
+            await deliveryRuntime.claimDelivery({
               id: delivery.id,
               owner: `attempt:${delivery.id}`,
             });
             if (input.status === "failed") {
-              await runtime.failDelivery({
+              await deliveryRuntime.failDelivery({
                 id: delivery.id,
                 owner: `attempt:${delivery.id}`,
                 error: { name: "Failure", message: "failed" },
                 retryable: false,
               });
             } else if (input.status === "cancelled") {
-              await runtime.cancelDelivery(
+              await deliveryRuntime.cancelDelivery(
                 delivery.id,
                 `attempt:${delivery.id}`,
               );
-            } else {await runtime.succeedDelivery(
+            } else {
+              await deliveryRuntime.succeedDelivery(
                 delivery.id,
                 `attempt:${delivery.id}`,
-              );}
+              );
+            }
           }
           await settlement.schedule(ctx, target);
           return {
@@ -269,7 +279,7 @@ async function fixture(
             operationId: string;
             deliveryId: string;
           };
-          const runtime = store(ctx);
+          const runtime = store(ctx, input.deliveryId);
           await runtime.claimDelivery({
             id: input.deliveryId,
             owner: `attempt:${input.deliveryId}`,
@@ -936,11 +946,10 @@ test("rejected ambiguous output drain is never reinvoked for the same reservatio
       deliveryId: root.deliveryId,
       dispatchAttemptId: "attempt",
     }];
-    f.state.duringDrain = async () => {
-      throw Object.assign(new Error("lost during flush"), {
+    f.state.duringDrain = () =>
+      Promise.reject(Object.assign(new Error("lost during flush"), {
         indeterminate: true,
-      });
-    };
+      }));
     for (const occurrence of ["first-flush", "retry-flush"]) {
       await assert.rejects(f.run(root, occurrence), /lost during flush/);
     }

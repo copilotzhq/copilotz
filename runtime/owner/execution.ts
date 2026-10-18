@@ -957,6 +957,7 @@ export function createOwnerExecutionCommands(
       session: options.session,
       schema: options.schema,
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
+      assertOperationCatalog: options.catalog.assertFormat,
       admitOperationEventSql: (input, param) =>
         options.catalog.admitEventSql(input, param),
       indexOperationEvent: (tx, input) => options.catalog.indexEvent(tx, input),

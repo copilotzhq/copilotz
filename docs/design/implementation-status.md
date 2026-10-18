@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 07:12 UTC.
+Updated: 18 October 2026, 07:51 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -35,12 +35,13 @@ reconstructed integration have since completed fresh scoped PostgreSQL/PGlite
 validation: final 34 host + 24 manager cases on each backend pass, with the
 original failed run retained. The sequential snapshot latency diagnostic is also
 complete. These scoped results do not imply full-suite acceptance or public
-activation. SQL format isolation, database and S3 writer scoped gates now pass.
-The latest private checks pass 86 combined cases, 92 legacy object cases, 115
-PostgreSQL cases and 107 PGlite cases with eight explicit PostgreSQL skips. The
+activation. SQL format isolation, memory/database/S3 physical stores and legacy
+catalog admission guards now have scoped passing checks. The latest corrected
+catalog gate passes 33 PostgreSQL and 31 PGlite cases plus two PostgreSQL-only
+skips, including all 15 formerly blocked settlement cases on each backend. The
 unchanged full-static package-surface guard still refuses five modules without
-genuine host wiring; owner catalog/execution integration and public activation
-remain open.
+genuine host wiring. Fresh owner stream schema, catalog authority/alarms and
+actual content execution routing remain open.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements
@@ -418,6 +419,13 @@ what it simplifies and eliminates before adding machinery.
 - [ ] Wire private physical stores into real owner catalog/execution
       composition; clear the unchanged five-module package-surface failure
       through that wiring
+
+- [x] Legacy catalog format admission guards: composed event/index SQL,
+      duplicate callbacks, supplied transactions, provisioning races and cached
+      recovery/maintenance; scoped PostgreSQL/PGlite review passed
+- [x] Repair the pre-existing settlement fixture to use exact owner attempts for
+      delivery mutations; all 15 cases pass on both backends without restoring
+      leases or weakening assertions
 
 ## 5. Views, providers and clients
 

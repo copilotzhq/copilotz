@@ -137,6 +137,7 @@ export function createDatabaseScope(
   options: CreateDatabaseScopeOptions,
 ): DatabaseScopeRuntime {
   const { databaseSchema, engine } = options;
+  const assertCatalogFormat = options.operationCatalog.assertFormat;
   const store: EventStore = options.store ?? createEventStore({
     session: engine.session,
     schema: databaseSchema,
@@ -153,6 +154,7 @@ export function createDatabaseScope(
       onScopeCancellation(transaction, input),
     settleActionOwners: (transaction, delivery) =>
       settleActionOwners(transaction, delivery),
+    assertOperationCatalog: assertCatalogFormat,
     admitOperationEventSql: (input, param) =>
       options.operationCatalog.admitEventSql(input, param),
     indexOperationEvent: (transaction, input) =>
@@ -476,14 +478,19 @@ export function createDatabaseScope(
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
   } as const;
-  const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
-    coordinator.recover({ ...recovery, databaseSchema });
+  const recover: CopilotzEngineDatabaseScope["recover"] = async (
+    recovery = {},
+  ) => {
+    await assertCatalogFormat();
+    return await coordinator.recover({ ...recovery, databaseSchema });
+  };
   let progressiveMaintenanceAfter: string | undefined;
   let openStreamReconcileAfter: string | undefined;
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
     maintenanceOptions = {},
   ) => {
     await refuseOwnerPhysicalSchema(engine.session, databaseSchema);
+    await assertCatalogFormat();
     const recovery = await coordinator.recover({
       databaseSchema,
       namespace: maintenanceOptions.namespace,

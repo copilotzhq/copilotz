@@ -229,6 +229,61 @@ bounded manifest still costs O(number of parts); it must be measured with actual
 producer batching before choosing public defaults. No public stream admission or
 live-provider performance claim follows from these private checks.
 
+## Catalog format admission prerequisite checkpoint
+
+The checked prerequisite reuses one marker check and SQL predicate to keep
+legacy catalog behavior away from foreign formats. Catalog construction still
+performs no asynchronous work before fresh provisioning. The current supported
+catalog format remains `action-obligations-v1`; the foreign marker in refusal
+fixtures is not an implemented owner-content schema or a migration.
+
+The admission predicate encloses the entire operation gate, including the
+absent-operation branch. It therefore gates the existing composed event, body,
+delivery and owner-sequence writes. Standalone indexing CTEs also gate their own
+operation/index/selection writes. A captured read-only preflight runs before
+duplicate recovery callbacks on the actual supplied executor; all nine
+production EventStore/catalog compositions wire it.
+
+Legacy stream, terminal, retention, pruning and supplied-transaction helpers
+assert the marker before mutation. Core provisioning checks it both before DDL
+and under the shared schema admission lock. Legacy engine default/additional
+scope admission and cached recovery/maintenance also refuse a foreign marker,
+including when bytes live in memory or S3 and no physical SQL format is present.
+
+This is a fresh-format/offline-drain boundary. Read/watch APIs are unchanged,
+and separate autocommit preflight/write calls do not establish a safe online
+marker-change protocol. Owner authority must still be checked independently; a
+compatible marker never grants execution permission.
+
+Independent core/catalog/engine checks pass 81 PostgreSQL cases and 73 PGlite
+cases with eight explicit PostgreSQL skips. The broader owner matrix initially
+found 13 settlement fixture failures on both backends; the exact preceding
+commit reproduces all 13, because its control-scoped store attempts delivery
+mutation without an exact owner attempt. The fixture now keeps control scope for
+initial insertion and binds claim/terminal mutations to the exact delivery and
+attempt. Assertions and timing budgets are unchanged, and no lease is restored.
+
+The final corrected gate passes 33 PostgreSQL and 31 PGlite cases plus two
+PostgreSQL-only skips, including all 15 settlement tests on each backend. The
+other nine owner files passed on the unchanged production hashes. Sixteen-file
+lint/format/typecheck and frozen hashes pass. All 370 fixture databases and
+three coordinators were exported/dropped, with no remaining sessions or
+databases and PostgreSQL stopped. The earlier strict scope-query fixture failure
+is retained; it now explicitly checks both new read-only preflight queries and
+all prior ordering/no-DDL assertions.
+
+Independent causal controls show the preceding catalog advancing a foreign
+stream offset while the guarded implementation refuses unchanged. Actual held
+PostgreSQL advisory-lock races prove engine and direct catalog provisioning
+refuse a newly committed foreign marker without adding relations. Supplied
+executor identity, duplicate callbacks and composed owner sequence/body/event
+non-mutation are checked. The unchanged full-static gate still fails only on the
+five private physical modules awaiting genuine host wiring; no full-suite or
+public content activation is claimed.
+
+Owner stream fields, fresh owner-format provisioning, commands/alarms and real
+content execution routing remain the next coordinated work.
+
 ## 1. Catalog authority, physical fence and bounded renewal
 
 Implement these together for explicit private fresh-schema host composition:
@@ -249,6 +304,27 @@ Implement these together for explicit private fresh-schema host composition:
   writers starving beyond their protection deadlines
 - Refuse incompatible retained formats explicitly; do not migrate production
   databases or silently reinterpret legacy writer records
+
+The reviewed minimum for the next fresh owner stream row is: owner ID, opening
+owner epoch, captured delivery attempt ordinal, canonical existing placement
+binding, physical backend ID, existing body_id, reservation ID, original writer
+generation, finite protection deadline and active/revoking/revoked state. Reuse
+`parseOwnerPlacementBinding` and its 16 KiB bound. Worker bindings omit epoch
+and local Processor bindings omit delivery ordinal, so those two captured values
+must be stored and compared separately rather than inferred from a successor. No
+additional holder column is needed; the boundary fences holder/epoch and local
+bindings already retain holderId.
+
+The descriptor must become immutable under owner replay before deriving physical
+mediaType from it. Validate that mediaType through `capturePhysicalIdentity`,
+and compare binding/descriptor namespace and stream ID with row coordinates.
+Admission must check source event, consumer and delivery settlement scope
+against operation_id; a worker transport parent-operation ID is not that SQL
+scope. Preserve SQL deadline precision, reject infinities and enforce exact
+binding/epoch/ordinal/generation transition predicates. The format marker,
+complete columns/constraints and renewal index must commit atomically under the
+existing schema then catalog locks. Identical reopen validates; it does not
+repair unmarked, partial or legacy schemas.
 
 Keep public stream/content admission closed until the following slices prove
 accepted-prefix and completion behavior. Do not create another stream catalog,

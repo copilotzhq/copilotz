@@ -1,3 +1,9 @@
+import {
+  assertOperationCatalogFormat,
+  OPERATION_CATALOG_FINGERPRINT,
+  operationCatalogFormatSql,
+} from "../events/catalog-format.ts";
+export { OPERATION_CATALOG_FINGERPRINT } from "../events/catalog-format.ts";
 import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
 import type {
   IncompleteBodyHead,
@@ -20,7 +26,6 @@ import type {
 import { snapshotStreamMetadata } from "./json.ts";
 import { isStreamOutputDescriptor } from "./observation.ts";
 
-export const OPERATION_CATALOG_FINGERPRINT = "action-obligations-v1";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -134,6 +139,8 @@ export type OperationCatalogAssociation = Readonly<{
 
 export type OperationCatalog = Readonly<{
   databaseSchema: string;
+  /** Read-only preflight on the supplied executor, including duplicate recovery. */
+  assertFormat(executor?: SqlExecutor): Promise<void>;
   watch(
     operationId: string,
     options?: Readonly<{
@@ -1374,6 +1381,9 @@ export function createOperationCatalog(
   }> = {},
 ): OperationCatalog {
   const tables = createOperationCatalogTables(databaseSchema);
+  const formatGate = operationCatalogFormatSql(tables.metadata);
+  const assertFormat = (executor: SqlExecutor = session) =>
+    assertOperationCatalogFormat(executor, tables.metadata);
   // CTEs that index one event. A root event creates its operation in the same
   // statement, which the other CTEs' snapshot cannot see, so "the operation
   // exists" also accepts the row created here. Detached deliveries get an
@@ -1396,7 +1406,9 @@ export function createOperationCatalog(
     const eventRef = param(eventId);
     const createdAt = `${param(input.createdAt)}::timestamptz`;
     const keys = `${param(observationKeys(input.metadata ?? {}))}::text[]`;
-    const requirements = event.requires ? ` AND ${event.requires}` : "";
+    const requirements = ` AND ${formatGate}${
+      event.requires ? ` AND ${event.requires}` : ""
+    }`;
     const created = root
       ? `created_operation AS (
            INSERT INTO ${tables.operations} (
@@ -1409,7 +1421,9 @@ export function createOperationCatalog(
         param(JSON.stringify(snapshotStreamMetadata(input.metadata ?? {})))
       }::jsonb,
              ${keys},2,'accepted',${createdAt},${createdAt}
-             ${event.requires ? `WHERE ${event.requires}` : ""}
+             WHERE ${formatGate}${
+        event.requires ? ` AND ${event.requires}` : ""
+      }
            ON CONFLICT (operation_id) DO NOTHING
            RETURNING operation_id, visibility, observation_keys, 1::bigint AS event_ordinal
          ), `
@@ -1442,7 +1456,7 @@ export function createOperationCatalog(
         ${createdAt}, ${createdAt},
         CASE WHEN delivery.status = 'cancelled' THEN ${createdAt} ELSE NULL END,
         CASE WHEN delivery.status = 'cancelled' THEN ${createdAt} ELSE NULL END
-      FROM ${event.deliveries} AS delivery WHERE delivery.settlement_scope_id <> ${operation}
+      FROM ${event.deliveries} AS delivery WHERE delivery.settlement_scope_id <> ${operation} AND ${formatGate}
       ON CONFLICT (operation_id) DO NOTHING
     ), `
       : "";
@@ -1493,6 +1507,7 @@ export function createOperationCatalog(
   };
   const catalog: OperationCatalog = {
     databaseSchema: validateEventSchemaName(databaseSchema),
+    assertFormat,
     async onChange(listener, options = {}) {
       if (typeof listener !== "function") {
         throw new TypeError("Operation change listener must be a function.");
@@ -1598,14 +1613,15 @@ export function createOperationCatalog(
         // deferred handoff requires a managed scope, including internal ones.
         cancelled:
           "EXISTS (SELECT 1 FROM admitted_operation WHERE cancellation_requested_at IS NOT NULL)",
-        gate: `(${
+        gate: `(${formatGate} AND (${
           input.requireScope !== true
             ? `NOT EXISTS (SELECT 1 FROM ${tables.operations} WHERE ${target}) OR `
             : ""
-        }EXISTS (SELECT 1 FROM admitted_operation))`,
+        }EXISTS (SELECT 1 FROM admitted_operation)))`,
       };
     },
     async indexEvent(transaction, input) {
+      await assertFormat(transaction);
       if (!/^(0|[1-9][0-9]*)$/.test(input.position)) {
         throw new TypeError("Operation event position is invalid.");
       }
@@ -1974,6 +1990,7 @@ export function createOperationCatalog(
       reason,
       commandTime,
     ) {
+      await assertFormat(transaction);
       const params: unknown[] = [namespace, operationId, reason];
       const timestamp = operationCommandTimestamp(params, commandTime);
       await transaction.query(
@@ -2079,6 +2096,7 @@ export function createOperationCatalog(
       );
       const bodyId = requiredText(input.bodyId, "Operation stream body id");
       const replayKey = await session.transaction(async (transaction) => {
+        await assertFormat(transaction);
         const operation = await transaction.query<{
           next_stream_ordinal: string | number | bigint;
         }>(
@@ -2214,6 +2232,7 @@ export function createOperationCatalog(
       return replayKey;
     },
     async commitStreamOffset(input) {
+      await assertFormat();
       const committedOffset = offset(input.committedOffset);
       const result = await session.query<
         { stream_id: string; committed_offset: string | number | bigint }
@@ -2243,6 +2262,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async sealStream(input) {
+      await assertFormat();
       const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
            SET state = 'terminal', outcome = 'completed',
@@ -2282,6 +2302,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async beginStreamTerminalization(input) {
+      await assertFormat();
       const outcome = input.outcome === "completed"
         ? "completed"
         : failedOutcome(input.outcome);
@@ -2319,6 +2340,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async terminateStream(input) {
+      await assertFormat();
       const outcome = failedOutcome(input.outcome);
       const capture = streamCapture(input.capture);
       const result = await session.query<{ stream_id: string }>(
@@ -2368,6 +2390,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async markStreamUnavailable(input) {
+      await assertFormat();
       const outcome = failedOutcome(input.outcome);
       const capture = streamCapture(input.capture);
       const result = await session.query<{ stream_id: string }>(
@@ -2408,6 +2431,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async discardStream(input) {
+      await assertFormat();
       const result = await session.query<{ stream_id: string }>(
         `DELETE FROM ${tables.operationStreams}
           WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
@@ -2429,6 +2453,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async retainStream(input) {
+      await assertFormat();
       const assetId = input.retention === "canonical"
         ? requiredText(input.assetId, "Operation stream asset id")
         : undefined;
@@ -2630,6 +2655,7 @@ export function createOperationCatalog(
       return (result.rows.map(mapStream));
     },
     async lockScope(transaction, operationId) {
+      await assertFormat(transaction);
       await transaction.query(
         `SELECT operation_id FROM ${tables.operations}
         WHERE operation_id = $1 FOR UPDATE`,
@@ -2637,6 +2663,7 @@ export function createOperationCatalog(
       );
     },
     async failDeliveryStreams(transaction, input) {
+      await assertFormat(transaction);
       const params: unknown[] = [
         input.operationId,
         input.deliveryId,
@@ -2652,6 +2679,7 @@ export function createOperationCatalog(
       );
     },
     async reconcile(input = {}) {
+      await assertFormat();
       const drained = operationSettlementDrainedSql(databaseSchema);
       const terminalizable = await session.query<
         { operation_id: string; namespace: string }
@@ -2679,6 +2707,7 @@ export function createOperationCatalog(
         operation.operation_id
       );
       const result = await session.transaction(async (transaction) => {
+        await assertFormat(transaction);
         // Event, stream and Action admission holds the same row lock. Read
         // obligations in a fresh statement AFTER the lock, including the
         // initial delivery of an internal operation (whose source event is
@@ -2717,6 +2746,7 @@ export function createOperationCatalog(
       return result.rows.length;
     },
     async pruneTerminalMetadata(input) {
+      await assertFormat();
       if (!Number.isFinite(input.retentionMs) || input.retentionMs < 0) {
         throw new TypeError(
           "Operation catalog retentionMs must be non-negative.",
@@ -2741,6 +2771,7 @@ export function createOperationCatalog(
       let operations = 0;
       for (const candidate of candidates.rows) {
         const result = await session.transaction(async (transaction) => {
+          await assertFormat(transaction);
           // Canonical Asset storage remains authoritative after replay grace;
           // deleting this metadata must never touch its Body. Expiring
           // observation rows remain until their Body CAS retirement succeeds.
@@ -2802,6 +2833,7 @@ export function createOperationCatalog(
       return ({ streams, events, operations } as const);
     },
     async pruneStream(input) {
+      await assertFormat();
       const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
             SET availability = 'purged', digest = NULL, updated_at = NOW()
@@ -2823,6 +2855,7 @@ export function createOperationCatalog(
       return result.rows.length > 0;
     },
     async markStreamPurgePending(input) {
+      await assertFormat();
       const result = await session.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
             SET availability = 'purge_pending', updated_at = NOW()
@@ -2980,6 +3013,7 @@ export async function terminalizeOperationSettlement(
   }>,
 ): Promise<OperationSettlementSnapshot | null> {
   const tables = createOperationCatalogTables(schema);
+  await assertOperationCatalogFormat(tx, tables.metadata);
   await tx.query(
     `SELECT operation_id FROM ${tables.operations}
      WHERE namespace=$1 AND operation_id=$2 FOR UPDATE`,
@@ -3005,6 +3039,7 @@ export async function terminalizeOperationSettlement(
     `UPDATE ${tables.operations} AS operation SET state=$3, updated_at=${timestamp},
       completed_at=COALESCE(completed_at,${timestamp})
      WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
+       AND ${operationCatalogFormatSql(tables.metadata)}
        AND ${operationSettlementDrainedSql(schema)} RETURNING operation_id`,
     params,
   );

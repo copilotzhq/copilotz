@@ -199,6 +199,8 @@ export type CreateEventStoreOptions = {
     >,
     param: (value: unknown) => string,
   ) => Readonly<{ ctes: readonly string[]; gate: string; cancelled?: string }>;
+  /** Read-only catalog format preflight, before duplicate recovery callbacks. */
+  assertOperationCatalog?(executor: SqlExecutor): Promise<void>;
   /** Additive operational index written in the same transaction as the Event. */
   indexOperationEvent?: (
     transaction: SqlExecutor,
@@ -674,6 +676,7 @@ export function createEventStore(
   const retryCapMs = boundedInteger(options.retryCapMs, 30_000, 0);
   const lockSettlementScope = options.lockSettlementScope;
   const settleActionOwners = options.settleActionOwners;
+  const assertOperationCatalog = options.assertOperationCatalog;
   const indexOperationEvent = options.indexOperationEvent;
   const indexOperationEventSql = options.indexOperationEventSql;
   const commandTimestamp = (params: unknown[]): string =>
@@ -737,6 +740,7 @@ export function createEventStore(
   ): Promise<CommitEventMutationResult<T>> => {
     const encoded = encodeDraft(options.draft);
     assertDuplicateMatches(event, options.draft, encoded);
+    await assertOperationCatalog?.(executor);
     const context = { transaction: executor, tables };
     const value = options.recoverDuplicate
       ? await options.recoverDuplicate(event, context)

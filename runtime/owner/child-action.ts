@@ -738,6 +738,7 @@ export function createOwnerChildActions(
         attemptAuthority(binding),
       ),
       lockSettlementScope: (tx, scope) => options.catalog.lockScope(tx, scope),
+      assertOperationCatalog: options.catalog.assertFormat,
       admitOperationEventSql: (value, param) =>
         options.catalog.admitEventSql(value, param),
       indexOperationEventSql: (value, param) =>

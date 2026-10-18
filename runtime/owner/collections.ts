@@ -121,6 +121,7 @@ export function createOwnerCollectionCommand(
   }
   const catalog = sourceCatalog && {
     lockSettlementScope: sourceCatalog.lockScope.bind(sourceCatalog),
+    assertOperationCatalog: sourceCatalog.assertFormat,
     admitOperationEventSql: sourceCatalog.admitEventSql.bind(sourceCatalog),
     indexOperationEvent: sourceCatalog.indexEvent.bind(sourceCatalog),
     indexOperationEventSql: sourceCatalog.indexEventSql.bind(sourceCatalog),

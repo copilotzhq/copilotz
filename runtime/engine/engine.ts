@@ -1,3 +1,4 @@
+import { assertOperationCatalogFormat } from "../events/catalog-format.ts";
 import { refuseOwnerPhysicalSchema } from "../content/physical-body-schema.ts";
 import { executeActionResolution } from "../actions/resolve.ts";
 import {
@@ -64,6 +65,7 @@ import type {
 } from "./types.ts";
 import {
   createOperationCatalog,
+  createOperationCatalogTables,
   provisionOperationCatalog,
   validateOperationCatalog,
 } from "../streams/catalog.ts";
@@ -109,6 +111,11 @@ export async function createCopilotzEngine(
     ...(secretAdapter ? { secretAdapter } : {}),
   } as const;
   await refuseOwnerPhysicalSchema(options.session, databaseSchema);
+  await assertOperationCatalogFormat(
+    options.session,
+    createOperationCatalogTables(databaseSchema).metadata,
+    { allowMissing: true },
+  );
   await prepareDefaultDatabaseSchema(options, databaseSchema);
   if (options.provisionDefaultDatabaseSchema === false) {
     await validateOperationCatalog(options.session, databaseSchema);
@@ -194,6 +201,7 @@ export async function createCopilotzEngine(
       }
       return primaryRuntime.settleActionOwners(transaction, delivery);
     },
+    assertOperationCatalog: operationCatalog.assertFormat,
     admitOperationEventSql: (input, param) =>
       operationCatalog.admitEventSql(input, param),
     indexOperationEvent: (transaction, input) =>
@@ -689,6 +697,11 @@ export async function createCopilotzEngine(
           // Selecting a tenant scope is a request-path operation. It must never
           // acquire DDL locks or implicitly create tenant infrastructure.
           await refuseOwnerPhysicalSchema(options.session, normalized);
+          await assertOperationCatalogFormat(
+            options.session,
+            createOperationCatalogTables(normalized).metadata,
+            { allowMissing: true },
+          );
           await validateCopilotzSchema(options.session, normalized);
           await validateOperationCatalog(options.session, normalized);
           await validateCollectionIndexes(

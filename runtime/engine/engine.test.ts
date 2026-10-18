@@ -528,21 +528,27 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 7);
+    assertEquals(observed.length, 9);
     assertEquals(/content_bodies/.test(observed[0]), true);
     assertEquals(/column_name='format'/.test(observed[0]), true);
-    assert(/pg_index/.test(observed[6]));
-    assertEquals(/information_schema\.columns/i.test(observed[1]), true);
-    assertEquals(/copilotz_schema_metadata/i.test(observed[2]), true);
     assertEquals(
-      /to_regclass/i.test(observed[3]),
+      /^SELECT to_regclass\(\$1\)::text AS name/.test(observed[1]),
       true,
     );
-    assertEquals(/information_schema\.columns/i.test(observed[4]), true);
     assertEquals(
-      /copilotz_operation_catalog_metadata/i.test(observed[5]),
+      /SELECT fingerprint FROM .*copilotz_operation_catalog_metadata.*WHERE singleton = TRUE/s
+        .test(observed[2]),
       true,
     );
+    assertEquals(/information_schema\.columns/i.test(observed[3]), true);
+    assertEquals(/copilotz_schema_metadata/i.test(observed[4]), true);
+    assertEquals(/to_regclass/i.test(observed[5]), true);
+    assertEquals(/information_schema\.columns/i.test(observed[6]), true);
+    assertEquals(
+      /copilotz_operation_catalog_metadata/i.test(observed[7]),
+      true,
+    );
+    assert(/pg_index/.test(observed[8]));
     assert(
       observed.every((sql) => !/\b(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(sql)),
     );

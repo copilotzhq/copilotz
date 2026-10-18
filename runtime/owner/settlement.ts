@@ -503,6 +503,7 @@ export function createOwnerOperationSettlement(
               ...context.ownerCommit,
               afterCommit: context.afterCommit,
             },
+            assertOperationCatalog: catalog.assertFormat,
             admitOperationEventSql: (value, param) =>
               catalog.admitEventSql(value, param),
             indexOperationEventSql: (value, param) =>

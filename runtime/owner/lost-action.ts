@@ -209,6 +209,7 @@ export function createOwnerLostActionRecovery(
         afterCommit: stagedContext.afterCommit,
       },
       lockSettlementScope: (tx, scope) => catalog.lockScope(tx, scope),
+      assertOperationCatalog: catalog.assertFormat,
       admitOperationEventSql: (value, param) =>
         catalog.admitEventSql(value, param),
       indexOperationEventSql: (value, param) =>

@@ -327,6 +327,7 @@ export function createOwnerActionAdmission(
       session: options.session,
       schema: options.schema,
       ownerCommit: context.ownerCommit,
+      assertOperationCatalog: options.catalog.assertFormat,
       admitOperationEventSql: (input, param) =>
         options.catalog.admitEventSql(input, param),
       indexOperationEventSql: (input, param) =>

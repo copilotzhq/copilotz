@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 03:39 UTC.
+Updated: 18 October 2026, 04:43 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -26,6 +26,8 @@ production-ready. All changes remain draft: **no merge or publication**.
 | Native PGlite snapshot lifecycle     | Reviewed prerequisite   | Native mutex/idle/readiness and trusted provider/config scope; 14 typed cases, four probes and static pass; owner activation remains open            |
 | Snapshot engine/session resources    | Reviewed backend flow   | 136 Ominipg, 31 Copilotz plus five steps, eight probes and static pass; owner activation remains open                                                |
 | Owner snapshot host integration      | Reviewed private scope  | Final PG/PGlite 34 host+ 24 manager each pass; pure 209, role 12 and full static pass; performance/public activation remain open                     |
+| Snapshot latency diagnostic          | In progress             | Sequential ordinary versus snapshot reads on actual PG/PGlite; preserve failed fixture/setup runs; no production-load claim                          |
+| Content writer lifetime              | Plan reviewed           | [Catalog authority, physical fencing and bounded owner renewal](owner-content-lifetime-plan.md); no implementation claim                             |
 | Architecture cleanup                 | In progress             | Shared local-port bookkeeping consolidated; migrate callers and retire superseded paths next                                                         |
 
 A cloud runner restart restored an older workspace. The exact pushed manager

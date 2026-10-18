@@ -804,6 +804,40 @@ stores replay evidence, pending protection and current physical placement; it
 does not create a second independent ownership graph or a physical ready-state
 machine.
 
+## 18 October: private successful-seal coordinator draft
+
+Scoped final-source diagnostics: 77 tests plus 46 schema steps passed in the
+coordinator, memory physical-store and PGlite catalog suites (1 minute 23
+seconds). This includes lost intent/terminal replies, concurrent cleanup,
+transactional rollback, authority loss during hashing, transient storage
+failures and bounded metadata expansion. Changed-file lint and source review
+passed. Actual-host close/adoption and PostgreSQL acceptance remain separate
+open gates.
+
+The existing stream row now records seal intent using its terminating/completed
+state, accepted offset and digest. This reuses the current lifecycle rather than
+adding an intent ledger or a second physical ready state. Exact current producer
+authority and a final accepted checkpoint are required before recording intent.
+Intent stops writer admission and renewal. The owner-control cleanup path then
+fences the original generation and verifies only the accepted prefix.
+
+Matching bytes cause one transaction to insert a stable pending logical-body
+reference/descriptor and publish the completed catalog terminal. Cleanup retries
+preserve that result. A mismatched digest fails at the same accepted offset.
+Verifier-observed missing/short bytes mark availability missing; generic backend
+unavailability remains unresolved and retryable. No terminal Core Event is
+added.
+
+The stored descriptor transfer is bounded in SQL. The pending descriptor's 128
+KiB SQL representation limit accommodates whitespace expansion from the existing
+64 KiB canonical JSON admission bound; no wire limit was increased.
+
+This is still private integration WIP. `beginSeal` is the first-step method, not
+an idempotent public `close`; public close must recover the stored intent or
+accepted pending result after a lost reply. Current-epoch cleanup works, while
+cross-epoch recovery, public close, successful completion barriers, logical
+readback, atomic domain adoption and replay-window protection remain open.
+
 ## 2. Checkpoints, accepted seals and recovery
 
 - Reuse catalog checkpoint SQL under a narrow internal owner mutation boundary

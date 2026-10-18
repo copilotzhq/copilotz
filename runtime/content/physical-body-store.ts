@@ -163,6 +163,16 @@ export function samePhysicalWriter(
     a.reservationId === b.reservationId && a.generation === b.generation;
 }
 
+/** Verifier-observed missing/short bytes, distinct from transient backend I/O
+ * failures that may share the ordinary storage-unavailable error code. */
+export class PhysicalPrefixUnavailableError extends Error {
+  readonly code = "asset_storage_unavailable";
+  constructor(message: string) {
+    super(message);
+    this.name = "CopilotzContentError";
+  }
+}
+
 /** Owner-side integrity check over one catalog-accepted prefix. Physical stores
  * never decide the accepted length, and no whole-body buffer is allocated. */
 export async function digestPhysicalPrefix(
@@ -181,8 +191,7 @@ export async function digestPhysicalPrefix(
   };
   const inspect = (raw: unknown): PhysicalBodyHead => {
     if (raw === null) {
-      throw createContentError(
-        "asset_storage_unavailable",
+      throw new PhysicalPrefixUnavailableError(
         "Physical prefix body is missing.",
       );
     }
@@ -200,8 +209,7 @@ export async function digestPhysicalPrefix(
       value.format !== OWNER_PHYSICAL_BODY_FORMAT || value.state !== state ||
       value.bodyId !== writer.bodyId || value.mediaType !== writer.mediaType ||
       value.reservationId !== writer.reservationId ||
-      value.generation !== writer.generation + (state === "fenced" ? 1 : 0) ||
-      integer(value.byteLength) < accepted
+      value.generation !== writer.generation + (state === "fenced" ? 1 : 0)
     ) {
       throw createContentError(
         "asset_storage_unavailable",
@@ -212,6 +220,11 @@ export async function digestPhysicalPrefix(
       typeof value.versionToken !== "string" || !value.versionToken ||
       value.versionToken.length > 4096
     ) invalid();
+    if (integer(value.byteLength) < accepted) {
+      throw new PhysicalPrefixUnavailableError(
+        "Physical prefix is shorter than its accepted length.",
+      );
+    }
     return Object.freeze(value as unknown as PhysicalBodyHead);
   };
   cancelled();
@@ -223,12 +236,11 @@ export async function digestPhysicalPrefix(
     cancelled();
     const bytes = await readRange({ bodyId: writer.bodyId, offset, end });
     cancelled();
-    if (
-      !(bytes instanceof Uint8Array) ||
-      typedArrayLength.call(bytes) !== end - offset
-    ) {
-      throw createContentError(
-        "asset_storage_unavailable",
+    if (!(bytes instanceof Uint8Array)) invalid();
+    const count = typedArrayLength.call(bytes) as number;
+    if (count > end - offset) invalid();
+    if (count < end - offset) {
+      throw new PhysicalPrefixUnavailableError(
         "Physical prefix read is incomplete.",
       );
     }

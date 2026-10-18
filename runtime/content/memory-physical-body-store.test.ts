@@ -2,6 +2,7 @@ import { digestContent } from "./digest.ts";
 import {
   digestPhysicalPrefix,
   PHYSICAL_READ_MAX_BYTES,
+  PhysicalPrefixUnavailableError,
 } from "./physical-body-store.ts";
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createMemoryPhysicalBodyStore } from "./memory-physical-body-store.ts";
@@ -599,5 +600,60 @@ Deno.test("owner prefix verification reports missing heads before and after read
         0,
         "open",
       ), "asset_storage_unavailable");
+  }
+});
+
+Deno.test("owner prefix distinguishes observed shortage from storage and protocol uncertainty", async () => {
+  const store = createMemoryPhysicalBodyStore(), writer = identity();
+  await store.reserve(writer);
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "bytes",
+    bytes: bytes("abc"),
+  });
+  const head = (await store.head(writer.bodyId))!;
+  const cases = [
+    {
+      head: () => Promise.resolve(null),
+      readRange: store.readRange,
+      shortage: true,
+    },
+    {
+      head: () => Promise.resolve({ ...head, byteLength: 2 }),
+      readRange: store.readRange,
+      shortage: true,
+    },
+    {
+      head: () => Promise.resolve({ ...head, byteLength: 2, versionToken: "" }),
+      readRange: store.readRange,
+      shortage: false,
+    },
+    {
+      head: store.head,
+      readRange: () => Promise.resolve(new Uint8Array(2)),
+      shortage: true,
+    },
+    {
+      head: store.head,
+      readRange: () => Promise.resolve(new Uint8Array(4)),
+      shortage: false,
+    },
+    {
+      head: store.head,
+      readRange: () =>
+        Promise.reject(
+          Object.assign(new Error("503"), {
+            code: "asset_storage_unavailable",
+          }),
+        ),
+      shortage: false,
+    },
+  ];
+  for (const { shortage, ...source } of cases) {
+    const error = await assertRejects(() =>
+      digestPhysicalPrefix(source, writer, 3, "open")
+    );
+    assertEquals(error instanceof PhysicalPrefixUnavailableError, shortage);
   }
 });

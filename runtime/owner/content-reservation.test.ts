@@ -1,3 +1,4 @@
+import { digestContent } from "../content/digest.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -18,6 +19,8 @@ import {
   OWNER_STREAM_CHECKPOINT,
   OWNER_STREAM_CONFIRM,
   OWNER_STREAM_RESERVE,
+  OWNER_STREAM_REVOKED,
+  OWNER_STREAM_SEAL_INTENT,
 } from "./content-reservation.ts";
 import type { OwnerLocalProcessorAssignmentBinding } from "./placement-binding.ts";
 
@@ -77,6 +80,8 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
     physical.reserve(identity);
   let append: PhysicalBodyStore["append"] = (input) => physical.append(input);
   let head: PhysicalBodyStore["head"] = (id) => physical.head(id);
+  let readRange: PhysicalBodyStore["readRange"] = (input) =>
+    physical.readRange(input);
   let fence: PhysicalBodyStore["fence"] = (identity) =>
     physical.fence(identity);
   let controlCurrent = (caller: OwnerCaller): boolean =>
@@ -103,6 +108,7 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
       head(id) {
         return head(id);
       },
+      readRange: (input) => readRange(input),
       reserve(identity) {
         physicalCalls++;
         return reserve(identity);
@@ -139,8 +145,20 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
       published.push(descriptor);
     },
   });
+  let queryFault: ((sql: string) => boolean) | undefined;
   const owner = createOwnerCommandBoundary({
-    session: db,
+    session: {
+      query: db.query.bind(db),
+      transaction: (run) =>
+        db.transaction((tx) =>
+          run({
+            query: (sql, params) =>
+              queryFault?.(sql)
+                ? Promise.reject(new Error("injected terminal write failure"))
+                : tx.query(sql, params),
+          })
+        ),
+    },
     schema: "public",
     ownerId: "owner",
     holderId: "holder",
@@ -249,11 +267,17 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
     published,
     counts,
     getPhysicalCalls: () => physicalCalls,
+    setQueryFault: (hook: typeof queryFault) => {
+      queryFault = hook;
+    },
     setAppend: (value: PhysicalBodyStore["append"]) => {
       append = value;
     },
     setFence: (value: PhysicalBodyStore["fence"]) => {
       fence = value;
+    },
+    setReadRange: (value: PhysicalBodyStore["readRange"]) => {
+      readRange = value;
     },
     setHead: (value: PhysicalBodyStore["head"]) => {
       head = value;
@@ -1402,3 +1426,358 @@ Deno.test("owner cleanup scan traverses unresolved first-page fences without for
     );
   });
 });
+
+async function prepareSeal(f: Awaited<ReturnType<typeof setup>>) {
+  const opened = await f.content.open(f.owner, f.caller, input);
+  await f.content.append(f.owner, f.caller, opened.streamId, {
+    expectedOffset: 0,
+    appendId: "answer",
+    bytes: new TextEncoder().encode("abc"),
+  });
+  await f.content.checkpoint(f.owner, f.caller, opened.streamId, 0, 3);
+  return opened;
+}
+Deno.test("owner seal persists pending descriptor atomically before completed terminal and replays cleanup", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const before = await f.counts();
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    let row = (await streamRow(f)).row;
+    assertEquals([
+      row.state,
+      row.outcome,
+      row.revocation_state,
+      Number(row.committed_offset),
+    ], ["terminating", "completed", "revoking", 3]);
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+    await assertRejects(() =>
+      f.content.append(f.owner, f.caller, opened.streamId, {
+        expectedOffset: 3,
+        appendId: "late",
+        bytes: new Uint8Array([1]),
+      })
+    );
+    f.setActive(false);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "cancelled",
+    });
+    row = (await streamRow(f)).row;
+    assertEquals([
+      row.state,
+      row.outcome,
+      row.revocation_state,
+      Number(row.committed_offset),
+    ], ["terminal", "completed", "revoked", 3]);
+    const bodies =
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows;
+    assertEquals(bodies.length, 1);
+    assertEquals(
+      bodies[0].digest,
+      await digestContent(new TextEncoder().encode("abc")),
+    );
+    assertEquals(bodies[0].pending_descriptor, {
+      kind: "text",
+      role: "assistant",
+      mediaType: "text/plain",
+      metadata: opened.metadata,
+    });
+    assertEquals(bodies[0].asset_id, null);
+    assertEquals(bodies[0].domain_owner_id, null);
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      bodies,
+    );
+    assertEquals(await f.counts(), before);
+  }));
+Deno.test("owner seal accepts only checkpointed prefix despite a longer physical tail", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const row = (await streamRow(f)).row;
+    await f.physical.append({
+      writer: {
+        bodyId: String(row.body_id),
+        reservationId: String(row.reservation_id),
+        mediaType: "text/plain",
+        generation: 1,
+      },
+      expectedOffset: 3,
+      appendId: "unaccepted",
+      bytes: new TextEncoder().encode("tail"),
+    });
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals(
+      (await f.db.query(
+        "SELECT byte_length::integer AS length,digest FROM copilotz_operation_bodies",
+      )).rows,
+      [{
+        length: 3,
+        digest: await digestContent(new TextEncoder().encode("abc")),
+      }],
+    );
+    assertEquals((await f.physical.head(String(row.body_id)))?.byteLength, 7);
+  }));
+Deno.test("owner seal mismatch fails at accepted prefix without publishing pending content", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    f.setReadRange(async (input) => {
+      const data = await f.physical.readRange(input);
+      data[0] ^= 1;
+      return data;
+    });
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const row = (await streamRow(f)).row;
+    assertEquals([
+      row.state,
+      row.outcome,
+      row.capture,
+      Number(row.committed_offset),
+      row.digest,
+    ], ["terminal", "failed", "truncated", 3, null]);
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+  }));
+Deno.test("owner seal retains intent across an unknown physical fence and completes once", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    f.setFence(async (writer) => {
+      await f.physical.fence(writer);
+      throw new Error("lost fence reply");
+    });
+    await assertRejects(() => f.content.revoke(f.owner, cleanupCaller, target));
+    assertEquals((await streamRow(f)).row.state, "terminating");
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+    f.setFence((writer) => f.physical.fence(writer));
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals((await streamRow(f)).row.outcome, "completed");
+    assertEquals(
+      (await f.db.query(
+        "SELECT count(*)::integer AS count FROM copilotz_operation_bodies",
+      )).rows,
+      [{ count: 1 }],
+    );
+  }));
+Deno.test("owner seal refuses uncheckpointed length and expired original authority", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    await assertRejects(() =>
+      f.content.beginSeal(f.owner, f.caller, opened.streamId, 4)
+    );
+    f.setTime("2026-10-18T00:00:02.000Z");
+    await assertRejects(() =>
+      f.content.beginSeal(f.owner, f.caller, opened.streamId, 3)
+    );
+    assertEquals((await streamRow(f)).row.state, "open");
+  }));
+
+Deno.test("owner seal preserves intent on transient storage unavailability and retries verification", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    f.setReadRange(() =>
+      Promise.reject(
+        Object.assign(new Error("temporary S3 503"), {
+          code: "asset_storage_unavailable",
+        }),
+      )
+    );
+    const error = await assertRejects(() =>
+      f.content.revoke(f.owner, cleanupCaller, target)
+    );
+    assertEquals((error as { indeterminate?: boolean }).indeterminate, true);
+    assertEquals((await streamRow(f)).row.state, "terminating");
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+    f.setReadRange((input) => f.physical.readRange(input));
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals((await streamRow(f)).row.outcome, "completed");
+  }));
+Deno.test("owner seal fails a verifier-observed short prefix without a pending descriptor", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    f.setReadRange(() => Promise.resolve(new Uint8Array(2)));
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    assertEquals((await streamRow(f)).row.outcome, "failed");
+    assertEquals((await streamRow(f)).row.availability, "missing");
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+  }));
+
+Deno.test("owner seal admits bounded wire metadata despite JSONB whitespace expansion", () =>
+  fixture(async (f) => {
+    const metadata = Object.fromEntries(
+      Array.from({ length: 4900 }, (_, i) => [`key${i}`, ""]),
+    );
+    const opened = await f.content.open(f.owner, f.caller, {
+      ...input,
+      metadata,
+    });
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      0,
+    );
+    await f.content.revoke(f.owner, cleanupCaller, target);
+    const rows = (await f.db.query(
+      "SELECT octet_length(pending_descriptor::text) AS bytes,pending_descriptor FROM copilotz_operation_bodies",
+    )).rows;
+    assertEquals(rows.length, 1);
+    assertEquals(Number(rows[0].bytes) > 65536, true);
+    assertEquals(
+      (rows[0].pending_descriptor as { metadata: unknown }).metadata,
+      opened.metadata,
+    );
+  }));
+
+Deno.test("owner seal cleanup recovers lost intent and accepted-terminal replies without duplicate bodies", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const before = await f.counts();
+    let dropIntent = true, dropTerminal = true;
+    const transport = {
+      ...f.owner,
+      checkpoint: async (...args: Parameters<typeof f.owner.checkpoint>) => {
+        const result = await f.owner.checkpoint(...args);
+        if (args[1] === OWNER_STREAM_SEAL_INTENT && dropIntent) {
+          dropIntent = false;
+          throw new Error("lost intent reply");
+        }
+        if (args[1] === OWNER_STREAM_REVOKED && dropTerminal) {
+          dropTerminal = false;
+          throw new Error("lost terminal reply");
+        }
+        return result;
+      },
+    };
+    await assertRejects(
+      () => f.content.beginSeal(transport, f.caller, opened.streamId, 3),
+      Error,
+      "lost intent reply",
+    );
+    f.setActive(false);
+    const { target } = await streamRow(f);
+    await assertRejects(
+      () => f.content.revoke(transport, cleanupCaller, target),
+      Error,
+      "lost terminal reply",
+    );
+    const bodies =
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows;
+    assertEquals(bodies.length, 1);
+    await f.content.revoke(transport, cleanupCaller, target, {
+      outcome: "failed",
+    });
+    assertEquals((await streamRow(f)).row.outcome, "completed");
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      bodies,
+    );
+    assertEquals(await f.counts(), before);
+  }));
+
+Deno.test("owner seal rolls pending insertion back with failed terminal update", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const target = await f.content.beginSeal(
+      f.owner,
+      f.caller,
+      opened.streamId,
+      3,
+    );
+    f.setQueryFault((sql) => sql.includes("SET revocation_state='revoked'"));
+    await assertRejects(
+      () => f.content.revoke(f.owner, cleanupCaller, target),
+      Error,
+      "injected terminal write failure",
+    );
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+    assertEquals((await streamRow(f)).row.state, "terminating");
+    f.setQueryFault(undefined);
+    await Promise.all([
+      f.content.revoke(f.owner, cleanupCaller, target),
+      f.content.revoke(f.owner, cleanupCaller, target),
+    ]);
+    assertEquals(
+      (await f.db.query(
+        "SELECT count(*)::integer AS count FROM copilotz_operation_bodies",
+      )).rows,
+      [{ count: 1 }],
+    );
+    assertEquals((await streamRow(f)).row.outcome, "completed");
+  }));
+Deno.test("owner seal cannot record intent after authority is lost during hashing", () =>
+  fixture(async (f) => {
+    const opened = await prepareSeal(f);
+    const entered = deferred(), release = deferred();
+    f.setReadRange(async (input) => {
+      entered.resolve();
+      await release.promise;
+      return f.physical.readRange(input);
+    });
+    const sealing = f.content.beginSeal(f.owner, f.caller, opened.streamId, 3);
+    const observed = sealing.catch((error: unknown) => error);
+    await entered.promise;
+    f.setActive(false);
+    release.resolve();
+    assertEquals(await observed instanceof Error, true);
+    assertEquals((await streamRow(f)).row.state, "open");
+    const { target } = await streamRow(f);
+    await f.content.revoke(f.owner, cleanupCaller, target, {
+      outcome: "failed",
+    });
+    assertEquals((await streamRow(f)).row.outcome, "failed");
+    assertEquals(
+      (await f.db.query("SELECT * FROM copilotz_operation_bodies")).rows,
+      [],
+    );
+  }));

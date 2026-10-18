@@ -206,7 +206,7 @@ export function operationCatalogSchemaStatements(
             CHECK ((jsonb_typeof(current_copy)='object' AND octet_length(current_copy::text)<=16384) IS TRUE),
           pending_ref TEXT NOT NULL,
           pending_descriptor JSONB NOT NULL CONSTRAINT owner_body_descriptor_check
-            CHECK ((jsonb_typeof(pending_descriptor)='object' AND octet_length(pending_descriptor::text)<=65536) IS TRUE),
+            CHECK ((jsonb_typeof(pending_descriptor)='object' AND octet_length(pending_descriptor::text)<=131072) IS TRUE),
           protected_until TIMESTAMPTZ NOT NULL CONSTRAINT owner_body_protection_check CHECK (isfinite(protected_until)),
           adoption_key TEXT,
           adoption_fingerprint TEXT CONSTRAINT owner_body_adoption_fingerprint_check

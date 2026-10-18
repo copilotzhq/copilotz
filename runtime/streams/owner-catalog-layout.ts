@@ -128,7 +128,7 @@ export const OWNER_CATALOG_LAYOUT = {
       ],
       "owner_body_descriptor_check": [
         "c",
-        "CHECK ((jsonb_typeof(pending_descriptor) = 'object'::text AND octet_length(pending_descriptor::text) <= 65536) IS TRUE)",
+        "CHECK ((jsonb_typeof(pending_descriptor) = 'object'::text AND octet_length(pending_descriptor::text) <= 131072) IS TRUE)",
       ],
       "owner_body_digest_check": [
         "c",

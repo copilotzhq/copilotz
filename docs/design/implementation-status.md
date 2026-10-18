@@ -1,6 +1,6 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 14:17 UTC.
+Updated: 18 October 2026, 14:47 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
@@ -31,6 +31,12 @@ execution and actual browser evidence are separate from the existing Deno test
 evidence.
 
 ## Current priority
+
+The current successful-content slice has durable logical-body metadata and a
+private seal coordinator under scoped testing. Domain adoption, public close,
+logical readback and final recovery/validation remain open. The full-stack
+implementation contract is recorded in the acceptance plan; no separate
+acceptance application has been started and no checklist completion is added.
 
 The 18 October [retirement review](refactor-cleanup.md) prioritizes real caller
 migration and deletion over additional isolated owner components. The reviewed

@@ -10,9 +10,11 @@ import { canonicalizeContentRefs } from "../content/input.ts";
 import {
   capturePhysicalAppendData,
   capturePhysicalIdentity,
+  digestPhysicalPrefix,
   type PhysicalBodyHead,
   type PhysicalBodyStore,
   physicalIdentifier,
+  PhysicalPrefixUnavailableError,
   type PhysicalWriterIdentity,
 } from "../content/physical-body-store.ts";
 import {
@@ -52,6 +54,7 @@ export const OWNER_STREAM_CONFIRM = "content.stream.confirm";
 export const OWNER_STREAM_WRITER = "content.stream.writer";
 export const OWNER_STREAM_APPEND_ACK = "content.stream.append-ack";
 export const OWNER_STREAM_CHECKPOINT = "content.stream.checkpoint";
+export const OWNER_STREAM_SEAL_INTENT = "content.stream.seal-intent";
 export const OWNER_STREAM_RENEW = "content.stream.renew";
 export const OWNER_STREAM_SCAN = "content.stream.scan";
 export const OWNER_STREAM_CLEANUP_SCAN = "content.stream.cleanup-scan";
@@ -102,6 +105,8 @@ type ControlAuthorized = Readonly<{
   mode: "control";
   target: OwnerStreamTarget;
   writer: PhysicalWriterIdentity;
+  descriptor: StreamOutputDescriptor;
+  sealDigest: string | null;
   state: Row["state"];
   revocation: Row["revocation_state"];
   committedOffset: number;
@@ -412,6 +417,7 @@ export function createOwnerStreamReservations(
     append: provider.append.bind(provider),
     head: provider.head.bind(provider),
     fence: provider.fence.bind(provider),
+    readRange: provider.readRange.bind(provider),
   };
   const catalog = createOwnerOperationCatalogCore(session, schema);
   const tables = createOperationCatalogTables(schema);
@@ -746,7 +752,7 @@ export function createOwnerStreamReservations(
         command.intent,
         command.kind === OWNER_STREAM_REVOKE
           ? ["namespace", "operationId", "streamId", "outcome", "capture"]
-          : ["namespace", "operationId", "streamId", "head"],
+          : ["namespace", "operationId", "streamId", "head", "verifiedDigest"],
       );
       const target = {
         namespace: physicalIdentifier(input.namespace),
@@ -755,6 +761,9 @@ export function createOwnerStreamReservations(
       };
       const row = (await tx.query<
         {
+          descriptor: StreamOutputDescriptor;
+          digest: string | null;
+          outcome: string | null;
           state: Row["state"];
           revocation_state: Row["revocation_state"];
           body_id: string;
@@ -765,6 +774,8 @@ export function createOwnerStreamReservations(
         }
       >(
         `SELECT state,revocation_state,body_id,reservation_id,writer_generation::text,
+          CASE WHEN outcome='completed' AND octet_length(descriptor::text)<=131072 THEN descriptor ELSE NULL END AS descriptor,
+          CASE WHEN char_length(digest)=71 THEN digest ELSE NULL END AS digest,outcome,
           CASE WHEN char_length(descriptor->>'mediaType') BETWEEN 1 AND 1024 THEN descriptor->>'mediaType' ELSE NULL END AS media_type,committed_offset::text
          FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
          AND owner_id=$4 AND physical_backend_id=$5 AND opening_owner_epoch=$6 FOR UPDATE`,
@@ -778,6 +789,18 @@ export function createOwnerStreamReservations(
         ],
       )).rows[0];
       if (!row) refuse("Owner cleanup target is unavailable.");
+      if (
+        row.outcome === "completed" &&
+        (typeof row.digest !== "string" ||
+          !/^sha256:[0-9a-f]{64}$/.test(row.digest))
+      ) {
+        refuse("Completed intent has no valid digest.");
+      }
+      if (
+        row.outcome === "completed" && !isStreamOutputDescriptor(row.descriptor)
+      ) {
+        refuse("Seal descriptor is unavailable or exceeds its bound.");
+      }
       const writer = capturePhysicalIdentity({
         bodyId: row.body_id,
         mediaType: row.media_type,
@@ -797,6 +820,8 @@ export function createOwnerStreamReservations(
         mode: "control",
         target,
         writer,
+        descriptor: row.descriptor,
+        sealDigest: row.outcome === "completed" ? row.digest : null,
         state: row.state,
         revocation: row.revocation_state,
         committedOffset: safeOffset(Number(row.committed_offset)),
@@ -812,6 +837,7 @@ export function createOwnerStreamReservations(
         OWNER_STREAM_WRITER,
         OWNER_STREAM_APPEND_ACK,
         OWNER_STREAM_CHECKPOINT,
+        OWNER_STREAM_SEAL_INTENT,
       ].includes(command.kind)
     ) refuse();
     if (
@@ -820,6 +846,7 @@ export function createOwnerStreamReservations(
         OWNER_STREAM_APPEND_ACK,
         OWNER_STREAM_CHECKPOINT,
         OWNER_STREAM_ABORT_TARGET,
+        OWNER_STREAM_SEAL_INTENT,
       ]
         .includes(command.kind)
     ) {
@@ -827,13 +854,19 @@ export function createOwnerStreamReservations(
         command.intent,
         [OWNER_STREAM_WRITER, OWNER_STREAM_ABORT_TARGET].includes(command.kind)
           ? ["streamId"]
+          : command.kind === OWNER_STREAM_SEAL_INTENT
+          ? ["streamId", "length", "digest"]
           : command.kind === OWNER_STREAM_APPEND_ACK
           ? ["streamId", "startOffset", "endOffset"]
           : ["streamId", "startOffset", "endOffset", "head"],
       );
       const streamId = physicalIdentifier(input.streamId);
       const cleanup = command.kind === OWNER_STREAM_ABORT_TARGET;
-      if (command.kind !== OWNER_STREAM_WRITER && !cleanup) offsets(input);
+      if (
+        ![OWNER_STREAM_WRITER, OWNER_STREAM_SEAL_INTENT].includes(
+          command.kind,
+        ) && !cleanup
+      ) offsets(input);
       const { scope, authority } = await authenticate(
         tx,
         caller,
@@ -1232,6 +1265,37 @@ export function createOwnerStreamReservations(
     );
     return { committedOffset: endOffset };
   };
+  // Existing terminating/completed fields and digest are the durable seal
+  // intent. No second physical ready state or per-body writer is introduced.
+  const sealIntent: OwnerCheckpointHandler = async (value, context) => {
+    const a = writing(context.tx, context.caller);
+    const input = record(value, ["streamId", "length", "digest"]);
+    if (
+      safeOffset(input.length) !== a.committedOffset ||
+      typeof input.digest !== "string" ||
+      !/^sha256:[0-9a-f]{64}$/.test(input.digest)
+    ) {
+      refuse("Seal intent must match the accepted prefix.");
+    }
+    await context.tx.query(
+      `UPDATE ${tables.operationStreams} SET state='terminating',outcome='completed',capture='complete',
+       revocation_state='revoking',digest=$4,updated_at=$5
+       WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
+      [
+        a.scope.binding.namespace,
+        a.scope.delivery.settlementScopeId,
+        a.streamId,
+        input.digest,
+        context.commandTime,
+      ],
+    );
+    await rearm(context);
+    return {
+      namespace: a.scope.binding.namespace,
+      operationId: a.scope.delivery.settlementScopeId,
+      streamId: a.streamId,
+    };
+  };
   const beginRevocation: OwnerCheckpointHandler = async (value, context) => {
     const a = controlling(context.tx, context.caller);
     const input = record(value, [
@@ -1267,7 +1331,12 @@ export function createOwnerStreamReservations(
     }
     await rearm(context);
     // The first revocation freezes the published terminal intent and C.
-    return json({ writer: a.writer, revoked: a.revocation === "revoked" });
+    return json({
+      writer: a.writer,
+      revoked: a.revocation === "revoked",
+      sealDigest: a.sealDigest,
+      committedOffset: a.committedOffset,
+    });
   };
   const confirmRevocation: OwnerCheckpointHandler = async (value, context) => {
     const a = controlling(context.tx, context.caller);
@@ -1279,6 +1348,7 @@ export function createOwnerStreamReservations(
       "operationId",
       "streamId",
       "head",
+      "verifiedDigest",
     ]);
     const head = record(input.head, [
       "format",
@@ -1301,8 +1371,78 @@ export function createOwnerStreamReservations(
     ) {
       refuse("Physical fence does not match the original writer.");
     }
-    const available = safeOffset(head.byteLength) >= a.committedOffset;
+    // null is a verifier-owned missing/short observation after the fence;
+    // undefined means ordinary abort cleanup, not a content verification result.
+    const available = safeOffset(head.byteLength) >= a.committedOffset &&
+      input.verifiedDigest !== null;
     if (a.revocation !== "revoked") {
+      const sealing = a.sealDigest !== null;
+      if (!sealing && input.verifiedDigest !== undefined) refuse();
+      if (
+        sealing && input.verifiedDigest !== null &&
+        (typeof input.verifiedDigest !== "string" ||
+          !/^sha256:[0-9a-f]{64}$/.test(input.verifiedDigest))
+      ) refuse();
+      const accepted = sealing && available &&
+        input.verifiedDigest === a.sealDigest;
+      if (accepted) {
+        if (!isStreamOutputDescriptor(a.descriptor)) {
+          refuse("Seal descriptor is unavailable.");
+        }
+        const logicalBodyId = await deriveWorkflowId(
+          "logical-body",
+          a.target.streamId,
+        );
+        const pendingRef = await deriveWorkflowId(
+          "pending-content",
+          a.target.streamId,
+        );
+        const d = a.descriptor;
+        const descriptor = json({
+          kind: d.kind,
+          role: d.role,
+          mediaType: d.mediaType,
+          name: d.name,
+          alt: d.alt,
+          language: d.language,
+          disposition: d.disposition,
+          metadata: d.metadata,
+        });
+        await context.tx.query(
+          `INSERT INTO ${tables.logicalBodies}
+          (namespace,logical_body_id,owner_id,producer_operation_id,producer_stream_id,
+           media_type,byte_length,digest,current_copy,pending_ref,pending_descriptor,protected_until,created_at,updated_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11::jsonb,$12::timestamptz + $13 * interval '1 millisecond',$12,$12)`,
+          [
+            a.target.namespace,
+            logicalBodyId,
+            ownerId,
+            a.target.operationId,
+            a.target.streamId,
+            a.writer.mediaType,
+            a.committedOffset,
+            a.sealDigest,
+            JSON.stringify({
+              backendId,
+              key: a.writer.bodyId,
+              reservationId: a.writer.reservationId,
+              generation: head.generation,
+              versionToken: head.versionToken,
+            }),
+            pendingRef,
+            JSON.stringify(descriptor),
+            context.commandTime,
+            protectionMs,
+          ],
+        );
+      }
+      if (sealing && !accepted) {
+        await context.tx.query(
+          `UPDATE ${tables.operationStreams} SET outcome='failed',capture='truncated',digest=NULL
+           WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
+          [a.target.namespace, a.target.operationId, a.target.streamId],
+        );
+      }
       await context.tx.query(
         `UPDATE ${tables.operationStreams} SET revocation_state='revoked',
           state=CASE WHEN state='reserving' THEN state ELSE 'terminal' END,
@@ -1464,6 +1604,7 @@ export function createOwnerStreamReservations(
       [OWNER_STREAM_WRITER]: writerAdmission,
       [OWNER_STREAM_APPEND_ACK]: appendAcknowledgement,
       [OWNER_STREAM_CHECKPOINT]: checkpoint,
+      [OWNER_STREAM_SEAL_INTENT]: sealIntent,
       [OWNER_STREAM_ABORT_TARGET]: (_input: OwnerJson, context: Context) => {
         const a = writing(context.tx, context.caller);
         if (!a.cleanup) refuse();
@@ -1557,6 +1698,40 @@ export function createOwnerStreamReservations(
         streamId: physicalIdentifier(result.streamId),
       };
     },
+    async beginSeal(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      streamIdInput: string,
+      length: number,
+      signal?: AbortSignal,
+    ): Promise<OwnerStreamTarget> {
+      const captured = structuredClone(caller),
+        streamId = physicalIdentifier(streamIdInput);
+      const accepted = safeOffset(length);
+      const admission = record(
+        await boundary.checkpoint(captured, OWNER_STREAM_WRITER, { streamId }, {
+          signal,
+        }),
+        ["writer", "committedOffset"],
+      );
+      if (safeOffset(admission.committedOffset) !== accepted) {
+        refuse("Seal requires a final accepted checkpoint.");
+      }
+      const proof = await digestPhysicalPrefix(
+        physical,
+        capturePhysicalIdentity(admission.writer),
+        accepted,
+        "open",
+        signal,
+      );
+      return target(
+        await boundary.checkpoint(captured, OWNER_STREAM_SEAL_INTENT, {
+          streamId,
+          length: accepted,
+          digest: proof.digest,
+        }, { signal }),
+      );
+    },
     async beginRevocation(
       boundary: OwnerCommandBoundary,
       caller: OwnerCaller,
@@ -1589,7 +1764,7 @@ export function createOwnerStreamReservations(
           outcome: input.outcome ?? "abandoned",
           capture: input.capture ?? "truncated",
         }),
-        ["writer", "revoked"],
+        ["writer", "revoked", "sealDigest", "committedOffset"],
       );
       if (result.revoked === true) return;
       if (result.revoked !== false) refuse();
@@ -1608,10 +1783,40 @@ export function createOwnerStreamReservations(
           },
         );
       }
+      let verifiedDigest: string | null | undefined;
+      if (result.sealDigest !== null) {
+        if (
+          typeof result.sealDigest !== "string" ||
+          !/^sha256:[0-9a-f]{64}$/.test(result.sealDigest)
+        ) refuse();
+        try {
+          const proof = await digestPhysicalPrefix(
+            physical,
+            writer,
+            safeOffset(result.committedOffset),
+            "fenced",
+          );
+          verifiedDigest = proof.digest;
+          head = proof.head;
+        } catch (error) {
+          // A known missing/short copy cannot complete a seal. Unknown I/O must
+          // retain the intent for another owner-controlled recovery attempt.
+          if (error instanceof PhysicalPrefixUnavailableError) {
+            verifiedDigest = null;
+          } else {
+            throw Object.assign(
+              new Error("Seal verification outcome is unresolved.", {
+                cause: error,
+              }),
+              { code: "content_seal_unknown", indeterminate: true },
+            );
+          }
+        }
+      }
       await boundary.checkpoint(
         captured,
         OWNER_STREAM_REVOKED,
-        json({ ...request, head }),
+        json({ ...request, head, verifiedDigest }),
       );
     },
     async append(

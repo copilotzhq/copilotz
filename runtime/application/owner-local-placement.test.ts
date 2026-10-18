@@ -936,3 +936,69 @@ test("local placement rechecks revocation after the owner current callback", asy
   assert.equal(f.controller.resolveCurrentLocal(entry.localCaller), undefined);
   assert.equal(f.stats().revokes, 1);
 });
+
+test("captured local Action lifetime uses invocation signal without retiring settlement", async () => {
+  const f = fixture(), invocation = new AbortController();
+  Object.assign(f.driver, { invocationSignal: invocation.signal });
+  const entry = f.reserve();
+  assert.equal(
+    f.controller.captureCurrentLifetime(entry.localCaller),
+    undefined,
+  );
+  await started(f, entry);
+  const caller = entry.localCaller,
+    lifetime = f.controller.captureCurrentLifetime(caller)!;
+  assert.ok(lifetime);
+  Object.assign(caller, { localPlacementAttempt: "changed" });
+  assert.equal(lifetime.isCurrent(), true);
+  assert.equal(lifetime.matches(caller), false);
+  assert.equal(lifetime.matches(entry.localCaller), true);
+  invocation.abort();
+  assert.equal(lifetime.signal.aborted, true);
+  assert.equal(lifetime.isCurrent(), false);
+  assert.equal(lifetime.matches(entry.localCaller), false);
+  assert.equal(entry.isCurrent(), true);
+  assert.deepEqual(f.controller.resolveCurrentLocal(entry.localCaller), ref());
+  assert.equal(f.stats().releases, 0);
+  f.controller.stop();
+  f.drained.resolve();
+  await tick();
+});
+test("local Action signal getter cannot attach a driver after revoking the entry", () => {
+  const f = fixture(), entry = f.controller.reserve(ref(), key);
+  assert.throws(() =>
+    entry.attachDriver({
+      ...f.driver,
+      get invocationSignal() {
+        entry.revoke();
+        return new AbortController().signal;
+      },
+    })
+  );
+  assert.equal(
+    f.controller.captureCurrentLifetime(entry.localCaller),
+    undefined,
+  );
+  assert.equal(f.stats().releases, 0);
+});
+test("current callback cannot end an Action invocation and preserve captured read authority", async () => {
+  const f = fixture(), invocation = new AbortController();
+  Object.assign(f.driver, { invocationSignal: invocation.signal });
+  const entry = f.reserve();
+  await started(f, entry);
+  const lifetime = f.controller.captureCurrentLifetime(entry.localCaller)!;
+  f.onCurrent(() =>
+    entry.onTerminal({ reference: ref(), status: "completed" })
+  );
+  assert.equal(lifetime.isCurrent(), false);
+  assert.equal(lifetime.matches(entry.localCaller), false);
+  assert.equal(
+    f.controller.captureCurrentLifetime(entry.localCaller),
+    undefined,
+  );
+  assert.equal(entry.isCurrent(), true);
+  assert.equal(f.stats().releases, 0);
+  f.controller.stop();
+  f.drained.resolve();
+  await tick();
+});

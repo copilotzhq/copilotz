@@ -1121,3 +1121,40 @@ for (const revoke of ["entry", "witness", "holder"] as const) {
     }
   });
 }
+
+for (const processor of [false, true]) {
+  test(`captured ${processor ? "Processor" : "Action"} dispatch lifetime survives calls but requires fresh exact witnesses`, async () => {
+    const f = await fixture({ processor });
+    try {
+      const opened = await f.dispatch(),
+        first = await witness(f, opened.context());
+      const lifetime = f.bridge.captureStartedLifetime(first.caller)!;
+      assert.ok(lifetime);
+      assert.equal(lifetime.matches(first.caller), true);
+      await first.handler({
+        input: stream(),
+        signal: new AbortController().signal,
+      });
+      assert.equal(lifetime.isCurrent(), true);
+      assert.equal(lifetime.matches(first.caller), false);
+      const next = await witness(f, opened.context());
+      assert.equal(lifetime.matches(next.caller), true);
+      const other = await f.dispatch("two"),
+        unrelated = await witness(f, other.context());
+      assert.equal(lifetime.matches(unrelated.caller), false);
+      await next.handler({
+        input: stream(),
+        signal: new AbortController().signal,
+      });
+      await unrelated.handler({
+        input: stream(),
+        signal: new AbortController().signal,
+      });
+      f.bridge.stop();
+      assert.equal(lifetime.isCurrent(), false);
+      assert.equal(lifetime.signal.aborted, true);
+    } finally {
+      await f.close();
+    }
+  });
+}

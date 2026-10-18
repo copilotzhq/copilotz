@@ -2234,3 +2234,162 @@ test("named preparation post-commit reply failure stays unknown", async () => {
   );
   assert.equal(calls, 1);
 });
+
+test("snapshot route authenticates exact parent without queued ordinary grant lookup", async () => {
+  const operations: string[] = [];
+  let grants = 0;
+  const port = admission(recordingBoundary(), {
+    resolveAssignment() {
+      grants++;
+      throw new Error("Queued lookup must not run");
+    },
+    snapshots: {
+      resolveCaller: () => caller,
+      run(actual, request) {
+        assert.deepEqual(actual, caller);
+        operations.push(request.operation);
+        return Promise.resolve(
+          request.operation === "open"
+            ? "resource"
+            : request.operation === "read"
+            ? [{ id: "record" }]
+            : null,
+        );
+      },
+    },
+  });
+  for (
+    const request of [{ operation: "open" }, {
+      operation: "read",
+      id: "resource",
+      request: {},
+    }, { operation: "close", id: "resource" }]
+  ) {
+    const handler = await port.admit(
+      context({ workload: "copilotz.owner.snapshot" }),
+    );
+    assert.ok(handler);
+    assert.equal(
+      decode(
+        await handler({
+          input: stream(request),
+          signal: new AbortController().signal,
+        }),
+      ).ok,
+      true,
+    );
+  }
+  assert.deepEqual(operations, ["open", "read", "close"]);
+  assert.equal(grants, 0);
+  assert.equal(
+    await port.admit(
+      context({ workload: "copilotz.owner.snapshot", parent: undefined }),
+    ),
+    undefined,
+  );
+  assert.equal(
+    await port.admitUnassigned(
+      context({ workload: "copilotz.owner.snapshot" }),
+    ),
+    undefined,
+  );
+});
+test("snapshot route refuses changed witnesses and closed request fields before resource work", async () => {
+  let fresh = true, runs = 0;
+  const port = admission(recordingBoundary(), {
+    snapshots: {
+      resolveCaller: () => fresh ? caller : undefined,
+      run() {
+        runs++;
+        return Promise.resolve(null);
+      },
+    },
+  });
+  const handler = await port.admit(
+    context({ workload: "copilotz.owner.snapshot" }),
+  );
+  assert.ok(handler);
+  fresh = false;
+  assert.equal(
+    decode(
+      await handler({
+        input: stream({ operation: "open" }),
+        signal: new AbortController().signal,
+      }),
+    ).ok,
+    false,
+  );
+  fresh = true;
+  const next = await port.admit(
+    context({ workload: "copilotz.owner.snapshot" }),
+  );
+  assert.ok(next);
+  assert.equal(
+    decode(
+      await next({
+        input: stream({ operation: "open", id: "forged" }),
+        signal: new AbortController().signal,
+      }),
+    ).ok,
+    false,
+  );
+  assert.equal(runs, 0);
+});
+test("snapshot route reauthenticates its witness after resource result awaits", async () => {
+  let fresh = true;
+  const port = admission(recordingBoundary(), {
+    snapshots: {
+      resolveCaller: () => fresh ? caller : undefined,
+      async run() {
+        await Promise.resolve();
+        fresh = false;
+        return [{ private: "hidden" }];
+      },
+    },
+  });
+  const handler = await port.admit(
+    context({ workload: "copilotz.owner.snapshot" }),
+  );
+  assert.ok(handler);
+  const result = decode(
+    await handler({
+      input: stream({ operation: "read", id: "resource", request: {} }),
+      signal: new AbortController().signal,
+    }),
+  );
+  assert.equal(result.ok, false);
+  assert.equal("value" in result, false);
+});
+test("unobserved snapshot close reply retains cleanup uncertainty", async () => {
+  const connection = createOwnerConnection({
+    ownerId: "tenant",
+    callHost: () => Promise.reject(new Error("connection lost")),
+  });
+  await assert.rejects(
+    () => connection.snapshots.close("resource"),
+    (error: { code?: string; indeterminate?: boolean }) =>
+      error.code === "owner_snapshot_cleanup_unknown" &&
+      error.indeterminate === true,
+  );
+});
+test("decoded snapshot close refusal stays distinct from transport uncertainty", async () => {
+  const connection = createOwnerConnection({
+    ownerId: "tenant",
+    callHost: () =>
+      Promise.resolve({
+        output: stream({
+          ok: false,
+          code: "owner_snapshot_expired",
+          outcome: "refused",
+        }),
+        completed: Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      }),
+  });
+  await assert.rejects(
+    () => connection.snapshots.close("resource"),
+    (error: unknown) =>
+      error instanceof OwnerCallRejected &&
+      error.code === "owner_snapshot_expired" && error.outcome === "refused",
+  );
+});

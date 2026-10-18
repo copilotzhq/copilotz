@@ -683,7 +683,9 @@ export async function createOwnerHost(
     clearTimeout(alarmTimer);
     local?.stop(error);
     localProcessor?.stop(error);
-    void snapshots?.stop().catch(report);
+    void snapshots?.stop().catch((cleanup) => {
+      if (cleanup !== error) report(cleanup);
+    });
     if (localControlToken) controlTokens.delete(localControlToken);
     owner?.stop(error);
     abort.abort(error);
@@ -2403,6 +2405,7 @@ export async function createOwnerHost(
       authorizeHistorical: snapshotConfiguration
         .authorizeHistorical as OwnerHistoricalReadPolicy,
       resolve: resolveInvocation,
+      onCleanupUnknown: stop,
       capture(caller) {
         return caller.principal.kind === "owner-local"
           ? local?.captureLifetime(caller) ??

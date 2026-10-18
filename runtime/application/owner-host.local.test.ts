@@ -139,6 +139,7 @@ async function fixture(input: {
   local?: OwnerHostLocalActionOptions;
   policy?: Partial<OwnerHostPolicy>;
   preparation?: OwnerHostOptions["preparation"];
+  snapshots?: OwnerHostOptions["snapshots"];
   processors?: OwnerHostLocalProcessorOptions;
   session?(db: SqlSession): SqlSession;
   beforeReady?(): Promise<void>;
@@ -162,6 +163,7 @@ async function fixture(input: {
     maxActive: input.maxActive ?? 4,
     maxPending: 32,
     ...(input.preparation ? { preparation: input.preparation } : {}),
+    ...(input.snapshots ? { snapshots: input.snapshots } : {}),
 
     onError: (error) => errors.push(error),
     transport: {
@@ -4130,4 +4132,345 @@ for (const mode of ["in-process", "websocket"] as const) {
       },
     );
   }
+}
+
+function snapshotFlowRegistry(
+  kind: "action" | "processor",
+  verify: (ctx: ActionContext | ProcessorContext) => Promise<void>,
+) {
+  return createPluginRegistry({
+    collections: { notes },
+    actions: {
+      idle: defineAction({ id: "fixture.idle", execute: () => null }),
+      work: defineAction({
+        id: "fixture.local",
+        inputSchema: { type: "string" } as const,
+        async execute(_value: string, ctx: ActionContext) {
+          await ctx.transaction(({ collections }) => {
+            for (const id of ["hidden", "a", "b", "trigger"]) {
+              collections.notes.create({
+                id,
+                title: ["a", "b"].includes(id) ? "visible" : "hidden",
+              });
+            }
+          }, { operationKey: "seed" });
+          if (kind === "action") await verify(ctx);
+          return "done";
+        },
+      }),
+    },
+    ...(kind === "processor"
+      ? {
+        processors: {
+          read: defineProcessor({
+            id: "fixture.read",
+            on: [{
+              eventType: "local_note.created",
+              data: { record: { id: "trigger" } },
+            }],
+            async handle(_event, ctx) {
+              await verify(ctx);
+            },
+          }),
+        },
+      }
+      : {}),
+  });
+}
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      test(`snapshot callbacks use real ${placement} ${kind} / ${mode}`, {
+        skip: !sourceRoot,
+        timeout: 45_000,
+      }, async () => {
+        let completed = false;
+        const bindings: string[] = [];
+        const verify = async (ctx: ActionContext | ProcessorContext) => {
+          let retained!: () => Promise<unknown>;
+          const result = await ctx.readSnapshot(async ({ collections }) => {
+            retained = () => collections.notes.get({ id: "a" });
+            assert.equal(
+              (await collections.notes.get({ id: "a" }))?.title,
+              "visible",
+            );
+            assert.equal(await collections.notes.get({ id: "hidden" }), null);
+            assert.deepEqual(
+              (await collections.notes.list({})).map((row) => row.id),
+              ["a", "b"],
+            );
+            return (await collections.notes.aggregate({
+              groupBy: ["title"],
+              metrics: { count: { op: "count" } },
+            }))[0];
+          });
+          assert.deepEqual(result, { title: "visible", count: 2 });
+          assert.throws(retained);
+          await ctx.transaction(
+            ({ collections }) =>
+              collections.notes.update({ id: "a", set: { title: "after" } }),
+            { operationKey: "after-snapshot" },
+          );
+          completed = true;
+        };
+        const f = await fixture({
+          registry: snapshotFlowRegistry(kind, verify),
+          mode,
+          maxActive: 1,
+          local: localOptions({
+            actionIds: kind === "action" && placement === "worker"
+              ? ["fixture.idle"]
+              : ["fixture.local"],
+          }),
+          ...(kind === "processor" && placement === "owner-local"
+            ? {
+              processors: {
+                processorIds: ["fixture.read"],
+                policy: {
+                  grants: () => ({ ctx: true, settlement: true }),
+                  event() {},
+                  collections: () => ({}),
+                },
+                createCapabilities: () => ({ resources: {}, adapters: {} }),
+              },
+            }
+            : {}),
+          snapshots: {
+            idleTimeoutMs: 1000,
+            maxLifetimeMs: 5000,
+            maxPendingReads: 8,
+            authorizeHistorical(_tx, binding) {
+              assert.equal(binding.kind, kind);
+              bindings.push(
+                "placement" in binding.assignment
+                  ? binding.assignment.placement
+                  : "worker",
+              );
+              return {
+                historical: true,
+                filter: { where: { title: "visible" } },
+              };
+            },
+          },
+        });
+        try {
+          assert.equal(
+            await f.facade.actions.work("snapshot", {
+              operationKey: `snapshot-${kind}-${placement}`,
+            }),
+            "done",
+          );
+          await eventually(() => completed && f.host.snapshot().active === 0);
+          assert.deepEqual([...new Set(bindings)], [placement]);
+          assert.equal(
+            (await f.db.query(
+              "SELECT data->>'title' AS title FROM nodes WHERE id='a'",
+            )).rows[0].title,
+            "after",
+          );
+          assert.deepEqual(f.errors, []);
+        } finally {
+          await f.close();
+        }
+      });
+    }
+  }
+}
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      for (const fault of ["idle", "ordinary", "grant"] as const) {
+        test(
+          `snapshot failure ${fault} releases real ${placement} ${kind} / ${mode}`,
+          { skip: !sourceRoot, timeout: 45_000 },
+          async () => {
+            let rejected = false, granted = true, ordinaryChecks = 0;
+            const verify = async (ctx: ActionContext | ProcessorContext) => {
+              try {
+                await ctx.readSnapshot(async ({ collections }) => {
+                  await collections.notes.get({ id: "a" });
+                  if (fault === "idle") {
+                    await new Promise((done) => setTimeout(done, 100));
+                  } else if (fault === "ordinary") {
+                    await ctx.collections.notes.list({});
+                  } else {
+                    granted = false;
+                    await collections.notes.list({});
+                  }
+                  return "must not escape";
+                });
+              } catch (error) {
+                rejected = true;
+                throw error;
+              }
+            };
+            const f = await fixture({
+              registry: snapshotFlowRegistry(kind, verify),
+              mode,
+              maxActive: 1,
+              local: localOptions({
+                actionIds: kind === "action" && placement === "worker"
+                  ? ["fixture.idle"]
+                  : ["fixture.local"],
+                policy: {
+                  ...localOptions().policy,
+                  grants: () => ({ ctx: granted, settlement: true }),
+                },
+              }),
+              ...(kind === "processor" && placement === "owner-local"
+                ? {
+                  processors: {
+                    processorIds: ["fixture.read"],
+                    policy: {
+                      grants: () => ({ ctx: granted, settlement: true }),
+                      event() {},
+                      collections: () => ({}),
+                    },
+                    createCapabilities: () => ({ resources: {}, adapters: {} }),
+                  },
+                }
+                : {}),
+              policy: {
+                worker: () => ({ ctx: granted, settlement: true }),
+                collectionRead() {
+                  ordinaryChecks++;
+                  return {};
+                },
+              },
+              snapshots: {
+                idleTimeoutMs: fault === "idle" ? 50 : 1000,
+                maxLifetimeMs: 5000,
+                maxPendingReads: 8,
+                authorizeHistorical: () => ({ historical: true, filter: {} }),
+              },
+            });
+            try {
+              const result = await outcome(
+                f.facade.actions.work("failure", {
+                  operationKey: `failure-${fault}`,
+                }),
+              );
+              if (kind === "action") assert.ok(result.error);
+              else assert.equal(result.value, "done");
+              await eventually(() => rejected);
+              assert.equal(
+                (await f.db.query("SELECT 1 AS available")).rows[0].available,
+                1,
+              );
+              if (fault === "ordinary") assert.equal(ordinaryChecks, 0);
+              assert.equal(f.host.snapshot().ready, true);
+              assert.deepEqual(f.errors, []);
+            } finally {
+              await f.close();
+            }
+          },
+        );
+      }
+    }
+  }
+}
+
+for (const shutdownFirst of [false, true]) {
+  test(
+    `snapshot unknown cleanup stops host and joins held resource / shutdown=${shutdownFirst}`,
+    {
+      skip: !sourceRoot,
+      timeout: 45_000,
+    },
+    async () => {
+      const opened = deferred(),
+        cleanupEntered = deferred(),
+        release = deferred();
+      let callbackEnded = false, closeSettled = false;
+      const f = await fixture({
+        registry: snapshotFlowRegistry("action", async (ctx) => {
+          try {
+            await ctx.readSnapshot(async () => {
+              opened.resolve();
+              if (shutdownFirst) {
+                await new Promise<void>((done) => {
+                  if (ctx.signal.aborted) done();
+                  else {ctx.signal.addEventListener("abort", () => done(), {
+                      once: true,
+                    });}
+                });
+              }
+            });
+          } finally {
+            callbackEnded = true;
+          }
+        }),
+        local: localOptions(),
+        snapshots: {
+          idleTimeoutMs: 1000,
+          maxLifetimeMs: 5000,
+          maxPendingReads: 8,
+          authorizeHistorical: () => ({ historical: true, filter: {} }),
+        },
+        session: (db) => ({
+          ...db,
+          async withReadSnapshot(operation, options) {
+            try {
+              return await db.withReadSnapshot!(operation, {
+                signal: options?.signal,
+              });
+            } finally {
+              cleanupEntered.resolve();
+              await release.promise;
+              // Fault injection: cleanup completed without its required proof.
+            }
+          },
+        }),
+      });
+      let closing: ReturnType<typeof outcome<void>> | undefined;
+      const invocation = outcome(
+        f.facade.actions.work("unknown", { operationKey: "unknown-cleanup" }),
+      );
+      try {
+        await opened.promise;
+        if (shutdownFirst) {
+          closing = outcome(f.host.close()).then((result) => {
+            closeSettled = true;
+            return result;
+          });
+        }
+        await cleanupEntered.promise;
+        if (shutdownFirst) {
+          await eventually(() => callbackEnded);
+          assert.equal(closeSettled, false);
+        } else {
+          assert.equal(f.host.snapshot().ready, true);
+        }
+        release.resolve();
+        if (!shutdownFirst) {
+          await eventually(() => !f.host.snapshot().ready);
+          assert.equal(f.host.snapshot().recoveryRequired, true);
+          assert.ok(
+            f.errors.some((error) =>
+              (error as { code?: string }).code ===
+                "owner_snapshot_cleanup_unknown"
+            ),
+          );
+          closing = outcome(f.host.close());
+        }
+        const result = await closing!;
+        assert.equal(
+          (result.error as { code?: string }).code,
+          "owner_snapshot_cleanup_unknown",
+        );
+        assert.equal(
+          (result.error as { indeterminate?: boolean }).indeterminate,
+          true,
+        );
+      } finally {
+        release.resolve();
+        await invocation;
+        const result = await outcome(f.close());
+        assert.equal(
+          (result.error as { code?: string }).code,
+          "owner_snapshot_cleanup_unknown",
+        );
+      }
+    },
+  );
 }

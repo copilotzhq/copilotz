@@ -110,6 +110,8 @@ export function createOwnerSnapshotResources(
     maxLifetimeMs: number;
     maxPendingReads: number;
     now?: () => string;
+    /** Owner-level negative outcome; independent of an ended invocation. */
+    onCleanupUnknown?(error: Error): void;
   }>,
 ) {
   const {
@@ -122,6 +124,7 @@ export function createOwnerSnapshotResources(
     idleTimeoutMs,
     maxLifetimeMs,
     maxPendingReads,
+    onCleanupUnknown,
   } = options;
   for (const value of [idleTimeoutMs, maxLifetimeMs, maxPendingReads]) {
     if (!Number.isSafeInteger(value) || value < 1) {
@@ -363,10 +366,21 @@ export function createOwnerSnapshotResources(
         r.remove.length = 0;
         if (r.cleanup !== "confirmed") {
           r.phase = "quarantined";
-          const unknown = failure("owner_snapshot_cleanup_unknown");
+          const unknown = Object.assign(
+            failure("owner_snapshot_cleanup_unknown"),
+            { indeterminate: true },
+          );
           r.abort.abort(unknown);
           r.ready.reject(unknown);
           r.finished.reject(unknown);
+          try {
+            const notified: unknown = onCleanupUnknown?.(unknown);
+            if (notified instanceof Promise) {
+              void Promise.prototype.then.call(notified, undefined, () => {});
+            }
+          } catch {
+            /* Notification cannot turn unconfirmed cleanup into success. */
+          }
           return;
         }
         r.phase = "closing";

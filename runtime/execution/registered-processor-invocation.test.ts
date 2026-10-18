@@ -632,3 +632,94 @@ test("Processor worker prebinds named preparation and its exact reference before
   assert.equal((await result).receipt.status, "succeeded");
   assert.deepEqual(called, ["original"]);
 });
+
+test("Processor onError cannot acknowledge callback failure hiding unknown snapshot cleanup", async () => {
+  let acknowledged = 0;
+  const f = fixture(processor(async (_event, ctx) => {
+    await ctx.readSnapshot(() => {
+      throw markNonRetryable(new Error("known callback failure"));
+    });
+  }, () => {
+    acknowledged++;
+    return true;
+  }));
+  const calls: Options["calls"] = {
+    ...f.options.calls,
+    snapshots: {
+      open: () => Promise.resolve("resource"),
+      read: () => Promise.resolve([]),
+      close: () =>
+        Promise.reject(
+          Object.assign(new Error("cleanup"), {
+            code: "owner_snapshot_cleanup_unknown",
+          }),
+        ),
+    },
+  };
+  Object.assign(f.options, { calls });
+  await assert.rejects(
+    f.run,
+    (error: { indeterminate?: boolean }) => error.indeterminate === true,
+  );
+  assert.equal(acknowledged, 0);
+  assert.equal(f.commands.length, 0);
+});
+
+test("exhausted Processor cannot acknowledge unknown snapshot opening cleanup", async () => {
+  let acknowledged = 0, callback = 0;
+  const f = fixture(processor(async (_event, ctx) => {
+    await ctx.readSnapshot(() => {
+      callback++;
+      return null;
+    });
+  }, () => {
+    acknowledged++;
+    return true;
+  }));
+  Object.assign(f.invocation, { attempts: 3 });
+  const calls: Options["calls"] = {
+    ...f.options.calls,
+    snapshots: {
+      open: () =>
+        Promise.reject(
+          Object.assign(new Error("opening cleanup"), {
+            code: "owner_snapshot_cleanup_unknown",
+          }),
+        ),
+      read: () => Promise.resolve([]),
+      close: () => Promise.resolve(),
+    },
+  };
+  Object.assign(f.options, { calls });
+  await assert.rejects(
+    f.run,
+    (error: { indeterminate?: boolean }) => error.indeterminate === true,
+  );
+  assert.equal(acknowledged, 0);
+  assert.equal(callback, 0);
+});
+
+test("Processor can acknowledge one known read failure repeated by snapshot cleanup", async () => {
+  let acknowledged = 0;
+  const original = markNonRetryable(new Error("known read"));
+  const f = fixture(processor(async (_event, ctx) => {
+    await ctx.readSnapshot(async ({ collections }) =>
+      await collections.notes.get({ id: "a" })
+    );
+  }, (error) => {
+    assert.equal(error, original);
+    acknowledged++;
+    return true;
+  }));
+  const calls: Options["calls"] = {
+    ...f.options.calls,
+    snapshots: {
+      open: () => Promise.resolve("resource"),
+      read: () => Promise.reject(original),
+      close: () => Promise.reject(original),
+    },
+  };
+  Object.assign(f.options, { calls });
+  assert.deepEqual(await f.run(), { status: "succeeded" });
+  assert.equal(acknowledged, 1);
+});

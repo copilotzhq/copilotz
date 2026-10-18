@@ -410,3 +410,32 @@ throughput under concurrent reads/writes, current-authority contention, pool
 occupancy/refusal, and PGlite queue delay at different callback durations. F5's
 idle/maximum lifetime settings require this load evidence. Expiry revokes use
 but does not prove cancellation of raw SQL or physical capacity release.
+
+## Reconstructed host integration: cleanup ownership
+
+The recovered integration now connects the private manager to actual local and
+worker Action/Processor calls. Earlier manager-only statements above describe
+that checkpoint, not the current wiring. Full static/role and backend acceptance
+must be rerun against the reconstructed tree; pre-restart evidence is
+historical.
+
+A local driver's quiescence covers authored execution and its admitted raw
+calls. The owner separately owns a snapshot's SQL resource. Revocation can
+prevent a new close call from being admitted even while that resource is still
+cleaning up. Driver quiescence therefore does not certify snapshot cleanup or
+return its capacity. The manager retains the charge until explicit confirmed
+cleanup and actual backend scope settlement; host shutdown joins that
+owner-owned cleanup. No post-revocation cleanup receipt, job lease, or second
+execution registry is introduced.
+
+If cleanup proof is absent or unknown, the manager first quarantines the
+resource and rejects its completion with an indeterminate error. A private
+negative notification then stops owner admission, including failures arriving
+after the invocation has quiesced. Observer failure cannot turn uncertainty into
+success or release capacity. Host shutdown reports the same cleanup uncertainty.
+
+The callback helper preserves identical known read/close errors so Processor
+error policies can recognize them. Distinct failures retain cleanup uncertainty;
+unknown open/read failures also remain indeterminate. Error classification reads
+only own data descriptors and never coerces error properties or invokes getters.
+Accepted raw reads still drain before the callback settles.

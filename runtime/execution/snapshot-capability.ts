@@ -3,21 +3,33 @@ import type { OwnerSnapshotPort } from "../owner/connection.ts";
 import type { OwnerJson } from "../owner/boundary.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import { createCollectionReadCapability } from "./collection-read-capability.ts";
-function uncertain(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const error = value as {
-    code?: string;
-    indeterminate?: boolean;
-    outcome?: string;
-  };
-  return error.indeterminate === true || error.outcome === "unknown" ||
-    [
+function uncertainty(value: unknown): "none" | "bare" | "tagged" {
+  if (!value || typeof value !== "object") return "none";
+  const data: Record<string, unknown> = {};
+  for (const key of ["indeterminate", "outcome", "execution", "code"]) {
+    let descriptor: PropertyDescriptor | undefined;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      return "bare";
+    }
+    if (descriptor && !("value" in descriptor)) return "bare";
+    data[key] = descriptor?.value;
+  }
+  if (
+    data.indeterminate === true || data.outcome === "unknown" ||
+    data.execution === "indeterminate"
+  ) return "tagged";
+  return typeof data.code === "string" && [
       "owner_snapshot_cleanup_unknown",
       "owner_commit_unknown",
       "persistence_indeterminate",
       "effect_indeterminate",
-    ].includes(error.code ?? "");
+    ].includes(data.code)
+    ? "bare"
+    : "none";
 }
+const uncertain = (value: unknown) => uncertainty(value) !== "none";
 function combineFailure(errors: unknown[]): unknown {
   const error = new AggregateError(
     errors,
@@ -129,10 +141,10 @@ export function createRegisteredReadSnapshot(
           // Parent revocation independently seals the owner if this call loses.
           if (id !== undefined) await port.close(id);
         } catch (caught) {
-          error = failed || uncertain(caught)
-            ? combineFailure(failed ? [error, caught] : [caught])
-            : caught;
-          failed = true;
+          if (!failed) {
+            error = caught;
+            failed = true;
+          } else if (caught !== error) error = combineFailure([error, caught]);
         }
         for (const value of await Promise.allSettled(pending)) {
           if (value.status !== "rejected") continue;
@@ -145,7 +157,10 @@ export function createRegisteredReadSnapshot(
         }
         active = false;
       }
-      if (failed) throw error;
+      if (failed) {
+        if (uncertainty(error) === "bare") throw combineFailure([error]);
+        throw error;
+      }
       check();
       signal.throwIfAborted();
       return result;

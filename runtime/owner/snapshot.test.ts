@@ -41,6 +41,7 @@ async function within<T>(promise: Promise<T>): Promise<T> {
 async function fixture(options: {
   policy?: OwnerHistoricalReadPolicy;
   noPolicy?: boolean;
+  onCleanupUnknown?: (error: Error) => void;
   idle?: number;
   maximum?: number;
   capacity?: number;
@@ -140,6 +141,7 @@ async function fixture(options: {
     idleTimeoutMs: options.idle ?? 1000,
     maxLifetimeMs: options.maximum ?? 5000,
     maxPendingReads: options.capacity ?? 8,
+    onCleanupUnknown: options.onCleanupUnknown,
   });
   return {
     db,
@@ -255,6 +257,7 @@ Deno.test("missing cleanup proof quarantines the bounded resource even after bac
       (error as { code?: string }).code,
       "owner_snapshot_cleanup_unknown",
     );
+    assertEquals((error as { indeterminate?: boolean }).indeterminate, true);
     await assertRejects(() => f.manager.open(f.caller()));
     await assertRejects(() => f.manager.stop());
   } finally {
@@ -419,6 +422,7 @@ Deno.test("duplicate backend cleanup observations quarantine resource", async ()
       (error as { code?: string }).code,
       "owner_snapshot_cleanup_unknown",
     );
+    assertEquals((error as { indeterminate?: boolean }).indeterminate, true);
     await assertRejects(() => f.manager.open(f.caller()));
   } finally {
     await f.close();
@@ -619,3 +623,88 @@ Deno.test("final historical policy cannot change durable epoch and disclose data
     await f.close();
   }
 });
+
+Deno.test("per-read cancellation seals the backend while detached policy remains charged", async () => {
+  const entered = gate(), release = gate(), abort = new AbortController();
+  const f = await fixture({
+    policy: async () => {
+      entered.resolve();
+      await release.promise;
+      return { historical: true, filter: {} };
+    },
+  });
+  let pending: Promise<unknown> | undefined;
+  try {
+    const id = await f.manager.open(f.caller());
+    pending = f.manager.read(id, f.caller(), read, abort.signal);
+    const observed = pending.catch((error) => error);
+    await within(entered.promise);
+    abort.abort();
+    await within(assertRejects(() => f.manager.close(id, f.caller())));
+    const next = await within(f.manager.open(f.caller()));
+    await f.manager.close(next, f.caller());
+    release.resolve();
+    assertEquals(
+      (await observed as { code?: string }).code,
+      "ActionOwnershipLost",
+    );
+  } finally {
+    release.resolve();
+    await pending?.catch(() => {});
+    await f.close();
+  }
+});
+
+for (const notification of ["throws", "rejects"] as const) {
+  Deno.test(`late unknown cleanup notifies after quarantine and survives observer that ${notification}`, async () => {
+    const entered = gate(), release = gate();
+    const notifications: Error[] = [];
+    const f = await fixture({
+      onCleanupUnknown(error) {
+        notifications.push(error);
+        if (notification === "throws") throw new Error("observer failed");
+        return Promise.reject(new Error("observer failed"));
+      },
+      session: (db) => ({
+        ...db,
+        async withReadSnapshot(operation, options) {
+          try {
+            return await db.withReadSnapshot!(operation, {
+              signal: options?.signal,
+            });
+          } finally {
+            entered.resolve();
+            await release.promise;
+            // Deliberately omit the cleanup proof, even though native cleanup returned.
+          }
+        },
+      }),
+    });
+    let stopped: Promise<unknown> | undefined, settled = false;
+    try {
+      await f.manager.open(f.caller());
+      f.parent.abort();
+      await within(entered.promise);
+      await assertRejects(() => f.manager.open(f.caller()));
+      stopped = f.manager.stop().then(() => {
+        settled = true;
+        return null;
+      }, (error) => {
+        settled = true;
+        return error;
+      });
+      await delay(0);
+      assertEquals(settled, false);
+      assertEquals(notifications.length, 0);
+      release.resolve();
+      const error = await within(stopped);
+      assertEquals(notifications, [error]);
+      assertEquals((error as { indeterminate?: boolean }).indeterminate, true);
+      await assertRejects(() => f.manager.open(f.caller()));
+    } finally {
+      release.resolve();
+      await stopped;
+      await f.close();
+    }
+  });
+}

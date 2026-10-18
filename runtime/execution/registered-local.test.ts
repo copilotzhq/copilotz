@@ -1126,3 +1126,27 @@ test("local Action named preparation captures its bound callback before executio
     operationKey: "named",
   }]);
 });
+
+test("private Action invocation signal closes before raw drain without cancelling settlement", async () => {
+  const entered = gate(), release = gate();
+  let hold = true;
+  const f = fixture(undefined, {
+    async drainRawCalls() {
+      if (hold) {
+        entered.resolve();
+        await release.promise;
+      }
+    },
+  });
+  assert.equal(f.execution.invocationSignal.aborted, false);
+  const running = f.execution.run();
+  await entered.promise;
+  assert.equal(f.execution.invocationSignal.aborted, true);
+  assert.equal(f.state.current, true);
+  assert.equal(f.completions.length, 0);
+  hold = false;
+  release.resolve();
+  const result = await running;
+  assert.equal(result.completion.status, "completed");
+  await f.execution.quiescent;
+});

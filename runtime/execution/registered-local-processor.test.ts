@@ -652,3 +652,28 @@ test("local Processor named preparation captures its bound callback before execu
     operationKey: "named",
   }]);
 });
+
+test("private Processor invocation signal closes before raw drain without cancelling settlement", async () => {
+  const entered = gate(), release = gate();
+  let hold = true;
+  const f = fixture(() => {}, {
+    async drainRawCalls() {
+      if (hold) {
+        entered.resolve();
+        await release.promise;
+      }
+    },
+  });
+  const driver = f.create();
+  assert.equal(driver.invocationSignal.aborted, false);
+  const running = driver.run();
+  await entered.promise;
+  assert.equal(driver.invocationSignal.aborted, true);
+  assert.equal(f.state.current, true);
+  assert.equal(f.events.includes("complete"), false);
+  hold = false;
+  release.resolve();
+  const result = await running;
+  assert.equal(result.receipt.status, "succeeded");
+  await driver.quiescent;
+});

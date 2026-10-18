@@ -182,10 +182,11 @@ function fixture(maxEntries = 8) {
   const controller: ReturnType<
     typeof createOwnerLocalProcessorPlacementController
   > = createOwnerLocalProcessorPlacementController(options);
-  const entry = (reference = ref()) => {
+  const entry = (reference = ref(), invocationSignal?: AbortSignal) => {
     const e = controller.reserve(reference, key), drain = gate();
     drains.set(reference.attemptId, drain);
     e.attachDriver({
+      invocationSignal,
       quiescent: drain.promise,
       revoke() {
         state.revokes++;
@@ -727,4 +728,65 @@ test("composed revoked noncooperative actual factory retains generation occupanc
   await first.driver.quiescent;
   assert.equal(f.f.state.releases, 0);
   assert.deepEqual(f.counts(), { executions: 0, completions: 0 });
+});
+
+test("captured local Processor lifetime ends invocation without revoking settlement", async () => {
+  const f = fixture(),
+    invocation = new AbortController(),
+    entry = f.entry(ref(), invocation.signal);
+  assert.equal(
+    f.controller.captureCurrentLifetime(entry.localCaller),
+    undefined,
+  );
+  await f.start(entry);
+  const caller = entry.localCaller,
+    lifetime = f.controller.captureCurrentLifetime(caller)!;
+  assert.ok(lifetime);
+  Object.assign(caller, { localProcessorAttempt: "changed" });
+  assert.equal(lifetime.isCurrent(), true);
+  assert.equal(lifetime.matches(caller), false);
+  assert.equal(lifetime.matches(entry.localCaller), true);
+  invocation.abort();
+  assert.equal(lifetime.signal.aborted, true);
+  assert.equal(lifetime.isCurrent(), false);
+  assert.equal(entry.isCurrent(), true);
+  assert.ok(f.controller.resolveCurrent(entry.localCaller));
+  assert.equal(f.state.releases, 0);
+  f.controller.stop();
+  await f.drained(entry);
+});
+test("local Processor signal getter cannot attach after entry revocation", () => {
+  const f = fixture(), entry = f.controller.reserve(ref(), key);
+  assert.throws(() =>
+    entry.attachDriver({
+      quiescent: Promise.resolve(),
+      revoke() {},
+      get invocationSignal() {
+        entry.revoke();
+        return new AbortController().signal;
+      },
+    })
+  );
+  assert.equal(f.state.releases, 0);
+});
+test("current callback cannot end a Processor invocation and preserve captured read authority", async () => {
+  const f = fixture(),
+    invocation = new AbortController(),
+    entry = f.entry(ref(), invocation.signal);
+  await f.start(entry);
+  const lifetime = f.controller.captureCurrentLifetime(entry.localCaller)!;
+  f.state.ownerHook = () => {
+    f.end(entry, "succeeded");
+    return true;
+  };
+  assert.equal(lifetime.isCurrent(), false);
+  assert.equal(lifetime.matches(entry.localCaller), false);
+  assert.equal(
+    f.controller.captureCurrentLifetime(entry.localCaller),
+    undefined,
+  );
+  assert.equal(entry.isCurrent(), true);
+  assert.equal(f.state.releases, 0);
+  f.controller.stop();
+  await f.drained(entry);
 });

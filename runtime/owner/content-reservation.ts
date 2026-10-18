@@ -1,3 +1,4 @@
+import { ownerTableNames } from "./schema.ts";
 /** Private catalog-first stream opening. Catalog rows are the durable replay
  * record; physical I/O never runs inside a retriable owner SQL handler. */
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
@@ -51,6 +52,16 @@ export const OWNER_STREAM_CONFIRM = "content.stream.confirm";
 export const OWNER_STREAM_WRITER = "content.stream.writer";
 export const OWNER_STREAM_APPEND_ACK = "content.stream.append-ack";
 export const OWNER_STREAM_CHECKPOINT = "content.stream.checkpoint";
+export const OWNER_STREAM_RENEW = "content.stream.renew";
+export const OWNER_STREAM_SCAN = "content.stream.scan";
+export const OWNER_STREAM_CLEANUP_SCAN = "content.stream.cleanup-scan";
+export type OwnerStreamCleanupCursor =
+  & OwnerStreamTarget
+  & Readonly<{ deadline: string }>;
+export const OWNER_STREAM_WORK_BATCH = 16;
+export function ownerStreamAlarm(ownerId: string): string {
+  return JSON.stringify([OWNER_STREAM_SCAN, ownerId, "content"]);
+}
 export const OWNER_STREAM_ABORT_TARGET = "content.stream.abort-target";
 export const OWNER_STREAM_REVOKE = "content.stream.revoke";
 export const OWNER_STREAM_REVOKED = "content.stream.revoked";
@@ -95,7 +106,40 @@ type ControlAuthorized = Readonly<{
   revocation: Row["revocation_state"];
   committedOffset: number;
 }>;
-type Authorized = OpeningAuthorized | WriterAuthorized | ControlAuthorized;
+type RenewalAuthorized = Readonly<{
+  mode: "renewal";
+  target: OwnerStreamTarget;
+  binding: OwnerPlacementBinding;
+  ordinal: number;
+  deadline: string;
+  writer: PhysicalWriterIdentity;
+  isCurrent(): boolean;
+}>;
+type Authorized =
+  | OpeningAuthorized
+  | WriterAuthorized
+  | ControlAuthorized
+  | RenewalAuthorized
+  | Readonly<{ mode: "scan" }>
+  | Readonly<
+    {
+      mode: "cleanup-scan";
+      after: OwnerStreamCleanupCursor | null;
+      closing: boolean;
+    }
+  >;
+type RenewalRow = {
+  binding: unknown;
+  ordinal: string;
+  deadline: string;
+  protected: boolean;
+  state: string;
+  revocation: string;
+  body_id: string;
+  reservation_id: string;
+  generation: string;
+  media_type: string;
+};
 type Row = {
   stream_id: string;
   state: "reserving" | "open" | "terminating" | "terminal";
@@ -260,6 +304,25 @@ function published(
   };
 }
 
+function cleanupCursor(value: unknown): OwnerStreamCleanupCursor {
+  const row = record(value, [
+    "namespace",
+    "operationId",
+    "streamId",
+    "deadline",
+  ]);
+  if (
+    typeof row.deadline !== "string" || row.deadline.length > 128 ||
+    !Number.isFinite(Date.parse(row.deadline))
+  ) refuse();
+  return {
+    namespace: physicalIdentifier(row.namespace),
+    operationId: physicalIdentifier(row.operationId),
+    streamId: physicalIdentifier(row.streamId),
+    deadline: row.deadline,
+  };
+}
+
 export function createOwnerStreamReservations(
   options: Readonly<{
     ownerId: string;
@@ -268,11 +331,26 @@ export function createOwnerStreamReservations(
     backendId: string;
     physical: PhysicalBodyStore;
     protectionMs: number;
+    now?: () => string;
     /** Bound includes hidden and revoking writers; only confirmed fences free it. */
     maxUnresolved: number;
     /** Genuine host control token, checked again before COMMIT. Never a worker grant. */
     isControlCurrent?(caller: OwnerCaller): boolean;
+    isRenewalCurrent?(caller: OwnerCaller): boolean;
+    resolveReserved?(
+      tx: SqlExecutor,
+      caller: OwnerCaller,
+      binding: OwnerPlacementBinding,
+      ordinal: number,
+      time: string,
+    ): Promise<
+      Readonly<{ delivery: EventDelivery; isCurrent(): boolean }> | undefined
+    >;
+    /** Nonblocking hint; the alarm itself is committed in the same owner transaction. */
+    onWork?(dueAt: string | null): void;
     onRevoked?(target: OwnerStreamTarget): void | Promise<void>;
+    /** Host-owned cleanup after a known reservation fails before returning a writer. */
+    cleanupOrphan?(target: OwnerStreamTarget): Promise<void>;
     resolve(
       tx: SqlExecutor,
       caller: OwnerCaller,
@@ -296,14 +374,29 @@ export function createOwnerStreamReservations(
   const ownerId = physicalIdentifier(options.ownerId);
   const backendId = physicalIdentifier(options.backendId);
   const { schema, session, protectionMs, maxUnresolved } = options;
+  const readClock = options.now ?? (() => new Date().toISOString());
+  if (typeof readClock !== "function") {
+    throw new TypeError("Invalid owner content clock.");
+  }
+  function clockTime(): string {
+    const value = readClock();
+    if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+      refuse("Owner content clock is unavailable.");
+    }
+    return value;
+  }
   if (
     !Number.isSafeInteger(maxUnresolved) || maxUnresolved < 1 ||
     maxUnresolved > 10_000
   ) {
     throw new RangeError("Invalid unresolved writer bound.");
   }
+  const isRenewalCurrent = options.isRenewalCurrent,
+    resolveReserved = options.resolveReserved,
+    onWork = options.onWork;
   const isControlCurrent = options.isControlCurrent,
-    onRevoked = options.onRevoked;
+    onRevoked = options.onRevoked,
+    cleanupOrphan = options.cleanupOrphan;
   if (
     !Number.isSafeInteger(protectionMs) || protectionMs < 1 ||
     protectionMs > 3_600_000
@@ -322,6 +415,8 @@ export function createOwnerStreamReservations(
   };
   const catalog = createOwnerOperationCatalogCore(session, schema);
   const tables = createOperationCatalogTables(schema);
+  const alarmTable = ownerTableNames(schema).alarms;
+  const alarm = ownerStreamAlarm(ownerId);
   // Command-local scratch only. The boundary supplies a distinct scoped tx for
   // each command, including grouped commands; nothing here grants durable authority.
   const authorized = new WeakMap<SqlExecutor, Authorized>();
@@ -345,6 +440,34 @@ export function createOwnerStreamReservations(
   function current(tx: SqlExecutor, caller: OwnerCaller): Authorized {
     const value = authorized.get(tx);
     if (!value) refuse();
+    if (value.mode === "cleanup-scan") {
+      requireControl(caller);
+      if (authorized.get(tx) !== value) refuse();
+      return value;
+    }
+    if (value.mode === "scan" || value.mode === "renewal") {
+      requireControl(caller, true);
+      if (value.mode === "renewal") {
+        const currentTime = clockTime();
+        let valid: unknown;
+        try {
+          valid = value.isCurrent();
+          if (valid instanceof Promise) {
+            Promise.prototype.then.call(valid, undefined, () => undefined);
+          }
+        } catch {
+          refuse();
+        }
+        if (
+          valid !== true ||
+          Date.parse(currentTime) >= Date.parse(value.deadline)
+        ) {
+          refuse("Original stream protection expired during renewal.");
+        }
+      }
+      if (authorized.get(tx) !== value) refuse();
+      return value;
+    }
     if (value.mode === "control") {
       requireControl(caller);
       if (authorized.get(tx) !== value) refuse();
@@ -359,17 +482,18 @@ export function createOwnerStreamReservations(
     assertOwnerAttemptCaller(caller, value.authority, ownerId);
     return value;
   }
-  function requireControl(caller: OwnerCaller) {
+  function requireControl(caller: OwnerCaller, renewal = false) {
+    const validate = renewal ? isRenewalCurrent : isControlCurrent;
     if (
       caller.principal.kind !== "owner-control" ||
       caller.principal.ownerId !== ownerId ||
-      caller.ownerEpoch !== caller.principal.epoch || !isControlCurrent
+      caller.ownerEpoch !== caller.principal.epoch || !validate
     ) {
       refuse("Current owner cleanup authority is required.");
     }
     let current: unknown;
     try {
-      current = isControlCurrent(structuredClone(caller));
+      current = validate!(structuredClone(caller));
       if (current instanceof Promise) {
         Promise.prototype.then.call(current, undefined, () => undefined);
       }
@@ -427,6 +551,162 @@ export function createOwnerStreamReservations(
     await catalog.assertFormat(tx);
     return { scope, authority };
   }
+  function target(value: unknown): OwnerStreamTarget {
+    const input = record(value, ["namespace", "operationId", "streamId"]);
+    return {
+      namespace: physicalIdentifier(input.namespace),
+      operationId: physicalIdentifier(input.operationId),
+      streamId: physicalIdentifier(input.streamId),
+    };
+  }
+  async function lockLiveScope(tx: SqlExecutor, selected: OwnerStreamTarget) {
+    const row = await tx.query(
+      `SELECT operation_id FROM ${tables.operations}
+      WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')
+        AND cancellation_requested_at IS NULL FOR UPDATE`,
+      [selected.namespace, selected.operationId],
+    );
+    if (row.rows.length !== 1) refuse("Stream scope is no longer renewable.");
+  }
+  async function readRenewal(
+    tx: SqlExecutor,
+    selected: OwnerStreamTarget,
+    caller: OwnerCaller,
+    time: string,
+    lock: boolean,
+  ) {
+    return (await tx.query<RenewalRow>(
+      `SELECT
+      CASE WHEN octet_length(placement_binding::text)<=32768 THEN placement_binding ELSE NULL END AS binding,
+      delivery_attempt::text AS ordinal,protection_deadline::text AS deadline,
+      protection_deadline>$6::timestamptz AS protected,state,revocation_state AS revocation,
+      CASE WHEN char_length(body_id) BETWEEN 1 AND 1024 THEN body_id END AS body_id,
+      CASE WHEN char_length(reservation_id) BETWEEN 1 AND 1024 THEN reservation_id END AS reservation_id,
+      writer_generation::text AS generation,
+      CASE WHEN jsonb_typeof(descriptor->'mediaType')='string' AND char_length(descriptor->>'mediaType') BETWEEN 1 AND 1024 THEN descriptor->>'mediaType' END AS media_type
+      FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
+        AND owner_id=$4 AND opening_owner_epoch=$5 AND physical_backend_id=$7 ${
+        lock ? "FOR UPDATE" : ""
+      }`,
+      [
+        selected.namespace,
+        selected.operationId,
+        selected.streamId,
+        ownerId,
+        caller.ownerEpoch,
+        time,
+        backendId,
+      ],
+    )).rows[0];
+  }
+  async function authorizeRenewal(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    value: OwnerJson,
+    time: string,
+  ) {
+    requireControl(caller, true);
+    if (!resolveReserved) refuse("Reserved renewal resolution is unavailable.");
+    await catalog.assertFormat(tx);
+    const selected = target(value);
+    await lockLiveScope(tx, selected);
+    const before = await readRenewal(tx, selected, caller, time, false);
+    if (
+      !before || !before.protected || before.revocation !== "active" ||
+      !["reserving", "open"].includes(before.state)
+    ) refuse("Expired or revoked writers cannot renew.");
+    const writer = capturePhysicalIdentity({
+      bodyId: before.body_id,
+      reservationId: before.reservation_id,
+      generation: Number(before.generation),
+      mediaType: before.media_type,
+    });
+    if (
+      writer.generation !== 1 ||
+      writer.bodyId !==
+        await deriveWorkflowId("stream-body", selected.streamId) ||
+      writer.reservationId !==
+        await deriveWorkflowId("stream-reservation", selected.streamId)
+    ) refuse("Reserved writer identity is inconsistent.");
+    const binding = parseOwnerPlacementBinding(before.binding),
+      ordinal = safeOffset(Number(before.ordinal));
+    if (ordinal < 1 || binding.namespace !== selected.namespace) refuse();
+    const proof = await resolveReserved!(
+      tx,
+      structuredClone(caller),
+      structuredClone(binding),
+      ordinal,
+      time,
+    );
+    const check = proof?.isCurrent;
+    if (!proof || typeof check !== "function") {
+      refuse("Original stream attempt is no longer current.");
+    }
+    const delivery = structuredClone(proof.delivery);
+    const authority = binding.placement === "owner-local" ? binding : {
+      placement: "worker" as const,
+      ownerId,
+      workerId: binding.workerId,
+      assignmentId: binding.assignmentId,
+      sessionId: binding.sessionId,
+      dispatchAttemptId: binding.dispatchAttemptId,
+      deliveryId: binding.deliveryId,
+    };
+    if (
+      !ownerAttemptIsLive(delivery, authority) ||
+      delivery.databaseSchema !== schema ||
+      delivery.attempts !== ordinal ||
+      delivery.eventId !== binding.sourceEventId ||
+      delivery.settlementScopeId !== selected.operationId
+    ) refuse();
+    await lockLiveScope(tx, selected);
+    const after = await readRenewal(tx, selected, caller, time, true);
+    if (
+      !after || !after.protected || after.revocation !== "active" ||
+      after.state !== before.state ||
+      after.ordinal !== before.ordinal || after.deadline !== before.deadline ||
+      after.body_id !== before.body_id ||
+      after.reservation_id !== before.reservation_id ||
+      after.generation !== before.generation ||
+      after.media_type !== before.media_type ||
+      JSON.stringify(parseOwnerPlacementBinding(after.binding)) !==
+        JSON.stringify(binding)
+    ) refuse("Stream renewal facts changed during authorization.");
+    authorized.set(tx, {
+      mode: "renewal",
+      target: selected,
+      binding,
+      ordinal,
+      deadline: after.deadline,
+      writer,
+      isCurrent: check!.bind(proof),
+    });
+    current(tx, caller);
+  }
+  async function rearm(context: Context) {
+    const armed = await context.tx.query<{ due_at: string }>(
+      `INSERT INTO ${alarmTable}(owner,name,due_at)
+      SELECT $1,$2,MIN(CASE WHEN revocation_state='revoking' THEN $3::timestamptz + $4 * interval '1 millisecond'
+        ELSE protection_deadline - $4 * interval '1 millisecond' END)
+      FROM ${tables.operationStreams} WHERE owner_id=$1 AND revocation_state<>'revoked' HAVING COUNT(*)>0
+      ON CONFLICT(owner,name) DO UPDATE SET due_at=EXCLUDED.due_at RETURNING due_at::text`,
+      [
+        ownerId,
+        alarm,
+        context.commandTime,
+        Math.max(1, Math.floor(protectionMs / 2)),
+      ],
+    );
+    if (armed.rows.length === 0) {
+      await context.tx.query(
+        `DELETE FROM ${alarmTable} WHERE owner=$1 AND name=$2
+      AND NOT EXISTS(SELECT 1 FROM ${tables.operationStreams} WHERE owner_id=$1 AND revocation_state<>'revoked')`,
+        [ownerId, alarm],
+      );
+    }
+    const dueAt = armed.rows[0]?.due_at ?? null;
+    context.afterCommit(() => onWork?.(dueAt));
+  }
   async function authorize(
     tx: SqlExecutor,
     caller: OwnerCaller,
@@ -434,6 +714,31 @@ export function createOwnerStreamReservations(
     time: string,
   ) {
     authorized.delete(tx);
+    if (command.kind === OWNER_STREAM_CLEANUP_SCAN) {
+      requireControl(caller);
+      const value = record(command.intent, ["after", "closing"]);
+      if (typeof value.closing !== "boolean") refuse();
+      const after = value.after === null ? null : cleanupCursor(value.after);
+      await catalog.assertFormat(tx);
+      authorized.set(tx, {
+        mode: "cleanup-scan",
+        after,
+        closing: value.closing,
+      });
+      current(tx, caller);
+      return;
+    }
+    if (command.kind === OWNER_STREAM_SCAN) {
+      requireControl(caller, true);
+      if (command.intent !== null) refuse();
+      await catalog.assertFormat(tx);
+      authorized.set(tx, { mode: "scan" });
+      current(tx, caller);
+      return;
+    }
+    if (command.kind === OWNER_STREAM_RENEW) {
+      return await authorizeRenewal(tx, caller, command.intent, time);
+    }
     if ([OWNER_STREAM_REVOKE, OWNER_STREAM_REVOKED].includes(command.kind)) {
       requireControl(caller);
       await catalog.assertFormat(tx);
@@ -762,7 +1067,13 @@ export function createOwnerStreamReservations(
       stored = await row(context.tx, a, context);
     }
     requireActive(stored);
+    await rearm(context);
     return json({
+      target: {
+        namespace: a.scope.binding.namespace,
+        operationId: a.scope.delivery.settlementScopeId,
+        streamId: a.streamId,
+      },
       writer: a.writer,
       descriptor: stored.state === "open"
         ? published(stored, a.descriptor)
@@ -954,6 +1265,7 @@ export function createOwnerStreamReservations(
         ],
       );
     }
+    await rearm(context);
     // The first revocation freezes the published terminal intent and C.
     return json({ writer: a.writer, revoked: a.revocation === "revoked" });
   };
@@ -1006,9 +1318,132 @@ export function createOwnerStreamReservations(
           context.caller.ownerEpoch,
         ],
       );
+      await rearm(context);
       context.afterCommit(() => onRevoked?.(structuredClone(a.target)));
     }
     return null;
+  };
+  const renew: OwnerCheckpointHandler = async (_input, context) => {
+    const a = current(context.tx, context.caller);
+    if (a.mode !== "renewal") refuse();
+    const renewalTime = clockTime();
+    if (Date.parse(renewalTime) >= Date.parse(a.deadline)) {
+      refuse("Expired writers cannot renew.");
+    }
+    const changed = await context.tx.query(
+      `UPDATE ${tables.operationStreams}
+      SET protection_deadline=$4::timestamptz + $5 * interval '1 millisecond',updated_at=$4
+      WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND owner_id=$6 AND opening_owner_epoch=$7
+        AND revocation_state='active' AND state IN ('reserving','open') AND protection_deadline=$8::timestamptz
+        AND protection_deadline>$4::timestamptz AND placement_binding=$9::jsonb AND delivery_attempt=$10
+        AND body_id=$11 AND reservation_id=$12 AND writer_generation=$13
+        AND descriptor->>'mediaType'=$14 AND physical_backend_id=$15 RETURNING stream_id`,
+      [
+        a.target.namespace,
+        a.target.operationId,
+        a.target.streamId,
+        renewalTime,
+        protectionMs,
+        ownerId,
+        context.caller.ownerEpoch,
+        a.deadline,
+        JSON.stringify(a.binding),
+        a.ordinal,
+        a.writer.bodyId,
+        a.writer.reservationId,
+        a.writer.generation,
+        a.writer.mediaType,
+        backendId,
+      ],
+    );
+    if (changed.rows.length !== 1) {
+      refuse("Stream deadline renewal lost its original attempt.");
+    }
+    await rearm(context);
+    return null;
+  };
+  const scan: OwnerCheckpointHandler = async (_input, context) => {
+    if (current(context.tx, context.caller).mode !== "scan") refuse();
+    const rows = await context.tx.query<
+      {
+        namespace: string;
+        operation_id: string;
+        stream_id: string;
+        epoch: string;
+      }
+    >(
+      `SELECT CASE WHEN char_length(namespace)<=1024 THEN namespace END AS namespace,
+        CASE WHEN char_length(operation_id)<=1024 THEN operation_id END AS operation_id,
+        CASE WHEN char_length(stream_id)<=1024 THEN stream_id END AS stream_id,opening_owner_epoch::text AS epoch
+       FROM ${tables.operationStreams} WHERE owner_id=$1 AND revocation_state='active'
+         AND protection_deadline <= $2::timestamptz + $3 * interval '1 millisecond'
+       ORDER BY protection_deadline,namespace,operation_id,stream_id LIMIT $4`,
+      [
+        ownerId,
+        context.commandTime,
+        Math.max(1, Math.floor(protectionMs / 2)),
+        OWNER_STREAM_WORK_BATCH + 1,
+      ],
+    );
+    const active = rows.rows.slice(0, OWNER_STREAM_WORK_BATCH).map((row) => {
+      if (Number(row.epoch) !== context.caller.ownerEpoch) {
+        refuse("Retained content requires separate recovery.");
+      }
+      return {
+        namespace: physicalIdentifier(row.namespace),
+        operationId: physicalIdentifier(row.operation_id),
+        streamId: physicalIdentifier(row.stream_id),
+      };
+    });
+    await rearm(context);
+    return json({
+      active,
+      moreActive: rows.rows.length > OWNER_STREAM_WORK_BATCH,
+    });
+  };
+  const scanCleanup: OwnerCheckpointHandler = async (_input, context) => {
+    const a = current(context.tx, context.caller);
+    if (a.mode !== "cleanup-scan") refuse();
+    const after = a.after;
+    const rows = await context.tx.query<
+      {
+        namespace: string;
+        operation_id: string;
+        stream_id: string;
+        deadline: string;
+        epoch: string;
+      }
+    >(
+      `SELECT CASE WHEN char_length(namespace)<=1024 THEN namespace END AS namespace,
+        CASE WHEN char_length(operation_id)<=1024 THEN operation_id END AS operation_id,
+        CASE WHEN char_length(stream_id)<=1024 THEN stream_id END AS stream_id,
+        protection_deadline::text AS deadline,opening_owner_epoch::text AS epoch
+       FROM ${tables.operationStreams} WHERE owner_id=$1
+         AND (revocation_state='revoking' OR ($2 AND revocation_state='active'))
+         AND ($3::timestamptz IS NULL OR (protection_deadline,namespace,operation_id,stream_id)>($3::timestamptz,$4,$5,$6))
+       ORDER BY protection_deadline,namespace,operation_id,stream_id LIMIT $7`,
+      [
+        ownerId,
+        a.closing,
+        after?.deadline ?? null,
+        after?.namespace ?? null,
+        after?.operationId ?? null,
+        after?.streamId ?? null,
+        OWNER_STREAM_WORK_BATCH + 1,
+      ],
+    );
+    const targets = rows.rows.slice(0, OWNER_STREAM_WORK_BATCH).map((row) => {
+      if (Number(row.epoch) !== context.caller.ownerEpoch) {
+        refuse("Retained content requires separate recovery.");
+      }
+      return cleanupCursor({
+        namespace: row.namespace,
+        operationId: row.operation_id,
+        streamId: row.stream_id,
+        deadline: row.deadline,
+      });
+    });
+    return json({ targets, more: rows.rows.length > OWNER_STREAM_WORK_BATCH });
   };
   return {
     authorize,
@@ -1021,6 +1456,9 @@ export function createOwnerStreamReservations(
       }
     },
     checkpoints: {
+      [OWNER_STREAM_RENEW]: renew,
+      [OWNER_STREAM_SCAN]: scan,
+      [OWNER_STREAM_CLEANUP_SCAN]: scanCleanup,
       [OWNER_STREAM_RESERVE]: reserve,
       [OWNER_STREAM_CONFIRM]: confirm,
       [OWNER_STREAM_WRITER]: writerAdmission,
@@ -1037,6 +1475,68 @@ export function createOwnerStreamReservations(
       },
       [OWNER_STREAM_REVOKE]: beginRevocation,
       [OWNER_STREAM_REVOKED]: confirmRevocation,
+    },
+    async renew(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      selected: OwnerStreamTarget,
+    ): Promise<void> {
+      await boundary.checkpoint(
+        structuredClone(caller),
+        OWNER_STREAM_RENEW,
+        target(selected),
+      );
+    },
+    async scanCleanup(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      after: OwnerStreamCleanupCursor | null = null,
+      closing = false,
+    ): Promise<{ targets: OwnerStreamCleanupCursor[]; more: boolean }> {
+      const result = record(
+        await boundary.checkpoint(
+          structuredClone(caller),
+          OWNER_STREAM_CLEANUP_SCAN,
+          json({
+            after: after === null ? null : cleanupCursor(after),
+            closing,
+          }),
+        ),
+        ["targets", "more"],
+      );
+      if (
+        !Array.isArray(result.targets) ||
+        result.targets.length > OWNER_STREAM_WORK_BATCH ||
+        typeof result.more !== "boolean"
+      ) refuse();
+      return { targets: result.targets.map(cleanupCursor), more: result.more };
+    },
+    async scan(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+    ): Promise<
+      {
+        active: OwnerStreamTarget[];
+        moreActive: boolean;
+      }
+    > {
+      const result = await boundary.checkpoint(
+        structuredClone(caller),
+        OWNER_STREAM_SCAN,
+        null,
+      ) as unknown as {
+        active: unknown[];
+        moreActive: unknown;
+      };
+      if (
+        !result || typeof result.moreActive !== "boolean" ||
+        !Array.isArray(result.active) ||
+        result.active.length > OWNER_STREAM_WORK_BATCH
+      ) refuse();
+      return {
+        moreActive: result.moreActive as boolean,
+        active: result.active.map(target),
+      };
     },
     async abortTarget(
       boundary: OwnerCommandBoundary,
@@ -1056,6 +1556,18 @@ export function createOwnerStreamReservations(
         operationId: physicalIdentifier(result.operationId),
         streamId: physicalIdentifier(result.streamId),
       };
+    },
+    async beginRevocation(
+      boundary: OwnerCommandBoundary,
+      caller: OwnerCaller,
+      selected: OwnerStreamTarget,
+      input: ContentStreamAbortInput = {},
+    ): Promise<void> {
+      await boundary.checkpoint(structuredClone(caller), OWNER_STREAM_REVOKE, {
+        ...target(selected),
+        outcome: input.outcome ?? "abandoned",
+        capture: input.capture ?? "truncated",
+      });
     },
     /** Owner-control cleanup remains possible after the producing caller is gone.
      * A held/unknown fence leaves the durable row revoking and its prefix intact. */
@@ -1208,26 +1720,47 @@ export function createOwnerStreamReservations(
             signal,
           },
         ),
-        ["writer", "descriptor"],
+        ["writer", "descriptor", "target"],
       );
-      if (signal?.aborted) throw signal.reason;
-      const writer = capturePhysicalIdentity(reserved.writer);
-      if (reserved.descriptor !== null) {
-        if (!isStreamOutputDescriptor(reserved.descriptor)) refuse();
-        return reserved.descriptor;
+      const orphan = target(reserved.target);
+      try {
+        if (signal?.aborted) throw signal.reason;
+        const writer = capturePhysicalIdentity(reserved.writer);
+        if (reserved.descriptor !== null) {
+          if (!isStreamOutputDescriptor(reserved.descriptor)) refuse();
+          return reserved.descriptor;
+        }
+        if (signal?.aborted) throw signal.reason;
+        const head: PhysicalBodyHead = await physical.reserve(writer);
+        if (signal?.aborted) throw signal.reason;
+        const result = await boundary.checkpoint(
+          capturedCaller,
+          OWNER_STREAM_CONFIRM,
+          json({ open: input, head }),
+          { signal },
+        );
+        if (signal?.aborted) throw signal.reason;
+        if (!isStreamOutputDescriptor(result)) refuse();
+        return result;
+      } catch (error) {
+        if (cleanupOrphan) {
+          try {
+            await cleanupOrphan(orphan);
+          } catch (cleanup) {
+            throw Object.assign(
+              new AggregateError(
+                [error, cleanup],
+                "Stream opening failed and owner cleanup is unresolved.",
+              ),
+              {
+                code: "content_open_cleanup_unknown",
+                indeterminate: true,
+              },
+            );
+          }
+        }
+        throw error;
       }
-      if (signal?.aborted) throw signal.reason;
-      const head: PhysicalBodyHead = await physical.reserve(writer);
-      if (signal?.aborted) throw signal.reason;
-      const result = await boundary.checkpoint(
-        capturedCaller,
-        OWNER_STREAM_CONFIRM,
-        json({ open: input, head }),
-        { signal },
-      );
-      if (signal?.aborted) throw signal.reason;
-      if (!isStreamOutputDescriptor(result)) refuse();
-      return result;
     },
   };
 }

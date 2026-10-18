@@ -318,6 +318,11 @@ export function createOwnerExecutionCommands(
     session: SqlSession;
     schema: string;
     registry: PluginRegistry;
+    /** SQL-only barrier: no delivery completion while its writers remain unresolved. */
+    assertContentDrained?(
+      tx: SqlExecutor,
+      delivery: EventDelivery,
+    ): Promise<void>;
     catalog: OperationCatalogCore & ActionRecoveryCatalog;
     executor: DeliveryExecutor;
     publish?: EventPublisher;
@@ -441,6 +446,7 @@ export function createOwnerExecutionCommands(
     readMode?: OwnerAuthorityReadMode,
   ): Promise<OwnerExecutionAssignment>;
 }> {
+  const assertContentDrained = options.assertContentDrained;
   const allowRecovery = options.allowRecovery;
   const local = options.local && {
     authorizeStart: options.local.authorizeStart,
@@ -1310,6 +1316,7 @@ export function createOwnerExecutionCommands(
       "completion",
     ]);
     const data = completion(value.completion);
+    await assertContentDrained?.(context.tx, state.delivery);
     const captured = await invoked(context.tx, state);
     if (!captured) refuse("Execution has no captured invocation.");
     if (data.status === "completed") {

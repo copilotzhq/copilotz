@@ -71,6 +71,29 @@ until the joint PostgreSQL/PGlite, fault, static and artifact gates pass. Slices
 2 and 3 below remain required, followed by the broader recovery/public/default
 and consumer-retirement backlog in the main checklist.
 
+## 18 October 13:45 UTC: safety checkpoint and consumer-driven next step
+
+The quiet-renewal scheduler now rescans after work and uses the committed due
+hint to arm its existing timer; keyset cleanup advances beyond held/unknown
+first pages without immediate retry loops. Orphan opens await owner cleanup;
+every completion handler has a SQL content barrier. Close joins the actual
+reverse calls as well as dispatched/local work, then sweeps current-epoch
+resources; discovery and fencing failures latch an indeterminate cleanup
+outcome.
+
+Scoped development results: coordinator40, focused real host49, actual reverse
+close4, and driver/helper140 pass on their stated intermediate sources. A causal
+counter removing the reverse-call join fails all four held-call cases. Full
+consolidated acceptance remains open. The former one-second cold-burst failures
+remain a capacity limitation; controlled construction plus real-time cleanup
+checks are not a substitute for that load evidence.
+
+The next implementation driver is the public two-agent browser-worker project in
+[the acceptance plan](browser-worker-acceptance-plan.md). Real Core execution
+requires successful seals, retention/follow and readback; the abort-only slice
+cannot be presented as completed agent integration. The full owner refactor and
+subsequent Compass/frontend migration remain the finish line.
+
 ## Approved contract and recovered-spec discrepancy
 
 The approved [owner-attempt contract](owner-attempt-authority.md) supersedes

@@ -1,3 +1,4 @@
+import type { SqlExecutor } from "../events/session.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { provisionCopilotzSchema } from "../events/schema.ts";
@@ -81,6 +82,12 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
   let controlCurrent = (caller: OwnerCaller): boolean =>
     caller.principal.kind === "owner-control" &&
     caller.principal.holderId === "holder";
+  let renewalHook: ((tx: SqlExecutor) => Promise<void>) | undefined;
+  let cleanupOrphan:
+    | ((
+      target: import("./content-reservation.ts").OwnerStreamTarget,
+    ) => Promise<void>)
+    | undefined;
   const published: unknown[] = [];
   const content = createOwnerStreamReservations({
     ownerId: "owner",
@@ -102,8 +109,20 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
       },
     },
     protectionMs: 1000,
+    now: () => time,
     maxUnresolved,
+    cleanupOrphan: (target) => cleanupOrphan?.(target) ?? Promise.resolve(),
     isControlCurrent: (caller) => controlCurrent(caller),
+    isRenewalCurrent: (caller) => controlCurrent(caller),
+    async resolveReserved(tx) {
+      await renewalHook?.(tx);
+      const store = createEventStore({
+        schema: "public",
+        session: { query: tx.query.bind(tx), transaction: (run) => run(tx) },
+      });
+      const delivery = await store.getDelivery(deliveryId);
+      return delivery ? { delivery, isCurrent: () => active } : undefined;
+    },
     async resolve(tx) {
       if (!active) return undefined;
       const store = createEventStore({
@@ -238,6 +257,12 @@ async function initialize(db: TestDatabase, maxUnresolved: number) {
     },
     setHead: (value: PhysicalBodyStore["head"]) => {
       head = value;
+    },
+    setCleanupOrphan: (hook: typeof cleanupOrphan) => {
+      cleanupOrphan = hook;
+    },
+    setRenewalHook: (hook: typeof renewalHook) => {
+      renewalHook = hook;
     },
     setControlCurrent: (hook: typeof controlCurrent) => {
       controlCurrent = hook;
@@ -1143,5 +1168,237 @@ Deno.test("owner current-epoch cleanup refuses retained epochs and asynchronous 
     );
     await new Promise((done) => setTimeout(done, 0));
     assertEquals((await streamRow(f)).row.revocation_state, "active");
+  });
+});
+
+Deno.test("owner quiet renewal advances only protection and keeps a durable ordered alarm", async () => {
+  await fixture(async (f) => {
+    await f.content.open(f.owner, f.caller, input);
+    const { target, row } = await streamRow(f), before = await f.counts();
+    f.setTime("2026-10-18T00:00:00.600Z");
+    assertEquals((await f.content.scan(f.owner, cleanupCaller)).active, [
+      target,
+    ]);
+    await f.content.renew(f.owner, cleanupCaller, target);
+    f.setTime("2026-10-18T00:00:01.200Z");
+    await f.content.renew(f.owner, cleanupCaller, target);
+    const current = (await streamRow(f)).row;
+    assertEquals(Number(current.committed_offset), 0);
+    assertEquals(current.placement_binding, row.placement_binding);
+    assertEquals(current.delivery_attempt, row.delivery_attempt);
+    assertEquals(current.revocation_state, "active");
+    assertEquals(
+      (await f.db.query(
+        "SELECT protection_deadline='2026-10-18T00:00:02.200Z'::timestamptz AS exact FROM copilotz_operation_streams",
+      )).rows[0].exact,
+      true,
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT due_at='2026-10-18T00:00:01.700Z'::timestamptz AS exact FROM owner_alarms WHERE name LIKE '%content.stream.scan%'",
+      )).rows[0].exact,
+      true,
+    );
+    assertEquals(await f.counts(), before);
+  });
+});
+for (
+  const mode of [
+    "expired",
+    "revoking",
+    "ordinal",
+    "private",
+    "control",
+    "cancelled",
+    "clock",
+    "body",
+    "reservation",
+    "generation",
+    "media",
+  ] as const
+) {
+  Deno.test(`owner renewal cannot resurrect ${mode} authority`, async () => {
+    await fixture(async (f) => {
+      await f.content.open(f.owner, f.caller, input);
+      const { target } = await streamRow(f);
+      f.setTime("2026-10-18T00:00:00.600Z");
+      if (mode === "expired") f.setTime("2026-10-18T00:00:01.001Z");
+      if (mode === "revoking") {
+        await f.content.beginRevocation(f.owner, cleanupCaller, target);
+      }
+      if (mode === "ordinal") {
+        await f.db.query(
+          "UPDATE event_deliveries SET attempts=2 WHERE status='leased'",
+        );
+      }
+      if (mode === "private") {
+        f.setRenewalHook(() => {
+          f.setActive(false);
+          return Promise.resolve();
+        });
+      }
+      if (mode === "control") {
+        f.setRenewalHook(() => {
+          f.setControlCurrent(() => false);
+          return Promise.resolve();
+        });
+      }
+      if (mode === "cancelled") {
+        f.setRenewalHook(async (tx) => {
+          await tx.query(
+            "UPDATE copilotz_operations SET cancellation_requested_at='2026-10-18T00:00:00.600Z'",
+          );
+        });
+      }
+      if (mode === "clock") {
+        f.setRenewalHook(() => {
+          f.setTime("2026-10-18T00:00:01.100Z");
+          return Promise.resolve();
+        });
+      }
+      if (mode === "body") {
+        f.setRenewalHook(async (tx) => {
+          await tx.query(
+            "UPDATE copilotz_operation_streams SET body_id='replacement'",
+          );
+        });
+      }
+      if (mode === "reservation") {
+        f.setRenewalHook(async (tx) => {
+          await tx.query(
+            "UPDATE copilotz_operation_streams SET reservation_id='replacement'",
+          );
+        });
+      }
+      if (mode === "generation") {
+        f.setRenewalHook(async (tx) => {
+          await tx.query(
+            "UPDATE copilotz_operation_streams SET writer_generation=2",
+          );
+        });
+      }
+      if (mode === "media") {
+        f.setRenewalHook(async (tx) => {
+          await tx.query(
+            `UPDATE copilotz_operation_streams SET descriptor=jsonb_set(descriptor,'{mediaType}', '"text/other"'::jsonb)`,
+          );
+        });
+      }
+      const before = (await streamRow(f)).row;
+      await assertRejects(() =>
+        f.content.renew(f.owner, cleanupCaller, target)
+      );
+      assertEquals((await streamRow(f)).row, before);
+    });
+  });
+}
+
+Deno.test("owner orphan opening waits for physical cleanup before rejecting", async () => {
+  await fixture(async (f) => {
+    const entered = deferred(), release = deferred();
+    f.setCleanupOrphan((target) =>
+      f.content.revoke(f.owner, cleanupCaller, target, { outcome: "failed" })
+    );
+    f.setReserve(async (writer) => {
+      await f.physical.reserve(writer);
+      throw new Error("reserve acknowledgement failed");
+    });
+    f.setFence(async (writer) => {
+      entered.resolve();
+      await release.promise;
+      return f.physical.fence(writer);
+    });
+    let finished = false;
+    const opening = f.content.open(f.owner, f.caller, input);
+    void opening.then(() => {
+      finished = true;
+    }, () => {
+      finished = true;
+    });
+    await entered.promise;
+    try {
+      assertEquals(finished, false);
+      assertEquals((await streamRow(f)).row.revocation_state, "revoking");
+    } finally {
+      release.resolve();
+    }
+    await assertRejects(() => opening, Error, "reserve acknowledgement failed");
+    const { row } = await streamRow(f);
+    assertEquals(row.revocation_state, "revoked");
+    assertEquals(row.state, "reserving");
+    assertEquals(row.stream_ordinal, null);
+    assertEquals(f.published.length, 0);
+  });
+});
+Deno.test("owner orphan opening preserves unknown cleanup instead of ordinary failure", async () => {
+  await fixture(async (f) => {
+    f.setCleanupOrphan((target) =>
+      f.content.revoke(f.owner, cleanupCaller, target)
+    );
+    f.setReserve(() => Promise.reject(new Error("reserve unavailable")));
+    f.setFence(() => Promise.reject(new Error("fence unavailable")));
+    const error = await assertRejects(
+      () => f.content.open(f.owner, f.caller, input),
+      AggregateError,
+      "cleanup is unresolved",
+    );
+    assertEquals(
+      (error as AggregateError & { indeterminate: boolean }).indeterminate,
+      true,
+    );
+    assertEquals((await streamRow(f)).row.revocation_state, "revoking");
+    assertEquals(f.published.length, 0);
+  });
+});
+
+Deno.test("owner cleanup scan traverses unresolved first-page fences without forgetting rows", async () => {
+  await fixture(async (f) => {
+    for (let i = 0; i < 20; i++) {
+      await f.content.open(f.owner, f.caller, { ...input, id: `cursor-${i}` });
+    }
+    const rows = (await f.db.query<
+      { namespace: string; operation_id: string; stream_id: string }
+    >("SELECT namespace,operation_id,stream_id FROM copilotz_operation_streams"))
+      .rows;
+    for (const row of rows) {
+      await f.content.beginRevocation(f.owner, cleanupCaller, {
+        namespace: row.namespace,
+        operationId: row.operation_id,
+        streamId: row.stream_id,
+      });
+    }
+    const first = await f.content.scanCleanup(f.owner, cleanupCaller);
+    assertEquals(first.targets.length, 16);
+    assertEquals(first.more, true);
+    const second = await f.content.scanCleanup(
+      f.owner,
+      cleanupCaller,
+      first.targets.at(-1)!,
+    );
+    assertEquals(second.targets.length, 4);
+    assertEquals(second.more, false);
+    assertEquals(
+      new Set([...first.targets, ...second.targets].map((t) => t.streamId))
+        .size,
+      20,
+    );
+    assertEquals(
+      (await f.content.scanCleanup(
+        f.owner,
+        cleanupCaller,
+        second.targets.at(-1)!,
+      )).targets,
+      [],
+    );
+    assertEquals(
+      (await f.db.query(
+        "SELECT 1 FROM copilotz_operation_streams WHERE revocation_state='revoking'",
+      )).rows.length,
+      20,
+    );
+    assertEquals(
+      (await f.content.scanCleanup(f.owner, cleanupCaller)).targets,
+      first.targets,
+    );
   });
 });

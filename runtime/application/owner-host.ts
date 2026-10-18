@@ -1,8 +1,15 @@
+import { createEventStore } from "../events/store.ts";
+import type { OwnerPlacementBinding } from "../owner/placement-binding.ts";
+import { ownerAttemptIsLive } from "../owner/attempt-authority.ts";
 import { ownerStreamDrainedSql } from "../streams/catalog.ts";
 import {
   createOwnerStreamReservations,
+  OWNER_STREAM_CLEANUP_SCAN,
+  OWNER_STREAM_RENEW,
   OWNER_STREAM_REVOKE,
   OWNER_STREAM_REVOKED,
+  OWNER_STREAM_SCAN,
+  type OwnerStreamCleanupCursor,
   type OwnerStreamScope,
 } from "../owner/content-reservation.ts";
 import type { PhysicalBodyStore } from "../content/physical-body-store.ts";
@@ -43,7 +50,7 @@ import {
 } from "../events/schema.ts";
 import { deriveWorkflowId } from "../events/workflow-id.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
-import type { DurableEvent } from "../events/types.ts";
+import type { DurableEvent, EventDelivery } from "../events/types.ts";
 import type { DeliveryExecutor } from "../execution/types.ts";
 import { assertJsonValue } from "../json.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
@@ -664,6 +671,19 @@ export async function createOwnerHost(
   const catalog = createOwnerOperationCatalogCore(session, schema);
   // The content opt-in requires confirmed cleanup before delivery recovery.
   // Unconfigured hosts continue to reject all unexpected stream history.
+  async function assertContentDrained(
+    tx: SqlExecutor,
+    delivery: EventDelivery,
+  ) {
+    const rows = await tx.query(
+      `SELECT 1 FROM ${operationTables.operationStreams} AS stream WHERE operation_id=$1
+        AND placement_binding->>'deliveryId'=$2 AND (${ownerStreamDrainedSql()}) IS NOT TRUE LIMIT 1`,
+      [delivery.settlementScopeId, delivery.id],
+    );
+    if (rows.rows.length) {
+      unavailable("Delivery content cleanup is unresolved.");
+    }
+  }
   const recoveryCatalog = Object.freeze(
     {
       ...catalog,
@@ -709,10 +729,20 @@ export async function createOwnerHost(
   let pumping = false;
   let settlementPump: Promise<void> | undefined;
   let alarmTimer: ReturnType<typeof setTimeout> | undefined;
+  let alarmTimerAt = Infinity;
+  let nextContentDue: number | undefined;
   let alarmPass: Promise<void> | undefined;
+  // Only charged physical work IDs, never invocation authority or a writer registry.
+  const activeContentFences = new Set<string>();
+  let contentContinuation = false;
+  // Bounded traversal only; catalog rows and original private attempts own authority.
+  let contentSweepAfter: OwnerStreamCleanupCursor | null = null;
+  let contentSweepRemaining = 0;
+  let contentSweepDone = true;
   type ControlPurpose =
     | "runtime"
     | "content-cleanup"
+    | "content-renew"
     | "local-start"
     | "fresh"
     | "schema"
@@ -953,18 +983,11 @@ export async function createOwnerHost(
       unavailable("Current metadata constraints refuse this operation.");
     }
   }
-  async function resolveCurrentAssignment(
+  async function grantsForAssignment(
     tx: SqlExecutor,
-    caller: OwnerCaller,
+    binding: OwnerAssignmentBinding,
     time: string,
-    readMode: OwnerAuthorityReadMode = "locking",
   ) {
-    const binding = await bridge.resolveStarted(tx, caller, readMode);
-    if (!binding || !ready()) {
-      return undefined;
-    }
-    // The live bridge witness has the exact incarnation. Obtain its fence from
-    // the actual session registry; never infer incarnation from worker input.
     const sessionView = transport!.sessions.get(binding.workerId);
     if (!sessionView || sessionView.connectionId !== binding.sessionId) {
       return undefined;
@@ -980,6 +1003,17 @@ export async function createOwnerHost(
       time,
     );
     const grants = returnedGrants && copy(returnedGrants);
+    return grants;
+  }
+  async function resolveCurrentAssignment(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    time: string,
+    readMode: OwnerAuthorityReadMode = "locking",
+  ) {
+    const binding = await bridge.resolveStarted(tx, caller, readMode);
+    if (!binding || !ready()) return undefined;
+    const grants = await grantsForAssignment(tx, binding, time);
     if (!grants || !await bridge.resolveStarted(tx, caller, readMode)) {
       return undefined;
     }
@@ -1314,6 +1348,7 @@ export async function createOwnerHost(
     return preparations.authorizeCaptured(tx, context);
   }
   const execution = createOwnerExecutionCommands({
+    ...(contentConfiguration ? { assertContentDrained } : {}),
     ownerId,
     schema,
     session,
@@ -1369,6 +1404,7 @@ export async function createOwnerHost(
     },
   });
   const processor = createOwnerProcessorCommands({
+    ...(contentConfiguration ? { assertContentDrained } : {}),
     ownerId,
     schema,
     session,
@@ -1535,6 +1571,78 @@ export async function createOwnerHost(
     return (await resolveInvocationFacts(tx, caller, time, readMode))
       ?.invocation;
   }
+  async function resolveReservedStream(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    supplied: OwnerPlacementBinding,
+    ordinal: number,
+    time: string,
+  ) {
+    assertControl(caller, "content-renew");
+    if (!ready()) return undefined;
+    const who = copy(caller), binding = copy(supplied);
+    let lifetime: Readonly<{ isCurrent(): boolean }> | undefined;
+    if (binding.placement === "worker") {
+      const first = await bridge.resolveReserved(tx, who, binding);
+      if (!first) return undefined;
+      const grants = await grantsForAssignment(tx, first.binding, time);
+      const after = await bridge.resolveReserved(tx, who, binding);
+      if (
+        grants?.ctx !== true || !after || !same(first.binding, after.binding) ||
+        !first.lifetime.isCurrent()
+      ) return undefined;
+      lifetime = first.lifetime;
+    } else {
+      const found = binding.kind === "action"
+        ? await local?.resolveReserved(tx, who, binding, ordinal, time)
+        : await localProcessor?.resolveReserved(
+          tx,
+          who,
+          binding,
+          ordinal,
+          time,
+        );
+      lifetime = found?.lifetime;
+    }
+    assertControl(who, "content-renew");
+    if (!lifetime?.isCurrent() || !ready()) return undefined;
+    // The coordinator already holds the operation lock. Keep operation -> delivery
+    // order and reuse the established live-attempt representation.
+    await tx.query(
+      `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 FOR UPDATE`,
+      [binding.deliveryId],
+    );
+    const store = createEventStore({
+      schema,
+      session: { query: tx.query.bind(tx), transaction: (run) => run(tx) },
+    });
+    const delivery = await store.getDelivery(binding.deliveryId);
+    const authority = binding.placement === "owner-local" ? binding : {
+      placement: "worker" as const,
+      ownerId,
+      workerId: binding.workerId,
+      assignmentId: binding.assignmentId,
+      sessionId: binding.sessionId,
+      dispatchAttemptId: binding.dispatchAttemptId,
+      deliveryId: binding.deliveryId,
+    };
+    if (
+      !delivery || !ownerAttemptIsLive(delivery, authority) ||
+      delivery.attempts !== ordinal ||
+      delivery.eventId !== binding.sourceEventId ||
+      delivery.databaseSchema !== schema ||
+      delivery.consumerId !==
+        ("kind" in binding && binding.kind === "processor"
+          ? `processor:${binding.processorId}`
+          : `registered:${binding.actionId}`)
+    ) return undefined;
+    const first = lifetime;
+    const isCurrent = () => {
+      assertControl(who, "content-renew");
+      return ready() && first.isCurrent() && ready();
+    };
+    return isCurrent() ? { delivery, isCurrent } : undefined;
+  }
   const content = contentConfiguration && physicalConfiguration
     ? createOwnerStreamReservations({
       ownerId,
@@ -1552,7 +1660,17 @@ export async function createOwnerHost(
         ]),
       ) as PhysicalBodyStore,
       protectionMs: contentConfiguration.protectionMs as number,
+      now,
       maxUnresolved: contentConfiguration.maxUnresolved as number,
+      resolveReserved: resolveReservedStream,
+      isRenewalCurrent(caller) {
+        assertControl(caller, "content-renew");
+        return ready();
+      },
+      onWork(dueAt) {
+        nextContentDue = dueAt === null ? undefined : Date.parse(dueAt);
+        if (!alarmPass && ready()) armAlarm();
+      },
       resolve: async (tx, caller, time) =>
         (await resolveInvocationFacts(tx, caller, time))?.stream,
       resolveSettlement: async (tx, caller, time) =>
@@ -1587,6 +1705,13 @@ export async function createOwnerHost(
       isControlCurrent(caller) {
         assertControl(caller, "content-cleanup");
         return owner.state === "acquired";
+      },
+      async cleanupOrphan(target): Promise<void> {
+        await control(
+          (caller) =>
+            content!.revoke(owner, caller, target, { outcome: "failed" }),
+          "content-cleanup",
+        );
       },
       onRevoked: (target) =>
         wake({ namespace: target.namespace, operationId: target.operationId }),
@@ -2167,9 +2292,13 @@ export async function createOwnerHost(
       "host.alarms": async (_input, context) => {
         const rows = await context.tx.query<{ name: string }>(
           `SELECT name FROM ${ownerTables.alarms} WHERE owner=$1 AND due_at <= $2::timestamptz ORDER BY due_at,name LIMIT $3`,
-          [ownerId, context.commandTime, maxPending * 2 + 1],
+          [
+            ownerId,
+            context.commandTime,
+            maxPending * 2 + (content ? 1 : 0) + 1,
+          ],
         );
-        if (rows.rows.length > maxPending * 2) {
+        if (rows.rows.length > maxPending * 2 + (content ? 1 : 0)) {
           unavailable("Owner alarm capacity exceeded.");
         }
         const found: OwnerJson[] = [];
@@ -2181,7 +2310,12 @@ export async function createOwnerHost(
           const [kind, namespace, id] = name;
           text(namespace);
           text(id);
-          if (kind === OWNER_OPERATION_SETTLEMENT) {
+          if (kind === OWNER_STREAM_SCAN) {
+            if (!content || namespace !== ownerId || id !== "content") {
+              unavailable("Unsupported content alarm.");
+            }
+            found.push({ kind: "content" });
+          } else if (kind === OWNER_OPERATION_SETTLEMENT) {
             found.push({ kind: "settlement", namespace, operationId: id });
           } else if (kind === "host.delivery") {
             const delivery = (await context.tx.query<ScheduledRow>(
@@ -2250,9 +2384,18 @@ export async function createOwnerHost(
         async () => {
           if (content && Object.hasOwn(content.checkpoints, command.kind)) {
             if (
-              [OWNER_STREAM_REVOKE, OWNER_STREAM_REVOKED].includes(command.kind)
+              [
+                OWNER_STREAM_REVOKE,
+                OWNER_STREAM_REVOKED,
+                OWNER_STREAM_CLEANUP_SCAN,
+              ].includes(command.kind)
             ) {
               assertControl(caller, "content-cleanup");
+            } else if (
+              [OWNER_STREAM_RENEW, OWNER_STREAM_SCAN].includes(command.kind)
+            ) {
+              assertControl(caller, "content-renew");
+              if (!ready()) unavailable();
             } else {
               if (!ready()) unavailable();
               snapshots?.assertOrdinaryAllowed(caller);
@@ -2750,19 +2893,193 @@ export async function createOwnerHost(
     });
     return settlementPump;
   }
+  function startContentCleanup(
+    targets: readonly OwnerStreamCleanupCursor[],
+  ): number {
+    if (!content || !ready()) return 0;
+    const coordinator = content;
+    let consumed = 0;
+    for (const supplied of targets) {
+      if (!ready() || contentSweepRemaining <= 0) break;
+      const target = {
+          namespace: supplied.namespace,
+          operationId: supplied.operationId,
+          streamId: supplied.streamId,
+        },
+        key = JSON.stringify([
+          target.namespace,
+          target.operationId,
+          target.streamId,
+        ]);
+      if (
+        !activeContentFences.has(key) && activeContentFences.size >= maxActive
+      ) break;
+      contentSweepAfter = copy(supplied);
+      contentSweepRemaining--;
+      consumed++;
+      if (activeContentFences.has(key)) continue;
+      activeContentFences.add(key);
+      const task = Promise.resolve().then(async () => {
+        try {
+          await control(
+            (caller) => coordinator.revoke(owner, caller, target),
+            "content-cleanup",
+          );
+        } catch (error) {
+          if (owner.state !== "acquired") stop(error);
+          else report(error);
+        }
+      }).finally(() => {
+        activeContentFences.delete(key);
+        // Advance to unvisited rows even after unknown outcomes. Never wrap an
+        // ended sweep here: failed rows retry only on the next durable alarm.
+        if (!contentSweepDone && ready()) {
+          contentContinuation = true;
+          queueMicrotask(() => {
+            void wakeAlarms().catch(report);
+          });
+        }
+      });
+      trackTask(task);
+    }
+    return consumed;
+  }
+  async function maintainContent(durableAlarm: boolean) {
+    if (!content || !ready()) return;
+    const work = await control(
+      (caller) => content.scan(owner, caller),
+      "content-renew",
+    );
+    // The scan's due set can grow while this page is processed. Rescan after
+    // any renewal work instead of adding a fresh poll interval to overdue work.
+    if (work.active.length || work.moreActive) contentContinuation = true;
+    if (contentSweepDone && durableAlarm) {
+      contentSweepAfter = null;
+      contentSweepRemaining = contentConfiguration!.maxUnresolved as number;
+      contentSweepDone = false;
+    }
+    for (const target of work.active) {
+      if (!ready()) return;
+      try {
+        await control(
+          (caller) => content.renew(owner, caller, target),
+          "content-renew",
+        );
+      } catch (error) {
+        if (owner.state !== "acquired" || uncertain(error)) {
+          stop(error);
+          return;
+        }
+        // Fix the durable revocation intent now; do not wait for storage inside
+        // the alarm pass or a held fence would starve unrelated quiet writers.
+        try {
+          await control(
+            (caller) => content.beginRevocation(owner, caller, target),
+            "content-cleanup",
+          );
+        } catch (failure) {
+          stop(failure);
+          return;
+        }
+      }
+    }
+    // Drain due renewal pages before spending this pass on physical cleanup.
+    if (work.active.length || work.moreActive) return;
+    if (!contentSweepDone && ready()) {
+      const page = await control(
+        (caller) => content.scanCleanup(owner, caller, contentSweepAfter),
+        "content-cleanup",
+      );
+      const consumed = startContentCleanup(page.targets);
+      if (
+        contentSweepRemaining <= 0 ||
+        (consumed === page.targets.length && !page.more)
+      ) contentSweepDone = true;
+      else if (
+        consumed === page.targets.length && activeContentFences.size < maxActive
+      ) contentContinuation = true;
+    }
+  }
+  async function drainContentForClose(): Promise<void> {
+    if (!content) return;
+    try {
+      if (owner.state !== "acquired") {
+        unavailable("Content cleanup requires a current owner boundary.");
+      }
+      let after: OwnerStreamCleanupCursor | null = null;
+      let remaining = contentConfiguration!.maxUnresolved as number;
+      const failures: unknown[] = [];
+      while (remaining > 0) {
+        const page = await control(
+          (caller) => content.scanCleanup(owner, caller, after, true),
+          "content-cleanup",
+        );
+        for (let start = 0; start < page.targets.length; start += maxActive) {
+          const chunk = page.targets.slice(
+            start,
+            start + Math.min(maxActive, remaining),
+          );
+          const results = await Promise.allSettled(
+            chunk.map((cursor) =>
+              control((caller) =>
+                content.revoke(owner, caller, {
+                  namespace: cursor.namespace,
+                  operationId: cursor.operationId,
+                  streamId: cursor.streamId,
+                }), "content-cleanup")
+            ),
+          );
+          for (const result of results) {
+            if (result.status === "rejected") failures.push(result.reason);
+          }
+          remaining -= chunk.length;
+          after = chunk.at(-1) ?? after;
+          if (remaining <= 0) break;
+        }
+        if (!page.more) break;
+        if (remaining <= 0) {
+          failures.push(
+            new Error(
+              "Content close sweep exceeded its unresolved-writer bound.",
+            ),
+          );
+        }
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Content fences remain unresolved.");
+      }
+    } catch (cause) {
+      const error = Object.assign(
+        new AggregateError(
+          [cause],
+          "Owner content cleanup remains unresolved.",
+          { cause },
+        ),
+        { code: "content_close_cleanup_unknown", indeterminate: true },
+      );
+      fault ??= error;
+      throw error;
+    }
+  }
   /** Bounded discovery during this live fresh epoch. It never reclaims a lost
    * attempt or consumes an alarm based on a transport result. */
   function wakeAlarms(): Promise<void> {
     if (alarmPass) return alarmPass;
     if (!ready()) return Promise.resolve();
+    const forceContent = contentContinuation;
+    contentContinuation = false;
     alarmPass = (async () => {
       await bridge.retryRetirements();
       const alarms = await control((caller) =>
         owner.project(caller, "host.alarms", null)
       ) as readonly Record<string, OwnerJson>[];
+      if (forceContent || alarms.some((alarm) => alarm.kind === "content")) {
+        await maintainContent(alarms.some((alarm) => alarm.kind === "content"));
+      }
       for (const alarm of alarms) {
         if (!ready()) return;
-        if (alarm.kind === "settlement") {
+        if (alarm.kind === "content") continue;
+        else if (alarm.kind === "settlement") {
           wake({
             namespace: String(alarm.namespace),
             operationId: String(alarm.operationId),
@@ -2805,15 +3122,60 @@ export async function createOwnerHost(
       pump();
     })().finally(() => {
       alarmPass = undefined;
+      armAlarm();
+      if (contentContinuation && ready()) {
+        queueMicrotask(() => {
+          void wakeAlarms().catch(report);
+        });
+      }
     });
     return alarmPass;
   }
   function armAlarm() {
     if (!ready()) return;
+    let time: number;
+    try {
+      time = Date.parse(now?.() ?? new Date().toISOString());
+    } catch (error) {
+      stop(error);
+      return;
+    }
+    // The injected clock may reenter close. It is advisory scheduling data,
+    // never permission to install work after the lifetime has ended.
+    if (!ready()) return;
+    if (
+      !Number.isFinite(time) ||
+      (nextContentDue !== undefined && !Number.isFinite(nextContentDue))
+    ) {
+      stop(new Error("Owner alarm clock is unavailable."));
+      return;
+    }
+    const interval = contentConfiguration
+      ? Math.max(
+        1,
+        Math.min(
+          1000,
+          Math.floor(Number(contentConfiguration.protectionMs) / 4),
+        ),
+      )
+      : 1000;
+    const delay = Math.max(
+      0,
+      Math.min(
+        interval,
+        nextContentDue === undefined ? interval : nextContentDue - time,
+      ),
+    );
+    const due = Date.now() + delay;
+    // A later hint must not postpone an already scheduled ordinary alarm check.
+    if (alarmTimer !== undefined && alarmTimerAt <= due) return;
     clearTimeout(alarmTimer);
+    alarmTimerAt = due;
     alarmTimer = setTimeout(() => {
+      alarmTimer = undefined;
+      alarmTimerAt = Infinity;
       void wakeAlarms().catch(report).finally(armAlarm);
-    }, 1000);
+    }, delay);
   }
   const calls = createOwnerWorkerCallAdmission({
     ...(content
@@ -2938,7 +3300,7 @@ export async function createOwnerHost(
   const wrapped = bridge.wrapWorkerCalls(calls);
   // Revocation and capacity are separate: cancelled unstarted calls release
   // promptly, while running/admitting noncooperative work retains its slot.
-  const reverseCalls = new Set<object>();
+  const reverseCalls = new Set<Promise<void>>();
   function trackAdmission(
     admit: Admissions["admit"] | NonNullable<Admissions["admitUnassigned"]>,
   ): Admissions["admit"] {
@@ -2947,7 +3309,8 @@ export async function createOwnerHost(
         !current(context.fence) || context.signal.aborted ||
         reverseCalls.size >= maxPending
       ) return undefined;
-      const entry = {};
+      let resolveDone!: () => void;
+      const entry = new Promise<void>((resolve) => resolveDone = resolve);
       reverseCalls.add(entry);
       let phase: "admitting" | "admitted" | "running" | "released" =
         "admitting";
@@ -2966,6 +3329,7 @@ export async function createOwnerHost(
         revoke();
         reverseCalls.delete(entry);
         signal.removeEventListener("abort", onAbort);
+        resolveDone();
       };
       const onAbort = () => {
         revoke();
@@ -3258,10 +3622,13 @@ export async function createOwnerHost(
           Promise.resolve().then(() => snapshots?.stop()),
           Promise.resolve().then(() => transport!.shutdown(reason)),
           (async () => {
-            await Promise.allSettled([...runningTasks]);
+            // Transport shutdown can abort a reply without joining its handler.
+            // Reuse charged reverse-call entries to await actual physical work.
+            await Promise.allSettled([...runningTasks, ...reverseCalls]);
             await settlementPump;
             await alarmPass?.catch(() => undefined);
             await bridge.retryRetirements();
+            await drainContentForClose();
           })(),
         ]);
         owner.stop(reason);

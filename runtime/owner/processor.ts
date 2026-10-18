@@ -365,6 +365,11 @@ export function createOwnerProcessorCommands(
     schema: string;
     session: SqlSession;
     registry: PluginRegistry;
+    /** SQL-only barrier: no delivery completion while its writers remain unresolved. */
+    assertContentDrained?(
+      tx: SqlExecutor,
+      delivery: EventDelivery,
+    ): Promise<void>;
     catalog: OperationCatalogCore;
     /** Internal local capability only; absent means all local routes refuse. */
     local?: OwnerLocalProcessorOptions;
@@ -398,6 +403,7 @@ export function createOwnerProcessorCommands(
     ): void | Promise<void>;
   }>,
 ) {
+  const assertContentDrained = options.assertContentDrained;
   const local = captureLocal(options);
   text(options.ownerId);
   if (options.catalog.databaseSchema !== options.schema) {
@@ -1077,6 +1083,7 @@ export function createOwnerProcessorCommands(
     if (state.read.cancelled && result.status !== "cancelled") {
       refuse("Scope cancellation takes precedence over Processor completion.");
     }
+    await assertContentDrained?.(context.tx, state.read.delivery);
     const settled = await settleAttempt(
       runtime(context, binding),
       binding.deliveryId,
@@ -1297,6 +1304,7 @@ export function createOwnerProcessorCommands(
     const store = runtime(context);
     const id = state.delivery.id;
     const owner = state.assignment.dispatchAttemptId;
+    await assertContentDrained?.(context.tx, state.delivery);
     const settled = await settleAttempt(store, id, owner, result);
     if (!settled) refuse("Processor settlement lost its attempt.");
     await options.scheduleSettlement(context, {

@@ -1,12 +1,24 @@
 # Owner, worker and Views implementation checklist
 
-Updated: 18 October 2026, 13:16 UTC.
+Updated: 18 October 2026, 13:45 UTC.
 
 This is the maintained coordination checklist for
 [Copilotz PR #93](https://github.com/copilotzhq/copilotz/pull/93). It tracks
 scoped deliverables, not a percentage complete. A checked item means the named
 scope is implemented and reviewed; it does not imply its whole workstream is
 production-ready. All changes remain draft: **no merge or publication**.
+
+## Acceptance-driven finish plan
+
+The latest direction is to complete the full owner refactor using a separate
+**two-agent browser-worker project** as the first public-consumer proof, then
+migrate Compass including its frontend. The local server owns persistence;
+authored Actions, Processors, agents and compatible tools run in the browser.
+See the
+[concrete milestones and acceptance matrix](browser-worker-acceptance-plan.md).
+The smaller app does not replace any approved refactor scope or the later full
+application migration. Preserve the current content safety checkpoint, then
+prioritize gaps exposed through the real public construction/agent/UI path.
 
 ## Current priority
 
@@ -65,18 +77,18 @@ retained-history adoption and public/default activation remain unavailable. No
 legacy writer behavior is extended, no new authority registry/lease is
 introduced, and no package is merged or published.
 
-## Latest working-tree status and remaining sequence
+## Historical 13:16 working-tree status and remaining sequence
 
 The pushed preservation checkpoint remains `33673b15` (local `7bc6e7a`,
-identical tree `541e5878`). The following newer changes are **uncommitted working
-code**, not an accepted or published milestone:
+identical tree `541e5878`). The following newer changes are **uncommitted
+working code**, not an accepted or published milestone:
 
 - Quiet owner renewal: 15 focused checks passed, including exact original
   lifetime/grant checks, late deadline/identity changes, 33-writer continuation,
   and cleanup with one held fence
 - Orphan opening cleanup: two coordinator checks and eight actual host flows
-  passed across Action/Processor, local/worker and both transports. Failure waits
-  for actual cleanup; hidden reservations remain hidden
+  passed across Action/Processor, local/worker and both transports. Failure
+  waits for actual cleanup; hidden reservations remain hidden
 - SQL delivery-completion barrier added; 16 existing real abort/disposal flows
   passed. Direct bypass/retry causal tests remain open
 - Fair cleanup pagination is being corrected: its latest combined diagnostic
@@ -92,23 +104,50 @@ These diagnostics come from different intermediate sources. Counts below remain
 The coordinated remaining sequence is:
 
 1. Finish private content lifetime in the actual owner flow: renewal fairness,
-   orphan cleanup, completion/retry barriers, actual close drain, and independent
-   PostgreSQL/PGlite plus artifact/static acceptance
+   orphan cleanup, completion/retry barriers, actual close drain, and
+   independent PostgreSQL/PGlite plus artifact/static acceptance
 2. Complete supported content behavior: accepted seals, close/retain/follow,
    current-copy resolution, promotion, client repair and retained references;
    finish remaining read/vector/subscription/protected-value contracts
-3. Complete recovery parity: retained history/takeover, replay and already-admitted
-   stages, continuations/parked execution, handoff, cancellation and settlement
-4. Migrate public `createCopilotz`, embedded/connected defaults, model/message and
-   channel providers, Views UI and plugins; retire each superseded consumer and
-   obsolete option/wrapper as its replacement passes
-5. Run coherent full-suite, fault/load/resource and package-surface gates; finish
-   faster PR feedback, dependency integration and operational/migration docs;
-   obtain explicit review/merge/publication approval
+3. Complete recovery parity: retained history/takeover, replay and
+   already-admitted stages, continuations/parked execution, handoff,
+   cancellation and settlement
+4. Migrate public `createCopilotz`, embedded/connected defaults, model/message
+   and channel providers, Views UI and plugins; retire each superseded consumer
+   and obsolete option/wrapper as its replacement passes
+5. Run coherent full-suite, fault/load/resource and package-surface gates;
+   finish faster PR feedback, dependency integration and operational/migration
+   docs; obtain explicit review/merge/publication approval
 
 Content lifetime is the current implementation track, not the final outstanding
 piece of the entire refactor. The unchecked items below remain the authoritative
 scope; optional hosting and production migration stay separate.
+
+## 13:45 content safety checkpoint (still unaccepted WIP)
+
+Quiet renewal, bounded keyset cleanup, orphan-open cleanup, SQL completion
+barriers and normal close sweeping are implemented in the working tree. The
+existing reverse-call capacity entries now expose their actual completion, so
+host close joins a held physical call even after transport shutdown finishes. No
+additional authority registry or transport drain API was added.
+
+Scoped development evidence on intermediate sources: 40 complete coordinator
+cases; 49 focused actual host cases; four held-worker-close cases across both
+transports; 140 driver/helper cases after moving a test-only fixture out of
+production modules. Removing the raw reverse-call join reproduces all four close
+failures. Source review also corrected discovery-error classification and clock
+reentrancy. These are not one frozen full acceptance run.
+
+The earlier one-second/21-writer cold-burst failures remain real load evidence.
+The revised held-fence case freezes construction only, then runs the original
+protection window and a real 2.2-second hold without rewriting deadlines. That
+isolates cleanup fairness rather than claiming burst capacity is solved.
+
+The package-surface diagnostic identified five physical-store implementation
+modules still awaiting genuine consumer composition, plus a misplaced test
+fixture which has now been moved to runtime/testing. A new all-green static or
+PostgreSQL gate is not claimed. Content semantics and public composition remain
+open and are required by the real two-agent acceptance project.
 
 ## Current work
 
@@ -147,15 +186,16 @@ All five causal old-version defects remain recorded beside corrected passes. The
 unchanged full-static package-surface guard now refuses seven private modules
 awaiting genuine host wiring. The private receipt-free mutation boundary now
 separately passes 194 PostgreSQL and 187 PGlite cases with seven explicit
-PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Those historical gates preceded the later reviewed reservation/checkpoint
-components and current unaccepted host integration described above. The shared operation/event catalog core
-now separately passes 335 PostgreSQL and 324 PGlite cases with 11 explicit
-PostgreSQL-only skips. Legacy SQL/parameter parity is unchanged in both
-notification modes; owner recovery still requires its explicit cleanup hook.
-Confirmation-order schema checks additionally pass 72 PostgreSQL and 64 PGlite
-tests, each with 63 steps; eight PostgreSQL-only cases are explicitly skipped on
-PGlite. This schema prerequisite leaves real physical confirmation and
-publication commands open.
+PostgreSQL skips, including genuine committed/aborted COMMIT-loss probes. Those
+historical gates preceded the later reviewed reservation/checkpoint components
+and current unaccepted host integration described above. The shared
+operation/event catalog core now separately passes 335 PostgreSQL and 324 PGlite
+cases with 11 explicit PostgreSQL-only skips. Legacy SQL/parameter parity is
+unchanged in both notification modes; owner recovery still requires its explicit
+cleanup hook. Confirmation-order schema checks additionally pass 72 PostgreSQL
+and 64 PGlite tests, each with 63 steps; eight PostgreSQL-only cases are
+explicitly skipped on PGlite. This schema prerequisite leaves real physical
+confirmation and publication commands open.
 
 The approved [lease-free owner attempt contract](owner-attempt-authority.md) is
 implemented and independently checked in this scoped checkpoint. Both placements

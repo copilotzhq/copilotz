@@ -375,6 +375,42 @@ export function createOwnerHostLocalProcessors(
       settlementGranted: permission.settlement === true,
     };
   }
+  /** The root host authenticates its genuine renewal control token. This reads
+   * an already-reserved exact entry and reuses only its ongoing ctx grant. */
+  async function resolveReserved(
+    tx: SqlExecutor,
+    caller: OwnerCaller,
+    supplied: Binding,
+    ordinal: number,
+    time: string,
+  ) {
+    const who = copy(caller), binding = copy(supplied);
+    const lifetime = controller.captureReservedLifetime(binding, ordinal);
+    if (!lifetime) return undefined;
+    const before = await assignments.resolveReserved(
+      tx,
+      who,
+      binding,
+      lifetime.isCurrent,
+    );
+    if (
+      !before || before.placement !== "owner-local" ||
+      before.kind !== "processor" ||
+      !selects(before.processorId) || !lifetime.isCurrent()
+    ) return undefined;
+    const permission = await grants(tx, before, "current", time);
+    const after = await assignments.resolveReserved(
+      tx,
+      who,
+      binding,
+      lifetime.isCurrent,
+    );
+    if (
+      permission?.ctx !== true || !after || !exact(before, after) ||
+      !lifetime.isCurrent()
+    ) return undefined;
+    return { binding: before, lifetime };
+  }
   return {
     selects,
     stop,
@@ -382,6 +418,7 @@ export function createOwnerHostLocalProcessors(
     captureLifetime: controller.captureCurrentLifetime,
     isInvocationCurrent: controller.isInvocationCurrent,
     captureReservedLifetime: controller.captureReservedLifetime,
+    resolveReserved,
     resolve,
     processor: {
       authorizeStart,

@@ -1,7 +1,7 @@
 /** Named-port failure fixture. This proves driver drain, not SQL authority. */
 import assert from "node:assert/strict";
 import type { ActionContext } from "../actions/types.ts";
-import type { RegisteredStreamPort } from "./stream-capability.ts";
+import type { RegisteredStreamPort } from "../execution/stream-capability.ts";
 function gate() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => resolve = done);

@@ -1,4 +1,4 @@
-import { streamFailureFixture } from "./stream-failure.fixture.ts";
+import { streamFailureFixture } from "../testing/stream-failure.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defineAction } from "../actions/define.ts";

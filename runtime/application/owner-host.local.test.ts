@@ -137,6 +137,7 @@ async function fixture(input: {
   registry?: PluginRegistry;
   mode?: Mode;
   maxActive?: number;
+  now?: () => string;
   callWaitMs?: number;
   local?: OwnerHostLocalActionOptions;
   policy?: Partial<OwnerHostPolicy>;
@@ -147,6 +148,7 @@ async function fixture(input: {
   session?(db: SqlSession): SqlSession;
   beforeReady?(): Promise<void>;
   shutdownFailure?: Readonly<{ error: Error; observed(): void }>;
+  onTransportShutdown?(): void;
 }) {
   const { entrypoints } = await resolveOxianSource(sourceRoot!);
   const { createHypervisor } = await import(entrypoints["./hypervisor"]);
@@ -164,6 +166,7 @@ async function fixture(input: {
     ...baseOptions(input.session?.(db) ?? db, registry),
     policy: { ...baseOptions(db, registry).policy, ...input.policy },
     maxActive: input.maxActive ?? 4,
+    ...(input.now ? { now: input.now } : {}),
     maxPending: 32,
     ...(input.preparation ? { preparation: input.preparation } : {}),
     ...(input.snapshots ? { snapshots: input.snapshots } : {}),
@@ -194,14 +197,17 @@ async function fixture(input: {
     createTransport(options, lifecycle) {
       const transport = createHypervisor(options, lifecycle);
       const failure = input.shutdownFailure;
-      if (!failure) return transport;
+      if (!failure && !input.onTransportShutdown) return transport;
       const shutdown = transport.shutdown.bind(transport);
       return {
         ...transport,
         async shutdown(reason) {
           await shutdown(reason);
-          failure.observed();
-          throw failure.error;
+          input.onTransportShutdown?.();
+          if (failure) {
+            failure.observed();
+            throw failure.error;
+          }
         },
       };
     },
@@ -4826,3 +4832,885 @@ test(
     }
   },
 );
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      test(
+        `quiet content renewal uses original ${placement} ${kind} / ${mode}`,
+        { skip: !sourceRoot, timeout: 30_000 },
+        async () => {
+          let inputChecks = 0, eventChecks = 0, completed = false;
+          const physical = createMemoryPhysicalBodyStore();
+          const onInput = () => {
+              inputChecks++;
+            },
+            onEvent = () => {
+              eventChecks++;
+            };
+          const f = await fixture({
+            mode,
+            maxActive: 1,
+            registry: invocationFlowRegistry(kind, async (ctx) => {
+              const writer = await ctx.streams.open({
+                id: "quiet",
+                mediaType: "text/plain",
+                role: "assistant",
+              });
+              await inspected();
+              await writer.abort({ outcome: "abandoned" });
+              completed = true;
+            }),
+            local: localOptions({
+              actionIds: kind === "action" && placement === "worker"
+                ? ["fixture.idle"]
+                : ["fixture.local"],
+              policy: {
+                grants: () => ({ ctx: true, settlement: true }),
+                input: onInput,
+                collections: () => ({}),
+              },
+            }),
+            ...(kind === "processor" && placement === "owner-local"
+              ? {
+                processors: {
+                  processorIds: ["fixture.read"],
+                  policy: {
+                    grants: () => ({ ctx: true, settlement: true }),
+                    event: onEvent,
+                    collections: () => ({}),
+                  },
+                  createCapabilities: () => ({ resources: {}, adapters: {} }),
+                },
+              }
+              : {}),
+            policy: { input: onInput, processorEvent: onEvent },
+            content: {
+              backendId: "memory",
+              physical,
+              protectionMs: 1000,
+              maxUnresolved: 8,
+            },
+          });
+          const inspected = async () => {
+            const before = (await f.db.query(
+              "SELECT placement_binding,delivery_attempt,opening_owner_epoch,protection_deadline::text AS deadline FROM copilotz_operation_streams",
+            )).rows[0];
+            const calls = { inputChecks, eventChecks };
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            const after = (await f.db.query(
+              "SELECT placement_binding,delivery_attempt,opening_owner_epoch,protection_deadline::text AS deadline,revocation_state,state,committed_offset FROM copilotz_operation_streams",
+            )).rows[0];
+            assert.equal(after.state, "open");
+            assert.equal(after.revocation_state, "active");
+            assert.equal(Number(after.committed_offset), 0);
+            assert.deepEqual(after.placement_binding, before.placement_binding);
+            assert.equal(after.delivery_attempt, before.delivery_attempt);
+            assert.equal(after.opening_owner_epoch, before.opening_owner_epoch);
+            assert.ok(
+              Date.parse(String(after.deadline)) >
+                Date.parse(String(before.deadline)) + 1000,
+            );
+            assert.deepEqual(
+              { inputChecks, eventChecks },
+              calls,
+              "protection must not repeat business admission policies",
+            );
+          };
+          try {
+            assert.equal(
+              await f.facade.actions.work("quiet", {
+                operationKey: `quiet-${kind}-${placement}`,
+              }),
+              "done",
+            );
+            await eventually(() => completed && f.host.snapshot().active === 0);
+            assert.deepEqual(f.errors, []);
+            assert.equal(
+              (await f.db.query(
+                "SELECT revocation_state FROM copilotz_operation_streams",
+              )).rows[0].revocation_state,
+              "revoked",
+            );
+          } finally {
+            await f.close();
+          }
+        },
+      );
+    }
+  }
+}
+
+for (const placement of ["owner-local", "worker"] as const) {
+  test(`held content fence does not starve quiet ${placement} renewal`, {
+    skip: !sourceRoot,
+    timeout: 30_000,
+  }, async () => {
+    const enteredFence = deferred(),
+      releaseFence = deferred(),
+      releaseWork = deferred();
+    const opened = new Set<string>();
+    // Freeze construction only: isolate live cleanup fairness from cold burst
+    // admission throughput. Existing deadlines are never extended or rewritten.
+    const clockOrigin = Date.now();
+    let clockStarted: number | undefined;
+    const now = () =>
+      new Date(
+        clockOrigin +
+          (clockStarted === undefined ? 0 : Date.now() - clockStarted),
+      ).toISOString();
+    const physical = createMemoryPhysicalBodyStore();
+    let badAllowed = true, fenceCalls = 0;
+    const perform =
+      (name: string) => async (_input: unknown, ctx: ActionContext) => {
+        const writers = [];
+        for (let i = 0; i < (name === "bad" ? 20 : 1); i++) {
+          writers.push(
+            await ctx.streams.open({
+              id: `${name}-${i}`,
+              mediaType: name === "bad" ? "text/x-bad" : "text/plain",
+              role: "assistant",
+            }),
+          );
+        }
+        opened.add(name);
+        await releaseWork.promise;
+        for (const writer of writers) {
+          await writer.abort({ outcome: "abandoned" });
+        }
+        return "done";
+      };
+    const f = await fixture({
+      maxActive: 2,
+      now,
+      registry: createPluginRegistry({
+        actions: {
+          idle: defineAction({ id: "fixture.idle", execute: () => null }),
+          bad: defineAction({ id: "fixture.bad", execute: perform("bad") }),
+          good: defineAction({ id: "fixture.good", execute: perform("good") }),
+        },
+      }),
+      local: localOptions({
+        actionIds: placement === "owner-local"
+          ? ["fixture.bad", "fixture.good"]
+          : ["fixture.idle"],
+        policy: {
+          grants: (_tx, { binding }) => ({
+            ctx: binding.actionId !== "fixture.bad" || badAllowed,
+            settlement: true,
+          }),
+          input() {},
+          collections: () => ({}),
+        },
+      }),
+      policy: {
+        worker: (_tx, { assignment }) => ({
+          ctx: !assignment || !("actionId" in assignment) ||
+            assignment.actionId !== "fixture.bad" || badAllowed,
+          settlement: true,
+        }),
+      },
+      content: {
+        backendId: "memory",
+        protectionMs: 1000,
+        maxUnresolved: 64,
+        physical: {
+          ...physical,
+          async fence(writer) {
+            if (writer.mediaType === "text/x-bad") {
+              fenceCalls++;
+              if (fenceCalls === 1) {
+                enteredFence.resolve();
+                await releaseFence.promise;
+              }
+            }
+            return await physical.fence(writer);
+          },
+        },
+      },
+    });
+    const bad = outcome(
+      (f.facade.actions as RuntimeActionCallers).bad(null, {
+        operationKey: "bad",
+      }),
+    );
+    const good = outcome(
+      (f.facade.actions as RuntimeActionCallers).good(null, {
+        operationKey: "good",
+      }),
+    );
+    try {
+      await eventually(() => opened.size === 2);
+      clockStarted = Date.now();
+      badAllowed = false;
+      await enteredFence.promise;
+      const read = async (media: string) =>
+        (await f.db.query(
+          "SELECT protection_deadline::text AS deadline,revocation_state FROM copilotz_operation_streams WHERE descriptor->>'mediaType'=$1",
+          [media],
+        )).rows[0];
+      const before = await read("text/plain");
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+      const after = await read("text/plain");
+      const badStates = (await f.db.query(
+        "SELECT revocation_state FROM copilotz_operation_streams WHERE descriptor->>'mediaType'='text/x-bad'",
+      )).rows;
+      assert.equal(
+        badStates.filter((row) => row.revocation_state === "revoking").length,
+        1,
+      );
+      assert.equal(
+        badStates.filter((row) => row.revocation_state === "revoked").length,
+        19,
+      );
+      assert.equal(after.revocation_state, "active");
+      assert.ok(
+        Date.parse(String(after.deadline)) >
+          Date.parse(String(before.deadline)) + 1000,
+      );
+      assert.equal(f.host.snapshot().recoveryRequired, false);
+      releaseFence.resolve();
+      await eventually(async () =>
+        (await f.db.query(
+          "SELECT 1 FROM copilotz_operation_streams WHERE descriptor->>'mediaType'='text/x-bad' AND revocation_state<>'revoked'",
+        )).rows.length === 0
+      );
+      releaseWork.resolve();
+      assert.equal((await bad).value, "done");
+      assert.equal((await good).value, "done");
+      assert.equal(fenceCalls, 20);
+      await eventually(() => f.host.snapshot().active === 0);
+    } finally {
+      releaseFence.resolve();
+      releaseWork.resolve();
+      await Promise.all([bad, good]);
+      await f.close();
+    }
+  });
+}
+
+test("quiet renewal promptly continues beyond two same-deadline batches", {
+  skip: !sourceRoot,
+  timeout: 45_000,
+}, async () => {
+  const physical = createMemoryPhysicalBodyStore();
+  const f = await fixture({
+    maxActive: 1,
+    registry: ordinaryRegistry(async (_value, ctx) => {
+      const writers = [];
+      for (let i = 0; i < 33; i++) {
+        writers.push(
+          await ctx.streams.open({
+            id: `quiet-${i}`,
+            mediaType: "text/plain",
+            role: "assistant",
+          }),
+        );
+      }
+      await inspected();
+      for (const writer of writers) {
+        await writer.abort({ outcome: "abandoned" });
+      }
+      return "done";
+    }),
+    content: {
+      backendId: "memory",
+      physical,
+      protectionMs: 2400,
+      maxUnresolved: 64,
+    },
+  });
+  const inspected = async () => {
+    const deadline = new Date(Date.now() + 2400).toISOString();
+    await f.db.query(
+      "UPDATE copilotz_operation_streams SET protection_deadline=$1::timestamptz",
+      [deadline],
+    );
+    await f.db.query(
+      "UPDATE owner_alarms SET due_at=$1::timestamptz - interval '1200 milliseconds' WHERE name LIKE '%content.stream.scan%'",
+      [deadline],
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const rows = (await f.db.query(
+      "SELECT revocation_state,protection_deadline>$1::timestamptz AS advanced FROM copilotz_operation_streams",
+      [deadline],
+    )).rows;
+    assert.equal(rows.length, 33);
+    assert.ok(
+      rows.every((row) =>
+        row.revocation_state === "active" && row.advanced === true
+      ),
+    );
+  };
+  try {
+    assert.equal(
+      await f.facade.actions.work("batch", { operationKey: "renew-batch" }),
+      "done",
+    );
+    await eventually(() => f.host.snapshot().active === 0);
+    assert.deepEqual(f.errors, []);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const kind of ["action", "processor"] as const) {
+    for (const placement of ["owner-local", "worker"] as const) {
+      test(
+        `real orphan opening drains before ${placement} ${kind} failure / ${mode}`,
+        {
+          skip: !sourceRoot,
+          timeout: 45_000,
+        },
+        async () => {
+          const physical = createMemoryPhysicalBodyStore();
+          const entered = deferred(), release = deferred();
+          let authoredFinished = false;
+          const f = await fixture({
+            mode,
+            registry: invocationFlowRegistry(kind, async (ctx) => {
+              try {
+                await ctx.streams.open({
+                  id: "orphan",
+                  mediaType: "text/plain",
+                  role: "assistant",
+                });
+              } finally {
+                authoredFinished = true;
+              }
+            }),
+            local: localOptions({
+              actionIds: kind === "action" && placement === "worker"
+                ? ["fixture.idle"]
+                : ["fixture.local"],
+            }),
+            ...(kind === "processor" && placement === "owner-local"
+              ? {
+                processors: {
+                  processorIds: ["fixture.read"],
+                  policy: {
+                    grants: () => ({ ctx: true, settlement: true }),
+                    event() {},
+                    collections: () => ({}),
+                  },
+                  createCapabilities: () => ({ resources: {}, adapters: {} }),
+                },
+              }
+              : {}),
+            content: {
+              backendId: "memory",
+              protectionMs: 30_000,
+              maxUnresolved: 8,
+              physical: {
+                ...physical,
+                async reserve(writer) {
+                  await physical.reserve(writer);
+                  throw new Error("reserve response failed");
+                },
+                async fence(writer) {
+                  entered.resolve();
+                  await release.promise;
+                  return physical.fence(writer);
+                },
+              },
+            },
+          });
+          const invocation = outcome(
+            f.facade.actions.work("orphan", { operationKey: "orphan-opening" }),
+          );
+          try {
+            await entered.promise;
+            assert.equal(authoredFinished, false);
+            const consumer = kind === "action"
+              ? "registered:fixture.local"
+              : "processor:fixture.read";
+            const status = async () =>
+              (await f.db.query(
+                "SELECT status FROM event_deliveries WHERE consumer_id=$1",
+                [consumer],
+              )).rows[0]?.status;
+            assert.equal(await status(), "leased");
+            assert.equal(
+              (await f.db.query(
+                "SELECT revocation_state FROM copilotz_operation_streams",
+              )).rows[0].revocation_state,
+              "revoking",
+            );
+            release.resolve();
+            await eventually(async () =>
+              authoredFinished && await status() === "dead_letter"
+            );
+            await eventually(() => f.host.snapshot().active === 0);
+            const row =
+              (await f.db.query("SELECT * FROM copilotz_operation_streams"))
+                .rows[0];
+            assert.equal(row.revocation_state, "revoked");
+            assert.equal(row.state, "reserving");
+            assert.equal(row.stream_ordinal, null);
+            assert.equal(f.host.snapshot().recoveryRequired, false);
+            const result = await invocation;
+            if (kind === "action") assert.ok(result.error);
+            else assert.equal(result.value, "done");
+          } finally {
+            release.resolve();
+            await f.close();
+            await invocation;
+          }
+        },
+      );
+    }
+  }
+}
+
+for (const failure of ["held", "unknown"] as const) {
+  test(`owner cleanup advances past sixteen ${failure} fences`, {
+    skip: !sourceRoot,
+    timeout: 45_000,
+  }, async () => {
+    const physical = createMemoryPhysicalBodyStore(),
+      opened = deferred(),
+      release = deferred(),
+      finish = deferred();
+    const attempts = new Map<string, number>();
+    let allowed = true, repair = false;
+    const f = await fixture({
+      maxActive: 32,
+      registry: ordinaryRegistry(async (value, ctx) => {
+        const writers = [];
+        for (let i = 0; i < 20; i++) {
+          writers.push(
+            await ctx.streams.open({
+              id: `page-${i}`,
+              mediaType: "text/plain",
+              role: "assistant",
+            }),
+          );
+        }
+        opened.resolve();
+        await finish.promise;
+        for (const writer of writers) {
+          await writer.abort({ outcome: "abandoned" });
+        }
+        return value;
+      }),
+      local: localOptions({
+        policy: {
+          grants: () => ({ ctx: allowed, settlement: true }),
+          input() {},
+          collections: () => ({}),
+        },
+      }),
+      content: {
+        backendId: "memory",
+        protectionMs: 30_000,
+        maxUnresolved: 32,
+        physical: {
+          ...physical,
+          async fence(writer) {
+            if (!attempts.has(writer.bodyId)) {
+              attempts.set(writer.bodyId, attempts.size);
+            }
+            if (attempts.get(writer.bodyId)! < 16 && !repair) {
+              if (failure === "held") {
+                await release.promise;
+              } else throw new Error("unknown fence response");
+            }
+            return physical.fence(writer);
+          },
+        },
+      },
+    });
+    const invocation = outcome(
+      f.facade.actions.work("pages", { operationKey: "cleanup-pages" }),
+    );
+    try {
+      await opened.promise;
+      allowed = false;
+      await f.db.query(
+        "UPDATE copilotz_operation_streams SET protection_deadline=$1::timestamptz",
+        [new Date(Date.now() + 10_000).toISOString()],
+      );
+      await f.db.query(
+        "UPDATE owner_alarms SET due_at=$1::timestamptz WHERE name LIKE '%content.stream.scan%'",
+        [new Date().toISOString()],
+      );
+      await f.host.wake();
+      await eventually(() => attempts.size === 20);
+      await eventually(async () =>
+        (await f.db.query(
+          "SELECT 1 FROM copilotz_operation_streams WHERE revocation_state='revoked'",
+        )).rows.length === 4
+      );
+      assert.equal(f.host.snapshot().recoveryRequired, false);
+      repair = true;
+      release.resolve();
+      finish.resolve();
+      assert.equal((await invocation).value, "pages");
+      await eventually(() => f.host.snapshot().active === 0);
+    } finally {
+      repair = true;
+      release.resolve();
+      finish.resolve();
+      await invocation;
+      await f.close();
+    }
+  });
+}
+
+for (const placement of ["owner-local", "worker"] as const) {
+  for (const result of ["confirmed", "unknown"] as const) {
+    test(`owner close drains ${result} content fencing for ${placement}`, {
+      skip: !sourceRoot,
+      timeout: 30_000,
+    }, async () => {
+      const opened = deferred(), entered = deferred(), release = deferred();
+      const physical = createMemoryPhysicalBodyStore();
+      let closeFinished = false;
+      const f = await fixture({
+        registry: invocationFlowRegistry("action", async (ctx) => {
+          await ctx.streams.open({
+            id: "close",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          opened.resolve();
+          await new Promise<void>((resolve) => {
+            if (ctx.signal.aborted) resolve();
+            else {ctx.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });}
+          });
+        }),
+        local: localOptions({
+          actionIds: placement === "owner-local"
+            ? ["fixture.local"]
+            : ["fixture.idle"],
+        }),
+        content: {
+          backendId: "memory",
+          protectionMs: 30_000,
+          maxUnresolved: 8,
+          physical: {
+            ...physical,
+            async fence(writer) {
+              entered.resolve();
+              await release.promise;
+              if (result === "unknown") {
+                throw new Error("lost close fence reply");
+              }
+              return physical.fence(writer);
+            },
+          },
+        },
+      });
+      const invocation = outcome(
+        f.facade.actions.work("close", { operationKey: "content-close" }),
+      );
+      try {
+        await opened.promise;
+        const closing = outcome(f.host.close()).then((value) => {
+          closeFinished = true;
+          return value;
+        });
+        await entered.promise;
+        assert.equal(closeFinished, false);
+        assert.equal(
+          (await f.db.query(
+            "SELECT revocation_state FROM copilotz_operation_streams",
+          )).rows[0].revocation_state,
+          "revoking",
+        );
+        release.resolve();
+        const closed = await closing;
+        if (result === "confirmed") assert.equal(closed.error, undefined);
+        else assert.ok(closed.error instanceof AggregateError);
+        assert.equal(
+          (await f.db.query(
+            "SELECT revocation_state FROM copilotz_operation_streams",
+          )).rows[0].revocation_state,
+          result === "confirmed" ? "revoked" : "revoking",
+        );
+        assert.equal(f.host.snapshot().state, "closed");
+        assert.equal(f.host.snapshot().recoveryRequired, result === "unknown");
+      } finally {
+        release.resolve();
+        await invocation;
+        const cleanup = await outcome(f.close());
+        if (result === "confirmed") assert.equal(cleanup.error, undefined);
+        else assert.ok(cleanup.error instanceof AggregateError);
+      }
+    });
+  }
+}
+
+for (const kind of ["action", "processor"] as const) {
+  for (const placement of ["owner-local", "worker"] as const) {
+    for (const completion of ["success", "failure"] as const) {
+      test(
+        `content barrier refuses direct ${completion} completion for ${placement} ${kind}`,
+        { skip: !sourceRoot, timeout: 30_000 },
+        async () => {
+          const entered = deferred(), release = deferred();
+          const f = await fixture({
+            registry: invocationFlowRegistry(kind, async () => {
+              entered.resolve();
+              await release.promise;
+              if (completion === "failure") throw new Error("authored failure");
+            }),
+            local: localOptions({
+              actionIds: kind === "action" && placement === "worker"
+                ? ["fixture.idle"]
+                : ["fixture.local"],
+            }),
+            ...(kind === "processor" && placement === "owner-local"
+              ? {
+                processors: {
+                  processorIds: ["fixture.read"],
+                  policy: {
+                    grants: () => ({ ctx: true, settlement: true }),
+                    event() {},
+                    collections: () => ({}),
+                  },
+                  createCapabilities: () => ({ resources: {}, adapters: {} }),
+                },
+              }
+              : {}),
+            content: {
+              backendId: "memory",
+              physical: createMemoryPhysicalBodyStore(),
+              protectionMs: 30_000,
+              maxUnresolved: 8,
+            },
+          });
+          const invocation = outcome(
+            f.facade.actions.work("barrier", {
+              operationKey: "content-barrier",
+            }),
+          );
+          try {
+            await entered.promise;
+            const consumer = kind === "action"
+              ? "registered:fixture.local"
+              : "processor:fixture.read";
+            const rows = (await f.db.query<
+              { id: string; settlement_scope_id: string; namespace: string }
+            >(
+              "SELECT d.id,d.settlement_scope_id,e.namespace FROM event_deliveries d JOIN events e ON e.id=d.event_id WHERE d.consumer_id=$1 AND d.status='leased'",
+              [consumer],
+            )).rows;
+            assert.equal(rows.length, 1);
+            const delivery = rows[0];
+            await insertTestOwnerStream(f.db, {
+              namespace: delivery.namespace,
+              operationId: delivery.settlement_scope_id,
+            });
+            await f.db.query(
+              "UPDATE copilotz_operation_streams SET placement_binding=placement_binding||jsonb_build_object('deliveryId',$1::text)",
+              [delivery.id],
+            );
+            const before =
+              (await f.db.query("SELECT * FROM event_deliveries WHERE id=$1", [
+                delivery.id,
+              ])).rows;
+            release.resolve();
+            await eventually(() => f.host.snapshot().recoveryRequired);
+            assert.deepEqual(
+              (await f.db.query("SELECT * FROM event_deliveries WHERE id=$1", [
+                delivery.id,
+              ])).rows,
+              before,
+            );
+            assert.equal(
+              (await f.db.query(
+                "SELECT 1 FROM owner_receipts WHERE kind = ANY($1::text[])",
+                [
+                  kind === "action"
+                    ? ["execution.complete"]
+                    : ["processor.complete", "processor.local-complete"],
+                ],
+              )).rows.length,
+              0,
+            );
+            assert.equal(
+              (await f.db.query("SELECT state FROM copilotz_operation_streams"))
+                .rows[0].state,
+              "reserving",
+            );
+          } finally {
+            release.resolve();
+            await invocation;
+            const cleanup = await outcome(f.close());
+            assert.ok(cleanup.error);
+          }
+        },
+      );
+    }
+  }
+}
+
+test("owner close reports unresolved content when discovery fails", {
+  skip: !sourceRoot,
+  timeout: 30_000,
+}, async () => {
+  const opened = deferred();
+  let failDiscovery = false;
+  const original = new Error("cleanup discovery unavailable");
+  const f = await fixture({
+    registry: ordinaryRegistry(async (value, ctx) => {
+      await ctx.streams.open({
+        id: "discovery",
+        mediaType: "text/plain",
+        role: "assistant",
+      });
+      opened.resolve();
+      await new Promise<void>((resolve) => {
+        if (ctx.signal.aborted) resolve();
+        else {ctx.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });}
+      });
+      return value;
+    }),
+    session(db) {
+      return {
+        query: db.query,
+        transaction: (run) =>
+          db.transaction((tx) =>
+            run({
+              async query<
+                TRow extends Record<string, unknown> = Record<string, unknown>,
+              >(sql: string, params?: unknown[]) {
+                if (
+                  failDiscovery &&
+                  sql.includes(
+                    "protection_deadline::text AS deadline,opening_owner_epoch::text AS epoch",
+                  )
+                ) throw original;
+                return await tx.query<TRow>(sql, params);
+              },
+            })
+          ),
+      };
+    },
+    content: {
+      backendId: "memory",
+      physical: createMemoryPhysicalBodyStore(),
+      protectionMs: 30_000,
+      maxUnresolved: 8,
+    },
+  });
+  const invocation = outcome(
+    f.facade.actions.work("discovery", { operationKey: "close-discovery" }),
+  );
+  try {
+    await opened.promise;
+    failDiscovery = true;
+    const closed = await outcome(f.host.close());
+    assert.equal(
+      (closed.error as { code?: string })?.code,
+      "content_close_cleanup_unknown",
+    );
+    assert.equal((closed.error as Error).cause, original);
+    assert.equal(f.host.snapshot().recoveryRequired, true);
+    assert.equal(
+      (await f.db.query(
+        "SELECT revocation_state FROM copilotz_operation_streams",
+      )).rows[0].revocation_state,
+      "active",
+    );
+  } finally {
+    await invocation;
+    const cleanup = await outcome(f.close());
+    assert.equal(
+      (cleanup.error as { code?: string })?.code,
+      "content_close_cleanup_unknown",
+    );
+  }
+});
+
+for (const mode of ["in-process", "websocket"] as const) {
+  for (const operation of ["open", "append"] as const) {
+    test(`worker close joins actual held physical ${operation} / ${mode}`, {
+      skip: !sourceRoot,
+      timeout: 30_000,
+    }, async () => {
+      const entered = deferred(),
+        release = deferred(),
+        transportStopped = deferred();
+      const physical = createMemoryPhysicalBodyStore();
+      let closeFinished = false, fences = 0;
+      const f = await fixture({
+        mode,
+        onTransportShutdown: () => transportStopped.resolve(),
+        registry: invocationFlowRegistry("action", async (ctx) => {
+          const writer = await ctx.streams.open({
+            id: "raw",
+            mediaType: "text/plain",
+            role: "assistant",
+          });
+          if (operation === "append") {
+            await writer.append({ appendId: "a", bytes: new Uint8Array([1]) });
+          }
+        }),
+        local: localOptions({ actionIds: ["fixture.idle"] }),
+        content: {
+          backendId: "memory",
+          protectionMs: 30_000,
+          maxUnresolved: 8,
+          physical: {
+            ...physical,
+            async reserve(writer) {
+              if (operation === "open") {
+                entered.resolve();
+                await release.promise;
+              }
+              return physical.reserve(writer);
+            },
+            async append(input) {
+              if (operation === "append") {
+                entered.resolve();
+                await release.promise;
+              }
+              return physical.append(input);
+            },
+            async fence(writer) {
+              fences++;
+              return await physical.fence(writer);
+            },
+          },
+        },
+      });
+      const invocation = outcome(
+        f.facade.actions.work("raw", { operationKey: "raw-close" }),
+      );
+      try {
+        await entered.promise;
+        const closing = outcome(f.host.close()).then((value) => {
+          closeFinished = true;
+          return value;
+        });
+        await transportStopped.promise;
+        await eventually(() => f.host.snapshot().active === 0);
+        // Let already-settled dispatch/transport continuations drain. The raw
+        // storage callback alone must still prevent owner close from finishing.
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        assert.equal(closeFinished, false);
+        assert.equal(fences, 0);
+        release.resolve();
+        assert.equal((await closing).error, undefined);
+        assert.equal(fences, 1);
+        assert.equal(
+          (await f.db.query(
+            "SELECT revocation_state FROM copilotz_operation_streams",
+          )).rows[0].revocation_state,
+          "revoked",
+        );
+      } finally {
+        release.resolve();
+        await invocation;
+        await f.close();
+      }
+    });
+  }
+}

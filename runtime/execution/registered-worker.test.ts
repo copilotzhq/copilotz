@@ -1,4 +1,4 @@
-import { streamFailureFixture } from "./stream-failure.fixture.ts";
+import { streamFailureFixture } from "../testing/stream-failure.ts";
 /** Focused named-port tests. Real owner/transport acceptance is a separate fixture. */
 import assert from "node:assert/strict";
 import { test } from "node:test";

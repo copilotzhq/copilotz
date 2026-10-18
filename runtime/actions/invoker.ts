@@ -116,7 +116,8 @@ export type CreateActionCallersOptions = Readonly<{
     }
   >;
   content?: RuntimeContent;
-  createInvocationKey?: (actionId: string) => string;
+  /** Root prefix; explicit keys must not depend on call ordering. */
+  createInvocationKey?: (actionId: string, operationKey?: string) => string;
   /** Stable root scope for awaiting Action captures in one processor run. */
   invocationScope?: string;
   identity?: RuntimeIdentity;
@@ -352,7 +353,8 @@ function createFrame(
   const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
   const hostInvocationKey = parent || prepared
     ? undefined
-    : invoker.createInvocationKey?.(action.id)?.trim() || undefined;
+    : invoker.createInvocationKey?.(action.id, explicitKey)?.trim() ||
+      undefined;
   // Root prepared calls replay a durable capture, so neither their stable
   // operation key nor their lifecycle identity may depend on a host callback.
   // Lifecycle storage already isolates the fallback scope by namespace.

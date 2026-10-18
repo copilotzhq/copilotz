@@ -1,0 +1,174 @@
+name: Verify pull request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Architecture, formatting, lint delta, and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+          cache: true
+          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
+      - run: deno task check
+      - run: deno fmt --check
+      - name: Refuse new lint findings against the reviewed conversion baseline
+        shell: bash
+        env:
+          LINT_BASE_SHA: 614c83c527f0365ab7d2e6fcfe04aec8dc7fc68b
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/lint-baseline"
+          git fetch --no-tags --depth=1 origin "$LINT_BASE_SHA"
+          git worktree add --detach "$base" "$LINT_BASE_SHA"
+          set +e
+          (cd "$base" && deno lint --json) > "$RUNNER_TEMP/base-lint.json"
+          base_status=$?
+          deno lint --json > "$RUNNER_TEMP/head-lint.json"
+          head_status=$?
+          set -e
+          if ((base_status > 1 || head_status > 1)); then
+            echo "Lint invocation failed before comparison"
+            exit 1
+          fi
+          python3 - "$base" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/base-lint.json" "$RUNNER_TEMP/head-lint.json" <<'PY'
+          import collections, json, pathlib, sys, urllib.parse
+          def findings(root, report):
+              root = pathlib.Path(root).resolve()
+              data = json.loads(pathlib.Path(report).read_text())
+              if data.get("errors"):
+                  raise RuntimeError("Lint reported file or invocation errors")
+              result = collections.Counter()
+              for item in data["diagnostics"]:
+                  name = item["filename"]
+                  if name.startswith("file:"):
+                      name = urllib.parse.unquote(urllib.parse.urlparse(name).path)
+                  path = pathlib.Path(name)
+                  if not path.is_absolute():
+                      path = root / path
+                  relative = path.resolve().relative_to(root).as_posix()
+                  lines = path.read_text().splitlines()
+                  span = item["range"]
+                  snippet = " ".join("\n".join(lines[span["start"]["line"] - 1:span["end"]["line"]]).split())
+                  result[(relative, item["code"], item["message"], snippet)] += 1
+              return result
+          baseline = findings(sys.argv[1], sys.argv[3])
+          current = findings(sys.argv[2], sys.argv[4])
+          introduced = current - baseline
+          print(f"Lint findings: baseline={baseline.total()}, current={current.total()}, new={introduced.total()}")
+          for (path, code, message, _), count in introduced.items():
+              print(f"{path}: {code}: {message} ({count})")
+          if introduced:
+              raise SystemExit(1)
+          PY
+      - run: deno task publish:dry-run
+
+  tests:
+    if: contains(github.event.pull_request.labels.*.name, 'owner-integration-ready')
+    name: Complete suite (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [pglite, postgres]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: copilotz_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d copilotz_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+          cache: true
+          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
+      - name: Run the complete retained suite
+        shell: bash
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          set -euo pipefail
+          if [[ "$BACKEND" == postgres ]]; then
+            export COPILOTZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
+          else
+            unset COPILOTZ_TEST_POSTGRES_URL
+          fi
+          deno task test
+
+  runtimes:
+    if: contains(github.event.pull_request.labels.*.name, 'owner-integration-ready')
+    name: Deno, Node, Bun, and browser isolate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+          cache: true
+          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: deno task smoke:authoring
+      - run: deno task bundle:runtime-smoke
+      - run: deno task smoke:deno
+      - run: deno task smoke:node
+      - run: deno task smoke:bun
+      - run: deno task smoke:browser
+
+  cloudflare:
+    if: contains(github.event.pull_request.labels.*.name, 'owner-integration-ready')
+    name: Worker isolate and deployment dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+          cache: true
+          cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      - run: deno task bundle:edge-smoke
+      - run: deno task smoke:cloudflare
+      - run: deno task smoke:cloudflare-build

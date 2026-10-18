@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { deferAction } from "./deferral.ts";
+import { awaitOperation } from "./continuation.ts";
 import { defineAction, isActionDefinition } from "./define.ts";
 import type {
   ActionCaller,
@@ -168,30 +168,62 @@ Deno.test("semantic contexts retain exact Action caller inputs", () => {
   assertEquals(typeof accepts, "function");
 });
 
-Deno.test("deferred Actions infer only the terminal output from their resolver", () => {
+Deno.test("awaiting Actions infer only the terminal output from their resumption", () => {
   const action = defineAction({
-    id: "test.deferred-inferred",
+    id: "test.awaiting-inferred",
     execute(input: { question: string }) {
-      return deferAction(input);
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: input,
+      });
     },
-    resolve(input, _context, resolution) {
-      return resolution.outcome === "completed" ? input.question : "failed";
+    resume(handoff, outcome) {
+      return outcome.status === "completed"
+        ? (handoff as { question: string }).question
+        : "failed";
     },
   });
   const input: ActionInput<typeof action> = { question: "hello" };
   const output: ActionOutput<typeof action> = "hello";
-  // @ts-expect-error A deferral request is not a terminal Action output.
-  const invalid: ActionOutput<typeof action> = deferAction({});
+  // @ts-expect-error A continuation request is not a terminal Action output.
+  const invalid: ActionOutput<typeof action> = awaitOperation({
+    start: { action: "child", input: {} },
+    handoff: {},
+  });
   void invalid;
   assertEquals(input.question, output);
   const explicit = defineAction<{ question: string }, string>({
-    id: "test.deferred-explicit",
+    id: "test.awaiting-explicit",
     execute(input) {
-      return deferAction(input);
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: input,
+      });
     },
-    resolve(input) {
-      return input.question;
+    resume(handoff) {
+      return (handoff as { question: string }).question;
     },
   });
   assert(isActionDefinition(explicit));
+});
+
+Deno.test("continuations capture JSON handoff state and reject non-durable state", () => {
+  const handoff = { cursor: 1 };
+  const continuation = awaitOperation({
+    start: { action: "child", input: {} },
+    handoff,
+  });
+  handoff.cursor = 2;
+  assertEquals(continuation.handoff, { cursor: 1 });
+  for (const value of [undefined, { callback: () => null }, { cursor: NaN }]) {
+    assertThrows(() =>
+      awaitOperation({ start: { action: "child", input: {} }, handoff: value })
+    );
+  }
+  assertThrows(() =>
+    awaitOperation({
+      start: { action: "child", input: {}, operationId: " " },
+      handoff: null,
+    })
+  );
 });

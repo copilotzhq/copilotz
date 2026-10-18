@@ -57,6 +57,5 @@ export function createTestProcessorContext(
     now: () => new Date(),
     transaction: unavailable,
     readSnapshot: unavailable,
-    signalDeferredWait: unavailable,
   } as const);
 }

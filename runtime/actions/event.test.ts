@@ -231,6 +231,9 @@ Deno.test("registered Action lifecycle event types are exactly reserved", () => 
   const actions = {
     search: defineAction({ id: "search.query", execute: () => null }),
   };
+  for (const type of ["copilotz.action.start", "copilotz.action.resume"]) {
+    assertEquals(isRegisteredActionLifecycleEventType(type, actions), true);
+  }
   assertEquals(
     isRegisteredActionLifecycleEventType("search.query.completed", actions),
     true,
@@ -253,8 +256,9 @@ Deno.test("Action lifecycle receipt deduplication identities are reserved", () =
   for (
     const id of [
       "run-1:action:invoked",
-      "run-1:action:deferred",
-      "run-1:action:resolve",
+      "run-1:action:awaiting",
+      "run-1:resume",
+      "run-1:child:start",
       "run-1:action:terminal",
       "run-1:action:progress:1",
       "nested:run:action:progress:42",

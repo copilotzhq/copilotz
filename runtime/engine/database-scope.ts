@@ -1,4 +1,4 @@
-import { advanceDeferredActions } from "../actions/deferred-work.ts";
+import { scheduleResumptions } from "../actions/continuation-work.ts";
 import {
   cancelScopeActions,
   recoverDeliveryActions,
@@ -96,7 +96,7 @@ export type DatabaseScopeRuntime = Readonly<{
   onScopeCancellation: NonNullable<
     Parameters<typeof createEventStore>[0]["onScopeCancellation"]
   >;
-  advanceDeferred(
+  resumeSettled(
     input?: Readonly<
       { namespace?: string; operationId?: string; limit?: number }
     >,
@@ -212,7 +212,7 @@ export function createDatabaseScope(
       transaction,
       delivery,
     );
-    const advanced = await advanceDeferredActions(
+    const advanced = await scheduleResumptions(
       { store, coordinator, catalog: options.operationCatalog },
       { operationId: delivery.settlementScopeId },
       transaction,
@@ -222,10 +222,10 @@ export function createDatabaseScope(
       await advanced();
     };
   };
-  const advanceDeferred: DatabaseScopeRuntime["advanceDeferred"] = async (
+  const resumeSettled: DatabaseScopeRuntime["resumeSettled"] = async (
     input = {},
   ) => {
-    const flush = await advanceDeferredActions({
+    const flush = await scheduleResumptions({
       store,
       coordinator,
       catalog: options.operationCatalog,
@@ -323,6 +323,17 @@ export function createDatabaseScope(
       }, appendOptions);
     },
     async appendProtected(draft, schema, ownerId) {
+      if (
+        isReservedActionLifecycleDeduplicationId(draft.deduplicationId) ||
+        isRegisteredActionLifecycleEventType(
+          draft.type,
+          options.registry.actions,
+        )
+      ) {
+        throw new TypeError(
+          "Protected Event ingress cannot publish runtime-owned Action events.",
+        );
+      }
       const deduplicationId = draft.deduplicationId?.trim();
       if (!deduplicationId) {
         throw new TypeError(
@@ -475,8 +486,19 @@ export function createDatabaseScope(
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
   } as const;
-  const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
-    coordinator.recover({ ...recovery, databaseSchema });
+  const recover: CopilotzEngineDatabaseScope["recover"] = async (
+    recovery = {},
+  ) => {
+    await options.operationCatalog.reconcile({
+      namespace: recovery.namespace,
+      limit: recovery.limit,
+    });
+    await resumeSettled({
+      namespace: recovery.namespace,
+      limit: recovery.limit,
+    });
+    return await coordinator.recover({ ...recovery, databaseSchema });
+  };
   let progressiveMaintenanceAfter: string | undefined;
   let openStreamReconcileAfter: string | undefined;
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
@@ -638,7 +660,7 @@ export function createDatabaseScope(
     if (
       openStreams.length < (maintenanceOptions.limit ?? 1_000)
     ) openStreamReconcileAfter = undefined;
-    await advanceDeferred({ limit: maintenanceOptions.limit });
+    await resumeSettled({ limit: maintenanceOptions.limit });
     const reconciled = await options.operationCatalog.reconcile({
       limit: maintenanceOptions.limit,
     });
@@ -788,7 +810,7 @@ export function createDatabaseScope(
     transients: options.transients,
     operationCatalog: options.operationCatalog,
     settleActionOwners,
-    advanceDeferred,
+    resumeSettled,
     onScopeCancellation,
   } as const);
 }

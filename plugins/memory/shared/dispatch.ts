@@ -169,32 +169,3 @@ export async function dispatchMemoryCheckpoint(
     ) throw error;
   }
 }
-
-/**
- * Old runtimes could leave a pending reservation without its deterministic
- * task Message. Re-dispatch only that demonstrable orphan; age alone never
- * changes a healthy pending checkpoint.
- */
-export async function recoverMemoryCheckpointProducer(
-  context: MemoryProcessorContext,
-  checkpointId: string,
-): Promise<void> {
-  const checkpoint = await context.collections.longTermMemory.get({
-    id: checkpointId,
-  });
-  if (!checkpoint || checkpoint.status !== "pending") return;
-  if (record(checkpoint.metadata).onDemand === true) return;
-  const producerId = await deriveWorkflowId(
-    "message",
-    "memory-agent-turn",
-    checkpoint.id,
-  );
-  const producer = await context.collections.message.get({ id: producerId });
-  if (producer) {
-    if (String(producer.historyScopeId) !== checkpoint.id) {
-      throw new Error("Memory checkpoint producer identity is inconsistent.");
-    }
-    return;
-  }
-  await dispatchMemoryCheckpoint(context, checkpoint);
-}

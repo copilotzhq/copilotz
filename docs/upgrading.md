@@ -8,6 +8,27 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Declared operation continuations: schema v8
+
+Actions now return `context.awaitOperation({ start, handoff })` and declare
+`resume(handoff, outcome, context)`. Each child is a public operation with a
+parent link and inherited observation keys. Exact-key signals and resolver
+rearming are removed; memory compaction uses the producer's operation
+settlement.
+
+Drain all existing deliveries, operations, streams and Action obligations with
+the old runtime, then stop all writers. Run
+`upgradeActionLifecycle(session,
+schema)` for every schema before starting new
+writers. The offline upgrade supports v5, v6 and v7, refuses undrained work,
+preserves immutable event history, and replaces the old obligation layout. The
+operation catalog fingerprint is `operation-continuations-v1`. Historical
+receipts remain readable event history; the new runtime does not execute old
+deferred workflows.
+
+The release notes below describe earlier schema versions and their migrations.
+Use the v8 procedure above when upgrading to the current runtime.
+
 ## 0.88.0: durable compaction waits
 
 Foreground memory compaction now records a durable wait and releases its worker
@@ -110,12 +131,13 @@ cancelling their in-flight work. Run `upgradeActionLifecycle` from
 an active database and preserves historical events. Read-only operation status
 checks no longer perform recovery or settlement.
 
-Actions may return `deferAction(work)` and implement
-`resolve(input, context, resolution)`. The runtime schedules and fences their
-work without interpreting plugin metadata. A pending Ask now stays open until
-the asked turn, tools and nested Asks drain. Permanent delivery failures produce
-ordinary Action failure terminals so tool pipelines can continue through their
-normal error path.
+The current runtime uses declared operation continuations. Replace deferred
+Action definitions with `context.awaitOperation({ start, handoff })` and
+`resume(handoff, outcome, context)`. Replace exact-key producer signals with
+operation-backed producers. Before upgrading to schema v8, stop old writers and
+drain deliveries, operations, streams, and Action obligations to confirmed
+terminal states. `upgradeActionLifecycle` refuses undrained schemas, preserves
+immutable event history, and replaces the old obligation layout in place.
 
 Memory's tool input is now `{continuity, remember?, retire?}`. Remove
 `resources.memory.kinds`, `defineMemoryKind`, graph/form/kind queries and grants
@@ -320,11 +342,11 @@ separate procedure, described in
 
 ### Upgrade layers
 
-| Layer              | Current state                        | How it is applied                                                   |
-| ------------------ | ------------------------------------ | ------------------------------------------------------------------- |
-| Event schema       | v7, durable Action waits             | Provision fresh; explicitly upgrade supported v5/v6 schemas offline |
-| Operation catalog  | `action-obligations-v1` since 0.86.0 | Provision fresh; upgrade the supported legacy catalog offline       |
-| Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema        |
+| Layer              | Current state                | How it is applied                                                    |
+| ------------------ | ---------------------------- | -------------------------------------------------------------------- |
+| Event schema       | v8, operation continuations  | Provision fresh; explicitly upgrade drained v5/v6/v7 schemas offline |
+| Operation catalog  | `operation-continuations-v1` | Provision fresh; upgrade the supported legacy catalog offline        |
+| Core history index | Optional since 0.85.1        | `provisionCoreHistoryIndexes`, once per physical Core schema         |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

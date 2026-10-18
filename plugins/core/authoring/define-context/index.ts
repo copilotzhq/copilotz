@@ -41,9 +41,6 @@ export function defineContextResource(
       ? { reserveCompact: resource.reserveCompact }
       : {}),
     ...(resource.checkCompact ? { checkCompact: resource.checkCompact } : {}),
-    ...(resource.recoverCompact
-      ? { recoverCompact: resource.recoverCompact }
-      : {}),
   } as const);
 }
 

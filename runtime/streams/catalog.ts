@@ -19,7 +19,7 @@ import type {
 import { snapshotStreamMetadata } from "./json.ts";
 import { isStreamOutputDescriptor } from "./observation.ts";
 
-export const OPERATION_CATALOG_FINGERPRINT = "action-obligations-v1";
+export const OPERATION_CATALOG_FINGERPRINT = "operation-continuations-v1";
 export const OPERATION_CHANGE_CHANNEL = "copilotz_operations";
 export const DEFAULT_OPERATION_REPLAY_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -69,6 +69,7 @@ export type OperationRecord = Readonly<{
   updatedAt: string;
   completedAt?: string;
   cancellationRequestedAt?: string;
+  parent?: Readonly<{ operationId: string; actionRunId: string }>;
 }>;
 
 export type OperationStreamRetention = "canonical" | "observation";
@@ -457,7 +458,7 @@ function dispatchOperationChange(
   }
 }
 
-async function notifyOperationChange(
+export async function notifyOperationChange(
   session: SqlSession,
   executor: SqlExecutor,
   schema: string,
@@ -545,6 +546,8 @@ type OperationRow = Record<string, unknown> & {
   updated_at: string | Date;
   completed_at: string | Date | null;
   cancellation_requested_at: string | Date | null;
+  parent_operation_id: string | null;
+  parent_action_run_id: string | null;
 };
 
 type StreamRow = Record<string, unknown> & {
@@ -737,6 +740,14 @@ function mapOperation(row: OperationRow): OperationRecord {
     acceptedAt: iso(row.accepted_at)!,
     updatedAt: iso(row.updated_at)!,
     ...(completedAt ? { completedAt } : {}),
+    ...(row.parent_operation_id && row.parent_action_run_id
+      ? {
+        parent: {
+          operationId: row.parent_operation_id,
+          actionRunId: row.parent_action_run_id,
+        },
+      }
+      : {}),
     ...(row.cancellation_requested_at
       ? { cancellationRequestedAt: iso(row.cancellation_requested_at)! }
       : {}),
@@ -845,6 +856,8 @@ function lifecycleIndexStatements(
   tables: OperationCatalogTables,
 ): readonly string[] {
   return [
+    `CREATE INDEX IF NOT EXISTS "copilotz_operations_parent_idx"
+     ON ${tables.operations} (namespace, parent_operation_id) WHERE parent_operation_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS "copilotz_operations_live_idx"
      ON ${tables.operations} (updated_at, operation_id) WHERE state IN ('accepted','running')`,
     `CREATE INDEX IF NOT EXISTS "copilotz_operation_streams_action_scope_idx"
@@ -898,6 +911,8 @@ export async function provisionOperationCatalog(
       accepted_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
       completed_at TIMESTAMPTZ,
+      parent_operation_id TEXT,
+      parent_action_run_id TEXT,
       cancellation_requested_at TIMESTAMPTZ,
       cancellation_reason TEXT
     )`);
@@ -1067,7 +1082,11 @@ export async function upgradeOperationCatalog(
     );
     if (marker.rows[0]?.fingerprint === OPERATION_CATALOG_FINGERPRINT) return;
     if (
-      !["retained-terminal-streams", "indexed-observation-ordinals-v1"]
+      ![
+        "retained-terminal-streams",
+        "indexed-observation-ordinals-v1",
+        "action-obligations-v1",
+      ]
         .includes(marker.rows[0]?.fingerprint ?? "")
     ) {
       throw operationCatalogError(
@@ -1235,6 +1254,8 @@ export async function upgradeOperationCatalog(
       ON CONFLICT (namespace, selection_key, operation_id) DO UPDATE SET change_ordinal = EXCLUDED.change_ordinal`);
     }
     await transaction.query(`ALTER TABLE ${tables.operations}
+      ADD COLUMN IF NOT EXISTS parent_operation_id TEXT,
+      ADD COLUMN IF NOT EXISTS parent_action_run_id TEXT,
       ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
       ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),
@@ -1299,7 +1320,7 @@ export async function validateOperationCatalog(
     `SELECT table_name, column_name FROM information_schema.columns
       WHERE table_schema = $1
         AND (
-          (table_name = 'copilotz_operations' AND column_name IN ('next_stream_ordinal', 'next_event_ordinal', 'observation_keys', 'cancellation_requested_at', 'cancellation_reason', 'visibility'))
+          (table_name = 'copilotz_operations' AND column_name IN ('next_stream_ordinal', 'next_event_ordinal', 'observation_keys', 'cancellation_requested_at', 'cancellation_reason', 'visibility', 'parent_operation_id', 'parent_action_run_id'))
           OR (table_name = 'copilotz_operation_events' AND column_name = 'event_ordinal')
           OR
           (table_name = 'copilotz_operation_streams'
@@ -1319,6 +1340,8 @@ export async function validateOperationCatalog(
     !present.has("copilotz_operations.observation_keys") ||
     !present.has("copilotz_operations.cancellation_requested_at") ||
     !present.has("copilotz_operations.visibility") ||
+    !present.has("copilotz_operations.parent_operation_id") ||
+    !present.has("copilotz_operations.parent_action_run_id") ||
     !present.has("copilotz_operations.cancellation_reason") ||
     !present.has("copilotz_operation_events.event_ordinal") ||
     !present.has("copilotz_operation_streams.replay_key") ||
@@ -1356,6 +1379,10 @@ export function createOperationCatalog(
     onStreamTerminal?: (
       operation: Readonly<{ namespace: string; operationId: string }>,
     ) => void;
+    onSettled?(
+      transaction: SqlExecutor,
+      input: { namespace: string; operationId: string },
+    ): Promise<() => Promise<void>>;
     /** Drains request-local/remote relay frames before a zero-settlement terminal inference. */
     beforeTerminal?: (
       operation: Readonly<{ namespace: string; operationId: string }>,
@@ -2065,17 +2092,6 @@ export function createOperationCatalog(
           [namespace, operationId],
         );
         if (!operation.rows[0]) return undefined;
-        const actionScopeId = descriptor.metadata?.sourceActionScopeId;
-        if (typeof actionScopeId === "string") {
-          const group = await transaction.query(
-            `SELECT action_run_id FROM ${
-              quoteEventIdentifier(databaseSchema)
-            }."open_actions"
-             WHERE namespace = $1 AND action_run_id = $2 AND state = 'deferred' FOR UPDATE`,
-            [namespace, actionScopeId],
-          );
-          if (!group.rows.length) return undefined;
-        }
         if (input.deliveryLease) {
           const owner = await transaction.query(
             `SELECT id FROM ${
@@ -2664,6 +2680,7 @@ export function createOperationCatalog(
       const ids = terminalizable.rows.map((operation) =>
         operation.operation_id
       );
+      const publications: (() => Promise<void>)[] = [];
       const result = await session.transaction(async (transaction) => {
         // Event, stream and Action admission holds the same row lock. Read
         // obligations in a fresh statement AFTER the lock, including the
@@ -2674,7 +2691,7 @@ export function createOperationCatalog(
            WHERE operation_id = ANY($1::text[]) ORDER BY operation_id FOR UPDATE`,
           [ids],
         );
-        return await transaction.query<
+        const settled = await transaction.query<
           { operation_id: string; namespace: string }
         >(
           `WITH drained AS MATERIALIZED (
@@ -2696,7 +2713,16 @@ export function createOperationCatalog(
             RETURNING operation.operation_id, operation.namespace`,
           [ids],
         );
+        for (const row of settled.rows) {
+          const flush = await options.onSettled?.(transaction, {
+            namespace: row.namespace,
+            operationId: row.operation_id,
+          });
+          if (flush) publications.push(flush);
+        }
+        return settled;
       });
+      for (const flush of publications) await flush();
       for (const row of result.rows) {
         await notifyOperationChange(
           session,

@@ -1,3 +1,4 @@
+import { startAwaitedOperation } from "./continuation-work.ts";
 import {
   actionOwnershipStatement,
   type ActionWriter,
@@ -91,6 +92,39 @@ export function createActionLifecycleAppender(
     & ActionLifecyclePersistenceOptions,
 ): ActionLifecycleAppender {
   return async ({ draft, data }) => {
+    if (data.status === "awaiting" && !options.transaction) {
+      if (!options.store) {
+        throw new TypeError("Awaiting requires an Event Store.");
+      }
+      const store = options.store as EventStore;
+      let flush!: () => Promise<void>;
+      const result = await store.session.transaction(async (transaction) => {
+        await transaction.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          [store.databaseSchema, `continuation:${draft.namespace}`],
+        );
+        const appended = await createActionLifecycleAppender({
+          ...options,
+          transaction,
+        })({ draft, data });
+        flush = await startAwaitedOperation(
+          {
+            store,
+            coordinator: options.coordinator,
+            actions: options.actions,
+            protectedValues: options.protectedValues,
+          },
+          transaction,
+          { draft, data },
+          options.writer,
+        );
+        return appended;
+      });
+      await options.coordinator.flushCommitted(result);
+      await flush();
+      return result;
+    }
+
     const deduplicationId = draft.deduplicationId?.trim();
     if (!deduplicationId) {
       throw new TypeError("Action lifecycle events require deduplicationId.");
@@ -113,6 +147,9 @@ export function createActionLifecycleAppender(
         namespace: draft.namespace,
         data,
         action,
+        awaitedAction: data.status === "awaiting"
+          ? options.actions?.[data.start.action]
+          : undefined,
         protectedValues: options.protectedValues,
         // Only a secret input is sealed once, by the invoked receipt; a later
         // receipt of that run reuses its reference.
@@ -143,7 +180,6 @@ export function createActionLifecycleAppender(
       prepared.prepared.length === 0;
     return await options.coordinator.commitMutation({
       admission: {
-        openActionGroup: data.status === "deferred",
         cancellation: options.writer?.kind === "cancellation",
       },
       draft: { ...draft, payload },

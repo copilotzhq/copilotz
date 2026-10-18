@@ -1,9 +1,5 @@
-import { executeActionResolution } from "../actions/resolve.ts";
-import {
-  rearmDeferredAction,
-  registerDeferredWait,
-  signalDeferredWait,
-} from "../actions/deferred-wait.ts";
+import { scheduleResumptions } from "../actions/continuation-work.ts";
+import { executeActionContinuation } from "../actions/resume.ts";
 import {
   provisionCollectionIndexes,
   validateCollectionIndexes,
@@ -131,11 +127,17 @@ export async function createCopilotzEngine(
     options.session,
     databaseSchema,
     {
+      onSettled: (transaction, input) =>
+        scheduleResumptions(
+          { store, coordinator: primaryRuntime!.coordinator },
+          input,
+          transaction,
+        ),
       onStreamTerminal: ({ namespace, operationId }) => {
         // A terminal body may arrive after its delivery has settled. Wake the
         // generic owner outside the writer/relay's own completion promise.
         void (async () => {
-          await primaryRuntime!.advanceDeferred({ namespace, operationId });
+          await primaryRuntime!.resumeSettled({ namespace, operationId });
           await operationCatalog.reconcile({ namespace, operationId });
         })().catch(() => undefined);
       },
@@ -239,8 +241,8 @@ export async function createCopilotzEngine(
   };
   const createContextFor = async (
     base: EngineContextSeed,
-    actionResolution?:
-      import("../actions/invoker.ts").CreateActionCallersOptions["resolution"],
+    actionResumption?:
+      import("../actions/invoker.ts").CreateActionCallersOptions["resumption"],
   ): Promise<ProcessorContext> => {
     const additional = base.databaseSchema === databaseSchema
       ? undefined
@@ -262,61 +264,7 @@ export async function createCopilotzEngine(
     }
     return createProcessorContext({
       base,
-      actionResolution,
-      deferredWaits: {
-        signal: (waitKey) =>
-          signalDeferredWait(
-            {
-              store: scopedStore,
-              coordinator: scopedCoordinator,
-              catalog: scopedOperationCatalog,
-            },
-            base.event.namespace,
-            waitKey,
-          ),
-        registerAction: (actionRunId, waitKey, timeoutMs) => {
-          if (
-            base.source?.kind !== "delivery" || !base.settlementScopeId ||
-            !base.executionIncarnationId
-          ) {
-            throw new Error("Durable Action waits require a leased delivery.");
-          }
-          return registerDeferredWait({
-            store: scopedStore,
-            coordinator: scopedCoordinator,
-            catalog: scopedOperationCatalog,
-          }, {
-            namespace: base.event.namespace,
-            actionRunId,
-            operationId: base.settlementScopeId,
-            deliveryId: base.source.id,
-            leaseOwner: base.executionIncarnationId,
-            waitKey,
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-          });
-        },
-        rearmAction: (actionRunId) => {
-          if (
-            base.source?.kind !== "delivery" || !base.settlementScopeId ||
-            !base.executionIncarnationId
-          ) {
-            throw new Error(
-              "Durable Action rearming requires a leased delivery.",
-            );
-          }
-          return rearmDeferredAction({
-            store: scopedStore,
-            coordinator: scopedCoordinator,
-            catalog: scopedOperationCatalog,
-          }, {
-            namespace: base.event.namespace,
-            actionRunId,
-            operationId: base.settlementScopeId,
-            deliveryId: base.source.id,
-            leaseOwner: base.executionIncarnationId,
-          });
-        },
-      },
+      actionResumption,
       registry: options.registry,
       assets: scopedCapabilities.assets,
       preparer,
@@ -422,8 +370,8 @@ export async function createCopilotzEngine(
   };
   const createContext = async (
     base: DeliveryContextBase,
-    actionResolution?:
-      import("../actions/invoker.ts").CreateActionCallersOptions["resolution"],
+    actionResumption?:
+      import("../actions/invoker.ts").CreateActionCallersOptions["resumption"],
   ): Promise<ProcessorContext> =>
     await createContextFor({
       databaseSchema: base.databaseSchema,
@@ -439,7 +387,7 @@ export async function createCopilotzEngine(
         id: base.delivery.id,
         consumerId: base.delivery.consumerId,
       },
-    }, actionResolution);
+    }, actionResumption);
   const createLiveContext = async (
     base: LiveProcessorContextBase,
   ): Promise<ProcessorContext> =>
@@ -489,11 +437,11 @@ export async function createCopilotzEngine(
     defaultDatabaseSchema: databaseSchema,
     registry: options.registry,
     createContext,
-    async resolveDeferredAction(base) {
+    async executeContinuation(base) {
       const runtime = base.databaseSchema === databaseSchema
         ? primaryRuntime!
         : (await resolveAdditionalScope(base.databaseSchema)).runtime;
-      await executeActionResolution({
+      await executeActionContinuation({
         store: runtime.store,
         actions: options.registry.actions,
         protectedValues: runtime.capabilities.protectedValues,
@@ -506,7 +454,7 @@ export async function createCopilotzEngine(
         ? primaryRuntime!
         : (await resolveAdditionalScope(result.delivery.databaseSchema))
           .runtime;
-      await runtime.advanceDeferred({
+      await runtime.resumeSettled({
         namespace: result.event.namespace,
         operationId: result.delivery.settlementScopeId,
       });
@@ -697,11 +645,17 @@ export async function createCopilotzEngine(
             options.session,
             normalized,
             {
+              onSettled: (transaction, input) =>
+                scheduleResumptions(
+                  { store: runtime.store, coordinator: runtime.coordinator },
+                  input,
+                  transaction,
+                ),
               onStreamTerminal: ({ namespace, operationId }) => {
                 void (async () => {
                   const scope =
                     (await resolveAdditionalScope(normalized)).runtime;
-                  await scope.advanceDeferred({ namespace, operationId });
+                  await scope.resumeSettled({ namespace, operationId });
                   await scopedOperationCatalog.reconcile({
                     namespace,
                     operationId,

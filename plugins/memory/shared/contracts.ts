@@ -19,6 +19,10 @@ export type ConsolidateMemoryActionResult = Readonly<
 >;
 
 export type MemoryActionCallers = Readonly<{
+  coordinateCheckpoint(
+    input: { checkpointId: string },
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
   consolidate_memory(
     input: ConsolidateMemoryActionInput,
     options?: ActionCallOptions,
@@ -29,10 +33,6 @@ export type MemoryActionCallers = Readonly<{
   ): Promise<unknown>;
   search_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
   inspect_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
-  request_memory_checkpoint_recovery(
-    input: Readonly<{ checkpointId: string }>,
-    options?: ActionCallOptions,
-  ): Promise<Readonly<{ checkpointId: string }>>;
 }>;
 
 export type MemoryActionContext = ActionContext<

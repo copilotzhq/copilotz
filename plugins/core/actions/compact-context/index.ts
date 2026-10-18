@@ -1,10 +1,9 @@
 /** Durable foreground maintenance; private maintenance content stays separate. @module */
 import {
-  type ActionDeferral,
+  type ActionContinuation,
   type ActionDefinition,
-  type ActionResolution,
-  deferAction,
   defineAction,
+  type OperationOutcome,
 } from "@copilotz/copilotz/actions";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { CoreActionContext } from "../../shared/runtime-context.ts";
@@ -78,7 +77,7 @@ type CompactWait = Readonly<{
   schema: "copilotz.core.context-compaction-wait.v1";
   resourceId: string;
   checkpointId: string;
-  waitKey: string;
+  input: Input;
 }>;
 
 function waitWork(value: unknown): CompactWait {
@@ -89,7 +88,7 @@ function waitWork(value: unknown): CompactWait {
   if (
     work.schema !== "copilotz.core.context-compaction-wait.v1" ||
     typeof work.resourceId !== "string" ||
-    typeof work.checkpointId !== "string" || typeof work.waitKey !== "string"
+    typeof work.checkpointId !== "string" || !work.input
   ) throw new TypeError("Compaction wait work is invalid.");
   return work as CompactWait;
 }
@@ -140,7 +139,7 @@ async function checkedState(
 ): Promise<ReadableCheckpointState> {
   if (!resource.checkCompact) {
     throw new Error(
-      `Context resource '${resource.id}' cannot check deferred compaction.`,
+      `Context resource '${resource.id}' cannot check operation-backed compaction.`,
     );
   }
   const state = await resource.checkCompact(input, checkpointId);
@@ -161,22 +160,9 @@ async function checkedState(
   return state;
 }
 
-async function registerAndCheck(
-  context: CoreActionContext,
-  resource: ContextResource,
-  input: CompactContextInput,
-  checkpointId: string,
-  exactWaitKey: string,
-): Promise<ReadableCheckpointState> {
-  await context.registerDeferredWait(exactWaitKey, { timeoutMs: 30_000 });
-  // The producer can settle between the first read and registration. This
-  // exact checkpoint re-read closes that lost-wakeup race.
-  return await checkedState(resource, input, checkpointId);
-}
-
 export const compactContextAction: ActionDefinition<
   Input,
-  Output | ActionDeferral,
+  Output | ActionContinuation,
   CoreActionContext,
   typeof inputSchema,
   typeof outputSchema
@@ -207,27 +193,21 @@ export const compactContextAction: ActionDefinition<
             );
           }
           seen.add(reservation.checkpointId);
-          const exactKey = reservation.waitKey;
-          const state = await registerAndCheck(
-            context,
+          const state = await checkedState(
             resource,
             prepared,
             reservation.checkpointId,
-            exactKey,
           );
           if (state.status === "pending") {
-            // Kick orphan repair as soon as the exact reservation is known.
-            // Healthy producers are a no-op in resource recover hooks, while
-            // legacy pending records need not wait for resolver expiry.
-            await resource.recoverCompact?.(prepared, reservation.checkpointId);
-            return deferAction(
-              {
+            return context.awaitOperation({
+              start: reservation.start,
+              handoff: {
                 schema: "copilotz.core.context-compaction-wait.v1",
                 resourceId: resource.id,
                 checkpointId: reservation.checkpointId,
-                waitKey: exactKey,
+                input,
               } satisfies CompactWait,
-            );
+            });
           }
           if (state.advances) return { advanced: true };
           // A concurrent route may have consumed this range while the
@@ -243,14 +223,12 @@ export const compactContextAction: ActionDefinition<
       "Conversation history cannot be consolidated into a safe bounded range.",
     );
   },
-  async resolve(input, context, resolution: ActionResolution) {
-    if (resolution.outcome !== "completed") {
-      throw new Error(
-        resolution.error?.message ??
-          `Context compaction ${resolution.outcome}.`,
-      );
+  async resume(handoff: unknown, outcome: OperationOutcome, context) {
+    const wait = waitWork(handoff);
+    const input = wait.input;
+    if (outcome.status !== "completed") {
+      throw new Error(`Context compaction ${outcome.status}.`);
     }
-    const wait = waitWork(resolution.work);
     const { metadata, participant, agent } = await authorized(input, context);
     const resource = Object.values(context.resources.promptContext ?? {}).find(
       (candidate) =>
@@ -260,20 +238,11 @@ export const compactContextAction: ActionDefinition<
       throw new Error(`Context resource '${wait.resourceId}' is unavailable.`);
     }
     const prepared = compactInput(input, context, metadata, participant, agent);
-    let state = await checkedState(resource, prepared, wait.checkpointId);
-    if (state.status === "pending" && resolution.waitExpired) {
-      await resource.recoverCompact?.(prepared, wait.checkpointId);
-      state = await checkedState(resource, prepared, wait.checkpointId);
-    }
+    const state = await checkedState(resource, prepared, wait.checkpointId);
     if (state.status === "pending") {
-      state = await registerAndCheck(
-        context,
-        resource,
-        prepared,
-        wait.checkpointId,
-        wait.waitKey,
+      throw new Error(
+        "Compaction producer settled without completing its checkpoint.",
       );
-      if (state.status === "pending") return deferAction(wait);
     }
     // A completed receipt is consumed by Core's router processor. Re-entering
     // from a processor context keeps the LLM Action at the root of its scope,

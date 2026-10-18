@@ -377,19 +377,6 @@ export function createProcessorContext(
     options.base.idempotencyKey,
     "Processor operation key",
   );
-  const deferredWaits: NonNullable<
-    CreateProcessorContextOptions["deferredWaits"]
-  > = options.deferredWaits ?? {
-    signal: (_waitKey: string) => Promise.resolve(0),
-    registerAction: () =>
-      Promise.reject(
-        new Error("Durable Action waits require a delivery runtime."),
-      ),
-    rearmAction: () =>
-      Promise.reject(
-        new Error("Durable Action rearming requires a delivery runtime."),
-      ),
-  };
   let transactionIndex = 0;
 
   const transaction = async <T>(
@@ -490,7 +477,7 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
-    resolution: options.actionResolution,
+    resumption: options.actionResumption,
     content: {
       ...content,
       // This runtime-owned key is content-addressed, not Processor-run-addressed.
@@ -506,20 +493,12 @@ export function createProcessorContext(
     createInvocationKey: (actionId) =>
       `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: contextIdentity,
-    rearmDeferredAction: (actionRunId) =>
-      deferredWaits.rearmAction(actionRunId),
     createContext({ frame, actions: nestedActions, progress }) {
       return createActionInvocationContext({
         host: context,
         frame,
         actions: nestedActions,
         progress,
-        registerDeferredWait: (waitKey, timeoutMs) =>
-          deferredWaits.registerAction(
-            frame.actionRunId,
-            waitKey,
-            timeoutMs,
-          ),
       });
     },
   });
@@ -537,7 +516,6 @@ export function createProcessorContext(
     collections,
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
-    signalDeferredWait: (waitKey: string) => deferredWaits.signal(waitKey),
     now: options.now ?? (() => new Date()),
     transaction,
     readSnapshot,

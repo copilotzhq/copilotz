@@ -2,13 +2,14 @@ export type {
   ActionContentDeclaration,
   ActionContentEntry,
 } from "./content.ts";
-export { deferAction } from "./deferral.ts";
 export type {
-  ActionDeferral,
-  ActionResolution,
-  ActionWorkOutcome,
-  DeferredAction,
-} from "./deferral.ts";
+  ActionContinuation,
+  AwaitingAction,
+  AwaitOperationInput,
+  OperationOutcome,
+  OperationStart,
+  OperationStatus,
+} from "./continuation.ts";
 export { defineAction, isActionDefinition } from "./define.ts";
 export { secret } from "./secret.ts";
 export { ActionError } from "./errors.ts";
@@ -51,13 +52,13 @@ export type {
   CreateActionCallersOptions,
 } from "./invoker.ts";
 export type {
+  ActionAwaitingData,
   ActionCaller,
   ActionCallers,
   ActionCallOptions,
   ActionCompletedData,
   ActionContext,
   ActionContextOf,
-  ActionDeferredData,
   ActionDefinition,
   ActionEventData,
   ActionFailedData,

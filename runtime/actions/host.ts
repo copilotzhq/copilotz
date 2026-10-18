@@ -1,3 +1,4 @@
+import { awaitOperation } from "./continuation.ts";
 import type { VectorReader } from "../vectors/index.ts";
 import type {
   CollectionDefinition,
@@ -78,7 +79,6 @@ export type ActionHostContext = Readonly<{
   content: ActionContentHandle;
   streams: ContentStreamRuntime;
   signal: AbortSignal;
-  signalDeferredWait(waitKey: string): Promise<number>;
   now(): Date;
   transaction: ActionContext["transaction"];
   readSnapshot: ActionContext["readSnapshot"];
@@ -151,7 +151,6 @@ type ActionInvocationHost = Pick<
   | "content"
   | "streams"
   | "signal"
-  | "signalDeferredWait"
   | "now"
   | "transaction"
   | "readSnapshot"
@@ -167,10 +166,6 @@ export function createActionInvocationContext(
     frame: ActionInvocationFrame;
     actions: RuntimeActionCallers;
     progress(value: unknown): Promise<void>;
-    registerDeferredWait(
-      waitKey: string,
-      timeoutMs?: number,
-    ): Promise<void>;
   }>,
 ): ActionContext {
   const { frame, host } = options;
@@ -225,8 +220,7 @@ export function createActionInvocationContext(
     streams,
     signal: frame.signal,
     progress: options.progress,
-    registerDeferredWait: (waitKey, waitOptions) =>
-      options.registerDeferredWait(waitKey, waitOptions?.timeoutMs),
+    awaitOperation,
     transaction: (
       execute: Parameters<ActionContext["transaction"]>[0],
       transactionOptions: ActionTransactionOptions = {},
@@ -341,10 +335,6 @@ export function createActionContext(
         frame,
         actions: nestedActions,
         progress,
-        registerDeferredWait: () =>
-          Promise.reject(
-            new Error("Durable Action waits require a delivery runtime."),
-          ),
       });
     },
   });
@@ -360,9 +350,6 @@ export function createActionContext(
     content,
     streams: content.stream,
     signal,
-    // Direct host executions cannot own durable waiters, so terminal
-    // notifications are harmless no-ops; registration still rejects below.
-    signalDeferredWait: () => Promise.resolve(0),
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
     readSnapshot,

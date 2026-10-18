@@ -2,15 +2,15 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { isNonRetryableError } from "../failure.ts";
 import { ActionError } from "./errors.ts";
 import { defineAction } from "./define.ts";
-import { type ActionDeferral, deferAction } from "./deferral.ts";
+import { type ActionContinuation, awaitOperation } from "./continuation.ts";
 import {
   createActionCallers,
   isActionInputValidationError,
 } from "./invoker.ts";
 import type {
+  ActionAwaitingData,
   ActionCompletedData,
   ActionContext,
-  ActionDeferredData,
   ActionFailedData,
   ActionInvokedData,
   ActionLifecycleEmitter,
@@ -24,7 +24,7 @@ function recordingLifecycle(
   emitted: ActionLifecycleInput[];
 }> {
   const invoked = new Map<string, ActionInvokedData>();
-  const deferred = new Map<string, ActionDeferredData>();
+  const awaiting = new Map<string, ActionAwaitingData>();
   const terminal = new Map<
     string,
     ActionCompletedData | ActionFailedData
@@ -50,12 +50,12 @@ function recordingLifecycle(
         terminal.set(input.actionRunId, input);
       }
       emitted.push(input);
-      if (input.status === "deferred") deferred.set(input.actionRunId, input);
+      if (input.status === "awaiting") awaiting.set(input.actionRunId, input);
       return Promise.resolve({ deduplicated: false } as never);
     },
     invoked: (actionRunId) => Promise.resolve(invoked.get(actionRunId) ?? null),
-    deferred: (actionRunId) =>
-      Promise.resolve(deferred.get(actionRunId) ?? null),
+    awaiting: (actionRunId) =>
+      Promise.resolve(awaiting.get(actionRunId) ?? null),
     terminal: (actionRunId) =>
       Promise.resolve(terminal.get(actionRunId) ?? null),
   };
@@ -725,16 +725,19 @@ Deno.test("prepared Action requires a stable non-empty operation key", async () 
   );
 });
 
-Deno.test("a nested deferred call returns its receipt without handing its command to the parent", async () => {
+Deno.test("a nested awaiting call returns its receipt without handing its command to the parent", async () => {
   const recorded = recordingLifecycle();
   let calls = 0;
-  const child = defineAction<unknown, number | ActionDeferral>({
-    id: "test.deferred-child",
+  const child = defineAction<unknown, number | ActionContinuation>({
+    id: "test.awaiting-child",
     execute() {
       calls++;
-      return deferAction({ opaque: "child-work" });
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: { opaque: "child-work" },
+      });
     },
-    resolve() {
+    resume() {
       return 7;
     },
   });
@@ -752,12 +755,12 @@ Deno.test("a nested deferred call returns its receipt without handing its comman
   });
   const result = await actions.parent({});
   const handoffs = recorded.emitted.filter((event) =>
-    event.status === "deferred"
+    event.status === "awaiting"
   );
   assertEquals(handoffs.length, 1);
   assertEquals(handoffs[0].actionId, child.id);
   assertEquals(result, {
-    status: "deferred",
+    status: "awaiting",
     actionRunId: handoffs[0].actionRunId,
   });
   assertEquals(recorded.emitted.at(-1)?.status, "completed");
@@ -765,16 +768,19 @@ Deno.test("a nested deferred call returns its receipt without handing its comman
   assertEquals(calls, 1);
 });
 
-Deno.test("deferred Action retry returns the same receipt without executing or exposing work again", async () => {
+Deno.test("awaiting Action retry returns the same receipt without executing or exposing work again", async () => {
   const recorded = recordingLifecycle();
   let calls = 0;
-  const work = defineAction<unknown, number | ActionDeferral>({
-    id: "test.deferred",
+  const work = defineAction<unknown, number | ActionContinuation>({
+    id: "test.awaiting",
     execute() {
       calls++;
-      return deferAction({ private: "work" });
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: { private: "work" },
+      });
     },
-    resolve() {
+    resume() {
       return 7;
     },
   });
@@ -785,12 +791,12 @@ Deno.test("deferred Action retry returns the same receipt without executing or e
     createContext: invocationContext,
   });
   const first = await actions.work({});
-  assertEquals(first, { status: "deferred", actionRunId: "stable" });
+  assertEquals(first, { status: "awaiting", actionRunId: "stable" });
   assertEquals(await actions.work({}), first);
   assertEquals(calls, 1);
   assertEquals(recorded.emitted.map((event) => event.status), [
     "invoked",
-    "deferred",
+    "awaiting",
   ]);
 });
 
@@ -834,82 +840,60 @@ Deno.test("Action replay preserves error codes and caller-safe classification", 
   });
 });
 
-for (
-  const mode of [
-    "rearm",
-    "changed-work",
-    "progress-rearm",
-    "progress-terminal",
-  ] as const
-) {
-  Deno.test(`resolver handoff contract: ${mode}`, async () => {
+for (const fail of [false, true]) {
+  Deno.test(`duplicate resumption preserves one ${fail ? "failure" : "result"} and captured handoff`, async () => {
     const recorded = recordingLifecycle();
-    let rearms = 0;
-    const work = defineAction<{ id: string }, number | ActionDeferral>({
-      id: "test.rearming-work",
+    let resumes = 0;
+    const work = defineAction<{ id: string }, number | ActionContinuation>({
+      id: "test.continuation",
       execute(input) {
-        return deferAction({ id: input.id });
+        return awaitOperation({
+          start: { action: "child", input: {} },
+          handoff: input,
+        });
       },
-      async resolve(_input, context, resolution) {
-        if (mode.startsWith("progress-")) {
-          await context.progress("Checked producer");
-        }
-        if (mode === "progress-terminal") return 7;
-        return deferAction(
-          mode === "changed-work" ? { id: "changed" } : resolution.work,
-        );
+      async resume(handoff, outcome, context) {
+        resumes++;
+        assertEquals(handoff, { id: "checkpoint" });
+        assertEquals(outcome.status, "completed");
+        await context.progress("Checked producer");
+        if (fail) throw new Error("answer failed");
+        return 7;
       },
     });
-    const original = createActionCallers({ work }, {
+    const options = {
       actionLifecycle: recorded.lifecycle,
       signal: new AbortController().signal,
       createInvocationKey: () => "stable-wait",
       createContext: invocationContext,
-    });
-    await original.work({ id: "checkpoint" });
+    };
+    await createActionCallers({ work }, options).work({ id: "checkpoint" });
     const receipt = recorded.emitted.find((event) =>
-      event.status === "deferred"
+      event.status === "awaiting"
     );
-    assert(receipt?.status === "deferred");
-    const resolving = createActionCallers({ work }, {
-      actionLifecycle: recorded.lifecycle,
-      signal: new AbortController().signal,
-      resolution: { receipt, outcome: "completed" },
-      rearmDeferredAction: () => {
-        rearms++;
-        return Promise.resolve();
+    assert(receipt?.status === "awaiting");
+    const resumed = createActionCallers({ work }, {
+      ...options,
+      resumption: {
+        receipt,
+        outcome: { operationId: "child", status: "completed" },
       },
-      createContext: invocationContext,
     });
-    if (mode === "changed-work" || mode === "progress-rearm") {
-      await assertRejects(
-        () => resolving.work({ id: "checkpoint" }),
-        TypeError,
-        mode === "changed-work"
-          ? "existing deferred work"
-          : "after publishing progress",
-      );
-      assertEquals(rearms, 0);
-      assertEquals(recorded.emitted.at(-1)?.status, "failed");
-    } else if (mode === "rearm") {
-      assertEquals(await resolving.work({ id: "checkpoint" }), {
-        status: "deferred",
-        actionRunId: "stable-wait",
-      });
-      assertEquals(rearms, 1);
-      assertEquals(recorded.emitted.map((event) => event.status), [
-        "invoked",
-        "deferred",
-      ]);
-    } else {
-      assertEquals(await resolving.work({ id: "checkpoint" }), 7);
-      assertEquals(rearms, 0);
-      assertEquals(recorded.emitted.map((event) => event.status), [
-        "invoked",
-        "deferred",
-        "progress",
-        "completed",
-      ]);
+    for (let i = 0; i < 2; i++) {
+      if (fail) {
+        await assertRejects(
+          () => resumed.work({ id: "checkpoint" }),
+          Error,
+          "answer failed",
+        );
+      } else assertEquals(await resumed.work({ id: "checkpoint" }), 7);
     }
+    assertEquals(resumes, 1);
+    assertEquals(recorded.emitted.map((event) => event.status), [
+      "invoked",
+      "awaiting",
+      "progress",
+      fail ? "failed" : "completed",
+    ]);
   });
 }

@@ -1,5 +1,6 @@
+import type { OperationStart } from "./continuation.ts";
 import type {
-  ActionDeferredData,
+  ActionAwaitingData,
   ActionEventData,
   ActionInvokedData,
   ActionLifecycleAppender,
@@ -13,7 +14,7 @@ import { durableActionMetadata, durableActionValue } from "./value.ts";
 
 const ACTION_STATUSES = new Set<ActionStatus>([
   "invoked",
-  "deferred",
+  "awaiting",
   "progress",
   "completed",
   "failed",
@@ -68,14 +69,15 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   switch (input.status) {
     case "invoked":
       return ({ ...base, status: "invoked" } as const);
-    case "deferred":
+    case "awaiting":
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 0
       ) throw new TypeError("Deferred progress index must be non-negative.");
       return {
         ...base,
-        status: "deferred",
-        work: durableActionValue(input.work),
+        status: "awaiting",
+        handoff: durableActionValue(input.handoff),
+        start: durableActionValue(input.start) as OperationStart,
         progressIndex: input.progressIndex,
       };
     case "progress": {
@@ -121,7 +123,7 @@ export function createActionLifecycleEmitter(
   const originMetadata = structuredClone(input.metadata ?? {});
   const load = async (
     actionRunId: string,
-    suffix: "invoked" | "deferred" | "terminal",
+    suffix: "invoked" | "awaiting" | "terminal",
   ): Promise<ActionEventData | null> => {
     const id = requireText(actionRunId, "Action run id");
     if (!input.load) return null;
@@ -175,12 +177,12 @@ export function createActionLifecycleEmitter(
       }
       return data;
     },
-    async deferred(actionRunId): Promise<ActionDeferredData | null> {
-      const data = await load(actionRunId, "deferred");
+    async awaiting(actionRunId): Promise<ActionAwaitingData | null> {
+      const data = await load(actionRunId, "awaiting");
       if (!data) return null;
-      if (data.status !== "deferred") {
+      if (data.status !== "awaiting") {
         throw new Error(
-          `Action deferred receipt '${actionRunId}' is inconsistent.`,
+          `Action awaiting receipt '${actionRunId}' is inconsistent.`,
         );
       }
       return data;

@@ -12,7 +12,7 @@ import {
 } from "../streams/catalog.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
-import { advanceDeferredActions } from "./deferred-work.ts";
+import { scheduleResumptions } from "./continuation-work.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
 function gate() {
@@ -107,7 +107,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL internal operation deferral rechecks concurrent descendant admission",
+    "PostgreSQL continuation waits for child work admitted during settlement drain",
   ignore: !url,
   async fn() {
     const db = await createTestDatabase({ url, pgPoolMax: 4 });
@@ -115,28 +115,19 @@ Deno.test({
     const selected = gate();
     const release = gate();
     let pause = false;
-    const session: SqlSession = {
-      ...db,
-      async query<T extends Record<string, unknown>>(
-        sql: string,
-        params?: unknown[],
-      ) {
-        const result = await db.query<T>(sql, params);
-        if (
-          pause &&
-          sql.includes("ORDER BY namespace, scope_id, action_run_id LIMIT")
-        ) {
-          pause = false;
-          selected.open();
-          await release.wait;
-        }
-        return result;
-      },
-    };
+    const session = db;
     try {
       await provisionCopilotzSchema(db, schema);
       await provisionOperationCatalog(db, schema);
-      const catalog = createOperationCatalog(db, schema);
+      const catalog = createOperationCatalog(db, schema, {
+        beforeTerminal: async () => {
+          if (pause) {
+            pause = false;
+            selected.open();
+            await release.wait;
+          }
+        },
+      });
       const store = createEventStore({
         session,
         schema,
@@ -148,7 +139,10 @@ Deno.test({
       const coordinator = createEventCoordinator({
         store,
         registry: { durableConsumers: () => [] } as never,
-        executor: { scheduleDelivery() {} } as never,
+        executor: {
+          scheduleDelivery() {},
+          dispatchDelivery: () => Promise.resolve({ done: Promise.resolve() }),
+        } as never,
       });
       const root = await store.commitMutation({
         draft: { namespace: "tenant", type: "test.root", payload: {} },
@@ -184,40 +178,46 @@ Deno.test({
       });
       await lifecycle.emit({
         ...common,
-        status: "deferred",
-        work: {},
+        status: "awaiting",
+        handoff: {},
+        start: { action: "child", input: {} },
         progressIndex: 0,
-        deduplicationId: "work:action:deferred",
+        deduplicationId: "work:action:awaiting",
       });
+      const childScope = "work:child";
+      const [initial] = await store.listDeliveries({
+        settlementScopeId: childScope,
+      });
+      await store.claimDelivery({ id: initial.id, owner: "child" });
+      await store.succeedDelivery(initial.id, "child");
       pause = true;
-      const advance = advanceDeferredActions({ store, coordinator, catalog });
+      const settle = catalog.reconcile({ operationId: childScope });
       await selected.wait;
       const child = await store.append({
         namespace: "tenant",
         type: "test.child",
         payload: {},
-        settlementScopeId: scope,
-        actionScopeId: "work",
+        settlementScopeId: childScope,
       }, ["child"]);
       release.open();
-      await (await advance)();
+      await settle;
+      await (await scheduleResumptions({ store, coordinator, catalog }))();
       assertEquals(
-        (await store.listDeliveries({ consumerId: "runtime:action-resolver" }))
-          .length,
+        (await store.listDeliveries({
+          consumerId: "runtime:action-continuation",
+          settlementScopeId: scope,
+        })).length,
         0,
       );
       await store.claimDelivery({ id: child.deliveries[0].id, owner: "child" });
       await store.succeedDelivery(child.deliveries[0].id, "child");
-      const flush = await advanceDeferredActions({
-        store,
-        coordinator,
-        catalog,
-      });
-      // This fixture intentionally does not execute the resolver.
-      void flush;
+      await catalog.reconcile({ operationId: childScope });
+      await (await scheduleResumptions({ store, coordinator, catalog }))();
       assertEquals(
-        (await store.listDeliveries({ consumerId: "runtime:action-resolver" }))
-          .length,
+        (await store.listDeliveries({
+          consumerId: "runtime:action-continuation",
+          settlementScopeId: scope,
+        })).length,
         1,
       );
       await assertRejects(() =>
@@ -225,8 +225,7 @@ Deno.test({
           namespace: "tenant",
           type: "test.late",
           payload: {},
-          settlementScopeId: scope,
-          actionScopeId: "work",
+          settlementScopeId: childScope,
         })
       );
     } finally {

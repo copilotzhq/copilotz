@@ -1,8 +1,8 @@
 import {
-  type ActionResolution,
-  deferredAction,
-  isActionDeferral,
-} from "./deferral.ts";
+  awaitingAction,
+  isActionContinuation,
+  type OperationOutcome,
+} from "./continuation.ts";
 import {
   actionContentDeclaration,
   prepareActionContentInput,
@@ -36,7 +36,7 @@ import type {
 import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
 import { splitSecretActionValue } from "./secret.ts";
 import type {
-  ActionDeferredData,
+  ActionAwaitingData,
   ActionEventData,
   ActionInvokedData,
   ActionLifecycleEmitter,
@@ -47,7 +47,7 @@ const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const settledActionErrors = new WeakSet<object>();
 const actionInputValidationErrors = new WeakSet<object>();
 // A composed Action alias is presentation only: Core needs the immutable
-// definition identity behind a caller when it persists a deferred workflow.
+// definition identity behind a caller when it persists a continuation.
 // Keep that association private to the runtime rather than widening every
 // caller's public callable shape.
 const callerDefinitionIds = new WeakMap<object, string>();
@@ -106,23 +106,20 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
-  /** Runtime-only resolver delivery; never exposed through ActionCallOptions. */
-  resolution?: Readonly<
+  /** Runtime-only resumption delivery; never exposed through ActionCallOptions. */
+  resumption?: Readonly<
     {
-      receipt: ActionDeferredData;
-      outcome: ActionResolution["outcome"];
-      waitExpired?: boolean;
-      error?: ActionResolution["error"];
+      receipt: ActionAwaitingData;
+      outcome: OperationOutcome;
       causationId?: string;
     }
   >;
   content?: RuntimeContent;
   createInvocationKey?: (actionId: string) => string;
-  /** Stable root scope for deferred Action captures in one processor run. */
+  /** Stable root scope for awaiting Action captures in one processor run. */
   invocationScope?: string;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
-  rearmDeferredAction?(actionRunId: string): Promise<void>;
   createContext(
     input: Readonly<{
       frame: ActionInvocationFrame;
@@ -336,20 +333,20 @@ function createFrame(
   invoker: CreateActionCallersOptions,
   prepared = false,
 ): ActionInvocationFrame {
-  const resolution =
-    !parent && invoker.resolution?.receipt.actionId === action.id
-      ? invoker.resolution
+  const resumption =
+    !parent && invoker.resumption?.receipt.actionId === action.id
+      ? invoker.resumption
       : undefined;
   const metadata = durableActionMetadata(
-    resolution?.receipt.metadata ?? options.metadata ?? {},
+    resumption?.receipt.metadata ?? options.metadata ?? {},
   );
   const explicitKey = options.operationKey?.trim() || undefined;
   const inheritedIdentity = mergeIdentity(
     parent?.identity ?? invoker.identity,
     options.identity,
   );
-  const identity = resolution
-    ? { ...inheritedIdentity, causationId: resolution.causationId }
+  const identity = resumption
+    ? { ...inheritedIdentity, causationId: resumption.causationId }
     : inheritedIdentity;
   const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
   const hostInvocationKey = parent || prepared
@@ -368,7 +365,7 @@ function createFrame(
     hostInvocationKey ??
     identityInvocationKey ?? explicitKey ?? `invocation:${crypto.randomUUID()}`;
   const localKey = explicitKey ?? String(parent?.nextActionIndex() ?? 1);
-  const actionRunId = resolution?.receipt.actionRunId ??
+  const actionRunId = resumption?.receipt.actionRunId ??
     (parent
       ? `${parent.operationKey}/action:${action.id}:${localKey}`
       : preparedInvocationScope
@@ -385,11 +382,11 @@ function createFrame(
     actionId: action.id,
     actionRunId,
     rootKey,
-    operationKey: resolution ? `${actionRunId}/resolve` : actionRunId,
+    operationKey: resumption ? `${actionRunId}/resume` : actionRunId,
     ...(parent
       ? { parentActionRunId: parent.actionRunId }
-      : resolution?.receipt.parentActionRunId
-      ? { parentActionRunId: resolution.receipt.parentActionRunId }
+      : resumption?.receipt.parentActionRunId
+      ? { parentActionRunId: resumption.receipt.parentActionRunId }
       : {}),
     metadata,
     ...(identity ? { identity } : {}),
@@ -562,12 +559,12 @@ function actionCaller(
     // unique, so inserting it either wins the run or reports an earlier
     // receipt. Only then are the receipts read, and a run seen for the first
     // time reads nothing.
-    const resolution =
-      !parent && invoker.resolution?.receipt.actionRunId === frame.actionRunId
-        ? invoker.resolution
+    const resumption =
+      !parent && invoker.resumption?.receipt.actionRunId === frame.actionRunId
+        ? invoker.resumption
         : undefined;
-    if (resolution) {
-      validateReceipt(resolution.receipt, frame, durableInput);
+    if (resumption) {
+      validateReceipt(resumption.receipt, frame, durableInput);
       const terminal = await loadTerminal(
         invoker.actionLifecycle,
         frame,
@@ -576,9 +573,9 @@ function actionCaller(
       if (terminal) return restoreTerminal(terminal);
     }
     let claimError: unknown;
-    let claimed = Boolean(resolution);
+    let claimed = Boolean(resumption);
     try {
-      if (!resolution) {
+      if (!resumption) {
         const receipt = await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "invoked",
@@ -625,18 +622,18 @@ function actionCaller(
         );
       }
       if (!invoked && claimError !== undefined) throw claimError;
-      const deferred = await invoker.actionLifecycle.deferred?.(
+      const awaiting = await invoker.actionLifecycle.awaiting?.(
         frame.actionRunId,
       );
-      if (deferred) {
-        validateReceipt(deferred, frame, durableInput);
-        return deferredAction(frame.actionRunId);
+      if (awaiting) {
+        validateReceipt(awaiting, frame, durableInput);
+        return awaitingAction(frame.actionRunId);
       }
       // A receipt permits replay only when the current lease still owns the Action.
       if (claimError !== undefined) throw claimError;
     }
 
-    let progressIndex = resolution?.receipt.progressIndex ?? 0;
+    let progressIndex = resumption?.receipt.progressIndex ?? 0;
     let progressTail: Promise<void> = Promise.resolve();
     const progress = (value: unknown): Promise<void> => {
       if (actionDefinitionHasSecrets(action)) {
@@ -672,55 +669,41 @@ function actionCaller(
 
     try {
       throwIfAborted(frame.signal);
-      const output = resolution
-        ? await action.resolve!(
-          executionInput as never,
+      const output = resumption
+        ? await action.resume!(
+          resumption.receipt.handoff as never,
+          resumption.outcome as never,
           context as never,
-          {
-            work: resolution.receipt.work,
-            outcome: resolution.outcome,
-            ...(resolution.waitExpired ? { waitExpired: true } : {}),
-            ...(resolution.error ? { error: resolution.error } : {}),
-          } as never,
         )
         : await action.execute(executionInput as never, context as never);
       await progressTail;
       throwIfAborted(frame.signal);
-      if (isActionDeferral(output)) {
-        if (!action.resolve) {
-          throw new TypeError(
-            "An Action deferral requires a resolver.",
-          );
+      if (isActionContinuation(output)) {
+        if (!action.resume) {
+          throw new TypeError("An Action continuation requires resume.");
         }
-        assertMetadataIsSecretFree({ work: output.work }, inputSecrets);
-        if (resolution) {
-          if (progressIndex !== resolution.receipt.progressIndex) {
-            throw new TypeError(
-              "A resolving Action cannot re-arm after publishing progress.",
-            );
-          }
-          if (!sameActionValue(output.work, resolution.receipt.work)) {
-            throw new TypeError(
-              "A resolving Action may only re-arm its existing deferred work.",
-            );
-          }
-          if (!invoker.rearmDeferredAction) {
-            throw new Error(
-              "Durable Action rearming requires a delivery runtime.",
-            );
-          }
-          await invoker.rearmDeferredAction(frame.actionRunId);
-          return deferredAction(frame.actionRunId);
+        if (resumption) {
+          throw new TypeError("A resumption must produce a terminal result.");
         }
+        assertMetadataIsSecretFree({
+          handoff: output.handoff,
+          start: {
+            ...output.start,
+            input: splitSecretActionValue(
+              actions[output.start.action]?.inputSchema,
+              output.start.input,
+            ).publicValue,
+          },
+        }, inputSecrets);
         await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
-          actionScopeId: frame.actionRunId,
-          status: "deferred",
-          work: output.work,
+          status: "awaiting",
+          handoff: output.handoff,
+          start: output.start,
           progressIndex,
-          deduplicationId: `${frame.actionRunId}:action:deferred`,
+          deduplicationId: `${frame.actionRunId}:action:awaiting`,
         });
-        return deferredAction(frame.actionRunId);
+        return awaitingAction(frame.actionRunId);
       }
       if (action.outputSchema) {
         validateAgainstJsonSchema(

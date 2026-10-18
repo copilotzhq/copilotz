@@ -6,10 +6,15 @@ import { optionalText, record } from "./input.ts";
 import type { ConversationThread } from "@copilotz/copilotz/core";
 import { branchCertificate, certifiedHistoryBoundary } from "./source.ts";
 
-export function memoryCheckpointWaitKey(checkpointId: string): string {
-  const id = checkpointId.trim();
-  if (!id) throw new TypeError("Memory checkpoint id must be non-empty.");
-  return `memory.checkpoint:${id}`;
+export function memoryCheckpointOperation(
+  context: Pick<MemoryProcessorContext, "namespace">,
+  checkpointId: string,
+) {
+  return {
+    action: "produceCheckpoint",
+    input: { checkpointId },
+    operationId: `memory:${context.namespace}:${checkpointId}:producer`,
+  } as const;
 }
 
 /** Capture the allocation head before preparing source; on-demand writes never trim history. */
@@ -194,7 +199,6 @@ export async function settleCheckpointError(
           },
         },
       );
-      await context.signalDeferredWait(memoryCheckpointWaitKey(checkpointId));
       return;
     } catch (failure) {
       // A successful consolidator may have settled after our read. If another

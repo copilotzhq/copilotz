@@ -1429,12 +1429,14 @@ export function createS3BodyStore(
         return appendResult(input, raced.meta);
       }
       if (
-        part &&
-        !raced?.meta.parts.some((accepted) => accepted.key === part.key)
+        part && raced &&
+        (raced.meta.reservationId !== input.writer.reservationId ||
+          raced.meta.writerGeneration !== input.writer.generation) &&
+        !raced.meta.parts.some((accepted) => accepted.key === part.key)
       ) {
-        // The isolated create happened before the metadata CAS. A losing
-        // writer owns this unreferenced key, so it can remove it without
-        // touching bytes accepted by the winner.
+        // Only an observed different writer fences this key's publication.
+        // Same-writer retries share immutable keys and may publish one after
+        // this read. Missing metadata is not a fence either; retain the part.
         await deleteObject(part.key);
       }
       throw createContentError(

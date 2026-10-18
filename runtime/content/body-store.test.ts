@@ -226,3 +226,109 @@ Deno.test("memory settlement freezes synchronously across digest awaits", async 
   await assertRejects(() => terminating.seal({ writer: terminateWriter }));
   assertEquals((await incompletePromise).state, "incomplete");
 });
+
+for (const text of ["", "first"]) {
+  Deno.test(`memory append identity preserves original offset for ${text ? "nonempty" : "empty"} chunks`, async () => {
+    const store = createMemoryBodyStore();
+    const writer = await store.reserve({
+      bodyId: `bodies/append-offset-${text || "empty"}`,
+      mediaType: "text/plain",
+    });
+    const first = encoder.encode(text);
+    await store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "first",
+      bytes: first,
+    });
+    await store.append({
+      writer,
+      expectedOffset: first.byteLength,
+      appendId: "tail",
+      bytes: encoder.encode("tail"),
+    });
+    const headBefore = await store.head({ bodyId: writer.bodyId });
+    const replay = await store.append({
+      writer,
+      expectedOffset: 0,
+      appendId: "first",
+      bytes: first.slice(),
+    });
+    assertEquals(replay.startOffset, 0);
+    assertEquals(replay.endOffset, first.byteLength + 4);
+    const error = assertThrows(() =>
+      store.append({
+        writer,
+        expectedOffset: 1,
+        appendId: "first",
+        bytes: first.slice(),
+      })
+    );
+    assertEquals((error as { code?: string }).code, "asset_conflict");
+    const headAfter = await store.head({ bodyId: writer.bodyId });
+    assertEquals(headAfter?.byteLength, headBefore?.byteLength);
+    assertEquals(headAfter?.maintenanceVersion, headBefore?.maintenanceVersion);
+    assertEquals(
+      await store.readRange({
+        bodyId: writer.bodyId,
+        offset: 0,
+        end: first.byteLength + 4,
+      }),
+      encoder.encode(text + "tail"),
+    );
+  });
+}
+
+Deno.test("memory append replay retains nonzero offset and an owned byte snapshot", async () => {
+  const store = createMemoryBodyStore();
+  const writer = await store.reserve({
+    bodyId: "bodies/append-owned",
+    mediaType: "text/plain",
+  });
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "prefix",
+    bytes: encoder.encode("pre"),
+  });
+  const supplied = encoder.encode("value");
+  await store.append({
+    writer,
+    expectedOffset: 3,
+    appendId: "owned",
+    bytes: supplied,
+  });
+  supplied.fill(0);
+  await store.append({
+    writer,
+    expectedOffset: 8,
+    appendId: "tail",
+    bytes: encoder.encode("tail"),
+  });
+  const before = await store.head({ bodyId: writer.bodyId });
+  const replay = await store.append({
+    writer,
+    expectedOffset: 3,
+    appendId: "owned",
+    bytes: encoder.encode("value"),
+  });
+  assertEquals([replay.startOffset, replay.endOffset], [3, 12]);
+  for (
+    const [expectedOffset, bytes] of [[3, supplied], [
+      4,
+      encoder.encode("value"),
+    ]] as const
+  ) {
+    const error = assertThrows(() =>
+      store.append({ writer, expectedOffset, appendId: "owned", bytes })
+    );
+    assertEquals((error as { code?: string }).code, "asset_conflict");
+  }
+  const after = await store.head({ bodyId: writer.bodyId });
+  assertEquals(after?.byteLength, before?.byteLength);
+  assertEquals(after?.maintenanceVersion, before?.maintenanceVersion);
+  assertEquals(
+    await store.readRange({ bodyId: writer.bodyId, offset: 0, end: 12 }),
+    encoder.encode("prevaluetail"),
+  );
+});

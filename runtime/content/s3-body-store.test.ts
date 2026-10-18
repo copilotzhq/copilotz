@@ -69,6 +69,7 @@ function createMockGcs(
     arrived: ReturnType<typeof deferred>;
     released: ReturnType<typeof deferred>;
   }> = [];
+  const responseGates: typeof requestGates = [];
   let failedDeletePath: string | undefined;
   let partGetGate:
     | {
@@ -286,7 +287,7 @@ function createMockGcs(
           progressiveMetaGetRequests++;
         }
         const existing = objects.get(path);
-        return existing
+        const response = existing
           ? new Response(existing.bytes.slice().buffer, {
             headers: {
               "content-length": String(existing.bytes.byteLength),
@@ -314,6 +315,16 @@ function createMockGcs(
             },
           })
           : gcsError(404, "NoSuchKey");
+        const gateIndex = responseGates.findIndex((gate) =>
+          gate.method === request.method &&
+          requestTarget.includes(gate.pathIncludes)
+        );
+        if (gateIndex >= 0) {
+          const [gate] = responseGates.splice(gateIndex, 1);
+          gate.arrived.resolve();
+          await gate.released.promise;
+        }
+        return response;
       }
       if (request.method === "DELETE") {
         deleteRequests++;
@@ -370,6 +381,14 @@ function createMockGcs(
       const arrived = deferred();
       const released = deferred();
       requestGates.push({ method, pathIncludes, arrived, released });
+      return Object.freeze({
+        arrived: arrived.promise,
+        release: released.resolve,
+      });
+    },
+    blockNextResponse(method: string, pathIncludes: string) {
+      const arrived = deferred(), released = deferred();
+      responseGates.push({ method, pathIncludes, arrived, released });
       return Object.freeze({
         arrived: arrived.promise,
         release: released.resolve,
@@ -1434,3 +1453,51 @@ Deno.test("GCS maintenance collects late orphan parts without touching active st
     await gcs.shutdown();
   }
 });
+
+for (const provider of ["s3", "gcs"] as const) {
+  Deno.test(`${provider} losing append cannot delete an identical retry's committed part`, async () => {
+    const mock = createMockGcs();
+    const releases: Array<() => void> = [];
+    try {
+      const store = provider === "s3"
+        ? createS3CasStore(mock.endpoint)
+        : createGcsStore(mock.endpoint);
+      const bodyId = "copilotz/schemas/test/assets/same-writer-replay-race";
+      const writer = await store.reserve({ bodyId, mediaType: "text/plain" });
+      const request = {
+        writer,
+        expectedOffset: 0,
+        appendId: "same-append",
+        bytes: new TextEncoder().encode("accepted bytes"),
+      };
+      const put = mock.blockNextRequest("PUT", ".progressive/meta.json");
+      releases.push(put.release);
+      const losing = store.append(request).then(
+        (value) => ({ value, error: undefined }),
+        (error) => ({ value: undefined, error }),
+      );
+      await put.arrived;
+      await store.renew({ writer });
+      const stale = mock.blockNextResponse("GET", ".progressive/meta.json");
+      releases.push(stale.release);
+      put.release();
+      await stale.arrived;
+      const winner = await store.append(request);
+      assertEquals(winner.endOffset, request.bytes.byteLength);
+      stale.release();
+      const loss = await losing;
+      assertEquals((loss.error as ContentError)?.code, "asset_conflict");
+      assertEquals(
+        await store.readRange({
+          bodyId,
+          offset: 0,
+          end: request.bytes.byteLength,
+        }),
+        request.bytes,
+      );
+    } finally {
+      for (const release of releases) release();
+      await mock.shutdown();
+    }
+  });
+}

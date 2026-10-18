@@ -1,8 +1,11 @@
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 7;
+export const EVENT_SCHEMA_VERSION = 8;
 
 export type CoreTableName =
+  | "owner_epochs"
+  | "owner_receipts"
+  | "owner_alarms"
   | "nodes"
   | "edges"
   | "events"
@@ -29,6 +32,9 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
   const table = (name: CoreTableName) =>
     `${schema}.${quoteEventIdentifier(name)}`;
   return ({
+    owner_epochs: table("owner_epochs"),
+    owner_receipts: table("owner_receipts"),
+    owner_alarms: table("owner_alarms"),
     nodes: table("nodes"),
     edges: table("edges"),
     events: table("events"),
@@ -40,6 +46,17 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
 }
 
 const CORE_SCHEMA_COLUMNS = {
+  owner_epochs: ["owner", "epoch", "holder", "last_seq"],
+  owner_receipts: [
+    "owner",
+    "domain",
+    "key",
+    "principal",
+    "kind",
+    "intent",
+    "result",
+  ],
+  owner_alarms: ["owner", "name", "due_at"],
   nodes: [
     "id",
     "namespace",
@@ -144,6 +161,7 @@ export async function validateCopilotzSchema(
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
+          'owner_epochs', 'owner_receipts', 'owner_alarms',
           'nodes',
           'edges',
           'events',
@@ -204,7 +222,7 @@ export async function validateCopilotzSchema(
   return ({ schema, version: EVENT_SCHEMA_VERSION } as const);
 }
 
-type SchemaClassification = "fresh" | "current" | "incompatible";
+type SchemaClassification = "fresh" | "current" | "upgrade" | "incompatible";
 
 async function classifySchema(
   executor: SqlExecutor,
@@ -232,6 +250,7 @@ async function classifySchema(
     }
       WHERE singleton = TRUE LIMIT 1`,
   );
+  if (Number(marker.rows[0]?.version) === 7) return "upgrade";
   if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
     return "incompatible";
   }
@@ -252,7 +271,7 @@ function incompatibleSchema(schemaName: string): Error {
   return error;
 }
 
-/** Creates a fresh schema; incompatible existing schemas are rejected. */
+/** Installs fresh schemas or atomically upgrades the supported event baseline. */
 export async function provisionCopilotzSchema(
   session: SqlSession,
   schemaName = "public",
@@ -262,7 +281,7 @@ export async function provisionCopilotzSchema(
   if (classification === "current") {
     return await validateCopilotzSchema(session, schema);
   }
-  if (classification !== "fresh") throw incompatibleSchema(schema);
+  if (classification === "incompatible") throw incompatibleSchema(schema);
   return await session.transaction(async (transaction) => {
     // Recheck inside the DDL transaction so a competing provisioner cannot turn
     // a released schema into a partial upgrade between classification and DDL.
@@ -270,10 +289,15 @@ export async function provisionCopilotzSchema(
       "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
       [schema, "copilotz-schema-provision"],
     );
-    if (await classifySchema(transaction, schema) !== "fresh") {
-      throw incompatibleSchema(schema);
+    const current = await classifySchema(transaction, schema);
+    if (current === "current") {
+      return await validateCopilotzSchema(transaction, schema);
     }
-    for (const statement of createCoreSchemaStatements(schema)) {
+    if (current === "incompatible") throw incompatibleSchema(schema);
+    const statements = current === "upgrade"
+      ? createOwnerSchemaStatements(schema)
+      : createCoreSchemaStatements(schema);
+    for (const statement of statements) {
       await transaction.query(statement);
     }
     await transaction.query(
@@ -284,6 +308,39 @@ export async function provisionCopilotzSchema(
     );
     return await validateCopilotzSchema(transaction, schema);
   });
+}
+
+/** Additive owner upgrade: semantic events and open obligations remain untouched. */
+export function createOwnerSchemaStatements(
+  schemaName: string,
+): readonly string[] {
+  const tables = createCoreTableNames(schemaName);
+  return [
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (
+      owner TEXT PRIMARY KEY,
+      epoch BIGINT NOT NULL CHECK (epoch >= 0),
+      holder TEXT NOT NULL,
+      last_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_seq >= 0)
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "owner_epochs_singleton_idx"
+      ON ${tables.owner_epochs} ((TRUE))`,
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_receipts} (
+      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      domain TEXT NOT NULL CHECK (domain IN ('logical', 'incarnation', 'occurrence')),
+      key TEXT NOT NULL,
+      principal TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      intent JSONB NOT NULL,
+      result JSONB NOT NULL,
+      PRIMARY KEY (owner, domain, key)
+    )`,
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_alarms} (
+      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      name TEXT NOT NULL,
+      due_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (owner, name)
+    )`,
+  ];
 }
 
 /** Shared DDL for fresh provisioning and the explicit offline lifecycle upgrade. */
@@ -479,6 +536,7 @@ export function createCoreSchemaStatements(
     `ALTER TABLE ${tables.event_deliveries}
       ALTER COLUMN settlement_scope_id SET NOT NULL`,
     ...createActionObligationStatements(schemaId),
+    ...createOwnerSchemaStatements(schemaId),
     `CREATE INDEX IF NOT EXISTS "deliveries_available_idx"
       ON ${tables.event_deliveries}
         (status, available_at, priority DESC, created_at, id)

@@ -1,3 +1,4 @@
+import type { CommandContext, DatabaseOwner } from "./commands.ts";
 import { advanceDeferredActions } from "../actions/deferred-work.ts";
 import {
   cancelScopeActions,
@@ -86,6 +87,7 @@ export type DatabaseScopeCapabilities = Readonly<{
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
+  owner: DatabaseOwner;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
   coordinator: EventCoordinator;
@@ -107,6 +109,7 @@ export type DatabaseScopeRuntime = Readonly<{
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
+  owner: DatabaseOwner;
   databaseSchema: string;
   engine: CreateCopilotzEngineOptions;
   registry: PluginRegistry;
@@ -198,7 +201,7 @@ export function createDatabaseScope(
     delivery,
   ) => settleDelivery(transaction, delivery);
   const settleDelivery: DatabaseScopeRuntime["settleActionOwners"] = async (
-    transaction,
+    transaction: CommandContext["transaction"],
     delivery,
   ) => {
     const recovered = await recoverDeliveryActions(
@@ -780,6 +783,7 @@ export function createDatabaseScope(
   } as const;
 
   return ({
+    owner: options.owner,
     public: publicScope,
     store,
     coordinator,

@@ -237,6 +237,9 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "events",
       "nodes",
       "open_actions",
+      "owner_alarms",
+      "owner_epochs",
+      "owner_receipts",
     ]);
     const namespace = "tenant-a";
     const participants = fixture.engine.collections.get("participant");
@@ -492,7 +495,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
     await db.close();
   }
 });
-Deno.test("lazy database scopes validate with read-only SQL and reject unprovisioned schemas", async () => {
+Deno.test("database scopes acquire one owner after validation and reject unprovisioned schemas", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const registry = await createPluginRegistry({
     collections: {
@@ -528,7 +531,8 @@ Deno.test("lazy database scopes validate with read-only SQL and reject unprovisi
   try {
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
-    assertEquals(observed.length, 6);
+    assertEquals(observed.length, 7);
+    assert(/owner_epochs/.test(observed[6]));
     assert(/pg_index/.test(observed[5]));
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
@@ -597,5 +601,58 @@ Deno.test("A55 engine assembly is factory-first and runtime-neutral", async () =
       !/unsafeGraph|producedEvents|queueId|runGeneration/.test(source),
       module,
     );
+  }
+});
+
+Deno.test("one engine owner serves several namespaces and separate schema owners", async () => {
+  const db = await createTestDatabase();
+  const registry = await createPluginRegistry({
+    collections: {
+      records: defineCollection({
+        name: "records",
+        schema: {
+          type: "object",
+          properties: { id: { type: "string" } },
+          required: ["id"],
+        },
+      }),
+    },
+  });
+  const schema = "owner_scope_primary";
+  const additional = "owner_scope_additional";
+  await provisionCopilotzSchema(db, additional);
+  await provisionOperationCatalog(db, additional);
+  const engine = await createCopilotzEngine({
+    session: db,
+    registry,
+    defaultDatabaseSchema: schema,
+  });
+  try {
+    await engine.collections.withScope({ namespace: "first" }).records.create({
+      id: "first-record",
+    });
+    await engine.collections.withScope({ namespace: "second" }).records.create({
+      id: "second-record",
+    });
+    const first = await db.query(
+      `SELECT epoch,holder FROM "${schema}".owner_epochs`,
+    );
+    assertEquals(first.rows.length, 1);
+    assertEquals(Number(first.rows[0].epoch), 1);
+    await engine.databaseScope(additional);
+    const other = await db.query(
+      `SELECT epoch,holder FROM "${additional}".owner_epochs`,
+    );
+    assertEquals(Number(other.rows[0].epoch), 1);
+    assert(first.rows[0].holder !== other.rows[0].holder);
+    await engine.databaseScope(additional);
+    assertEquals(
+      (await db.query(`SELECT epoch,holder FROM "${additional}".owner_epochs`))
+        .rows,
+      other.rows,
+    );
+  } finally {
+    await engine.shutdown();
+    await db.close();
   }
 });

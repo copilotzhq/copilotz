@@ -1,6 +1,7 @@
 import {
   createActionObligationStatements,
   createCoreTableNames,
+  createOwnerSchemaStatements,
   EVENT_SCHEMA_VERSION,
   validateCopilotzSchema,
   validateEventSchemaName,
@@ -14,7 +15,7 @@ import {
 } from "../streams/catalog.ts";
 
 /**
- * Offline v5/v6 -> v7 upgrade. Stop old writers before calling this. The v5
+ * Offline v5/v6 -> current schema upgrade. Stop old writers before calling this. The v5
  * Action lifecycle cutover still requires drained workflows. The additive v6
  * wait columns preserve open Actions and initialize them as unsignaled. No
  * lifecycle receipt or domain record is rewritten.
@@ -68,6 +69,9 @@ export async function upgradeActionLifecycle(
            ADD COLUMN IF NOT EXISTS wait_expires_at TIMESTAMPTZ,
            ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
       );
+      for (const statement of createOwnerSchemaStatements(schema)) {
+        await transaction.query(statement);
+      }
       await transaction.query(
         `UPDATE ${core.copilotz_schema_metadata} SET version = $1 WHERE singleton`,
         [EVENT_SCHEMA_VERSION],
@@ -113,6 +117,9 @@ export async function upgradeActionLifecycle(
          ADD COLUMN IF NOT EXISTS resolve_generation INTEGER NOT NULL DEFAULT 0`,
     );
     await upgradeOperationCatalog(joined, schema);
+    for (const statement of createOwnerSchemaStatements(schema)) {
+      await transaction.query(statement);
+    }
     await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1 WHERE singleton`,
       [EVENT_SCHEMA_VERSION],

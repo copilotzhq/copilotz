@@ -40,6 +40,9 @@ Deno.test({
         "events",
         "nodes",
         "open_actions",
+        "owner_alarms",
+        "owner_epochs",
+        "owner_receipts",
       ]);
       const store = createEventStore({
         session,

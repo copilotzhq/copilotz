@@ -10,10 +10,12 @@ import type {
   ApplicationScope,
   InternalCopilotzApplication,
 } from "../types.ts";
-import { SERVER_INVOKE_ACTION_ID } from "./invoke-action.ts";
+// Retained pre-consolidation receipts remain readable after an upgrade.
+const SERVER_INVOKE_ACTION_ID = "copilotz.server.internal.invoke";
 import {
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
+  serverActionRunId,
   type ServerCollectionMutationRequest,
 } from "./contracts.ts";
 export type RecordedOperationResult = Readonly<
@@ -455,6 +457,37 @@ async function readRecordedOperationResult(
       "Action request is unavailable.",
     );
   }
+  const direct = await recoverDirectActionTerminal(
+    application,
+    context,
+    event,
+    action.id,
+  );
+  if (direct) {
+    if (direct.status === "failed" || direct.status === "cancelled") {
+      throw actionFailure(direct.error, audience);
+    }
+    if (direct.status === "completed") {
+      let afterStreamOrdinal: string | undefined;
+      for (;;) {
+        const streams = await scoped.operations.listStreams({
+          namespace: status.namespace,
+          operationId,
+          afterStreamOrdinal,
+          limit: 256,
+        });
+        if (
+          streams.some((stream) =>
+            stream.descriptor.metadata.sourceActionRunId ===
+              direct.actionRunId && stream.state !== "terminal"
+          )
+        ) return pending();
+        if (streams.length < 256) break;
+        afterStreamOrdinal = streams.at(-1)!.streamOrdinal;
+      }
+      return { kind: "action", pending: false, value: direct.output };
+    }
+  }
   const terminal = await recoverActionTerminal(
     application,
     context,
@@ -466,6 +499,30 @@ async function readRecordedOperationResult(
   if (!terminal) {
     if (status.state === "accepted" || status.state === "running") {
       return pending();
+    }
+    const [delivery] = await scoped.deliveries.list({
+      namespace: status.namespace,
+      eventId: event.id,
+      consumerId: "processor:copilotz.server.action-request",
+      status: "dead_letter",
+      limit: 1,
+    });
+    const refusal = delivery?.lastError;
+    if (refusal?.callerSafe === true) {
+      const safe = standardActionError(refusal);
+      if (safe) {
+        throw actionFailure({
+          name: safe.name,
+          message: safe.message,
+          code: safe.code,
+          status: safe.status,
+          callerSafe: true,
+        }, audience);
+      }
+    }
+
+    if (delivery) {
+      throw appError(422, "action_failed", "Action execution failed.");
     }
     throw appError(409, "action_not_completed", "Action did not complete.");
   }
@@ -537,4 +594,60 @@ function actionFailure(
     );
   }
   return appError(422, "action_failed", "Action execution failed.");
+}
+
+/** Direct roots are fixed by source and parent identity, never caller metadata. */
+async function recoverDirectActionTerminal(
+  application: InternalCopilotzApplication,
+  context: ApplicationScope,
+  request: DurableEvent,
+  actionId: string,
+): Promise<ActionEventData | undefined> {
+  const scope = context.databaseSchema &&
+      context.databaseSchema !== application.config.databaseSchema
+    ? await application.databaseScope(context.databaseSchema)
+    : application;
+  let afterPosition = request.position;
+  let runId: string | undefined;
+  for (;;) {
+    const events = await scope.events.list({
+      namespace: request.namespace,
+      correlationId: request.correlationId,
+      metadata: { actionId },
+      afterPosition,
+      limit: 1000,
+    });
+    for (const event of events) {
+      if (
+        event.type === `${actionId}.invoked` &&
+        event.causationId === request.id &&
+        event.metadata.sourceEventId === request.id &&
+        event.subject?.id ===
+          serverActionRunId(
+            String(event.metadata.sourceDeliveryId),
+            actionId,
+            String(
+              record((request as DurableEvent & { data?: unknown }).data)
+                .requestId,
+            ),
+          )
+      ) runId = event.subject?.id;
+      if (
+        !runId || event.subject?.id !== runId ||
+        !["completed", "failed", "cancelled"].some((status) =>
+          event.type === `${actionId}.${status}`
+        )
+      ) continue;
+      const data = await scope.events.resolveActionLifecycle(
+        request.namespace,
+        event.id,
+      );
+      if (
+        data && !data.parentActionRunId && data.actionId === actionId &&
+        ["completed", "failed", "cancelled"].includes(data.status)
+      ) return data;
+    }
+    if (events.length < 1000) return;
+    afterPosition = events.at(-1)!.position;
+  }
 }

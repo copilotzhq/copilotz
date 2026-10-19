@@ -134,7 +134,7 @@ export type CreateActionCallersOptions = Readonly<{
   prepareInput?(
     frame: ActionInvocationFrame,
     input: unknown,
-  ): Promise<{ input: unknown; claimed: boolean }> | undefined;
+  ): Promise<{ input: unknown; claimed: boolean } | undefined> | undefined;
   /** Runtime-only resumption delivery; never exposed through ActionCallOptions. */
   resumption?: Readonly<
     {

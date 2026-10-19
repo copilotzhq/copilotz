@@ -1,3 +1,5 @@
+import { admitInlineAction } from "../application/ingress/inline-action.ts";
+import { completeHostCollection } from "../application/ingress/inline-collection.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
 import { createProtectedActions } from "../actions/protected-actions.ts";
 import { assertOwnerIngressReplay } from "../application/ingress/authority.ts";
@@ -331,30 +333,15 @@ export function createDatabaseScope(
     const event = await store.getEvent(delivery.eventId);
     return event?.namespace === namespace ? delivery : null;
   };
-  const events: CopilotzEngineDatabaseScope["events"] = {
-    append(draft, appendOptions) {
-      if (
-        isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
-      ) {
-        throw new TypeError(
-          `Event deduplication identity '${
-            draft.deduplicationId!.trim()
-          }' is reserved for the Action lifecycle.`,
-        );
-      }
-      if (
-        isRegisteredActionLifecycleEventType(
-          draft.type,
-          options.registry.actions,
-        )
-      ) {
-        throw new TypeError(
-          `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
-        );
-      }
-      return coordinator.append(draft, appendOptions);
-    },
-    async appendProtected(draft, schema, ownerId, ingress) {
+  const appendProtected:
+    CopilotzEngineDatabaseScope["events"]["appendProtected"] = async (
+      draft,
+      schema,
+      ownerId,
+      ingress,
+      completion,
+      inlineAction,
+    ) => {
       if (
         isReservedActionLifecycleDeduplicationId(draft.deduplicationId) ||
         isRegisteredActionLifecycleEventType(
@@ -389,41 +376,116 @@ export function createDatabaseScope(
         } as const,
       } as const;
       const eventId = crypto.randomUUID();
-      return await coordinator.commitMutation({
-        eventId,
-        draft: { ...draft, payload: persistedPayload },
-        ingress,
-        matchData: prepared.publicData,
-        body: { id: bodyId, json: prepared.body },
-        mutate: async (context) => {
-          for (const value of prepared.prepared) {
-            await protectedValues!.adopt(context, draft.namespace, value);
-          }
-        },
-        recoverDuplicate: async (event, context) => {
-          const existing = await readEventBody(
-            context,
-            event.namespace,
-            eventDataRef(event.payload),
-          );
-          await assertOwnerIngressReplay(
-            context,
-            options.databaseSchema,
-            event,
-            existing,
-            ingress,
-          );
-          if (!samePreparedProtectedEventBody(existing, prepared.body)) {
-            throw Object.assign(
-              new Error(
-                `Protected Event '${event.id}' was retried with different data.`,
+      const commit = (
+        transaction?: import("../events/session.ts").SqlExecutor,
+      ) =>
+        coordinator.commitMutation({
+          transaction,
+          ...(inlineAction && !engine.execution?.dispatcher
+            ? {
+              initialLocalClaim: {
+                consumerId: "processor:copilotz.server.action-request",
+                owner: crypto.randomUUID(),
+              },
+            }
+            : {}),
+          ...(completion
+            ? {
+              consumers: options.registry.durableConsumers(
+                draft,
+                prepared.publicData,
+              ).filter((consumer) =>
+                consumer.consumerId !==
+                  "processor:copilotz.server.collection-mutation-request"
               ),
-              { code: "event_deduplication_conflict" },
+            }
+            : {}),
+          eventId,
+          draft: { ...draft, payload: persistedPayload },
+          ingress,
+          matchData: prepared.publicData,
+          body: { id: bodyId, json: prepared.body },
+          mutate: async (context) => {
+            for (const value of prepared.prepared) {
+              await protectedValues!.adopt(context, draft.namespace, value);
+            }
+          },
+          recoverDuplicate: async (event, context) => {
+            const existing = await readEventBody(
+              context,
+              event.namespace,
+              eventDataRef(event.payload),
             );
-          }
+            await assertOwnerIngressReplay(
+              context,
+              options.databaseSchema,
+              event,
+              existing,
+              ingress,
+            );
+            if (!samePreparedProtectedEventBody(existing, prepared.body)) {
+              throw Object.assign(
+                new Error(
+                  `Protected Event '${event.id}' was retried with different data.`,
+                ),
+                { code: "event_deduplication_conflict" },
+              );
+            }
+          },
+        });
+      if (inlineAction && !engine.execution?.dispatcher) {
+        return await admitInlineAction(
+          {
+            store,
+            coordinator,
+            registry: options.registry,
+            protectedValues,
+            protectedActions: engine.protectedActions,
+          },
+          draft,
+          commit,
+        );
+      }
+      if (!completion) return await commit();
+      return await completeHostCollection(
+        {
+          store,
+          collections,
+          catalog: options.operationCatalog,
+          registry: options.registry,
+          signal: options.owner.signal,
+          protectedValues,
         },
-      });
+        draft,
+        prepared.body,
+        completion,
+        commit,
+      );
+    };
+  const events: CopilotzEngineDatabaseScope["events"] = {
+    append(draft, appendOptions) {
+      if (
+        isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
+      ) {
+        throw new TypeError(
+          `Event deduplication identity '${
+            draft.deduplicationId!.trim()
+          }' is reserved for the Action lifecycle.`,
+        );
+      }
+      if (
+        isRegisteredActionLifecycleEventType(
+          draft.type,
+          options.registry.actions,
+        )
+      ) {
+        throw new TypeError(
+          `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
+        );
+      }
+      return coordinator.append(draft, appendOptions);
     },
+    appendProtected,
     async emit(input) {
       const event = createEphemeralEvent(input, options.now);
       const dispatched = await options.publishLive(event);

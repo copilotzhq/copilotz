@@ -154,6 +154,8 @@ export function createHostServices(
       );
     }
     const { id: requestId, envelope } = admission(options);
+    const completion:
+      import("./ingress/inline-collection.ts").InlineCollectionCompletion = {};
     const handle = await admitCollectionMutationRequest(
       application(),
       {
@@ -171,37 +173,40 @@ export function createHostServices(
       },
       typeof inputSchema === "object" ? inputSchema as ActionSchema : undefined,
       hostIngressProof(),
+      definition.content ? undefined : completion,
     );
-    return await result(handle, envelope);
+    return definition.content || completion.deferred
+      ? await result(handle, envelope)
+      : completion.value;
   };
   const actions: ApplicationActions = bindings(
-    Object.entries(registry.actions).filter(([alias]) =>
-      alias !== "serverInvoke"
-    )
-      .map(([alias, action]) => [alias, async (input, options = {}) => {
-        input = structuredClone(input);
-        if (action.inputSchema) {
-          validateAgainstJsonSchema(action.inputSchema, input, "Action input");
-        }
-        const { id, envelope } = admission(options);
-        const handle = await admitActionRequest(
-          application(),
-          {
-            ...envelope,
-            type: SERVER_ACTION_REQUEST_EVENT_TYPE,
-            payload: {
-              schema: SERVER_ACTION_REQUEST_SCHEMA,
-              requestId: id,
-              actionAlias: alias,
-              input,
-              actionMetadata: structuredClone(options.actionMetadata ?? {}),
-            },
+    Object.entries(registry.actions).map((
+      [alias, action],
+    ) => [alias, async (input, options = {}) => {
+      input = structuredClone(input);
+      if (action.inputSchema) {
+        validateAgainstJsonSchema(action.inputSchema, input, "Action input");
+      }
+      const { id, envelope } = admission(options);
+      const handle = await admitActionRequest(
+        application(),
+        {
+          ...envelope,
+          type: SERVER_ACTION_REQUEST_EVENT_TYPE,
+          payload: {
+            schema: SERVER_ACTION_REQUEST_SCHEMA,
+            requestId: id,
+            actionAlias: alias,
+            input,
+            actionMetadata: structuredClone(options.actionMetadata ?? {}),
           },
-          action.inputSchema,
-          hostIngressProof(),
-        );
-        return await result(handle, envelope);
-      }]),
+        },
+        action.inputSchema,
+        hostIngressProof(),
+        true,
+      );
+      return await result(handle, envelope);
+    }]),
   );
   const collections: ApplicationCollections = bindings(
     Object.entries(registry.collections).map(([alias, definition]) => [alias, {

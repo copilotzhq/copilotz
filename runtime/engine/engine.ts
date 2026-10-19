@@ -1,3 +1,5 @@
+import { sameActionValue } from "../actions/value.ts";
+import { SERVER_ACTION_REQUEST_EVENT_TYPE } from "../application/ingress/contracts.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/policy-receipt.ts";
@@ -431,7 +433,39 @@ export async function createCopilotzEngine(
             }
           }
           : undefined,
-        prepareActionInput: protectedActions.prepareInput,
+        prepareActionInput: async (frame, input) => {
+          const protectedInput = protectedActions.prepareInput(frame, input);
+          if (protectedInput) return await protectedInput;
+          if (
+            frame.parentActionRunId ||
+            base.event.type !== SERVER_ACTION_REQUEST_EVENT_TYPE ||
+            base.source?.kind !== "delivery" || !base.executionIncarnationId ||
+            !base.event.durable
+          ) return;
+          const claim = await scopedStore.readLocalClaim(
+            base.source.id,
+            base.executionIncarnationId,
+          );
+          if (!claim) return;
+          const action = actionDefinitionById(
+            options.registry.actions,
+            frame.actionId,
+          );
+          if (action.content) return;
+          const invoked = await createActionLifecycleLoader({
+            store: scopedStore,
+            actions: options.registry.actions,
+            protectedValues: scopedCapabilities.protectedValues,
+          })(base.event.namespace, `${frame.actionRunId}:action:invoked`);
+          if (!invoked) return;
+          if (
+            invoked.status !== "invoked" || invoked.parentActionRunId ||
+            invoked.actionId !== frame.actionId ||
+            !sameActionValue(invoked.input, input) ||
+            !sameActionValue(invoked.metadata, frame.metadata)
+          ) throw new TypeError("Admitted Action differs from its invocation.");
+          return { input, claimed: claim.attempts === 1 };
+        },
         refuseActionAuthorization: base.event.durable
           ? (frame) =>
             settleActionAuthorizationRefusal({
@@ -627,6 +661,32 @@ export async function createCopilotzEngine(
         actionLifecycle: createActionLifecycleEmitter({
           namespace: base.event.namespace,
           append: createActionLifecycleAppender({
+            ...(base.source?.kind === "delivery" &&
+                base.source.consumerId ===
+                  "processor:copilotz.server.action-request"
+              ? {
+                finishTerminal: async (
+                  transaction: import("../events/session.ts").SqlExecutor,
+                ) => {
+                  // Stream relays drain outside the queue. Only a stream-free
+                  // synchronous root can settle at its own terminal commit.
+                  const streams = await transaction.query(
+                    `SELECT 1 FROM "${base.databaseSchema}"."copilotz_operation_streams" WHERE namespace=$1 AND operation_id=$2 LIMIT 1`,
+                    [base.event.namespace, base.settlementScopeId],
+                  );
+                  if (streams.rows.length) return;
+                  await scopedStore.succeedDelivery(
+                    base.source!.id,
+                    base.executionIncarnationId!,
+                    transaction,
+                  );
+                  await scopedOperationCatalog.reconcile({
+                    namespace: base.event.namespace,
+                    operationId: base.settlementScopeId,
+                  }, transaction);
+                },
+              }
+              : {}),
             coordinator: scopedCoordinator,
             store: scopedStore,
             actions: (execution?.registry ?? options.registry).actions,

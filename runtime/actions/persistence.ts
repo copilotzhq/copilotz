@@ -42,6 +42,10 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   protectedValues?: ProtectedValueRuntime;
   writer?: ActionWriter;
   transaction?: SqlExecutor;
+  finishTerminal?(
+    transaction: SqlExecutor,
+    data: ActionEventData,
+  ): Promise<void>;
   protectedActionOutput?(
     data: ActionEventData,
   ): { authorize?(transaction: SqlExecutor): Promise<void> };
@@ -233,6 +237,32 @@ export function createActionLifecycleAppender(
       );
       await awaitEventPublication(result);
       await flush();
+      return result;
+    }
+
+    if (
+      options.finishTerminal && !outputHooks?.authorize &&
+      !data.parentActionRunId &&
+      ["completed", "failed", "cancelled"].includes(data.status)
+    ) {
+      const complete = async (transaction: SqlExecutor) => {
+        if (data.status === "completed") {
+          await outputHooks?.authorize?.(transaction);
+        }
+        const result = await commit(transaction);
+        await options.finishTerminal!(transaction, data);
+        return result;
+      };
+      if (options.transaction) return await complete(options.transaction);
+      const result = await createSchemaCommandRunner(
+        options.store!.session,
+        options.store!.databaseSchema!,
+      )(
+        "actions.terminal",
+        { actionRunId: data.actionRunId },
+        (_input, command) => complete(command.transaction),
+      );
+      await awaitEventPublication(result);
       return result;
     }
 

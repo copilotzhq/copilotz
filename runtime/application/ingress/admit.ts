@@ -17,12 +17,15 @@ export function admitActionRequest(
   input: ApplicationSendInput & { payload: ServerActionRequest },
   inputSchema?: ActionSchema,
   ingress?: OwnerIngressProof,
+  inline = false,
 ) {
   return application.sendProtected(
     input,
     serverActionRequestSchema(inputSchema),
     `server:${input.payload.requestId}`,
     ingress,
+    undefined,
+    inline,
   );
 }
 
@@ -31,11 +34,13 @@ export function admitCollectionMutationRequest(
   input: ApplicationSendInput & { payload: ServerCollectionMutationRequest },
   inputSchema?: ActionSchema,
   ingress?: OwnerIngressProof,
+  completion?: import("./inline-collection.ts").InlineCollectionCompletion,
 ) {
   return application.sendProtected(
     input,
     serverCollectionMutationRequestSchema(inputSchema),
     `server:${input.payload.requestId}`,
     ingress,
+    completion,
   );
 }

@@ -13,6 +13,7 @@ import {
   assertSchemaCommandTransaction,
   type CommandContext,
   createSchemaCommandRunner,
+  schemaCommandContext,
 } from "../engine/commands.ts";
 import { afterSqlCommit } from "../events/session.ts";
 import {
@@ -456,6 +457,8 @@ export type OperationCatalog = Readonly<{
     input?: Readonly<
       { limit?: number; namespace?: string; operationId?: string }
     >,
+    transaction?: SqlExecutor,
+    outcome?: "failed",
   ): Promise<number>;
   pruneTerminalMetadata(
     input: Readonly<{ now?: Date; retentionMs: number; limit?: number }>,
@@ -3149,8 +3152,11 @@ export function createOperationCatalog(
         [input.operationId, input.deliveryId, input.outcome],
       );
     },
-    async reconcile(input = {}) {
-      const key = input.namespace && input.operationId
+    async reconcile(input = {}, transaction, outcome) {
+      if (transaction) {
+        assertSchemaCommandTransaction(transaction, databaseSchema);
+      }
+      const key = !transaction && input.namespace && input.operationId
         ? JSON.stringify([input.namespace, input.operationId])
         : undefined;
       const active = key && reconciliations.get(key);
@@ -3175,7 +3181,7 @@ export function createOperationCatalog(
         WHERE delivery.settlement_scope_id = operation.operation_id AND event.namespace = operation.namespace
           AND delivery.status IN ('pending','leased','retry_wait')
       )`;
-        const terminalizable = await session.query<
+        const terminalizable = await (transaction ?? session).query<
           { operation_id: string; namespace: string }
         >(
           `SELECT operation.operation_id, operation.namespace FROM ${tables.operations} AS operation
@@ -3191,26 +3197,31 @@ export function createOperationCatalog(
           ],
         );
         for (const operation of terminalizable.rows) {
-          await options.beforeTerminal?.({
-            namespace: operation.namespace,
-            operationId: operation.operation_id,
-          });
+          if (!transaction) {
+            await options.beforeTerminal?.({
+              namespace: operation.namespace,
+              operationId: operation.operation_id,
+            });
+          }
         }
         if (!terminalizable.rows.length) return 0;
         const ids = terminalizable.rows.map((operation) =>
           operation.operation_id
         );
         const publications: (() => Promise<void>)[] = [];
-        const result = await runCommand(
-          "catalog.reconcile",
-          { ids },
-          async (_input, { transaction }) => {
-            // Output draining ran outside the command loop. Reread readiness
-            // inside this serialized command so newly admitted work prevents settlement.
-            const settled = await transaction.query<
-              { operation_id: string; namespace: string }
-            >(
-              `WITH drained AS MATERIALIZED (
+        const result =
+          await (transaction
+            ? createSchemaCommandRunner(transaction, databaseSchema)
+            : runCommand)(
+              "catalog.reconcile",
+              { ids },
+              async (_input, { transaction, commandTime }) => {
+                // Output draining ran outside the command loop. Reread readiness
+                // inside this serialized command so newly admitted work prevents settlement.
+                const settled = await transaction.query<
+                  { operation_id: string; namespace: string }
+                >(
+                  `WITH drained AS MATERIALIZED (
             SELECT operation.operation_id, operation.namespace,
               CASE WHEN operation.cancellation_requested_at IS NOT NULL THEN 'cancelled'
                 WHEN EXISTS (
@@ -3218,53 +3229,64 @@ export function createOperationCatalog(
                   JOIN ${tables.events} AS event ON event.id = delivery.event_id
                   WHERE delivery.settlement_scope_id = operation.operation_id
                     AND event.namespace = operation.namespace AND delivery.status IN ('dead_letter','cancelled')
-                ) THEN 'failed' ELSE 'completed' END AS outcome
+                ) THEN 'failed' ELSE COALESCE($2::text, 'completed') END AS outcome
             FROM ${tables.operations} AS operation
             WHERE operation.operation_id = ANY($1::text[])
               AND operation.state IN ('accepted','running') AND ${drained}
           ) UPDATE ${tables.operations} AS operation
-            SET state = drained.outcome, updated_at = NOW(),
-              completed_at = COALESCE(operation.completed_at, NOW())
+            SET state = drained.outcome, updated_at = $3::timestamptz,
+              completed_at = COALESCE(operation.completed_at, $3::timestamptz)
             FROM drained WHERE operation.operation_id = drained.operation_id
             RETURNING operation.operation_id, operation.namespace`,
-              [ids],
-            );
-            for (const row of settled.rows) {
-              // No future work can be admitted to a terminal operation. Retire
-              // its wake together with the terminal and continuation receipts.
-              await writeOwnerDeadline(transaction, databaseSchema, {
-                source: "reconciliation",
-                key: reconciliationAlarmKey("schema", {
-                  kind: "operation",
-                  namespace: row.namespace,
-                  id: row.operation_id,
-                }),
-                namespace: row.namespace,
-                dueAt: null,
-              });
-              await transaction.query(
-                `UPDATE "${databaseSchema}"."pending_content"
-              SET expires_at=GREATEST(expires_at,NOW()+($3::bigint*interval '1 millisecond'))
+                  [ids, outcome ?? null, commandTime],
+                );
+                for (const row of settled.rows) {
+                  // No future work can be admitted to a terminal operation. Retire
+                  // its wake together with the terminal and continuation receipts.
+                  await writeOwnerDeadline(transaction, databaseSchema, {
+                    source: "reconciliation",
+                    key: reconciliationAlarmKey("schema", {
+                      kind: "operation",
+                      namespace: row.namespace,
+                      id: row.operation_id,
+                    }),
+                    namespace: row.namespace,
+                    dueAt: null,
+                  });
+                  await transaction.query(
+                    `UPDATE "${databaseSchema}"."pending_content"
+              SET expires_at=GREATEST(expires_at,$4::timestamptz+($3::bigint*interval '1 millisecond'))
               WHERE namespace=$1 AND producer=$2`,
-                [row.namespace, row.operation_id, CONTENT_REPLAY_RETENTION_MS],
-              );
-              await publishOperationChange(
-                session,
-                transaction,
-                databaseSchema,
-                row.namespace,
-                row.operation_id,
-              );
-              const flush = await options.onSettled?.(transaction, {
-                namespace: row.namespace,
-                operationId: row.operation_id,
-              });
-              if (flush) publications.push(flush);
-            }
-            return settled;
-          },
-        );
-        for (const flush of publications) await flush();
+                    [
+                      row.namespace,
+                      row.operation_id,
+                      CONTENT_REPLAY_RETENTION_MS,
+                      commandTime,
+                    ],
+                  );
+                  await publishOperationChange(
+                    session,
+                    transaction,
+                    databaseSchema,
+                    row.namespace,
+                    row.operation_id,
+                  );
+                  const flush = await options.onSettled?.(transaction, {
+                    namespace: row.namespace,
+                    operationId: row.operation_id,
+                  });
+                  if (flush) publications.push(flush);
+                }
+                return settled;
+              },
+            );
+        for (const flush of publications) {
+          if (transaction) {
+            schemaCommandContext(transaction, databaseSchema).afterCommit(
+              flush,
+            );
+          } else await flush();
+        }
         return result.rows.length;
       };
       const task = run();

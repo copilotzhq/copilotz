@@ -225,7 +225,7 @@ type ApplicationUnresolvedReadOptions =
 export type ApplicationActions<TActions extends ActionMap = ActionMap> =
   Readonly<
     {
-      [K in keyof TActions as K extends "serverInvoke" ? never : K]: (
+      [K in keyof TActions]: (
         input: ActionInput<TActions[K]>,
         options?: ApplicationActionOptions,
       ) => Promise<ActionOutput<TActions[K]>>;
@@ -376,6 +376,9 @@ export type InternalCopilotzApplication =
       schema: ActionSchema,
       ownerId: string,
       ingress?: OwnerIngressProof,
+      completion?:
+        import("./ingress/inline-collection.ts").InlineCollectionCompletion,
+      inline?: boolean,
     ): Promise<ApplicationSendHandle>;
     /** Internal-only transport interruption used by persistence recovery. */
     interruptActiveSends(error: unknown): void;

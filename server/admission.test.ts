@@ -9,7 +9,7 @@ import { serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
 
-Deno.test("HTTP admission rejects a 33rd active operation but recovers identical receipts at capacity", async () => {
+Deno.test("concurrent HTTP admission enforces the atomic cap and recovers identical receipts at capacity", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => release = resolve);
@@ -52,16 +52,29 @@ Deno.test("HTTP admission rejects a 33rd active operation but recovers identical
   });
   const ids: string[] = [];
   try {
-    for (let index = 0; index < 32; index++) {
-      ids.push(
-        (await client.actions.submit("test.blocked", {}, {
-          idempotencyKey: `key-${index}`,
-        })).operationId,
-      );
+    const admissions = await Promise.allSettled(
+      Array.from(
+        { length: 40 },
+        (_, index) =>
+          client.actions.submit("test.blocked", {}, {
+            idempotencyKey: `key-${index}`,
+          }),
+      ),
+    );
+    const accepted = admissions.flatMap((result, index) =>
+      result.status === "fulfilled" ? [{ index, receipt: result.value }] : []
+    );
+    assertEquals(accepted.length, 32);
+    for (const result of admissions) {
+      if (result.status === "rejected") {
+        assertEquals(result.reason.code, "operation_replay_capacity_exceeded");
+      }
     }
+    ids.push(...accepted.map(({ receipt }) => receipt.operationId));
+    const replayKey = `key-${accepted[0].index}`;
     assertEquals(
       (await client.actions.submit("test.blocked", {}, {
-        idempotencyKey: "key-0",
+        idempotencyKey: replayKey,
       })).operationId,
       ids[0],
     );
@@ -77,7 +90,7 @@ Deno.test("HTTP admission rejects a 33rd active operation but recovers identical
     const conflict = await assertRejects(
       () =>
         client.actions.submit("test.blocked", { different: true }, {
-          idempotencyKey: "key-0",
+          idempotencyKey: replayKey,
         }),
       CopilotzHttpError,
     );

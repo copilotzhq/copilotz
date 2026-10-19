@@ -597,7 +597,7 @@ export function createOwnerCapabilityHost(
         [alias, action],
       ) => [
         alias,
-        alias === "serverInvoke" ? action : {
+        {
           ...action,
           execute: (input: unknown, context: ActionContext) =>
             invoke(assignment, "action", alias, [input], context),

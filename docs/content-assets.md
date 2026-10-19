@@ -370,3 +370,10 @@ the body is fetched.
 - [Actions](actions.md) covers invocation keys, validation and lifecycle Events.
 - [Streams](streams.md) covers bodies produced or consumed progressively.
 - [Runtime adapters](runtime-adapters.md) covers body store backends.
+
+Newly captured inline JSON uses deterministic recursively key-sorted JSON bytes.
+Array order, scalar values, Unicode strings, and finite JSON numbers retain
+their JSON meaning. Unsupported values are refused. The same preparation code
+verifies owner-bound parent captures after a retained JSON/JSONB round trip.
+Existing canonical references retain their accepted bytes and digest without
+recapture.

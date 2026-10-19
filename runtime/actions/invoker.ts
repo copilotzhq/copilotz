@@ -1,5 +1,21 @@
 import { bindActionInvocationParent } from "./invocation-parent.ts";
-import { closeCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
+import {
+  closeCollectionPolicyInvocation,
+  preserveCollectionInvocation,
+} from "../collections/policy-invocation.ts";
+import {
+  isOwnerAuthorizationRefusal,
+  sanitizedAuthorizationRefusal,
+} from "../engine/authorization-refusal.ts";
+import { callerDefinition, recordActionCaller } from "./caller-identity.ts";
+import { withOwnerCommandAuthorization } from "../engine/command-authorization.ts";
+import {
+  type ActionNamedPreparation,
+  type ActionPrepareNamedOptions,
+  normalizeActionNamedPreparation,
+} from "../execution/preparation-call.ts";
+import type { NamedPreparationHooks } from "./preparation.ts";
+import { authorizeActionCapabilities } from "./capability-authorization.ts";
 import { createActionEffectController } from "./effects.ts";
 import {
   type ActionEffectClient,
@@ -58,7 +74,6 @@ const actionInputValidationErrors = new WeakSet<object>();
 // definition identity behind a caller when it persists a continuation.
 // Keep that association private to the runtime rather than widening every
 // caller's public callable shape.
-const callerDefinitionIds = new WeakMap<object, string>();
 
 /**
  * Identifies a caller value that failed an Action's input schema before an
@@ -94,10 +109,7 @@ export function isActionInputValidationError(
 
 /** Returns the registered Action definition id for a composed caller. */
 export function actionCallerDefinitionId(value: unknown): string | undefined {
-  return (typeof value === "function" ||
-      (typeof value === "object" && value !== null))
-    ? callerDefinitionIds.get(value as object)
-    : undefined;
+  return callerDefinition(value);
 }
 
 export type ActionInvocationFrame = Readonly<{
@@ -114,6 +126,12 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
+  namedPreparations?: NamedPreparationHooks;
+  authorize?: NamedPreparationHooks["authorize"];
+  /** Private owner-only cleanup; never accepts worker error/status/output. */
+  refuseAuthorization?(
+    frame: ActionInvocationFrame,
+  ): Promise<{ error: Error; settled: boolean }>;
   /** Owner-only preparation; no worker-callable hook. */
   prepareInput?(
     frame: ActionInvocationFrame,
@@ -280,11 +298,18 @@ function createFrame(
   parent: ActionInvocationFrame | undefined,
   invoker: CreateActionCallersOptions,
   prepared = false,
+  named = false,
 ): ActionInvocationFrame {
   const resumption =
     !parent && invoker.resumption?.receipt.actionId === action.id
       ? invoker.resumption
       : undefined;
+  if (
+    !named && !resumption && options.metadata &&
+    Object.keys(options.metadata).some((key) =>
+      key.startsWith("__copilotzPreparation")
+    )
+  ) throw new TypeError("Named preparation metadata is owner-reserved.");
   const metadata = durableActionMetadata(
     resumption?.receipt.metadata ?? options.metadata ?? {},
   );
@@ -455,17 +480,43 @@ function actionCaller(
   invoker: CreateActionCallersOptions,
   parent?: ActionInvocationFrame,
 ): BoundActionCaller<AnyActionDefinition> {
+  const authorize = invoker.authorize ?? invoker.namedPreparations?.authorize;
+  type Invocation = {
+    frame: ActionInvocationFrame;
+    refusal?: unknown;
+    remember(error: unknown): void;
+  };
   const invokeBody = async (
     input: unknown,
     options: ActionCallOptions = {},
     captureRace = false,
     prepared = false,
+    namedPrepared = false,
+    invocation: Invocation,
   ): Promise<unknown> => {
-    const frame = createFrame(action, options, parent, invoker, prepared);
+    const frame = invocation.frame;
     throwIfAborted(frame.signal);
-    const preparation = invoker.prepareInput?.(frame, input);
-    const ownerPrepared = preparation ? await preparation : undefined;
+    const lifecycle = authorize
+      ? {
+        ...invoker.actionLifecycle,
+        emit: ((input) =>
+          withOwnerCommandAuthorization(
+            (command, purpose) =>
+              authorize!(frame, purpose, command.transaction),
+            () => invoker.actionLifecycle.emit(input),
+          )) as ActionLifecycleEmitter["emit"],
+      }
+      : invoker.actionLifecycle;
+    const preparation = namedPrepared
+      ? undefined
+      : invoker.prepareInput?.(frame, input);
+    const ownerPrepared = namedPrepared
+      ? { input, claimed: false }
+      : preparation
+      ? await preparation
+      : undefined;
     if (ownerPrepared) input = ownerPrepared.input;
+    await authorize?.(frame, "input");
 
     // Execution receives the canonical value; lifecycle persistence applies
     // the schema-owned protected projection inside its storage boundary.
@@ -479,7 +530,7 @@ function actionCaller(
     // A recorded result remains replayable after its input content is collected.
     // Only an attempt that still needs execution must open the captured pointers.
     if (action.content) {
-      const terminal = await invoker.actionLifecycle.terminal(
+      const terminal = await lifecycle.terminal(
         frame.actionRunId,
       );
       if (terminal) {
@@ -491,6 +542,7 @@ function actionCaller(
             durableActionContentInput(input, action.content),
           );
         }
+        await authorize?.(frame, "result");
         return restoreTerminal(terminal);
       }
     }
@@ -542,21 +594,24 @@ function actionCaller(
     if (resumption) {
       validateReceipt(resumption.receipt, frame, durableInput);
       const terminal = await loadTerminal(
-        invoker.actionLifecycle,
+        lifecycle,
         frame,
         durableInput,
       );
-      if (terminal) return restoreTerminal(terminal);
+      if (terminal) {
+        await authorize?.(frame, "result");
+        return restoreTerminal(terminal);
+      }
     }
     let replayProtocol: number | undefined = resumption
-      ? (await loadInvoked(invoker.actionLifecycle, frame, durableInput))
+      ? (await loadInvoked(lifecycle, frame, durableInput))
         ?.effectProtocol
       : 1;
     let claimError: unknown;
     let claimed = Boolean(resumption) || (ownerPrepared?.claimed ?? false);
     try {
       if (!resumption && !ownerPrepared) {
-        const receipt = await invoker.actionLifecycle.emit({
+        const receipt = await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "invoked",
           effectProtocol: 1,
@@ -571,8 +626,8 @@ function actionCaller(
     }
     if (!claimed) {
       const existing = captureRace
-        ? await invoker.actionLifecycle.terminal(frame.actionRunId)
-        : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+        ? await lifecycle.terminal(frame.actionRunId)
+        : await loadTerminal(lifecycle, frame, durableInput);
       if (existing && captureRace) {
         validateReceiptIdentity(existing, frame);
         return await invoke(
@@ -585,11 +640,14 @@ function actionCaller(
           prepared,
         );
       }
-      if (existing) return restoreTerminal(existing);
+      if (existing) {
+        await authorize?.(frame, "result");
+        return restoreTerminal(existing);
+      }
 
       const invoked = captureRace
-        ? await invoker.actionLifecycle.invoked(frame.actionRunId)
-        : await loadInvoked(invoker.actionLifecycle, frame, durableInput);
+        ? await lifecycle.invoked(frame.actionRunId)
+        : await loadInvoked(lifecycle, frame, durableInput);
       if (invoked && captureRace) {
         validateReceiptIdentity(invoked, frame);
         return await invoke(
@@ -603,7 +661,7 @@ function actionCaller(
         );
       }
       if (!invoked && claimError !== undefined) throw claimError;
-      const awaiting = await invoker.actionLifecycle.awaiting?.(
+      const awaiting = await lifecycle.awaiting?.(
         frame.actionRunId,
       );
       if (awaiting) {
@@ -628,7 +686,7 @@ function actionCaller(
       const index = ++progressIndex;
       const durableProgress = durableActionValue(value);
       progressTail = progressTail.then(async () => {
-        await invoker.actionLifecycle.emit({
+        await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "progress",
           progress: durableProgress,
@@ -669,6 +727,7 @@ function actionCaller(
       },
     };
     const pendingEffects = new Set<Promise<unknown>>();
+    const pendingCapabilityCleanup = new Set<Promise<void>>();
     let effectError: unknown;
     let closed = false;
     const controller = client && createActionEffectController({
@@ -694,10 +753,36 @@ function actionCaller(
     });
     if (controller) {
       // Preserve nonenumerable host capabilities (including source resolution).
-      context = Object.defineProperties({}, {
-        ...Object.getOwnPropertyDescriptors(context),
-        effect: { value: controller.effect, enumerable: true },
-      }) as ActionContext;
+      context = preserveCollectionInvocation(
+        Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(context),
+          effect: { value: controller.effect, enumerable: true },
+        }) as ActionContext,
+        context,
+      );
+    }
+    if (authorize) {
+      context = preserveCollectionInvocation(
+        authorizeActionCapabilities(
+          context,
+          (command, purpose) => authorize!(frame, purpose, command.transaction),
+          () => {
+            if (closed) {
+              throw new Error("Action capability lifetime has ended.");
+            }
+            frame.signal.throwIfAborted();
+          },
+          invocation.remember,
+          () => authorize!(frame, "result"),
+          (pending) => {
+            pendingCapabilityCleanup.add(pending);
+            void pending.finally(() =>
+              pendingCapabilityCleanup.delete(pending)
+            );
+          },
+        ),
+        context,
+      );
     }
     const drainEffects = async () => {
       while (pendingEffects.size) await Promise.allSettled([...pendingEffects]);
@@ -736,6 +821,7 @@ function actionCaller(
           context as never,
         )
         : await action.execute(executionInput as never, context as never);
+      if (invocation.refusal) throw invocation.refusal;
       await progressTail;
       await drainEffects();
       if (
@@ -769,7 +855,7 @@ function actionCaller(
             }
             : { operationId: output.operationId }),
         }, inputSecrets);
-        await invoker.actionLifecycle.emit({
+        await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "awaiting",
           handoff: output.handoff,
@@ -790,7 +876,7 @@ function actionCaller(
       }
       const durableOutput = durableActionValue(output);
       try {
-        await invoker.actionLifecycle.emit({
+        await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "completed",
           output: durableOutput,
@@ -798,14 +884,21 @@ function actionCaller(
         });
       } catch (error) {
         const terminal = captureRace
-          ? await invoker.actionLifecycle.terminal(frame.actionRunId)
-          : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+          ? await lifecycle.terminal(frame.actionRunId)
+          : await loadTerminal(lifecycle, frame, durableInput);
         if (terminal && captureRace) validateReceiptIdentity(terminal, frame);
-        if (terminal) return restoreTerminal(terminal);
+        if (terminal) {
+          await authorize?.(frame, "result");
+          return restoreTerminal(terminal);
+        }
         throw error;
       }
+      await authorize?.(frame, "result");
       return structuredClone(durableOutput);
     } catch (caught) {
+      if (isOwnerAuthorizationRefusal(caught) || invocation.refusal) {
+        throw invocation.refusal ?? caught;
+      }
       await Promise.allSettled([...pendingEffects]);
       let error = effectError ?? caught;
       // A provider exception after dispatch proves neither success nor no-start.
@@ -832,17 +925,20 @@ function actionCaller(
         unresolvedEffectFailures.set(parent, error);
       }
       const existingTerminal = captureRace
-        ? await invoker.actionLifecycle.terminal(frame.actionRunId)
-        : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+        ? await lifecycle.terminal(frame.actionRunId)
+        : await loadTerminal(lifecycle, frame, durableInput);
       if (existingTerminal && captureRace) {
         validateReceiptIdentity(existingTerminal, frame);
       }
-      if (existingTerminal) return restoreTerminal(existingTerminal);
+      if (existingTerminal) {
+        await authorize?.(frame, "result");
+        return restoreTerminal(existingTerminal);
+      }
       const status = frame.signal?.aborted || isCancellationError(error)
         ? "cancelled" as const
         : "failed" as const;
       try {
-        await invoker.actionLifecycle.emit({
+        await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status,
           error: actionDefinitionHasSecrets(action)
@@ -852,35 +948,119 @@ function actionCaller(
         });
       } catch (settlementError) {
         const terminal = captureRace
-          ? await invoker.actionLifecycle.terminal(frame.actionRunId)
-          : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+          ? await lifecycle.terminal(frame.actionRunId)
+          : await loadTerminal(lifecycle, frame, durableInput);
         if (terminal && captureRace) validateReceiptIdentity(terminal, frame);
-        if (terminal) return restoreTerminal(terminal);
+        if (terminal) {
+          await authorize?.(frame, "result");
+          return restoreTerminal(terminal);
+        }
         throw settlementError;
       }
       throw settledActionError(error);
     } finally {
       closed = true;
+      // Revocation may return a logical refusal before a native read resource
+      // acknowledges cancellation. Keep this invocation physically occupied.
+      while (pendingCapabilityCleanup.size) {
+        await Promise.allSettled([...pendingCapabilityCleanup]);
+      }
       closeCollectionPolicyInvocation(collectionPolicyContext);
     }
   };
   const invoke = async (
-    ...args: Parameters<typeof invokeBody>
+    input: unknown,
+    options: ActionCallOptions = {},
+    captureRace = false,
+    prepared = false,
+    namedPrepared = false,
   ): Promise<unknown> => {
+    const cancellation = new AbortController();
+    const frame = createFrame(
+      action,
+      {
+        ...options,
+        signal: mergeSignal(
+          options.signal ?? invoker.signal,
+          cancellation.signal,
+        ),
+      },
+      parent,
+      invoker,
+      prepared,
+      namedPrepared,
+    );
+    const invocation: Invocation = {
+      frame,
+      remember(error) {
+        if (isOwnerAuthorizationRefusal(error)) {
+          invocation.refusal ??= error;
+          cancellation.abort(sanitizedAuthorizationRefusal());
+        }
+      },
+    };
     try {
-      return await invokeBody(...args);
-    } catch (error) {
+      return await invokeBody(
+        input,
+        options,
+        captureRace,
+        prepared,
+        namedPrepared,
+        invocation,
+      );
+    } catch (caught) {
+      let error = invocation.refusal ?? caught;
+      if (isOwnerAuthorizationRefusal(error) && invoker.refuseAuthorization) {
+        const refusal = await invoker.refuseAuthorization(frame);
+        error = refusal.settled
+          ? settledActionError(refusal.error)
+          : refusal.error;
+      }
       const code = (error as { code?: unknown } | null)?.code;
       if (
         parent &&
         (code === "effect_indeterminate" || code === "owner_commit_unknown")
-      ) {
-        unresolvedEffectFailures.set(parent, error);
-      }
+      ) unresolvedEffectFailures.set(parent, error);
       throw error;
     }
   };
-  const caller = Object.assign(invoke, {
+  const caller = Object.assign((...args: [unknown, ActionCallOptions?]) => {
+    if (args.length > 2) {
+      throw new TypeError("Action calls accept input and options only.");
+    }
+    return invoke(args[0], args[1]);
+  }, {
+    async prepareNamed(
+      request: ActionNamedPreparation,
+      options: ActionPrepareNamedOptions,
+    ): Promise<unknown> {
+      const normalized = normalizeActionNamedPreparation(request, options);
+      if (!invoker.namedPreparations) {
+        throw new TypeError("Named Action preparation is unavailable.");
+      }
+      const callOptions = {
+        operationKey: `prepare:${normalized.operationKey}`,
+        ...(normalized.signal ? { signal: normalized.signal } : {}),
+      };
+      const frame = createFrame(action, callOptions, parent, invoker, true);
+      const prepared = await invoker.namedPreparations.prepare(
+        frame,
+        normalized.request,
+        normalized.operationKey,
+      );
+      const result = await invoke(
+        prepared.input,
+        { ...callOptions, metadata: prepared.metadata },
+        false,
+        true,
+        true,
+      );
+      await invoker.namedPreparations.authorize({
+        ...frame,
+        metadata: prepared.metadata,
+      }, "result");
+      return result;
+    },
     async prepare(
       factory: ActionPrepareFactory<unknown>,
       options: ActionPrepareOptions,
@@ -947,7 +1127,7 @@ export function createActionCallers<const TActions extends ActionMap>(
 ): ActionCallers<TActions> {
   const entries = Object.entries(actions).map(([rawAlias, action]) => {
     const caller = actionCaller(action, actions, options, parent);
-    callerDefinitionIds.set(caller as object, action.id);
+    recordActionCaller(caller as object, action.id);
     return [requireAlias(rawAlias), caller] as const;
   });
   return (Object.fromEntries(entries)) as ActionCallers<TActions>;

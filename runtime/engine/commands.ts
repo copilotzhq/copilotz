@@ -38,7 +38,12 @@ export type CommandIdentity = Readonly<{
 }>;
 
 /** Authority is supplied by the host, separately from replay identity. */
-export type CommandCaller = Readonly<{ principal: string; epoch: number }>;
+export type CommandCaller = Readonly<{
+  principal: string;
+  epoch: number;
+  /** Authenticated physical caller; separate from the logical invocation principal. */
+  receiptReader?: string;
+}>;
 export type CommandContext = Readonly<{
   transaction: SqlExecutor;
   caller: CommandCaller;
@@ -395,6 +400,18 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                     }
 
                     await handler.authorizeResult?.(request.input, context);
+                    assertAcquired();
+                    // Recovery rights become durable with the same outer commit
+                    // as this currently authorized replay, never on admission.
+                    await tx.query(
+                      `UPDATE ${tables.owner_receipts} SET readers=array_append(readers,$4) WHERE owner=$1 AND domain=$2 AND key=$3 AND NOT ($4=ANY(readers))`,
+                      [
+                        owner,
+                        receipt.identity.domain,
+                        receipt.identity.key,
+                        binding.receiptReader ?? binding.principal,
+                      ],
+                    );
                     return existing.result as Output;
                   }
                 }
@@ -404,7 +421,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                 await alarms.refresh(tx, commandTime);
                 if (receipt) {
                   await tx.query(
-                    `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)`,
+                    `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result,readers) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,ARRAY[$8]::text[])`,
                     [
                       owner,
                       receipt.identity.domain,
@@ -413,6 +430,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                       kind,
                       canonical(receipt.intent),
                       canonical(output as CommandJson),
+                      binding.receiptReader ?? binding.principal,
                     ],
                   );
                 }
@@ -637,6 +655,7 @@ function registerCommandOnSlot<Input, Output>(
     binding?: Readonly<
       {
         principal: string;
+        receiptReader?: string;
         receipt: NonNullable<CommandRequest<Input>["receipt"]>;
         signal: AbortSignal;
       }
@@ -678,6 +697,7 @@ function registerCommandOnSlot<Input, Output>(
     });
     return await registered({
       principal: binding?.principal ?? "runtime",
+      receiptReader: binding?.receiptReader,
       epoch: owner.epoch!,
     }, {
       input,
@@ -739,6 +759,7 @@ export function createSchemaCommandRunner(
     binding?: Readonly<
       {
         principal: string;
+        receiptReader?: string;
         receipt: NonNullable<CommandRequest<Input>["receipt"]>;
         signal: AbortSignal;
       }
@@ -854,7 +875,7 @@ export async function readSchemaReceipt(
   ) return false;
   const tables = createCoreTableNames(schema);
   const result = await session.query<{ kind: string; intent: CommandJson }>(
-    `SELECT kind,intent FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3 AND principal=$4`,
+    `SELECT kind,intent FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3 AND $4=ANY(readers)`,
     ["schema", "logical", request.key, principal],
   );
   const row = result.rows[0];

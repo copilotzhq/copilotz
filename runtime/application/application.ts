@@ -1,3 +1,4 @@
+import { captureActionPreparationOptions } from "../actions/preparation.ts";
 import type { OwnerIngressProof } from "./ingress/authority.ts";
 import { createHostCommands, hostDatabaseScopes } from "./host-commands.ts";
 import { createHostServices } from "./host.ts";
@@ -331,6 +332,7 @@ export async function createCopilotzApplication(
     options.databaseLifecycle ?? {},
   beforeRecovery?: (engine: CopilotzEngine) => void | Promise<void>,
 ): Promise<InternalCopilotzApplication> {
+  options = captureActionPreparationOptions(options);
   const requestedScopes = hostDatabaseScopes(
     options.databaseSchema ?? "public",
     options.databaseScopes,

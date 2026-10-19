@@ -870,3 +870,30 @@ Deno.test("transactional protected input uses committed database staging and exi
     await db.close();
   }
 });
+
+import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
+import { ActionError } from "./errors.ts";
+Deno.test("protected policy cannot turn a query infrastructure failure into permanent refusal", async () => {
+  const f = await fixture();
+  try {
+    const hooks = f.build({
+      async authorize(_input, context) {
+        try {
+          await context.query("SELECT * FROM missing_policy_infrastructure");
+        } catch {
+          throw new ActionError("wrapped denial", {
+            code: "forbidden",
+            status: 403,
+          });
+        }
+      },
+    });
+    const error = await assertRejects(() =>
+      hooks.prepareInput(frame(), { account: "account-a" })!
+    );
+    assertEquals(isOwnerAuthorizationRefusal(error), false);
+    await f.build().prepareInput(frame(), { account: "account-a" });
+  } finally {
+    await f.db.close();
+  }
+});

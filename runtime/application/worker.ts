@@ -57,6 +57,7 @@ export async function createCopilotzWorker(
       "databaseScopes",
       "protectedActions",
       "collectionPolicies",
+      "preparations",
     ]
       .some((key) => Object.hasOwn(options, key))
   ) {

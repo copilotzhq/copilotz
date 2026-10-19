@@ -1,4 +1,5 @@
 import { withOwnedHosting } from "./hosting.ts";
+import { captureActionPreparationOptions } from "../actions/preparation.ts";
 import { hostDatabaseScopes } from "./host-commands.ts";
 import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
 import { createCopilotzGateway } from "./gateway.ts";
@@ -67,6 +68,7 @@ export async function createCopilotz(
     options.databaseLifecycle ?? {},
   createFetch?: EmbeddedFetchFactory,
 ): Promise<CopilotzEmbeddedApplication | CopilotzEmbeddedFetchApplication> {
+  options = captureActionPreparationOptions(options);
   hostDatabaseScopes(
     options.databaseSchema ?? "public",
     options.databaseScopes,

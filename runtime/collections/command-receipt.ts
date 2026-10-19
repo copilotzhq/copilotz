@@ -3,6 +3,7 @@ import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import type { CommandJson, CommandRequest } from "../engine/commands.ts";
 export type CollectionCommandReceipt = Readonly<{
   principal: string;
+  receiptReader?: string;
   receipt: NonNullable<CommandRequest<unknown>["receipt"]>;
   signal: AbortSignal;
 }>;

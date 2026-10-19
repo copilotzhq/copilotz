@@ -9,6 +9,8 @@ import type {
 } from "./policy-types.ts";
 
 type OwnerBinding = Readonly<{
+  /** Owner-resolved logical Processor run, independent of its current attempt. */
+  logicalRunId?: string;
   scope: Readonly<{ databaseSchema: string; namespace: string }>;
   signal: AbortSignal;
   resolveSource(transaction: SqlExecutor): Promise<ProtectedActionSource>;
@@ -210,6 +212,42 @@ export function bindActionCollectionInvocation<T extends object>(
     }, parent.root),
   );
 }
+/** Preserve the same revocable binding when the trusted invoker adds capabilities. */
+export function preserveCollectionInvocation<T extends object>(
+  context: T,
+  source: object,
+): T {
+  const authority = contexts.get(source);
+  if (authority) {
+    authority.check();
+    contexts.set(context, authority);
+  }
+  return context;
+}
+
+/** Owner-only logical receipt identity; public context fields cannot select it. */
+export function collectionReceiptInvocation(context: object):
+  | Readonly<{
+    scope: OwnerBinding["scope"];
+    invocation: Readonly<
+      { kind: "action" | "processor"; id: string; runId: string }
+    >;
+  }>
+  | undefined {
+  const authority = contexts.get(context);
+  if (!authority || authority.invocation.kind === "alarm") return undefined;
+  authority.check();
+  const { kind, id } = authority.invocation;
+  const runId = kind === "action"
+    ? authority.invocation.runId
+    : authority.logicalRunId;
+  if (!runId) return undefined;
+  return Object.freeze({
+    scope: authority.scope,
+    invocation: Object.freeze({ kind, id, runId }),
+  });
+}
+
 export function closeCollectionPolicyInvocation(context: object): void {
   contexts.get(context)?.close();
 }

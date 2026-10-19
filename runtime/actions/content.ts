@@ -227,7 +227,7 @@ export function durableActionContentInput(
 export async function prepareActionContentInput(
   input: unknown,
   declaration: ActionContentDeclaration,
-  content: RuntimeContent,
+  content: Pick<RuntimeContent, "getMany" | "resolveMany" | "authorize">,
   signal: AbortSignal,
 ): Promise<{ durableInput: unknown; hydrate(): Promise<unknown> }> {
   const snapshot = structuredClone(input);

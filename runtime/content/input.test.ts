@@ -95,7 +95,7 @@ Deno.test("JSON content materialization canonicalizes nested content refs", asyn
     {
       type: "json",
       value: {
-        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        createdAt: "2026-01-01T00:00:00.000Z",
         ref: {
           assetId: "asset-a",
           kind: "json",

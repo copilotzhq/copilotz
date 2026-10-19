@@ -293,8 +293,9 @@ for (const baseline of [8, 9]) {
         `INSERT INTO ${tables.owner_body_retirements}(owner,backend_kind,backend_id,body_id,token,completed)
          VALUES('schema','database','database:default','retained-retirement','retained-token',TRUE)`,
       );
-      const receipts =
-        (await db.query(`SELECT * FROM ${tables.owner_receipts}`)).rows;
+      const receipts = (await db.query(
+        `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts}`,
+      )).rows;
       const retirements =
         (await db.query(`SELECT * FROM ${tables.owner_body_retirements}`)).rows;
       await db.query(`DROP INDEX "${schema}".owner_alarms_owner_idx`);
@@ -352,7 +353,9 @@ for (const baseline of [8, 9]) {
         history,
       );
       assertEquals(
-        (await db.query(`SELECT * FROM ${tables.owner_receipts}`)).rows,
+        (await db.query(
+          `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts}`,
+        )).rows,
         receipts,
       );
       assertEquals(

@@ -75,3 +75,34 @@ or blanket cursor reset occurs during this upgrade.
 The [real old-code fixture](fixtures/retained-upgrade/README.md) and
 `runtime/actions/retained-upgrade.test.ts` exercise preparation, interruption,
 replay, finalization and normal owner activation on PGlite and PostgreSQL.
+
+## Receipt authority during offline conversion
+
+The current v10 receipt shape separates the stable owner-resolved invocation
+principal from the authenticated physical workers allowed to recover its
+outcome. Replacement workers gain recovery rights only after an authorized exact
+replay commits. Existing fixed-principal receipts retain their principal and
+receive only that principal as a reader during the offline upgrade.
+
+Historical logical Collection receipts bound only to a `worker:` principal do
+not prove the original invocation authority. Preparation and finalization refuse
+such rows without advancing readiness or mutating the source. Keep that schema
+offline and retained. Resolving this case requires an independently reviewed
+conversion backed by original durable invocation records; the current tool does
+not accept a manual override, infer authority from a receipt key, or authorize
+replacement workers to replay these rows. This case is not a supported upgrade
+until that conversion exists. Fresh pre-conversion histories without owner
+receipts and fixed-principal owner receipts remain supported.
+
+Earlier unpublished v10 databases missing the required reader column are
+rejected by normal schema validation. They must not be relabeled as an older
+version or served through a compatibility path. Use a fresh disposable schema
+for rehearsal; retain any non-disposable source for a separately reviewed
+offline conversion.
+
+Physical recovery readers use the authenticated `workerId`, matching the
+existing receipt-recovery trust contract across sessions and owner epochs. The
+host's admission layer must keep each worker ID bound to the same security
+principal; it must never recycle an ID across unrelated principals or tenants. A
+transport connection or attempt ID changing does not itself revoke that durable
+identity.

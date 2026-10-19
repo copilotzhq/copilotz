@@ -1,3 +1,4 @@
+import { preparationInventoryIndexes } from "../actions/preparation-inventory.ts";
 import {
   CONTENT_CATALOG_COLUMNS,
   contentCatalogStatements,
@@ -79,6 +80,7 @@ const CORE_SCHEMA_COLUMNS = {
     "domain",
     "key",
     "principal",
+    "readers",
     "kind",
     "intent",
     "result",
@@ -229,6 +231,19 @@ export async function validateCopilotzSchema(
         .filter((column) => !actual.get(table)?.has(column))
         .map((column) => `${table}.${column}`),
   );
+  const indexes = await executor.query<{ name: string }>(
+    `SELECT index.relname AS name FROM pg_index status JOIN pg_class index ON index.oid=status.indexrelid JOIN pg_namespace scope ON scope.oid=index.relnamespace WHERE scope.nspname=$1 AND index.relname IN ('event_bodies_action_parent_idx','owner_receipts_preparation_operation_idx') AND status.indisvalid AND status.indisready`,
+    [schema],
+  );
+  const readyIndexes = new Set(indexes.rows.map((row) => row.name));
+  for (
+    const name of [
+      "event_bodies_action_parent_idx",
+      "owner_receipts_preparation_operation_idx",
+    ]
+  ) {
+    if (!readyIndexes.has(name)) missing.push(`index:${name}`);
+  }
   if (missing.length > 0) {
     const error = new Error(
       `Copilotz database schema '${schema}' is not provisioned for v${EVENT_SCHEMA_VERSION}; missing ${
@@ -372,11 +387,13 @@ export function createOwnerSchemaStatements(
       domain TEXT NOT NULL CHECK (domain IN ('logical', 'incarnation', 'occurrence')),
       key TEXT NOT NULL,
       principal TEXT NOT NULL,
+      readers TEXT[] NOT NULL DEFAULT '{}',
       kind TEXT NOT NULL,
       intent JSONB NOT NULL,
       result JSONB NOT NULL,
       PRIMARY KEY (owner, domain, key)
     )`,
+    ...preparationInventoryIndexes(tables),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_alarms} (
       owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       name TEXT NOT NULL,

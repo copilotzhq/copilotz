@@ -900,3 +900,223 @@ for (const fail of [false, true]) {
     ]);
   });
 }
+
+Deno.test("worker-shaped forbidden errors never invoke private authorization cleanup", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let privileged = 0;
+  const forged = Object.assign(new Error("Action authorization was refused."), {
+    name: "ActionAuthorizationRefused",
+    code: "action_authorization_refused",
+    retryable: false,
+  });
+  const callers = createActionCallers({
+    child: defineAction({
+      id: "fixture.forged",
+      execute() {
+        throw forged;
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext: invocationContext,
+    authorize: () => Promise.resolve(),
+    refuseAuthorization() {
+      privileged++;
+      return Promise.resolve({ error: new Error("cleanup"), settled: true });
+    },
+  });
+  await assertRejects(
+    () => callers.child({}),
+    Error,
+    "Action authorization was refused.",
+  );
+  assertEquals(privileged, 0);
+  assertEquals(emitted.map((event) => event.status), ["invoked", "failed"]);
+});
+
+Deno.test("denied native read acquisition retains Action settlement until physical cancellation settles", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const { markOwnerAuthorizationRefusal } = await import(
+    "../engine/authorization-refusal.ts"
+  );
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  let allowed = true, returned = false, refusals = 0, opens = 0;
+  const callers = createActionCallers({
+    work: defineAction({
+      id: "fixture.held-read-cleanup",
+      async execute(_input: unknown, context: ActionContext) {
+        try {
+          await context.content.open({} as never);
+        } catch {
+          /* Worker code cannot convert a remembered refusal to success. */
+        }
+        return "must not escape";
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext(input) {
+      return {
+        ...invocationContext(input),
+        content: {
+          open() {
+            opens++;
+            allowed = false;
+            return new ReadableStream({
+              cancel() {
+                cancelled.resolve();
+                return cleanup.promise;
+              },
+            }, { highWaterMark: 0 });
+          },
+        },
+      } as unknown as ActionContext;
+    },
+    authorize() {
+      if (!allowed) {
+        return Promise.reject(markOwnerAuthorizationRefusal(
+          new ActionError("Forbidden", { code: "forbidden", status: 403 }),
+        ));
+      }
+      return Promise.resolve();
+    },
+    refuseAuthorization() {
+      refusals++;
+      return Promise.resolve({
+        error: new Error("sanitized refusal"),
+        settled: true,
+      });
+    },
+  });
+  const invocation = callers.work({}, { operationKey: "held" });
+  void invocation.then(() => returned = true, () => returned = true);
+  try {
+    await cancelled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(opens, 1);
+    assertEquals(returned, false, "physical invocation must remain occupied");
+    assertEquals(
+      refusals,
+      0,
+      "durable refusal must not race the physical drain",
+    );
+    assertEquals(emitted.map((event) => event.status), ["invoked"]);
+  } finally {
+    cleanup.resolve();
+  }
+  await assertRejects(() => invocation, Error, "sanitized refusal");
+  assertEquals(refusals, 1);
+  assertEquals(returned, true);
+});
+
+for (const method of ["stream", "reader", "native"] as const) {
+  Deno.test(`explicit ${method} cancellation retains physical Action completion until cleanup settles`, async () => {
+    const { lifecycle } = recordingLifecycle();
+    const cancelled = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    let returned = false;
+    const callers = createActionCallers({
+      work: defineAction({
+        id: `fixture.explicit-${method}-cleanup`,
+        async execute(_input: unknown, context: ActionContext) {
+          const stream = await context.content.open({} as never);
+          if (method === "reader") void stream.getReader().cancel();
+          else if (method === "native") {
+            void ReadableStream.prototype.cancel.call(stream);
+          } else void stream.cancel();
+          return "complete";
+        },
+      }),
+    }, {
+      actionLifecycle: lifecycle,
+      signal: new AbortController().signal,
+      createContext(input) {
+        return {
+          ...invocationContext(input),
+          content: {
+            open: () =>
+              new ReadableStream({
+                cancel() {
+                  cancelled.resolve();
+                  return cleanup.promise;
+                },
+              }, { highWaterMark: 0 }),
+          },
+        } as unknown as ActionContext;
+      },
+      authorize: () => Promise.resolve(),
+    });
+    const invocation = callers.work({}, { operationKey: "held" });
+    void invocation.then(() => returned = true, () => returned = true);
+    try {
+      await cancelled.promise;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assertEquals(returned, false);
+    } finally {
+      cleanup.resolve();
+    }
+    assertEquals(await invocation, "complete");
+  });
+}
+
+Deno.test("unawaited native acquisition reserves its physical tail before Action return and late cancellation", async () => {
+  const { lifecycle } = recordingLifecycle();
+  const opened = Promise.withResolvers<void>();
+  const acquire = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  let returned = false;
+  const callers = createActionCallers({
+    work: defineAction({
+      id: "fixture.unawaited-read-cleanup",
+      async execute(_input: unknown, context: ActionContext) {
+        void context.content.open({} as never).catch(() => undefined);
+        await opened.promise;
+        return "complete";
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext(input) {
+      return {
+        ...invocationContext(input),
+        content: {
+          async open() {
+            opened.resolve();
+            await acquire.promise;
+            return new ReadableStream({
+              cancel() {
+                cancelled.resolve();
+                return cleanup.promise;
+              },
+            }, { highWaterMark: 0 });
+          },
+        },
+      } as unknown as ActionContext;
+    },
+    authorize: () => Promise.resolve(),
+  });
+  const invocation = callers.work({}, { operationKey: "held" });
+  void invocation.then(() => returned = true, () => returned = true);
+  try {
+    await opened.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(
+      returned,
+      false,
+      "outstanding acquisition still occupies invocation",
+    );
+    acquire.resolve();
+    await cancelled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(returned, false, "late cleanup still occupies invocation");
+  } finally {
+    acquire.resolve();
+    cleanup.resolve();
+  }
+  assertEquals(await invocation, "complete");
+});

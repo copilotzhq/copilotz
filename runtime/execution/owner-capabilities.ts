@@ -1,3 +1,4 @@
+import { collectionReceiptInvocation } from "../collections/policy-invocation.ts";
 import { withCollectionReadBudget } from "../collections/read-budget.ts";
 import {
   capabilityReceiptIntent,
@@ -63,6 +64,7 @@ type Invocation = {
   sealed: boolean;
   calls: Set<Promise<void>>;
   context: ProcessorContext | ActionContext;
+  receiptPrincipal?: string;
   result: Deferred<unknown>;
   removeAbort(): void;
 };
@@ -137,7 +139,8 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
   }
   if (snapshot) return false;
   if (root === "actions") {
-    return path.length === 2 || path.length === 3 && leaf === "prepare";
+    return path.length === 2 ||
+      path.length === 3 && ["prepare", "prepareNamed"].includes(leaf);
   }
   if (root === "vectors") return path.length === 2 && method === "search";
   if (root === "operations") return path.length === 2 && method === "start";
@@ -338,7 +341,20 @@ export function createOwnerCapabilityHost(
         notify(assignment, { aborted: id });
       } else abortAssignment(assignment, capabilityError("owner_capacity"));
     };
+    const receiptAuthority = collectionReceiptInvocation(context);
+    const receiptPrincipal = receiptAuthority
+      ? `invocation:${
+        JSON.stringify([
+          receiptAuthority.scope.databaseSchema,
+          receiptAuthority.scope.namespace,
+          receiptAuthority.invocation.kind,
+          receiptAuthority.invocation.id,
+          receiptAuthority.invocation.runId,
+        ])
+      }`
+      : undefined;
     const invocationState: Invocation = {
+      receiptPrincipal,
       sealed: false,
       calls: new Set(),
       context,
@@ -955,8 +971,12 @@ export function createOwnerCapabilityHost(
           if (JSON.stringify(intent) !== JSON.stringify(receipt.intent)) {
             throw capabilityError("owner_receipt_intent");
           }
+          if (!invocation.receiptPrincipal) {
+            throw capabilityError("owner_receipt_authority");
+          }
           await withCollectionCommandReceipt({
-            principal: `worker:${binding.fence.identity.workerId}`,
+            principal: invocation.receiptPrincipal,
+            receiptReader: `worker:${binding.fence.identity.workerId}`,
             receipt: {
               identity: { domain: "logical", key: receipt.key },
               intent,

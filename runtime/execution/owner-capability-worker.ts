@@ -1,3 +1,4 @@
+import { normalizeActionNamedPreparation } from "./preparation-call.ts";
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
 import { reportDeliveryDiagnostic } from "./diagnostics.ts";
 /** The single worker execution path for in-process and WebSocket placement. */
@@ -404,6 +405,20 @@ function workerContext(options: {
     ) => [
       alias,
       Object.assign((...args: unknown[]) => rpc(["actions", alias], args), {
+        async prepareNamed(request: unknown, prepareOptions: unknown) {
+          check();
+          const normalized = normalizeActionNamedPreparation(
+            request,
+            prepareOptions,
+          );
+          return await rpc(["actions", alias, "prepareNamed"], [
+            normalized.request,
+            {
+              operationKey: normalized.operationKey,
+              ...(normalized.signal ? { signal: normalized.signal } : {}),
+            },
+          ]);
+        },
         async prepare(factory: () => unknown, prepareOptions: RecordValue) {
           check();
           if (typeof factory !== "function") {

@@ -1,3 +1,8 @@
+import { assetBodySchemaPrefix } from "../content/body-store.ts";
+import {
+  assertProtectedParentCapture,
+  captureParentCapture,
+} from "./protected-action-content.ts";
 import { resolveProtectedActionParent } from "./protected-action-parent.ts";
 import {
   protectedActionCollectionFacade,
@@ -6,6 +11,12 @@ import {
 } from "./protected-action-collections.ts";
 import type { CollectionTransactionCollections } from "../collections/kernel.ts";
 import { standardActionError } from "./errors.ts";
+import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
+import {
+  isOwnerAuthorizationRefusal,
+  markOwnerAuthorizationRefusal,
+  withOwnerPolicyRefusal,
+} from "../engine/authorization-refusal.ts";
 import {
   openCapturedActionOutput,
   readCapturedActionOutput,
@@ -46,6 +57,7 @@ import {
 import type {
   ProtectedActionDefinitions,
   ProtectedActionOwnerContext,
+  ProtectedActionParentCapture,
 } from "./protected-action-types.ts";
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
@@ -65,6 +77,7 @@ export function createProtectedActions(
     protectedValues?: ProtectedValueRuntime;
     lifecycleMetadata?: Readonly<Record<string, unknown>>;
     collections?: ProtectedActionCollectionRuntime;
+    streamBodyPrefix?: string;
   }>,
 ) {
   const { store, namespace } = options;
@@ -150,6 +163,7 @@ export function createProtectedActions(
     source: ProtectedActionSourceBinding,
     run: (context: ProtectedActionOwnerContext) => T | Promise<T>,
     adoption?: CollectionTransactionCollections,
+    adoptionChecks?: Array<(transaction: SqlExecutor) => Promise<void>>,
   ) => {
     const signal = AbortSignal.any([
       options.signal,
@@ -163,12 +177,26 @@ export function createProtectedActions(
       frame,
       actions: options.actions,
     });
+    let infrastructureFailed = false;
+    const watch = <V>(promise: Promise<V>): Promise<V> =>
+      promise.catch((error) => {
+        infrastructureFailed = true;
+        throw error;
+      });
     return withOwnerQueryContext(
       run,
       command,
       signal,
       (assertActive, query, track) => {
-        const transaction = { query };
+        const watchedQuery: typeof query = (sql, params) => {
+          try {
+            return watch(query(sql, params));
+          } catch (error) {
+            infrastructureFailed = true;
+            throw error;
+          }
+        };
+        const transaction = { query: watchedQuery };
         bindCommandExecutorAlias(
           transaction,
           command.transaction,
@@ -181,13 +209,13 @@ export function createProtectedActions(
             return Promise.reject(error);
           }
           return track(
-            resolveProtectedActionSource({
+            watch(resolveProtectedActionSource({
               transaction,
               databaseSchema,
               namespace,
               source,
               protectedValues: options.protectedValues,
-            }).then((value) => {
+            })).then((value) => {
               assertActive();
               return value;
             }),
@@ -206,6 +234,7 @@ export function createProtectedActions(
                 : Object.freeze({}),
             }
             : {}),
+          query: watchedQuery,
           scope: Object.freeze({ databaseSchema, namespace }),
           action: Object.freeze({
             id: frame.actionId,
@@ -216,6 +245,37 @@ export function createProtectedActions(
           }),
           input: captureHostCommandJson(input),
           resolveSource,
+          assertParentCapture(request: ProtectedActionParentCapture) {
+            assertActive();
+            let assertion;
+            try {
+              assertion = captureParentCapture(request);
+            } catch (error) {
+              return track(Promise.reject(error));
+            }
+            return track(
+              assertProtectedParentCapture({
+                transaction,
+                databaseSchema,
+                namespace,
+                source,
+                frame,
+                parentId,
+                actions: options.actions,
+                writer: options.writer,
+                assertion,
+                streamBodyPrefix: options.streamBodyPrefix ??
+                  assetBodySchemaPrefix({ databaseSchema }),
+                registeredOrigins: Object.values(
+                  options.collections?.definitions ?? {},
+                ).map((definition) => definition.name),
+              }).then(async (check) => {
+                assertActive();
+                if (adoptionChecks) adoptionChecks.push(check);
+                else await check(transaction);
+              }),
+            );
+          },
           readAcceptedOutput() {
             try {
               assertActive();
@@ -254,15 +314,18 @@ export function createProtectedActions(
           },
         }, async () => (await resolveSource()).data);
       },
-    ).catch((error) => {
+    ).catch((caught) => {
       if (signal.aborted) {
         throw new DOMException(
           "Protected Action owner phase was cancelled.",
           "AbortError",
         );
       }
-      throw standardActionError(error) ??
+      const error = standardActionError(caught) ??
         new Error("Protected Action owner phase failed.");
+      throw !infrastructureFailed && isOwnerAuthorizationRefusal(caught)
+        ? markOwnerAuthorizationRefusal(error)
+        : error;
     });
   };
   const authorize = async (
@@ -276,12 +339,18 @@ export function createProtectedActions(
   ) => {
     await authority(command.transaction, frame);
     const hook = definition(frame.actionId)!;
-    await phase(
-      command,
-      frame,
-      input,
-      source,
-      (context) => hook.authorize(input, context),
+    await withOwnerAuthorizationPhase(() =>
+      phase(
+        command,
+        frame,
+        input,
+        source,
+        (context) =>
+          withOwnerPolicyRefusal(
+            () => hook.authorize(input, context),
+            context.signal,
+          ),
+      )
     );
     await authority(command.transaction, frame);
   };
@@ -351,24 +420,29 @@ export function createProtectedActions(
           const source = options.source;
           await authorize(command, frame, input, source);
           const prepared = hook.prepareInput
-            ? await phase(command, frame, input, source, (context) => {
-              const value = hook.prepareInput!(input, context);
-              return value instanceof Promise
-                ? value.then((value) =>
-                  capturePreparedActionInput(
+            ? await withOwnerAuthorizationPhase(() =>
+              phase(command, frame, input, source, (context) => {
+                const value = withOwnerPolicyRefusal(
+                  () => hook.prepareInput!(input, context),
+                  context.signal,
+                );
+                return value instanceof Promise
+                  ? value.then((value) =>
+                    capturePreparedActionInput(
+                      action,
+                      input,
+                      value,
+                      hook.publicRevisionFields,
+                    )
+                  )
+                  : capturePreparedActionInput(
                     action,
                     input,
                     value,
                     hook.publicRevisionFields,
-                  )
-                )
-                : capturePreparedActionInput(
-                  action,
-                  input,
-                  value,
-                  hook.publicRevisionFields,
-                );
-            })
+                  );
+              })
+            )
             : capturePreparedActionInput(
               action,
               input,
@@ -472,6 +546,9 @@ export function createProtectedActions(
         ? async (value: unknown, tx: SqlExecutor) => {
           const capturedInput = await captured(tx);
           if (hook.acceptOutput) {
+            const adoptionChecks: Array<
+              (transaction: SqlExecutor) => Promise<void>
+            > = [];
             const accept = (collections: CollectionTransactionCollections) =>
               phase(
                 schemaCommandContext(tx, databaseSchema),
@@ -495,6 +572,7 @@ export function createProtectedActions(
                     : validateVoid(result);
                 },
                 collections,
+                adoptionChecks,
               );
             const command = schemaCommandContext(tx, databaseSchema);
             if (options.collections) {
@@ -529,6 +607,11 @@ export function createProtectedActions(
               );
             } else {
               await accept({});
+            }
+            // Public handles are closed; all staged Collection SQL has run in
+            // this same command. These fixed checks cannot commit or publish.
+            for (const check of adoptionChecks) {
+              await check(command.transaction);
             }
           }
           await authority(tx, frame);

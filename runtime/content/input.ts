@@ -1,3 +1,4 @@
+import { canonicalContentJson } from "./json.ts";
 import { createContentError } from "./errors.ts";
 import { isContentRef } from "./schema.ts";
 import type {
@@ -203,7 +204,7 @@ export async function materializeContentInput(
     if (value.type === "json") {
       let encoded: string | undefined;
       try {
-        encoded = JSON.stringify(canonicalizeContentRefs(value.value));
+        encoded = canonicalContentJson(canonicalizeContentRefs(value.value));
       } catch (cause) {
         throw createContentError(
           "content_invalid",
@@ -309,6 +310,12 @@ export function captureContentInput<T>(input: T): T {
         : prototype !== Object.prototype && prototype !== null
     ) invalid();
     const properties = Object.getOwnPropertyDescriptors(value);
+    // Optional authoring fields may be absent; an inline JSON value itself must
+    // be JSON, without silently dropping unsupported nested values.
+    if (properties.type?.value === "json" && properties.value) {
+      if (!("value" in properties.value)) invalid();
+      canonicalContentJson(properties.value.value);
+    }
     const names = Reflect.ownKeys(properties);
     if (names.some((name) => typeof name !== "string")) invalid();
     ancestors.add(value as object);

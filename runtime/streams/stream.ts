@@ -1,4 +1,8 @@
 import {
+  contentStreamBodyId,
+  contentStreamIncarnationId,
+} from "./body-identity.ts";
+import {
   promoteConfiguredLogicalBody,
   promotedReadyStore,
 } from "../content/promoted-body-store.ts";
@@ -43,17 +47,6 @@ export class ContentStreamOwnershipLostError extends Error {
     super(`Content stream '${streamId}' lost durable write ownership.`);
     this.name = "ContentStreamOwnershipLostError";
   }
-}
-function cleanSegment(value: string) {
-  return encodeURIComponent(value.trim()).replaceAll("%2F", "%252F");
-}
-function bodyIdFor(namespace: string, id: string, prefix?: string) {
-  return [
-    ...(prefix?.split("/").map((s) => s.trim()).filter(Boolean) ?? []),
-    "content-streams",
-    cleanSegment(namespace),
-    cleanSegment(id),
-  ].join("/");
 }
 function mediaKind(mediaType: string): ContentKind {
   const type = mediaType.toLowerCase();
@@ -101,11 +94,7 @@ export function createContentStreamRuntime(
       cancelled(options.signal);
       const semanticId = input.id?.trim() || (options.createId ?? ulid)();
       const incarnation = options.incarnationId?.trim();
-      const id = incarnation
-        ? `incarnation:${encodeURIComponent(semanticId)}:${
-          encodeURIComponent(incarnation)
-        }`
-        : semanticId;
+      const id = contentStreamIncarnationId(semanticId, incarnation);
       const mediaType = input.mediaType.trim(), role = input.role.trim();
       if (!id || !mediaType || !role) {
         throw new TypeError("Content stream requires id, mediaType, and role.");
@@ -128,7 +117,7 @@ export function createContentStreamRuntime(
           : {}),
         metadata,
       };
-      const bodyId = bodyIdFor(namespace, id, options.bodyPrefix);
+      const bodyId = contentStreamBodyId(namespace, id, options.bodyPrefix);
       const identity: ContentWriter = {
         bodyId,
         writerId: incarnation ?? crypto.randomUUID(),
@@ -452,7 +441,11 @@ export function createContentStreamRuntime(
     },
     async follow(input, followOptions = {}) {
       cancelled(followOptions.signal);
-      const bodyId = bodyIdFor(namespace, input.id, options.bodyPrefix),
+      const bodyId = contentStreamBodyId(
+          namespace,
+          input.id,
+          options.bodyPrefix,
+        ),
         start = input.offset ?? 0;
       if (!Number.isSafeInteger(start) || start < 0) {
         throw new TypeError("Invalid follower offset.");

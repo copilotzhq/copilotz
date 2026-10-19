@@ -24,4 +24,4 @@ export type {
   ScheduledJobStatus,
 } from "./shared/contracts.ts";
 
-export { scheduledJobDelegationDigest } from "../../runtime/schedules/delegation.ts";
+export { scheduledJobDelegationDigest } from "@copilotz/copilotz/authoring";

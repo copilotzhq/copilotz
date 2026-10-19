@@ -129,6 +129,23 @@ export {
 export { externalEffect } from "./external-effect.ts";
 
 export type {
+  ActionNamedPreparation,
+  ActionPrepareNamedOptions,
+} from "../execution/preparation-call.ts";
+export type {
+  ActionPreparationRegistration,
+  ActionPreparations,
+} from "./preparation.ts";
+export type {
+  PreparationActionBinding,
+  PreparationPurpose,
+  PreparationSourcePolicy,
+} from "./preparation-source.ts";
+export type {
+  PreparationResourceReference,
+  PreparationSourceReference,
+} from "./preparation-capture.ts";
+export type {
   ProtectedActionAdoptionContext,
   ProtectedActionCollection,
   ProtectedActionCollections,
@@ -136,6 +153,7 @@ export type {
   ProtectedActionDefinitions,
   ProtectedActionIngress,
   ProtectedActionOwnerContext,
+  ProtectedActionParentCapture,
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "./protected-action-types.ts";

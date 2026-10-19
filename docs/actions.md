@@ -27,6 +27,9 @@ Shared behaviour needs one owner with a contract that holds for every caller:
   instead of doing the work twice;
 - sensitive input is kept out of the public record of the call.
 
+For owner-authorized record, resource and View capture, see
+[named Action preparation](action-preparation.md).
+
 ## The solution
 
 `defineAction` declares a named operation. An Action never subscribes to Events
@@ -678,3 +681,48 @@ parent leaves the active-run index. It is an additional scope fact: policy must
 still validate the original authenticated actor or delegation, current domain
 permissions, and the exact resource and purpose. Worker metadata cannot supply
 or replace this parent identity.
+
+### Parent content capture proof
+
+A protected owner hook can call
+`context.assertParentCapture({ captureKey,
+parentInputPath, content, origin })`.
+The hook supplies a local capture key, an exact JSON Pointer into the immediate
+parent's declared public input, the entire ordered canonical reference sequence,
+and the authorized destination `{ type, id }`. The destination type must be a
+registered Collection type. The owner derives the parent Action/run, operation,
+database schema, and namespace; there is no selectable parent, Event, or
+plaintext accessor. Paths through protected or ambiguous declarations are
+refused. Every segment must be declared by common `properties`. Ancestor
+`allOf`, `anyOf`, and `oneOf` branches may contain only required-field lists and
+sibling scalar `type`/`const`/`enum` constraints (plus descriptive annotations).
+They cannot redeclare the selected segment or introduce ancestor secrecy,
+references, patterns, conditionals, or nested combinators. Full ordinary Action
+input validation still applies.
+
+Policy must first allow the actual parent Action and validate the original actor
+or delegation, current permissions, and destination. A registered tool's parent
+input can be authorized proposed content; it need not be text authored by a
+human. This proof establishes exact capture provenance, not the truth of
+arbitrary external observations supplied by a worker.
+
+The assertion checks the full ordered descriptors and immutable commitments
+against the existing capture/adoption catalogs without opening stored bytes.
+Existing canonical references pass through unchanged and may be legitimately
+shared with other records. An Asset's diagnostic `origin` is not exclusive
+ownership. No new capture, byte copy, or retention owner is created by the
+assertion.
+
+In `acceptOutput`, descriptor and capture checks happen immediately. The
+callback may then stage the destination Collection mutation. After the callback
+closes and staged Collection SQL finishes, a private check requires the exact
+destination record and complete `has_asset` set in that same transaction. This
+check precedes the accepted-output receipt and outer commit; failure rolls back
+all callback SQL, Collection changes, and output acceptance. It is not an
+after-commit callback. Authorization and replay assertions instead require the
+already durable destination edges immediately. Replaying accepted output does
+not repeat adoption; current policy still controls disclosure.
+
+The retained parent input and assertion must fit the bounded JSON boundary. If
+the retained descriptor cannot reproduce the exact captured commitment, the
+assertion refuses it rather than accepting a different digest.

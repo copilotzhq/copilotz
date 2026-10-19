@@ -1,4 +1,8 @@
 import {
+  assertReceiptUpgradeAuthority,
+  upgradeReceiptReaders,
+} from "./upgrade-receipts.ts";
+import {
   createCoreSchemaStatements,
   createCoreTableNames,
   createOwnerSchemaStatements,
@@ -220,6 +224,7 @@ export async function prepareRetainedDataUpgrade(
       await inspectRetainedDataDrain(transaction, schema),
     );
     await validateRetainedHistory(transaction, schema);
+    await assertReceiptUpgradeAuthority(transaction, schema);
     await migrateBodyStoreSchema(joined(transaction), schema);
     await upgradeOperationCatalog(joined(transaction), schema);
     await transaction.query(
@@ -340,6 +345,7 @@ export async function upgradeActionLifecycle(
       await inspectRetainedDataDrain(transaction, schema),
     );
     await validateRetainedHistory(transaction, schema);
+    await assertReceiptUpgradeAuthority(transaction, schema);
     const session = joined(transaction);
     const actual = await inspectEmbeddedContent(
       inspector(session, schema, options),
@@ -370,6 +376,7 @@ export async function upgradeActionLifecycle(
     ) {
       await transaction.query(statement);
     }
+    await upgradeReceiptReaders(transaction, schema);
     await migrateActionContent(session, schema, {
       apply: true,
       decisions,
@@ -381,6 +388,7 @@ export async function upgradeActionLifecycle(
       reviewedFingerprint: actual.fingerprint,
     });
     await validateRetainedHistory(transaction, schema);
+    await assertReceiptUpgradeAuthority(transaction, schema);
     const updated = await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1,upgrade_reviewed_fingerprint=$4,upgrade_decisions_fingerprint=$5 WHERE singleton AND version=0 AND upgrade_id=$2 AND upgrade_from=$3 AND upgrade_to=$1 AND upgrade_reviewed_fingerprint IS NULL AND upgrade_decisions_fingerprint IS NULL RETURNING version`,
       [

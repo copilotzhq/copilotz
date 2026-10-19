@@ -167,3 +167,5 @@ export type { CollectionNamedQueryRead } from "./runtime/collections/authoring.t
 
 export { ActionError } from "./runtime/actions/errors.ts";
 export { resolveActionSourceData } from "./runtime/actions/protected-context.ts";
+
+export { scheduledJobDelegationDigest } from "./runtime/schedules/delegation.ts";

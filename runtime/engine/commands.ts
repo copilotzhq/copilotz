@@ -260,6 +260,29 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
           `INSERT INTO ${tables.owner_epochs} (owner,epoch,holder) VALUES ($1,0,'') ON CONFLICT DO NOTHING`,
           [owner],
         );
+        // Hold the predecessor fence before checking retained authority. A
+        // refused startup must not advance epochs until future evidence looks old.
+        const current = await tx.query(
+          `SELECT epoch FROM ${tables.owner_epochs} WHERE owner=$1 AND epoch=$2 FOR UPDATE`,
+          [owner, expectedEpoch],
+        );
+        if (!current.rows.length) {
+          throw failure(
+            "owner_acquisition_conflict",
+            "Another owner acquired this database schema.",
+          );
+        }
+        const future = await tx.query(
+          `SELECT id FROM ${tables.event_deliveries}
+           WHERE status IN ('pending','retry_wait','leased') AND owner_epoch > $1::bigint LIMIT 1`,
+          [expectedEpoch],
+        );
+        if (future.rows.length) {
+          throw failure(
+            "delivery_future_epoch",
+            "Retained delivery authority is ahead of the current owner epoch.",
+          );
+        }
         const result = await tx.query<{ epoch: string | number }>(
           `UPDATE ${tables.owner_epochs} SET epoch=epoch+1, holder=$3 WHERE owner=$1 AND epoch=$2 RETURNING epoch`,
           [owner, expectedEpoch, holder],

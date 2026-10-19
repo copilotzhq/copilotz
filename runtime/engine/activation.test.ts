@@ -74,7 +74,7 @@ Deno.test("engine admission waits for epoch invalidation and catalog recovery", 
       db.transaction((tx) =>
         run({
           async query(sql, params) {
-            if (sql.includes("owner_epoch <>")) {
+            if (sql.includes("SET lease_expires_at=NOW()")) {
               entered.resolve();
               await release.promise;
             }
@@ -134,7 +134,7 @@ Deno.test("an unknown activation commit rejects engine admission", async () => {
       const result = await db.transaction((tx) =>
         run({
           query(sql, params) {
-            if (sql.includes("owner_epoch <>")) activating = true;
+            if (sql.includes("SET lease_expires_at=NOW()")) activating = true;
             return tx.query(sql, params);
           },
         })

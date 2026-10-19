@@ -941,7 +941,6 @@ export function createDatabaseScope(
   let pushSubscription: OwnerPushSubscription | undefined;
   let pushedHead: string | undefined;
   const activate = async () => {
-    await collectionAlarms.seed();
     pushSubscription ??= await attachOwnerPush(
       engine.session,
       databaseSchema,
@@ -972,12 +971,25 @@ export function createDatabaseScope(
         await createSchemaCommandRunner(engine.session, databaseSchema)(
           "owner.invalidateAttempts",
           {},
-          async (_input, { transaction }) => {
+          async (_input, { transaction, caller }) => {
+            const future = await transaction.query(
+              `SELECT id FROM ${store.tables.event_deliveries}
+          WHERE status IN ('pending','retry_wait','leased') AND owner_epoch > $1::bigint LIMIT 1`,
+              [caller.epoch],
+            );
+            if (future.rows.length) {
+              throw Object.assign(
+                new Error(
+                  "Retained delivery authority is ahead of the current owner epoch.",
+                ),
+                { code: "delivery_future_epoch" },
+              );
+            }
             await transaction.query(
               `UPDATE ${store.tables.event_deliveries}
           SET lease_expires_at=NOW(), updated_at=NOW()
-          WHERE status='leased' AND owner_epoch <> $1`,
-              [options.owner.epoch],
+          WHERE status='leased' AND owner_epoch < $1`,
+              [caller.epoch],
             );
             await transaction.query(
               `INSERT INTO ${store.tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
@@ -991,6 +1003,8 @@ export function createDatabaseScope(
             );
           },
         );
+        // Seed only after retained authority passed the fenced integrity check.
+        await collectionAlarms.seed();
         while (
           (await store.recoverExpiredDeliveries({ limit: 1000 })).length ===
             1000

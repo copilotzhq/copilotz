@@ -300,7 +300,11 @@ export type EventStore = {
     attempts: readonly DeliveryAttemptHeartbeat[],
     accept?: (attempt: DeliveryAttemptHeartbeat, epoch: number) => boolean,
   ): Promise<readonly Pick<DeliveryAttemptHeartbeat, "id" | "owner">[]>;
-  readLocalClaim(id: string, owner: string): Promise<EventDelivery | null>;
+  readLocalClaim(
+    id: string,
+    owner: string,
+    consume?: boolean,
+  ): Promise<EventDelivery | null>;
   /** Settles a leased delivery and returns the row it settled into. */
   succeedDelivery(
     id: string,
@@ -641,6 +645,9 @@ export function createEventStore(
   const databaseSchema = options.schema ?? "public";
   const tables = createCoreTableNames(databaseSchema);
   const acquireOwner = bindSchemaOwner(session, databaseSchema);
+  const localInstance = crypto.randomUUID();
+  const unstartedLocalClaims = new Set<string>();
+  let observingLocalClaims = false;
   const command = createSchemaCommandRunner(
     session,
     databaseSchema,
@@ -757,6 +764,14 @@ export function createEventStore(
     let insertedSelectionKeys: string[] | undefined;
     const insertEvent = async (executor: SqlExecutor) => {
       const { commandTime } = schemaCommandContext(executor, databaseSchema);
+      const authority = mutation.initialLocalClaim
+        ? await acquireOwner()
+        : undefined;
+      const localClaimOwner = authority
+        ? `${authority.holderId}:${authority.epoch}:${localInstance}:${
+          mutation.initialLocalClaim!.owner
+        }`
+        : null;
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
       const commandTimeSql = `${param(commandTime)}::timestamptz`;
@@ -857,7 +872,7 @@ export function createEventStore(
         }, (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'), CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
           param(mutation.initialLocalClaim?.consumerId ?? null)
         } THEN ${
-          param(mutation.initialLocalClaim?.owner ?? null)
+          param(localClaimOwner)
         } ELSE NULL END, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
@@ -1065,6 +1080,25 @@ export function createEventStore(
         )
       ) {
         invalidateOwnerAlarm(transaction, databaseSchema);
+      }
+      if (!result.deduplicated && mutation.initialLocalClaim) {
+        const authority = await acquireOwner();
+        for (const delivery of result.deliveries) {
+          if (delivery.status !== "leased" || !delivery.leaseOwner) continue;
+          const attempt = delivery.leaseOwner;
+          afterSqlCommit(transaction, () => {
+            if (authority.signal.aborted) return;
+            unstartedLocalClaims.add(attempt);
+            if (!observingLocalClaims) {
+              observingLocalClaims = true;
+              authority.signal.addEventListener(
+                "abort",
+                () => unstartedLocalClaims.clear(),
+                { once: true },
+              );
+            }
+          });
+        }
       }
       if (mutation.onCommitted) {
         schemaCommandContext(transaction, databaseSchema).afterCommit(() =>
@@ -1506,11 +1540,20 @@ export function createEventStore(
       );
       return result.rows;
     },
-    async readLocalClaim(id, owner) {
+    async readLocalClaim(id, owner, consume = false) {
       const authority = await acquireOwner();
+      authority.signal.throwIfAborted();
+      if (
+        !owner.startsWith(
+          `${authority.holderId}:${authority.epoch}:${localInstance}:`,
+        )
+      ) return null;
+      // Only the admitting store can consume this committed preclaim, once.
+      // Reserve synchronously before the read so concurrent dispatches cannot start it twice.
+      if (consume && !unstartedLocalClaims.delete(owner)) return null;
       const result = await session.query<DeliveryRow>(
-        `SELECT * FROM ${tables.event_deliveries} WHERE id=$1 AND status='leased' AND lease_owner=$2 AND lease_expires_at IS NULL AND owner_epoch=$3`,
-        [id, owner, authority.epoch],
+        `SELECT * FROM ${tables.event_deliveries} WHERE id=$1 AND status='leased' AND lease_owner=$2 AND lease_expires_at IS NULL AND owner_epoch=$3 AND EXISTS (SELECT 1 FROM ${tables.owner_epochs} WHERE owner='schema' AND epoch=$3 AND holder=$4)`,
+        [id, owner, authority.epoch, authority.holderId],
       );
       authority.signal.throwIfAborted();
       return result.rows[0]

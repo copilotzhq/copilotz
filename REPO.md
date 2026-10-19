@@ -66,10 +66,9 @@ This map describes the current implementation.
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
 - View definitions, resolution, and pure one-shot text rendering:
-  `runtime/views/` (`@copilotz/copilotz/views`); owner-backed read-only
-  Collection observations: `server/collection-observation.ts` and
-  `client/collection-observation.ts`. Live/React hosts consume these seams; the
-  package does not ship a React renderer or component scheduler.
+  `runtime/views/` (`@copilotz/copilotz/views`). Collection subscriptions await
+  owner push (see `docs/views.md`); the package does not ship a React renderer
+  or component scheduler.
 - Canonical content/assets: `runtime/content/`
 - Conversation Collections: `plugins/core/collections/`; mutation Actions:
   `plugins/core/actions/`; projections and contracts: `plugins/core/shared/`;

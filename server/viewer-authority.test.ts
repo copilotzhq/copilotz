@@ -134,20 +134,6 @@ Deno.test("HTTP viewer authority requires both successful host hooks and cannot 
           `${mode}: forged record request must fail`,
         );
         await record.text();
-        for (const selector of [{ id: "one" }, { id: "one", ...forged }]) {
-          const observed = await app.fetch(
-            new Request(
-              "http://fixture.test/api/collections/viewerEntry/observe",
-              {
-                method: "POST",
-                headers,
-                body: JSON.stringify(selector),
-              },
-            ),
-          );
-          assert(observed.status >= 400, `${mode}: observation must fail`);
-          assert(!(await observed.text()).includes("collection.snapshot"));
-        }
         assertEquals(
           viewerInvocations,
           0,

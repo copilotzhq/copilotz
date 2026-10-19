@@ -1,16 +1,15 @@
 import { withOwnedHosting } from "./hosting.ts";
-import { hostDatabaseScopes } from "./host-commands.ts";
-import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
-import { createCopilotzGateway } from "./gateway.ts";
+import { hostDatabaseScopes } from "./database-scopes.ts";
+import {
+  createCopilotzApplication,
+  observeApplicationPersistence,
+} from "./application.ts";
 import type {
   CreateCopilotzGatewayOptions,
   InternalCopilotzGateway,
 } from "./gateway.ts";
-import {
-  type CopilotzPersistenceLifecycleCallbacks,
-  openCopilotzPersistence,
-} from "@copilotz/copilotz/persistence";
-import { createCopilotzWorker } from "./worker.ts";
+import type { CopilotzPersistenceLifecycleCallbacks } from "@copilotz/copilotz/persistence";
+import { openCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import type { CopilotzApplication } from "./types.ts";
 
 type EmbeddedWorkerOptions = Readonly<{
@@ -39,7 +38,7 @@ export type CopilotzEmbeddedApplication = CopilotzApplication;
 
 /** Builds the embedded Gateway's Fetch handler; the caller owns HTTP policy. */
 export type EmbeddedFetchFactory = (
-  gateway: InternalCopilotzGateway,
+  gateway: Pick<InternalCopilotzGateway, "application" | "admit">,
 ) => (request: Request) => Promise<Response>;
 
 export type CopilotzEmbeddedFetchApplication =
@@ -67,123 +66,64 @@ export async function createCopilotz(
     options.databaseLifecycle ?? {},
   createFetch?: EmbeddedFetchFactory,
 ): Promise<CopilotzEmbeddedApplication | CopilotzEmbeddedFetchApplication> {
-  hostDatabaseScopes(
-    options.databaseSchema ?? "public",
-    options.databaseScopes,
-    options.hostCommands,
-  );
+  options = { ...options, worker: options.worker && { ...options.worker } };
+  hostDatabaseScopes(options.databaseScopes);
   const persistence = await openCopilotzPersistence(options, lifecycle);
-  const workerId = options.worker?.id?.trim() ||
-    `copilotz-embedded-${crypto.randomUUID()}`;
-  const transport: HypervisorTransport = {
-    type: "in-process",
-    config: {
-      topic: `copilotz.embedded.${crypto.randomUUID()}`,
-    } as const,
-  } as const;
-  const engine = options.engine ?? {};
-  let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
-  let worker: Awaited<ReturnType<typeof createCopilotzWorker>> | undefined;
+  let application:
+    | Awaited<ReturnType<typeof createCopilotzApplication>>
+    | undefined;
   let fetch: ((request: Request) => Promise<Response>) | undefined;
   try {
-    gateway = await createCopilotzGateway({
-      namespace: options.namespace,
-      databaseSchema: options.databaseSchema,
-      databaseScopes: options.databaseScopes,
-      hostCommands: options.hostCommands,
-      protectedActions: options.protectedActions,
-      collectionPolicies: options.collectionPolicies,
-      collectionProjections: options.collectionProjections,
-      plugins: options.plugins,
-      collections: options.collections,
-      actions: options.actions,
-      processors: options.processors,
-      views: options.views,
-      resources: options.resources,
-      adapters: options.adapters,
-      assets: options.assets,
-      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
+    application = await createCopilotzApplication({
+      ...options,
+      database: undefined,
+      databaseRecovery: undefined,
+      databaseLifecycle: undefined,
       persistence,
-      transports: [transport],
-      target: { workerId },
-      engine,
+      engine: {
+        ...options.engine,
+        execution: {
+          workerId: options.worker?.id,
+          capacity: options.worker?.capacity,
+        },
+      },
     });
-    worker = await createCopilotzWorker({
-      namespace: options.namespace,
-      databaseSchema: options.databaseSchema,
-      plugins: options.plugins,
-      collections: options.collections,
-      actions: options.actions,
-      processors: options.processors,
-      views: options.views,
-      resources: options.resources,
-      adapters: options.adapters,
-      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
-      id: workerId,
-      transport,
-      capacity: options.worker?.capacity ?? 8,
+    await application.startRecovery();
+    fetch = createFetch?.({
+      application,
+      admit: () => persistence.recovery?.admit() ?? Promise.resolve(),
     });
-    await worker.ready;
-    if (createFetch) {
-      fetch = createFetch(gateway);
-      gateway.installFetchFallback(fetch);
-    }
   } catch (error) {
-    await Promise.allSettled([
-      worker?.stop("copilotz_embedded_initialization_failed"),
-      gateway?.shutdown("copilotz_embedded_initialization_failed"),
-      persistence.close("copilotz_embedded_initialization_failed"),
-    ]);
+    await application?.shutdown("copilotz_embedded_initialization_failed")
+      .catch(() => undefined);
+    await persistence.close("copilotz_embedded_initialization_failed").catch(
+      () => undefined,
+    );
     throw error;
   }
-
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = (reason = "copilotz_embedded_shutdown"): Promise<void> => {
-    if (shutdownTask) return shutdownTask;
-    shutdownTask = (async () => {
-      const roleResults = await Promise.allSettled([
-        gateway!.shutdown(reason),
-        worker!.stop(reason),
-      ]);
-      const persistenceResult = await Promise.allSettled([
-        persistence.close(reason),
-      ]);
-      const failures = [
-        ...roleResults,
-        ...persistenceResult,
-      ].flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) {
-        throw new AggregateError(
-          failures,
-          "Embedded Copilotz shutdown failed.",
-        );
-      }
-    })();
-    shutdownTask.catch(() => undefined);
-    return shutdownTask;
-  };
-
-  return withOwnedHosting(
-    {
-      async send(input: Parameters<CopilotzApplication["send"]>[0]) {
-        return await gateway!.send(input);
-      },
-      hostCommands: gateway.hostCommands,
-      actions: gateway.actions,
-      collections: gateway.collections,
-      attach: (input) => gateway!.attach(input),
-      operationStatus: (input) => gateway!.operationStatus(input),
-      listOperations: (input) => gateway!.listOperations(input),
-      operationCheckpoint: (input) => gateway!.operationCheckpoint(input),
-      cancelOperation: (input) => gateway!.cancelOperation(input),
-      maintenance: (input) => gateway!.maintenance(input),
-      observe: () => gateway!.observe(),
-      close: shutdown,
-      ...(fetch ? { fetch } : {}),
-    } as const,
-    gateway.hypervisor,
-  );
+  const stopObserving = observeApplicationPersistence(persistence, application);
+  let closing: Promise<void> | undefined;
+  return withOwnedHosting({
+    send: application.send,
+    actions: application.host.actions,
+    collections: application.host.collections,
+    attach: application.attach,
+    operationStatus: application.operationStatus,
+    listOperations: application.listOperations,
+    operationCheckpoint: application.operationCheckpoint,
+    cancelOperation: application.cancelOperation,
+    maintenance: application.maintenance,
+    observe: application.observe,
+    close(reason) {
+      return closing ??= (async () => {
+        stopObserving();
+        try {
+          await application!.shutdown(reason);
+        } finally {
+          await persistence.close(reason);
+        }
+      })();
+    },
+    ...(fetch ? { fetch } : {}),
+  }, undefined);
 }

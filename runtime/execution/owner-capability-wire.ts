@@ -32,7 +32,7 @@ export type CapabilityCall = Readonly<{
     { path: CapabilityPath; args: readonly unknown[] }
   >[];
   options?: Readonly<Record<string, unknown>>;
-  receipt?: Readonly<{ key: string; databaseSchema: string; intent: unknown }>;
+  receipt?: Readonly<{ key: string; databaseSchema: string; intent?: unknown }>;
 }>;
 export type CapabilityInvocation = Readonly<{
   id: string;
@@ -49,7 +49,6 @@ export type CapabilityInvocation = Readonly<{
   scope: Readonly<Record<string, unknown>>;
 }>;
 export type CapabilityPoll = Readonly<{
-  diagnostic?: import("./types.ts").DeliveryDiagnostic;
   invocation?: CapabilityInvocation;
   aborted?: string;
   done?: boolean;

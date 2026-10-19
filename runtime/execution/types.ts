@@ -61,11 +61,6 @@ export type ExecutionWorkTarget = NonNullable<
   WorkInput["target"]
 >;
 
-export type LocalWorkloadWorkerOptions = Readonly<{
-  workerId?: string;
-  capacity?: number;
-}>;
-
 export type DeliveryContextBase = Readonly<{
   databaseSchema: string;
   event: DurableEvent;
@@ -151,6 +146,8 @@ export type DeliveryDiagnosticSink = (
 ) => void | Promise<void>;
 
 export type CreateDeliveryWorkloadOptions = Readonly<{
+  /** Owner-resolved immutable event for colocated placement. */
+  resolvedEvent?: (schema: string, id: string) => DurableEvent | undefined;
   /** Trusted placement selected by an owner-created executor. */
   localExecution?: boolean;
   /** Owner-only registration with the accepted transport heartbeat producer. */
@@ -195,10 +192,6 @@ export type DeliveryRecoveryDispatch = Readonly<{
 export type CreateDeliveryExecutorOptions = Readonly<{
   /** Owner registration; never passed to a worker. */
   createWorkerWorkloads?: import("./workload.ts").OwnerExecutionFactory;
-  /** Installs capability admission on an application-owned Hypervisor before attachment. */
-  bindOwnerCapabilities?: (
-    host: import("./owner-capabilities.ts").OwnerCapabilityHost,
-  ) => void;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   defaultDatabaseSchema?: string;
@@ -208,22 +201,10 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
-  /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
-  hypervisor?: DeliveryHypervisor;
-  /**
-   * In-process event-fabric rendezvous shared by Copilotz Workers and their
-   * Hypervisor. Required with an injected Hypervisor; optional for a private
-   * Hypervisor, which otherwise receives a unique topic.
-   */
-  transport?: DeliveryInProcessTransport;
   target?: Readonly<{ workerId: string }>;
   workload?: string;
   /** Additional application/runtime workloads hosted beside deliveries. */
   workloads?: Readonly<Record<string, DeliveryWorkload>>;
-  /** Additional workloads that should not consume durable-delivery slots. */
-  localWorkloadWorkers?: Readonly<
-    Record<string, LocalWorkloadWorkerOptions>
-  >;
   /** Per-workload routing used with an injected dispatcher/hypervisor. */
   workloadTargets?: Readonly<Record<string, ExecutionWorkTarget>>;
   workerId?: string;
@@ -245,8 +226,7 @@ export type CreateDeliveryExecutorOptions = Readonly<{
 }>;
 
 export type DeliveryExecutorOwnership =
-  | "private_hypervisor"
-  | "shared_hypervisor"
+  | "local"
   | "injected_dispatcher";
 
 export type DeliveryExecutor = Readonly<{

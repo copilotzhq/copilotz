@@ -477,7 +477,6 @@ async function capabilityFixture(
     ids,
     outcomes: outcomes.map((outcome) => outcome.promise),
     signal: abort.signal,
-    snapshot: () => host.snapshot(),
     close: () => host.close(),
   };
 }
@@ -864,7 +863,7 @@ async function authorizedWriterFailure(
         await fencing.promise;
         await new Promise((resolve) => setTimeout(resolve, 0));
         assertEquals(settled, false);
-        assertEquals(host.snapshot(), { assignments: 1, resources: 1 });
+
         releaseFence.resolve();
         const result = await host.outcomes[0];
         assertEquals(

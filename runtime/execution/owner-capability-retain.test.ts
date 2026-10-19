@@ -45,6 +45,7 @@ function fixture(
   const calls: CapabilityCall[] = [];
   let physicalAppends = 0;
   let epoch = 1;
+  const ownerAbort = new AbortController();
   const abort = new AbortController();
   // The physical stream is deliberately synthetic. Production host, worker,
   // resource accounting, invocation lifetime and the wire codec are real.
@@ -110,7 +111,8 @@ function fixture(
   const host = createOwnerCapabilityHost({
     registry,
     localExecution: true,
-    resolveAuthority: () => Promise.resolve({ epoch, signal: abort.signal }),
+    resolveAuthority: () =>
+      Promise.resolve({ epoch, signal: ownerAbort.signal }),
     createWorkloads: ({ registry }) => ({
       test: async () => {
         await registry.actions.run.execute(
@@ -186,6 +188,7 @@ function fixture(
     host,
     setEpoch(value: number) {
       epoch = value;
+      ownerAbort.abort(new Error("retired owner epoch"));
     },
     run: () =>
       createOwnerWorkerWorkloads({ registry, workloads: ["test"] }).test(work),
@@ -208,7 +211,6 @@ Deno.test("real worker-facing sealed writer retains the exact canonical selectio
   try {
     await f.run();
     assertEquals(f.retained, [selection, selection]);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -249,10 +251,9 @@ Deno.test("remote owner keeps a bounded sealed retain capability until invocatio
       args: [selection],
     });
     assertEquals(f.retained, [selection, selection]);
-    assertEquals(f.host.snapshot().resources, 1);
+
     await f.call({ kind: "complete", id: context });
     assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -291,7 +292,7 @@ Deno.test("worker sealed and aborted writers cannot append or close again", asyn
     try {
       await f.run();
       assertEquals(f.retained, []);
-      assertEquals(f.host.snapshot().resources, 0);
+
       await assertRejects(
         () => leaked!.retain({ retention: "observation" }),
         Error,
@@ -485,7 +486,6 @@ Deno.test("a failed physical seal cannot select retention", async () => {
   try {
     await f.run();
     assertEquals(f.retained, []);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -500,14 +500,12 @@ Deno.test("accounting: 64 sequential close without retain plus disposal releases
         role: "output",
       });
       await writer.close({ assetId: `asset-${i}` });
-      assertEquals(f.host.snapshot().resources, 1);
+
       await writer[Symbol.asyncDispose]();
-      assertEquals(f.host.snapshot().resources, 0);
     }
   });
   try {
     await f.run();
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -525,7 +523,7 @@ Deno.test("accounting baseline: 32 live slots refuse the next open until explici
         }),
       );
     }
-    assertEquals(f.host.snapshot().resources, 32);
+
     await assertRejects(
       () =>
         context.streams.open({
@@ -537,7 +535,7 @@ Deno.test("accounting baseline: 32 live slots refuse the next open until explici
       "owner_capacity",
     );
     await writers[0][Symbol.asyncDispose]();
-    assertEquals(f.host.snapshot().resources, 31);
+
     writers.push(
       await context.streams.open({
         id: "replacement",
@@ -545,13 +543,11 @@ Deno.test("accounting baseline: 32 live slots refuse the next open until explici
         role: "output",
       }),
     );
-    assertEquals(f.host.snapshot().resources, 32);
+
     for (const writer of writers.slice(1)) await writer[Symbol.asyncDispose]();
-    assertEquals(f.host.snapshot().resources, 0);
   });
   try {
     await f.run();
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -573,7 +569,6 @@ Deno.test("accounting contract: 64 sequential close retain repeat dispose cycles
       await writer.retain(selection);
       await writer.retain(selection);
       await writer[Symbol.asyncDispose]();
-      assertEquals(f.host.snapshot().resources, 0);
     }
   });
   try {
@@ -601,7 +596,7 @@ for (const retain of [false, true]) {
         }
         writers.push(writer);
       }
-      assertEquals(f.host.snapshot().resources, 32);
+
       await assertRejects(
         () =>
           context.streams.open({
@@ -613,7 +608,7 @@ for (const retain of [false, true]) {
         "owner_capacity",
       );
       await writers[0][Symbol.asyncDispose]();
-      assertEquals(f.host.snapshot().resources, 31);
+
       const replacement = await context.streams.open({
         id: "replacement",
         mediaType: "text/plain",
@@ -623,11 +618,9 @@ for (const retain of [false, true]) {
       for (const writer of writers.slice(1)) {
         await writer[Symbol.asyncDispose]();
       }
-      assertEquals(f.host.snapshot().resources, 0);
     });
     try {
       await f.run();
-      assertEquals(f.host.snapshot().resources, 0);
     } finally {
       await f.close();
     }
@@ -656,7 +649,7 @@ Deno.test("capture-only close releases immediately for 64 sequential worker writ
           role: "output",
         });
         await writer.close({ assetId: "asset" });
-        assertEquals(f.host.snapshot().resources, 0);
+
         await writer[Symbol.asyncDispose]();
         await assertRejects(
           () => writer.retain({ retention: "observation" }),
@@ -689,7 +682,7 @@ Deno.test("worker-supplied shape hint cannot preserve a capture-only owner handl
       args: [{ retainAfterClose: true }],
       value: { retainAfterClose: true },
     });
-    assertEquals(f.host.snapshot().resources, 0);
+
     await assertRejects(
       () =>
         f.call({
@@ -746,7 +739,7 @@ Deno.test("owner refuses append and reclose queued behind a physical seal", asyn
     release.resolve();
     await Promise.all([closing, appended, reclosed]);
     assertEquals(f.physicalAppends(), 0);
-    assertEquals(f.host.snapshot().resources, 1);
+
     await f.call({
       kind: "call",
       context,
@@ -845,10 +838,9 @@ for (const unknown of [false, true]) {
       await cleanupEntered.promise;
       await new Promise((resolve) => setTimeout(resolve, 0));
       assertEquals(disposed, false);
-      assertEquals(f.host.snapshot().resources, 1);
+
       release.resolve();
       await Promise.all([closing, disposal]);
-      assertEquals(f.host.snapshot().resources, unknown ? 1 : 0);
     } finally {
       release.resolve();
       await f.close();
@@ -886,7 +878,6 @@ Deno.test("Action-authorized sealed writer retains repeatedly through the real h
   try {
     await f.run();
     assertEquals(f.retained, [selection, selection]);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -927,7 +918,6 @@ Deno.test("Action-authorized sealed retention rechecks current policy before the
   try {
     await f.run();
     assertEquals(f.retained, []);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }

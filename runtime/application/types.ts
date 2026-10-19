@@ -1,9 +1,5 @@
 import type { OwnerIngressProof } from "./ingress/authority.ts";
 import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
-import type {
-  HostCommandDefinitions,
-  HostCommands,
-} from "./host-command-types.ts";
 import type { ViewMap } from "../views/index.ts";
 import type {
   CopilotzEngine,
@@ -50,7 +46,6 @@ export type CreateCopilotzApplicationOptions =
     namespace?: string;
     databaseSchema?: string;
     /** Trusted owner-local data commands; never sent to workers or HTTP routes. */
-    hostCommands?: HostCommandDefinitions;
     /** Trusted owner-only Collection authorization callbacks. */
     collectionPolicies?:
       import("../collections/policy-types.ts").CollectionPolicies;
@@ -343,9 +338,7 @@ export type ApplicationCollections<
 export type CopilotzApplication<
   TActions extends ActionMap = ActionMap,
   TCollections extends CollectionMap = CollectionMap,
-  THostCommands extends HostCommandDefinitions = HostCommandDefinitions,
 > = Readonly<{
-  hostCommands: HostCommands<THostCommands>;
   actions: ApplicationActions<TActions>;
   collections: ApplicationCollections<TCollections>;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;

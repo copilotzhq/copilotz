@@ -6,7 +6,6 @@ import type { EventMutationContext } from "../../events/store.ts";
 import { scheduledJobDelegationDigest } from "../../schedules/delegation.ts";
 import {
   assertOwnerIngressReplay,
-  recordOwnerIngress,
   scheduledOccurrenceIngressProof,
 } from "./authority.ts";
 
@@ -20,24 +19,20 @@ type Admission = Readonly<{
   scheduleVersion: string;
   deadline: OwnerDeadline;
 }>;
-const tokens = new WeakMap<object, Admission>();
 export function withScheduledAlarmAdmission<T extends object>(
   target: T,
   input: Admission,
 ): T {
-  const token = Object.freeze({});
-  tokens.set(token, captureHostCommandJson(input) as Admission);
+  const token = captureHostCommandJson(input) as Admission;
   return Object.defineProperty(target, symbol, {
     value: token,
     enumerable: true,
   });
 }
 export function scheduledAlarmAdmission(input: object): Admission | undefined {
-  const token = (input as { [symbol]?: object })[symbol];
+  const token = (input as { [symbol]?: Admission })[symbol];
   if (!token) return;
-  const admission = tokens.get(token);
-  if (!admission) throw new Error("Scheduled occurrence authority is invalid.");
-  return admission;
+  return token;
 }
 export function captureScheduledAlarmAdmission<T extends object>(
   source: T,
@@ -45,22 +40,19 @@ export function captureScheduledAlarmAdmission<T extends object>(
 ): T {
   const token = (source as { [symbol]?: object })[symbol];
   if (!token) return captured;
-  if (!tokens.has(token)) {
-    throw new Error("Scheduled occurrence authority is invalid.");
-  }
   return Object.defineProperty(captured, symbol, {
     value: token,
     enumerable: true,
   });
 }
-const proof = (admission: Admission) =>
+export const scheduledIngressProof = (admission: Admission) =>
   scheduledOccurrenceIngressProof({
     scheduleId: admission.scheduleId,
     occurrenceId: admission.occurrenceId,
     scheduledFor: admission.scheduledFor,
     scheduleVersion: admission.scheduleVersion,
   });
-type Event = Parameters<typeof recordOwnerIngress>[2];
+type Event = import("../../events/types.ts").DurableEventDraft & { id: string };
 export async function recordScheduledAlarmIngress(
   context: EventMutationContext,
   input: Readonly<{
@@ -118,13 +110,6 @@ export async function recordScheduledAlarmIngress(
   if (!current.rows.length) {
     throw new Error("Scheduled occurrence deadline is unavailable.");
   }
-  await recordOwnerIngress(
-    context,
-    admission.databaseSchema,
-    event,
-    body,
-    proof(admission),
-  );
 }
 export function assertScheduledAlarmReplay(
   context: EventMutationContext,
@@ -137,6 +122,6 @@ export function assertScheduledAlarmReplay(
     admission.databaseSchema,
     event,
     body,
-    proof(admission),
+    scheduledIngressProof(admission),
   );
 }

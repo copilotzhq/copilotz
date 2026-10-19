@@ -9,13 +9,7 @@ import {
   releaseDatabaseOwner,
 } from "../engine/commands.ts";
 import { registerDeliveryAlarms } from "./alarms.ts";
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -69,9 +63,11 @@ async function createFixture(options?: {
   handle?: (eventId: string, idempotencyKey: string) => void | Promise<void>;
   onError?: Processor["onError"];
 }): Promise<Fixture> {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const session = createSqlSession(db);
-  const schema = "copilotz_execution";
+  const schema = `execution_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(session, schema);
   const owner = await openDatabaseOwner(session, schema);
   const store = createEventStore({
@@ -138,6 +134,11 @@ async function appendMessage(fixture: Fixture) {
 }
 async function closeFixture(fixture: Fixture): Promise<void> {
   releaseDatabaseOwner(fixture.owner);
+  if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+    await fixture.db.query(
+      `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,
+    );
+  }
   await fixture.db.close();
 }
 async function waitForDeliveryStatus(
@@ -154,7 +155,7 @@ async function waitForDeliveryStatus(
   }
   throw new Error(`Delivery '${id}' did not reach '${status}'.`);
 }
-Deno.test("A24 private in-process Oxian recovers and executes a durable delivery", async () => {
+Deno.test("direct local execution recovers and executes a durable delivery", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
   const executor = createDeliveryExecutor({
@@ -164,7 +165,7 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     workerId: "copilotz-private-test",
   });
   try {
-    assertEquals(executor.ownership, "private_hypervisor");
+    assertEquals(executor.ownership, "local");
     const recovery = await executor.dispatchRecoverable({
       namespace: "tenant-a",
     });
@@ -210,9 +211,13 @@ Deno.test("a settled delivery reports its row, so success is not read back", asy
       if (failing.current) throw new Error("boom");
     },
   });
-  let reads = 0;
+  let reads = 0, eventReads = 0;
   const store: EventStore = {
     ...fixture.store,
+    getEvent: (id) => {
+      eventReads++;
+      return fixture.store.getEvent(id);
+    },
     getDelivery: (id) => {
       reads++;
       return fixture.store.getDelivery(id);
@@ -232,6 +237,11 @@ Deno.test("a settled delivery reports its row, so success is not read back", asy
     const result = await handle.done;
     assertEquals(result.delivery.status, "succeeded");
     assertEquals(reads, 0, "success reports its own row");
+    assertEquals(
+      eventReads,
+      1,
+      "placement carries the owner-resolved event into execution",
+    );
     // The reported row is what the database holds.
     assertEquals(
       result.delivery,
@@ -633,61 +643,6 @@ Deno.test("scope progress resolves when local work for the scope finishes", asyn
     await closeFixture(fixture);
   }
 });
-Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
-  const fixture = await createFixture();
-  const committed = await appendMessage(fixture);
-  const transport = {
-    type: "in-process",
-    config: { topic: `copilotz.shared.${crypto.randomUUID()}` },
-  } as const;
-  let ownerHost: OwnerCapabilityHost;
-  const hypervisor = createHypervisor({
-    transports: [transport],
-    workerCalls: { admit: (binding) => ownerHost?.workerCalls.admit(binding) },
-  }, {
-    onDisconnect: (event) => ownerHost?.lifecycle?.onDisconnect?.(event),
-    onComplete: (event) => ownerHost?.lifecycle?.onComplete?.(event),
-  });
-  const executor = createDeliveryExecutor({
-    store: fixture.store,
-    registry: fixture.registry,
-    createContext: fixture.createContext,
-    hypervisor,
-    bindOwnerCapabilities(host) {
-      ownerHost = host;
-    },
-    transport,
-    workerId: "shared-copilotz",
-  });
-  let applicationWorker: ReturnType<typeof createWorker> | undefined;
-  try {
-    assertEquals(executor.ownership, "shared_hypervisor");
-    const result =
-      await (await executor.dispatchDelivery(committed.deliveries[0])).done;
-    assertEquals(result.delivery.status, "succeeded");
-    await executor.shutdown();
-    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
-    applicationWorker = createWorker({
-      id: "application-worker",
-      transport,
-      workloads: {
-        "application.probe.v1": () => ({ metadata: { alive: true } }),
-      },
-    });
-    await applicationWorker.ready;
-    const probe = await hypervisor.dispatch({
-      workload: "application.probe.v1",
-    });
-    assertEquals(await probe.metadata, { alive: true });
-    assertEquals((await probe.completed).status, "completed");
-  } finally {
-    await executor.shutdown();
-    await applicationWorker?.stop();
-    await applicationWorker?.closed;
-    await hypervisor.shutdown();
-    await closeFixture(fixture);
-  }
-});
 Deno.test("A53 remote dispatch contains serializable identities and resolves on the worker", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -766,30 +721,6 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     await worker.closed;
     await hypervisor.shutdown();
     await ownerHost.close();
-    await closeFixture(fixture);
-  }
-});
-Deno.test("shared Hypervisors require their explicit event-fabric transport", async () => {
-  const fixture = await createFixture();
-  const transport = {
-    type: "in-process",
-    config: { topic: `copilotz.explicit.${crypto.randomUUID()}` },
-  } as const;
-  const hypervisor = createHypervisor({ transports: [transport] });
-  try {
-    assertThrows(
-      () =>
-        createDeliveryExecutor({
-          store: fixture.store,
-          registry: fixture.registry,
-          createContext: fixture.createContext,
-          hypervisor,
-        }),
-      TypeError,
-      "requires its declared in-process transport",
-    );
-  } finally {
-    await hypervisor.shutdown();
     await closeFixture(fixture);
   }
 });
@@ -1297,6 +1228,11 @@ Deno.test("owner retry alarm retains the original backoff across executor and ow
     await owner.drainAlarms();
     await executor.shutdown();
     releaseDatabaseOwner(owner);
+    if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+      await fixture.db.query(
+        `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,
+      );
+    }
     await fixture.db.close();
   }
 });

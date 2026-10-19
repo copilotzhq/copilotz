@@ -39,11 +39,4 @@ export type {
   DeliveryDiagnosticSink,
 } from "./runtime/application/public.ts";
 
-export type {
-  HostCommandContext,
-  HostCommandDefinition,
-  HostCommandDefinitions,
-  HostCommandJson,
-  HostCommandOptions,
-  HostCommands,
-} from "./runtime/application/public.ts";
+export type {} from "./runtime/application/public.ts";

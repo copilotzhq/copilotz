@@ -92,9 +92,12 @@ export async function resolveProtectedActionSource(
         namespace: string;
         metadata: Record<string, unknown>;
         payload: unknown;
+        owner_ingress:
+          | import("./protected-action-types.ts").ProtectedActionIngress
+          | null;
       }
     >(
-      `SELECT id,type,namespace,metadata,payload FROM ${tables.events} WHERE id=$1 AND namespace=$2`,
+      `SELECT id,type,namespace,metadata,payload,owner_ingress FROM ${tables.events} WHERE id=$1 AND namespace=$2`,
       [id, namespace],
     )).rows[0];
     if (!event) {
@@ -108,7 +111,7 @@ export async function resolveProtectedActionSource(
     const ingress = await resolveOwnerIngress(
       { transaction, tables },
       databaseSchema,
-      event,
+      { ...event, ownerIngress: event.owner_ingress ?? undefined },
       body,
     );
     const data = await openProtectedEventBody({

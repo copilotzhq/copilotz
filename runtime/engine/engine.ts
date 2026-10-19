@@ -61,10 +61,7 @@ import {
 } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
-  COPILOTZ_LIVE_WORKLOAD,
   createDeliveryExecutor,
-  createLiveEventDispatcher,
-  createLiveProcessorWorkload,
   type DeliveryContextBase,
   type DeliveryExecutor,
   invokeLiveProcessors,
@@ -778,15 +775,6 @@ export async function createCopilotzEngine(
       );
 
     const configuredWorkloads = options.execution?.workloads ?? {};
-    const configuredLocalWorkers = options.execution?.localWorkloadWorkers ??
-      {};
-    for (const reserved of [COPILOTZ_LIVE_WORKLOAD]) {
-      if (Object.prototype.hasOwnProperty.call(configuredWorkloads, reserved)) {
-        throw new TypeError(
-          `Execution workload '${reserved}' is reserved by the Copilotz engine.`,
-        );
-      }
-    }
     const createWorkerWorkloads:
       import("../execution/workload.ts").OwnerExecutionFactory = (
         execution,
@@ -799,6 +787,7 @@ export async function createCopilotzEngine(
               registry: execution.registry,
               workerId: execution.workerId,
               localExecution: execution.localExecution,
+              resolvedEvent: execution.resolvedEvent,
               trackAttempt: execution.trackAttempt,
               onDiagnostic: execution.onDiagnostic,
               resolveStore: async (schema) =>
@@ -819,29 +808,13 @@ export async function createCopilotzEngine(
                 });
               },
             }),
-          [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
-            resolveAuthority,
-            registry: execution.registry,
-            createContext: (base) => createLiveContext(base, execution),
-            resolveEvent: resolveEventInScope,
-          }),
         };
       };
 
     const executor: DeliveryExecutor = createDeliveryExecutor({
       createWorkerWorkloads: (execution) => createWorkerWorkloads(execution),
       ...(options.execution ?? {}),
-      workloads: {
-        ...configuredWorkloads,
-        [COPILOTZ_LIVE_WORKLOAD]: createLiveProcessorWorkload({
-          resolveAuthority,
-          registry: options.registry,
-          transients,
-          createContext: createLiveContext,
-          resolveEvent: resolveEventInScope,
-        }),
-      } as const,
-      localWorkloadWorkers: configuredLocalWorkers,
+      workloads: configuredWorkloads,
       resolveStore: async (requestedDatabaseSchema) =>
         requestedDatabaseSchema === databaseSchema
           ? store
@@ -945,13 +918,6 @@ export async function createCopilotzEngine(
           });
         }
       },
-    });
-    const liveDispatcher = createLiveEventDispatcher({
-      resolveAuthority,
-      registry: options.registry,
-      transients,
-      executor,
-      defaultDatabaseSchema: databaseSchema,
     });
     const publishLive = async (
       event: CopilotzEvent,
@@ -1157,7 +1123,6 @@ export async function createCopilotzEngine(
         execution: {
           ownership: executor.ownership,
           workload: executor.workload,
-          liveWorkload: liveDispatcher.workload,
           workloads: executor.workloads,
           createWorkerWorkloads,
           async lookupReceipt(identity, input) {

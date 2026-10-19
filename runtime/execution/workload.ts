@@ -180,7 +180,9 @@ export function createDeliveryWorkload(
       if (mismatch) {
         throw new TypeError(`Invalid delivery dispatch: ${mismatch}.`);
       }
-      const event = await store.getEvent(delivery.eventId);
+      const event =
+        options.resolvedEvent?.(metadata.databaseSchema, delivery.id) ??
+          await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
@@ -327,7 +329,10 @@ export function createDeliveryWorkload(
       return {
         metadata: {
           ...statusMetadata(delivery.id, "succeeded"),
-          delivery: JSON.parse(JSON.stringify(settled)),
+          delivery:
+            settled as unknown as import("../../dependencies/oxian-worker.ts").WorkerWorkContext[
+              "metadata"
+            ],
         },
       };
     } catch (error) {
@@ -372,6 +377,10 @@ export function createDeliveryWorkload(
 }
 
 export type OwnerExecutionOptions = Readonly<{
+  resolvedEvent?: (
+    schema: string,
+    id: string,
+  ) => import("../events/types.ts").DurableEvent | undefined;
   registry: import("../plugins/index.ts").PluginRegistry;
   /** Trusted owner placement; never supplied by a worker. */
   localExecution?: boolean;

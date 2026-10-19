@@ -129,7 +129,7 @@ export const serverInvokeAction: ActionDefinition<
         identity: context.identity,
         signal: context.signal,
         metadata: {
-          ...structuredClone(request.actionMetadata),
+          ...request.actionMetadata,
           copilotzServer: {
             schema: SERVER_ACTION_METADATA_SCHEMA,
             requestId: input.requestId,

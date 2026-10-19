@@ -1,23 +1,36 @@
-import type {
-  Hypervisor,
-  HypervisorListener,
+import {
+  createHypervisor,
+  type Hypervisor,
+  type HypervisorListener,
 } from "../../dependencies/oxian-hypervisor.ts";
 
-type Hosted = Readonly<{ close(reason?: string): Promise<void> }>;
+type Hosted = Readonly<
+  {
+    close(reason?: string): Promise<void>;
+    fetch?: (request: Request) => Promise<Response>;
+  }
+>;
 type Binding = {
-  hypervisor: Hypervisor;
+  hypervisor?: Hypervisor;
+  fetch?: Hosted["fetch"];
   closed: boolean;
   listeners: Set<HypervisorListener>;
 };
-const owned = new WeakMap<object, Binding>();
+const hosting = Symbol("owned-hosting");
+const bindingOf = (host: object): Binding | undefined =>
+  (host as { [hosting]?: Binding })[hosting];
 
 /** Internal association only: public handles never expose transport authority. */
 export function withOwnedHosting<T extends Hosted>(
   host: T,
   hypervisor: Hypervisor | undefined,
 ): T {
-  if (!hypervisor) return host;
-  const binding: Binding = { hypervisor, closed: false, listeners: new Set() };
+  const binding: Binding = {
+    hypervisor,
+    fetch: host.fetch,
+    closed: false,
+    listeners: new Set(),
+  };
   let closing: Promise<void> | undefined;
   const result = {
     ...host,
@@ -28,6 +41,7 @@ export function withOwnedHosting<T extends Hosted>(
         const results = await Promise.allSettled([
           ...[...binding.listeners].map((listener) => listener.shutdown()),
           host.close(reason),
+          !hypervisor ? binding.hypervisor?.shutdown(reason) : undefined,
         ]);
         const failures = results.flatMap((entry) =>
           entry.status === "rejected" ? [entry.reason] : []
@@ -39,13 +53,22 @@ export function withOwnedHosting<T extends Hosted>(
       return closing;
     },
   };
-  owned.set(result, binding);
+  Object.defineProperty(result, hosting, { value: binding });
   return result;
 }
 
 export function ownedHypervisor(host: object): Hypervisor | undefined {
-  const binding = owned.get(host);
+  const binding = bindingOf(host);
   if (binding?.closed) throw new TypeError("Copilotz host is closed.");
+  if (binding?.fetch) {
+    binding.hypervisor ??= createHypervisor({
+      transports: [{
+        type: "in-process",
+        config: { topic: `copilotz.http.${crypto.randomUUID()}` },
+      }],
+      fallback: binding.fetch,
+    });
+  }
   return binding?.hypervisor;
 }
 
@@ -54,17 +77,10 @@ export async function attachOwnedListener(
   host: object,
   listener: HypervisorListener,
 ): Promise<HypervisorListener> {
-  const binding = owned.get(host);
-  if (!binding) return listener;
-  if (binding.closed) {
+  if (!attach(host, listener)) {
     await listener.shutdown();
     throw new TypeError("Copilotz host is closed.");
   }
-  binding.listeners.add(listener);
-  void listener.finished.finally(() => binding.listeners.delete(listener))
-    .catch(
-      () => undefined,
-    );
   return listener;
 }
 
@@ -73,16 +89,18 @@ export function attachOwnedListenerSync(
   host: object,
   listener: HypervisorListener,
 ): HypervisorListener {
-  const binding = owned.get(host);
-  if (!binding) return listener;
-  if (binding.closed) {
+  if (!attach(host, listener)) {
     void listener.shutdown();
     throw new TypeError("Copilotz host is closed.");
   }
+  return listener;
+}
+function attach(host: object, listener: HypervisorListener): boolean {
+  const binding = bindingOf(host);
+  if (!binding) return true;
+  if (binding.closed) return false;
   binding.listeners.add(listener);
   void listener.finished.finally(() => binding.listeners.delete(listener))
-    .catch(
-      () => undefined,
-    );
-  return listener;
+    .catch(() => undefined);
+  return true;
 }

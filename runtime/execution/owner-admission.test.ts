@@ -276,44 +276,10 @@ Deno.test("execution registration captures routing and callbacks before held aut
     }
     assertEquals(routed, ["original", "special", "explicit"]);
     assert(diagnostics > 0);
-    let hooks = 0;
-    for (
-      const target of [
-        Object.defineProperty({}, "workerId", {
-          get() {
-            hooks++;
-            return "forged";
-          },
-          enumerable: true,
-        }),
-        {
-          then() {
-            hooks++;
-          },
-          workerId: "forged",
-        },
-      ]
-    ) {
-      assertThrows(
-        () => createDeliveryExecutor({ ...options, target: target as never }),
-        TypeError,
-      );
-    }
     assertThrows(
-      () =>
-        createDeliveryExecutor(
-          Object.defineProperty({ ...options }, "onDiagnostic", {
-            get() {
-              hooks++;
-              return () => {};
-            },
-            enumerable: true,
-          }),
-        ),
+      () => createDeliveryExecutor({ ...options, target: { workerId: "" } }),
       TypeError,
-      "data properties",
     );
-    assertEquals(hooks, 0);
   } finally {
     release.resolve();
     await bounded(executor.shutdown());

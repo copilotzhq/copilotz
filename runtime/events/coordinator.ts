@@ -192,6 +192,7 @@ export function createEventCoordinator(
       },
       draft: mutation.draft,
       eventId: mutation.eventId,
+      ingress: mutation.ingress,
       body: mutation.body,
       statement: mutation.statement,
       mutate: mutation.mutate,

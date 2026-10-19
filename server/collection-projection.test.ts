@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { createCopilotz } from "../create-copilotz.ts";
+import { createFixtureCopilotz as createCopilotz } from "../runtime/testing/fixture-commands.test.ts";
 import { createCopilotzClient } from "../client/index.ts";
 import { ActionError } from "../runtime/actions/index.ts";
 import { defineCollection } from "../runtime/collections/definition.ts";

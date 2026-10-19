@@ -1,4 +1,4 @@
-import { hostDatabaseScopes } from "./host-commands.ts";
+import { hostDatabaseScopes } from "./database-scopes.ts";
 import {
   captureOwnerSessionAuthority,
   createOwnerCapabilityHost,
@@ -90,7 +90,6 @@ export type InternalCopilotzGateway = Readonly<{
   transports: readonly HypervisorTransport[];
   hypervisor?: Hypervisor;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
-  hostCommands: CopilotzApplication["hostCommands"];
   actions: CopilotzApplication["actions"];
   collections: CopilotzApplication["collections"];
   attach: CopilotzApplication["attach"];
@@ -141,6 +140,16 @@ export async function createCopilotzGateway(
       "dispatcher must be a trusted worker-capability binding callback.",
     );
   }
+  options = {
+    ...options,
+    target: options.target && { ...options.target },
+    workloadTargets: options.workloadTargets && Object.fromEntries(
+      Object.entries(options.workloadTargets).map((
+        [name, target],
+      ) => [name, { ...target }]),
+    ),
+    transports: options.transports && [...options.transports],
+  };
   options.signal?.throwIfAborted();
   if (options.dispatcher && options.transports) {
     throw new TypeError("Configure either dispatcher or transports, not both.");
@@ -156,9 +165,7 @@ export async function createCopilotzGateway(
   }
 
   hostDatabaseScopes(
-    options.databaseSchema ?? "public",
     options.databaseScopes,
-    options.hostCommands,
   );
   const persistence = await openCopilotzPersistence(options);
   const transports = options.dispatcher
@@ -244,7 +251,6 @@ export async function createCopilotzGateway(
         namespace: options.namespace,
         databaseSchema: options.databaseSchema,
         databaseScopes: options.databaseScopes,
-        hostCommands: options.hostCommands,
         protectedActions: options.protectedActions,
         collectionPolicies: options.collectionPolicies,
         collectionProjections: options.collectionProjections,
@@ -270,6 +276,7 @@ export async function createCopilotzGateway(
       undefined,
       (engine) => {
         ownerCapabilities = createOwnerCapabilityHost({
+          onDiagnostic: options.onDeliveryDiagnostic,
           registry: engine.plugins,
           sessions,
           createWorkloads: engine.execution.createWorkerWorkloads,
@@ -363,7 +370,6 @@ export async function createCopilotzGateway(
       await persistence.recovery?.admit();
       return await application!.send(input);
     },
-    hostCommands: application.hostCommands,
     actions: application.host.actions,
     collections: application.host.collections,
     attach: (input) => application!.attach(input),

@@ -18,7 +18,6 @@ import {
 import { type CopilotzEngine, createCopilotzEngine } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import type { OwnerCapabilityHost } from "../execution/owner-capabilities.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import {
   defineCollection,
@@ -221,7 +220,7 @@ async function closeFixture(fixture: Fixture): Promise<void> {
 Deno.test("factory engine scopes typed processor capabilities and deduplicates retry projections", async () => {
   const fixture = await createFixture();
   try {
-    assertEquals(fixture.engine.execution.ownership, "private_hypervisor");
+    assertEquals(fixture.engine.execution.ownership, "local");
     assert(!("eventStore" in fixture.engine));
     assert(!("session" in fixture.engine));
     assert(!("coordinator" in fixture.engine));
@@ -391,31 +390,21 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     type: "in-process",
     config: { topic: `copilotz.engine.${crypto.randomUUID()}` },
   } as const;
-  let ownerHost: OwnerCapabilityHost;
   const hypervisor = createHypervisor({
     transports: [transport],
-    workerCalls: { admit: (binding) => ownerHost?.workerCalls.admit(binding) },
-  }, {
-    onDisconnect: (event) => ownerHost?.lifecycle?.onDisconnect?.(event),
-    onComplete: (event) => ownerHost?.lifecycle?.onComplete?.(event),
   });
   const engine = await createCopilotzEngine({
     session,
     registry,
     defaultDatabaseSchema: "copilotz_shared_engine",
     execution: {
-      hypervisor,
-      transport,
-      workerId: "shared-engine",
-      bindOwnerCapabilities(host) {
-        ownerHost = host;
-      },
+      dispatcher: hypervisor,
     },
   });
   let applicationWorker: ReturnType<typeof createWorker> | undefined;
   try {
-    assertEquals(engine.execution.ownership, "shared_hypervisor");
-    assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
+    assertEquals(engine.execution.ownership, "injected_dispatcher");
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await engine.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await session.query("SELECT 1");
@@ -522,7 +511,7 @@ Deno.test("one engine isolates lazy physical-schema repository scopes", async ()
         .list()).map((row) => row.id),
       ["audit:same-thread"],
     );
-    assertEquals(engine.execution.ownership, "private_hypervisor");
+    assertEquals(engine.execution.ownership, "local");
   } finally {
     await engine.shutdown();
     await db.close();

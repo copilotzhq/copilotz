@@ -1,12 +1,5 @@
-import { readSchemaReceipt } from "../engine/commands.ts";
-import { recoverOwnerReceipt } from "./owner-receipt.ts";
-import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import { createWorker } from "../../dependencies/oxian-worker.ts";
-import type {
-  DurableEvent,
-  EventDelivery,
-  EventStore,
-} from "../events/index.ts";
+import { localDispatcher } from "./local.ts";
+import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
   COPILOTZ_DELIVERY_WORKLOAD,
   type CreateDeliveryExecutorOptions,
@@ -15,20 +8,12 @@ import {
   type DeliveryExecutionHandle,
   type DeliveryExecutor,
   type DeliveryExecutorOwnership,
-  type DeliveryInProcessTransport,
   type DeliveryRecoveryDispatch,
-  type DeliveryWorkload,
   type ExecutionWorkTarget,
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
-import { createOwnerCapabilityHost } from "./owner-capabilities.ts";
 import { createOwnerWorkerWorkloads } from "./owner-capability-worker.ts";
-import { relayCopilotzWorkHandle } from "./protocol.ts";
 import { reportDeliveryDiagnostic } from "./diagnostics.ts";
-import { isStreamOutputDescriptor } from "../streams/index.ts";
-
-const PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS = 1_000;
-const MAX_PLACEMENT_FAILURE_DIAGNOSTICS = 10_000;
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -46,19 +31,7 @@ function assertWorkload(value: string): string {
 
 /** Registration is inert and detached before any asynchronous placement. */
 function captureRegistration<T extends object>(value: T): T {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Execution registration must be a data record.");
-  }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const key of Reflect.ownKeys(descriptors)) {
-    const descriptor = Reflect.get(descriptors, key) as PropertyDescriptor;
-    if (!("value" in descriptor)) {
-      throw new TypeError(
-        "Execution registration must contain data properties.",
-      );
-    }
-  }
-  return Object.freeze(Object.defineProperties({}, descriptors)) as T;
+  return { ...value };
 }
 function captureTarget(
   value: ExecutionWorkTarget | undefined,
@@ -74,7 +47,7 @@ function captureTarget(
   return Object.freeze({ workerId: captured.workerId });
 }
 
-/** Creates the Copilotz delivery dispatcher and optional embedded Oxian worker. */
+/** Creates a direct local dispatcher or uses the injected remote dispatcher. */
 export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
@@ -87,21 +60,6 @@ export function createDeliveryExecutor(
   if (!options.store && !options.resolveStore) {
     throw new TypeError("Delivery executor requires a store resolver.");
   }
-  if (options.dispatcher && options.hypervisor) {
-    throw new TypeError(
-      "Configure either a delivery dispatcher or Hypervisor, not both.",
-    );
-  }
-  if (options.dispatcher && options.transport) {
-    throw new TypeError(
-      "An injected dispatcher already owns Worker placement and cannot receive a local transport.",
-    );
-  }
-  if (options.hypervisor && !options.transport) {
-    throw new TypeError(
-      "An injected Hypervisor requires its declared in-process transport.",
-    );
-  }
   const workload = assertWorkload(
     options.workload ?? COPILOTZ_DELIVERY_WORKLOAD,
   );
@@ -111,10 +69,6 @@ export function createDeliveryExecutor(
     `copilotz-delivery-${crypto.randomUUID()}`;
   const defaultDatabaseSchema = options.defaultDatabaseSchema?.trim() ||
     options.store?.databaseSchema || "public";
-  const knownStores = new Map<string, EventStore>();
-  if (options.store) {
-    knownStores.set(options.store.databaseSchema, options.store);
-  }
   const resolveStore = async (databaseSchema: string) => {
     const requested = databaseSchema.trim();
     if (!requested) throw new TypeError("Database schema must be non-empty.");
@@ -126,7 +80,6 @@ export function createDeliveryExecutor(
         `Resolved store '${store.databaseSchema}' does not match '${requested}'.`,
       );
     }
-    knownStores.set(requested, store);
     return store;
   };
   if (Object.prototype.hasOwnProperty.call(options.workloads ?? {}, workload)) {
@@ -135,171 +88,38 @@ export function createDeliveryExecutor(
     );
   }
   const additionalWorkloads = captureRegistration(options.workloads ?? {});
-  const localWorkloadWorkers = Object.fromEntries(
-    Object.entries(captureRegistration(options.localWorkloadWorkers ?? {})).map(
-      ([name, configuration]) => [name, captureRegistration(configuration)],
-    ),
-  );
-  if (options.dispatcher && Object.keys(localWorkloadWorkers).length > 0) {
-    throw new TypeError(
-      "Local workload workers cannot be attached to an injected dispatcher.",
-    );
-  }
-  for (const name of Object.keys(localWorkloadWorkers)) {
-    if (!Object.prototype.hasOwnProperty.call(additionalWorkloads, name)) {
-      throw new TypeError(
-        `Local workload worker '${name}' has no registered workload.`,
-      );
-    }
-  }
-  const ownerCapabilities = options.dispatcher
+  const localCapacity = options.dispatcher
     ? undefined
-    : createOwnerCapabilityHost({
+    : positiveCapacity(options.capacity);
+  const target = capturedTarget;
+  const workloadTargets = new Map(capturedTargets);
+  const resolvedEvents = new Map<string, DurableEvent>();
+  const resolvedEvent = (schema: string, id: string) =>
+    resolvedEvents.get(`${schema}\0${id}`);
+  const localWorkloads = options.dispatcher
+    ? {}
+    : options.createWorkerWorkloads?.({
       registry: options.registry,
+      workerId,
       localExecution: true,
-      lookupReceipt: async (identity, input) => {
-        const schema = String(
-          (input as { databaseSchema?: unknown })?.databaseSchema ?? "",
-        );
-        const store = knownStores.get(schema);
-        if (!store) return false;
-        return await readSchemaReceipt(
-          store.session,
-          schema,
-          `worker:${identity.workerId}`,
-          input,
-        );
-      },
-      resolveAuthority: async (schema) =>
-        await (await resolveStore(schema)).executionAuthority(),
-      createWorkloads: options.createWorkerWorkloads ?? ((execution) => ({
-        ...additionalWorkloads,
-        [workload]: createDeliveryWorkload({
-          ...options,
-          registry: execution.registry,
-          workerId: execution.workerId,
-          localExecution: true,
-        }),
-      })),
-    });
-
-  let dispatcher: DeliveryDispatcher;
-  let ownership: DeliveryExecutorOwnership;
-  const attachedWorkers: ReturnType<typeof createWorker>[] = [];
-  let privateHypervisor: ReturnType<typeof createHypervisor> | undefined;
-  let target = capturedTarget;
-  const workloadTargets = new Map<string, ExecutionWorkTarget>(
-    capturedTargets,
-  );
-  let localCapacity: number | undefined;
-  const transport: DeliveryInProcessTransport | undefined = options.dispatcher
-    ? undefined
-    : options.transport ?? ({
-      type: "in-process" as const,
-      config: {
-        topic: `copilotz.execution.${crypto.randomUUID()}`,
-      } as const,
-    } as const);
-
-  const startWorker = (
-    config: Readonly<{
-      id: string;
-      capacity: number;
-      workloads: Readonly<Record<string, DeliveryWorkload>>;
-    }>,
-  ): void => {
-    const worker = createWorker({
-      id: config.id,
-      transport: transport!,
-      capacity: config.capacity,
-      workloads: createOwnerWorkerWorkloads({
-        registry: options.registry,
-        workloads: Object.keys(config.workloads),
-        onDiagnostic: options.onDiagnostic,
-        recoverReceipt: (receipt) => recoverOwnerReceipt(worker, receipt),
+      onDiagnostic: options.onDiagnostic,
+      resolvedEvent,
+    }) ?? {
+      ...additionalWorkloads,
+      [workload]: createDeliveryWorkload({
+        ...options,
+        workerId,
+        localExecution: true,
+        resolvedEvent,
       }),
-      hostCalls: { maxConcurrent: 128 },
-    });
-    attachedWorkers.push(worker);
-    void worker.closed.catch(() => undefined);
-  };
-
-  const attachLocalWorkers = (): void => {
-    startWorker({
-      id: workerId,
-      capacity: localCapacity!,
-      workloads: {
-        ...Object.fromEntries(
-          Object.entries(additionalWorkloads).filter(([name]) =>
-            !Object.hasOwn(localWorkloadWorkers, name)
-          ),
-        ),
-        [workload]: undefined!,
-      },
-    });
-    target = { workerId };
-    const workerIds = new Set([workerId]);
-    let index = 0;
-    for (const [name, config] of Object.entries(localWorkloadWorkers)) {
-      if (workloadTargets.has(name)) {
-        throw new TypeError(
-          `Workload '${name}' cannot configure both a target and local worker.`,
-        );
-      }
-      const isolatedWorkerId = config.workerId?.trim() ||
-        `${workerId}-workload-${++index}`;
-      if (workerIds.has(isolatedWorkerId)) {
-        throw new TypeError(
-          `Execution worker ID '${isolatedWorkerId}' is duplicated.`,
-        );
-      }
-      workerIds.add(isolatedWorkerId);
-      startWorker({
-        id: isolatedWorkerId,
-        capacity: positiveCapacity(config.capacity),
-        workloads: { [name]: additionalWorkloads[name] },
-      });
-      workloadTargets.set(name, { workerId: isolatedWorkerId });
-    }
-  };
-
-  if (options.dispatcher) {
-    dispatcher = options.dispatcher;
-    ownership = "injected_dispatcher";
-  } else if (options.hypervisor) {
-    localCapacity = positiveCapacity(options.capacity);
-    if (!options.bindOwnerCapabilities) {
-      throw new TypeError(
-        "An injected Hypervisor requires an owner-capability admission binding.",
-      );
-    }
-    options.bindOwnerCapabilities(ownerCapabilities!);
-    attachLocalWorkers();
-    dispatcher = options.hypervisor;
-    ownership = "shared_hypervisor";
-  } else {
-    localCapacity = positiveCapacity(options.capacity);
-    privateHypervisor = createHypervisor({
-      transports: [transport!],
-      workerCalls: ownerCapabilities!.workerCalls,
-    }, {
-      ...ownerCapabilities!.lifecycle,
-      onReady(event) {
-        if (!event.workerCalls) {
-          throw new Error(
-            "Copilotz workers require negotiated owner capabilities.",
-          );
-        }
-      },
-    });
-    attachLocalWorkers();
-    dispatcher = privateHypervisor;
-    ownership = "private_hypervisor";
-  }
-  const ready = Promise.all(
-    attachedWorkers.map((worker) => worker.ready),
-  ).then(() => undefined);
-  void ready.catch(() => {});
+    };
+  const local = options.dispatcher
+    ? undefined
+    : localDispatcher(localWorkloads, localCapacity!, workerId);
+  const dispatcher = options.dispatcher ?? local!;
+  const ownership: DeliveryExecutorOwnership = options.dispatcher
+    ? "injected_dispatcher"
+    : "local";
 
   let closed = false;
   let shutdownPromise: Promise<void> | undefined;
@@ -329,7 +149,6 @@ export function createDeliveryExecutor(
   >();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
-  const lastPlacementFailureDiagnosticAt = new Map<string, number>();
   let scheduling = false;
   let capacityBlocked = false;
   let pumpQueued = false;
@@ -345,27 +164,6 @@ export function createDeliveryExecutor(
     namespace: string,
     settlementScopeId: string,
   ): string => `${databaseSchema}\u0000${namespace}\u0000${settlementScopeId}`;
-  const shouldReportPlacementAttempt = (
-    key: string,
-    nowMs: number,
-  ): boolean => {
-    const previous = lastPlacementFailureDiagnosticAt.get(key);
-    return previous === undefined ||
-      nowMs - previous >= PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS;
-  };
-  const recordPlacementFailureDiagnostic = (
-    key: string,
-    nowMs: number,
-  ): void => {
-    if (
-      !lastPlacementFailureDiagnosticAt.has(key) &&
-      lastPlacementFailureDiagnosticAt.size >= MAX_PLACEMENT_FAILURE_DIAGNOSTICS
-    ) {
-      const oldest = lastPlacementFailureDiagnosticAt.keys().next().value;
-      if (oldest) lastPlacementFailureDiagnosticAt.delete(oldest);
-    }
-    lastPlacementFailureDiagnosticAt.set(key, nowMs);
-  };
   const trackOutputScope = (
     delivery: EventDelivery,
     event: DurableEvent,
@@ -538,8 +336,11 @@ export function createDeliveryExecutor(
         work.metadata,
         Promise.resolve(undefined),
       ]).catch(() => undefined);
-      const current = settledDelivery(delivery, reported) ??
-        await store.getDelivery(delivery.id);
+      const current =
+        (options.dispatcher
+          ? undefined
+          : settledDelivery(delivery, reported)) ??
+          await store.getDelivery(delivery.id);
       if (!current) {
         throw new Error(
           `Delivery '${delivery.id}' disappeared after execution.`,
@@ -599,9 +400,11 @@ export function createDeliveryExecutor(
     if (dispatching) return await dispatching;
 
     const task = (async () => {
-      await ready;
       const event = await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
+      if (!options.dispatcher) {
+        resolvedEvents.set(`${delivery.databaseSchema}\0${delivery.id}`, event);
+      }
       const attemptId = createAttemptId();
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
@@ -620,8 +423,7 @@ export function createDeliveryExecutor(
         idempotencyKey: delivery.id,
       } as const;
       const placementNowMs = Date.now();
-      const reportPlacement = options.onDiagnostic !== undefined &&
-        shouldReportPlacementAttempt(key, placementNowMs);
+      const reportPlacement = options.onDiagnostic !== undefined;
       if (reportPlacement) {
         reportDeliveryDiagnostic(options.onDiagnostic, {
           phase: "placement_requested",
@@ -664,11 +466,9 @@ export function createDeliveryExecutor(
             queuedCount: scheduled.size,
             origin: dispatchOptions.origin ?? "direct",
           });
-          recordPlacementFailureDiagnostic(key, placementNowMs);
         }
         throw error;
       }
-      lastPlacementFailureDiagnosticAt.delete(key);
       reportDeliveryDiagnostic(options.onDiagnostic, {
         phase: "placement_accepted",
         timestampMs: Date.now(),
@@ -685,35 +485,13 @@ export function createDeliveryExecutor(
         queuedCount: scheduled.size,
         origin: dispatchOptions.origin ?? "direct",
       });
-      const work = relayCopilotzWorkHandle(dispatched, {
-        onEventFrame: (output) => {
-          if (isStreamOutputDescriptor(output)) return;
-          reportDeliveryDiagnostic(options.onDiagnostic, {
-            phase: "gateway_event_frame_received",
-            timestampMs: Date.now(),
-            ...(output.durable ? { eventId: output.id } : {}),
-            deliveryId: delivery.id,
-            consumerId: delivery.consumerId,
-            dispatchAttemptId: attemptId,
-            operationId: dispatched.operationId,
-            workerId: target?.workerId ?? workerId,
-            databaseSchema: delivery.databaseSchema,
-            namespace: output.namespace,
-          });
-        },
-        onOutput: options.onOutput
-          ? (output) =>
-            options.onOutput!(output, {
-              databaseSchema: delivery.databaseSchema,
-              settlementScopeId: delivery.settlementScopeId,
-            })
-          : undefined,
-      });
+      const work = dispatched;
       const handle = createHandle(delivery, event, store, attemptId, work);
       active.set(key, handle);
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
       void handle.done.finally(() => {
+        resolvedEvents.delete(`${delivery.databaseSchema}\0${delivery.id}`);
         if (active.get(key)?.operationId === work.operationId) {
           active.delete(key);
         }
@@ -725,6 +503,11 @@ export function createDeliveryExecutor(
     try {
       return await task;
     } finally {
+      if (!active.has(key)) {
+        resolvedEvents.delete(
+          `${delivery.databaseSchema}\0${delivery.id}`,
+        );
+      }
       if (dispatchTasks.get(key) === task) {
         dispatchTasks.delete(key);
         // A consumed wake may also be waiting on a placement that rejected
@@ -811,7 +594,6 @@ export function createDeliveryExecutor(
       if (closed) {
         throw new Error("Delivery executor is shut down.");
       }
-      await ready;
       const workloadTarget = workloadTargets.get(input.workload);
       const dispatched = await dispatcher.dispatch({
         ...input,
@@ -823,14 +605,7 @@ export function createDeliveryExecutor(
           ? { target }
           : {}),
       });
-      const databaseSchema = typeof input.metadata?.databaseSchema === "string"
-        ? input.metadata.databaseSchema.trim() || defaultDatabaseSchema
-        : defaultDatabaseSchema;
-      return relayCopilotzWorkHandle(dispatched, {
-        onOutput: options.onOutput
-          ? (output) => options.onOutput!(output, { databaseSchema })
-          : undefined,
-      });
+      return dispatched;
     },
     dispatchDelivery,
     dispatchRecoverable,
@@ -886,14 +661,6 @@ export function createDeliveryExecutor(
       // Share the complete drain with every caller, including callers arriving
       // during cleanup. Defer cleanup until the shared promise is installed.
       shutdownPromise = Promise.resolve().then(async () => {
-        const cleanupErrors: unknown[] = [];
-        const cleanUp = async (run: () => unknown): Promise<void> => {
-          try {
-            await run();
-          } catch (error) {
-            cleanupErrors.push(error);
-          }
-        };
         scheduled.clear();
         // Admission is closed. These producers finish at handle creation or the
         // end of a recovery read, never at handle.done or callback completion.
@@ -909,24 +676,10 @@ export function createDeliveryExecutor(
           handle.cancel(reason).catch(() => undefined)
         );
         await Promise.all(cancellations);
-        await Promise.all(
-          attachedWorkers.map(async (worker) => {
-            try {
-              await worker.stop(reason);
-            } catch {
-              // Preserve the existing best-effort worker stop behavior.
-            }
-          }),
-        );
-        await Promise.allSettled(
-          attachedWorkers.map((worker) => worker.closed),
-        );
-        await cleanUp(() => ownerCapabilities?.close(reason));
-        await cleanUp(() => privateHypervisor?.shutdown(reason));
+        await local?.drain();
         // Timer/resource errors must not skip cancellation: a delivery may need
         // it to finish. Only then drain the callbacks, independently of done.
         await Promise.allSettled([...settlementTasks]);
-        if (cleanupErrors.length > 0) throw cleanupErrors[0];
       });
       return shutdownPromise;
     },

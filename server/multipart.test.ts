@@ -1222,3 +1222,50 @@ Deno.test("lifetime renewal interrupts pending lane terminals and source complet
     );
   }
 });
+
+Deno.test("multipart heartbeat samples one coherent owner frontier per frame", async () => {
+  let samples = 0;
+  let tick: (() => void) | undefined;
+  let output!: ReadableStreamDefaultController<ApplicationOutput>;
+  const interval = globalThis.setInterval;
+  globalThis.setInterval = ((callback: () => void) => {
+    tick = callback;
+    return 0;
+  }) as unknown as typeof setInterval;
+  let response: Response;
+  try {
+    response = applicationOutputsMultipartResponse({
+      type: HTTP_OBSERVATION,
+      outputs: new ReadableStream({
+        start(controller) {
+          output = controller;
+        },
+      }),
+      done: Promise.resolve(),
+      cancel: () => Promise.resolve(),
+      heartbeat() {
+        samples++;
+        return {
+          headSeq: String(samples),
+          payloadPositions: [{ streamId: "held", committedOffset: samples }],
+        };
+      },
+    });
+  } finally {
+    globalThis.setInterval = interval;
+  }
+  const frames = Array.fromAsync(decodeObservation(response));
+  tick!();
+  output.close();
+  const heartbeat = (await frames).find((frame) =>
+    frame.kind === "output" && frame.output.type === "observation.heartbeat"
+  );
+  assertEquals(samples, 1);
+  assertEquals(heartbeat?.kind, "output");
+  if (heartbeat?.kind !== "output") throw new Error("Missing heartbeat");
+  assertEquals(heartbeat.output.headSeq, "1");
+  assertEquals(heartbeat.output.payloadPositions, [{
+    streamId: "held",
+    committedOffset: 1,
+  }]);
+});

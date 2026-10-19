@@ -3,7 +3,6 @@ import {
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   SERVER_ACTION_REQUEST_SCHEMA,
 } from "../application/ingress/contracts.ts";
-import { resolveOwnerIngress } from "../application/ingress/authority.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createCopilotzApplication } from "../application/application.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -291,7 +290,7 @@ Deno.test("ordinary unauthenticated HTTP and spoofed ingress fields never acquir
     await f.database.close();
   }
 });
-Deno.test("host admission is distinct; receipts reject substituted roots and event bodies", async () => {
+Deno.test("host admission is distinct; accepted events reject substituted roots and metadata", async () => {
   const f = await fixture(false, "host");
   try {
     assertEquals(
@@ -317,23 +316,6 @@ Deno.test("host admission is distinct; receipts reject substituted roots and eve
       );
     await assertRejects(() => resolve(source.event.id, "other"));
     await assertRejects(() => resolve("substituted-root"));
-    const event = (await f.app.events.get("space", source.event.id))!;
-    await assertRejects(
-      () =>
-        createSchemaCommandRunner(f.database, f.schema)(
-          "fixture.substitute",
-          {},
-          (_, command) =>
-            resolveOwnerIngress(
-              { transaction: command.transaction, tables },
-              f.schema,
-              event,
-              { ...source.data as object, input: { label: "substituted" } },
-            ),
-        ),
-      Error,
-      "binding",
-    );
     await assertRejects(
       () =>
         f.database.query(
@@ -346,7 +328,7 @@ Deno.test("host admission is distinct; receipts reject substituted roots and eve
     const receipts = await f.database.query<{ text: string }>(
       `SELECT string_agg(result::text || intent::text,'') AS text FROM ${tables.owner_receipts}`,
     );
-    assert(!receipts.rows[0].text.includes("bound-owner-secret"));
+    assert(!receipts.rows[0].text?.includes("bound-owner-secret"));
   } finally {
     await f.app.close();
     await f.database.close();

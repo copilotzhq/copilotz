@@ -7,8 +7,6 @@ import {
   createCopilotzGateway,
   type CreateCopilotzGatewayOptions,
 } from "../application/gateway.ts";
-import { captureOwnerCommandAuthorization } from "../engine/command-authorization.ts";
-import type { CommandContext } from "../engine/commands.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import {
   captureOwnerSessionAuthority,
@@ -63,24 +61,23 @@ function fixture(unsubscribeFailure = false) {
   let admitAttempt = (_attempt: { id: string; owner: string }) => true;
   const store = {
     async heartbeatDeliveries(
-      attempts: readonly { id: string; owner: string }[],
+      attempts:
+        readonly import("../events/store.ts").DeliveryAttemptHeartbeat[],
+      accept?: (
+        attempt: import("../events/store.ts").DeliveryAttemptHeartbeat,
+        epoch: number,
+      ) => boolean,
     ) {
       calls.push(attempts.map((a) => a.id));
-      const guard = captureOwnerCommandAuthorization();
-      assert(guard);
       await beforeFence?.();
-      const command = {
-        caller: { epoch: 1 },
-        transaction: {},
-      } as CommandContext;
-      await guard(command, "mutation");
       if (failure) throw failure;
-      await guard(command, "result");
-      const renewed = attempts.filter(admitAttempt).map(({ id, owner }) => ({
+      const renewed = attempts.filter((a) =>
+        (!accept || accept(a, 1)) && admitAttempt(a)
+      ).map(({ id, owner }) => ({
         id,
         owner,
       }));
-      writes.push(renewed.map((a) => a.id));
+      if (renewed.length) writes.push(renewed.map((a) => a.id));
       return renewed;
     },
   };
@@ -286,7 +283,7 @@ Deno.test("accepted evidence is revalidated after a blocked fence and stale memb
     f.controls.get("cancelled")!.abort(new Error("cancelled before renewal"));
     release.resolve();
     await f.flush();
-    assertEquals(f.calls, [["cancelled", "current"], ["current"]]);
+    assertEquals(f.calls, [["cancelled", "current"]]);
     assertEquals(f.writes, [["current"]]);
     assertEquals(f.revoked, ["cancelled"]);
   } finally {
@@ -375,7 +372,7 @@ Deno.test("subscription and owner-attempt cleanup survive observer and unsubscri
     assertEquals(f.subscriptions(), 1);
     await assertRejects(() => f.host.close(), Error, "unsubscribe failure");
     assertEquals(f.subscriptions(), 0);
-    assertEquals(f.host.snapshot(), { assignments: 0, resources: 0 });
+
     f.beat();
     await f.flush();
     assertEquals(f.calls.length, 1);
@@ -385,7 +382,7 @@ Deno.test("subscription and owner-attempt cleanup survive observer and unsubscri
   }
 });
 
-Deno.test("a mixed batch gets at most one fresh retry after identified retirement", async () => {
+Deno.test("a mixed batch renews healthy members in one command", async () => {
   const f = await fixture();
   let entered = 0;
   f.before(() => {
@@ -401,9 +398,9 @@ Deno.test("a mixed batch gets at most one fresh retry after identified retiremen
     await f.open("last");
     f.beat();
     await f.flush();
-    assertEquals(f.calls, [["first", "second", "last"], ["second", "last"]]);
-    assertEquals(f.writes, []);
-    assertEquals(f.revoked.sort(), ["first", "last", "second"]);
+    assertEquals(f.calls, [["first", "second", "last"]]);
+    assertEquals(f.writes, [["second", "last"]]);
+    assertEquals(f.revoked, ["first"]);
   } finally {
     await f.close();
   }

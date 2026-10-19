@@ -1,16 +1,17 @@
 /** Package-private admission evidence. No wire value can create this authority. */
 import { captureHostCommandJson } from "../host-command-json.ts";
-import { durableActionMetadata, sameActionValue } from "../../actions/value.ts";
+import { sameActionValue } from "../../actions/value.ts";
 import type { ProtectedActionIngress } from "../../actions/protected-action-types.ts";
-import { digestContent } from "../../content/digest.ts";
 import type { EventMutationContext } from "../../events/store.ts";
 
-const proofs = new WeakMap<object, ProtectedActionIngress>();
-export type OwnerIngressProof = Readonly<{ readonly __ownerIngress: never }>;
+const provenance = Symbol("owner-ingress");
+export type OwnerIngressProof = Readonly<
+  { [provenance]: ProtectedActionIngress }
+>;
 function proof(ingress: ProtectedActionIngress): OwnerIngressProof {
-  const token = Object.freeze({}) as OwnerIngressProof;
-  proofs.set(token, captureHostCommandJson(ingress) as ProtectedActionIngress);
-  return token;
+  return {
+    [provenance]: captureHostCommandJson(ingress) as ProtectedActionIngress,
+  };
 }
 export const hostIngressProof = (): OwnerIngressProof =>
   proof({ kind: "host" });
@@ -28,11 +29,11 @@ export const scheduledOccurrenceIngressProof = (
     "kind"
   >,
 ): OwnerIngressProof => proof({ kind: "scheduled-occurrence", ...occurrence });
-function evidence(
+export function ownerIngressEvidence(
   token?: OwnerIngressProof,
 ): ProtectedActionIngress | undefined {
   if (!token) return;
-  const value = proofs.get(token);
+  const value = token[provenance];
   if (!value) throw new Error("Owner ingress authority is invalid.");
   return value;
 }
@@ -42,65 +43,16 @@ type EventBinding = Readonly<{
   type: string;
   payload: unknown;
   metadata?: Readonly<Record<string, unknown>>;
+  ownerIngress?: ProtectedActionIngress;
 }>;
-const key = (event: EventBinding) =>
-  JSON.stringify(["owner.ingress", event.namespace, event.id]);
-async function binding(
-  databaseSchema: string,
+/** The caller loads this field with the immutable accepted event. */
+export function resolveOwnerIngress(
+  _context: EventMutationContext,
+  _databaseSchema: string,
   event: EventBinding,
-  body: unknown,
-) {
-  return {
-    databaseSchema,
-    namespace: event.namespace,
-    eventId: event.id,
-    digest: await digestContent(
-      new TextEncoder().encode(JSON.stringify(durableActionMetadata({
-        type: event.type,
-        payload: event.payload,
-        metadata: event.metadata ?? {},
-        body,
-      }))),
-    ),
-  };
-}
-export async function recordOwnerIngress(
-  context: EventMutationContext,
-  databaseSchema: string,
-  event: EventBinding,
-  body: unknown,
-  token?: OwnerIngressProof,
-): Promise<void> {
-  const ingress = evidence(token);
-  if (!ingress) return;
-  await context.transaction.query(
-    `INSERT INTO ${context.tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical',$1,'runtime','owner.ingress',$2::jsonb,$3::jsonb)`,
-    [
-      key(event),
-      JSON.stringify(await binding(databaseSchema, event, body)),
-      JSON.stringify({ ingress }),
-    ],
-  );
-}
-export async function resolveOwnerIngress(
-  context: EventMutationContext,
-  databaseSchema: string,
-  event: EventBinding,
-  body: unknown,
+  _body: unknown,
 ): Promise<ProtectedActionIngress | undefined> {
-  const row = (await context.transaction.query<
-    { intent: unknown; result: { ingress: ProtectedActionIngress } }
-  >(
-    `SELECT intent,result FROM ${context.tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND kind='owner.ingress' AND key=$1`,
-    [key(event)],
-  )).rows[0];
-  if (!row) return;
-  if (
-    !sameActionValue(row.intent, await binding(databaseSchema, event, body))
-  ) {
-    throw new Error("Owner ingress binding is invalid.");
-  }
-  return captureHostCommandJson(row.result.ingress) as ProtectedActionIngress;
+  return Promise.resolve(event.ownerIngress);
 }
 export async function assertOwnerIngressReplay(
   context: EventMutationContext,
@@ -109,7 +61,7 @@ export async function assertOwnerIngressReplay(
   body: unknown,
   token?: OwnerIngressProof,
 ): Promise<void> {
-  const expected = evidence(token);
+  const expected = ownerIngressEvidence(token);
   const actual = await resolveOwnerIngress(
     context,
     databaseSchema,

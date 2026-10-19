@@ -4,7 +4,7 @@ import {
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 10;
+export const EVENT_SCHEMA_VERSION = 11;
 
 export type CoreTableName =
   | "action_effects"
@@ -134,6 +134,7 @@ const CORE_SCHEMA_COLUMNS = {
     "payload",
     "delta",
     "metadata",
+    "owner_ingress",
     "causation_id",
     "correlation_id",
     "deduplication_id",
@@ -501,6 +502,7 @@ export function createCoreSchemaStatements(
       payload JSONB NOT NULL,
       delta JSONB,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      owner_ingress JSONB,
       causation_id TEXT,
       correlation_id TEXT NOT NULL,
       deduplication_id TEXT,

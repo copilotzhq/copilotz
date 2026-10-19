@@ -253,7 +253,7 @@ for (const transport of ["in-process", "websocket"] as const) {
       await f.close();
     }
   });
-  Deno.test(`${transport}: lost transaction response recovers authenticated receipt without repeating mutations`, async () => {
+  Deno.test(`${transport}: lost transaction response fails safely and preserves the durable receipt without repeating mutations`, async () => {
     let lost = false;
     let executions = 0;
     const run = defineAction({
@@ -274,9 +274,17 @@ for (const transport of ["in-process", "websocket"] as const) {
       fault: (call) => call.kind === "transaction" && !lost && (lost = true),
     });
     try {
+      await assertRejects(() =>
+        f.gateway.actions.run({}, { idempotencyKey: "receipt" })
+      );
+      await assertRejects(() =>
+        f.gateway.actions.run({}, { idempotencyKey: "receipt" })
+      );
       assertEquals(
-        await f.gateway.actions.run({}, { idempotencyKey: "receipt" }),
-        "confirmed",
+        (await f.database.query(
+          "SELECT count(*)::int AS n FROM public.owner_receipts WHERE kind='collections.commit'",
+        )).rows[0].n,
+        1,
       );
       assertEquals(f.dropped, 1);
       assertEquals(executions, 1);

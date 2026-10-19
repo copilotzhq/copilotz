@@ -14,7 +14,7 @@ import {
 } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker, type Worker } from "../../dependencies/oxian-worker.ts";
 import { createOwnerWorkerWorkloads } from "./owner-capability-worker.ts";
-import { recoverOwnerReceipt } from "./owner-receipt.ts";
+import { recoverOwnerReceipt } from "./owner-capability-worker.ts";
 import {
   type CapabilityCall,
   encodeCapability,
@@ -145,7 +145,18 @@ for (
         (binding) => async (context) => {
           const call = await readCapability(context.input) as CapabilityCall;
           if (call.kind === "transaction") {
-            receipt ??= call.receipt;
+            receipt ??= call.receipt &&
+              {
+                ...call.receipt,
+                intent: JSON.parse(
+                  new TextDecoder().decode(
+                    encodeCapability({
+                      plan: call.plan,
+                      options: call.options,
+                    }),
+                  ),
+                ),
+              };
             observed.push(binding.fence.identity.workerId);
           }
           const handler = await (binding.parent
@@ -276,7 +287,6 @@ for (
         for (const id of ["original", "replacement", "unrelated"]) {
           const workloads = createOwnerWorkerWorkloads({
             registry,
-            recoverReceipt: (value) => recoverOwnerReceipt(worker, value),
           });
           const worker = createWorker({
             id,

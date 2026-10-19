@@ -336,6 +336,11 @@ export type OperationCatalog = Readonly<{
       content: Parameters<ContentCatalog["checkpoint"]>[0];
     },
   ): Promise<number>;
+  acceptStreamSealIntent(
+    input: StreamCoordinates & {
+      content: Parameters<ContentCatalog["sealIntent"]>[0];
+    },
+  ): ReturnType<ContentCatalog["sealIntent"]>;
   acceptStreamSeal(
     input: StreamCoordinates & {
       content: Parameters<ContentCatalog["sealAccepted"]>[0];
@@ -1716,6 +1721,7 @@ export function createOperationCatalog(
       createCoreTableNames(databaseSchema).content_logical_bodies
     } body
       ON body.body_id=stream.body_id AND body.namespace=stream.namespace`;
+  const reconciliations = new Map<string, Promise<number>>();
   const catalog: OperationCatalog = {
     pushState(input) {
       const snapshot = pushSnapshot?.();
@@ -2572,6 +2578,74 @@ export function createOperationCatalog(
         },
       );
     },
+    async acceptStreamSealIntent(input) {
+      return await runCommand(
+        "catalog.acceptStreamSealIntent",
+        input,
+        async (input, context) => {
+          const membership = await requireStreamMembership(
+            context.transaction,
+            input,
+            "seal",
+          );
+          const intent = await createContentCatalog(
+            context.transaction,
+            databaseSchema,
+          ).sealIntent(input.content);
+          // A retry of the accepted intent must not publish another lifecycle
+          // change or turn an accepted terminal back into a terminating stream.
+          if (
+            membership.state === "terminal" ||
+            membership.state === "terminating" && membership.reason === null
+          ) {
+            return intent;
+          }
+          const terminalizing = await context.transaction.query(
+            `UPDATE ${tables.operationStreams}
+             SET state='terminating', outcome='completed', reason=NULL,
+                 availability='retained', updated_at=$4::timestamptz
+             WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
+               AND (state='open' OR (state='terminating' AND outcome='completed' AND reason IS NULL))
+             RETURNING stream_id`,
+            [
+              input.namespace,
+              input.operationId,
+              input.streamId,
+              context.commandTime,
+            ],
+          );
+          if (!terminalizing.rows.length) {
+            throw new ContentStreamOwnershipLostError(input.streamId);
+          }
+          if (
+            input.content.expectedOffset !== undefined &&
+            input.content.expectedOffset !== input.content.length
+          ) {
+            await publishOperationChange(
+              session,
+              context.transaction,
+              databaseSchema,
+              input.namespace,
+              input.operationId,
+              {
+                kind: "stream-offset",
+                streamId: input.streamId,
+                committedOffset: input.content.length,
+              },
+            );
+          }
+          await publishOperationChange(
+            session,
+            context.transaction,
+            databaseSchema,
+            input.namespace,
+            input.operationId,
+            { kind: "stream", streamId: input.streamId },
+          );
+          return intent;
+        },
+      );
+    },
     async acceptStreamSeal(input) {
       return await runCommand(
         "catalog.acceptStreamSeal",
@@ -3076,11 +3150,19 @@ export function createOperationCatalog(
       );
     },
     async reconcile(input = {}) {
-      const deliveries = `${
-        quoteEventIdentifier(databaseSchema)
-      }."event_deliveries"`;
-      const actions = `${quoteEventIdentifier(databaseSchema)}."open_actions"`;
-      const drained = `NOT EXISTS (
+      const key = input.namespace && input.operationId
+        ? JSON.stringify([input.namespace, input.operationId])
+        : undefined;
+      const active = key && reconciliations.get(key);
+      if (active) return await active;
+      const run = async () => {
+        const deliveries = `${
+          quoteEventIdentifier(databaseSchema)
+        }."event_deliveries"`;
+        const actions = `${
+          quoteEventIdentifier(databaseSchema)
+        }."open_actions"`;
+        const drained = `NOT EXISTS (
         SELECT 1 FROM ${actions} AS action
         WHERE action.namespace = operation.namespace AND action.scope_id = operation.operation_id
       ) AND NOT EXISTS (
@@ -3093,42 +3175,42 @@ export function createOperationCatalog(
         WHERE delivery.settlement_scope_id = operation.operation_id AND event.namespace = operation.namespace
           AND delivery.status IN ('pending','leased','retry_wait')
       )`;
-      const terminalizable = await session.query<
-        { operation_id: string; namespace: string }
-      >(
-        `SELECT operation.operation_id, operation.namespace FROM ${tables.operations} AS operation
+        const terminalizable = await session.query<
+          { operation_id: string; namespace: string }
+        >(
+          `SELECT operation.operation_id, operation.namespace FROM ${tables.operations} AS operation
          WHERE operation.state IN ('accepted','running')
            AND ($2::text IS NULL OR operation.namespace = $2)
            AND ($3::text IS NULL OR operation.operation_id = $3)
            AND ${drained}
          ORDER BY operation.updated_at, operation.operation_id LIMIT $1`,
-        [
-          boundedLimit(input.limit),
-          input.namespace ?? null,
-          input.operationId ?? null,
-        ],
-      );
-      for (const operation of terminalizable.rows) {
-        await options.beforeTerminal?.({
-          namespace: operation.namespace,
-          operationId: operation.operation_id,
-        });
-      }
-      if (!terminalizable.rows.length) return 0;
-      const ids = terminalizable.rows.map((operation) =>
-        operation.operation_id
-      );
-      const publications: (() => Promise<void>)[] = [];
-      const result = await runCommand(
-        "catalog.reconcile",
-        { ids },
-        async (_input, { transaction }) => {
-          // Output draining ran outside the command loop. Reread readiness
-          // inside this serialized command so newly admitted work prevents settlement.
-          const settled = await transaction.query<
-            { operation_id: string; namespace: string }
-          >(
-            `WITH drained AS MATERIALIZED (
+          [
+            boundedLimit(input.limit),
+            input.namespace ?? null,
+            input.operationId ?? null,
+          ],
+        );
+        for (const operation of terminalizable.rows) {
+          await options.beforeTerminal?.({
+            namespace: operation.namespace,
+            operationId: operation.operation_id,
+          });
+        }
+        if (!terminalizable.rows.length) return 0;
+        const ids = terminalizable.rows.map((operation) =>
+          operation.operation_id
+        );
+        const publications: (() => Promise<void>)[] = [];
+        const result = await runCommand(
+          "catalog.reconcile",
+          { ids },
+          async (_input, { transaction }) => {
+            // Output draining ran outside the command loop. Reread readiness
+            // inside this serialized command so newly admitted work prevents settlement.
+            const settled = await transaction.query<
+              { operation_id: string; namespace: string }
+            >(
+              `WITH drained AS MATERIALIZED (
             SELECT operation.operation_id, operation.namespace,
               CASE WHEN operation.cancellation_requested_at IS NOT NULL THEN 'cancelled'
                 WHEN EXISTS (
@@ -3145,33 +3227,55 @@ export function createOperationCatalog(
               completed_at = COALESCE(operation.completed_at, NOW())
             FROM drained WHERE operation.operation_id = drained.operation_id
             RETURNING operation.operation_id, operation.namespace`,
-            [ids],
-          );
-          for (const row of settled.rows) {
-            await transaction.query(
-              `UPDATE "${databaseSchema}"."pending_content"
+              [ids],
+            );
+            for (const row of settled.rows) {
+              // No future work can be admitted to a terminal operation. Retire
+              // its wake together with the terminal and continuation receipts.
+              await writeOwnerDeadline(transaction, databaseSchema, {
+                source: "reconciliation",
+                key: reconciliationAlarmKey("schema", {
+                  kind: "operation",
+                  namespace: row.namespace,
+                  id: row.operation_id,
+                }),
+                namespace: row.namespace,
+                dueAt: null,
+              });
+              await transaction.query(
+                `UPDATE "${databaseSchema}"."pending_content"
               SET expires_at=GREATEST(expires_at,NOW()+($3::bigint*interval '1 millisecond'))
               WHERE namespace=$1 AND producer=$2`,
-              [row.namespace, row.operation_id, CONTENT_REPLAY_RETENTION_MS],
-            );
-            await publishOperationChange(
-              session,
-              transaction,
-              databaseSchema,
-              row.namespace,
-              row.operation_id,
-            );
-            const flush = await options.onSettled?.(transaction, {
-              namespace: row.namespace,
-              operationId: row.operation_id,
-            });
-            if (flush) publications.push(flush);
-          }
-          return settled;
-        },
-      );
-      for (const flush of publications) await flush();
-      return result.rows.length;
+                [row.namespace, row.operation_id, CONTENT_REPLAY_RETENTION_MS],
+              );
+              await publishOperationChange(
+                session,
+                transaction,
+                databaseSchema,
+                row.namespace,
+                row.operation_id,
+              );
+              const flush = await options.onSettled?.(transaction, {
+                namespace: row.namespace,
+                operationId: row.operation_id,
+              });
+              if (flush) publications.push(flush);
+            }
+            return settled;
+          },
+        );
+        for (const flush of publications) await flush();
+        return result.rows.length;
+      };
+      const task = run();
+      if (key) reconciliations.set(key, task);
+      try {
+        return await task;
+      } finally {
+        if (key && reconciliations.get(key) === task) {
+          reconciliations.delete(key);
+        }
+      }
     },
     async pruneTerminalMetadata(input) {
       if (!Number.isFinite(input.retentionMs) || input.retentionMs < 0) {

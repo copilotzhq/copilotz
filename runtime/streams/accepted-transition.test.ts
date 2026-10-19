@@ -27,7 +27,7 @@ import {
 import type { StreamOutput } from "./types.ts";
 import { contentStreamBodyId } from "./body-identity.ts";
 
-type Phase = "checkpoint" | "seal" | "failure";
+type Phase = "checkpoint" | "intent" | "seal" | "failure";
 async function fixture(
   transformStore: (store: BodyStore) => BodyStore = (store) => store,
   local = false,
@@ -58,6 +58,8 @@ async function fixture(
             const matches = fault === "checkpoint"
               ? sql.includes("content_logical_bodies") &&
                 sql.includes("SET committed_offset=")
+              : fault === "intent"
+              ? sql.includes("SET state='terminating'")
               : fault === "seal"
               ? sql.includes("SET state='terminal'") &&
                 params?.[3] === "completed"
@@ -443,7 +445,7 @@ Deno.test("checkpoint acceptance takes one owner command and terminal acceptance
     );
     const beforeClose = f.transactions();
     await writer.close({ assetId: "asset" });
-    assertEquals(f.transactions() - beforeClose, 3);
+    assertEquals(f.transactions() - beforeClose, 2);
     const body = await f.catalog.read(
       contentStreamBodyId("scope", writer.id, "bodies"),
     );
@@ -463,7 +465,7 @@ Deno.test("checkpoint acceptance takes one owner command and terminal acceptance
       );
     assertEquals(terminalEvents.length, 1);
     await writer.close({ assetId: "asset" });
-    assertEquals(f.transactions() - beforeClose, 3);
+    assertEquals(f.transactions() - beforeClose, 2);
   } finally {
     await writer.abort().catch(() => {});
     await f.close();
@@ -502,7 +504,7 @@ Deno.test("cancellation wins before terminal intent and cannot rewrite an accept
             await assertRejects(
               () => writer.close({ assetId: "asset" }),
               Error,
-              "could not begin terminalization",
+              "lost durable write ownership",
             );
             await writer.abort({
               outcome: "failed",
@@ -775,5 +777,93 @@ Deno.test("local stream terminal delivery remains local with real catalog accept
         await f.close();
       }
     });
+  }
+});
+
+Deno.test("final checkpoint and seal intent roll back together with the stream projection", async () => {
+  const f = await fixture();
+  const writer = await f.context.streams.open({
+    id: "intent",
+    mediaType: "text/plain",
+    role: "output",
+  });
+  try {
+    await writer.append({
+      appendId: "committed",
+      bytes: new TextEncoder().encode("a"),
+    });
+    await writer.append({
+      appendId: "tentative",
+      bytes: new TextEncoder().encode("b"),
+    });
+    f.inject("intent");
+    await assertRejects(
+      () => writer.close({ assetId: "asset" }),
+      Error,
+      "projection write failed",
+    );
+    const body = await f.catalog.read(
+      contentStreamBodyId("scope", writer.id, "bodies"),
+    );
+    assertEquals(body?.committedOffset, 1);
+    assertEquals(body?.sealIntent, undefined);
+    assertEquals(f.injected(), 1);
+  } finally {
+    await writer.abort().catch(() => {});
+    await f.close();
+  }
+});
+
+Deno.test("replaying seal intent after acceptance preserves the terminal and owner sequence", async () => {
+  const f = await fixture();
+  const writer = await f.context.streams.open({
+    id: "intent-replay",
+    mediaType: "text/plain",
+    role: "output",
+  });
+  try {
+    await writer.append({
+      appendId: "prefix",
+      bytes: new TextEncoder().encode("prefix"),
+    });
+    await writer.close({ assetId: "asset" });
+    const body = (await f.catalog.read(
+      contentStreamBodyId("scope", writer.id, "bodies"),
+    ))!;
+    const events = await f.events.listEvents({
+      namespace: "scope",
+      limit: 100,
+    });
+    const projection = await f.operations.getStream(
+      "scope",
+      f.root.id,
+      writer.id,
+    );
+    assertEquals(
+      await f.operations.acceptStreamSealIntent({
+        namespace: "scope",
+        operationId: f.root.id,
+        streamId: writer.id,
+        content: {
+          bodyId: body.bodyId,
+          writerId: body.writerId,
+          generation: body.generation,
+          expectedOffset: 0,
+          ...body.sealIntent!,
+        },
+      }),
+      body.sealIntent,
+    );
+    assertEquals(
+      await f.operations.getStream("scope", f.root.id, writer.id),
+      projection,
+    );
+    assertEquals(
+      await f.events.listEvents({ namespace: "scope", limit: 100 }),
+      events,
+    );
+  } finally {
+    await writer.abort().catch(() => {});
+    await f.close();
   }
 });

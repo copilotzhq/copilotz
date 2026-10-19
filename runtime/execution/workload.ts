@@ -131,6 +131,7 @@ export function createDeliveryWorkload(
       ? await store.readLocalClaim(
         metadata.deliveryId,
         metadata.dispatchAttemptId,
+        true,
       )
       : null;
     const delivery = localClaim ?? await store.claimDelivery({

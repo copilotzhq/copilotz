@@ -1,3 +1,4 @@
+import type { DatabaseOwner } from "../engine/commands.ts";
 import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
 import type { OwnerIngressProof } from "./ingress/authority.ts";
 import { hostDatabaseScopes } from "./database-scopes.ts";
@@ -44,12 +45,12 @@ export function observeApplicationPersistence(
   persistence: OpenCopilotzPersistence,
   application: Pick<
     InternalCopilotzApplication,
-    "interruptActiveSends" | "recoverAll"
+    "interruptPersistence" | "recoverAll"
   >,
   options: Readonly<{ recoverDurable?: boolean }> = {},
 ): () => void {
   return persistence.recovery?.register({
-    onUnavailable: (error) => application.interruptActiveSends(error),
+    onUnavailable: (error) => application.interruptPersistence(error),
     async onReady() {
       if (options.recoverDurable === false) return;
       await application.recoverAll({ limit: 1_000 });
@@ -359,6 +360,13 @@ export async function createCopilotzApplication(
   const configuredPublish = options.engine?.publish;
 
   let engine: CopilotzEngine;
+  const owners = new Map<string, DatabaseOwner>();
+  const retiredEngines = new Set<Promise<void>>();
+  let replacement: Promise<void> | undefined;
+  const transientBindings = new Set<{
+    processor: Parameters<CopilotzEngine["bindTransient"]>[0];
+    dispose(): void;
+  }>();
   // Stream terminal waits outlive their observer; shutdown ends them before
   // persistence closes.
   let operationReaders:
@@ -383,8 +391,8 @@ export async function createCopilotzApplication(
       ),
     } as const);
   });
-  try {
-    engine = await createCopilotzEngine({
+  const constructEngine = (replacing = false) =>
+    createCopilotzEngine({
       ...(options.engine ?? {}),
       ...(options.onDeliveryDiagnostic
         ? {
@@ -407,7 +415,17 @@ export async function createCopilotzApplication(
       async publishLocalStream(stream, context) {
         await outputHub.emit(stream, context.databaseSchema);
       },
-    }, { beforeRecovery });
+    }, {
+      ownerAcquired(schema, owner) {
+        owners.set(schema, owner);
+      },
+      async beforeRecovery(next) {
+        if (replacing) await installSuccessor(next);
+        await beforeRecovery?.(next);
+      },
+    });
+  try {
+    engine = await constructEngine();
   } catch (error) {
     outputHub.close();
     await persistence.close("copilotz_application_initialization_failed").catch(
@@ -467,8 +485,12 @@ export async function createCopilotzApplication(
       activeSends.clear();
       // Owner alarms and execution callbacks may still use persistence while
       // draining. Teardown must happen after that drain, even on failure.
+      await replacement?.catch(() => undefined);
       const settled = [
-        ...(await Promise.allSettled([engine.shutdown(reason)])),
+        ...(await Promise.allSettled([
+          engine.shutdown(reason),
+          ...retiredEngines,
+        ])),
         ...(await Promise.allSettled([persistence.close(reason)])),
       ];
       outputHub.close();
@@ -826,7 +848,49 @@ export async function createCopilotzApplication(
     events: engine.events,
     engine,
     execution: engine.execution,
+    async bindTransient(processor) {
+      const binding = {
+        processor,
+        dispose: await engine.bindTransient(processor),
+      };
+      transientBindings.add(binding);
+      return () => {
+        transientBindings.delete(binding);
+        binding.dispose();
+      };
+    },
     interruptActiveSends,
+    interruptPersistence(error) {
+      interruptActiveSends(error);
+      for (const owner of owners.values()) owner.stop(error);
+    },
+    async recoverAll(recovery = {}) {
+      if ([...owners.values()].some((owner) => owner.state === "stopped")) {
+        replacement ??= (async () => {
+          lifetime.signal.throwIfAborted();
+          const schemas = [...owners.keys()];
+          // Retire the old graph without waiting for user code that ignores abort.
+          // Its repositories and capabilities keep their stopped authority.
+          const retired = engine.shutdown("persistence_owner_replaced");
+          retiredEngines.add(retired);
+          void retired.then(
+            () => retiredEngines.delete(retired),
+            () => undefined,
+          );
+          scopeRecoveries.clear();
+          const successor = await constructEngine(true);
+          for (const schema of schemas) await successor.databaseScope(schema);
+        })().catch((error) => {
+          // Partial activation cannot admit work from only some of the scopes.
+          for (const owner of owners.values()) owner.stop(error);
+          throw error;
+        }).finally(() => {
+          replacement = undefined;
+        });
+      }
+      await replacement;
+      return await engine.recoverAll(recovery);
+    },
     async startRecovery() {
       // Only explicit host scopes are opened; no catalog-wide schema discovery.
       for (const schema of requestedScopes) await engine.databaseScope(schema);
@@ -879,6 +943,23 @@ export async function createCopilotzApplication(
     close: shutdown,
     shutdown,
   };
+  async function installSuccessor(successor: CopilotzEngine) {
+    engine = successor;
+    const {
+      shutdown: _shutdown,
+      databaseScope: _databaseScope,
+      recoverAll: _recoverAll,
+      maintenance: _maintenance,
+      bindTransient: _bindTransient,
+      ...services
+    } = successor;
+    Object.assign(application, services, { engine: successor });
+    for (const binding of transientBindings) {
+      binding.dispose();
+      binding.dispose = await successor.bindTransient(binding.processor);
+      if (!transientBindings.has(binding)) binding.dispose();
+    }
+  }
   stopObservingPersistence = observeApplicationPersistence(
     persistence,
     application,

@@ -11,8 +11,10 @@ import {
 import type { SqlExecutor } from "../events/index.ts";
 
 Deno.test("attachment pages consumed lanes once and repairs progress without notifications", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "observation_incremental";
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const schema = `observation_incremental_${crypto.randomUUID().slice(0, 8)}`;
   const namespace = "tenant";
   const operationId = "operation";
   const listings: Array<{ at: number; after?: string; rows: number }> = [];
@@ -128,6 +130,7 @@ Deno.test("attachment pages consumed lanes once and repairs progress without not
     );
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });
@@ -228,8 +231,10 @@ Deno.test("attachment byte readers wake while the outer loop is coalescing", asy
 });
 
 Deno.test("attachment final pass includes a stream committed during the terminal status read", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "observation_terminal_race";
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const schema = `observation_terminal_race_${crypto.randomUUID().slice(0, 8)}`;
   let inject = false;
   let injected = false;
   let streamListings = 0;
@@ -315,6 +320,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
     assertEquals(streamListings, 3);
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });

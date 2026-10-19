@@ -585,8 +585,12 @@ Deno.test("application reattaches durable events and stream Bodies through a ter
   }
 });
 Deno.test("operation checkpoints page and compact more than one thousand sealed lanes", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const databaseSchema = `${SCHEMA}_deep_checkpoint`;
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const databaseSchema = `${SCHEMA}_deep_checkpoint_${
+    crypto.randomUUID().slice(0, 8)
+  }`;
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
@@ -640,6 +644,7 @@ Deno.test("operation checkpoints page and compact more than one thousand sealed 
     });
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
     await db.close();
   }
 });
@@ -936,9 +941,13 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
   }
 });
 Deno.test("sealed stream defaults to expiring observation retention when its processor fails before retain", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
   const store = createMemoryBodyStore();
-  const databaseSchema = `${SCHEMA}_failed_stream_retention`;
+  const databaseSchema = `${SCHEMA}_failed_stream_retention_${
+    crypto.randomUUID().slice(0, 8)
+  }`;
   const plugin = definePlugin({
     id: "test.application.failed-stream-retention",
     version: "1.0.0",
@@ -1018,13 +1027,18 @@ Deno.test("sealed stream defaults to expiring observation retention when its pro
     assertEquals(await store.head({ bodyId }), null);
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
     await closeDb(db);
   }
 });
 Deno.test("observation retirement preserves a Body already adopted by a canonical Asset", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
   const store = createMemoryBodyStore();
-  const databaseSchema = `${SCHEMA}_stream_partial_adoption`;
+  const databaseSchema = `${SCHEMA}_stream_partial_adoption_${
+    crypto.randomUUID().slice(0, 8)
+  }`;
   let assetId = "";
   const plugin = definePlugin({
     id: "test.application.stream-partial-adoption",
@@ -1114,11 +1128,14 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
     assertEquals(await store.head({ bodyId }), null);
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
     await closeDb(db);
   }
 });
 Deno.test("concurrent observation retirement cannot resurrect a deleted Body", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
   const baseStore = createMemoryBodyStore();
   let deleteCalls = 0;
   const store = Object.freeze({
@@ -1138,7 +1155,9 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
       },
     }),
   }) satisfies BodyStore;
-  const databaseSchema = `${SCHEMA}_concurrent_stream_retirement`;
+  const databaseSchema = `${SCHEMA}_concurrent_stream_retirement_${
+    crypto.randomUUID().slice(0, 8)
+  }`;
   const plugin = definePlugin({
     id: "test.application.concurrent-stream-retirement",
     version: "1.0.0",
@@ -1222,13 +1241,18 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
     assert(retired === null || retired.availability === "purged");
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
     await closeDb(db);
   }
 });
 Deno.test("maintenance reconciles physical stream crash windows before terminalizing operations", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
   const store = createMemoryBodyStore();
-  const databaseSchema = `${SCHEMA}_stream_reconcile`;
+  const databaseSchema = `${SCHEMA}_stream_reconcile_${
+    crypto.randomUUID().slice(0, 8)
+  }`;
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
@@ -1538,6 +1562,7 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
     assertEquals(await store.head({ bodyId: incompleteBodyId }), null);
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
     await closeDb(db);
   }
 });
@@ -1900,7 +1925,12 @@ Deno.test("opening a tenant scope recovers its expired delivery lease", async ()
   }
 });
 Deno.test("persistence outage interrupts active send observers without cancelling durable work", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const schema = `${SCHEMA}_recovery_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
   let generation = 0;
   let failNextQuery = false;
   let processorCalls = 0;
@@ -1967,7 +1997,7 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     },
     databaseRecovery: { waitMs: 100 },
     namespace: NAMESPACE,
-    databaseSchema: `${SCHEMA}_recovery`,
+    databaseSchema: schema,
     plugins: [storageFixture, plugin],
     engine: {
       retryBaseMs: 0,
@@ -1995,6 +2025,10 @@ Deno.test("persistence outage interrupts active send observers without cancellin
     },
   });
   try {
+    const previousEngine = application.engine;
+    const previousEpoch = (await db.query<{ epoch: string; holder: string }>(
+      `SELECT epoch,holder FROM "${schema}".owner_epochs WHERE owner='schema'`,
+    )).rows[0];
     await createTestDomainContext(application, NAMESPACE).actions.createThread({
       id: "recovery-thread",
       participants: [{
@@ -2056,6 +2090,19 @@ Deno.test("persistence outage interrupts active send observers without cancellin
       String(doneError),
     );
     await waitFor(() => lifecycle.includes("ready:2"));
+    assert(application.engine !== previousEngine);
+    const nextEpoch = (await db.query<{ epoch: string; holder: string }>(
+      `SELECT epoch,holder FROM "${schema}".owner_epochs WHERE owner='schema'`,
+    )).rows[0];
+    assertEquals(Number(nextEpoch.epoch), Number(previousEpoch.epoch) + 1);
+    assert(nextEpoch.holder !== previousEpoch.holder);
+    await assertRejects(() =>
+      previousEngine.events.append({
+        type: "stale.write",
+        namespace: NAMESPACE,
+        payload: {},
+      })
+    );
     const activeSettlement = await application.events.settlement(
       NAMESPACE,
       activeSend.eventId,
@@ -2086,6 +2133,7 @@ Deno.test("persistence outage interrupts active send observers without cancellin
   } finally {
     releaseActiveSend();
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
   assertEquals(closedGenerations, [1, 2]);

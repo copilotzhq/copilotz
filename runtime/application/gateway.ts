@@ -273,7 +273,8 @@ export async function createCopilotzGateway(
         },
       },
       undefined,
-      (engine) => {
+      async (engine) => {
+        await ownerCapabilities?.close("persistence_owner_replaced");
         ownerCapabilities = createOwnerCapabilityHost({
           onDiagnostic: options.onDeliveryDiagnostic,
           registry: engine.plugins,

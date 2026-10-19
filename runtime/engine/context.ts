@@ -118,6 +118,15 @@ export function createProcessorContext(
           })
           : options.assets.catalog.checkpoint(content);
       },
+      sealIntent(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamSealIntent({
+            ...stream,
+            content,
+          })
+          : options.assets.catalog.sealIntent(content);
+      },
       sealAccepted(content) {
         const stream = membership(content.bodyId);
         return stream
@@ -282,6 +291,9 @@ export function createProcessorContext(
     if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
       return;
     }
+    // Successful seal intent already records the operation projection in its
+    // own command. Failure revocation still uses its separate transition.
+    if (input.outcome === "completed") return;
     const terminalizing = await options.operationCatalog
       .beginStreamTerminalization({
         namespace,
@@ -301,7 +313,7 @@ export function createProcessorContext(
       // Never let a producer cross that cataloged boundary.
       if (
         current?.state === "terminating" &&
-        (current.outcome === "completed") === (input.outcome === "completed")
+        current.outcome !== "completed"
       ) return;
       throw new Error(
         `Operation stream '${stream.id}' could not begin terminalization.`,

@@ -374,11 +374,28 @@ export async function scheduleResumptions(
     }
   };
   if (transaction) await run(transaction);
-  else {await createSchemaCommandRunner(store.session, store.databaseSchema)(
-      "actions.resume",
-      input,
-      (_input, { transaction }) => run(transaction),
-    );}
+  else {
+    // Settlement already schedules resumptions in its own command. Recovery
+    // needs a command only when a committed waiter was actually left behind.
+    // The command rereads the rows, so this hint never grants write authority.
+    const pending = await store.session.query(
+      `SELECT 1 FROM ${store.tables.open_actions} AS action
+       JOIN ${operations} AS child
+         ON child.namespace=action.namespace AND child.operation_id=action.child_operation_id
+       WHERE action.state='awaiting' AND action.owner_delivery_id IS NULL
+         AND child.state IN ('completed','failed','cancelled')
+         AND ($1::text IS NULL OR action.namespace=$1)
+         AND ($2::text IS NULL OR child.operation_id=$2) LIMIT 1`,
+      [input.namespace ?? null, input.operationId ?? null],
+    );
+    if (pending.rows.length) {
+      await createSchemaCommandRunner(store.session, store.databaseSchema)(
+        "actions.resume",
+        input,
+        (_input, { transaction }) => run(transaction),
+      );
+    }
+  }
   return async () => {
     for (const result of committed) await awaitEventPublication(result);
   };

@@ -31,9 +31,10 @@ for (
     "active",
     "rejected placement",
     "scheduled placement",
+    "terminal delivery",
   ] as const
 ) {
-  Deno.test(`consumed retry alarm arriving during ${phase} survives the previous attempt completion`, async () => {
+  Deno.test(`consumed alarm arriving during ${phase} preserves only runnable work`, async () => {
     const event = {
       durable: true,
       id: "event",
@@ -82,7 +83,12 @@ for (
       executionAuthority: () =>
         Promise.resolve({ epoch: 1, signal: new AbortController().signal }),
       getEvent: () => Promise.resolve(event),
-      getDelivery: () => Promise.resolve(delivery),
+      getDelivery: () =>
+        Promise.resolve(
+          phase === "terminal delivery"
+            ? { ...delivery, status: "succeeded" as const }
+            : delivery,
+        ),
     } as unknown as EventStore;
     const executor = createDeliveryExecutor({
       store,
@@ -143,8 +149,13 @@ for (
         completed[0].resolve(terminal(0));
         await handle?.done;
       }
-      await bounded(secondDispatched.promise);
-      assertEquals(dispatches, 2);
+      if (phase === "terminal delivery") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        assertEquals(dispatches, 1);
+      } else {
+        await bounded(secondDispatched.promise);
+        assertEquals(dispatches, 2);
+      }
     } finally {
       allowFirstDispatch.resolve();
       completed.forEach((value, index) => value.resolve(terminal(index)));

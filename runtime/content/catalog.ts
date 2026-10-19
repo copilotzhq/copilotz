@@ -160,7 +160,11 @@ export interface ContentCatalog {
   ): Promise<LogicalBody>;
   revoked(input: ContentWriter): Promise<number>;
   sealIntent(
-    input: ContentWriter & ContentSeal & { pending?: PendingDescriptorInput },
+    input: ContentWriter & ContentSeal & {
+      pending?: PendingDescriptorInput;
+      /** Final checkpoint and seal intent are one atomic writer step. */
+      expectedOffset?: number;
+    },
   ): Promise<ContentSeal>;
   sealAccepted(
     input: ContentWriter & {
@@ -644,9 +648,19 @@ export function createContentCatalog(
       );
     },
     async sealIntent(
-      input: ContentWriter & ContentSeal & { pending?: PendingDescriptorInput },
+      input: ContentWriter & ContentSeal & {
+        pending?: PendingDescriptorInput;
+        /** Final checkpoint and seal intent are one atomic writer step. */
+        expectedOffset?: number;
+      },
     ) {
       number(input.length);
+      if (input.expectedOffset !== undefined) {
+        number(input.expectedOffset);
+        if (input.length < input.expectedOffset) {
+          throw new TypeError("Checkpoint must not move backwards.");
+        }
+      }
       if (!/^sha256:[0-9a-f]{64}$/.test(input.digest)) {
         throw new TypeError("Invalid seal digest.");
       }
@@ -657,15 +671,17 @@ export function createContentCatalog(
           const body = await requireBody(input.bodyId, transaction);
           if (
             !sameWriter(body, input) || body.revocation !== "active" ||
-            body.committedOffset !== input.length
+            (body.committedOffset !== input.length &&
+              (body.committedOffset !== input.expectedOffset ||
+                body.terminal !== undefined || body.sealIntent !== undefined))
           ) conflict("Seal intent requires the active catalog prefix.");
           const intent = { length: input.length, digest: input.digest };
           if (
             body.sealIntent && canonical(body.sealIntent) !== canonical(intent)
           ) conflict("Seal intent cannot be replaced.");
           await transaction.query(
-            `UPDATE ${tables.content_logical_bodies} SET seal_intent=$2::jsonb WHERE body_id=$1`,
-            [input.bodyId, JSON.stringify(intent)],
+            `UPDATE ${tables.content_logical_bodies} SET seal_intent=$2::jsonb,committed_offset=$3 WHERE body_id=$1`,
+            [input.bodyId, JSON.stringify(intent), input.length],
           );
           if (input.pending) {
             await savePending(

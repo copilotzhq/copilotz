@@ -490,7 +490,18 @@ export function createDeliveryExecutor(
       active.set(key, handle);
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
-      void handle.done.finally(() => {
+      void handle.done.then((result) => {
+        // An availability wake may have raced the successful claim. Terminal
+        // deliveries never become runnable again; discard that stale wake now.
+        // Retry waits keep their queued wake until this handle finishes draining.
+        if (
+          ["succeeded", "cancelled", "dead_letter"].includes(
+            result.delivery.status,
+          )
+        ) {
+          scheduled.delete(key);
+        }
+      }).finally(() => {
         resolvedEvents.delete(`${delivery.databaseSchema}\0${delivery.id}`);
         if (active.get(key)?.operationId === work.operationId) {
           active.delete(key);

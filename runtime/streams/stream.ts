@@ -513,11 +513,10 @@ function createStreamRuntime(
           clearTimers();
           await queue(async () => {
             failure.signal.throwIfAborted();
-            await checkpoint();
             const digest = await digestCatalogPrefix(
               store,
               logical.copy.key,
-              committed,
+              offset,
             );
             const descriptor = capturePendingContentDescriptor(
               closeInput.descriptor ?? {
@@ -553,10 +552,20 @@ function createStreamRuntime(
             failure.signal.throwIfAborted();
             await catalog.sealIntent({
               ...identity,
-              length: committed,
+              length: offset,
+              ...(offset !== committed ? { expectedOffset: committed } : {}),
               digest,
               pending,
             });
+            if (offset !== committed) {
+              const startOffset = committed;
+              committed = offset;
+              lastCheckpoint = Date.now();
+              await options.onAppend?.(opened, {
+                startOffset,
+                endOffset: committed,
+              });
+            }
             await ownerTerminalize?.(opened, { outcome: "completed" });
             await options.onTerminalizing?.(opened, { outcome: "completed" });
             failure.signal.throwIfAborted();

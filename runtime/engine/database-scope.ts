@@ -923,11 +923,12 @@ export function createDatabaseScope(
       for (const deadline of deadlines) {
         const operationId =
           (deadline.payload as { operationId?: string } | null)?.operationId;
-        await options.operationCatalog.reconcile({
+        const settled = await options.operationCatalog.reconcile({
           namespace: deadline.namespace ?? undefined,
           operationId,
           limit: 1000,
         });
+        if (settled) continue;
         await resumeSettled({
           namespace: deadline.namespace ?? undefined,
           operationId,

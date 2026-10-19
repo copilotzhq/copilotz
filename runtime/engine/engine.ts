@@ -187,10 +187,9 @@ export async function createCopilotzEngine(
         onStreamTerminal: ({ namespace, operationId }) => {
           // A terminal body may arrive after its delivery has settled. Wake the
           // generic owner outside the writer/relay's own completion promise.
-          void (async () => {
-            await primaryRuntime!.resumeSettled({ namespace, operationId });
-            await operationCatalog.reconcile({ namespace, operationId });
-          })().catch(() => undefined);
+          void operationCatalog.reconcile({ namespace, operationId }).catch(
+            () => undefined,
+          );
         },
         beforeTerminal: ({ namespace, operationId }) =>
           executor.settleOutputs({
@@ -818,10 +817,6 @@ export async function createCopilotzEngine(
           ? primaryRuntime!
           : (await resolveAdditionalScope(result.delivery.databaseSchema))
             .runtime;
-        await runtime.resumeSettled({
-          namespace: result.event.namespace,
-          operationId: result.delivery.settlementScopeId,
-        });
         await runtime.operationCatalog.reconcile({
           namespace: result.event.namespace,
           operationId: result.delivery.settlementScopeId,
@@ -1023,15 +1018,10 @@ export async function createCopilotzEngine(
                     ),
                   ),
                 onStreamTerminal: ({ namespace, operationId }) => {
-                  void (async () => {
-                    const scope =
-                      (await resolveAdditionalScope(normalized)).runtime;
-                    await scope.resumeSettled({ namespace, operationId });
-                    await scopedOperationCatalog.reconcile({
-                      namespace,
-                      operationId,
-                    });
-                  })().catch(() => undefined);
+                  void scopedOperationCatalog.reconcile({
+                    namespace,
+                    operationId,
+                  }).catch(() => undefined);
                 },
                 beforeTerminal: ({ namespace, operationId }) =>
                   executor.settleOutputs({

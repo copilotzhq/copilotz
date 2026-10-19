@@ -829,3 +829,59 @@ Deno.test("settlement watches filter bytes and events while committed lifecycle 
     await f.session.close();
   }
 });
+
+Deno.test("overlapping operation settlement shares the drain and rereads work admitted during it", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const draining = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let drains = 0;
+  try {
+    await provisionCopilotzSchema(database, SCHEMA);
+    await provisionOperationCatalog(database, SCHEMA);
+    const catalog = createOperationCatalog(database, SCHEMA, {
+      async beforeTerminal() {
+        drains++;
+        draining.resolve();
+        await release.promise;
+      },
+    });
+    const store = createEventStore({
+      session: database,
+      schema: SCHEMA,
+      indexOperationEventSql: (input, param) =>
+        catalog.indexEventSql(input, param),
+    });
+    const root = await store.append({
+      namespace: "scope",
+      type: "test.root",
+      payload: {},
+    });
+    const input = { namespace: "scope", operationId: root.event.id };
+    const first = catalog.reconcile(input);
+    await draining.promise;
+    const second = catalog.reconcile(input);
+    const added = await store.append({
+      namespace: "scope",
+      type: "test.added",
+      payload: {},
+      settlementScopeId: root.event.id,
+    }, ["consumer"]);
+    release.resolve();
+    assertEquals(await Promise.all([first, second]), [0, 0]);
+    assertEquals(drains, 1);
+    assertEquals(
+      (await catalog.get("scope", root.event.id))?.state,
+      "running",
+    );
+    await store.claimDelivery({ id: added.deliveries[0].id, owner: "attempt" });
+    await store.succeedDelivery(added.deliveries[0].id, "attempt");
+    assertEquals(await catalog.reconcile(input), 1);
+    assertEquals(
+      (await catalog.get("scope", root.event.id))?.state,
+      "completed",
+    );
+  } finally {
+    release.resolve();
+    await database.close();
+  }
+});

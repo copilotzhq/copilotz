@@ -1,5 +1,4 @@
 import { awaitEventPublication } from "../events/coordinator.ts";
-import { validateCollectionProjections } from "../collections/projection-registration.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/policy-receipt.ts";
 import { resolveProtectedActionSource } from "../actions/protected-action-source.ts";
@@ -119,10 +118,6 @@ export async function createCopilotzEngine(
   }> = {},
 ): Promise<CopilotzEngine> {
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
-  const collectionProjectionRegistrations = validateCollectionProjections(
-    options.collectionProjections,
-    options.registry.collections,
-  );
   const collectionPolicyRegistrations = validateCollectionPolicies(
     options.collectionPolicies,
     options.registry.collections,
@@ -328,10 +323,6 @@ export async function createCopilotzEngine(
       }
       const protectedActions = createProtectedActions({
         definitions: protectedActionDefinitions,
-        streamBodyPrefix: assetBodySchemaPrefix({
-          prefix: options.assetStorage?.prefix,
-          databaseSchema: base.databaseSchema,
-        }),
         actions: (execution?.registry ?? options.registry).actions,
         store: scopedStore,
         coordinator: scopedCoordinator,
@@ -988,7 +979,6 @@ export async function createCopilotzEngine(
         databaseSchema,
         store,
         engine: engineOptions,
-        collectionProjections: collectionProjectionRegistrations,
         registry: options.registry,
         executor,
         preparer,
@@ -1070,7 +1060,6 @@ export async function createCopilotzEngine(
               owner: scopedOwner,
               databaseSchema: normalized,
               engine: engineOptions,
-              collectionProjections: collectionProjectionRegistrations,
               registry: options.registry,
               executor,
               preparer,

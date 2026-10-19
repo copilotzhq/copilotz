@@ -29,7 +29,6 @@ export type CreateCopilotzWorkerOptions =
       databaseScopes?: never;
       protectedActions?: never;
       collectionPolicies?: never;
-      collectionProjections?: never;
     }
   >;
 
@@ -56,7 +55,6 @@ export async function createCopilotzWorker(
       "databaseScopes",
       "protectedActions",
       "collectionPolicies",
-      "collectionProjections",
     ]
       .some((key) => Object.hasOwn(options, key))
   ) {

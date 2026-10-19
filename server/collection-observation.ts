@@ -22,16 +22,7 @@ export type CollectionObservationFrame = Readonly<{
   checkpoint: string;
 }>;
 type Selection = Readonly<
-  { id: string; query?: never; queryName?: never } | {
-    id?: never;
-    query: CollectionQuery;
-    queryName?: never;
-  } | {
-    id?: never;
-    query?: never;
-    queryName: string;
-    input: Record<string, unknown>;
-  }
+  { id: string; query?: never } | { id?: never; query: CollectionQuery }
 >;
 type ScanWaiter = {
   signal: AbortSignal;
@@ -98,7 +89,7 @@ function selection(value: unknown): Selection {
   const record = input as Record<string, unknown>;
   if (
     Object.keys(record).some((key) =>
-      !["id", "query", "queryName", "input", "checkpoint"].includes(key)
+      !["id", "query", "checkpoint"].includes(key)
     )
   ) {
     throw failure(
@@ -112,20 +103,6 @@ function selection(value: unknown): Selection {
     (typeof record.checkpoint !== "string" || record.checkpoint.length > 2048)
   ) {
     throw failure("invalid_query", 400, "Invalid Collection checkpoint.");
-  }
-  if (
-    typeof record.queryName === "string" &&
-    /^[a-z][a-z0-9_.-]*$/i.test(record.queryName) && record.id === undefined &&
-    record.query === undefined && record.input &&
-    typeof record.input === "object" && !Array.isArray(record.input)
-  ) {
-    return {
-      queryName: record.queryName,
-      input: record.input as Record<string, unknown>,
-    };
-  }
-  if (record.queryName !== undefined || record.input !== undefined) {
-    throw failure("invalid_query", 400, "Invalid named Collection selector.");
   }
   if (
     typeof record.id === "string" && record.id.trim() === record.id &&
@@ -189,16 +166,6 @@ export async function observeCollection(
       "forbidden",
       403,
       "Live Collections require a current owner policy.",
-    );
-  }
-  if (
-    selected.queryName &&
-    !definition.queries?.[selected.queryName]?.ownerProjection
-  ) {
-    throw failure(
-      "forbidden",
-      403,
-      "Live named queries require a declared owner projection.",
     );
   }
   const { databaseSchema, namespace } = input.context.serverScope;
@@ -344,18 +311,10 @@ export async function observeCollection(
                       }],
                     }
                     : selected.query;
-                  const checked = selected.queryName !== undefined
-                    ? await read.query(
-                      input.collection,
-                      selected.queryName,
-                      selected.input,
-                    )
-                    : selected.id !== undefined
+                  const checked = selected.id !== undefined
                     ? await read.get(input.collection, selected.id, { signal })
                     : await read.list(input.collection, query, { signal });
-                  // Owner projections can depend on closed authority records outside
-                  // this owner head. Reexecute them for current authorized output.
-                  const value = unchanged && !selected.queryName
+                  const value = unchanged
                     ? JSON.parse(previousValue!)
                     : checked;
                   return {

@@ -397,7 +397,6 @@ export async function createCopilotzApplication(
       session: persistence.session,
       protectedActions: options.protectedActions,
       collectionPolicies: options.collectionPolicies,
-      collectionProjections: options.collectionProjections,
       registry,
       defaultDatabaseSchema: databaseSchema,
       assets: options.assets,

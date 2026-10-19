@@ -39,7 +39,7 @@ Deno.test("Collection client rejects an initial gap and only accepts explicit re
     return "1";
   });
   assertEquals(
-    await reset("entry", { queryName: "public", input: {} }, {
+    await reset("entry", { query: { limit: 10 } }, {
       checkpoint: "untrusted-old-cursor",
       onSnapshot(value) {
         values.push(value.to);

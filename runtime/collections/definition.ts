@@ -68,8 +68,6 @@ export type CollectionNamedQueryRead = Readonly<{
 }>;
 
 export type CollectionNamedQuery = Readonly<{
-  /** Execution is supplied by a host-only collectionProjections registration. */
-  ownerProjection?: true;
   /** Optional JSON Schema validated before this query runs. */
   inputSchema?: CollectionNamedQuerySchema;
   /** Optional JSON Schema validated against the complete query result. */
@@ -329,23 +327,6 @@ export function defineCollection<S extends JsonSchema>(
       ).map(([queryName, definition]) => {
         const name = requiredMemberName(queryName, "query");
         if (
-          definition.ownerProjection !== undefined &&
-          definition.ownerProjection !== true
-        ) {
-          throw new TypeError("ownerProjection must be true.");
-        }
-        if (
-          definition.ownerProjection &&
-          (input.ownerPolicy !== "required" || !definition.inputSchema ||
-            !definition.outputSchema || definition.select !== undefined ||
-            definition.filter !== undefined || definition.query !== undefined)
-        ) {
-          throw new TypeError(
-            "Owner projections require ownerPolicy, both schemas, and no local query callback.",
-          );
-        }
-        if (
-          !definition.ownerProjection &&
           typeof definition.filter !== "function" &&
           typeof definition.query !== "function" &&
           typeof definition.select !== "function"

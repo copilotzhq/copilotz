@@ -253,7 +253,6 @@ export async function createCopilotzGateway(
         databaseScopes: options.databaseScopes,
         protectedActions: options.protectedActions,
         collectionPolicies: options.collectionPolicies,
-        collectionProjections: options.collectionProjections,
         plugins: options.plugins,
         collections: options.collections,
         actions: options.actions,

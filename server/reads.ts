@@ -121,36 +121,6 @@ export async function createHttpReads(
           code: "query_not_found",
         });
       }
-      if (spec.ownerProjection) {
-        // These callbacks receive query-only authority solely inside the
-        // existing repeatable READ ONLY snapshot, never an owner write command.
-        if (!host.collections) {
-          return await withServerViewerRead(
-            host.viewer,
-            () =>
-              runtime.collections.readSnapshot(
-                { namespace: scope.namespace ?? application.config.namespace! },
-                async (snapshot) =>
-                  (await createHttpReads(application, scope, constraints, {
-                    viewer: host.viewer,
-                    collections: snapshot.collections,
-                  })).query(name, queryName, input),
-              ),
-          );
-        }
-        if (selected.policy && Object.keys(selected.policy).length) {
-          throw Object.assign(
-            new Error(
-              "Owner projections require their explicit query policy; generic row filters cannot authorize projected objects.",
-            ),
-            { status: 403, code: "forbidden" },
-          );
-        }
-        return await withServerViewerRead(
-          host.viewer,
-          () => selected.collection.queries[queryName](input),
-        );
-      }
       if (spec.inputSchema) {
         try {
           validateAgainstJsonSchema(

@@ -8,12 +8,10 @@ import { ActionError } from "./errors.ts";
 import { secret } from "./secret.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import type { ProtectedActionDefinitions } from "./protected-action-types.ts";
-const enabled = Boolean(Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL"));
 for (const begunEffect of [false, true]) {
   Deno.test({
     name:
       `permanent protected Action revocation reaches bounded truthful terminal refusal without domain mutation (begun effect: ${begunEffect})`,
-    ignore: !enabled,
     async fn() {
       const database = await createOwnerTestDatabase();
       let preparations = 0, executions = 0, resumptions = 0, allowed = true;
@@ -111,7 +109,13 @@ for (const begunEffect of [false, true]) {
           })
         );
         const terminal = await database.query<
-          { body: { status: string; error?: { code: string } } }
+          {
+            body: {
+              actionId: string;
+              status: string;
+              error?: { code: string };
+            };
+          }
         >("SELECT COALESCE(body->'data',body) AS body FROM public.event_bodies WHERE COALESCE(body->'data',body)->>'actionId' IN ('resume.child','resume.leaf') AND COALESCE(body->'data',body)->>'status' IN ('failed','cancelled','completed')");
         assertEquals(
           terminal.rows.some((row) => row.body.status === "completed"),
@@ -121,7 +125,9 @@ for (const begunEffect of [false, true]) {
         assertEquals(
           terminal.rows.every((row) =>
             row.body.error?.code ===
-              (begunEffect ? "effect_indeterminate" : "forbidden")
+              (begunEffect || row.body.actionId === "resume.child"
+                ? "effect_indeterminate"
+                : "forbidden")
           ),
           true,
           JSON.stringify(terminal.rows),

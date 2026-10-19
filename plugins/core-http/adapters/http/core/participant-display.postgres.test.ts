@@ -3,7 +3,6 @@ import { createCopilotz } from "../../../../../create-copilotz.ts";
 import { createCopilotzClient } from "../../../../../client/index.ts";
 import { defineCollection } from "@copilotz/copilotz/collections/authoring";
 import { definePlugin } from "@copilotz/copilotz/authoring";
-import { ActionError } from "@copilotz/copilotz/actions";
 import { createTestDatabase } from "../../../../../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../../../../server/plugin.ts";
 import { defineServerFacade } from "../../../../server/resources/facade/index.ts";
@@ -17,7 +16,7 @@ import {
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 Deno.test({
   name:
-    "PostgreSQL display batches fit actual owner-projection budgets for escaped Unicode IDs",
+    "PostgreSQL display batches preserve escaped Unicode IDs through named queries",
   ignore: !url,
   async fn() {
     const db = await createTestDatabase({ url: url!, pgPoolMax: 4 });
@@ -30,50 +29,26 @@ Deno.test({
       collections: {
         participant: defineCollection({
           name: "displayParticipant",
-          ownerPolicy: "required",
           schema: { type: "object", properties: { name: { type: "string" } } },
           queries: {
             display: {
-              ownerProjection: true,
               inputSchema: participantDisplayInputSchema,
               outputSchema: participantDisplayOutputSchema,
+              select({ input }) {
+                calls.push(input);
+                return (input.participantIds as string[]).map((id) => ({
+                  id,
+                  externalId: id,
+                  namespace: "scope",
+                  participantType: "human",
+                  metadata: {},
+                  createdAt: "2026-01-01T00:00:00Z",
+                  updatedAt: "2026-01-01T00:00:00Z",
+                }));
+              },
             },
           },
         }),
-      },
-      collectionPolicies: {
-        participant: {
-          authorize(intent, context) {
-            if (
-              context.invocation.kind !== "viewer" ||
-              context.invocation.actor.id !== "member" ||
-              intent.method !== "query"
-            ) {
-              throw new ActionError("Forbidden", {
-                code: "forbidden",
-                status: 403,
-              });
-            }
-          },
-        },
-      },
-      collectionProjections: {
-        participant: {
-          display: {
-            select(input) {
-              calls.push(input);
-              return (input.participantIds as string[]).map((id) => ({
-                id,
-                externalId: id,
-                namespace: "scope",
-                participantType: "human",
-                metadata: {},
-                createdAt: "2026-01-01T00:00:00Z",
-                updatedAt: "2026-01-01T00:00:00Z",
-              }));
-            },
-          },
-        },
       },
       plugins: [definePlugin({
         ...serverPlugin,

@@ -1,5 +1,4 @@
 import { isOwnerExecutionInterrupted } from "../execution/owner-interruption.ts";
-import { bindActionInvocationParent } from "./invocation-parent.ts";
 import {
   closeCollectionPolicyInvocation,
   preserveCollectionInvocation,
@@ -344,24 +343,21 @@ function createFrame(
       ? `${rootKey}/action:${action.id}:${localKey}`
       : `${rootKey}/action:${action.id}`);
   let actionIndex = 0;
-  return bindActionInvocationParent(
-    {
-      actionId: action.id,
-      actionRunId,
-      rootKey,
-      operationKey: resumption ? `${actionRunId}/resume` : actionRunId,
-      ...(parent
-        ? { parentActionRunId: parent.actionRunId }
-        : resumption?.receipt.parentActionRunId
-        ? { parentActionRunId: resumption.receipt.parentActionRunId }
-        : {}),
-      metadata,
-      ...(identity ? { identity } : {}),
-      signal,
-      nextActionIndex: () => ++actionIndex,
-    } as const,
-    parent,
-  );
+  return {
+    actionId: action.id,
+    actionRunId,
+    rootKey,
+    operationKey: resumption ? `${actionRunId}/resume` : actionRunId,
+    ...(parent
+      ? { parentActionRunId: parent.actionRunId }
+      : resumption?.receipt.parentActionRunId
+      ? { parentActionRunId: resumption.receipt.parentActionRunId }
+      : {}),
+    metadata,
+    ...(identity ? { identity } : {}),
+    signal,
+    nextActionIndex: () => ++actionIndex,
+  } as const;
 }
 
 function lifecycleCommon(

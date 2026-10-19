@@ -47,6 +47,7 @@ export type OwnerPushSubscription = Readonly<{
   cursor: string;
   close(): void;
   heartbeat(): void;
+  readTail?(offset: number): Uint8Array | undefined;
   snapshot(): Readonly<
     {
       headSeq: string;
@@ -67,6 +68,7 @@ type Hub = {
   positions: Map<string, OwnerPushPosition>;
   bodies: Map<string, { revision: number; references: number }>;
   listeners: Set<Listener>;
+  tails: Map<string, OwnerBodyTail>;
   timer?: ReturnType<typeof setInterval>;
 };
 const hubs = new WeakMap<AbortSignal, Hub>();
@@ -79,6 +81,7 @@ function hubFor(signal: AbortSignal): Hub {
     positions: new Map(),
     bodies: new Map(),
     listeners: new Set(),
+    tails: new Map(),
   };
   hubs.set(signal, hub);
   const captured = hub;
@@ -94,6 +97,7 @@ function hubFor(signal: AbortSignal): Hub {
     captured.listeners.clear();
     captured.positions.clear();
     captured.bodies.clear();
+    for (const tail of captured.tails.values()) tail.close();
   }, { once: true });
   return hub;
 }
@@ -162,6 +166,82 @@ function snapshot(hub: Hub, listener: Listener) {
 function heartbeat(hub: Hub, listener: Listener): void {
   deliver(hub, listener, { kind: "heartbeat", ...snapshot(hub, listener) });
 }
+/** Owner-local tentative bytes. The catalog checkpoint is their only durable receipt. */
+export type OwnerBodyTail = {
+  append(offset: number, bytes: Uint8Array): void;
+  read(offset: number): Uint8Array | undefined;
+  committed(offset: number): void;
+  bytes(): Uint8Array;
+  close(): void;
+};
+export function openOwnerBodyTail(
+  signal: AbortSignal,
+  bodyId: string,
+): OwnerBodyTail {
+  signal.throwIfAborted();
+  const hub = hubFor(signal);
+  if (hub.tails.has(bodyId) || hub.tails.size >= 4096) {
+    throw new Error("Owner stream tail capacity or identity conflict.");
+  }
+  let chunks: { offset: number; bytes: Uint8Array }[] = [];
+  let byteLength = 0;
+  const tail: OwnerBodyTail = {
+    append(offset, bytes) {
+      signal.throwIfAborted();
+      if (hub.tails.get(bodyId) !== tail) {
+        throw new Error("Stream tail was revoked.");
+      }
+      const last = chunks.at(-1);
+      if (
+        byteLength + bytes.length > 1024 * 1024 ||
+        last && last.offset + last.bytes.length !== offset
+      ) {
+        throw new Error("Stream tail exceeds its bounded contiguous prefix.");
+      }
+      chunks.push({ offset, bytes: bytes.slice() });
+      byteLength += bytes.length;
+      notifyOwnerBodyChange(signal, bodyId);
+    },
+    read(offset) {
+      if (signal.aborted) return undefined;
+      const chunk = chunks.find((part) =>
+        part.offset <= offset && part.offset + part.bytes.length > offset
+      );
+      return chunk?.bytes.slice(offset - chunk.offset);
+    },
+    bytes() {
+      signal.throwIfAborted();
+      const bytes = new Uint8Array(byteLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk.bytes, offset);
+        offset += chunk.bytes.length;
+      }
+      return bytes;
+    },
+    committed(offset) {
+      chunks = chunks.filter((part) => {
+        if (part.offset + part.bytes.length > offset) return true;
+        byteLength -= part.bytes.length;
+        return false;
+      });
+    },
+    close() {
+      chunks = [];
+      byteLength = 0;
+      if (hub.tails.get(bodyId) === tail) hub.tails.delete(bodyId);
+    },
+  };
+  hub.tails.set(bodyId, tail);
+  return tail;
+}
+export function discardOwnerBodyTail(
+  signal: AbortSignal,
+  bodyId: string,
+): void {
+  hubs.get(signal)?.tails.get(bodyId)?.close();
+}
+
 /** An invalidation only: physical completion never advances the accepted offset. */
 export function notifyOwnerBodyChange(
   signal: AbortSignal,
@@ -357,6 +437,10 @@ export async function attachOwnerPush(
       });
       return {
         cursor,
+        readTail: (offset: number) =>
+          options.bodyId === undefined
+            ? undefined
+            : hub.tails.get(options.bodyId)?.read(offset),
         heartbeat: () => heartbeat(hub, listener),
         snapshot: () => ({
           headSeq: hub.head,
@@ -375,7 +459,11 @@ export async function attachOwnerPush(
   );
 }
 
-export type OwnerPushWatch = Readonly<{ wait(): Promise<void>; close(): void }>;
+export type OwnerPushWatch = Readonly<{
+  wait(): Promise<void>;
+  close(): void;
+  readTail?(offset: number): Uint8Array | undefined;
+}>;
 
 /** One coalesced invalidation, repaired from the shared owner's heartbeat. */
 export async function watchOwnerPush(
@@ -430,6 +518,7 @@ export async function watchOwnerPush(
   };
   await attach();
   return {
+    readTail: (offset) => subscription?.readTail?.(offset),
     async wait() {
       if (!changed && !closed) {
         await new Promise<void>((resolve) => {

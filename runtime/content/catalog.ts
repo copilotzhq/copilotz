@@ -1,9 +1,14 @@
+import { appendDatabaseBody } from "./database-body-store.ts";
+import { afterSqlCommit } from "../events/session.ts";
 import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import { canonicalJson as canonical } from "../data-only-json.ts";
 /** One owner-authoritative lifecycle for logical bodies and their physical copies. */
 import { createCoreTableNames } from "../events/schema.ts";
 import {
+  discardOwnerBodyTail,
   notifyOwnerBodyChange,
+  openOwnerBodyTail,
+  type OwnerBodyTail,
   type OwnerPushWatch,
   stageOwnerBodyChange,
   watchOwnerPush,
@@ -11,6 +16,7 @@ import {
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type {
+  AppendBodyInput,
   BodyStore,
   MutableBodyHead,
   ReadyBodyHead,
@@ -144,6 +150,7 @@ export interface ContentCatalog {
   watch(bodyId: string): Promise<OwnerPushWatch>;
   /** Invalidates physical reads, without accepting bytes or changing semantic history. */
   notifyPhysicalChange(bodyId: string): void;
+  openTail(bodyId: string): OwnerBodyTail;
   reserve(
     input: ContentWriter & {
       namespace: string;
@@ -152,7 +159,11 @@ export interface ContentCatalog {
     },
   ): Promise<LogicalBody>;
   checkpoint(
-    input: ContentWriter & { expectedOffset: number; offset: number },
+    input: ContentWriter & {
+      expectedOffset: number;
+      offset: number;
+      databaseAppend?: AppendBodyInput;
+    },
   ): Promise<number>;
   renew(input: ContentWriter & { deadline: string }): Promise<string>;
   beginRevocation(
@@ -164,6 +175,7 @@ export interface ContentCatalog {
       pending?: PendingDescriptorInput;
       /** Final checkpoint and seal intent are one atomic writer step. */
       expectedOffset?: number;
+      databaseAppend?: AppendBodyInput;
     },
   ): Promise<ContentSeal>;
   sealAccepted(
@@ -225,6 +237,15 @@ export function createContentCatalog(
     runner(kind, input, async (value, context) => {
       ownerSignal = context.signal;
       const result = await execute(value, context);
+      if (
+        (kind === "content.revoke" &&
+          (result as LogicalBody).revocation !== "active") ||
+        kind === "content.failed" || kind === "content.sealAccepted"
+      ) {
+        const bodyId = (value as ContentWriter).bodyId;
+        afterSqlCommit(context.transaction, () =>
+          discardOwnerBodyTail(context.signal, bodyId));
+      }
       if (kind !== "content.checkpoint") {
         invalidateOwnerAlarm(context.transaction, schema, "content");
       }
@@ -275,6 +296,31 @@ export function createContentCatalog(
         "A tombstoned physical copy cannot become current or be adopted.",
       );
     }
+  }
+  async function appendCheckpoint(
+    transaction: SqlExecutor,
+    input: ContentWriter,
+    append: AppendBodyInput | undefined,
+    start: number | undefined,
+    end: number,
+  ) {
+    if (!append) return;
+    const body = await requireBody(input.bodyId, transaction);
+    if (
+      !sameWriter(body, input) || body.revocation !== "active" ||
+      body.terminal ||
+      body.copy.backendKind !== "database" ||
+      append.writer.bodyId !== body.copy.key ||
+      append.writer.reservationId !== input.writerId ||
+      append.writer.generation !== input.generation ||
+      append.expectedOffset !== start ||
+      append.expectedOffset + append.bytes.length !== end
+    ) {
+      conflict(
+        "Checkpoint bytes must belong to the active writer and exact prefix.",
+      );
+    }
+    await appendDatabaseBody(transaction, schema, append);
   }
   async function savePending(
     transaction: SqlExecutor,
@@ -484,6 +530,14 @@ export function createContentCatalog(
         rows.rows.map((row) => requireBody(row.body_id)),
       );
     },
+    openTail(bodyId: string) {
+      if (!ownerSignal) {
+        throw new Error(
+          "Stream reservation must commit before its tail opens.",
+        );
+      }
+      return openOwnerBodyTail(ownerSignal, bodyId);
+    },
     watch(bodyId: string) {
       return watchOwnerPush(session, schema, { bodyId });
     },
@@ -551,7 +605,11 @@ export function createContentCatalog(
       );
     },
     async checkpoint(
-      input: ContentWriter & { expectedOffset: number; offset: number },
+      input: ContentWriter & {
+        expectedOffset: number;
+        offset: number;
+        databaseAppend?: AppendBodyInput;
+      },
     ) {
       number(input.expectedOffset);
       number(input.offset);
@@ -562,6 +620,13 @@ export function createContentCatalog(
         "content.checkpoint",
         input,
         async (input, { transaction }) => {
+          await appendCheckpoint(
+            transaction,
+            input,
+            input.databaseAppend,
+            input.expectedOffset,
+            input.offset,
+          );
           const result = await transaction.query(
             `UPDATE ${tables.content_logical_bodies} SET committed_offset=$5
               WHERE body_id=$1 AND writer_id=$2 AND generation=$3
@@ -652,6 +717,7 @@ export function createContentCatalog(
         pending?: PendingDescriptorInput;
         /** Final checkpoint and seal intent are one atomic writer step. */
         expectedOffset?: number;
+        databaseAppend?: AppendBodyInput;
       },
     ) {
       number(input.length);
@@ -668,6 +734,13 @@ export function createContentCatalog(
         "content.sealIntent",
         input,
         async (input, { transaction }) => {
+          await appendCheckpoint(
+            transaction,
+            input,
+            input.databaseAppend,
+            input.expectedOffset,
+            input.length,
+          );
           const body = await requireBody(input.bodyId, transaction);
           if (
             !sameWriter(body, input) || body.revocation !== "active" ||

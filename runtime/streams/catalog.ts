@@ -496,10 +496,6 @@ export async function publishOperationChange(
   assertSchemaCommandTransaction(executor, schema);
   const tables = createOperationCatalogTables(schema);
   const core = createCoreTableNames(schema);
-  const selectionKeys = (await executor.query<{ selection_key: string }>(
-    `SELECT selection_key FROM ${tables.selectionOperations} WHERE namespace=$1 AND operation_id=$2 ORDER BY selection_key`,
-    [namespace, operationId],
-  )).rows.map((row) => row.selection_key);
   const kind = change.kind ?? "operation";
   if (kind !== "stream-offset" && kind !== "event") {
     invalidateOwnerAlarm(executor, schema, "content");
@@ -507,25 +503,55 @@ export async function publishOperationChange(
   if (["heartbeat", "checkpoint", "reset"].includes(kind)) {
     throw new TypeError("Control frames are not catalog mutations.");
   }
+  // Read publication state and selection membership from the same snapshot.
+  const publication = (await executor.query<{
+    selection_keys: string[];
+    last_seq: string | number;
+    state: Record<string, unknown> | null;
+  }>(
+    `SELECT ARRAY(SELECT selection_key FROM ${tables.selectionOperations}
+       WHERE namespace=$1 AND operation_id=$2 ORDER BY selection_key) AS selection_keys,
+       (SELECT last_seq FROM ${core.owner_epochs} WHERE owner='schema') AS last_seq,
+       ${
+      kind === "stream-offset" || kind === "event"
+        ? "NULL::jsonb"
+        : change.streamId
+        ? `(SELECT to_jsonb(publication_state) FROM (SELECT stream_id,state,outcome,reason,availability,availability_reason,descriptor
+             FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3) publication_state)`
+        : `(SELECT to_jsonb(publication_state) FROM (SELECT state,cancellation_requested_at
+             FROM ${tables.operations} WHERE namespace=$1 AND operation_id=$2) publication_state)`
+    } AS state`,
+    change.streamId && kind !== "stream-offset" && kind !== "event"
+      ? [namespace, operationId, change.streamId]
+      : [namespace, operationId],
+  )).rows[0];
+  const selectionKeys = publication.selection_keys;
   let seq: string;
   let event: DurableEvent | undefined;
   if (kind === "stream-offset" || kind === "event") {
-    seq = String(
-      (await executor.query<{ last_seq: string | number }>(
-        `SELECT last_seq FROM ${core.owner_epochs} WHERE owner='schema'`,
-      )).rows[0].last_seq,
-    );
+    seq = String(publication.last_seq);
   } else {
-    const state = change.streamId
-      ? (await executor.query<Record<string, unknown>>(
-        `SELECT stream_id,state,outcome,reason,availability,availability_reason,descriptor FROM ${tables.operationStreams}
-         WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
-        [namespace, operationId, change.streamId],
-      )).rows[0] ?? null
-      : (await executor.query<Record<string, unknown>>(
-        `SELECT state,cancellation_requested_at FROM ${tables.operations} WHERE namespace=$1 AND operation_id=$2`,
-        [namespace, operationId],
-      )).rows[0] ?? null;
+    // Preserve the retained publication digest's field order and timestamp
+    // encoding when the snapshot arrives as jsonb instead of separate columns.
+    const state = publication.state === null
+      ? null
+      : change.streamId
+      ? Object.fromEntries([
+        "stream_id",
+        "state",
+        "outcome",
+        "reason",
+        "availability",
+        "availability_reason",
+        "descriptor",
+      ].map((key) => [key, publication.state![key]]))
+      : {
+        state: publication.state.state,
+        cancellation_requested_at: publication.state.cancellation_requested_at
+          ? new Date(String(publication.state.cancellation_requested_at))
+            .toISOString()
+          : null,
+      };
     const payload = {
       operationId,
       kind,
@@ -545,11 +571,6 @@ export async function publishOperationChange(
     ]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
     const dedup = `catalog:${operationId}:${digest}`;
-    const existing = await executor.query<{ seq: string | number }>(
-      `SELECT seq FROM ${core.events} WHERE namespace=$1 AND deduplication_id=$2`,
-      [namespace, dedup],
-    );
-    if (existing.rows.length) return;
     const id = crypto.randomUUID();
     const result = await executor.query<
       {
@@ -558,7 +579,8 @@ export async function publishOperationChange(
         created_at: string | Date;
       }
     >(
-      `WITH allocated AS (UPDATE ${core.owner_epochs} SET last_seq=last_seq+1 WHERE owner='schema' RETURNING last_seq),
+      `WITH allocated AS (UPDATE ${core.owner_epochs} SET last_seq=last_seq+1 WHERE owner='schema'
+         AND NOT EXISTS (SELECT 1 FROM ${core.events} WHERE namespace=$3 AND deduplication_id=$6) RETURNING last_seq),
        inserted AS (INSERT INTO ${core.events} (seq,id,schema_version,type,namespace,payload,metadata,correlation_id,deduplication_id)
          SELECT last_seq,$1,$2,'operation.catalog.changed',$3,$4::jsonb,'{}'::jsonb,$5,$6 FROM allocated RETURNING seq,id,position,created_at)
        SELECT seq,position,created_at FROM inserted`,
@@ -571,6 +593,7 @@ export async function publishOperationChange(
         dedup,
       ],
     );
+    if (!result.rows.length) return;
     seq = String(result.rows[0].seq);
     event = {
       durable: true,
@@ -3233,37 +3256,41 @@ export function createOperationCatalog(
             FROM ${tables.operations} AS operation
             WHERE operation.operation_id = ANY($1::text[])
               AND operation.state IN ('accepted','running') AND ${drained}
-          ) UPDATE ${tables.operations} AS operation
+          ), settled AS (UPDATE ${tables.operations} AS operation
             SET state = drained.outcome, updated_at = $3::timestamptz,
               completed_at = COALESCE(operation.completed_at, $3::timestamptz)
             FROM drained WHERE operation.operation_id = drained.operation_id
-            RETURNING operation.operation_id, operation.namespace`,
-                  [ids, outcome ?? null, commandTime],
+            RETURNING operation.operation_id, operation.namespace
+          ), removed_deadlines AS (
+            DELETE FROM ${
+                    createCoreTableNames(databaseSchema).owner_deadlines
+                  } AS deadline
+            USING settled, unnest($1::text[], $5::text[]) AS keys(operation_id, key)
+            WHERE deadline.owner='schema' AND deadline.source='reconciliation'
+              AND deadline.key=keys.key AND settled.operation_id=keys.operation_id
+          ), retained_content AS (
+            UPDATE "${databaseSchema}"."pending_content" AS content
+            SET expires_at=GREATEST(expires_at,$3::timestamptz+($4::bigint*interval '1 millisecond'))
+            FROM settled WHERE content.namespace=settled.namespace AND content.producer=settled.operation_id
+          ) SELECT * FROM settled`,
+                  [
+                    ids,
+                    outcome ?? null,
+                    commandTime,
+                    CONTENT_REPLAY_RETENTION_MS,
+                    terminalizable.rows.map((row) =>
+                      reconciliationAlarmKey("schema", {
+                        kind: "operation",
+                        namespace: row.namespace,
+                        id: row.operation_id,
+                      })
+                    ),
+                  ],
                 );
+                if (settled.rows.length) {
+                  invalidateOwnerAlarm(transaction, databaseSchema);
+                }
                 for (const row of settled.rows) {
-                  // No future work can be admitted to a terminal operation. Retire
-                  // its wake together with the terminal and continuation receipts.
-                  await writeOwnerDeadline(transaction, databaseSchema, {
-                    source: "reconciliation",
-                    key: reconciliationAlarmKey("schema", {
-                      kind: "operation",
-                      namespace: row.namespace,
-                      id: row.operation_id,
-                    }),
-                    namespace: row.namespace,
-                    dueAt: null,
-                  });
-                  await transaction.query(
-                    `UPDATE "${databaseSchema}"."pending_content"
-              SET expires_at=GREATEST(expires_at,$4::timestamptz+($3::bigint*interval '1 millisecond'))
-              WHERE namespace=$1 AND producer=$2`,
-                    [
-                      row.namespace,
-                      row.operation_id,
-                      CONTENT_REPLAY_RETENTION_MS,
-                      commandTime,
-                    ],
-                  );
                   await publishOperationChange(
                     session,
                     transaction,

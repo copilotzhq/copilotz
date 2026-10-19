@@ -5,6 +5,7 @@ import {
   promotedReadyStore,
 } from "./promoted-body-store.ts";
 import {
+  CONTENT_PROTECTION_MS,
   CONTENT_REPLAY_RETENTION_MS,
   type ContentCatalog,
   type ContentCopy,
@@ -17,7 +18,14 @@ import { createContentPreparer } from "./preparer.ts";
 import {
   assertSchemaCommandTransaction,
   createSchemaCommandRunner,
+  schemaCommandContext,
 } from "../engine/commands.ts";
+import {
+  bodyStoreTables,
+  provisionBodyStoreSchema,
+} from "./body-store-schema.ts";
+import { BODY_APPEND_MAX_BYTES } from "./body-store-operations.ts";
+import { afterSqlCommit } from "../events/session.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
@@ -44,6 +52,8 @@ import {
 } from "./body-store.ts";
 import {
   createDatabaseBodyStoreAdapter,
+  databaseBodyStoreWriter,
+  isDatabaseBodyStore,
   provisionDatabaseBodyStore,
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
@@ -158,6 +168,7 @@ export type DatabaseAssetRepository =
  * optionally the asset nodes, only while nothing already holds their identity.
  */
 export type AssetAdoptionStatement = Readonly<{
+  invalidatesContent: boolean;
   ctes: readonly string[];
   /** Holds while no asset, key or body already occupies the adoption. */
   gate: string;
@@ -170,6 +181,7 @@ export type AssetAdoptionStatement = Readonly<{
 }>;
 
 type CollectionAssetAdopter = Readonly<{
+  prepareInCommand: boolean;
   reconcileMaterializations(
     transaction: SqlExecutor,
     plans: readonly AssetMaterializationPlan[],
@@ -179,7 +191,7 @@ type CollectionAssetAdopter = Readonly<{
   composeAdoption(
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    options: Readonly<{ nodes: boolean }>,
+    options: Readonly<{ nodes: boolean; commandTime: string }>,
   ): AssetAdoptionStatement;
 
   prepareMaterialization(
@@ -486,6 +498,14 @@ export function createDatabaseAssetRepository(
     options.databaseSchema,
   );
   const catalog = createContentCatalog(options.session, options.databaseSchema);
+  let databaseBodiesProvisioned = false;
+  const databasePlans = new WeakMap<PreparedAsset, {
+    physical_key: string;
+    backend_id: string;
+    collectable: boolean;
+    token: string;
+    parts: { start_offset: number; bytes: string; digest: string }[];
+  }>();
   const copyStores = new Map(storage.readers);
   const preparedBodies = new Map<string, PreparedBodyCacheEntry>();
   let preparedBodyBytes = 0;
@@ -757,6 +777,7 @@ export function createDatabaseAssetRepository(
     namespace: string,
     source: PreparedAsset,
     fallbackOrigin?: AssetOrigin,
+    deferDatabase = true,
   ): Promise<
     Readonly<{ asset: AssetRecord; adoption?: AssetAdoptionPlan }>
   > => {
@@ -846,7 +867,7 @@ export function createDatabaseAssetRepository(
       writerId: `capture:${namespace}:${candidate.id}`,
       generation: 1,
     };
-    const current = await catalog.read(logicalBodyId);
+    const current = await catalog.read(logicalBodyId, executor);
     if (
       current &&
       (current.namespace !== namespace ||
@@ -865,9 +886,85 @@ export function createDatabaseAssetRepository(
       );
     }
     let head: ReadyBodyHead;
-    if (current?.terminal) {
-      const stored =
-        (await readLogicalHead(catalog, current.bodyId, storeForCopy))?.head;
+    if (
+      deferDatabase && !current && !candidate.readyBody &&
+      physicalStore.kind === "database" && isDatabaseBodyStore(physicalStore) &&
+      !promotedReadyStore(physicalStore)
+    ) {
+      // Captured bytes are staged as SQL values. Their physical and logical
+      // rows are written only by the eventual adoption statement.
+      if (!databaseBodiesProvisioned) {
+        if (executor === options.session) {
+          await provisionDatabaseBodyStore(physicalStore);
+          databaseBodiesProvisioned = true;
+        } else {
+          databaseBodyStoreWriter(physicalStore, executor);
+          await provisionBodyStoreSchema(executor, options.databaseSchema);
+          afterSqlCommit(executor, () => {
+            databaseBodiesProvisioned = true;
+          });
+        }
+      }
+      const parts = [] as {
+        start_offset: number;
+        bytes: string;
+        digest: string;
+      }[];
+      for (
+        let offset = 0;
+        offset < candidate.body.length;
+        offset += BODY_APPEND_MAX_BYTES
+      ) {
+        const bytes = candidate.body.slice(
+          offset,
+          offset + BODY_APPEND_MAX_BYTES,
+        );
+        parts.push({
+          start_offset: offset,
+          bytes: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+            .join(""),
+          digest: await digestContent(bytes),
+        });
+      }
+      const staged = { ...candidate, logicalBodyId };
+      databasePlans.set(staged, {
+        physical_key: physicalKey,
+        backend_id: physicalStore.backendId,
+        collectable: physicalStore.conditionalDelete,
+        token: crypto.randomUUID(),
+        parts,
+      });
+      const readyAt = now().toISOString();
+      const asset: AssetRecord = {
+        id: candidate.id,
+        namespace,
+        mediaType: candidate.mediaType,
+        byteLength: candidate.byteLength,
+        digest: candidate.digest,
+        state: "ready",
+        bodyId: logicalBodyId,
+        origin: structuredClone(origin),
+        createdAt: readyAt,
+        readyAt,
+        ...(cloneMetadata(candidate.metadata)
+          ? { metadata: cloneMetadata(candidate.metadata) }
+          : {}),
+      };
+      return {
+        asset,
+        adoption: { kind: "database", candidate: staged, asset },
+      };
+    } else if (current?.terminal) {
+      const stored = (await readLogicalHead(
+        executor === options.session
+          ? catalog
+          : createContentCatalog(executor, options.databaseSchema),
+        current.bodyId,
+        (copy) =>
+          executor !== options.session && copy.backendKind === "database"
+            ? databaseBodyStoreWriter(storeForCopy(copy), executor)
+            : storeForCopy(copy),
+      ))?.head;
       if (!stored || stored.state !== "ready") {
         throw createContentError(
           "content_missing",
@@ -876,6 +973,11 @@ export function createDatabaseAssetRepository(
       }
       head = stored;
     } else {
+      if (executor !== options.session) {
+        throw new TypeError(
+          "External or unfinished content must be prepared before the owner command.",
+        );
+      }
       if (!current) {
         await catalog.reserve({
           ...writerIdentity,
@@ -942,11 +1044,13 @@ export function createDatabaseAssetRepository(
         "Captured body integrity does not match its descriptor.",
       );
     }
-    await promoteConfiguredLogicalBody({
-      catalog,
-      bodyId: logicalBodyId,
-      storeFor: storeForCopy,
-    });
+    if (executor === options.session) {
+      await promoteConfiguredLogicalBody({
+        catalog,
+        bodyId: logicalBodyId,
+        storeFor: storeForCopy,
+      });
+    }
     const adoptionCandidate = {
       ...candidate,
       logicalBodyId,
@@ -1063,6 +1167,36 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id },
       );
     }
+    if (plan.kind === "database") {
+      const params: unknown[] = [];
+      const composed = composeAdoption(
+        [soleAdoption(plan)],
+        (value) => `$${params.push(value)}`,
+        {
+          nodes: false,
+          commandTime:
+            schemaCommandContext(context.transaction, options.databaseSchema)
+              .commandTime,
+        },
+      );
+      const result = await context.transaction.query(
+        `WITH ${
+          [
+            ...composed.ctes,
+            `adoption_accepted AS (SELECT 1 WHERE ${composed.gate})`,
+            ...composed.effects("adoption_accepted"),
+          ].join(",")
+        }
+         SELECT * FROM adoption_accepted`,
+        params,
+      );
+      if (!result.rows.length) throw takenAdoption();
+      invalidateOwnerAlarm(
+        context.transaction,
+        options.databaseSchema,
+        "content",
+      );
+    }
     const bodyId = assetBodyId(asset);
     if (!bodyId) {
       throw createContentError(
@@ -1170,9 +1304,15 @@ export function createDatabaseAssetRepository(
           )).slice(7)
         }`;
         const observed = await readLogicalHead(
-          catalog,
+          executor === options.session
+            ? catalog
+            : createContentCatalog(executor, options.databaseSchema),
           pending.body.bodyId,
-          storeForCopy,
+          (copy) =>
+            executor !== options.session &&
+              isDatabaseBodyStore(storeForCopy(copy))
+              ? databaseBodyStoreWriter(storeForCopy(copy), executor)
+              : storeForCopy(copy),
         );
         const head = observed?.head;
         if (observed) pending.body = observed.body;
@@ -1294,12 +1434,21 @@ export function createDatabaseAssetRepository(
   const composeAdoption = (
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    { nodes }: Readonly<{ nodes: boolean }>,
+    { nodes, commandTime }: Readonly<{ nodes: boolean; commandTime: string }>,
   ): AssetAdoptionStatement => {
+    const hasDatabase = plans.some((plan) =>
+      plan.adoptions.some((adoption) => adoption.kind === "database")
+    );
+    const physical = bodyStoreTables(options.databaseSchema);
+    const time = hasDatabase
+      ? `${param(commandTime)}::timestamptz`
+      : "NULL::timestamptz";
     const rows = param(
       JSON.stringify(
         plans.flatMap((plan) =>
-          plan.adoptions.map(({ asset, candidate }) => ({
+          plan.adoptions.map(({ asset, candidate, kind }) => ({
+            database: kind === "database",
+            ...databasePlans.get(candidate),
             id: asset.id,
             namespace: asset.namespace,
             key: candidate.idempotencyKey ?? null,
@@ -1311,21 +1460,56 @@ export function createDatabaseAssetRepository(
       ),
     );
     return {
+      invalidatesContent: hasDatabase,
       ctes: [
-        `adoption_rows AS (SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(id text,namespace text,key text,media_type text,created_at timestamptz,data jsonb))`,
+        `adoption_rows AS (SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(id text,namespace text,key text,media_type text,created_at timestamptz,data jsonb,database boolean,physical_key text,backend_id text,collectable boolean,token text,parts jsonb))`,
         `adoption_refused AS (SELECT EXISTS(SELECT 1 FROM adoption_rows wanted LEFT JOIN ${tables.content_logical_bodies} body ON body.body_id=wanted.data->>'bodyId'
           LEFT JOIN ${tables.content_copies} copy ON copy.copy_key=body.current_copy
-          WHERE body.body_id IS NULL OR copy.copy_key IS NULL OR body.namespace<>wanted.namespace OR body.terminal->>'outcome' IS DISTINCT FROM 'completed' OR body.terminal->>'digest' IS DISTINCT FROM wanted.data->>'digest' OR (body.terminal->>'length')::bigint IS DISTINCT FROM (wanted.data->>'byteLength')::bigint OR copy.state IN ('retiring','retired') OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} r WHERE r.body_id=copy.copy_key)
+          WHERE (NOT wanted.database AND (body.body_id IS NULL OR copy.copy_key IS NULL OR body.namespace<>wanted.namespace OR body.terminal->>'outcome' IS DISTINCT FROM 'completed' OR body.terminal->>'digest' IS DISTINCT FROM wanted.data->>'digest' OR (body.terminal->>'length')::bigint IS DISTINCT FROM (wanted.data->>'byteLength')::bigint OR copy.state IN ('retiring','retired') OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} r WHERE r.body_id=copy.copy_key)))
+          ${
+          hasDatabase
+            ? `OR (wanted.database AND (body.body_id IS NOT NULL OR wanted.physical_key IS NULL
+            OR EXISTS(SELECT 1 FROM ${tables.content_copies} WHERE copy_key=wanted.physical_key)
+            OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} WHERE body_id=wanted.physical_key)
+            OR EXISTS(SELECT 1 FROM ${physical.bodies} WHERE body_id=wanted.physical_key)))`
+            : ""
+        }
           OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND taken.type='asset' AND (taken.id=wanted.id OR (wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
       ],
       gate: "NOT (SELECT refused FROM adoption_refused)",
-      effects: (source) =>
-        nodes
+      effects: (source) => [
+        ...(hasDatabase
+          ? [
+            `adoption_logical AS (INSERT INTO ${tables.content_logical_bodies}
+            (body_id,namespace,current_copy,writer_id,generation,protected_until,committed_offset,seal_intent,terminal)
+            SELECT wanted.data->>'bodyId',wanted.namespace,wanted.physical_key,'capture:'||wanted.namespace||':'||wanted.id,1,
+              ${time}+(${CONTENT_PROTECTION_MS}*interval '1 millisecond'),(wanted.data->>'byteLength')::bigint,
+              jsonb_build_object('length',(wanted.data->>'byteLength')::bigint,'digest',wanted.data->>'digest'),
+              jsonb_build_object('length',(wanted.data->>'byteLength')::bigint,'digest',wanted.data->>'digest','outcome','completed')
+            FROM adoption_rows wanted,${source} WHERE wanted.database RETURNING body_id)`,
+            `adoption_physical AS (INSERT INTO ${physical.bodies}
+            (body_id,state,media_type,reservation_id,writer_generation,byte_length,digest,version_token,maintenance_version,updated_at)
+            SELECT wanted.physical_key,'ready',wanted.media_type,'put:'||wanted.token,1,
+              (wanted.data->>'byteLength')::bigint,wanted.data->>'digest',wanted.token,1,${time}
+            FROM adoption_rows wanted JOIN adoption_logical ON adoption_logical.body_id=wanted.data->>'bodyId' RETURNING body_id)`,
+            `adoption_copies AS (INSERT INTO ${tables.content_copies}
+            (copy_key,backend_kind,backend_id,body_id,version_token,state,collectable,retire_after)
+            SELECT wanted.physical_key,'database',wanted.backend_id,wanted.data->>'bodyId',wanted.token,'current',wanted.collectable,
+              ${time}+(${CONTENT_REPLAY_RETENTION_MS}*interval '1 millisecond')
+            FROM adoption_rows wanted JOIN adoption_physical ON adoption_physical.body_id=wanted.physical_key)`,
+            `adoption_parts AS (INSERT INTO ${physical.parts}(body_id,start_offset,append_id,bytes,part_digest)
+            SELECT wanted.physical_key,part.start_offset,'put:'||part.start_offset,decode(part.bytes,'hex'),part.digest
+            FROM adoption_rows wanted JOIN adoption_physical ON adoption_physical.body_id=wanted.physical_key,
+              LATERAL jsonb_to_recordset(wanted.parts) AS part(start_offset bigint,bytes text,digest text))`,
+          ]
+          : []),
+        ...(nodes
           ? [
             `adoption_nodes AS (INSERT INTO ${tables.nodes}(id,namespace,type,name,data,source_type,source_id,created_at,updated_at)
-        SELECT wanted.id,wanted.namespace,'asset',wanted.media_type,wanted.data,CASE WHEN wanted.key IS NULL THEN NULL ELSE 'asset_idempotency' END,wanted.key,wanted.created_at,wanted.created_at FROM adoption_rows wanted,${source})`,
+            SELECT wanted.id,wanted.namespace,'asset',wanted.media_type,wanted.data,CASE WHEN wanted.key IS NULL THEN NULL ELSE 'asset_idempotency' END,wanted.key,wanted.created_at,wanted.created_at FROM adoption_rows wanted,${source})`,
           ]
-          : [],
+          : []),
+      ],
       report:
         "jsonb_build_object('refused',(SELECT refused FROM adoption_refused))",
       refused: (report) =>
@@ -1418,11 +1602,11 @@ export function createDatabaseAssetRepository(
           const result = await options.coordinator.commitMutation({
             ...event,
             dispatch: false,
-            statement: (param) => {
+            statement: (param, _tables, { commandTime }) => {
               const composed = composeAdoption(
                 [soleAdoption(adoption)],
                 param,
-                { nodes: true },
+                { nodes: true, commandTime },
               );
               return {
                 ...composed,
@@ -1833,6 +2017,7 @@ export function createDatabaseAssetRepository(
           input.namespace,
           candidate,
           input.origin,
+          false,
         );
         const body = await catalog.read(preparedCandidate.asset.bodyId);
         if (!body?.terminal) {
@@ -2346,6 +2531,9 @@ export function createDatabaseAssetRepository(
   collectionAssetAdopters.set(
     frozenRepository,
     {
+      prepareInCommand: storage.writer?.kind === "database" &&
+        isDatabaseBodyStore(storage.writer) &&
+        !promotedReadyStore(storage.writer),
       prepareMaterialization: (input, transaction) =>
         prepareMaterializationOn(transaction ?? options.session, input),
       adoptMaterialization,

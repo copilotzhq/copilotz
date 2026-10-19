@@ -8,7 +8,12 @@ import { actionOwnershipStatement, type ActionWriter } from "./ownership.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
-import { eventDataRef, readEventBody } from "../events/body-store.ts";
+import {
+  EVENT_BODY_SCHEMA_VERSION,
+  eventDataRef,
+  readEventBody,
+  verifiedEventBody,
+} from "../events/body-store.ts";
 import { withProcessorEventData } from "../plugins/processor.ts";
 import { parseActionLifecycleEvent } from "./event.ts";
 import {
@@ -34,7 +39,7 @@ type LifecycleStore =
     EventStore,
     "getEventByDeduplicationId" | "session" | "tables"
   >
-  & Partial<Pick<EventStore, "databaseSchema">>;
+  & Partial<Pick<EventStore, "databaseSchema" | "recentEventBody">>;
 
 type ActionLifecyclePersistenceOptions = Readonly<{
   store?: LifecycleStore;
@@ -52,13 +57,19 @@ type ActionLifecyclePersistenceOptions = Readonly<{
 }>;
 
 async function rawEventBody(
-  store: Pick<EventStore, "session" | "tables">,
+  store:
+    & Pick<EventStore, "session" | "tables">
+    & Partial<Pick<EventStore, "recentEventBody">>,
   event: DurableEvent,
 ): Promise<unknown> {
-  return await readEventBody(
+  const ref = eventDataRef(event.payload);
+  const cached = ref.schemaVersion === EVENT_BODY_SCHEMA_VERSION
+    ? store.recentEventBody?.(event.id, ref.eventBodyId)
+    : undefined;
+  return cached ? cached.json : await readEventBody(
     { transaction: store.session, tables: store.tables },
     event.namespace,
-    eventDataRef(event.payload),
+    ref,
   );
 }
 
@@ -70,23 +81,33 @@ async function invokedInputRef(
   if (data.status === "invoked" || !options.store) return undefined;
   const deduplicationId = `${data.actionRunId}:action:invoked`;
   const executor = options.transaction ?? options.store.session;
-  const receipt = options.transaction
-    ? (await executor.query<{ payload: unknown }>(
-      `SELECT payload FROM ${options.store.tables.events} WHERE namespace = $1 AND deduplication_id = $2`,
-      [namespace, deduplicationId],
-    )).rows[0]
-    : await options.store.getEventByDeduplicationId(namespace, deduplicationId);
+  const receipt = (await executor.query<{
+    payload: unknown;
+    body: unknown;
+    schema_version: number | null;
+    digest: string;
+  }>(
+    `SELECT event.payload,body.body,body.schema_version,body.digest
+     FROM ${options.store.tables.events} AS event
+     LEFT JOIN ${options.store.tables.event_bodies} AS body
+       ON body.namespace=event.namespace AND body.event_body_id=event.payload->'dataRef'->>'eventBodyId'
+     WHERE event.namespace=$1 AND event.deduplication_id=$2`,
+    [namespace, deduplicationId],
+  )).rows[0];
   if (!receipt) {
     throw new Error(
       `Protected Action invoked receipt '${data.actionRunId}' is missing.`,
     );
   }
+  const ref = eventDataRef(receipt.payload);
+  if (receipt.schema_version === null) {
+    throw new Error(`Event body '${ref.eventBodyId}' was not found.`);
+  }
   const body = protectedActionLifecycleBody(
-    await readEventBody(
-      { transaction: executor, tables: options.store.tables },
-      namespace,
-      eventDataRef(receipt.payload),
-    ),
+    await verifiedEventBody({
+      ...receipt,
+      schema_version: receipt.schema_version,
+    }, ref),
   );
   return body?.protected.input;
 }

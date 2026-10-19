@@ -72,6 +72,10 @@ const writers = new WeakMap<
   BodyStore["put"],
   (transaction: SqlExecutor) => BodyStore
 >();
+/** Whether the physical adapter uses this runtime's owner-joinable SQL layout. */
+export function isDatabaseBodyStore(store: BodyStore): boolean {
+  return writers.has(store.put);
+}
 /** Owner-internal writer bound to the existing command, never a second session. */
 export function databaseBodyStoreWriter(
   store: BodyStore,
@@ -190,22 +194,32 @@ export function createDatabaseBodyStore(
           body.revision,
           body.updatedAt,
         ];
-        const result = previous === null
-          ? await transaction.query(
-            `INSERT INTO ${bodies}(body_id,state,media_type,reservation_id,writer_generation,fenced_from,byte_length,digest,version_token,maintenance_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(body_id) DO NOTHING RETURNING body_id`,
-            values,
-          )
-          : await transaction.query(
-            `UPDATE ${bodies} SET state=$2,media_type=$3,reservation_id=$4,writer_generation=$5,fenced_from=$6,byte_length=$7,digest=$8,version_token=$9,maintenance_version=$10,updated_at=$11 WHERE body_id=$1 AND version_token=$12 RETURNING body_id`,
-            [...values, previous],
-          );
+        const mutation = previous === null
+          ? `INSERT INTO ${bodies}(body_id,state,media_type,reservation_id,writer_generation,fenced_from,byte_length,digest,version_token,maintenance_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(body_id) DO NOTHING RETURNING body_id`
+          : `UPDATE ${bodies} SET state=$2,media_type=$3,reservation_id=$4,writer_generation=$5,fenced_from=$6,byte_length=$7,digest=$8,version_token=$9,maintenance_version=$10,updated_at=$11 WHERE body_id=$1 AND version_token=$12 RETURNING body_id`;
+        const params: unknown[] = previous === null
+          ? values
+          : [...values, previous];
+        const rows = writes.map(({ part, bytes }) =>
+          `($${params.push(part.offset)}::bigint,$${
+            params.push(part.appendId)
+          }::text,$${params.push(bytes)}::bytea,$${
+            params.push(part.digest)
+          }::text)`
+        );
+        const result = await transaction.query(
+          rows.length
+            ? `WITH changed AS (${mutation}), inserted_parts AS (
+            INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+            SELECT changed.body_id,part.start_offset,part.append_id,part.bytes,part.digest
+            FROM changed,(VALUES ${
+              rows.join(",")
+            }) AS part(start_offset,append_id,bytes,digest)
+          ) SELECT body_id FROM changed`
+            : mutation,
+          params,
+        );
         if (!result.rows.length) return false;
-        for (const { part, bytes } of writes) {
-          await transaction.query(
-            `INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest) VALUES($1,$2,$3,$4,$5)`,
-            [body.bodyId, part.offset, part.appendId, bytes, part.digest],
-          );
-        }
         return body.nonce;
       });
     },

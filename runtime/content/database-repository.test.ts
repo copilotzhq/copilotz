@@ -1,3 +1,5 @@
+import { createCollectionRuntime } from "../collections/kernel.ts";
+import { defineCollection } from "../collections/definition.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
@@ -34,6 +36,7 @@ import {
   isPendingContentRef,
   maintainProgressiveBodies,
 } from "./index.ts";
+import { provisionBodyStoreSchema } from "./body-store-schema.ts";
 import { collectionAssetAdopterFor } from "./database-repository.ts";
 
 const TEST_SCHEMA = "copilotz_database_assets";
@@ -594,7 +597,7 @@ Deno.test("external bodies are prepared before Asset graph adoption", async () =
   }
 });
 
-Deno.test("database bytes are reserved before atomic Asset graph adoption", async () => {
+Deno.test("database bytes and catalog terminal are written only with Asset graph adoption", async () => {
   const fixture = await createFixture();
   try {
     const adopter = collectionAssetAdopterFor(fixture.assets);
@@ -608,18 +611,16 @@ Deno.test("database bytes are reserved before atomic Asset graph adoption", asyn
       namespace: "tenant-a",
       content: prepared,
     });
-    const bodyId =
-      (await fixture.assets.catalog.read(plan.assets[0].bodyId))!.copy.key;
     const bodyRows = async () =>
       (await fixture.session.query<{ n: number }>(
-        `SELECT count(*)::int AS n
-           FROM "copilotz_database_assets"."content_bodies"
-          WHERE body_id = $1`,
-        [bodyId],
+        `SELECT count(*)::int AS n FROM "copilotz_database_assets"."content_bodies"`,
       )).rows[0].n;
-
-    assertEquals(plan.adoptions.map((item) => item.kind), ["ready"]);
-    assertEquals(await bodyRows(), 1);
+    assertEquals(plan.adoptions.map((item) => item.kind), ["database"]);
+    assertEquals(
+      await fixture.assets.catalog.read(plan.assets[0].bodyId),
+      null,
+    );
+    assertEquals(await bodyRows(), 0);
     assertEquals(
       await fixture.assets.get("tenant-a", "asset-planned-database"),
       null,
@@ -1294,6 +1295,145 @@ Deno.test("asset reads and pending adoption re-resolve a copy retired during hea
         (await fixture.assets.read("tenant-a", refs[0].assetId)).bytes,
       ),
       "captured",
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("database content preparation shares the adoption transaction and rolls back every byte", async () => {
+  const fixture = await createFixture();
+  const schema = TEST_SCHEMA;
+  try {
+    const prepared = await createContentPreparer({
+      createId: () => "atomic-content",
+    })
+      .prepare("atomic bytes", { namespace: "tenant-a" });
+    const adopter = collectionAssetAdopterFor(fixture.assets);
+    const run = createSchemaCommandRunner(fixture.session, schema);
+    await run(
+      "test.content.provision",
+      {},
+      (_, command) => provisionBodyStoreSchema(command.transaction, schema),
+    );
+    await assertRejects(
+      () =>
+        run("test.content.rollback", {}, async (_, command) => {
+          const plan = await adopter.prepareMaterialization({
+            namespace: "tenant-a",
+            content: prepared,
+            origin: { type: "message", id: "message-a" },
+          }, command.transaction);
+          await adopter.adoptMaterialization({
+            transaction: command.transaction,
+            tables: fixture.store.tables,
+          }, plan);
+          throw new Error("rollback captured bytes");
+        }),
+      Error,
+      "rollback captured bytes",
+    );
+    for (
+      const table of [
+        "content_bodies",
+        "content_body_parts",
+        "content_logical_bodies",
+        "content_copies",
+      ]
+    ) {
+      const result = await fixture.session.query<{ count: string | number }>(
+        `SELECT count(*) AS count FROM "${schema}"."${table}"`,
+      );
+      assertEquals(Number(result.rows[0].count), 0, table);
+    }
+    await run("test.content.commit", {}, async (_, command) => {
+      const plan = await adopter.prepareMaterialization({
+        namespace: "tenant-a",
+        content: prepared,
+        origin: { type: "message", id: "message-a" },
+      }, command.transaction);
+      await adopter.adoptMaterialization({
+        transaction: command.transaction,
+        tables: fixture.store.tables,
+      }, plan);
+    });
+    const bodies = await fixture.assets.readMany("tenant-a", [
+      "atomic-content",
+    ]);
+    assertEquals(new TextDecoder().decode(bodies[0].bytes), "atomic bytes");
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("content Collection joins an existing owner command without preparation commands", async () => {
+  const fixture = await createFixture();
+  try {
+    const collections = createCollectionRuntime({
+      session: fixture.session,
+      eventStore: fixture.store,
+      coordinator: fixture.coordinator,
+      assets: collectionAssetAdopterFor(fixture.assets),
+    });
+    collections.bind(
+      defineCollection({
+        name: "atomic_note",
+        content: { fields: ["content"] },
+        schema: {
+          type: "object",
+          properties: { id: { type: "string" }, content: {} },
+          required: ["id", "content"],
+        },
+      }),
+    );
+    const run = createSchemaCommandRunner(fixture.session, TEST_SCHEMA);
+    await run("test.content.collection", {}, async (_, command) => {
+      await collections.transaction({
+        namespace: "tenant-a",
+        operationKey: "atomic-note",
+        async execute({ collections }) {
+          await collections.atomic_note.create({
+            id: "note-a",
+            content: "captured inside command",
+          });
+        },
+      }, command);
+    });
+    const row = await collections.withScope({ namespace: "tenant-a" })
+      .atomic_note.get({ id: "note-a" });
+    const refs = row!.content as { assetId: string }[];
+    const [body] = await fixture.assets.readMany("tenant-a", [refs[0].assetId]);
+    assertEquals(
+      new TextDecoder().decode(body.bytes),
+      "captured inside command",
+    );
+    const pending = await fixture.assets.capture({
+      namespace: "tenant-a",
+      producer: "pending-operation",
+      operationKey: "pending-note",
+      content: "pending inside command",
+    });
+    await run("test.content.pendingCollection", {}, async (_, command) => {
+      await collections.transaction({
+        namespace: "tenant-a",
+        operationKey: "pending-note",
+        async execute({ collections }) {
+          await collections.atomic_note.create({
+            id: "note-b",
+            content: pending,
+          });
+        },
+      }, command);
+    });
+    const pendingRow = await collections.withScope({ namespace: "tenant-a" })
+      .atomic_note.get({ id: "note-b" });
+    const pendingRefs = pendingRow!.content as { assetId: string }[];
+    const [pendingBody] = await fixture.assets.readMany("tenant-a", [
+      pendingRefs[0].assetId,
+    ]);
+    assertEquals(
+      new TextDecoder().decode(pendingBody.bytes),
+      "pending inside command",
     );
   } finally {
     await closeFixture(fixture);

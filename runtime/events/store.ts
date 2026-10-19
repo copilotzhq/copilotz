@@ -115,6 +115,8 @@ export type EventMutationContext = {
 
 /** SQL composed into the statement that inserts an event. */
 export type EventStatement<T> = Readonly<{
+  /** The statement creates or changes catalog content deadlines. */
+  invalidatesContent?: boolean;
   /** CTEs evaluated before the event insert. */
   ctes: readonly string[];
   /** The event is inserted only when this condition holds. */
@@ -219,7 +221,8 @@ export type CreateEventStoreOptions = {
   ) => Promise<void>;
   /**
    * The same index as CTEs over a sibling `inserted_event` CTE, so a new
-   * event is indexed by its own insert statement.
+   * event is indexed by its own insert statement. Includes `updated_selections`,
+   * returning each selection_key written by the index.
    */
   indexOperationEventSql?: (
     input: Readonly<{
@@ -751,12 +754,16 @@ export function createEventStore(
     // The event, deliveries, body, operation index and projection share the
     // transaction. An existing body is verified before that transaction can
     // commit, and a duplicate event returns its original durable result.
+    let insertedSelectionKeys: string[] | undefined;
     const insertEvent = async (executor: SqlExecutor) => {
       const { commandTime } = schemaCommandContext(executor, databaseSchema);
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
       const commandTimeSql = `${param(commandTime)}::timestamptz`;
       const statement = mutation.statement?.(param, tables, { commandTime });
+      if (statement?.invalidatesContent) {
+        invalidateOwnerAlarm(executor, databaseSchema, "content");
+      }
       const admission = options.admitOperationEventSql?.({
         namespace: draft.namespace,
         operationId: settlementScopeId,
@@ -861,6 +868,12 @@ export function createEventStore(
            RETURNING *
          )`,
       ];
+      ctes.push(`inserted_delivery_deadlines AS (
+        INSERT INTO ${tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
+        SELECT 'schema','deliveries',id,${param(draft.namespace)},available_at,
+          jsonb_build_object('deliveryId',id)
+        FROM inserted_deliveries WHERE status='pending' AND attempts<max_attempts
+      )`);
       if (body) {
         ctes.push(`inserted_body AS (
            INSERT INTO ${tables.event_bodies} (
@@ -894,6 +907,7 @@ export function createEventStore(
       const inserted = await executor.query<
         EventRow & {
           deliveries: unknown;
+          selection_keys?: string[];
           body_written?: boolean;
           statement_report?: unknown;
         }
@@ -903,6 +917,17 @@ export function createEventStore(
            (SELECT jsonb_agg(to_jsonb(inserted_deliveries)) FROM inserted_deliveries),
            '[]'::jsonb
          ) AS deliveries${
+          indexOperationEventSql
+            ? `,
+           ARRAY(SELECT selection_key FROM (
+             SELECT selection_key FROM "${databaseSchema}"."copilotz_operation_selections"
+               WHERE namespace=${param(draft.namespace)} AND operation_id=${
+              param(settlementScopeId)
+            }
+             UNION SELECT selection_key FROM updated_selections
+           ) AS selections ORDER BY selection_key) AS selection_keys`
+            : ""
+        }${
           body ? ", EXISTS (SELECT 1 FROM inserted_body) AS body_written" : ""
         }${
           statement
@@ -916,6 +941,7 @@ export function createEventStore(
       const row = inserted.rows[0];
       const {
         deliveries: deliveryJson,
+        selection_keys,
         body_written,
         statement_report: report,
         ...eventRow
@@ -924,6 +950,7 @@ export function createEventStore(
         ? (wasInserted: boolean) => statement.resolve(report, wasInserted)
         : undefined;
       if (!row || eventRow.id == null) return { outcome } as const;
+      insertedSelectionKeys = selection_keys;
       const event = mapEvent(eventRow as EventRow);
       if (body && !body_written) {
         // Verifies the existing row against this body, or throws.
@@ -1030,11 +1057,14 @@ export function createEventStore(
     });
     const commitOn = async (transaction: SqlExecutor) => {
       const result = await runOn(transaction);
-      if (!result.deduplicated) {
-        await syncDeliveryAlarms(
-          transaction,
-          result.deliveries.map((delivery) => delivery.id),
-        );
+      if (
+        !result.deduplicated &&
+        result.deliveries.some((delivery) =>
+          delivery.status === "pending" &&
+          delivery.attempts < delivery.maxAttempts
+        )
+      ) {
+        invalidateOwnerAlarm(transaction, databaseSchema);
       }
       if (mutation.onCommitted) {
         schemaCommandContext(transaction, databaseSchema).afterCommit(() =>
@@ -1042,7 +1072,9 @@ export function createEventStore(
         );
       }
       if (!result.deduplicated) {
-        const selectionKeys = (indexOperationEvent || indexOperationEventSql)
+        const selectionKeys = insertedSelectionKeys && !mutation.mutate
+          ? insertedSelectionKeys
+          : (indexOperationEvent || indexOperationEventSql)
           ? (await transaction.query<{ selection_key: string }>(
             `SELECT selection_key FROM "${databaseSchema}"."copilotz_operation_selections" WHERE namespace=$1 AND operation_id=$2 ORDER BY selection_key`,
             [result.event.namespace, result.settlementScopeId],

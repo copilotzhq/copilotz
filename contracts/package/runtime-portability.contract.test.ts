@@ -175,7 +175,7 @@ Deno.test("external dependency versions are centralized in deno.json imports", a
   );
   assertEquals(
     configuration.imports["@oxian/oxian-js"],
-    "jsr:@oxian/oxian-js@0.22.0-next.25b4943",
+    "jsr:@oxian/oxian-js@0.22.0-next.bac5abb",
   );
   assertEquals(
     configuration.imports["@modelcontextprotocol/sdk"],

@@ -1,3 +1,4 @@
+import { collectionAssetAdopterFor } from "../content/database-repository.ts";
 import { hostIngressProof } from "./ingress/authority.ts";
 /** Trusted in-process ingress and reads over the ordinary application runtime. @module */
 import type { ActionSchema } from "../actions/types.ts";
@@ -154,6 +155,9 @@ export function createHostServices(
       );
     }
     const { id: requestId, envelope } = admission(options);
+    const inlineContent = !definition.content || collectionAssetAdopterFor(
+      (await application().databaseScope(envelope.databaseSchema)).content.assets,
+    ).prepareInCommand;
     const completion:
       import("./ingress/inline-collection.ts").InlineCollectionCompletion = {};
     const handle = await admitCollectionMutationRequest(
@@ -173,9 +177,9 @@ export function createHostServices(
       },
       typeof inputSchema === "object" ? inputSchema as ActionSchema : undefined,
       hostIngressProof(),
-      definition.content ? undefined : completion,
+      inlineContent ? completion : undefined,
     );
-    return definition.content || completion.deferred
+    return !inlineContent || completion.deferred
       ? await result(handle, envelope)
       : completion.value;
   };

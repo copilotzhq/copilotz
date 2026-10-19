@@ -142,6 +142,7 @@ export type CreateCollectionRuntimeOptions = Readonly<{
 
 /** Internal content-adoption seam used only by the Collection kernel. */
 type CollectionAssetAdopter = Readonly<{
+  prepareInCommand?: boolean;
   reconcileMaterializations(
     transaction: SqlExecutor,
     plans: readonly AssetMaterializationPlan[],
@@ -164,7 +165,7 @@ type CollectionAssetAdopter = Readonly<{
   composeAdoption(
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    options: Readonly<{ nodes: boolean }>,
+    options: Readonly<{ nodes: boolean; commandTime: string }>,
   ): Readonly<{
     ctes: readonly string[];
     gate: string;
@@ -1580,7 +1581,7 @@ export function createCollectionKernel(
         let value = getPath(record, field);
         if (value === undefined) continue;
         if (
-          Boolean(currentCommand()) &&
+          Boolean(currentCommand()) && !options.assets.prepareInCommand &&
           !(Array.isArray(value) &&
             value.every((item) =>
               item && typeof item === "object" &&
@@ -2023,7 +2024,7 @@ export function createCollectionKernel(
             },
           }
           : {
-            statement: (param: (value: unknown) => string) => {
+            statement: (param, _tables, { commandTime }) => {
               const projection = composeCollectionProjection(
                 tables,
                 definition,
@@ -2037,9 +2038,11 @@ export function createCollectionKernel(
               const adoption = inStatement
                 ? options.assets!.composeAdoption(plan.content, param, {
                   nodes: false,
+                  commandTime,
                 })
                 : undefined;
               return {
+                invalidatesContent: adopts,
                 ctes: [...adoption?.ctes ?? [], ...projection.ctes],
                 gate: adoption
                   ? `(${adoption.gate}) AND (${projection.gate})`

@@ -3,6 +3,7 @@ import {
   assertEquals,
   assertRejects,
   assertStrictEquals,
+  assertThrows,
 } from "@std/assert";
 import {
   collectionAssetAdopterFor,
@@ -25,7 +26,7 @@ import type { SqlExecutor } from "../events/session.ts";
 import { bounded, until } from "../testing/effect-commit-proxy.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "./definition.ts";
-import { joinCollectionRuntime } from "./joined-runtime.ts";
+
 import { createCollectionRuntime } from "./kernel.ts";
 import { readViewKey, readViews } from "./read-view.ts";
 
@@ -56,8 +57,13 @@ const job = defineCollection({
   commands: { touch: { mutate: () => ({ set: { name: "touched" } }) } },
 });
 
-async function fixture(options: { failPublication?: string } = {}) {
-  const db = await createTestDatabase({ url: url!, pgPoolMax: 4 });
+async function fixture(
+  options: { failPublication?: string; url?: string } = {},
+) {
+  const db = await createTestDatabase({
+    url: options.url ?? url!,
+    pgPoolMax: 4,
+  });
   const schema = `joined_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   const owner = await openDatabaseOwner(db, schema);
@@ -114,28 +120,21 @@ async function fixture(options: { failPublication?: string } = {}) {
   runtime.bind(job);
   const jobs = runtime.withScope({ namespace }).joined_job;
   const run = createSchemaCommandRunner(db, schema);
-  const joined = (command: CommandContext) =>
-    joinCollectionRuntime(runtime, { job }, command);
   const update = async (command: CommandContext) => {
-    const binding = joined(command);
-    try {
-      return await binding.runtime.transaction({
-        namespace,
-        operationKey: "change",
-        async execute({ collections }) {
-          await collections.joined_job.update({
-            id: "first",
-            set: { name: "after" },
-          });
-          await collections.joined_job.update({
-            id: "second",
-            set: { name: "after" },
-          });
-        },
-      });
-    } finally {
-      binding.close();
-    }
+    return await runtime.transaction({
+      namespace,
+      operationKey: "change",
+      async execute({ collections }) {
+        await collections.joined_job.update({
+          id: "first",
+          set: { name: "after" },
+        });
+        await collections.joined_job.update({
+          id: "second",
+          set: { name: "after" },
+        });
+      },
+    }, command);
   };
   return {
     db,
@@ -149,7 +148,6 @@ async function fixture(options: { failPublication?: string } = {}) {
     runtime,
     jobs,
     run,
-    joined,
     update,
     async seed() {
       for (const id of ["first", "second"]) {
@@ -165,39 +163,6 @@ async function fixture(options: { failPublication?: string } = {}) {
     },
   };
 }
-
-Deno.test({
-  name: "PostgreSQL borrowed Collection reads bypass the committed hop memo",
-  ignore: !url,
-  async fn() {
-    const f = await fixture();
-    try {
-      await f.seed();
-      await readViews.run(async () => {
-        assertEquals((await f.jobs.get({ id: "first" }))?.name, "before");
-        await f.run("fixture.borrow", {}, async (_input, command) => {
-          await f.update(command);
-          // This separate connection may refill the committed view while the
-          // owner transaction is still open. The borrowed read must ignore it.
-          assertEquals((await f.jobs.get({ id: "first" }))?.name, "before");
-          const binding = f.joined(command);
-          try {
-            assertEquals(
-              (await binding.runtime.withScope({ namespace }).joined_job.get({
-                id: "first",
-              }))?.name,
-              "after",
-            );
-          } finally {
-            binding.close();
-          }
-        });
-      });
-    } finally {
-      await f.close();
-    }
-  },
-});
 
 Deno.test({
   name:
@@ -298,23 +263,18 @@ Deno.test({
     try {
       const create = (count: number, key: string) =>
         f.run("fixture.capacity", {}, async (_input, command) => {
-          const binding = f.joined(command);
-          try {
-            await binding.runtime.transaction({
-              namespace,
-              operationKey: key,
-              async execute({ collections }) {
-                for (let i = 0; i < count; i++) {
-                  await collections.joined_job.create({
-                    id: `${key}-${i}`,
-                    name: key,
-                  });
-                }
-              },
-            });
-          } finally {
-            binding.close();
-          }
+          await f.runtime.transaction({
+            namespace,
+            operationKey: key,
+            async execute({ collections }) {
+              for (let i = 0; i < count; i++) {
+                await collections.joined_job.create({
+                  id: `${key}-${i}`,
+                  name: key,
+                });
+              }
+            },
+          }, command);
         });
       // Each event reserves its push and coordinator publication; assets also
       // retain a reservation. The one owner limit applies to all three kinds.
@@ -453,26 +413,21 @@ Deno.test({
               "fixture.nested-helper",
               {},
               async (_input, nested) => {
-                const joined = f.joined(nested);
-                try {
-                  await joined.runtime.transaction({
-                    namespace,
-                    operationKey: `batch:${batch}`,
-                    async execute({ collections }) {
-                      for (let i = 0; i < 32; i++) {
-                        const id = `${batch}:${i}`;
-                        await collections.joined_job.create({
-                          id,
-                          name: id,
-                          content,
-                          dueAt: "2099-01-01T00:00:00.000Z",
-                        });
-                      }
-                    },
-                  });
-                } finally {
-                  joined.close();
-                }
+                await f.runtime.transaction({
+                  namespace,
+                  operationKey: `batch:${batch}`,
+                  async execute({ collections }) {
+                    for (let i = 0; i < 32; i++) {
+                      const id = `${batch}:${i}`;
+                      await collections.joined_job.create({
+                        id,
+                        name: id,
+                        content,
+                        dueAt: "2099-01-01T00:00:00.000Z",
+                      });
+                    }
+                  },
+                }, nested);
               },
             );
             expectedPublications.push(
@@ -581,18 +536,13 @@ Deno.test({
       operationKey: string,
       name: string,
     ) => {
-      const joined = f.joined(command);
-      try {
-        await joined.runtime.transaction({
-          namespace,
-          operationKey,
-          async execute({ collections }) {
-            await collections.joined_job.update({ id: "first", set: { name } });
-          },
-        });
-      } finally {
-        joined.close();
-      }
+      await f.runtime.transaction({
+        namespace,
+        operationKey,
+        async execute({ collections }) {
+          await collections.joined_job.update({ id: "first", set: { name } });
+        },
+      }, command);
     };
     try {
       await f.seed();
@@ -643,48 +593,49 @@ Deno.test({
   },
 });
 
-Deno.test({
-  name:
-    "PostgreSQL borrowed Collection closure cannot disclose a remembered hop row",
-  ignore: !url,
-  async fn() {
-    const f = await fixture();
+for (const backend of [":memory:", url]) {
+  if (!backend) continue;
+  Deno.test(`explicit Collection command rollback and escaped-handle refusal (${backend === ":memory:" ? "PGlite" : "Postgres"})`, async () => {
+    const f = await fixture({ url: backend });
+    let retained!: () => Promise<unknown>;
+    let expired!: CommandContext;
     try {
       await f.seed();
-      await readViews.run(async () => {
-        const before = await f.jobs.get({ id: "first" });
-        let retained: ReturnType<typeof f.joined> | undefined;
-        await f.run("fixture.read", {}, async (_input, command) => {
-          retained = f.joined(command);
-          try {
-            assertEquals(
-              await retained.runtime.withScope({ namespace }).joined_job.get({
-                id: "first",
-              }),
-              before,
-            );
-          } finally {
-            retained.close();
-          }
-        });
-        await assertRejects(
-          () =>
-            retained!.runtime.withScope({ namespace }).joined_job.get({
-              id: "first",
-            }),
-          Error,
-          "adoption has ended",
-        );
-        assertEquals(
-          readViews.memo()?.recall(
-            readViewKey(f.store.tables.nodes, namespace, job.name, "first"),
-          )?.value,
-          before,
-          "a read-only join does not invalidate committed state",
-        );
-      });
+      await assertRejects(
+        () =>
+          f.run("fixture.closed", {}, async (_input, command) => {
+            expired = command;
+            await f.runtime.transaction({
+              namespace,
+              operationKey: "closed",
+              async execute({ collections }) {
+                retained = () =>
+                  collections.joined_job.create({ id: "late", name: "late" });
+                await collections.joined_job.update({
+                  id: "first",
+                  set: { name: "rolled back" },
+                });
+              },
+            }, command);
+            assertThrows(retained, Error, "closed");
+            assertEquals(f.publications, []);
+            throw new Error("rollback");
+          }),
+        Error,
+        "rollback",
+      );
+      assertEquals((await f.jobs.get({ id: "first" }))?.name, "before");
+      assertEquals(await f.jobs.get({ id: "late" }), null);
+      assertEquals(f.publications, []);
+      await assertRejects(() =>
+        f.runtime.transaction({
+          namespace,
+          operationKey: "expired",
+          execute: () => Promise.resolve(undefined),
+        }, expired)
+      );
     } finally {
       await f.close();
     }
-  },
-});
+  });
+}

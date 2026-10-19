@@ -6,7 +6,7 @@ import {
   withCollectionCommandReceipt,
 } from "../collections/command-receipt.ts";
 import { defineCollection } from "../collections/definition.ts";
-import { joinCollectionRuntime } from "../collections/joined-runtime.ts";
+
 import { createCollectionRuntime } from "../collections/kernel.ts";
 import {
   type CollectionInvocationAuthority,
@@ -122,23 +122,18 @@ async function fixture() {
   });
   runtime.bind(record);
   const adopt = async (command: CommandContext, id: string) => {
-    const joined = joinCollectionRuntime(runtime, { records: record }, command);
-    try {
-      await withOwnerCollectionInvocation(
-        authority,
-        () =>
-          joined.runtime.transaction({
-            namespace: "space",
-            operationKey: id,
-            async execute({ collections }) {
-              await collections.queued_receipt_record.create({ id, name: id });
-            },
-          }),
-      );
-      return { id };
-    } finally {
-      joined.close();
-    }
+    await withOwnerCollectionInvocation(
+      authority,
+      () =>
+        runtime.transaction({
+          namespace: "space",
+          operationKey: id,
+          async execute({ collections }) {
+            await collections.queued_receipt_record.create({ id, name: id });
+          },
+        }, command),
+    );
+    return { id };
   };
   return {
     db,

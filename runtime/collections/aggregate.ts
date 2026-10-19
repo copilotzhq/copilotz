@@ -1,11 +1,7 @@
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { compileCollectionPredicate } from "./predicate.ts";
-import {
-  type CollectionReadBudget,
-  currentCollectionReadBudget,
-  queryCollectionRows,
-} from "./read-budget.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import type {
   CollectionAggregateQuery,
   CollectionAggregateRow,
@@ -158,7 +154,6 @@ export async function aggregateCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionAggregateQuery,
-  budget: CollectionReadBudget | undefined = currentCollectionReadBudget(),
   /** Trusted internal source check, supplied by the owner, never wire/policy SQL. */
   sourceCheck?: string,
 ): Promise<readonly CollectionAggregateRow[]> {
@@ -300,7 +295,6 @@ export async function aggregateCollectionRecords(
       grouping.length ? ` GROUP BY ${grouping.join(", ")}` : ""
     } LIMIT ${capacity + 1}`,
     params,
-    budget,
     { sourceChecked: sourceCheck !== undefined },
   );
   if (rows.length > capacity) {

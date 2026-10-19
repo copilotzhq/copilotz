@@ -35,7 +35,7 @@ export function scheduledAlarmAdmission(input: object): Admission | undefined {
   return token;
 }
 export function captureScheduledAlarmAdmission<T extends object>(
-  source: T,
+  source: object,
   captured: T,
 ): T {
   const token = (source as { [symbol]?: object })[symbol];

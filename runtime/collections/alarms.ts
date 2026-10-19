@@ -2,7 +2,6 @@ import { withCollectionAlarmPolicy } from "./policy-alarm.ts";
 import { reportDeliveryDiagnostic } from "../execution/diagnostics.ts";
 import type { DeliveryDiagnosticSink } from "../execution/types.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
-import { joinCollectionRuntime } from "./joined-runtime.ts";
 import { withScheduledAlarmAdmission } from "../application/ingress/scheduled.ts";
 import { scheduledJobDelegationDigest } from "../schedules/delegation.ts";
 import type { CollectionDefinition } from "./definition.ts";
@@ -73,88 +72,88 @@ export function registerCollectionAlarms(options: {
                 ],
               );
               if (!selected.rows.length) return;
-              const joined = joinCollectionRuntime(
-                options.collections,
-                Object.fromEntries(
-                  options.definitions.map((item) => [item.name, item]),
-                ),
-                context,
-              );
-              try {
-                const id = (deadline.payload as { id: string }).id;
-                const scope = { namespace: deadline.namespace! };
-                const collection = joined.runtime.get(definition.name)!;
-                const current = await withCollectionAlarmPolicy({
+              const id = (deadline.payload as { id: string }).id;
+              const scope = { namespace: deadline.namespace! };
+              const collection = options.collections.get(definition.name)!;
+              const current = await withCollectionAlarmPolicy({
+                definition,
+                deadline,
+                databaseSchema: options.schema,
+                signal: options.owner.signal,
+                method: "get",
+                args: { id },
+              }, async () =>
+                (await options.collections.transaction({
+                  namespace: scope.namespace,
+                  operationKey: deadline.key,
+                  execute: () => collection.get(scope, { id }),
+                }, context)).value);
+              if (
+                !current ||
+                definition.alarm!.deadline(current) !== deadline.dueAt
+              ) {
+                await completeOwnerDeadline(
+                  context.transaction,
+                  options.schema,
+                  deadline,
+                );
+                return;
+              }
+              const command = definition.alarm!.command(current, {
+                dueAt: deadline.dueAt,
+                now: context.commandTime,
+              });
+              const callOptions = {
+                operationKey: command.key,
+                identity: {
+                  deduplicationId: command.key,
+                  metadata: { sourceOwnerAlarm: true },
+                },
+              };
+              if (definition.alarm!.ingress === "scheduled-occurrence") {
+                if (
+                  command.name !== "due" ||
+                  command.input.mode !== "scheduled" ||
+                  command.input.scheduledFor !== deadline.dueAt ||
+                  typeof command.input.occurrenceId !== "string"
+                ) {
+                  throw new Error("Scheduled alarm command is invalid.");
+                }
+                withScheduledAlarmAdmission(callOptions, {
+                  databaseSchema: options.schema,
+                  namespace: deadline.namespace!,
+                  scheduleId: id,
+                  occurrenceId: command.input.occurrenceId,
+                  scheduledFor: deadline.dueAt,
+                  scheduleVersion: await scheduledJobDelegationDigest({
+                    databaseSchema: options.schema,
+                    namespace: deadline.namespace!,
+                    record: current,
+                  }),
+                  deadline,
+                });
+              }
+              await withCollectionAlarmPolicy(
+                {
                   definition,
                   deadline,
                   databaseSchema: options.schema,
                   signal: options.owner.signal,
-                  method: "get",
-                  args: { id },
-                }, () => collection.get(scope, { id }));
-                if (
-                  !current ||
-                  definition.alarm!.deadline(current) !== deadline.dueAt
-                ) {
-                  await completeOwnerDeadline(
-                    context.transaction,
-                    options.schema,
-                    deadline,
-                  );
-                  return;
-                }
-                const command = definition.alarm!.command(current, {
-                  dueAt: deadline.dueAt,
-                  now: context.commandTime,
-                });
-                const callOptions = {
-                  operationKey: command.key,
-                  identity: {
-                    deduplicationId: command.key,
-                    metadata: { sourceOwnerAlarm: true },
-                  },
-                };
-                if (definition.alarm!.ingress === "scheduled-occurrence") {
-                  if (
-                    command.name !== "due" ||
-                    command.input.mode !== "scheduled" ||
-                    command.input.scheduledFor !== deadline.dueAt ||
-                    typeof command.input.occurrenceId !== "string"
-                  ) {
-                    throw new Error("Scheduled alarm command is invalid.");
-                  }
-                  withScheduledAlarmAdmission(callOptions, {
-                    databaseSchema: options.schema,
-                    namespace: deadline.namespace!,
-                    scheduleId: id,
-                    occurrenceId: command.input.occurrenceId,
-                    scheduledFor: deadline.dueAt,
-                    scheduleVersion: await scheduledJobDelegationDigest({
-                      databaseSchema: options.schema,
-                      namespace: deadline.namespace!,
-                      record: current,
-                    }),
-                    deadline,
-                  });
-                }
-                await withCollectionAlarmPolicy(
-                  {
-                    definition,
-                    deadline,
-                    databaseSchema: options.schema,
-                    signal: options.owner.signal,
-                    method: "command",
-                    args: { id, name: command.name, input: command.input },
-                  },
-                  () =>
-                    collection.commands[command.name](scope, {
-                      ...command.input,
-                      id,
-                    }, callOptions),
-                );
-              } finally {
-                joined.close();
-              }
+                  method: "command",
+                  args: { id, name: command.name, input: command.input },
+                },
+                () =>
+                  options.collections.transaction({
+                    namespace: scope.namespace,
+                    operationKey: command.key,
+                    identity: callOptions.identity,
+                    execute: ({ collections }) =>
+                      collections[definition.name].commands[command.name]({
+                        ...command.input,
+                        id,
+                      }, callOptions),
+                  }, context),
+              );
             });
           } catch (error) {
             if (!isOwnerAuthorizationRefusal(error)) throw error;

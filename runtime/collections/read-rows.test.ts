@@ -1,17 +1,11 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
 import { defineCollection } from "./definition.ts";
-import { queryCollectionRecords, queryCollectionRelations } from "./query.ts";
-import { searchVectors } from "../vectors/index.ts";
+import { queryCollectionRecords } from "./query.ts";
 import { aggregateCollectionRecords } from "./aggregate.ts";
-import {
-  type CollectionReadBudget,
-  queryCollectionRows,
-  withCollectionReadBudget,
-} from "./read-budget.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import type { CollectionAggregateQuery, CollectionQuery } from "./types.ts";
 
-const budget = { maxRowBytes: 512, maxResultBytes: 2048 };
 const definition = defineCollection({
   name: "entry",
   schema: {
@@ -58,19 +52,17 @@ async function fixture() {
         [id, namespace, JSON.stringify(data), timestamp],
       );
     },
-    list(query: CollectionQuery = {}, limits = budget) {
+    list(query: CollectionQuery = {}) {
       return queryCollectionRecords(
         executor,
         tables,
         definition,
         "tenant",
         query,
-        limits,
       );
     },
     aggregate(
       query: CollectionAggregateQuery,
-      limits = budget,
       sourceCheck?: string,
     ) {
       return aggregateCollectionRecords(
@@ -79,7 +71,6 @@ async function fixture() {
         definition,
         "tenant",
         query,
-        limits,
         sourceCheck,
       );
     },
@@ -113,68 +104,6 @@ Deno.test("bounded Collection reads preserve order, scoped cursor and data witho
   }
 });
 
-Deno.test("bounded Collection oversized row is refused before driver JSON materialization", async () => {
-  const f = await fixture();
-  try {
-    await f.put("large", { label: "secret-payload".repeat(10000) });
-    await assertRejects(() => f.list(), RangeError, "transfer budget");
-    assertEquals(f.responses, [[{ bounded_value: null, oversized: true }]]);
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("bounded Collection total budget refuses whole page rather than truncating", async () => {
-  const f = await fixture();
-  try {
-    for (const id of ["a", "b", "c"]) {
-      await f.put(id, { label: "x".repeat(250) });
-    }
-    await assertRejects(
-      () => f.list({}, { maxRowBytes: 512, maxResultBytes: 600 }),
-      RangeError,
-      "transfer budget",
-    );
-    assertEquals(f.responses, [Array.from({ length: 3 }, () => ({
-      bounded_value: null,
-      oversized: true,
-    }))]);
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("bounded Collection cursor value is bounded before transfer", async () => {
-  const f = await fixture();
-  try {
-    await f.put("cursor", { label: "large-cursor".repeat(10000) });
-    await assertRejects(
-      () => f.list({ order: { field: "label" }, after: "cursor" }),
-      RangeError,
-      "transfer budget",
-    );
-    assertEquals(f.responses, [[{ bounded_value: null, oversized: true }]]);
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("bounded aggregate refuses huge group values before transfer", async () => {
-  const f = await fixture();
-  try {
-    await f.put("large", { label: "large-group".repeat(10000) });
-    await assertRejects(
-      () =>
-        f.aggregate({ groupBy: ["label"], metrics: { n: { op: "count" } } }),
-      RangeError,
-      "transfer budget",
-    );
-    assertEquals(f.responses, [[{ bounded_value: null, oversized: true }]]);
-  } finally {
-    await f.close();
-  }
-});
-
 Deno.test("bounded aggregate preserves metrics and group capacity refusal", async () => {
   const f = await fixture();
   try {
@@ -199,45 +128,6 @@ Deno.test("bounded aggregate preserves metrics and group capacity refusal", asyn
   } finally {
     await f.close();
   }
-});
-
-Deno.test("bounded Collection budgets count UTF-8 bytes", async () => {
-  const f = await fixture();
-  try {
-    await f.put("utf8", { label: "😀".repeat(150) });
-    await assertRejects(() => f.list(), RangeError, "transfer budget");
-    assertEquals(f.responses, [[{ bounded_value: null, oversized: true }]]);
-    assertEquals(f.responses.length, 1);
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("bounded Collection invalid budgets refuse before SQL", async () => {
-  let calls = 0;
-  const executor = {
-    query: () => {
-      calls++;
-      return Promise.resolve({ rows: [] });
-    },
-  };
-  for (
-    const invalid of [
-      null as unknown as CollectionReadBudget,
-      false as unknown as CollectionReadBudget,
-      { maxRowBytes: 0, maxResultBytes: 100 },
-      { maxRowBytes: 1.5, maxResultBytes: 100 },
-      { maxRowBytes: 100, maxResultBytes: 99 },
-      { maxRowBytes: 100, maxResultBytes: Infinity },
-    ]
-  ) {
-    await assertRejects(
-      () => queryCollectionRows(executor, "SELECT 1", [], invalid),
-      TypeError,
-      "transfer budget",
-    );
-  }
-  assertEquals(calls, 0);
 });
 
 Deno.test("bounded Collection keysets retain microseconds and null/tie ordering", async () => {
@@ -316,7 +206,7 @@ Deno.test("guarded aggregate refuses rejected source before aliases, metric filt
       ] as CollectionAggregateQuery[]
     ) {
       await assertRejects(
-        () => f.aggregate(query, budget, "id <> 'hidden'"),
+        () => f.aggregate(query, "id <> 'hidden'"),
         TypeError,
         "source",
       );
@@ -327,57 +217,15 @@ Deno.test("guarded aggregate refuses rejected source before aliases, metric filt
   }
 });
 
-Deno.test("relation and vector capability reads apply the transfer envelope before driver values escape", async () => {
-  let calls = 0;
-  const executor = {
-    query<T extends Record<string, unknown>>(sql: string, params?: unknown[]) {
-      calls++;
-      assertEquals(
-        sql.includes("THEN NULL ELSE value END AS bounded_value"),
-        true,
-      );
-      assertEquals(params?.slice(-2), [256 * 1024, 512 * 1024]);
-      return Promise.resolve({
-        rows: [{ bounded_value: null, oversized: true }] as unknown as T[],
-      });
-    },
-  };
+Deno.test("Collection reads refuse row overflow", async () => {
   await assertRejects(
     () =>
-      withCollectionReadBudget(() =>
-        queryCollectionRelations(
-          executor,
-          { nodes: "nodes", edges: "edges" },
-          "tenant",
-          "entry",
-        )
+      queryCollectionRows(
+        { query: () => Promise.resolve({ rows: Array(10001).fill({}) }) },
+        "SELECT 1",
+        [],
       ),
     RangeError,
-    "transfer budget",
+    "row capacity",
   );
-  await assertRejects(
-    () =>
-      withCollectionReadBudget(() =>
-        searchVectors(
-          executor,
-          "public",
-          "tenant",
-          {
-            ownerType: "entry",
-            field: "embedding",
-            values: [1],
-            filter: { field: "rank", eq: 1 },
-            profile: {
-              model: "test",
-              revision: "1",
-              dimensions: 1,
-              metric: "cosine",
-            },
-          },
-        )
-      ),
-    RangeError,
-    "transfer budget",
-  );
-  assertEquals(calls, 2);
 });

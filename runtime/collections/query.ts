@@ -3,11 +3,7 @@ import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
-import {
-  type CollectionReadBudget,
-  currentCollectionReadBudget,
-  queryCollectionRows,
-} from "./read-budget.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import type {
   CollectionGraphRelation,
   CollectionQuery,
@@ -76,7 +72,6 @@ async function resolveCursorAnchor(
   namespace: string,
   boundary: "after" | "before",
   cursor: string,
-  budget: CollectionReadBudget | undefined = currentCollectionReadBudget(),
   sourceCheck?: string,
 ): Promise<CursorAnchorRow> {
   const params = [...filterParams, cursor];
@@ -101,7 +96,6 @@ async function resolveCursorAnchor(
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
       LIMIT 1`,
     params,
-    budget,
     { sourceChecked: sourceCheck !== undefined },
   );
   const anchor = rows[0];
@@ -258,7 +252,6 @@ export async function queryCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionQuery = {},
-  budget: CollectionReadBudget | undefined = currentCollectionReadBudget(),
   /** Trusted fixed source check, never caller-authored SQL. */
   sourceCheck?: string,
   readRelated?: (
@@ -328,7 +321,6 @@ export async function queryCollectionRecords(
       namespace,
       boundary,
       cursor,
-      budget,
       sourceCheck,
     );
     filters.push(cursorFilter(params, order, boundary, anchor));
@@ -339,21 +331,16 @@ export async function queryCollectionRecords(
     : `(${order.expression}) ${order.direction}, id ${order.direction}`;
   const rows = await queryCollectionRows<NodeRow>(
     executor,
-    `SELECT ${
-      budget
-        ? `id, namespace, data, row_number() OVER (ORDER BY ${orderBy}) AS __collection_read_order${
-          sourceCheck === undefined
-            ? ""
-            : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
-        }`
-        : "*"
-    } FROM ${tables.nodes}
+    `SELECT ${`id, namespace, data${
+      sourceCheck === undefined
+        ? ""
+        : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
+    }`} FROM ${tables.nodes}
      WHERE ${filters.join(" AND ")}
      ORDER BY ${orderBy}
      LIMIT ${limit}`,
     params,
-    budget,
-    { ordered: budget !== undefined, sourceChecked: sourceCheck !== undefined },
+    { sourceChecked: sourceCheck !== undefined },
   );
   const records = rows.map(mapNode);
   if (!query.include?.length) return records;
@@ -396,8 +383,6 @@ export async function queryCollectionRecords(
           [namespace, value.id, edgeType],
         );
         const related = [];
-        // Hydration participates in the same transfer budget; avoid materializing
-        // a fan-out of independently bounded rows concurrently.
         for (const edge of edges) {
           const record = await (readRelated
             ? readRelated(relation.collection, edge.related_id)

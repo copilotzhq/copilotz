@@ -1,3 +1,4 @@
+import { canonicalJson as encodeJson } from "../data-only-json.ts";
 import { assertCommandTransaction } from "../engine/commands.ts";
 import type { EventMutationContext } from "./store.ts";
 import type { EventBodyRef } from "./types.ts";
@@ -36,22 +37,11 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function normalizeJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeJson);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, normalizeJson(child)]),
-    );
-  }
-  return value;
-}
-
 function canonicalJson(value: unknown): string {
-  const text = JSON.stringify(
-    normalizeJson(value === undefined ? null : value),
-  );
+  const text = encodeJson(value === undefined ? null : value, {
+    order: "locale",
+    objectOrder: true,
+  });
   if (text === undefined) {
     throw new TypeError("Event body must be JSON serializable.");
   }
@@ -123,16 +113,17 @@ export async function writeEventBody(
       digest,
     ],
   );
-  const row = inserted.rows[0] ??
-    await requireStoredBody(context, input.namespace, input.id);
-  if (
-    Number(row.schema_version) !== EVENT_BODY_SCHEMA_VERSION ||
-    String(row.digest) !== digest ||
-    canonicalJson(row.body) !== body
-  ) {
-    throw new Error(
-      `Event body '${input.id}' already exists with different content.`,
-    );
+  if (!inserted.rows.length) {
+    const row = await requireStoredBody(context, input.namespace, input.id);
+    if (
+      Number(row.schema_version) !== EVENT_BODY_SCHEMA_VERSION ||
+      String(row.digest) !== digest ||
+      canonicalJson(row.body) !== body
+    ) {
+      throw new Error(
+        `Event body '${input.id}' already exists with different content.`,
+      );
+    }
   }
   return ({
     eventBodyId: input.id,

@@ -1,9 +1,5 @@
-import { captureSnapshotAncestry } from "../persistence/snapshot-admission.ts";
+import { encodeJsonValue } from "../json.ts";
 import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
-import {
-  currentCollectionReadBudget,
-  withCollectionReadBudgetBinding,
-} from "../collections/read-budget.ts";
 import {
   authorizeOwnerCommand,
   captureOwnerCommandAuthorization,
@@ -76,30 +72,10 @@ function failure(code: string, message: string, cause?: unknown): Error {
 }
 
 function canonical(value: CommandJson): string {
-  if (
-    value === null || typeof value === "boolean" || typeof value === "string"
-  ) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (
-    typeof value === "object" &&
-    Object.getPrototypeOf(value) === Object.prototype
-  ) {
-    return `{${
-      Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(
-        ([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`,
-      ).join(",")
-    }}`;
-  }
-  throw new TypeError("Command receipts require finite JSON values.");
+  return encodeJsonValue(value, { label: "Command receipts" });
 }
 
 type Pending = {
-  withReadContext(execute: () => Promise<void>): Promise<void>;
   run(): Promise<void>;
   reject(error: unknown): void;
 };
@@ -222,7 +198,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     try {
       while (pending.length && state !== "stopped") {
         const item = pending.shift()!;
-        await runIndependentAsyncContext(() => item.withReadContext(item.run));
+        await runIndependentAsyncContext(item.run);
       }
     } finally {
       running = false;
@@ -308,14 +284,8 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       intent: canonical(request.receipt.intent),
     };
     const binding = { ...caller };
-    const readBudget = currentCollectionReadBudget();
-    const runWithSnapshotAncestry = captureSnapshotAncestry();
     pending.push({
       reject: completion.reject,
-      withReadContext: (execute) =>
-        runWithSnapshotAncestry(() =>
-          withCollectionReadBudgetBinding(readBudget, execute)
-        ),
       async run() {
         let callbackFinished = false;
         let handlerError: unknown;

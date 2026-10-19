@@ -15,7 +15,7 @@ import {
 } from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "./definition.ts";
-import { joinCollectionRuntime } from "./joined-runtime.ts";
+
 import { createCollectionRuntime } from "./kernel.ts";
 import { captureCollectionPolicy } from "./policy-authorization.ts";
 import {
@@ -148,31 +148,21 @@ async function fixture() {
   runtime.bind(record);
   let captured!: CollectionInvocationAuthority;
   const adopt = async (command: CommandContext) => {
-    const joined = joinCollectionRuntime(runtime, { records: record }, command);
     try {
       await withOwnerCollectionInvocation(authority, async () => {
         captured = captureCollectionInvocation()!;
-        await joined.runtime.transaction({
+        await runtime.transaction({
           namespace: "space",
           operationKey: "adopt",
           async execute({ collections }) {
             await collections.policy_record.create({ id: "one", name: "one" });
           },
-        });
+        }, command);
       });
     } finally {
-      joined.close();
       closed = true;
     }
     assertThrows(() => captured.check(), Error, "authority has ended");
-    await assertRejects(
-      () =>
-        joined.runtime.withScope({ namespace: "space" }).policy_record.create({
-          id: "late",
-          name: "late",
-        }),
-      Error,
-    );
   };
   return {
     db,

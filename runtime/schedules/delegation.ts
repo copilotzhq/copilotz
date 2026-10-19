@@ -1,3 +1,4 @@
+import { orderedJson as ordered } from "../data-only-json.ts";
 import { snapshotStreamMetadata } from "../streams/json.ts";
 
 /** Pure digest of the scope and authority-bearing execution fields of one schedule. */
@@ -43,17 +44,6 @@ export async function scheduledJobDelegationDigest(
       content: record.content ?? null,
       metadata: object(record.metadata),
     },
-  };
-  const ordered = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(ordered);
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value)
-          .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-          .map(([key, child]) => [key, ordered(child)]),
-      );
-    }
-    return Object.is(value, -0) ? 0 : value;
   };
   const digest = new Uint8Array(
     await crypto.subtle.digest(

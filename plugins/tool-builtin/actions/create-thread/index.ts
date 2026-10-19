@@ -1,3 +1,4 @@
+import { canonicalJson } from "@copilotz/copilotz/content/codec";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /** Built-in Action that creates a separate durable thread.
  *
@@ -13,18 +14,8 @@ import {
   participantByExternalId,
   participantInput,
 } from "../../shared/participants.ts";
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return "[" + value.map(stableJson).join(",") + "]";
-  }
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => JSON.stringify(key) + ":" + stableJson(child));
-    return "{" + entries.join(",") + "}";
-  }
-  return JSON.stringify(value) ?? "null";
-}
+const stableJson = (value: unknown): string =>
+  canonicalJson(value, { order: "locale", undefinedValue: "null" });
 async function resolveThreadParticipant(
   context: ActionContext,
   reference: unknown,

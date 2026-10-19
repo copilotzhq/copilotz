@@ -1,3 +1,4 @@
+import { orderedJson } from "../runtime/data-only-json.ts";
 /** Batched resource checks, shared only across identical enforced predicates. */
 import type { CollectionFilter } from "../runtime/collections/types.ts";
 
@@ -10,17 +11,7 @@ type Group = {
 const groupsByRuntime = new WeakMap<object, Map<string, Group>>();
 const timers = new WeakMap<object, ReturnType<typeof setInterval>>();
 
-function canonical(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map((
-        [key, item],
-      ) => [key, canonical(item)]),
-    );
-  }
-  return value;
-}
+const canonical = (value: unknown) => orderedJson(value, "locale");
 
 /** A singleton id restriction is already proved for this exact watcher. */
 export function observationReadPolicy(

@@ -1,3 +1,4 @@
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
   type BoundCollection,
   createCollectionKernel as createCollectionRuntime,
@@ -544,6 +545,23 @@ async function runSuite(url: string, schema: string): Promise<void> {
     assertEquals(snapshotEvent?.metadata, {
       nested: { value: "original" },
     });
+    assert(snapshotEvent);
+    assertEquals(
+      (await readEventBody<{ intent: unknown }>(
+        { transaction: session, tables: store.tables },
+        snapshotEvent.namespace,
+        eventDataRef(snapshotEvent.payload),
+      )).intent,
+      {
+        operation: "create",
+        input: ["object", [
+          ["externalId", ["string", "ext-snapshot"]],
+          ["id", ["string", "job-snapshot"]],
+          ["title", ["string", "Original"]],
+        ]],
+      },
+      "persisted tagged receipt intent keeps its historical representation",
+    );
 
     await jobs.create({
       id: "job-conditional",

@@ -192,3 +192,6 @@ export type {
   GeneratedContentSequence,
   PendingContentRef,
 } from "./types.ts";
+
+export { canonicalJson, orderedJson } from "../data-only-json.ts";
+export { captureJsonValue } from "../json.ts";

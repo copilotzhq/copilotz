@@ -158,7 +158,6 @@ export function compileServerRoutes(
     add("GET", "list", "", undefined, schema);
     add("GET", "get", "/:id", undefined, schema);
     for (const [name, query] of Object.entries(collection.queries ?? {})) {
-      if (query.ownerProjection) continue;
       const queryOutput = cloneSchema(query.outputSchema) ??
         (schema ? ({ type: "array", items: schema }) : undefined);
       add(

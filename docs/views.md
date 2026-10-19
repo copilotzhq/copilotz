@@ -169,6 +169,6 @@ corresponding HTTP route is removed. Use one-shot Collection reads for current
 data.
 
 Operation observations and their multipart streaming remain supported, including
-payload replay, terminal ordering, revocation and bounded renewal (F6 §5).
-Live Collection subscriptions (F6 §6: snapshot plus owner-sequence deltas) are
-not part of this release; they will be built on owner push.
+payload replay, terminal ordering, revocation and bounded renewal (F6 §5). Live
+Collection subscriptions (F6 §6: snapshot plus owner-sequence deltas) are not
+part of this release; they will be built on owner push.

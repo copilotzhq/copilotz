@@ -112,7 +112,7 @@ export async function createHttpReads(
     async query(name, queryName, input) {
       const selected = definition(name);
       const spec = selected.schema.queries?.[queryName];
-      if (!spec || spec.ownerProjection) {
+      if (!spec) {
         throw Object.assign(new Error("Query was not found."), {
           status: 404,
           code: "query_not_found",

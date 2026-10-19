@@ -371,19 +371,8 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
   );
 });
 
-Deno.test("route compiler keeps operation observations and ordinary queries without Collection subscriptions or owner projections", () => {
-  const entry = defineCollection({
-    ...notes,
-    ownerPolicy: "required",
-    queries: {
-      ...notes.queries,
-      projected: {
-        ownerProjection: true,
-        inputSchema: { type: "object" },
-        outputSchema: { type: "array" },
-      },
-    },
-  });
+Deno.test("route compiler keeps operation observations and ordinary queries without Collection subscriptions", () => {
+  const entry = defineCollection({ ...notes, ownerPolicy: "required" });
   const routes = compileServerRoutes(
     createPluginRegistry({
       plugins: [definePlugin({ ...fixture, collections: { entry } })],
@@ -393,10 +382,6 @@ Deno.test("route compiler keeps operation observations and ordinary queries with
     }),
   );
   assertEquals(routes.match("POST", "/api/collections/notes/observe"), null);
-  assertEquals(
-    routes.match("POST", "/api/collections/notes/queries/projected"),
-    null,
-  );
   assertEquals(
     routes.match("POST", "/api/collections/notes/queries/byLabel")?.endpoint
       .operation,

@@ -1,3 +1,4 @@
+import { registerRemoteAdmission } from "../execution/remote-admission.ts";
 import { hostDatabaseScopes } from "./database-scopes.ts";
 import {
   captureOwnerSessionAuthority,
@@ -222,6 +223,7 @@ export async function createCopilotzGateway(
   Object.freeze(workerLifecycle);
   let hypervisor: Hypervisor | undefined;
   let application: InternalCopilotzApplication | undefined;
+  let releaseRemoteAdmission: (() => void) | undefined;
 
   try {
     const dispatcher = options.dispatcher
@@ -246,6 +248,12 @@ export async function createCopilotzGateway(
       );
     }
     const sessions = captureOwnerSessionAuthority(dispatcher.sessions);
+    releaseRemoteAdmission = registerRemoteAdmission(dispatcher, {
+      ...sessions,
+      ...(dispatcher.sessions.list
+        ? { list: dispatcher.sessions.list.bind(dispatcher.sessions) }
+        : {}),
+    });
     application = await createCopilotzApplication(
       {
         namespace: options.namespace,
@@ -295,6 +303,7 @@ export async function createCopilotzGateway(
       () => undefined,
     );
     await settleAll([
+      () => releaseRemoteAdmission?.(),
       () => hypervisor?.shutdown("copilotz_gateway_initialization_failed"),
       () => persistence.close("copilotz_gateway_initialization_failed"),
     ], "Copilotz Gateway initialization cleanup failed.").catch(() =>
@@ -323,6 +332,7 @@ export async function createCopilotzGateway(
       undefined
     );
     await settleAll([
+      () => releaseRemoteAdmission?.(),
       () => hypervisor?.shutdown("copilotz_gateway_recovery_failed"),
       () => persistence.close("copilotz_gateway_recovery_failed"),
     ], "Copilotz Gateway recovery cleanup failed.").catch(() => undefined);
@@ -339,6 +349,7 @@ export async function createCopilotzGateway(
       // Resource cleanup retains the database generation until it settles.
       for (
         const operation of [
+          () => releaseRemoteAdmission?.(),
           () => ownerCapabilities!.close(reason),
           () => application!.shutdown(reason),
           () => hypervisor?.shutdown(reason),

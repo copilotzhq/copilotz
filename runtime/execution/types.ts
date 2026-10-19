@@ -33,7 +33,8 @@ export type DeliveryDispatchMetadata = Readonly<{
 
 /** Accepted transport state only; no registry mutation capability. */
 export type OwnerSessionSource = Readonly<
-  Pick<Hypervisor["sessions"], "subscribe" | "assertCurrent">
+  & Pick<Hypervisor["sessions"], "subscribe" | "assertCurrent">
+  & Partial<Pick<Hypervisor["sessions"], "list">>
 >;
 export type OwnerSessionAuthority = Readonly<{
   subscribe: NonNullable<OwnerSessionSource["subscribe"]>;
@@ -150,6 +151,7 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   resolvedEvent?: (schema: string, id: string) => DurableEvent | undefined;
   /** Trusted placement selected by an owner-created executor. */
   localExecution?: boolean;
+  remoteSession?: import("./remote-admission.ts").RemoteFence;
   /** Owner-only registration with the accepted transport heartbeat producer. */
   trackAttempt?: DeliveryAttemptTracker;
   store?: EventStore;

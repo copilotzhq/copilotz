@@ -463,7 +463,11 @@ export async function createCopilotzEngine(
           const claim = await scopedStore.readLocalClaim(
             base.source.id,
             base.executionIncarnationId,
-          );
+          ) ??
+            await scopedStore.readRemoteClaim(
+              base.source.id,
+              base.executionIncarnationId,
+            );
           if (!claim) return;
           const action = actionDefinitionById(
             options.registry.actions,
@@ -842,6 +846,7 @@ export async function createCopilotzEngine(
               registry: execution.registry,
               workerId: execution.workerId,
               localExecution: execution.localExecution,
+              remoteSession: execution.remoteSession,
               resolvedEvent: execution.resolvedEvent,
               trackAttempt: execution.trackAttempt,
               onDiagnostic: execution.onDiagnostic,

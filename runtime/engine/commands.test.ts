@@ -1,3 +1,4 @@
+import { bounded } from "../testing/effect-commit-proxy.ts";
 import { upgradeActionLifecycle } from "../actions/upgrade.ts";
 import { provisionOperationCatalog } from "../streams/catalog.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
@@ -28,7 +29,10 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
     let authorizations = 0;
     let writes = 0;
     let cached = 0;
-    let published = 0;
+    const published: string[] = [];
+    const publicationDone = new Map(
+      ["one", "two", "three"].map((id) => [id, Promise.withResolvers<void>()]),
+    );
     let retained: SqlExecutor | undefined;
     let retainedContext: CommandContext | undefined;
     const times: string[] = [];
@@ -68,7 +72,8 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
               cached++;
             });
             context.afterCommit(() => {
-              published++;
+              published.push(input.id);
+              publicationDone.get(input.id)?.resolve();
             });
             if (input.fail) throw new Error("handler failed");
             return { id: input.id };
@@ -106,10 +111,14 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
       ),
       undefined,
     );
+    await bounded(
+      publicationDone.get("one")!.promise,
+      "first owner publication",
+    );
     assertEquals(writes, 1);
     assertEquals(authorizations, 2);
     assertEquals(cached, 1);
-    assertEquals(published, 1);
+    assertEquals(published, ["one"]);
     await assertRejects(() => retained!.query("SELECT 1"), Error, "closed");
     await assertRejects(
       () =>
@@ -127,7 +136,7 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
       "handler failed",
     );
     assertEquals(cached, 1);
-    assertEquals(published, 1);
+    assertEquals(published, ["one"]);
     assertEquals(
       (await db.query(`SELECT id FROM ${tables.nodes} WHERE id='failed'`)).rows,
       [],
@@ -137,10 +146,14 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
         owner.execute("write", caller, { input: { id } })
       ),
     );
+    await bounded(
+      Promise.all([...publicationDone.values()].map((done) => done.promise)),
+      "committed owner publications",
+    );
     assertEquals(times.length, 4);
     assertEquals(new Set(times).size, 4);
     assertEquals(cached, 3);
-    assertEquals(published, 3);
+    assertEquals(published, ["one", "two", "three"]);
     for (const queries of statements.slice(1)) {
       assert(
         queries[0].startsWith(

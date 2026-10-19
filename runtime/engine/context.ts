@@ -1,3 +1,4 @@
+import { bindContentStreamTerminalizer } from "../streams/stream.ts";
 import { bindProcessorCollectionInvocation } from "../collections/policy-invocation.ts";
 import {
   snapshotControl,
@@ -5,7 +6,6 @@ import {
 } from "../collections/snapshot-control.ts";
 import type { CollectionDefinition } from "../collections/index.ts";
 import {
-  ContentStreamOwnershipLostError,
   createContentStreamRuntime,
   type StreamOutput,
   type StreamTerminalStatus,
@@ -85,7 +85,19 @@ export function createProcessorContext(
     options.base.createMutationIdentity(
       requiredText(operationKey, "Mutation operation key"),
     );
-  const catalogedStreams = new Set<string>();
+  const catalogedStreams = new Map<string, string>();
+  const bodyIdFor = (streamId: string) =>
+    operationStreamBodyId({
+      namespace,
+      streamId,
+      bodyPrefix: options.streamBodyPrefix,
+    });
+  const membership = (bodyId: string) => {
+    const streamId = catalogedStreams.get(bodyId);
+    return streamId && settlementScopeId
+      ? { namespace, operationId: settlementScopeId, streamId }
+      : undefined;
+  };
   const settlementScopeId = options.base.settlementScopeId;
   const localStreams = new Map<
     string,
@@ -95,7 +107,30 @@ export function createProcessorContext(
   const streams = createContentStreamRuntime({
     namespace,
     store: options.streamBodyStore,
-    catalog: options.assets.catalog,
+    catalog: {
+      ...options.assets.catalog,
+      checkpoint(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamCheckpoint({
+            ...stream,
+            content,
+          })
+          : options.assets.catalog.checkpoint(content);
+      },
+      sealAccepted(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamSeal({ ...stream, content })
+          : options.assets.catalog.sealAccepted(content);
+      },
+      recordFailure(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamFailure({ ...stream, content })
+          : options.assets.catalog.recordFailure(content);
+      },
+    },
     producerId: settlementScopeId,
     storeForCopy: options.assets.storeForCopy,
     bodyPrefix: options.streamBodyPrefix,
@@ -161,11 +196,7 @@ export function createProcessorContext(
         namespace,
         operationId: settlementScopeId,
         semanticStreamId,
-        bodyId: operationStreamBodyId({
-          namespace,
-          streamId: output.id,
-          bodyPrefix: options.streamBodyPrefix,
-        }),
+        bodyId: bodyIdFor(output.id),
         descriptor,
         ...(options.base.source?.kind === "delivery" &&
             options.base.executionIncarnationId
@@ -182,7 +213,7 @@ export function createProcessorContext(
           `Operation stream '${output.id}' cannot open after its operation settled.`,
         );
       }
-      catalogedStreams.add(output.id);
+      catalogedStreams.set(bodyIdFor(output.id), output.id);
       // The catalog is itself a durable reconnect publication boundary.
       publication.established();
       await options.publishOutput?.(
@@ -193,21 +224,10 @@ export function createProcessorContext(
       );
       publication.established();
     },
-    async onAppend(stream, result) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.commitStreamOffset({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          committedOffset: result.endOffset,
-        })
-      ) {
-        throw new ContentStreamOwnershipLostError(stream.id);
+    onTerminalizing: bindContentStreamTerminalizer(async (stream, input) => {
+      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+        return;
       }
-    },
-    async onTerminalizing(stream, input) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
       const terminalizing = await options.operationCatalog
         .beginStreamTerminalization({
           namespace,
@@ -233,8 +253,8 @@ export function createProcessorContext(
           `Operation stream '${stream.id}' could not begin terminalization.`,
         );
       }
-    },
-    async onSeal(stream, body) {
+    }),
+    onSeal(stream, body) {
       const local = localStreams.get(stream.id);
       if (local) {
         local.settle(
@@ -248,19 +268,8 @@ export function createProcessorContext(
         localStreams.delete(stream.id);
         return;
       }
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.sealStream({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          body,
-        })
-      ) {
-        throw new Error(`Operation stream '${stream.id}' could not be sealed.`);
-      }
     },
-    async onTerminate(stream, body, input) {
+    onTerminate(stream, body, input) {
       const local = localStreams.get(stream.id);
       if (local) {
         local.settle(
@@ -275,34 +284,23 @@ export function createProcessorContext(
         localStreams.delete(stream.id);
         return;
       }
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.terminateStream({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          body,
-          outcome: input.outcome,
-          ...(input.reason ? { reason: input.reason } : {}),
-        })
-      ) {
-        throw new Error(
-          `Operation stream '${stream.id}' could not be terminated.`,
-        );
-      }
     },
     async onDiscard(stream) {
       localStreams.delete(stream.id);
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
+      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+        return;
+      }
       await options.operationCatalog.discardStream({
         namespace,
         operationId: settlementScopeId,
         streamId: stream.id,
       });
-      catalogedStreams.delete(stream.id);
+      catalogedStreams.delete(bodyIdFor(stream.id));
     },
     async onRetain(stream, input) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
+      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+        return;
+      }
       await options.operationCatalog.retainStream({
         namespace,
         operationId: settlementScopeId,

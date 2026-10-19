@@ -275,7 +275,6 @@ export type CopilotzEngine = Readonly<{
       filter: CopilotzEventFilter & {
         namespace: string;
         timeoutMs?: number;
-        pollIntervalMs?: number;
       },
       signal?: AbortSignal,
     ): Promise<CopilotzEvent>;

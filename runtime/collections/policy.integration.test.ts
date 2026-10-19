@@ -24,6 +24,16 @@ const definition = defineCollection({
   } as const,
   queries: { all: { query: () => ({}) } },
 });
+// Host result reconstruction preserves safe name/code/message, not HTTP status
+// or the original Error prototype.
+async function assertActionForbidden(run: () => Promise<unknown>) {
+  const error = await assertRejects(run, Error);
+  assertEquals(error.name, "ActionError");
+  assertEquals(error.message, "Forbidden");
+  assertEquals((error as { code?: unknown }).code, "forbidden");
+  return error;
+}
+
 Deno.test("Collection policy required registration fails closed and Worker host options are refused", async () => {
   assertThrows(
     () => validateCollectionPolicies(undefined, { entry: definition }),
@@ -598,12 +608,14 @@ for (const topology of ["embedded", "websocket"] as const) {
     }
     try {
       await app.hostCommands.invoke("configure", { allowed: true });
-      await assertRejects(
+      const directRefusal = await assertRejects(
         () => app.collections.entry.get({ id: "one" }),
-        Error,
-        "denied",
+        ActionError,
+        "Forbidden",
       );
-      await assertRejects(
+      assertEquals(directRefusal.code, "forbidden");
+      assertEquals(directRefusal.status, 403);
+      await assertActionForbidden(
         () =>
           bounded(
             app.actions.unrelated({ op: "create", id: "forged" }, {
@@ -617,8 +629,6 @@ for (const topology of ["embedded", "websocket"] as const) {
             }),
             "unrelated",
           ),
-        Error,
-        "denied",
       );
       const created = await bounded(
         app.actions.allowed({ op: "create" }),
@@ -650,15 +660,11 @@ for (const topology of ["embedded", "websocket"] as const) {
       for (
         const op of ["vectors", "hidden", "relations", "search"]
       ) await assertRejects(() => app.actions.allowed({ op }));
-      await assertRejects(
+      await assertActionForbidden(
         () => app.actions.allowed({ op: "aggregate" }),
-        Error,
-        "denied",
       );
-      await assertRejects(
+      await assertActionForbidden(
         () => app.actions.allowed({ op: "batch", id: "batch" }),
-        Error,
-        "denied",
       );
       assertEquals(
         (await db.query(
@@ -679,10 +685,8 @@ for (const topology of ["embedded", "websocket"] as const) {
       // Plain Action outputs have their own result boundary. Collection policies
       // authorize reads, not arbitrary retained output from completed Actions.
       await app.hostCommands.invoke("configure", { allowed: false });
-      await assertRejects(
+      await assertActionForbidden(
         () => app.actions.allowed({ op: "get" }),
-        Error,
-        "denied",
       );
       const checksBeforeCompletedReplay = seen.length;
       assertEquals(
@@ -698,10 +702,8 @@ for (const topology of ["embedded", "websocket"] as const) {
       );
       void concurrent.catch(() => undefined);
       await bounded(concurrentOpened.promise, "authorized Action is open");
-      await assertRejects(
+      await assertActionForbidden(
         () => app.actions.unrelated({ op: "get" }),
-        Error,
-        "denied",
       );
       concurrentContinue.resolve();
       assertEquals((await concurrent as { id: string }).id, "one");
@@ -751,14 +753,16 @@ for (const topology of ["embedded", "websocket"] as const) {
           "hidden-relation-write",
         ]
       ) {
-        await assertRejects(() => app.actions.allowed({ op }), Error, "denied");
+        await assertActionForbidden(() => app.actions.allowed({ op }));
       }
+      // Existing and absent edge planning must disclose exactly the same refusal.
       for (const id of ["existing-edge", "missing-edge"]) {
         const refused = await assertRejects(
           () => app.actions.allowed({ op: "relation-write", id }),
           Error,
-          "Collection access denied.",
+          "Forbidden",
         );
+        assertEquals(refused.message, "Forbidden");
         assertEquals((refused as { code?: string }).code, "forbidden");
       }
       const batchCommitted = await assertRejects(
@@ -787,7 +791,7 @@ for (const topology of ["embedded", "websocket"] as const) {
           const denied = await assertRejects(
             () => app.actions.unrelated({ op, id }),
             Error,
-            "Collection access denied.",
+            "Forbidden",
           );
           assertEquals((denied as { code?: string }).code, "forbidden");
         }
@@ -820,7 +824,7 @@ for (const topology of ["embedded", "websocket"] as const) {
       await bounded(replayOpened.promise, "receipt committed");
       await app.hostCommands.invoke("configure", { allowed: false });
       replayContinue.resolve();
-      await assertRejects(() => replay, Error, "denied");
+      await assertActionForbidden(() => replay);
       assertEquals(
         (await db.query(
           `SELECT id FROM "${schema}".nodes WHERE id LIKE 'receipt:%'`,
@@ -842,7 +846,7 @@ for (const topology of ["embedded", "websocket"] as const) {
       if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
         await bounded(revoke, "detached snapshot allows owner revocation");
         snapshotContinue.resolve();
-        await assertRejects(() => snapshot, Error, "denied");
+        await assertActionForbidden(() => snapshot);
       } else {
         await new Promise((resolve) => setTimeout(resolve, 25));
         assertEquals(revoked, false);
@@ -851,10 +855,8 @@ for (const topology of ["embedded", "websocket"] as const) {
         await bounded(revoke, "exclusive snapshot releases owner queue");
       }
       for (const op of ["get", "list", "query", "update", "snapshot"]) {
-        await assertRejects(
+        await assertActionForbidden(
           () => bounded(app.actions.allowed({ op }), `revoked ${op}`),
-          Error,
-          "denied",
         );
       }
       assertEquals(

@@ -1,5 +1,9 @@
+import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
-import { withOwnerCommandAuthorization } from "../engine/command-authorization.ts";
+import {
+  withoutOwnerCommandAuthorization,
+  withOwnerCommandAuthorization,
+} from "../engine/command-authorization.ts";
 import type {
   DeliveryAttemptRegistration,
   OwnerSessionAuthority,
@@ -59,6 +63,8 @@ type Resource = {
   created: number;
   used: number;
   closed: boolean;
+  pendingAppends?: number;
+  removeFailure?(): void;
   close(reason?: unknown): Promise<void>;
   run?(path: readonly string[], args: readonly unknown[]): Promise<unknown>;
 };
@@ -72,6 +78,8 @@ type Invocation = {
   sealed: boolean;
   logicalAbort: boolean;
   semanticFailure: boolean;
+  streamFailure?: { reason: unknown };
+  failStream(reason: unknown): void;
   calls: Set<Promise<void>>;
   context: ProcessorContext | ActionContext;
   receiptPrincipal?: string;
@@ -317,6 +325,9 @@ export function createOwnerCapabilityHost(
         assignment.resources.delete(resource.id);
       }
       throw error;
+    } finally {
+      resource.removeFailure?.();
+      resource.removeFailure = undefined;
     }
   };
   const abortAssignment = (assignment: Assignment, reason: unknown) => {
@@ -524,14 +535,12 @@ export function createOwnerCapabilityHost(
     const id = crypto.randomUUID();
     const result = Promise.withResolvers<unknown>();
     void result.promise.catch(() => undefined);
-    const abort = () => {
-      // A caller cancellation predating placement revocation stays semantic.
-      if (!assignment.abort.signal.aborted) invocationState.logicalAbort = true;
+    const stop = (reason: unknown) => {
       invocationState.sealed = true;
-      result.reject(context.signal.reason);
+      result.reject(reason);
       for (const resource of assignment.resources.values()) {
         if (resource.context === id) {
-          void closeResource(assignment, resource, context.signal.reason).catch(
+          void closeResource(assignment, resource, reason).catch(
             () => undefined,
           );
         }
@@ -539,6 +548,11 @@ export function createOwnerCapabilityHost(
       if (assignment.queue.length < MAX_CONTEXTS) {
         notify(assignment, { aborted: id });
       } else abortAssignment(assignment, capabilityError("owner_capacity"));
+    };
+    const abort = () => {
+      // A caller cancellation predating placement revocation stays semantic.
+      if (!assignment.abort.signal.aborted) invocationState.logicalAbort = true;
+      stop(context.signal.reason);
     };
     const receiptAuthority = collectionReceiptInvocation(context);
     const receiptPrincipal = receiptAuthority
@@ -557,6 +571,12 @@ export function createOwnerCapabilityHost(
       sealed: false,
       logicalAbort: false,
       semanticFailure: false,
+      failStream(reason) {
+        if (invocationState.streamFailure) return;
+        invocationState.streamFailure = { reason };
+        invocationState.semanticFailure = true;
+        stop(reason);
+      },
       calls: new Set(),
       context,
       result,
@@ -565,6 +585,7 @@ export function createOwnerCapabilityHost(
     assignment.contexts.set(id, invocationState);
     context.signal.addEventListener("abort", abort, { once: true });
     if (context.signal.aborted) abort();
+    let value: unknown;
     try {
       const invocation: CapabilityInvocation = {
         id,
@@ -576,10 +597,9 @@ export function createOwnerCapabilityHost(
       };
       encodeCapability(invocation);
       notify(assignment, { invocation });
-      const value = await result.promise;
+      value = await result.promise;
       await check(assignment);
       context.signal.throwIfAborted();
-      return value;
     } catch (error) {
       // Only the trusted transport lifecycle can classify a physical loss.
       // Wire codes and worker-thrown AbortErrors never grant logical replay.
@@ -598,11 +618,20 @@ export function createOwnerCapabilityHost(
       const resources = [...assignment.resources.values()].filter((resource) =>
         resource.context === id
       );
-      await Promise.all(
-        resources.map((resource) => closeResource(assignment, resource)),
-      );
-      assignment.contexts.delete(id);
+      try {
+        await Promise.all(
+          resources.map((resource) => closeResource(assignment, resource)),
+        );
+      } finally {
+        assignment.contexts.delete(id);
+      }
     }
+    // A result may have arrived before a checkpoint failed during cleanup.
+    // Successful fencing cannot turn that latched failure into Action success.
+    if (invocationState.streamFailure) {
+      throw invocationState.streamFailure.reason;
+    }
+    return value;
   };
   const rehost = (assignment: Assignment): PluginRegistry => {
     const registry = options.registry;
@@ -783,6 +812,14 @@ export function createOwnerCapabilityHost(
           });
         },
       }, reservation);
+      const invocation = assignment.contexts.get(context);
+      resource.removeFailure = observeContentStreamFailure(writer, (reason) => {
+        // A timer may notify from its completed call scope. Resource cleanup
+        // still enters the exact writer facade and checks its current policy.
+        void withoutOwnerCommandAuthorization(() => {
+          invocation?.failStream(reason);
+        });
+      });
       return {
         $ownerResource: "writer",
         handle: resource.id,
@@ -1251,23 +1288,36 @@ export function createOwnerCapabilityHost(
                 ? ["read"]
                 : ["append", "close", "abort", "retain"]).includes(path[0])
           ) throw capabilityError("owner_capability_refused");
-          const result = resource.serial.then(async () => {
-            await check(active);
-            return resource.run
-              ? await resource.run(path, args)
-              : await callPath(resource.value, path, args);
-          });
-          resource.serial = result.catch(() => undefined);
-          const value = await result;
-          await check(active);
-          checkInvocation();
-          if (
-            resource.kind === "writer" && ["close", "abort"].includes(path[0])
-          ) {
-            resource.closed = true;
-            active.resources.delete(resource.id);
+          const append = resource.kind === "writer" && path[0] === "append";
+          if (append && (resource.pendingAppends ?? 0) >= 2) {
+            throw capabilityError("owner_append_capacity");
           }
-          return await exposeResult(active, call.context!, value);
+          if (append) {
+            resource.pendingAppends = (resource.pendingAppends ?? 0) + 1;
+          }
+          try {
+            const result = resource.serial.then(async () => {
+              await check(active);
+              return resource.run
+                ? await resource.run(path, args)
+                : await callPath(resource.value, path, args);
+            });
+            resource.serial = result.catch(() => undefined);
+            const value = await result;
+            await check(active);
+            checkInvocation();
+            if (
+              resource.kind === "writer" && ["close", "abort"].includes(path[0])
+            ) {
+              resource.closed = true;
+              resource.removeFailure?.();
+              resource.removeFailure = undefined;
+              active.resources.delete(resource.id);
+            }
+            return await exposeResult(active, call.context!, value);
+          } finally {
+            if (append) resource.pendingAppends!--;
+          }
         }
         if (!allowedPath(path)) {
           throw capabilityError("owner_capability_refused");

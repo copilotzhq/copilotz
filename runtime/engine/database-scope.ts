@@ -9,7 +9,11 @@ import { readLogicalHead } from "../content/catalog.ts";
 import { registerDeliveryAlarms } from "../execution/alarms.ts";
 import { registerCollectionAlarms } from "../collections/alarms.ts";
 import { completeOwnerDeadline } from "./alarms.ts";
-import { attachOwnerPush, type OwnerPushSubscription } from "../events/push.ts";
+import {
+  attachOwnerPush,
+  type OwnerPushSubscription,
+  watchOwnerPush,
+} from "../events/push.ts";
 import {
   activateDatabaseOwner,
   type CommandContext,
@@ -69,6 +73,7 @@ import {
   createEventStore,
   type EventCoordinator,
   type EventStore,
+  matchesCopilotzEvent,
   waitForCopilotzEvent,
 } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -444,22 +449,48 @@ export function createDatabaseScope(
     },
     subscribe: (filter) => options.eventHub.subscribe(filter),
     waitFor(filterInput, signal) {
-      const { timeoutMs, pollIntervalMs, ...filter } = filterInput;
+      const { timeoutMs, ...filter } = filterInput;
+      let afterPosition = filter.afterPosition;
+      const deadline = timeoutMs === undefined
+        ? undefined
+        : Date.now() + timeoutMs;
       return waitForCopilotzEvent({
         hub: options.eventHub,
         filter,
         signal,
         timeoutMs,
-        pollIntervalMs,
-        loadDurable: () =>
-          store.listEvents({
-            namespace: filter.namespace,
-            metadata: filter.metadata,
-            correlationId: filter.correlationId,
-            afterPosition: filter.afterPosition,
-            afterSeq: filter.afterSeq,
-            limit: 1_000,
-          }),
+        ...(filter.durable === false ? {} : {
+          attachDurable: () =>
+            watchOwnerPush(engine.session, databaseSchema, {
+              namespace: filter.namespace,
+              relevant: (change) =>
+                !!change.event && matchesCopilotzEvent(change.event, filter),
+            }),
+          loadDurable: async () => {
+            for (;;) {
+              signal?.throwIfAborted();
+              if (deadline !== undefined && Date.now() >= deadline) {
+                throw new Error(
+                  `Timed out waiting for event after ${timeoutMs}ms.`,
+                );
+              }
+              const page = await store.listEvents({
+                namespace: filter.namespace,
+                metadata: filter.metadata,
+                correlationId: filter.correlationId,
+                afterPosition,
+                afterSeq: filter.afterSeq,
+                limit: 1_000,
+              });
+              const match = page.find((event) =>
+                matchesCopilotzEvent(event, filter)
+              );
+              if (match) return [match];
+              afterPosition = page.at(-1)?.position ?? afterPosition;
+              if (page.length < 1_000) return [];
+            }
+          },
+        }),
       });
     },
     async get(namespace, id) {

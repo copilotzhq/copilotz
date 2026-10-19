@@ -1,5 +1,7 @@
 import {
   CONTENT_REPLAY_RETENTION_MS,
+  type ContentCatalog,
+  type ContentTerminal,
   createContentCatalog,
 } from "../content/catalog.ts";
 import {
@@ -8,6 +10,7 @@ import {
 } from "../engine/alarms.ts";
 import {
   assertSchemaCommandTransaction,
+  type CommandContext,
   createSchemaCommandRunner,
 } from "../engine/commands.ts";
 import { afterSqlCommit } from "../events/session.ts";
@@ -38,8 +41,15 @@ import type {
   StreamTerminalOutcome,
   StreamTerminalStatus,
 } from "./types.ts";
+import { ContentStreamOwnershipLostError } from "./stream.ts";
 import { snapshotStreamMetadata } from "./json.ts";
 import { isStreamOutputDescriptor } from "./observation.ts";
+
+type StreamCoordinates = Readonly<{
+  namespace: string;
+  operationId: string;
+  streamId: string;
+}>;
 
 export const OPERATION_CATALOG_FINGERPRINT = "stream-taxonomy-content-v1";
 const STREAM_TERMINAL_CHECK = `
@@ -322,6 +332,22 @@ export type OperationCatalog = Readonly<{
   ): Promise<
     Readonly<{ replayKey: string; streamOrdinal: string }> | undefined
   >;
+  /** Accepted logical transitions and their exact stream projection share one command. */
+  acceptStreamCheckpoint(
+    input: StreamCoordinates & {
+      content: Parameters<ContentCatalog["checkpoint"]>[0];
+    },
+  ): Promise<number>;
+  acceptStreamSeal(
+    input: StreamCoordinates & {
+      content: Parameters<ContentCatalog["sealAccepted"]>[0];
+    },
+  ): Promise<ContentTerminal>;
+  acceptStreamFailure(
+    input: StreamCoordinates & {
+      content: Parameters<ContentCatalog["recordFailure"]>[0];
+    },
+  ): Promise<ContentTerminal>;
   commitStreamOffset(
     input: Readonly<{
       namespace: string;
@@ -1595,6 +1621,269 @@ export function createOperationCatalog(
       }
     >)
     | undefined;
+  async function projectStreamOffset(
+    input: Parameters<OperationCatalog["commitStreamOffset"]>[0],
+    { transaction }: CommandContext,
+  ): Promise<boolean> {
+    const committedOffset = offset(input.committedOffset);
+    const stream = (await transaction.query<{ body_id: string; state: string }>(
+      `SELECT body_id,state FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
+      [input.namespace, input.operationId, input.streamId],
+    )).rows[0];
+    if (!stream || stream.state !== "open") return false;
+    const logical = await createContentCatalog(
+      transaction,
+      databaseSchema,
+    ).read(stream.body_id);
+    if (
+      !logical || logical.namespace !== input.namespace ||
+      logical.committedOffset < committedOffset
+    ) {
+      throw new Error(
+        "Stream checkpoint is not accepted by the content catalog.",
+      );
+    }
+    const result = await transaction.query<
+      { stream_id: string; committed_offset: string | number | bigint }
+    >(
+      `UPDATE ${tables.operationStreams}
+     SET committed_offset = GREATEST(committed_offset, $4::bigint),
+         updated_at = NOW()
+   WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+     AND state = 'open'
+   RETURNING stream_id, committed_offset`,
+      [
+        input.namespace,
+        input.operationId,
+        input.streamId,
+        committedOffset,
+      ],
+    );
+    if (result.rows.length > 0) {
+      await publishOperationChange(
+        session,
+        transaction,
+        databaseSchema,
+        input.namespace,
+        input.operationId,
+        {
+          kind: "stream-offset",
+          streamId: input.streamId,
+          committedOffset: offset(
+            Number(result.rows[0].committed_offset),
+          ),
+        },
+      );
+    }
+    return result.rows.length > 0;
+  }
+  async function projectStreamSeal(
+    input: Parameters<OperationCatalog["sealStream"]>[0],
+    { transaction, commandTime }: CommandContext,
+  ): Promise<boolean> {
+    if (input.body.state !== "ready") {
+      throw new TypeError("Completed streams require a sealed Body.");
+    }
+    const logical = await createContentCatalog(
+      transaction,
+      databaseSchema,
+    ).read(input.body.bodyId);
+    if (
+      !logical || logical.namespace !== input.namespace ||
+      logical.terminal?.outcome !== "completed" ||
+      logical.terminal.length !== input.body.byteLength ||
+      logical.terminal.digest !== input.body.digest
+    ) return false;
+    const result = await transaction.query<{ stream_id: string }>(
+      `UPDATE ${tables.operationStreams}
+     SET state = 'terminal', outcome = 'completed',
+         availability = 'retained', reason = NULL,
+         committed_offset = $4::bigint, digest = $5, asset_id = CASE WHEN state = 'terminal' THEN asset_id END,
+         asset_retention = CASE WHEN state = 'terminal' THEN asset_retention ELSE 'observation' END,
+         terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
+   WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+     AND availability = 'retained' AND cleanup_state IS NULL
+     AND body_id = $6 AND committed_offset <= $4::bigint
+     AND (
+       state = 'open'
+       OR (state = 'terminating' AND outcome = 'completed')
+       OR (state = 'terminal' AND outcome = 'completed'
+         AND committed_offset = $4::bigint AND digest = $5)
+     )
+   RETURNING stream_id`,
+      [
+        input.namespace,
+        input.operationId,
+        input.streamId,
+        offset(input.body.byteLength),
+        input.body.digest,
+        input.body.bodyId,
+      ],
+    );
+    if (result.rows.length > 0) {
+      await publishOperationChange(
+        session,
+        transaction,
+        databaseSchema,
+        input.namespace,
+        input.operationId,
+        { kind: "stream", streamId: input.streamId },
+      );
+    }
+    if (result.rows.length > 0) {
+      if (options.onStreamTerminal) {
+        await writeOwnerDeadline(transaction, databaseSchema, {
+          source: "reconciliation",
+          key: reconciliationAlarmKey("schema", {
+            kind: "operation",
+            namespace: input.namespace,
+            id: input.operationId,
+          }),
+          namespace: input.namespace,
+          dueAt: commandTime,
+          payload: { operationId: input.operationId },
+        });
+      }
+      afterSqlCommit(
+        transaction,
+        () => options.onStreamTerminal?.(input),
+      );
+    }
+    return result.rows.length > 0;
+  }
+  async function projectStreamFailure(
+    input: StreamCoordinates & {
+      body:
+        | Pick<IncompleteBodyHead, "bodyId" | "state" | "byteLength" | "digest">
+        | Pick<ReadyBodyHead, "bodyId" | "state" | "byteLength" | "digest">;
+      outcome: Exclude<StreamTerminalOutcome, "completed">;
+      reason?: string;
+    },
+    { transaction, commandTime }: CommandContext,
+  ): Promise<boolean> {
+    if (
+      input.body.state !== "incomplete" && input.body.state !== "ready"
+    ) {
+      throw new TypeError(
+        "Terminated streams require an immutable Body prefix.",
+      );
+    }
+    const outcome = failedOutcome(input.outcome);
+    const reason = streamReason(input.reason);
+    const logical = await createContentCatalog(
+      transaction,
+      databaseSchema,
+    ).read(input.body.bodyId);
+    if (
+      !logical || logical.namespace !== input.namespace ||
+      !logical.terminal || logical.terminal.outcome === "completed" ||
+      logical.terminal.length !== input.body.byteLength ||
+      logical.terminal.digest !== input.body.digest
+    ) return false;
+    const result = await transaction.query<{ stream_id: string }>(
+      `UPDATE ${tables.operationStreams}
+     SET state = 'terminal',
+         outcome = CASE
+           WHEN state IN ('terminating','terminal') AND outcome <> 'completed' THEN outcome ELSE $4
+         END,
+         reason = CASE
+           WHEN state IN ('terminating','terminal') AND outcome <> 'completed' THEN reason ELSE $5
+         END,
+         availability = 'retained',
+         committed_offset = $6::bigint, digest = $7,
+         asset_id = CASE WHEN state = 'terminal' THEN asset_id END, asset_retention = CASE WHEN state = 'terminal' THEN asset_retention ELSE 'observation' END,
+         terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
+   WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
+     AND availability = 'retained' AND cleanup_state IS NULL
+     AND body_id = $8 AND committed_offset <= $6::bigint
+     AND (
+       state = 'open'
+       OR state = 'terminating'
+       OR (state = 'terminal' AND outcome <> 'completed'
+         AND committed_offset = $6::bigint AND digest = $7)
+     )
+   RETURNING stream_id`,
+      [
+        input.namespace,
+        input.operationId,
+        input.streamId,
+        outcome,
+        reason,
+        offset(input.body.byteLength),
+        input.body.digest,
+        input.body.bodyId,
+      ],
+    );
+    if (result.rows.length > 0) {
+      await publishOperationChange(
+        session,
+        transaction,
+        databaseSchema,
+        input.namespace,
+        input.operationId,
+        { kind: "stream", streamId: input.streamId },
+      );
+    }
+    if (result.rows.length > 0) {
+      if (options.onStreamTerminal) {
+        await writeOwnerDeadline(transaction, databaseSchema, {
+          source: "reconciliation",
+          key: reconciliationAlarmKey("schema", {
+            kind: "operation",
+            namespace: input.namespace,
+            id: input.operationId,
+          }),
+          namespace: input.namespace,
+          dueAt: commandTime,
+          payload: { operationId: input.operationId },
+        });
+      }
+      afterSqlCommit(
+        transaction,
+        () => options.onStreamTerminal?.(input),
+      );
+    }
+    return result.rows.length > 0;
+  }
+
+  async function requireStreamMembership(
+    transaction: SqlExecutor,
+    input: StreamCoordinates & { content: { bodyId: string } },
+    transition: "checkpoint" | "seal" | "failure",
+  ) {
+    const row = (await transaction.query<{
+      body_id: string;
+      state: string;
+      outcome: StreamTerminalOutcome | null;
+      reason: string | null;
+      availability: string;
+      cleanup_state: string | null;
+    }>(
+      `SELECT body_id,state,outcome,reason,availability,cleanup_state
+      FROM ${tables.operationStreams} AS stream
+      WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3
+        AND EXISTS (SELECT 1 FROM ${
+        createCoreTableNames(databaseSchema).content_logical_bodies
+      } AS body
+          WHERE body.body_id=stream.body_id AND body.namespace=stream.namespace)`,
+      [input.namespace, input.operationId, input.streamId],
+    )).rows[0];
+    const admissible = row?.state === "open" || transition !== "checkpoint" && (
+          transition === "seal"
+            ? (row?.state === "terminating" || row?.state === "terminal") &&
+              row.outcome === "completed"
+            : row?.state === "terminating" ||
+              row?.state === "terminal" && row.outcome !== "completed"
+        );
+    if (
+      !row || row.body_id !== input.content.bodyId || !admissible ||
+      row.availability !== "retained" || row.cleanup_state !== null
+    ) {
+      throw new ContentStreamOwnershipLostError(input.streamId);
+    }
+    return row;
+  }
+
   const catalog: OperationCatalog = {
     pushState(input) {
       const snapshot = pushSnapshot?.();
@@ -2421,142 +2710,108 @@ export function createOperationCatalog(
         },
       );
     },
+    async acceptStreamCheckpoint(input) {
+      return await runCommand(
+        "catalog.acceptStreamCheckpoint",
+        input,
+        async (input, context) => {
+          await requireStreamMembership(
+            context.transaction,
+            input,
+            "checkpoint",
+          );
+          const accepted = await createContentCatalog(
+            context.transaction,
+            databaseSchema,
+          ).checkpoint(input.content);
+          if (
+            !await projectStreamOffset(
+              { ...input, committedOffset: accepted },
+              context,
+            )
+          ) {
+            throw new ContentStreamOwnershipLostError(input.streamId);
+          }
+          return accepted;
+        },
+      );
+    },
+    async acceptStreamSeal(input) {
+      return await runCommand(
+        "catalog.acceptStreamSeal",
+        input,
+        async (input, context) => {
+          await requireStreamMembership(context.transaction, input, "seal");
+          const accepted = await createContentCatalog(
+            context.transaction,
+            databaseSchema,
+          ).sealAccepted(input.content);
+          if (
+            !await projectStreamSeal({
+              ...input,
+              body: { ...input.content.head, bodyId: input.content.bodyId },
+            }, context)
+          ) {
+            throw new ContentStreamOwnershipLostError(input.streamId);
+          }
+          return accepted;
+        },
+      );
+    },
+    async acceptStreamFailure(input) {
+      return await runCommand(
+        "catalog.acceptStreamFailure",
+        input,
+        async (input, context) => {
+          const membership = await requireStreamMembership(
+            context.transaction,
+            input,
+            "failure",
+          );
+          const priorFailure = (membership.state === "terminating" ||
+            membership.state === "terminal") &&
+            membership.outcome !== "completed";
+          const accepted = await createContentCatalog(
+            context.transaction,
+            databaseSchema,
+          ).recordFailure({
+            ...input.content,
+            ...(priorFailure
+              ? {
+                outcome: membership.outcome as "failed" | "cancelled",
+                reason: membership.reason ?? undefined,
+              }
+              : {}),
+          });
+          if (
+            accepted.outcome === "completed" ||
+            !await projectStreamFailure({
+              ...input,
+              body: {
+                bodyId: input.content.bodyId,
+                state: "incomplete",
+                byteLength: accepted.length,
+                digest: accepted.digest,
+              },
+              outcome: accepted.outcome,
+              reason: accepted.reason,
+            }, context)
+          ) {
+            throw new ContentStreamOwnershipLostError(input.streamId);
+          }
+          return accepted;
+        },
+      );
+    },
     async commitStreamOffset(input) {
       return await runCommand(
         "catalog.commitStreamOffset",
         input,
-        async (input, { transaction }) => {
-          const committedOffset = offset(input.committedOffset);
-          const stream =
-            (await transaction.query<{ body_id: string; state: string }>(
-              `SELECT body_id,state FROM ${tables.operationStreams} WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3`,
-              [input.namespace, input.operationId, input.streamId],
-            )).rows[0];
-          if (!stream || stream.state !== "open") return false;
-          const logical = await createContentCatalog(
-            transaction,
-            databaseSchema,
-          ).read(stream.body_id);
-          if (
-            !logical || logical.namespace !== input.namespace ||
-            logical.committedOffset < committedOffset
-          ) {
-            throw new Error(
-              "Stream checkpoint is not accepted by the content catalog.",
-            );
-          }
-          const result = await transaction.query<
-            { stream_id: string; committed_offset: string | number | bigint }
-          >(
-            `UPDATE ${tables.operationStreams}
-           SET committed_offset = GREATEST(committed_offset, $4::bigint),
-               updated_at = NOW()
-         WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND state = 'open'
-         RETURNING stream_id, committed_offset`,
-            [
-              input.namespace,
-              input.operationId,
-              input.streamId,
-              committedOffset,
-            ],
-          );
-          if (result.rows.length > 0) {
-            await publishOperationChange(
-              session,
-              transaction,
-              databaseSchema,
-              input.namespace,
-              input.operationId,
-              {
-                kind: "stream-offset",
-                streamId: input.streamId,
-                committedOffset: offset(
-                  Number(result.rows[0].committed_offset),
-                ),
-              },
-            );
-          }
-          return result.rows.length > 0;
-        },
+        projectStreamOffset,
       );
     },
     async sealStream(input) {
-      return await runCommand(
-        "catalog.sealStream",
-        input,
-        async (input, { transaction, commandTime }) => {
-          if (input.body.state !== "ready") {
-            throw new TypeError("Completed streams require a sealed Body.");
-          }
-          const logical = await createContentCatalog(
-            transaction,
-            databaseSchema,
-          ).read(input.body.bodyId);
-          if (
-            !logical || logical.namespace !== input.namespace ||
-            logical.terminal?.outcome !== "completed" ||
-            logical.terminal.length !== input.body.byteLength ||
-            logical.terminal.digest !== input.body.digest
-          ) return false;
-          const result = await transaction.query<{ stream_id: string }>(
-            `UPDATE ${tables.operationStreams}
-           SET state = 'terminal', outcome = 'completed',
-               availability = 'retained', reason = NULL,
-               committed_offset = $4::bigint, digest = $5, asset_id = CASE WHEN state = 'terminal' THEN asset_id END,
-               asset_retention = CASE WHEN state = 'terminal' THEN asset_retention ELSE 'observation' END,
-               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
-         WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND availability = 'retained' AND cleanup_state IS NULL
-           AND body_id = $6 AND committed_offset <= $4::bigint
-           AND (
-             state = 'open'
-             OR (state = 'terminating' AND outcome = 'completed')
-             OR (state = 'terminal' AND outcome = 'completed'
-               AND committed_offset = $4::bigint AND digest = $5)
-           )
-         RETURNING stream_id`,
-            [
-              input.namespace,
-              input.operationId,
-              input.streamId,
-              offset(input.body.byteLength),
-              input.body.digest,
-              input.body.bodyId,
-            ],
-          );
-          if (result.rows.length > 0) {
-            await publishOperationChange(
-              session,
-              transaction,
-              databaseSchema,
-              input.namespace,
-              input.operationId,
-              { kind: "stream", streamId: input.streamId },
-            );
-          }
-          if (result.rows.length > 0) {
-            if (options.onStreamTerminal) {
-              await writeOwnerDeadline(transaction, databaseSchema, {
-                source: "reconciliation",
-                key: reconciliationAlarmKey("schema", {
-                  kind: "operation",
-                  namespace: input.namespace,
-                  id: input.operationId,
-                }),
-                namespace: input.namespace,
-                dueAt: commandTime,
-                payload: { operationId: input.operationId },
-              });
-            }
-            afterSqlCommit(
-              transaction,
-              () => options.onStreamTerminal?.(input),
-            );
-          }
-          return result.rows.length > 0;
-        },
-      );
+      return await runCommand("catalog.sealStream", input, projectStreamSeal);
     },
     async beginStreamTerminalization(input) {
       return await runCommand(
@@ -2603,91 +2858,7 @@ export function createOperationCatalog(
       return await runCommand(
         "catalog.terminateStream",
         input,
-        async (input, { transaction, commandTime }) => {
-          if (
-            input.body.state !== "incomplete" && input.body.state !== "ready"
-          ) {
-            throw new TypeError(
-              "Terminated streams require an immutable Body prefix.",
-            );
-          }
-          const outcome = failedOutcome(input.outcome);
-          const reason = streamReason(input.reason);
-          const logical = await createContentCatalog(
-            transaction,
-            databaseSchema,
-          ).read(input.body.bodyId);
-          if (
-            !logical || logical.namespace !== input.namespace ||
-            !logical.terminal || logical.terminal.outcome === "completed" ||
-            logical.terminal.length !== input.body.byteLength ||
-            logical.terminal.digest !== input.body.digest
-          ) return false;
-          const result = await transaction.query<{ stream_id: string }>(
-            `UPDATE ${tables.operationStreams}
-           SET state = 'terminal',
-               outcome = CASE
-                 WHEN state IN ('terminating','terminal') AND outcome <> 'completed' THEN outcome ELSE $4
-               END,
-               reason = CASE
-                 WHEN state IN ('terminating','terminal') AND outcome <> 'completed' THEN reason ELSE $5
-               END,
-               availability = 'retained',
-               committed_offset = $6::bigint, digest = $7,
-               asset_id = CASE WHEN state = 'terminal' THEN asset_id END, asset_retention = CASE WHEN state = 'terminal' THEN asset_retention ELSE 'observation' END,
-               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
-         WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
-           AND availability = 'retained' AND cleanup_state IS NULL
-           AND body_id = $8 AND committed_offset <= $6::bigint
-           AND (
-             state = 'open'
-             OR state = 'terminating'
-             OR (state = 'terminal' AND outcome <> 'completed'
-               AND committed_offset = $6::bigint AND digest = $7)
-           )
-         RETURNING stream_id`,
-            [
-              input.namespace,
-              input.operationId,
-              input.streamId,
-              outcome,
-              reason,
-              offset(input.body.byteLength),
-              input.body.digest,
-              input.body.bodyId,
-            ],
-          );
-          if (result.rows.length > 0) {
-            await publishOperationChange(
-              session,
-              transaction,
-              databaseSchema,
-              input.namespace,
-              input.operationId,
-              { kind: "stream", streamId: input.streamId },
-            );
-          }
-          if (result.rows.length > 0) {
-            if (options.onStreamTerminal) {
-              await writeOwnerDeadline(transaction, databaseSchema, {
-                source: "reconciliation",
-                key: reconciliationAlarmKey("schema", {
-                  kind: "operation",
-                  namespace: input.namespace,
-                  id: input.operationId,
-                }),
-                namespace: input.namespace,
-                dueAt: commandTime,
-                payload: { operationId: input.operationId },
-              });
-            }
-            afterSqlCommit(
-              transaction,
-              () => options.onStreamTerminal?.(input),
-            );
-          }
-          return result.rows.length > 0;
-        },
+        projectStreamFailure,
       );
     },
     async markStreamUnavailable(input) {

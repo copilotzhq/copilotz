@@ -5,6 +5,10 @@ import {
   withOwnerCommandAuthorization,
 } from "../engine/command-authorization.ts";
 import { inheritActionCaller } from "./caller-identity.ts";
+import {
+  bindContentStreamCommands,
+  inheritContentStreamFailure,
+} from "../streams/stream.ts";
 import type { ActionContext } from "./types.ts";
 const readResourceOwners = new WeakMap<object, object>();
 export function authorizeActionCapabilities(
@@ -22,6 +26,15 @@ export function authorizeActionCapabilities(
     value instanceof ReadableStreamDefaultReader ||
     value instanceof ReadableStreamBYOBReader;
   const own = (value: unknown) => {
+    if (value && typeof value === "object") {
+      // Bind before the acquisition scope closes or post-open disclosure waits.
+      // Scheduled work keeps this invocation's guard, with a fresh call lifetime.
+      bindContentStreamCommands(
+        value,
+        <T>(run: () => T | Promise<T>) =>
+          withoutOwnerCommandAuthorization(() => call(run)) as Promise<T>,
+      );
+    }
     if (isReadResource(value) && !readResourceOwners.has(value)) {
       readResourceOwners.set(value, owner);
     }
@@ -333,6 +346,7 @@ export function authorizeActionCapabilities(
       },
     });
     inheritActionCaller(value, facade);
+    inheritContentStreamFailure(value, facade);
     if (!receiver) cache.set(value, facade);
     return facade;
   };

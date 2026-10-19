@@ -9,6 +9,16 @@ import { createTestDatabase } from "../testing/ominipg.ts";
 import { bounded } from "../testing/effect-commit-proxy.ts";
 import { defineCollection, relation } from "./definition.ts";
 
+// Host result reconstruction preserves safe name/code/message, not HTTP status
+// or the original Error prototype.
+async function assertActionForbidden(run: () => Promise<unknown>) {
+  const error = await assertRejects(run, Error);
+  assertEquals(error.name, "ActionError");
+  assertEquals(error.message, "Forbidden");
+  assertEquals((error as { code?: unknown }).code, "forbidden");
+  return error;
+}
+
 Deno.test("unprotected root reads recheck every protected related disclosure after hydration", async () => {
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
@@ -126,7 +136,7 @@ Deno.test("unprotected root reads recheck every protected related disclosure aft
       const revoked = app.hostCommands.invoke("grant", { allowed: false });
       proceed.resolve();
       await revoked;
-      await assertRejects(() => read, Error, "Collection access denied.");
+      await assertActionForbidden(() => read);
     }
   } finally {
     proceed.resolve();

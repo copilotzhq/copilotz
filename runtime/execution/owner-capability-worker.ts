@@ -171,6 +171,7 @@ function workerContext(options: {
       const handle = resource.handle;
       let offset = Number(resource.offset);
       let closed = false;
+      let pendingAppends = 0;
       const guard = () => {
         check();
         if (closed) throw capabilityError("owner_handle_closed");
@@ -180,11 +181,20 @@ function workerContext(options: {
         offset: () => offset,
         async append(...args: unknown[]) {
           guard();
-          const result = await rpc(["append"], args, handle) as {
-            endOffset: number;
-          };
-          offset = result.endOffset;
-          return result;
+          if (pendingAppends >= 2) {
+            throw capabilityError("owner_append_capacity");
+          }
+          // Reject before rpc snapshots/encodes bytes or tracks another call.
+          pendingAppends++;
+          try {
+            const result = await rpc(["append"], args, handle) as {
+              endOffset: number;
+            };
+            offset = result.endOffset;
+            return result;
+          } finally {
+            pendingAppends--;
+          }
         },
         async close(...args: unknown[]) {
           guard();

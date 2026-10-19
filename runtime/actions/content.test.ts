@@ -432,6 +432,7 @@ Deno.test("Action content enforces budgets, cancellation and authorization befor
 
 Deno.test("Action content schemas validate prepared values before recording invocation", async () => {
   const f = fixture();
+  let executions = 0;
   const action = defineAction({
     id: "test.schema-content",
     content: { input: ["content"] },
@@ -448,19 +449,36 @@ Deno.test("Action content schemas validate prepared values before recording invo
         },
       },
     },
-    execute: () => "ok",
+    execute: () => {
+      executions++;
+      return "ok";
+    },
   });
-  let emitted = 0;
+  const events: ActionLifecycleInput[] = [];
   const callers = createActionCallers({ action }, {
     signal: new AbortController().signal,
     content: f.content,
+    createInvocationKey: () => "schema-content",
     actionLifecycle: {
-      emit: () => {
-        emitted++;
-        return Promise.resolve(undefined as never);
+      emit: (data) => {
+        const deduplicated = events.some((event) =>
+          event.deduplicationId === data.deduplicationId
+        );
+        if (!deduplicated) events.push(structuredClone(data));
+        return Promise.resolve({ deduplicated } as never);
       },
-      invoked: () => Promise.resolve(null),
-      terminal: () => Promise.resolve(null),
+      invoked: (id) =>
+        Promise.resolve(
+          events.find((event) =>
+            event.actionRunId === id && event.status === "invoked"
+          ) as import("./types.ts").ActionInvokedData | undefined ?? null,
+        ),
+      terminal: (id) =>
+        Promise.resolve(
+          events.find((event) =>
+            event.actionRunId === id && event.status === "completed"
+          ) as import("./types.ts").ActionCompletedData | undefined ?? null,
+        ),
     },
     createContext: () => ({}) as ActionContext,
   });
@@ -476,19 +494,25 @@ Deno.test("Action content schemas validate prepared values before recording invo
       }),
     TypeError,
   );
-  assertEquals(emitted, 0);
-  assertEquals(
-    await callers.action({
-      content: [{
-        kind: "text",
-        role: "body",
-        mediaType: "text/plain",
-        value: "valid",
-      }],
-    }),
-    "ok",
-  );
-  assertEquals(emitted, 2);
+  assertEquals(events, []);
+  assertEquals(executions, 0);
+  const valid = {
+    content: [{
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+      value: "valid",
+    }],
+  };
+  assertEquals(await callers.action(valid), "ok");
+  assertEquals(events.map((event) => event.status), ["invoked", "completed"]);
+  const capture = events[0];
+  assert(capture.status === "invoked");
+  assertEquals(capture.effectProtocol, 1);
+  assertEquals(capture.input, valid);
+  assertEquals(await callers.action(structuredClone(valid)), "ok");
+  assertEquals(events.length, 2);
+  assertEquals(executions, 1);
 });
 
 Deno.test("Action hydration rejects invalid UTF-8 even when a host returns undecoded bytes", async () => {

@@ -1,5 +1,11 @@
 /** One owner-authoritative lifecycle for logical bodies and their physical copies. */
 import { createCoreTableNames } from "../events/schema.ts";
+import {
+  notifyOwnerBodyChange,
+  type OwnerPushWatch,
+  stageOwnerBodyChange,
+  watchOwnerPush,
+} from "../events/push.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import {
   assertSchemaCommandTransaction,
@@ -138,8 +144,6 @@ function sameWriter(body: LogicalBody, writer: ContentWriter): boolean {
     body.generation === writer.generation;
 }
 
-const contentHubs = new WeakMap<SqlExecutor, Map<string, Set<() => void>>>();
-
 export interface ContentCatalog {
   read(bodyId: string, executor?: SqlExecutor): Promise<LogicalBody | null>;
   nextDeadline(executor?: SqlExecutor): Promise<string | null>;
@@ -149,7 +153,9 @@ export interface ContentCatalog {
   recoveryCandidates(
     input?: { limit?: number; after?: string },
   ): Promise<LogicalBody[]>;
-  watch(bodyId: string): { wait(): Promise<void>; close(): void };
+  watch(bodyId: string): Promise<OwnerPushWatch>;
+  /** Invalidates physical reads, without accepting bytes or changing semantic history. */
+  notifyPhysicalChange(bodyId: string): void;
   reserve(
     input: ContentWriter & {
       namespace: string;
@@ -219,21 +225,19 @@ export function createContentCatalog(
 ): ContentCatalog {
   const tables = createCoreTableNames(schema);
   const runner = createSchemaCommandRunner(session, schema);
-  const hubs = contentHubs.get(session) ?? new Map<string, Set<() => void>>();
-  contentHubs.set(session, hubs);
-  const wake = (id: string) => {
-    const key = `${schema}\0${id}`;
-    for (const listener of hubs.get(key) ?? []) listener();
-  };
+  let ownerSignal: AbortSignal | undefined;
   const command: ReturnType<typeof createSchemaCommandRunner> = (
     kind,
     input,
     execute,
   ) =>
     runner(kind, input, async (value, context) => {
+      ownerSignal = context.signal;
       const result = await execute(value, context);
       const id = (value as { bodyId?: string })?.bodyId;
-      if (id) context.afterCommit(() => wake(id));
+      if (id && kind !== "content.renew" && kind !== "content.deferRecovery") {
+        stageOwnerBodyChange(context.transaction, schema, id);
+      }
       return result;
     });
   async function read(
@@ -459,41 +463,10 @@ export function createContentCatalog(
       );
     },
     watch(bodyId: string) {
-      const key = `${schema}\0${bodyId}`;
-      let changed = false;
-      let waiting: (() => void) | undefined;
-      const listener = () => {
-        changed = true;
-        waiting?.();
-      };
-      const listeners = hubs.get(key) ?? new Set<() => void>();
-      listeners.add(listener);
-      hubs.set(key, listeners);
-      return {
-        async wait() {
-          if (changed) {
-            changed = false;
-            return;
-          }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-              waiting = undefined;
-              resolve();
-            }, 1000);
-            waiting = () => {
-              clearTimeout(timer);
-              waiting = undefined;
-              changed = false;
-              resolve();
-            };
-          });
-        },
-        close() {
-          listeners.delete(listener);
-          waiting?.();
-          if (!listeners.size) hubs.delete(key);
-        },
-      };
+      return watchOwnerPush(session, schema, { bodyId });
+    },
+    notifyPhysicalChange(bodyId: string) {
+      if (ownerSignal) notifyOwnerBodyChange(ownerSignal, bodyId);
     },
     async reserve(
       input: ContentWriter & {

@@ -1,3 +1,4 @@
+import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import {
   contentStreamBodyId,
   contentStreamIncarnationId,
@@ -23,6 +24,7 @@ import type {
   ContentStreamAbortInput,
   ContentStreamCloseInput,
   ContentStreamRuntime,
+  ContentStreamWriter,
   CreateContentStreamRuntimeOptions,
 } from "./types.ts";
 import { snapshotStreamMetadata } from "./json.ts";
@@ -40,6 +42,61 @@ export type {
   CreateContentStreamRuntimeOptions,
   StreamTerminalOutcome,
 } from "./types.ts";
+
+type ScheduledWriterCommand = <T>(run: () => T | Promise<T>) => Promise<T>;
+type WriterLifetime = {
+  failure: AbortSignal;
+  scheduled?: ScheduledWriterCommand;
+};
+const writerLifetimes = new WeakMap<object, WriterLifetime>();
+type Terminalizer = NonNullable<
+  CreateContentStreamRuntimeOptions["onTerminalizing"]
+>;
+const ownerTerminalizers = new WeakSet<Terminalizer>();
+
+/** Bind only the engine's exact operation terminal-intent transition. */
+export function bindContentStreamTerminalizer<T extends Terminalizer>(
+  terminalize: T,
+): T {
+  ownerTerminalizers.add(terminalize);
+  return terminalize;
+}
+const typedArrayLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "length",
+)!.get!;
+const copyBytes = Uint8Array.prototype.set;
+
+/** Preserve the same writer lifetime through a trusted capability facade. */
+export function inheritContentStreamFailure(
+  source: object,
+  target: object,
+): void {
+  const lifetime = writerLifetimes.get(source);
+  if (lifetime) writerLifetimes.set(target, lifetime);
+}
+
+/** The first acquiring invocation owns scheduled policy for this exact writer. */
+export function bindContentStreamCommands(
+  writer: object,
+  scheduled: ScheduledWriterCommand,
+): void {
+  const lifetime = writerLifetimes.get(writer);
+  if (lifetime) lifetime.scheduled ??= scheduled;
+}
+
+/** Package-only lifetime observation for the invocation that owns this writer. */
+export function observeContentStreamFailure(
+  writer: object,
+  onFailure: (reason: unknown) => void,
+): () => void {
+  const signal = writerLifetimes.get(writer)?.failure;
+  if (!signal) return () => {};
+  const notify = () => onFailure(signal.reason);
+  signal.addEventListener("abort", notify, { once: true });
+  if (signal.aborted) notify();
+  return () => signal.removeEventListener("abort", notify);
+}
 
 export class ContentStreamOwnershipLostError extends Error {
   readonly code = "content_stream_ownership_lost";
@@ -145,7 +202,12 @@ export function createContentStreamRuntime(
       let stopped = false,
         closed: PendingContentRef | undefined,
         terminalTask: Promise<void> | undefined;
-      let failure: unknown;
+      const failure = new AbortController();
+      const lifetime: WriterLifetime = { failure: failure.signal };
+      const scheduled = async <T>(run: () => T | Promise<T>): Promise<T> =>
+        await (lifetime.scheduled ? lifetime.scheduled(run) : run());
+      let terminalAccepted = false, aborting = false;
+      let pendingAppends = 0;
       let tail: Promise<void> = Promise.resolve();
       let checkpointTimer: ReturnType<typeof setTimeout> | undefined,
         renewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -180,34 +242,86 @@ export function createContentStreamRuntime(
           endOffset: committed,
         });
       };
-      const abort = async (
-        abortInput: ContentStreamAbortInput = {},
-        abortOptions: { signal?: AbortSignal } = {},
+      // Only an owner-observed failure or the captured invocation cancellation
+      // admits these fixed revocation steps outside a completed capability call.
+      const cleanup = async <T>(run: () => T | Promise<T>): Promise<T> =>
+        await (failure.signal.aborted || options.signal?.aborted
+          ? withoutOwnerCommandAuthorization(run)
+          : run());
+      const captureAbort = (abortInput: ContentStreamAbortInput) => {
+        const requested = {
+          outcome: abortInput.outcome ?? "failed",
+          reason: abortInput.reason,
+        };
+        if (
+          (requested.outcome !== "failed" &&
+            requested.outcome !== "cancelled") ||
+          (requested.reason !== undefined &&
+            typeof requested.reason !== "string")
+        ) {
+          throw new TypeError(
+            "Abort requires a failed or cancelled outcome and a string reason.",
+          );
+        }
+        const observed = failure.signal.aborted
+          ? failure.signal.reason instanceof ContentStreamOwnershipLostError
+            ? { outcome: "cancelled" as const, reason: "superseded" }
+            : { outcome: "failed" as const, reason: "writer_failed" }
+          : options.signal?.aborted
+          ? options.signal.reason instanceof DOMException &&
+              options.signal.reason.name === "AbortError"
+            ? { outcome: "cancelled" as const, reason: "cancelled" }
+            : { outcome: "failed" as const, reason: "abandoned" }
+          : requested;
+        const { outcome, reason } = observed;
+        return { outcome, ...(reason ? { reason } : {}) };
+      };
+      let selectedTerminal: ReturnType<typeof captureAbort> | undefined;
+      const terminate = async (
+        requested: ReturnType<typeof captureAbort>,
+        runFixed: ScheduledWriterCommand,
       ) => {
-        cancelled(abortOptions.signal);
-        if (closed) return;
+        const terminal = selectedTerminal ??= requested;
+        aborting = true;
         stopped = true;
         clearTimers();
         terminalTask ??= queue(async () => {
-          const terminal = {
-            outcome: abortInput.outcome ?? "failed" as const,
-            ...(abortInput.reason ? { reason: abortInput.reason } : {}),
-          };
-          await options.onTerminalizing?.(opened, terminal);
-          await catalog.beginRevocation(identity);
-          writer = await store.fence({ writer });
-          committed = await catalog.revoked(identity);
-          const digest = await digestCatalogPrefix(
-            store,
-            logical.copy.key,
-            committed,
+          const current = await runFixed(() =>
+            catalog.beginRevocation(identity)
           );
-          const incomplete = await store.terminate({
-            writer,
-            expectedByteLength: committed,
-            expectedDigest: digest,
-          });
-          await catalog.recordFailure({ ...identity, ...terminal, digest });
+          // A seal can have committed even if its reply was lost. Its accepted
+          // terminal wins over late failure and must never be fenced/replaced.
+          if (current.terminal) {
+            terminalAccepted = current.terminal.outcome === "completed";
+            appends.clear();
+            removeAbort();
+            return;
+          }
+          const terminalize = options.onTerminalizing;
+          if (terminalize) {
+            if (ownerTerminalizers.has(terminalize)) {
+              await runFixed(() => terminalize(opened, terminal));
+            } else await terminalize(opened, terminal);
+          }
+          writer = await runFixed(() => store.fence({ writer }));
+          committed = await runFixed(() => catalog.revoked(identity));
+          const digest = await runFixed(() =>
+            digestCatalogPrefix(
+              store,
+              logical.copy.key,
+              committed,
+            )
+          );
+          const incomplete = await runFixed(() =>
+            store.terminate({
+              writer,
+              expectedByteLength: committed,
+              expectedDigest: digest,
+            })
+          );
+          await runFixed(() =>
+            catalog.recordFailure({ ...identity, ...terminal, digest })
+          );
           await options.onTerminate?.(opened, incomplete, terminal);
           appends.clear();
           removeAbort();
@@ -217,22 +331,40 @@ export function createContentStreamRuntime(
         });
         await terminalTask;
       };
+      const abort = async (
+        abortInput: ContentStreamAbortInput = {},
+        abortOptions: { signal?: AbortSignal } = {},
+      ) => {
+        cancelled(abortOptions.signal);
+        if (closed || terminalAccepted) return;
+        const terminal = captureAbort(abortInput);
+        // Public retries retain the current call authority, even after failure.
+        await terminate(terminal, async (run) => await run());
+      };
+      const abortObserved = async (input: ContentStreamAbortInput) => {
+        if (closed || terminalAccepted) return;
+        // Only the owner-created failure/cancellation closures reach this entry.
+        await terminate(captureAbort(input), cleanup);
+      };
       const fail = (error: unknown) => {
-        failure = error;
+        if (failure.signal.aborted) return;
         stopped = true;
         clearTimers();
-        void abort(
+        // Start existing fence/recovery before notifying the owning invocation.
+        // Its cleanup can join this task, but cannot turn the failure into success.
+        void abortObserved(
           error instanceof ContentStreamOwnershipLostError
             ? { outcome: "cancelled", reason: "superseded" }
-            : { reason: "checkpoint_failed" },
+            : { reason: "writer_failed" },
         ).catch(() => undefined);
+        failure.abort(error);
       };
       const scheduleCheckpoint = () => {
         if (stopped || checkpointTimer !== undefined) return;
         checkpointTimer = setTimeout(() => {
           checkpointTimer = undefined;
           void queue(async () => {
-            if (!stopped) await checkpoint();
+            if (!stopped) await scheduled(checkpoint);
           }).catch(fail);
         }, Math.max(1, interval - (Date.now() - lastCheckpoint)));
         unref(checkpointTimer);
@@ -243,10 +375,14 @@ export function createContentStreamRuntime(
           renewTimer = undefined;
           if (stopped) return;
           // This owner command is deliberately independent of append I/O.
-          void catalog.renew({
-            ...identity,
-            deadline: new Date(Date.now() + protectionMs).toISOString(),
-          }).then(renew, fail);
+          void scheduled(() =>
+            catalog.renew({
+              ...identity,
+              deadline: new Date(Date.now() + protectionMs).toISOString(),
+            })
+          ).then(renew, (error) => {
+            if (!terminalAccepted && !aborting) fail(error);
+          });
         }, protectionMs / 2);
         unref(renewTimer);
       };
@@ -255,7 +391,7 @@ export function createContentStreamRuntime(
         const onAbort = () => {
           const cancelled = signal.reason instanceof DOMException &&
             signal.reason.name === "AbortError";
-          void abort(
+          void abortObserved(
             cancelled
               ? { outcome: "cancelled", reason: "cancelled" }
               : { reason: "abandoned" },
@@ -286,18 +422,36 @@ export function createContentStreamRuntime(
         throw error;
       }
       renew();
-      return {
+      const streamWriter: ContentStreamWriter = {
         id,
         offset: () => offset,
         append(appendInput, appendOptions = {}) {
           cancelled(appendOptions.signal);
-          const bytes = new Uint8Array(appendInput.bytes),
+          if (pendingAppends >= 2) {
+            throw new RangeError("Content stream append capacity is full.");
+          }
+          // Admit before inspecting/copying caller bytes, including reentrant getters.
+          pendingAppends++;
+          let bytes: Uint8Array, appendId: string;
+          try {
             appendId = appendInput.appendId.trim();
-          if (!appendId || bytes.byteLength > CONTENT_CHUNK_BYTES) {
-            throw new TypeError("Append requires an id and a bounded chunk.");
+            const inputBytes = appendInput.bytes;
+            const length = typedArrayLength.call(inputBytes);
+            if (
+              !appendId || !(inputBytes instanceof Uint8Array) ||
+              length > CONTENT_CHUNK_BYTES
+            ) {
+              throw new TypeError("Append requires an id and a bounded chunk.");
+            }
+            // Built-in accessors/copy avoid caller iterators and shadowed lengths.
+            bytes = new Uint8Array(length);
+            copyBytes.call(bytes, inputBytes);
+          } catch (error) {
+            pendingAppends--;
+            throw error;
           }
           return queue(async () => {
-            if (failure) throw failure;
+            failure.signal.throwIfAborted();
             if (stopped) throw new ContentStreamOwnershipLostError(id);
             const digest = await digestContent(bytes);
             const prior = appends.get(appendId);
@@ -318,20 +472,31 @@ export function createContentStreamRuntime(
             }
             const startOffset = offset;
             if (bytes.byteLength) {
-              const result = await store.append({
-                writer,
-                expectedOffset: startOffset,
-                appendId,
-                bytes,
-              });
+              let result;
+              try {
+                result = await store.append({
+                  writer,
+                  expectedOffset: startOffset,
+                  appendId,
+                  bytes,
+                });
+              } catch (error) {
+                fail(error);
+                throw error;
+              } finally {
+                // A rejected storage reply may still have written tentative bytes.
+                catalog.notifyPhysicalChange(bodyId);
+              }
               if (
                 result.startOffset !== startOffset ||
                 result.endOffset < startOffset + bytes.length
               ) {
-                throw createContentError(
+                const error = createContentError(
                   "asset_corrupted",
                   "Physical append returned an invalid receipt.",
                 );
+                fail(error);
+                throw error;
               }
               offset = startOffset + bytes.length;
             }
@@ -345,16 +510,17 @@ export function createContentStreamRuntime(
               throw error;
             }
             return result;
-          });
+          }).finally(() => pendingAppends--);
         },
         async close(closeInput: ContentStreamCloseInput, closeOptions = {}) {
           cancelled(closeOptions.signal);
           if (closed) return closed;
-          if (failure) throw failure;
+          failure.signal.throwIfAborted();
           if (stopped) throw new ContentStreamOwnershipLostError(id);
           stopped = true;
           clearTimers();
           await queue(async () => {
+            failure.signal.throwIfAborted();
             await checkpoint();
             const digest = await digestCatalogPrefix(
               store,
@@ -392,6 +558,7 @@ export function createContentStreamRuntime(
               expiresAt: new Date(Date.now() + CONTENT_REPLAY_RETENTION_MS)
                 .toISOString(),
             };
+            failure.signal.throwIfAborted();
             await catalog.sealIntent({
               ...identity,
               length: committed,
@@ -399,12 +566,16 @@ export function createContentStreamRuntime(
               pending,
             });
             await options.onTerminalizing?.(opened, { outcome: "completed" });
+            failure.signal.throwIfAborted();
             const head = await store.seal({
               writer,
               expectedByteLength: committed,
               expectedDigest: digest,
             });
+            failure.signal.throwIfAborted();
             await catalog.sealAccepted({ ...identity, head });
+            terminalAccepted = true;
+            failure.signal.throwIfAborted();
             await promoteConfiguredLogicalBody({
               catalog,
               bodyId,
@@ -421,7 +592,7 @@ export function createContentStreamRuntime(
             };
             removeAbort();
           }).catch((error) => {
-            failure = error;
+            fail(error);
             throw error;
           });
           return closed!;
@@ -438,6 +609,8 @@ export function createContentStreamRuntime(
           await abort({ reason: "abandoned" });
         },
       };
+      writerLifetimes.set(streamWriter, lifetime);
+      return streamWriter;
     },
     async follow(input, followOptions = {}) {
       cancelled(followOptions.signal);
@@ -450,18 +623,43 @@ export function createContentStreamRuntime(
       if (!Number.isSafeInteger(start) || start < 0) {
         throw new TypeError("Invalid follower offset.");
       }
-      let initial = await catalog.read(bodyId);
-      if (!initial) {
-        throw createContentError(
-          "content_missing",
-          "Stream body is unavailable.",
-        );
-      }
+      const watch = await catalog.watch(bodyId);
+      const stopWatching = () => watch.close();
+      followOptions.signal?.addEventListener("abort", stopWatching, {
+        once: true,
+      });
+      const closeWatch = () => {
+        followOptions.signal?.removeEventListener("abort", stopWatching);
+        watch.close();
+      };
       let initialHead;
       try {
-        initialHead = await resolveStore(initial.copy).head({
-          bodyId: initial.copy.key,
-        });
+        cancelled(followOptions.signal);
+        let initial = await catalog.read(bodyId);
+        if (!initial) {
+          throw createContentError(
+            "content_missing",
+            "Stream body is unavailable.",
+          );
+        }
+        try {
+          initialHead = await resolveStore(initial.copy).head({
+            bodyId: initial.copy.key,
+          });
+          if (!initialHead) {
+            throw createContentError(
+              "content_missing",
+              "Stream copy is unavailable.",
+            );
+          }
+        } catch (error) {
+          const next = await catalog.read(bodyId);
+          if (!next || next.copy.key === initial.copy.key) throw error;
+          initial = next;
+          initialHead = await resolveStore(initial.copy).head({
+            bodyId: initial.copy.key,
+          });
+        }
         if (!initialHead) {
           throw createContentError(
             "content_missing",
@@ -469,20 +667,9 @@ export function createContentStreamRuntime(
           );
         }
       } catch (error) {
-        const next = await catalog.read(bodyId);
-        if (!next || next.copy.key === initial.copy.key) throw error;
-        initial = next;
-        initialHead = await resolveStore(initial.copy).head({
-          bodyId: initial.copy.key,
-        });
+        closeWatch();
+        throw error;
       }
-      if (!initialHead) {
-        throw createContentError(
-          "content_missing",
-          "Stream copy is unavailable.",
-        );
-      }
-      const watch = catalog.watch(bodyId);
       let cursor = start, cancelledRead = false;
       const body = new ReadableStream<Uint8Array>({
         async pull(controller) {
@@ -535,20 +722,20 @@ export function createContentStreamRuntime(
                 continue;
               }
               if (logical.terminal) {
-                watch.close();
+                closeWatch();
                 controller.close();
                 return;
               }
               await watch.wait();
             }
           } catch (error) {
-            watch.close();
+            closeWatch();
             controller.error(error);
           }
         },
         cancel() {
           cancelledRead = true;
-          watch.close();
+          closeWatch();
         },
       }, { highWaterMark: 0 });
       return { bodyId, offset: start, mediaType: initialHead.mediaType, body };

@@ -30,6 +30,7 @@ import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  isNonRetryableError,
   markNonRetryable,
   type PluginRegistry,
   type Processor,
@@ -437,7 +438,14 @@ for (
       },
       onError(cause, event, context) {
         recoveries++;
-        assertEquals(cause, error);
+        // Owner capabilities transport error data, not the worker's prototype/stack.
+        assert(cause instanceof Error);
+        assertEquals(cause.name, error.name);
+        assertEquals(cause.message, error.message);
+        assertEquals(
+          isNonRetryableError(cause),
+          disposition === "non-retryable",
+        );
         assertEquals(event.namespace, "tenant-a");
         assertEquals(context.signal.aborted, false);
         if (disposition === "rejected") {

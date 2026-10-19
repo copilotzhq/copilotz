@@ -3,11 +3,7 @@ import {
   schemaCommandContext,
 } from "../engine/commands.ts";
 import { createCoreTableNames } from "./schema.ts";
-import {
-  afterSqlCommit,
-  type SqlExecutor,
-  type SqlSession,
-} from "./session.ts";
+import { afterSqlCommit, type SqlExecutor } from "./session.ts";
 import type { DurableEvent } from "./types.ts";
 
 export type OwnerPushPosition = Readonly<{
@@ -30,12 +26,20 @@ export type OwnerPushFrame =
   | Readonly<
     { kind: "change"; change: OwnerChange; headSeq: string; revision: number }
   >
-  | Readonly<{ kind: "checkpoint"; headSeq: string }>
+  | Readonly<
+    {
+      kind: "checkpoint";
+      headSeq: string;
+      bodyRevision?: number;
+      sequenced?: boolean;
+    }
+  >
   | Readonly<
     {
       kind: "heartbeat";
       headSeq: string;
       positions: readonly OwnerPushPosition[];
+      bodyRevision?: number;
     }
   >
   | Readonly<{ kind: "reset"; headSeq: string; reason: string }>;
@@ -44,18 +48,24 @@ export type OwnerPushSubscription = Readonly<{
   close(): void;
   heartbeat(): void;
   snapshot(): Readonly<
-    { headSeq: string; positions: readonly OwnerPushPosition[] }
+    {
+      headSeq: string;
+      positions: readonly OwnerPushPosition[];
+      bodyRevision?: number;
+    }
   >;
 }>;
 type Listener = {
   send(frame: OwnerPushFrame): void;
   namespace?: string;
   operationId?: string;
+  bodyId?: string;
 };
 type Hub = {
   head: string;
   revision: number;
   positions: Map<string, OwnerPushPosition>;
+  bodies: Map<string, { revision: number; references: number }>;
   listeners: Set<Listener>;
   timer?: ReturnType<typeof setInterval>;
 };
@@ -63,7 +73,13 @@ const hubs = new WeakMap<AbortSignal, Hub>();
 function hubFor(signal: AbortSignal): Hub {
   let hub = hubs.get(signal);
   if (hub) return hub;
-  hub = { head: "0", revision: 0, positions: new Map(), listeners: new Set() };
+  hub = {
+    head: "0",
+    revision: 0,
+    positions: new Map(),
+    bodies: new Map(),
+    listeners: new Set(),
+  };
   hubs.set(signal, hub);
   const captured = hub;
   signal.addEventListener("abort", () => {
@@ -77,11 +93,25 @@ function hubFor(signal: AbortSignal): Hub {
     }
     captured.listeners.clear();
     captured.positions.clear();
+    captured.bodies.clear();
   }, { once: true });
   return hub;
 }
+function detach(hub: Hub, listener: Listener): void {
+  if (!hub.listeners.delete(listener)) return;
+  if (listener.bodyId !== undefined) {
+    const body = hub.bodies.get(listener.bodyId);
+    if (body && --body.references === 0) hub.bodies.delete(listener.bodyId);
+  }
+  if (!hub.listeners.size) {
+    clearInterval(hub.timer);
+    hub.timer = undefined;
+    hub.positions.clear();
+  }
+}
 function deliver(hub: Hub, listener: Listener, frame: OwnerPushFrame): void {
   try {
+    if (listener.bodyId !== undefined && frame.kind === "change") return;
     if (
       frame.kind === "change" &&
       ((listener.namespace !== undefined &&
@@ -89,10 +119,14 @@ function deliver(hub: Hub, listener: Listener, frame: OwnerPushFrame): void {
         (listener.operationId !== undefined &&
           listener.operationId !== frame.change.operationId))
     ) {
-      listener.send({ kind: "checkpoint", headSeq: frame.headSeq });
+      listener.send({
+        kind: "checkpoint",
+        headSeq: frame.headSeq,
+        sequenced: !!frame.change.event,
+      });
     } else listener.send(structuredClone(frame));
   } catch {
-    hub.listeners.delete(listener);
+    detach(hub, listener);
     try {
       listener.send({
         kind: "reset",
@@ -100,25 +134,72 @@ function deliver(hub: Hub, listener: Listener, frame: OwnerPushFrame): void {
         reason: "push_failed",
       });
     } catch { /* disconnected */ }
-    if (!hub.listeners.size) {
-      clearInterval(hub.timer);
-      hub.timer = undefined;
-    }
   }
 }
 function snapshot(hub: Hub, listener: Listener) {
   return {
     headSeq: hub.head,
-    positions: [...hub.positions.values()].filter((position) =>
-      (listener.namespace === undefined ||
-        position.namespace === listener.namespace) &&
-      (listener.operationId === undefined ||
-        position.operationId === listener.operationId)
-    ),
+    ...(listener.bodyId === undefined
+      ? {}
+      : { bodyRevision: hub.bodies.get(listener.bodyId)?.revision ?? 0 }),
+    positions: listener.bodyId === undefined
+      ? [...hub.positions.values()].filter((position) =>
+        (listener.namespace === undefined ||
+          position.namespace === listener.namespace) &&
+        (listener.operationId === undefined ||
+          position.operationId === listener.operationId)
+      )
+      : [],
   };
 }
 function heartbeat(hub: Hub, listener: Listener): void {
   deliver(hub, listener, { kind: "heartbeat", ...snapshot(hub, listener) });
+}
+/** An invalidation only: physical completion never advances the accepted offset. */
+export function notifyOwnerBodyChange(
+  signal: AbortSignal,
+  bodyId: string,
+): void {
+  if (signal.aborted) return;
+  const hub = hubs.get(signal), body = hub?.bodies.get(bodyId);
+  if (!hub || !body) return;
+  body.revision++;
+  deliverBodyChange(hub, bodyId, body.revision);
+}
+function deliverBodyChange(
+  hub: Hub,
+  bodyId: string,
+  bodyRevision: number,
+): void {
+  for (const listener of [...hub.listeners]) {
+    if (listener.bodyId === bodyId) {
+      deliver(hub, listener, {
+        kind: "checkpoint",
+        headSeq: hub.head,
+        bodyRevision,
+      });
+    }
+  }
+}
+/** The revision records confirmed logical changes independently of delivery. */
+export function stageOwnerBodyChange(
+  transaction: SqlExecutor,
+  schema: string,
+  bodyId: string,
+): void {
+  const context = schemaCommandContext(transaction, schema);
+  const hub = hubFor(context.signal);
+  let body: { revision: number; references: number } | undefined;
+  let revision: number | undefined;
+  afterSqlCommit(transaction, () => {
+    body = hub.bodies.get(bodyId);
+    if (body) revision = ++body.revision;
+  });
+  context.afterCommit(() => {
+    if (revision !== undefined && hub.bodies.get(bodyId) === body) {
+      deliverBodyChange(hub, bodyId, revision);
+    }
+  });
 }
 /** The committed head advances separately from delivery, so a lost final push is detectable. */
 export function stageOwnerChange(
@@ -168,7 +249,7 @@ export function stageOwnerChange(
             reason: "push_capacity",
           });
         }
-        hub.listeners.clear();
+        for (const listener of [...hub.listeners]) detach(hub, listener);
         clearInterval(hub.timer);
         hub.timer = undefined;
         hub.positions.clear();
@@ -205,10 +286,12 @@ export function stageOwnerChange(
 }
 /** Register and capture the cursor at the same serialized commit boundary. */
 export async function attachOwnerPush(
-  session: SqlSession,
+  session: SqlExecutor,
   schema: string,
   send: Listener["send"],
-  options: Readonly<{ namespace?: string; operationId?: string }> = {},
+  options: Readonly<
+    { namespace?: string; operationId?: string; bodyId?: string }
+  > = {},
 ): Promise<OwnerPushSubscription> {
   return await createSchemaCommandRunner(session, schema)(
     "observation.attach",
@@ -223,6 +306,15 @@ export async function attachOwnerPush(
       );
       const cursor = String(result.rows[0]?.last_seq ?? "0");
       const hub = hubFor(context.signal);
+      if (
+        options.bodyId !== undefined && !hub.bodies.has(options.bodyId) &&
+        hub.bodies.size >= 4096
+      ) {
+        throw Object.assign(
+          new Error("Owner body observation capacity exceeded."),
+          { code: "observation_capacity" },
+        );
+      }
       let closed = false;
       let attachedRevision = 0;
       const listener: Listener = {
@@ -238,9 +330,27 @@ export async function attachOwnerPush(
       };
       afterSqlCommit(context.transaction, () => {
         if (closed || context.signal.aborted) return;
+        // Multiple attaches can join one command; enforce the bound at commit too.
+        if (
+          listener.bodyId !== undefined && !hub.bodies.has(listener.bodyId) &&
+          hub.bodies.size >= 4096
+        ) {
+          listener.send({
+            kind: "reset",
+            headSeq: hub.head,
+            reason: "push_capacity",
+          });
+          return;
+        }
         if (BigInt(cursor) > BigInt(hub.head)) hub.head = cursor;
         attachedRevision = hub.revision;
         hub.listeners.add(listener);
+        if (listener.bodyId !== undefined) {
+          const body = hub.bodies.get(listener.bodyId) ??
+            { revision: 0, references: 0 };
+          body.references++;
+          hub.bodies.set(listener.bodyId, body);
+        }
         hub.timer ??= setInterval(() => {
           for (const item of [...hub.listeners]) heartbeat(hub, item);
         }, 1000);
@@ -251,18 +361,95 @@ export async function attachOwnerPush(
         snapshot: () => ({
           headSeq: hub.head,
           positions: [...hub.positions.values()],
+          ...(listener.bodyId === undefined
+            ? {}
+            : { bodyRevision: hub.bodies.get(listener.bodyId)?.revision ?? 0 }),
         }),
         close() {
           if (closed) return;
           closed = true;
-          hub.listeners.delete(listener);
-          if (!hub.listeners.size) {
-            clearInterval(hub.timer);
-            hub.timer = undefined;
-            hub.positions.clear();
-          }
+          detach(hub, listener);
         },
       };
     },
   );
+}
+
+export type OwnerPushWatch = Readonly<{ wait(): Promise<void>; close(): void }>;
+
+/** One coalesced invalidation, repaired from the shared owner's heartbeat. */
+export async function watchOwnerPush(
+  session: SqlExecutor,
+  schema: string,
+  options: Readonly<{
+    namespace?: string;
+    bodyId?: string;
+    relevant?: (change: OwnerChange) => boolean;
+  }> = {},
+): Promise<OwnerPushWatch> {
+  let changed = false, closed = false, reset = false;
+  let failure: Error | undefined, head = "0", bodyRevision = 0;
+  let pending: (() => void) | undefined;
+  let subscription: OwnerPushSubscription | undefined;
+  const wake = () => {
+    changed = true;
+    pending?.();
+  };
+  const attach = async () => {
+    subscription = await attachOwnerPush(session, schema, (frame) => {
+      if (frame.kind === "reset") {
+        if (frame.reason === "owner_lost") {
+          failure = new Error("Observation owner was lost.");
+        } else reset = true;
+        wake();
+      } else if (options.bodyId !== undefined) {
+        if (
+          "bodyRevision" in frame && frame.bodyRevision !== undefined &&
+          frame.bodyRevision > bodyRevision
+        ) {
+          bodyRevision = frame.bodyRevision;
+          wake();
+        }
+      } else {
+        const gap = BigInt(frame.headSeq) >
+          BigInt(head) + ((frame.kind === "change" && frame.change.event) ||
+                (frame.kind === "checkpoint" && frame.sequenced)
+              ? 1n
+              : 0n);
+        if (BigInt(frame.headSeq) > BigInt(head)) head = frame.headSeq;
+        if (
+          gap ||
+          (frame.kind === "change" &&
+            (options.relevant?.(frame.change) ?? true))
+        ) wake();
+      }
+    }, options);
+    head = subscription.cursor;
+    bodyRevision = subscription.snapshot().bodyRevision ?? 0;
+    if (closed) subscription.close();
+  };
+  await attach();
+  return {
+    async wait() {
+      if (!changed && !closed) {
+        await new Promise<void>((resolve) => {
+          pending = resolve;
+        });
+      }
+      pending = undefined;
+      if (failure) throw failure;
+      if (closed) return;
+      changed = false;
+      if (reset) {
+        reset = false;
+        subscription?.close();
+        await attach();
+      }
+    },
+    close() {
+      closed = true;
+      subscription?.close();
+      pending?.();
+    },
+  };
 }

@@ -1,12 +1,76 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-import { createEphemeralEvent } from "../events/index.ts";
+import {
+  createEphemeralEvent,
+  provisionCopilotzSchema,
+} from "../events/index.ts";
+import { createContentCatalog } from "../content/catalog.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
 import { createMemoryBodyStore } from "../content/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import type { StreamOutput } from "../streams/index.ts";
 import type { CreateProcessorContextOptions } from "./types.ts";
 import { createProcessorContext } from "./context.ts";
 
+async function createStreamFixture() {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const databaseSchema = `context_streams_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
+  try {
+    await provisionCopilotzSchema(db, databaseSchema);
+    return {
+      databaseSchema,
+      catalog: createContentCatalog(db, databaseSchema),
+      async [Symbol.asyncDispose]() {
+        try {
+          await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
+        } finally {
+          await db.close();
+        }
+      },
+    };
+  } catch (error) {
+    await db.close();
+    throw error;
+  }
+}
+
+async function assertUnpublishedReservation(
+  catalog: ReturnType<typeof createContentCatalog>,
+  bodyStore: ReturnType<typeof createMemoryBodyStore>,
+  bodyId: string,
+) {
+  const logical = await catalog.read(bodyId);
+  assertExists(logical);
+  assertEquals(logical.revocation, "revoked");
+  assertEquals(logical.committedOffset, 0);
+  assertEquals(logical.terminal, {
+    outcome: "failed",
+    reason: "abandoned",
+    length: 0,
+    digest:
+      "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  });
+  const head = await bodyStore.head({ bodyId: logical.copy.key });
+  assertExists(head);
+  assertEquals(head.state, "incomplete");
+  assertEquals(head.byteLength, 0);
+  // Publication refusal retires writer authority; the catalog owns copy cleanup.
+  await assertRejects(() =>
+    catalog.renew({
+      bodyId,
+      writerId: logical.writerId,
+      generation: logical.generation,
+      deadline: new Date(Date.now() + 60_000).toISOString(),
+    })
+  );
+}
+
 Deno.test("scoped streams without an operation require a local authority", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published = 0;
   const event = createEphemeralEvent({
@@ -17,7 +81,7 @@ Deno.test("scoped streams without an operation require a local authority", async
   });
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event,
       signal: new AbortController().signal,
       settlementScopeId: "missing-operation",
@@ -45,7 +109,7 @@ Deno.test("scoped streams without an operation require a local authority", async
       published += 1;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -63,20 +127,21 @@ Deno.test("scoped streams without an operation require a local authority", async
     "require a local output authority",
   );
   assertEquals(published, 0);
-  assertEquals(
-    await bodyStore.head({
-      bodyId: "content-streams/tenant-a/unowned-stream",
-    }),
-    null,
+  await assertUnpublishedReservation(
+    catalog,
+    bodyStore,
+    "content-streams/tenant-a/unowned-stream",
   );
 });
 
 Deno.test("Processor/unscoped streams do not invent Action provenance", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-completed",
         namespace: "tenant-a",
@@ -106,7 +171,7 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
       published = output;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -138,11 +203,13 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
 });
 
 Deno.test("unscoped streams publish an exact local failed prefix", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-failed",
         namespace: "tenant-a",
@@ -172,7 +239,7 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
       published = output;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -203,10 +270,12 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
 });
 
 Deno.test("unscoped streams reject publication without a local authority", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-without-authority",
         namespace: "tenant-a",
@@ -232,7 +301,7 @@ Deno.test("unscoped streams reject publication without a local authority", async
       }),
       withScope: () => ({}),
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -249,20 +318,21 @@ Deno.test("unscoped streams reject publication without a local authority", async
     Error,
     "require a local output authority",
   );
-  assertEquals(
-    await bodyStore.head({
-      bodyId: "content-streams/tenant-a/local-without-authority",
-    }),
-    null,
+  await assertUnpublishedReservation(
+    catalog,
+    bodyStore,
+    "content-streams/tenant-a/local-without-authority",
   );
 });
 
 Deno.test("unscoped observed publication rejection retains an exact terminal", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-publication-rejection",
         namespace: "tenant-a",
@@ -292,7 +362,7 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
       published = output;
       return Promise.reject(new Error("local publication relay failed"));
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},

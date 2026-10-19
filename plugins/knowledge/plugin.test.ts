@@ -99,7 +99,6 @@ async function waitForDocumentStatus(
     types: [eventType],
     subject: { type: "document", id: documentId },
     timeoutMs: 5000,
-    pollIntervalMs: 10,
   });
 }
 function embeddingProvider(
@@ -391,7 +390,6 @@ Deno.test("knowledge indexing keeps one canonical source asset and atomic search
       namespace: NAMESPACE,
       types: ["copilotz.knowledge.indexDocument.completed"],
       timeoutMs: 5000,
-      pollIntervalMs: 10,
     });
     const events = await application.events.list({ namespace: NAMESPACE });
     assertEquals(
@@ -634,7 +632,6 @@ Deno.test("knowledge source failure settles once as document and Action failure"
       namespace: NAMESPACE,
       types: ["copilotz.knowledge.indexDocument.failed"],
       timeoutMs: 5000,
-      pollIntervalMs: 10,
     });
     assertEquals(sourceKeys.length, 1);
     const document = await knowledge.documents.get({
@@ -796,7 +793,6 @@ Deno.test("knowledge Tool Actions execute through durable callers", async () => 
       types: ["document.indexed"],
       subject: { type: "document", id: documentId },
       timeoutMs: 5000,
-      pollIntervalMs: 10,
     });
     const document = await knowledge.documents.get({ id: documentId }) as
       | KnowledgeDocument

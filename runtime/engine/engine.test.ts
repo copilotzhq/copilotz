@@ -18,6 +18,7 @@ import {
 import { type CopilotzEngine, createCopilotzEngine } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
+import type { OwnerCapabilityHost } from "../execution/owner-capabilities.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import {
   defineCollection,
@@ -56,6 +57,7 @@ type Fixture = Readonly<{
   engine: CopilotzEngine;
   processorCalls: () => number;
   leakedStorage: () => boolean;
+  pendingAlarmDelays: () => readonly number[];
   streamOutputs: () => readonly Readonly<{
     streamId: string;
     semanticId: unknown;
@@ -164,6 +166,9 @@ async function createFixture(): Promise<Fixture> {
       }),
     ],
   });
+  // Record owner alarms without firing them so this test owns explicit recovery.
+  // Default-scheduler recovery is exercised separately in execution.test.ts.
+  const alarms = new Map<object, { callback: () => void; delay: number }>();
   let nextId = 0;
   const engine = await createCopilotzEngine({
     session,
@@ -173,6 +178,16 @@ async function createFixture(): Promise<Fixture> {
     now: () => new Date("2026-08-09T00:00:00.000Z"),
     random: () => 0,
     retryBaseMs: 0,
+    alarmScheduler: {
+      schedule(callback, delay) {
+        const handle = {};
+        alarms.set(handle, { callback, delay });
+        return handle;
+      },
+      cancel(handle) {
+        alarms.delete(handle as object);
+      },
+    },
     publish(output) {
       if (isStreamOutputDescriptor(output)) {
         streamOutputs.push(Object.freeze({
@@ -194,11 +209,13 @@ async function createFixture(): Promise<Fixture> {
     engine,
     processorCalls: () => calls,
     leakedStorage: () => leakedStorage,
+    pendingAlarmDelays: () => [...alarms.values()].map((alarm) => alarm.delay),
     streamOutputs: () => Object.freeze([...streamOutputs]),
   });
 }
 async function closeFixture(fixture: Fixture): Promise<void> {
   await fixture.engine.shutdown();
+  assertEquals(fixture.pendingAlarmDelays(), []);
   await fixture.db.close();
 }
 Deno.test("factory engine scopes typed processor capabilities and deduplicates retry projections", async () => {
@@ -216,6 +233,10 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       [TEST_SCHEMA],
     );
     assertEquals(tables.rows.map((row) => row.table_name), [
+      "action_effects",
+      "content_adoptions",
+      "content_copies",
+      "content_logical_bodies",
       "copilotz_operation_catalog_metadata",
       "copilotz_operation_events",
       "copilotz_operation_selection_heads",
@@ -230,11 +251,12 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "nodes",
       "open_actions",
       "owner_alarms",
-      "owner_deadlines",
       "owner_body_retirements",
+      "owner_deadlines",
       "owner_epochs",
       "owner_event_sequences",
       "owner_receipts",
+      "pending_content",
     ]);
     const namespace = "tenant-a";
     const participants = fixture.engine.collections.get("participant");
@@ -292,17 +314,20 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "retry_wait",
     );
     assertEquals(first.status, "retry_wait");
+    assertEquals(first.attempts, 1);
     await fixture.engine.execution.settleOutputs({
       databaseSchema: TEST_SCHEMA,
       namespace,
       settlementScopeId: first.settlementScopeId,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+    assert(fixture.pendingAlarmDelays().includes(0));
     const recovery = await fixture.engine.recover({ namespace: "tenant-a" });
     assertEquals(recovery.failures, []);
     assertEquals(recovery.handles.length, 1);
     const second = await recovery.handles[0].done;
     assertEquals(second.delivery.status, "succeeded");
+    assertEquals(second.delivery.attempts, 2);
     assertEquals(fixture.processorCalls(), 2);
     assertEquals(fixture.leakedStorage(), false);
     const retryStreams = fixture.streamOutputs();
@@ -366,18 +391,31 @@ Deno.test("engine shutdown releases only its worker and leaves injected infrastr
     type: "in-process",
     config: { topic: `copilotz.engine.${crypto.randomUUID()}` },
   } as const;
+  let ownerHost: OwnerCapabilityHost;
   const hypervisor = createHypervisor({
     transports: [transport],
+    workerCalls: { admit: (binding) => ownerHost?.workerCalls.admit(binding) },
+  }, {
+    onDisconnect: (event) => ownerHost?.lifecycle?.onDisconnect?.(event),
+    onComplete: (event) => ownerHost?.lifecycle?.onComplete?.(event),
   });
   const engine = await createCopilotzEngine({
     session,
     registry,
     defaultDatabaseSchema: "copilotz_shared_engine",
-    execution: { hypervisor, transport, workerId: "shared-engine" },
+    execution: {
+      hypervisor,
+      transport,
+      workerId: "shared-engine",
+      bindOwnerCapabilities(host) {
+        ownerHost = host;
+      },
+    },
   });
   let applicationWorker: ReturnType<typeof createWorker> | undefined;
   try {
     assertEquals(engine.execution.ownership, "shared_hypervisor");
+    assertEquals(hypervisor.snapshot().inProcessWorkers, 1);
     await engine.shutdown();
     assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
     await session.query("SELECT 1");

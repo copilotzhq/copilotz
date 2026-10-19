@@ -75,14 +75,17 @@ Deno.test("event waits combine durable replay with live subscription", async () 
       afterPosition: "0",
     },
     loadDurable: () => Promise.resolve(++loads > 1 ? [durable] : []),
-    pollIntervalMs: 1,
+    attachDurable: () =>
+      Promise.resolve({
+        wait: () => Promise.resolve(),
+        close() {},
+      }),
     timeoutMs: 100,
   });
   assertEquals(replayed, durable);
   const live = waitForCopilotzEvent({
     hub,
     filter: { types: ["text.delta"] },
-    pollIntervalMs: 100,
     timeoutMs: 1000,
   });
   await hub.publish(ephemeral);

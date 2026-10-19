@@ -178,7 +178,7 @@ Deno.test({
       const refusal = await assertRejects(
         () => check(denied),
         ActionError,
-        "Collection access denied.",
+        "Forbidden",
       );
       assertEquals((refusal as ActionError).status, 403);
       assert(isOwnerAuthorizationRefusal(refusal));

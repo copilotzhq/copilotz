@@ -1,4 +1,4 @@
-import { ActionError } from "../actions/errors.ts";
+import { ActionError, standardActionError } from "../actions/errors.ts";
 import { withProtectedValueRead } from "../actions/protected-value-read.ts";
 import { withCollectionReadBudget } from "./read-budget.ts";
 import { markOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
@@ -39,10 +39,9 @@ export type CollectionPolicyOperation = Readonly<{
   result?: unknown;
 }>;
 export function collectionPolicyRefused(permanent = true): never {
-  const error = new ActionError("Collection access denied.", {
-    code: "forbidden",
-    status: 403,
-  });
+  // Planning and admitted policy failures must have the same public presentation.
+  // Only owner-classified policy denial receives permanent cleanup authority.
+  const error = standardActionError({ code: "forbidden", status: 403 })!;
   throw permanent ? markOwnerAuthorizationRefusal(error) : error;
 }
 function collectionPolicyUnavailable(): never {

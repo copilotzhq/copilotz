@@ -2018,20 +2018,20 @@ export function createDatabaseAssetRepository(
         },
         mutate: async ({ transaction, tables: names }) => {
           assertSchemaCommandTransaction(transaction, options.databaseSchema);
-          const locked = await transaction.query<AssetNodeRow>(
+          const selected = await transaction.query<AssetNodeRow>(
             `SELECT * FROM ${names.nodes}
              WHERE namespace = $1 AND id = $2 AND type = 'asset'
-             LIMIT 1 FOR UPDATE`,
+             LIMIT 1`,
             [namespace, assetId],
           );
-          if (!locked.rows[0]) {
+          if (!selected.rows[0]) {
             throw createContentError(
               "asset_not_found",
               `Asset not found: ${assetId}`,
               { namespace, assetId },
             );
           }
-          const currentRow = locked.rows[0];
+          const currentRow = selected.rows[0];
           const current = mapAsset(currentRow);
           if (current.state !== "ready") {
             throw createContentError(

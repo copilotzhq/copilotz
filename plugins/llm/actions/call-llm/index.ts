@@ -2187,6 +2187,30 @@ async function abortWriters(
   }));
 }
 
+/** Release bounded owner handles after the final retention/adoption decision. */
+async function disposeWriters(
+  writers: readonly OpenWriter[],
+): Promise<readonly unknown[]> {
+  const outcomes = await Promise.allSettled(writers.map(async (writer) => {
+    await writer[Symbol.asyncDispose]();
+  }));
+  return outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+}
+
+function finalizationFailure(
+  primary: unknown,
+  cleanup: readonly unknown[],
+): unknown {
+  return cleanup.length
+    ? new AggregateError(
+      [primary, ...cleanup],
+      "LLM finalization and stream disposal failed.",
+    )
+    : primary;
+}
+
 async function settleWriters(
   state: StreamState,
   signal: AbortSignal,
@@ -2195,13 +2219,21 @@ async function settleWriters(
   const writers = [...state.writers.entries()];
   state.writers.clear();
   let failure: unknown;
+  let failed = false;
+  const cleanupFailures: unknown[] = [];
+  const opened: OpenWriter[] = [];
   const settled: SettledStream[] = [];
   for (const [key, opening] of writers) {
     let writer: OpenWriter | undefined;
     try {
       writer = await opening;
-      if (failure !== undefined) {
-        await writer.abort({ reason: "related_stream_failed" });
+      opened.push(writer);
+      if (failed) {
+        try {
+          await writer.abort({ reason: "related_stream_failed" });
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
         continue;
       }
       const [lane, mediaType] = JSON.parse(key) as [string, string];
@@ -2246,14 +2278,25 @@ async function settleWriters(
         } as const,
       );
     } catch (error) {
-      failure ??= error;
-      await writer?.abort({
-        outcome: signal.aborted ? "cancelled" : "failed",
-        reason: signal.aborted ? "cancelled" : "seal_failed",
-      }).catch(() => undefined);
+      if (!failed) failure = error;
+      else cleanupFailures.push(error);
+      failed = true;
+      try {
+        await writer?.abort({
+          outcome: signal.aborted ? "cancelled" : "failed",
+          reason: signal.aborted ? "cancelled" : "seal_failed",
+        });
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
     }
   }
-  if (failure !== undefined) throw failure;
+  if (failed) {
+    throw finalizationFailure(failure, [
+      ...cleanupFailures,
+      ...await disposeWriters(opened),
+    ]);
+  }
   return settled;
 }
 
@@ -2951,29 +2994,44 @@ async function executeLlmCall(
         attemptSignal,
         finalContent,
       );
-      appendDurableAttempts(
-        attempts,
-        candidate,
-        context,
-        result.attempts,
-        "completed",
-      );
-      resultAccounted = true;
-      const { content, reasoning, nativeReasoning } =
-        await materializeResultContent(
-          finalContent,
-          index,
-          settledStreams,
+      let output: LlmCallOutput;
+      try {
+        appendDurableAttempts(
+          attempts,
+          candidate,
           context,
+          result.attempts,
+          "completed",
         );
-      return outputFor(
-        candidate,
-        result,
-        content,
-        reasoning,
-        nativeReasoning,
-        attempts,
+        resultAccounted = true;
+        const { content, reasoning, nativeReasoning } =
+          await materializeResultContent(
+            finalContent,
+            index,
+            settledStreams,
+            context,
+          );
+        output = outputFor(
+          candidate,
+          result,
+          content,
+          reasoning,
+          nativeReasoning,
+          attempts,
+        );
+      } catch (error) {
+        throw finalizationFailure(
+          error,
+          await disposeWriters(settledStreams.map((stream) => stream.writer)),
+        );
+      }
+      const cleanup = await disposeWriters(
+        settledStreams.map((stream) => stream.writer),
       );
+      if (cleanup.length) {
+        throw new AggregateError(cleanup, "LLM stream disposal failed.");
+      }
+      return output;
     } catch (error) {
       // Final normalization now happens before close; failure must also drain
       // writers which have not yet reached settleWriters.

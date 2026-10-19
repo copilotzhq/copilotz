@@ -655,6 +655,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     operations,
     events: {
       ...events,
+      outstanding: events.scopeOutstanding,
       async resolve(namespace: string, id: string) {
         const event = await events.getEvent(id);
         return event?.namespace === namespace

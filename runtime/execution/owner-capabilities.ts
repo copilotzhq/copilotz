@@ -64,6 +64,8 @@ type Resource = {
   used: number;
   closed: boolean;
   pendingAppends?: number;
+  /** Body sealing does not revoke its bounded retention capability. */
+  writerSealed?: boolean;
   removeFailure?(): void;
   close(reason?: unknown): Promise<void>;
   run?(path: readonly string[], args: readonly unknown[]): Promise<unknown>;
@@ -316,7 +318,13 @@ export function createOwnerCapabilityHost(
     // own cancellation. Keep capacity until both the call and cleanup settle.
     const inFlight = resource.serial.catch(() => undefined);
     const cleanup = Promise.resolve().then(() => resource.close(reason));
-    resource.serial = Promise.all([inFlight, cleanup]).then(() => undefined);
+    resource.serial = (async () => {
+      // A rejected cleanup must not release capacity while physical I/O is
+      // still settling. Unknown cleanup keeps its reserved slot below.
+      const results = await Promise.allSettled([inFlight, cleanup]);
+      const result = results[1];
+      if (result.status === "rejected") throw result.reason;
+    })();
     try {
       await resource.serial;
       assignment.resources.delete(resource.id);
@@ -825,6 +833,10 @@ export function createOwnerCapabilityHost(
         handle: resource.id,
         id: writer.id,
         offset: (writer.offset as Method)(),
+        ...(typeof Object.getOwnPropertyDescriptor(writer, "retain")?.value ===
+            "function"
+          ? { retainAfterClose: true }
+          : {}),
       };
     }
     if (
@@ -1298,22 +1310,61 @@ export function createOwnerCapabilityHost(
           try {
             const result = resource.serial.then(async () => {
               await check(active);
-              return resource.run
+              checkInvocation();
+              if (resource.closed) {
+                throw capabilityError("owner_handle_unknown");
+              }
+              // Recheck inside serialization: a queued append must not revive a
+              // body whose earlier close has already physically settled.
+              if (resource.writerSealed && path[0] !== "retain") {
+                throw capabilityError("owner_handle_closed");
+              }
+              if (
+                resource.kind === "writer" && path[0] === "retain" &&
+                !resource.writerSealed
+              ) throw capabilityError("owner_handle_not_sealed");
+              const value = resource.run
                 ? await resource.run(path, args)
                 : await callPath(resource.value, path, args);
+              await check(active);
+              checkInvocation();
+              if (resource.closed) {
+                throw capabilityError("owner_handle_unknown");
+              }
+              if (
+                resource.kind === "writer" &&
+                ["close", "abort"].includes(path[0])
+              ) {
+                const retain = Object.getOwnPropertyDescriptor(
+                  resource.value,
+                  "retain",
+                )?.value;
+                resource.removeFailure?.();
+                resource.removeFailure = undefined;
+                if (path[0] === "close" && typeof retain === "function") {
+                  // Keep the same MAX_RESOURCES slot and original owner-bound
+                  // method, without append/close or physical cleanup authority.
+                  // Disposal/invocation cleanup releases this terminal handle.
+                  const writer = resource.value;
+                  resource.value = {
+                    // Keep the authorized callable itself: its .bind property
+                    // may be an asynchronous capability facade as well.
+                    retain: (...args: unknown[]) =>
+                      Reflect.apply(retain, writer, args),
+                  };
+                  resource.writerSealed = true;
+                  resource.close = () => Promise.resolve();
+                } else {
+                  resource.closed = true;
+                  active.resources.delete(resource.id);
+                }
+              }
+              return value;
             });
             resource.serial = result.catch(() => undefined);
             const value = await result;
             await check(active);
             checkInvocation();
-            if (
-              resource.kind === "writer" && ["close", "abort"].includes(path[0])
-            ) {
-              resource.closed = true;
-              resource.removeFailure?.();
-              resource.removeFailure = undefined;
-              active.resources.delete(resource.id);
-            }
             return await exposeResult(active, call.context!, value);
           } finally {
             if (append) resource.pendingAppends!--;

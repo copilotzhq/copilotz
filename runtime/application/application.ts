@@ -191,6 +191,7 @@ async function waitForApplicationScope(
         );
       }
       if (operation.state === "completed") return;
+      await eventScope.events.outstanding(namespace, settlementScopeId);
       // Notifications are hints, never settlement authority. Keep the existing
       // bounded poll for remote writers, missed hints and notification outages.
       await watch.wait({ timeoutMs: 250, signal });

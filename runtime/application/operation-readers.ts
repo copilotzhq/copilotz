@@ -422,6 +422,15 @@ export function createSharedOperationReaders(
               reconcileRequested = false;
             }
             cachedStatus = status;
+            if (
+              status &&
+              !["completed", "failed", "cancelled"].includes(status.state)
+            ) {
+              await runtime.events.outstanding(
+                input.namespace,
+                input.operationId,
+              );
+            }
           }
           const status = cachedStatus;
           if (

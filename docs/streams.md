@@ -294,8 +294,14 @@ settlement time.
   default outcome is `failed`; pass `{ outcome: "cancelled" }` when handling
   cancellation. The prefix becomes an immutable `incomplete` Body that is
   readable but never adoptable.
-- Disposing a leaked writer (`Symbol.asyncDispose`, or execution teardown)
-  records `failed` with reason `abandoned`.
+- Disposing an open writer (`Symbol.asyncDispose`, or execution teardown)
+  records `failed` with reason `abandoned`. In a worker invocation, closing a
+  retain-capable writer seals its Body but keeps one of the existing 32 resource
+  slots until explicit async disposal or invocation end. Repeated `retain` calls
+  remain subject to the original current authority until disposal. Close alone
+  therefore no longer releases a retain-capable slot; dispose after the final
+  retention choice, including on failure. Capture-only writers release their
+  slot immediately on close. Disposing a sealed writer does not abort its Body.
 
 Before its descriptor is published, a failed open discards staging. After
 publication, the lane is a replay obligation and always reaches a terminal

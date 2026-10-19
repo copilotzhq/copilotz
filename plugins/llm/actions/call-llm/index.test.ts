@@ -103,6 +103,8 @@ type OpenedStream = {
   aborted: boolean;
   abortInput?: ContentStreamAbortInput;
   retentions: ContentStreamRetentionInput[];
+  disposeCalls: number;
+  disposed: boolean;
 };
 
 type FixtureOptions = Readonly<{
@@ -115,6 +117,10 @@ type FixtureOptions = Readonly<{
   signal?: AbortSignal;
   onAppend?: () => void;
   failStreamRetention?: boolean;
+  onClose?: (stream: OpenedStream) => void | Promise<void>;
+  onAbort?: (stream: OpenedStream) => void | Promise<void>;
+  onDispose?: (stream: OpenedStream) => void | Promise<void>;
+  onCapture?: () => void | Promise<void>;
 }>;
 
 function fixtureDigest(bytes: Uint8Array): `sha256:${string}` {
@@ -248,6 +254,7 @@ function fixture(options: FixtureOptions) {
               captureOptions,
             );
         captured.push(batch);
+        await options.onCapture?.();
         return batch.content.map((value, index) => {
           const asset = batch.assets.find((asset) =>
             asset.id === value.assetId
@@ -302,6 +309,8 @@ function fixture(options: FixtureOptions) {
           closed: false,
           aborted: false,
           retentions: [],
+          disposeCalls: 0,
+          disposed: false,
         };
         opened.push(record);
         const writer: ContentStreamWriter = Object.freeze({
@@ -319,7 +328,8 @@ function fixture(options: FixtureOptions) {
               endOffset: bytes.byteLength,
             });
           },
-          close() {
+          async close() {
+            await options.onClose?.(record);
             record.closed = true;
             const bytes = new Uint8Array(
               record.appends.flatMap((item) => [...item]),
@@ -333,9 +343,11 @@ function fixture(options: FixtureOptions) {
             );
           },
           abort(input?: ContentStreamAbortInput) {
-            record.aborted = true;
-            record.abortInput = input;
-            return Promise.resolve();
+            if (record.closed) return Promise.resolve();
+            return Promise.resolve(options.onAbort?.(record)).then(() => {
+              record.aborted = true;
+              record.abortInput = input;
+            });
           },
           retain(input: ContentStreamRetentionInput) {
             if (options.failStreamRetention) {
@@ -344,9 +356,11 @@ function fixture(options: FixtureOptions) {
             record.retentions.push(Object.freeze({ ...input }));
             return Promise.resolve();
           },
-          [Symbol.asyncDispose]() {
-            record.aborted = true;
-            return Promise.resolve();
+          async [Symbol.asyncDispose]() {
+            record.disposeCalls++;
+            await options.onDispose?.(record);
+            record.disposed = true;
+            if (!record.closed) record.aborted = true;
           },
         });
         return Promise.resolve(writer);
@@ -1967,6 +1981,9 @@ Deno.test("llm.call publishes frames through Streams and captures final pending 
   assertEquals(test.opened[0].appends.length, 1);
   assertEquals(test.opened[1].appends.length, 1);
   assert(test.opened.every((stream) => stream.closed && !stream.aborted));
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
   assertEquals(test.materialized.length, 0);
   assertEquals(test.captured.length, 1);
   assertEquals(test.progressCalls(), 0);
@@ -2097,6 +2114,8 @@ Deno.test("llm.call reuses an exactly equivalent content stream Body", async () 
     [],
     "Canonical retention starts at domain adoption.",
   );
+  assertEquals(test.opened[0].disposeCalls, 1);
+  assert(test.opened[0].disposed && !test.opened[0].aborted);
 });
 
 Deno.test("llm.call retains a non-equivalent stream as an observation Body", async () => {
@@ -3243,6 +3262,9 @@ Deno.test("llm.call settles every opened writer when stream retention fails", as
   assertEquals(backupCalls, 0);
   assertEquals(test.opened.length, 2);
   assert(test.opened.every((stream) => stream.closed && !stream.aborted));
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
   assertEquals(test.progressValues(), [{
     schema: "copilotz.llm.attempt-accounting.v1",
     attempts: [{
@@ -3614,4 +3636,242 @@ Deno.test("dynamic connection options are preflighted without resolving credenti
   );
   assertEquals(providerCalls, 0);
   assertEquals(resolverCalls, 0);
+});
+
+function finalizationFixture(options: Partial<FixtureOptions> = {}) {
+  let backupCalls = 0;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        { content: "normalized answer", attempts: [{ status: "completed" }] },
+        new ReadableStream({
+          start(controller) {
+            for (const lane of ["content", "reasoning", "tool-calls"]) {
+              controller.enqueue({
+                lane,
+                mediaType: "text/plain",
+                bytes: encoder.encode(`${lane} prefix`),
+              });
+            }
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupCalls++;
+      return invocation({
+        content: "backup",
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    llmConnections: {
+      primary: { adapter: "primary" },
+      backup: { adapter: "backup" },
+    },
+    adapters: { primary, backup },
+    ...options,
+  });
+  return {
+    ...test,
+    backupCalls: () => backupCalls,
+    run: async () =>
+      await callLlmAction.execute({
+        ...baseInput,
+        models: [{ connection: "primary", model: "model-a" }, {
+          connection: "backup",
+          model: "model-b",
+        }],
+        stream: { id: "finalize" },
+      }, test.context),
+  };
+}
+
+Deno.test("llm.call disposes every sealed lane only after final capture and retention", async () => {
+  const test = finalizationFixture({
+    onDispose(stream) {
+      assert(stream.closed && !stream.aborted);
+      assertEquals(stream.retentions, [{ retention: "observation" }]);
+      assertEquals(test.captured.length, 1);
+    },
+  });
+  const output = await test.run();
+  assertEquals(
+    pendingId(output.content[0]),
+    "capture:attempt:0:capture:content:0",
+  );
+  assertEquals(test.opened.length, 3);
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call capture failure disposes all sealed writers and preserves the primary error", async () => {
+  const primary = new Error("synthetic capture failure");
+  const test = finalizationFixture({
+    onCapture() {
+      throw primary;
+    },
+  });
+  assertStrictEquals(await assertRejects(test.run), primary);
+  assertEquals(test.opened.length, 3);
+  assert(
+    test.opened.every((stream) =>
+      stream.closed && !stream.aborted && stream.disposed &&
+      stream.disposeCalls === 1
+    ),
+  );
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call partial seal failure aborts remaining lanes and disposes all opened writers", async () => {
+  const primary = new Error("synthetic seal failure");
+  const test = finalizationFixture({
+    onClose(stream) {
+      if (stream.input.metadata?.lane === "reasoning") throw primary;
+    },
+  });
+  assertStrictEquals(await assertRejects(test.run), primary);
+  const [sealed, failed, related] = test.opened;
+  assert(sealed.closed && !sealed.aborted);
+  assertEquals(failed.abortInput, { outcome: "failed", reason: "seal_failed" });
+  assertEquals(related.abortInput, { reason: "related_stream_failed" });
+  assert(!failed.closed && !related.closed);
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
+  assertEquals(test.captured.length, 0);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call preserves primary and cleanup failures and awaits every disposer", async () => {
+  const primary = new Error("synthetic capture failure");
+  const cleanup = new Error("synthetic disposal failure");
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const test = finalizationFixture({
+    onCapture() {
+      throw primary;
+    },
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+      if (stream.input.metadata?.lane === "reasoning") {
+        entered.resolve();
+        return release.promise;
+      }
+    },
+  });
+  let completed = false;
+  const result = assertRejects(test.run, AggregateError).then((error) => {
+    completed = true;
+    return error;
+  });
+  try {
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(completed, false);
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+    release.resolve();
+    assertEquals((await result).errors, [primary, cleanup]);
+    assertEquals(test.backupCalls(), 0);
+  } finally {
+    release.resolve();
+    await result;
+  }
+});
+
+Deno.test("llm.call does not release successful output when final disposal fails", async () => {
+  const cleanup = new Error("synthetic disposal failure");
+  const test = finalizationFixture({
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+    },
+  });
+  const failure = await assertRejects(
+    test.run,
+    AggregateError,
+    "LLM stream disposal failed",
+  );
+  assertEquals(failure.errors, [cleanup]);
+  assertEquals(test.captured.length, 1);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call partial seal and abort failures preserve all errors and still dispose", async () => {
+  const seal = new Error("synthetic seal failure"),
+    abort = new Error("synthetic abort failure"),
+    cleanup = new Error("synthetic disposal failure");
+  const test = finalizationFixture({
+    onClose(stream) {
+      if (stream.input.metadata?.lane === "reasoning") throw seal;
+    },
+    onAbort() {
+      throw abort;
+    },
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+    },
+  });
+  const failure = await assertRejects(test.run, AggregateError);
+  assertEquals(failure.errors, [seal, abort, abort, cleanup]);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assertEquals(test.captured.length, 0);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call preserves an undefined seal rejection while disposing every opened writer", async () => {
+  const test = finalizationFixture({
+    onClose() {
+      return Promise.reject(undefined);
+    },
+  });
+  let rejected = false;
+  await test.run().then(() => {
+    throw new Error("must reject");
+  }, (error) => {
+    rejected = true;
+    assertEquals(error, undefined);
+  });
+  assert(rejected);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assert(test.opened.every((stream) => stream.disposed));
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call holds sealed handles until delayed final capture physically completes", async () => {
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const test = finalizationFixture({
+    onCapture() {
+      entered.resolve();
+      return release.promise;
+    },
+  });
+  let completed = false;
+  const result = test.run().then((output) => {
+    completed = true;
+    return output;
+  });
+  try {
+    await entered.promise;
+    assertEquals(completed, false);
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [0, 0, 0]);
+    assert(test.opened.every((stream) => stream.closed && !stream.aborted));
+    release.resolve();
+    const output = await result;
+    assertEquals(
+      pendingId(output.content[0]),
+      "capture:attempt:0:capture:content:0",
+    );
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  } finally {
+    release.resolve();
+    await result;
+  }
 });

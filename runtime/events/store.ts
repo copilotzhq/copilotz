@@ -1726,6 +1726,7 @@ export function createEventStore(
         unsettled: string | number;
         dead_letters: string | number;
         cancelled: string | number;
+        orphaned_action: boolean;
       }>(
         `WITH scoped AS (
            SELECT d.status
@@ -1739,11 +1740,29 @@ export function createEventStore(
          SELECT
            COUNT(*) FILTER (WHERE status IN ('pending', 'leased', 'retry_wait')) AS unsettled,
            COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letters,
-           COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+           COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled,
+           EXISTS (
+             SELECT 1 FROM ${tables.open_actions} action
+             WHERE action.namespace = $1 AND action.scope_id = $2
+               AND action.state = 'invoked'
+               AND action.owner_delivery_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${tables.event_deliveries} owner_delivery
+                 WHERE owner_delivery.id = action.owner_delivery_id
+               )
+           ) AS orphaned_action
          FROM scoped`,
         params,
       );
       const row = result.rows[0];
+      // This read refuses an unavailable result; it never settles the retained
+      // Action or grants a replacement worker authority to repeat its effects.
+      if (row?.orphaned_action) {
+        throw Object.assign(new Error("Operation result is unavailable."), {
+          code: "operation_result_unavailable",
+          status: 409,
+        });
+      }
       return ({
         unsettled: Number(row?.unsettled ?? 0),
         deadLetters: Number(row?.dead_letters ?? 0),

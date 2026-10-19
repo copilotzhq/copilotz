@@ -170,17 +170,23 @@ function workerContext(options: {
     ) {
       const handle = resource.handle;
       let offset = Number(resource.offset);
+      const retainAfterClose = resource.retainAfterClose === true;
+      let sealed = false;
       let closed = false;
       let pendingAppends = 0;
       const guard = () => {
         check();
         if (closed) throw capabilityError("owner_handle_closed");
       };
+      const writeGuard = () => {
+        guard();
+        if (sealed) throw capabilityError("owner_handle_closed");
+      };
       return {
         id: resource.id,
         offset: () => offset,
         async append(...args: unknown[]) {
-          guard();
+          writeGuard();
           if (pendingAppends >= 2) {
             throw capabilityError("owner_append_capacity");
           }
@@ -197,18 +203,24 @@ function workerContext(options: {
           }
         },
         async close(...args: unknown[]) {
-          guard();
+          writeGuard();
           const result = await rpc(["close"], args, handle);
-          closed = true;
+          sealed = true;
+          // Capture-only handles end at close. Stream bodies are sealed, but
+          // their bounded retain capability lives until explicit disposal.
+          closed = !retainAfterClose;
           return result;
         },
         async abort(...args: unknown[]) {
-          if (closed) return;
+          if (closed || sealed) return;
           await rpc(["abort"], args, handle);
           closed = true;
         },
         async retain(...args: unknown[]) {
           guard();
+          if (!sealed || !retainAfterClose) {
+            throw capabilityError("owner_handle_not_sealed");
+          }
           return await rpc(["retain"], args, handle);
         },
         async [Symbol.asyncDispose]() {

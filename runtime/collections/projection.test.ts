@@ -1,6 +1,10 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
-import { type BoundCollection, createCollectionKernel } from "./kernel.ts";
+import {
+  type BoundCollection,
+  type CollectionTransactionCollections,
+  createCollectionKernel,
+} from "./kernel.ts";
 import { defineCollection, relation } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
@@ -183,11 +187,23 @@ Deno.test("collection writes atomically project their relations", async () => {
       )?.includes("owner_epochs"),
       "the fence precedes the projection",
     );
+    // Each fenced command also refreshes its durable wake. Account for that
+    // maintenance separately so the event/projection statement budget stays exact.
+    const alarmStatements = fixture.sql.statements.filter((sql) =>
+      sql.startsWith(`INSERT INTO ${fixture.store.tables.owner_alarms} `) ||
+      sql.startsWith(`DELETE FROM ${fixture.store.tables.owner_alarms} `)
+    );
+    assertEquals(
+      alarmStatements.map((sql) => sql.split(" ", 1)[0]),
+      ["INSERT", "DELETE"],
+      "the command refreshes its owner alarm once",
+    );
     return {
       statements:
         fixture.sql.statements.filter((sql) =>
           !/^\s*(SAVEPOINT|RELEASE)\b/.test(sql) &&
-          !sql.includes("SET holder=holder")
+          !sql.includes("SET holder=holder") &&
+          !alarmStatements.includes(sql)
         ).length,
       transactions: fixture.sql.transactions,
     };
@@ -363,43 +379,56 @@ Deno.test({
     const fixture = await createFixture(POSTGRES_URL!, schema);
     const namespace = "tenant-race";
     const docs = fixture.docs;
-    // Runs `contend` against a row another connection holds, and commits that
-    // hold only once `contend` waits on it.
-    const whileHeld = async (
-      hold: (transaction: SqlExecutor) => Promise<unknown>,
-      contend: () => Promise<unknown>,
+    // Both writers use the schema owner. Hold the losing plan before admission,
+    // commit the winner, then require its current state to refuse the stale plan.
+    const afterPlanned = async (
+      operationKey: string,
+      plan: (collections: CollectionTransactionCollections) => Promise<unknown>,
+      win: () => Promise<unknown>,
     ) => {
-      const blocker = await createTestDatabase({ url: POSTGRES_URL! });
-      try {
-        let settled: Promise<unknown> = Promise.resolve();
-        fixture.sql.transactions = 0;
-        await blocker.transaction(async (transaction) => {
-          await hold(transaction);
-          const [{ xid }] = (await transaction.query<{ xid: string }>(
-            "SELECT (txid_current() % 4294967296)::text AS xid",
-          )).rows;
-          settled = contend().then(() => undefined, (error: unknown) => error);
-          for (let attempt = 0; attempt < 500; attempt++) {
-            const [{ waiting }] = (await transaction.query<
-              { waiting: boolean }
-            >(
-              `SELECT EXISTS (
-                 SELECT 1 FROM pg_locks
-                 WHERE NOT granted AND locktype = 'transactionid'
-                   AND transactionid::text = $1
-               ) AS waiting`,
-              [xid],
-            )).rows;
-            if (waiting) return;
-            await new Promise((resolve) => setTimeout(resolve, 10));
+      const planned = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      fixture.sql.statements.length = 0;
+      fixture.sql.transactions = 0;
+      const settled = fixture.runtime.transaction({
+        operationKey,
+        namespace,
+        async execute({ collections }) {
+          try {
+            await plan(collections);
+            planned.resolve();
+          } catch (error) {
+            planned.reject(error);
+            throw error;
           }
-          throw new Error("The contending write never waited on the hold.");
-        });
-        return { error: await settled, transactions: fixture.sql.transactions };
+          await release.promise;
+        },
+      }).then(() => undefined, (error: unknown) => error);
+      try {
+        await planned.promise;
+        await win();
       } finally {
-        await blocker.close();
+        release.resolve();
+        await settled;
       }
+      assertEquals(
+        fixture.sql.statements.filter((sql) =>
+          sql.includes("SET holder=holder")
+        )
+          .length,
+        2,
+        "both writers commit through the owner fence",
+      );
+      return { error: await settled, transactions: fixture.sql.transactions };
     };
+    const eventCount = async () =>
+      Number(
+        (await fixture.db.query<{ count: string }>(
+          `SELECT count(*) AS count FROM ${fixture.store.tables.events}
+         WHERE namespace = $1`,
+          [namespace],
+        )).rows[0].count,
+      );
     try {
       await seed(fixture, namespace);
       await docs.create({ id: "d1", title: "Race", folderId: "f1" }, {
@@ -434,19 +463,18 @@ Deno.test({
         }],
       );
 
-      const { nodes } = fixture.store.tables;
-      // The update plans against the committed record, then waits on the row
-      // a concurrent writer holds, and must see that writer's change.
-      // An update that changes nothing plans no write and would never wait.
+      // Planning is concurrent, but each commit rechecks the planned state
+      // inside its serialized owner command. The loser's relation must not move.
       const moved = current?.folderId === "f2" ? "f1" : "f2";
-      const stale = await whileHeld(
-        (transaction) =>
-          transaction.query(
-            `UPDATE ${nodes} SET data = data || '{"title":"held"}'::jsonb
-             WHERE namespace = $1 AND id = 'd1'`,
-            [namespace],
-          ),
-        () => docs.update("d1", { set: { folderId: moved } }, { namespace }),
+      const beforeUpdate = await eventCount();
+      const stale = await afterPlanned(
+        "stale-update",
+        (collections) =>
+          collections.projection_doc.update({
+            id: "d1",
+            set: { folderId: moved },
+          }),
+        () => docs.update("d1", { set: { title: "held" } }, { namespace }),
       );
       assert(stale.error instanceof Error);
       assertEquals(
@@ -454,24 +482,30 @@ Deno.test({
         "Collection 'projection_doc' 'd1' changed while its mutation was prepared.",
       );
       assertEquals((await docs.get("d1", namespace))?.title, "held");
+      assertEquals(
+        (await docs.get("d1", namespace))?.folderId,
+        current?.folderId,
+      );
+      assertEquals((await graph(fixture, namespace))[1], edges);
+      assertEquals(await eventCount(), beforeUpdate + 1);
 
-      // A concurrent creator holds the id; the create's unique violation is
-      // retried against the committed record.
-      const raced = await whileHeld(
-        (transaction) =>
-          transaction.query(
-            `INSERT INTO ${nodes} (id, namespace, type, name, data)
-             VALUES ('d-race', $1, 'projection_doc', 'd-race', $2::jsonb)`,
-            [namespace, JSON.stringify({ title: "held" })],
-          ),
-        () => docs.create({ id: "d-race", title: "late" }, { namespace }),
+      // Both creators plan the same absent id. Only the first owner's commit
+      // persists a record and event; the later plan must report the conflict.
+      const beforeCreate = await eventCount();
+      const raced = await afterPlanned(
+        "stale-create",
+        (collections) =>
+          collections.projection_doc.create({ id: "d-race", title: "late" }),
+        () => docs.create({ id: "d-race", title: "held" }, { namespace }),
       );
       assert(raced.error instanceof Error);
       assertEquals(
         raced.error.message,
         "Collection 'projection_doc' 'd-race' was created while its mutation was prepared.",
       );
-      assert(raced.transactions >= 1);
+      assertEquals(raced.transactions, 2);
+      assertEquals((await docs.get("d-race", namespace))?.title, "held");
+      assertEquals(await eventCount(), beforeCreate + 1);
     } finally {
       await fixture.executor.shutdown();
       await fixture.db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

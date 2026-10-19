@@ -11,6 +11,10 @@ import type { StreamOutput } from "../runtime/streams/types.ts";
 import { createSharedOperationReaders } from "../runtime/application/operation-readers.ts";
 import { createCopilotzApplication } from "../runtime/application/application.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
+import {
+  createEventStore,
+  provisionCopilotzSchema,
+} from "../runtime/events/index.ts";
 import { definePlugin, defineProcessor } from "../runtime/plugins/index.ts";
 import type { ContentStreamWriter } from "../runtime/streams/types.ts";
 import {
@@ -51,6 +55,7 @@ async function fixture(
     eventReads: 0,
     status: 0,
     streams: 0,
+    outstanding: 0,
   };
   let record: OperationStreamRecord = {
     namespace: "tenant",
@@ -178,6 +183,14 @@ async function fixture(
     config: { namespace: "tenant", databaseSchema: "scope" },
     operations,
     events: {
+      outstanding: () => {
+        counts.outstanding++;
+        return Promise.resolve({
+          unsettled: completed ? 0 : 1,
+          deadLetters: 0,
+          cancelled: 0,
+        });
+      },
       async resolve(_namespace: string, id: string) {
         counts.eventReads++;
         const row = indexed.find((entry) => entry.eventId === id)!;
@@ -305,6 +318,11 @@ Deno.test("byte-only hints share reads without repeating topology or settlement 
   }
   assertEquals(f.counts.streams, 1);
   assertEquals(f.counts.status, 1);
+  assertEquals(
+    f.counts.outstanding,
+    1,
+    "byte-only hints do not read integrity again",
+  );
   await f.complete();
   assertEquals((await payload.read()).done, true);
   await attachment.done;
@@ -927,5 +945,155 @@ Deno.test("missing retained stream bytes fail reads without rewriting completion
     await attachment.detach();
     await done;
     await readers.close();
+  }
+});
+
+Deno.test("scoped result refusal releases shared readers without emitting operation settlement", async () => {
+  const f = await fixture();
+  const unavailable = Object.assign(
+    new Error("Operation result is unavailable."),
+    { code: "operation_result_unavailable", status: 409 },
+  );
+  const scopes: string[][] = [];
+  Object.assign(f.application.events, {
+    outstanding(namespace: string, operationId: string) {
+      scopes.push([namespace, operationId]);
+      return Promise.reject(unavailable);
+    },
+  });
+  const readers = createSharedOperationReaders(f.application, fast);
+  try {
+    const attachments = await Promise.all([
+      readers.attach({ operationId: "op" }),
+      readers.attach({ operationId: "op" }),
+    ]);
+    const observed: string[] = [];
+    await Promise.all(attachments.flatMap((attachment) => [
+      assertRejects(() => attachment.done, Error, unavailable.message),
+      assertRejects(
+        async () => {
+          for await (const output of attachment.outputs) {
+            observed.push(output.type);
+          }
+        },
+        Error,
+        unavailable.message,
+      ),
+    ]));
+    await Promise.all(attachments.map((attachment) => attachment.drained));
+    assertEquals(scopes, [["tenant", "op"]]);
+    assertEquals(
+      observed.some((type) =>
+        ["operation.completed", "operation.failed", "operation.cancelled"]
+          .includes(type)
+      ),
+      false,
+    );
+    assertEquals(f.counts.watches, 1);
+    assertEquals(f.counts.closes, 1);
+    assertEquals(
+      (await f.application.operationStatus({ operationId: "op" }))?.state,
+      "running",
+    );
+  } finally {
+    await readers.close();
+  }
+});
+
+Deno.test("quiet and byte-only reader iterations add no integrity SQL until status is refreshed", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const schema = "reader_availability";
+  await provisionCopilotzSchema(database, schema);
+  const statements: { sql: string; params: unknown[] }[] = [];
+  const store = createEventStore({
+    schema,
+    session: {
+      ...database,
+      query(sql, params) {
+        statements.push({ sql, params: [...params ?? []] });
+        return database.query(sql, params);
+      },
+    },
+  });
+  // This isolates reader scheduling and real SQL accounting. Genuine reopened
+  // orphan/effect behavior is covered by orphan-result-refusal.postgres.test.ts.
+  const f = await fixture();
+  Object.assign(f.application.events, { outstanding: store.scopeOutstanding });
+  const originalWatch = f.application.operations.watch;
+  let waits = 0;
+  let finishWait: (() => void) | undefined;
+  Object.assign(f.application.operations, {
+    async watch(...args: Parameters<typeof originalWatch>) {
+      const watch = await originalWatch(...args);
+      return {
+        ...watch,
+        wait(
+          { signal, timeoutMs }: { signal: AbortSignal; timeoutMs: number },
+        ) {
+          assertEquals(timeoutMs, 60_000);
+          waits++;
+          return new Promise<boolean>((resolve) => {
+            const finish = () => {
+              signal.removeEventListener("abort", finish);
+              resolve(false);
+            };
+            finishWait = finish;
+            signal.addEventListener("abort", finish, { once: true });
+          });
+        },
+        close() {
+          finishWait?.();
+          watch.close();
+        },
+      };
+    },
+  });
+  const readers = createSharedOperationReaders(f.application, fast);
+  try {
+    const attachment = await readers.attach({ operationId: "op" });
+    const output = (await attachment.outputs.getReader().read())
+      .value as StreamOutput;
+    const payload = output.payload.getReader();
+    await until(() => waits === 1);
+    assertEquals(statements.length, 1);
+    const nextIteration = async () => {
+      const previous = waits;
+      finishWait!();
+      await until(() => waits === previous + 1);
+    };
+    for (let tick = 0; tick < 3; tick++) {
+      await nextIteration(); // a quiet timeout, with no hint or revision change
+      assertEquals(statements.length, 1);
+    }
+    for (let tick = 0; tick < 4; tick++) {
+      const read = payload.read();
+      await f.append("byte");
+      await nextIteration();
+      assertEquals(text((await read).value), "byte");
+      assertEquals(statements.length, 1);
+    }
+    assertEquals(f.counts.streams, 1);
+    assertEquals(f.counts.status, 1);
+    f.event("status-change");
+    await nextIteration();
+    assertEquals(
+      statements.length,
+      2,
+      "an actual status refresh rechecks the exact scope",
+    );
+    assertEquals(statements.map(({ params }) => params), [["tenant", "op"], [
+      "tenant",
+      "op",
+    ]]);
+    assertEquals(
+      statements.some(({ sql }) => /\b(UPDATE|INSERT|DELETE)\b/.test(sql)),
+      false,
+    );
+    await attachment.detach();
+    await attachment.drained;
+    assertEquals(f.counts.closes, 1);
+  } finally {
+    await readers.close();
+    await database.close();
   }
 });

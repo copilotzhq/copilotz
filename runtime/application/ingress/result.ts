@@ -256,6 +256,7 @@ export async function collectionMutationResult(
   }
   const request = root.data as ServerCollectionMutationRequest;
   if (status.state === "accepted" || status.state === "running") {
+    await scope.events.outstanding(status.namespace, operationId);
     return {
       kind: "collection",
       pending: true,
@@ -347,6 +348,60 @@ export async function recordedOperationResult(
   operationId: string,
   audience: "http" | "host" = "http",
 ): Promise<RecordedOperationResult> {
+  let refusal: unknown;
+  try {
+    return await readRecordedOperationResult(
+      application,
+      context,
+      operationId,
+      audience,
+      (error) => {
+        refusal = error;
+      },
+    );
+  } catch (error) {
+    if (refusal === undefined || error !== refusal) throw error;
+  }
+  // An accepted Action result can race the pending lookup while a different
+  // joined obligation remains open. Re-read once through the same authority;
+  // this never retries execution, changes identity, or settles an obligation.
+  let repeatedRefusal: unknown;
+  try {
+    return await readRecordedOperationResult(
+      application,
+      context,
+      operationId,
+      audience,
+      (error) => {
+        repeatedRefusal = error;
+      },
+    );
+  } catch (error) {
+    throw repeatedRefusal !== undefined && error === repeatedRefusal
+      ? refusal
+      : error;
+  }
+}
+
+async function readRecordedOperationResult(
+  application: InternalCopilotzApplication,
+  context: ApplicationScope,
+  operationId: string,
+  audience: "http" | "host",
+  onPendingRefusal: (error: unknown) => void,
+): Promise<RecordedOperationResult> {
+  const notePendingRefusal = (error: unknown) => {
+    const typed = error as { code?: unknown; status?: unknown } | null;
+    if (
+      error instanceof Error &&
+      typed?.code === "operation_result_unavailable" &&
+      typed.status === 409 &&
+      error.message === "Operation result is unavailable."
+    ) {
+      onPendingRefusal(error);
+    }
+    throw error;
+  };
   const status = await application.operationStatus({
     operationId,
     namespace: context.namespace,
@@ -355,15 +410,22 @@ export async function recordedOperationResult(
   if (!status) {
     throw appError(404, "operation_not_found", "Operation was not found.");
   }
-  const pending = (): RecordedOperationResult => ({
-    kind: event?.type === SERVER_ACTION_REQUEST_EVENT_TYPE ? "action" : "event",
-    pending: true,
-    value: { status: status.state },
-  });
   const scoped = context.databaseSchema &&
       context.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(context.databaseSchema)
     : application;
+  const pending = async (): Promise<RecordedOperationResult> => {
+    await scoped.events.outstanding(status.namespace, operationId).catch(
+      notePendingRefusal,
+    );
+    return {
+      kind: event?.type === SERVER_ACTION_REQUEST_EVENT_TYPE
+        ? "action"
+        : "event",
+      pending: true,
+      value: { status: status.state },
+    };
+  };
   const event = await scoped.events.resolve(status.namespace, operationId);
   if (event?.type === SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE) {
     const collectionResult = await collectionMutationResult(
@@ -371,7 +433,7 @@ export async function recordedOperationResult(
       context,
       operationId,
       audience,
-    );
+    ).catch(notePendingRefusal);
     if (collectionResult) return collectionResult;
   }
   if (event?.type !== SERVER_ACTION_REQUEST_EVENT_TYPE || !event.durable) {

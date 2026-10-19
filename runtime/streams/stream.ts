@@ -45,44 +45,30 @@ export type {
 
 type ScheduledWriterCommand = <T>(run: () => T | Promise<T>) => Promise<T>;
 type WriterLifetime = {
-  failure: AbortSignal;
-  scheduled?: ScheduledWriterCommand;
+  observeFailure(onFailure: (reason: unknown) => void): () => void;
+  bindCommands(scheduled: ScheduledWriterCommand): void;
 };
-const writerLifetimes = new WeakMap<object, WriterLifetime>();
+/** Package-private lifecycle: immutable handles, with the first invocation owning scheduling. */
+export const contentStreamLifecycle = Symbol("content stream lifecycle");
+const lifetimeOf = (writer: object) =>
+  (writer as { [contentStreamLifecycle]?: WriterLifetime })[
+    contentStreamLifecycle
+  ];
 type Terminalizer = NonNullable<
   CreateContentStreamRuntimeOptions["onTerminalizing"]
 >;
-const ownerTerminalizers = new WeakSet<Terminalizer>();
-
-/** Bind only the engine's exact operation terminal-intent transition. */
-export function bindContentStreamTerminalizer<T extends Terminalizer>(
-  terminalize: T,
-): T {
-  ownerTerminalizers.add(terminalize);
-  return terminalize;
-}
 const typedArrayLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   "length",
 )!.get!;
 const copyBytes = Uint8Array.prototype.set;
 
-/** Preserve the same writer lifetime through a trusted capability facade. */
-export function inheritContentStreamFailure(
-  source: object,
-  target: object,
-): void {
-  const lifetime = writerLifetimes.get(source);
-  if (lifetime) writerLifetimes.set(target, lifetime);
-}
-
 /** The first acquiring invocation owns scheduled policy for this exact writer. */
 export function bindContentStreamCommands(
   writer: object,
   scheduled: ScheduledWriterCommand,
 ): void {
-  const lifetime = writerLifetimes.get(writer);
-  if (lifetime) lifetime.scheduled ??= scheduled;
+  lifetimeOf(writer)?.bindCommands(scheduled);
 }
 
 /** Package-only lifetime observation for the invocation that owns this writer. */
@@ -90,12 +76,7 @@ export function observeContentStreamFailure(
   writer: object,
   onFailure: (reason: unknown) => void,
 ): () => void {
-  const signal = writerLifetimes.get(writer)?.failure;
-  if (!signal) return () => {};
-  const notify = () => onFailure(signal.reason);
-  signal.addEventListener("abort", notify, { once: true });
-  if (signal.aborted) notify();
-  return () => signal.removeEventListener("abort", notify);
+  return lifetimeOf(writer)?.observeFailure(onFailure) ?? (() => {});
 }
 
 export class ContentStreamOwnershipLostError extends Error {
@@ -130,6 +111,19 @@ function unref(timer: ReturnType<typeof setTimeout>) {
 /** Catalog acceptance is the only lifecycle. The adapter stores physical bytes. */
 export function createContentStreamRuntime(
   options: CreateContentStreamRuntimeOptions,
+): ContentStreamRuntime {
+  return createStreamRuntime(options);
+}
+/** Owner cleanup is wired at construction, separately from caller callbacks. */
+export function createOwnerContentStreamRuntime(
+  options: CreateContentStreamRuntimeOptions,
+  terminalize: Terminalizer,
+): ContentStreamRuntime {
+  return createStreamRuntime(options, terminalize);
+}
+function createStreamRuntime(
+  options: CreateContentStreamRuntimeOptions,
+  ownerTerminalize?: Terminalizer,
 ): ContentStreamRuntime {
   const namespace = options.namespace.trim();
   if (!namespace) throw new TypeError("Content stream namespace is required.");
@@ -203,9 +197,20 @@ export function createContentStreamRuntime(
         closed: PendingContentRef | undefined,
         terminalTask: Promise<void> | undefined;
       const failure = new AbortController();
-      const lifetime: WriterLifetime = { failure: failure.signal };
+      let scheduledCommand: ScheduledWriterCommand | undefined;
+      const lifetime: WriterLifetime = Object.freeze({
+        observeFailure(onFailure: (reason: unknown) => void) {
+          const notify = () => onFailure(failure.signal.reason);
+          failure.signal.addEventListener("abort", notify, { once: true });
+          if (failure.signal.aborted) notify();
+          return () => failure.signal.removeEventListener("abort", notify);
+        },
+        bindCommands(scheduled: ScheduledWriterCommand) {
+          scheduledCommand ??= scheduled;
+        },
+      });
       const scheduled = async <T>(run: () => T | Promise<T>): Promise<T> =>
-        await (lifetime.scheduled ? lifetime.scheduled(run) : run());
+        await (scheduledCommand ? scheduledCommand(run) : run());
       let terminalAccepted = false, aborting = false;
       let pendingAppends = 0;
       let tail: Promise<void> = Promise.resolve();
@@ -297,32 +302,19 @@ export function createContentStreamRuntime(
             removeAbort();
             return;
           }
-          const terminalize = options.onTerminalizing;
-          if (terminalize) {
-            if (ownerTerminalizers.has(terminalize)) {
-              await runFixed(() => terminalize(opened, terminal));
-            } else await terminalize(opened, terminal);
+          if (ownerTerminalize) {
+            await runFixed(() => ownerTerminalize(opened, terminal));
           }
+          await options.onTerminalizing?.(opened, terminal);
           writer = await runFixed(() => store.fence({ writer }));
           committed = await runFixed(() => catalog.revoked(identity));
-          const digest = await runFixed(() =>
-            digestCatalogPrefix(
-              store,
-              logical.copy.key,
-              committed,
-            )
-          );
-          const incomplete = await runFixed(() =>
-            store.terminate({
-              writer,
-              expectedByteLength: committed,
-              expectedDigest: digest,
-            })
-          );
           await runFixed(() =>
-            catalog.recordFailure({ ...identity, ...terminal, digest })
+            catalog.recordFailure({ ...identity, ...terminal })
           );
-          await options.onTerminate?.(opened, incomplete, terminal);
+          await options.onTerminate?.(opened, {
+            bodyId: logical.bodyId,
+            byteLength: committed,
+          }, terminal);
           appends.clear();
           removeAbort();
         }).catch((error) => {
@@ -565,6 +557,7 @@ export function createContentStreamRuntime(
               digest,
               pending,
             });
+            await ownerTerminalize?.(opened, { outcome: "completed" });
             await options.onTerminalizing?.(opened, { outcome: "completed" });
             failure.signal.throwIfAborted();
             const head = await store.seal({
@@ -609,7 +602,9 @@ export function createContentStreamRuntime(
           await abort({ reason: "abandoned" });
         },
       };
-      writerLifetimes.set(streamWriter, lifetime);
+      Object.defineProperty(streamWriter, contentStreamLifecycle, {
+        value: lifetime,
+      });
       return streamWriter;
     },
     async follow(input, followOptions = {}) {

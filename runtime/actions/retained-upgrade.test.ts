@@ -179,7 +179,10 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
     );
     assertEquals(
       (await f.db.query(
-        `SELECT namespace,operation_id,replay_key,stream_id,stream_ordinal,committed_offset FROM "${f.schema}".copilotz_operation_streams ORDER BY replay_key`,
+        `SELECT s.namespace,operation_id,replay_key,stream_id,stream_ordinal,b.committed_offset
+          FROM "${f.schema}".copilotz_operation_streams s
+          JOIN ${f.tables.content_logical_bodies} b ON b.body_id=s.body_id
+          ORDER BY replay_key`,
       )).rows,
       oldStreams,
     );

@@ -839,12 +839,6 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
           metadata: {},
         },
       });
-      await operations.commitStreamOffset({
-        namespace: "tenant",
-        operationId,
-        streamId,
-        committedOffset: bytes.length,
-      });
       await operations.retainStream({
         namespace: "tenant",
         operationId,

@@ -51,10 +51,11 @@ export type ContentSeal = Readonly<
   { length: number; digest: `sha256:${string}` }
 >;
 export type ContentTerminal = Readonly<
-  ContentSeal & {
-    outcome: "completed" | "failed" | "cancelled";
-    reason?: string;
-  }
+  & { length: number; reason?: string }
+  & (
+    | { outcome: "completed"; digest: `sha256:${string}` }
+    | { outcome: "failed" | "cancelled"; digest?: never }
+  )
 >;
 export type LogicalBody = Readonly<
   ContentWriter & {
@@ -184,7 +185,6 @@ export interface ContentCatalog {
     input: ContentWriter & {
       outcome?: "failed" | "cancelled";
       reason?: string;
-      digest: `sha256:${string}`;
     },
   ): Promise<ContentTerminal>;
   reservePromotion(
@@ -202,12 +202,9 @@ export interface ContentCatalog {
       body: LogicalBody;
       descriptor: PendingContentDescriptor;
       producer: string;
+      ownerId?: string;
     }
   >;
-  checkPendingOwner(
-    executor: SqlExecutor,
-    input: { namespace: string; pendingRef: string; ownerId: string },
-  ): Promise<void>;
   adoptPending(
     transaction: SqlExecutor,
     input: {
@@ -320,27 +317,56 @@ export function createContentCatalog(
       canonical(json(existing.descriptor)) !== canonical(descriptor)
     ) conflict("Pending content identity is already used.");
   }
-  async function pendingLive(
+  async function pendingState(
     namespace: string,
     pendingRef: string,
     executor: SqlExecutor,
-  ): Promise<boolean> {
-    const base = (await executor.query<{ live: boolean; producer: string }>(
-      `SELECT p.producer,(p.expires_at>NOW() OR EXISTS(SELECT 1 FROM ${tables.content_adoptions} a WHERE a.namespace=p.namespace AND a.pending_ref=p.pending_ref)) AS live FROM ${tables.pending_content} p WHERE namespace=$1 AND pending_ref=$2`,
+  ) {
+    const row = (await executor.query<
+      BodyRow & {
+        descriptor: PendingContentDescriptor;
+        producer: string;
+        owner_id: string | null;
+        live: boolean;
+        tombstoned: boolean;
+      }
+    >(
+      `SELECT b.*,c.backend_kind,c.backend_id,c.version_token,c.collectable,
+      p.descriptor,p.producer,a.owner_id,
+      (p.expires_at>NOW() OR a.owner_id IS NOT NULL) AS live,
+      (c.state IN ('retiring','retired') OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} r
+        WHERE r.body_id=c.copy_key AND r.backend_kind=c.backend_kind
+        AND r.backend_id=CASE WHEN c.backend_kind='database' THEN '' ELSE c.backend_id END)) AS tombstoned
+      FROM ${tables.pending_content} p
+      JOIN ${tables.content_logical_bodies} b ON b.body_id=p.body_id
+      JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy
+      LEFT JOIN ${tables.content_adoptions} a ON a.namespace=p.namespace AND a.pending_ref=p.pending_ref
+      WHERE p.namespace=$1 AND p.pending_ref=$2`,
       [namespace, pendingRef],
     )).rows[0];
-    if (!base) return false;
-    if (base.live) return true;
-    const operations = `"${schema}"."copilotz_operations"`;
-    const present = (await executor.query<{ present: boolean }>(
-      "SELECT to_regclass($1) IS NOT NULL AS present",
-      [operations],
-    )).rows[0]?.present;
-    if (!present) return false;
-    return (await executor.query(
-      `SELECT 1 FROM ${operations} WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')`,
-      [namespace, base.producer],
-    )).rows.length > 0;
+    if (row && !row.live) {
+      const operations = `"${schema}"."copilotz_operations"`;
+      const present = (await executor.query<{ present: boolean }>(
+        "SELECT to_regclass($1) IS NOT NULL AS present",
+        [operations],
+      )).rows[0]?.present;
+      row.live = !!present && (await executor.query(
+            `SELECT 1 FROM ${operations} WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running')`,
+            [namespace, row.producer],
+          )).rows.length > 0;
+    }
+    if (!row?.live) {
+      throw createContentError(
+        "content_missing",
+        "Pending content descriptor is unavailable or expired.",
+      );
+    }
+    if (row.tombstoned) {
+      conflict(
+        "A tombstoned physical copy cannot become current or be adopted.",
+      );
+    }
+    return row;
   }
   return {
     read,
@@ -540,25 +566,22 @@ export function createContentCatalog(
         "content.checkpoint",
         input,
         async (input, { transaction }) => {
-          const body = await requireBody(input.bodyId, transaction);
-          if (
-            !sameWriter(body, input) || body.revocation !== "active" ||
-            body.terminal || body.sealIntent
-          ) conflict("Content writer has been revoked or sealed.");
-          // The committed offset is the receipt. Exact replay after application is harmless.
-          if (body.committedOffset === input.offset) {
-            return body
-              .committedOffset;
-          }
-          if (body.committedOffset !== input.expectedOffset) {
-            conflict(
-              "Checkpoint does not extend the catalog prefix.",
-            );
-          }
-          await transaction.query(
-            `UPDATE ${tables.content_logical_bodies} SET committed_offset=$2 WHERE body_id=$1`,
-            [input.bodyId, input.offset],
+          const result = await transaction.query(
+            `UPDATE ${tables.content_logical_bodies} SET committed_offset=$5
+              WHERE body_id=$1 AND writer_id=$2 AND generation=$3
+              AND revocation='active' AND terminal IS NULL AND seal_intent IS NULL
+              AND committed_offset IN ($4,$5) RETURNING committed_offset`,
+            [
+              input.bodyId,
+              input.writerId,
+              input.generation,
+              input.expectedOffset,
+              input.offset,
+            ],
           );
+          if (!result.rows.length) {
+            conflict("Checkpoint does not extend the active catalog prefix.");
+          }
           return input.offset;
         },
       );
@@ -730,7 +753,6 @@ export function createContentCatalog(
       input: ContentWriter & {
         outcome?: "failed" | "cancelled";
         reason?: string;
-        digest: `sha256:${string}`;
       },
     ) {
       return await command(
@@ -745,7 +767,6 @@ export function createContentCatalog(
           const terminal: ContentTerminal = {
             outcome: input.outcome ?? "failed",
             length: body.committedOffset,
-            digest: input.digest,
             ...(input.reason ? { reason: input.reason } : {}),
           };
           await transaction.query(
@@ -847,25 +868,8 @@ export function createContentCatalog(
       executor: SqlExecutor = session,
     ) {
       const ref = capturePendingContentRef(source);
-      const rows = await executor.query<
-        {
-          body_id: string;
-          descriptor: PendingContentDescriptor;
-          producer: string;
-          expired: boolean;
-        }
-      >(
-        `SELECT body_id,descriptor,producer,expires_at<=NOW() AS expired FROM ${tables.pending_content} WHERE namespace=$1 AND pending_ref=$2`,
-        [namespace, ref.pendingRef],
-      );
-      const pending = rows.rows[0];
-      if (!pending || !await pendingLive(namespace, ref.pendingRef, executor)) {
-        throw createContentError(
-          "content_missing",
-          "Pending content descriptor is unavailable or expired.",
-        );
-      }
-      const body = await requireBody(pending.body_id, executor);
+      const pending = await pendingState(namespace, ref.pendingRef, executor);
+      const body = map(pending);
       if (
         body.terminal?.outcome !== "completed" ||
         body.terminal.length !== ref.byteLength ||
@@ -875,24 +879,12 @@ export function createContentCatalog(
           "Pending content claims do not match their catalog descriptor.",
         );
       }
-      await assertUntombstoned(body.copy, executor);
       return {
         body,
         descriptor: capturePendingContentDescriptor(json(pending.descriptor)),
         producer: pending.producer,
+        ...(pending.owner_id ? { ownerId: pending.owner_id } : {}),
       };
-    },
-    async checkPendingOwner(
-      executor: SqlExecutor,
-      input: { namespace: string; pendingRef: string; ownerId: string },
-    ) {
-      const row = (await executor.query<{ owner_id: string }>(
-        `SELECT owner_id FROM ${tables.content_adoptions} WHERE namespace=$1 AND pending_ref=$2`,
-        [input.namespace, input.pendingRef],
-      )).rows[0];
-      if (row && row.owner_id !== input.ownerId) {
-        conflict("Pending content already belongs to another domain owner.");
-      }
     },
     async adoptPending(
       transaction: SqlExecutor,
@@ -904,33 +896,14 @@ export function createContentCatalog(
       },
     ) {
       assertSchemaCommandTransaction(transaction, schema);
-      const pending = (await transaction.query<{ body_id: string }>(
-        `SELECT body_id FROM ${tables.pending_content} WHERE namespace=$1 AND pending_ref=$2`,
-        [input.namespace, input.pendingRef],
-      )).rows[0];
-      if (
-        !pending ||
-        !await pendingLive(input.namespace, input.pendingRef, transaction)
-      ) {
-        throw createContentError(
-          "content_missing",
-          "Pending descriptor is unavailable or expired.",
-        );
-      }
-      await assertUntombstoned(
-        (await requireBody(pending.body_id, transaction)).copy,
-        transaction,
-      );
-      await transaction.query(
-        `INSERT INTO ${tables.content_adoptions}(namespace,pending_ref,owner_id,asset_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+      await pendingState(input.namespace, input.pendingRef, transaction);
+      const receipt = (await transaction.query<{ asset_id: string }>(
+        `INSERT INTO ${tables.content_adoptions} AS a(namespace,pending_ref,owner_id,asset_id)
+          VALUES($1,$2,$3,$4) ON CONFLICT(namespace,pending_ref) DO UPDATE SET owner_id=a.owner_id
+          WHERE a.owner_id=EXCLUDED.owner_id RETURNING asset_id`,
         [input.namespace, input.pendingRef, input.ownerId, input.assetId],
-      );
-      const receipt =
-        (await transaction.query<{ owner_id: string; asset_id: string }>(
-          `SELECT owner_id,asset_id FROM ${tables.content_adoptions} WHERE namespace=$1 AND pending_ref=$2`,
-          [input.namespace, input.pendingRef],
-        )).rows[0];
-      if (receipt.owner_id !== input.ownerId) {
+      )).rows[0];
+      if (!receipt) {
         conflict("Pending content already belongs to another domain owner.");
       }
       return receipt.asset_id;
@@ -977,6 +950,7 @@ export async function openLogicalBody(
     throw createContentError("content_missing", "Logical body is missing.");
   }
   let offset = 0;
+  let body = initial;
   const length = expectedLength ?? initial.terminal?.length;
   if (length === undefined) {
     throw new TypeError("Immutable content reads require a terminal length.");
@@ -987,13 +961,6 @@ export async function openLogicalBody(
         if (offset === length) {
           controller.close();
           return;
-        }
-        let body = await catalog.read(bodyId);
-        if (!body) {
-          throw createContentError(
-            "content_missing",
-            "Logical body is missing.",
-          );
         }
         const end = Math.min(length, offset + CONTENT_CHUNK_BYTES);
         let bytes: Uint8Array;

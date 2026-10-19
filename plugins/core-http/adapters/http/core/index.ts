@@ -12,17 +12,6 @@ import {
   mapThreadRecord,
 } from "../../../../core/index.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import { readParticipantDisplays } from "./participant-display.ts";
-export {
-  participantDisplayInputSchema,
-  participantDisplayOutputSchema,
-} from "./participant-display.ts";
-
-export type CoreHttpAdapterOptions = Readonly<{
-  /** Trusted named Collection query; never selected by request input. */
-  participantDisplayQuery?: string;
-}>;
-
 function query(
   context: HttpHandlerContext,
 ): import("@copilotz/copilotz/core/client").ThreadQuery {
@@ -80,21 +69,12 @@ async function thread(context: HttpHandlerContext, id: string) {
 async function project(
   context: HttpHandlerContext,
   value: CollectionRecord,
-  displayQuery?: string,
 ) {
-  const participants = displayQuery
-    ? await readParticipantDisplays(
-      context,
-      displayQuery,
-      value,
-      value.participantIds as string[],
-      "participants",
-    )
-    : await Promise.all(
-      (value.participantIds as string[]).map((id) =>
-        context.read.get("participant", id)
-      ),
-    );
+  const participants = await Promise.all(
+    (value.participantIds as string[]).map((id) =>
+      context.read.get("participant", id)
+    ),
+  );
   return mapThreadRecord(
     value,
     participants.filter((value): value is CollectionRecord => value !== null)
@@ -102,20 +82,8 @@ async function project(
   );
 }
 
-/** Create the existing Core routes with an optional authorized display projection. */
-export function createCoreHttpAdapter(
-  options: CoreHttpAdapterOptions = {},
-): HttpAdapter {
-  const displayQuery = options.participantDisplayQuery;
-  if (
-    displayQuery !== undefined &&
-    (typeof displayQuery !== "string" ||
-      !/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(displayQuery))
-  ) {
-    throw new TypeError(
-      "Participant display query must be a valid static query name.",
-    );
-  }
+/** Core conversation routes use ordinary authorized participant reads. */
+export function createCoreHttpAdapter(): HttpAdapter {
   return createHttpAdapter({
     routes: [
       {
@@ -140,9 +108,7 @@ export function createCoreHttpAdapter(
           });
           return Response.json({
             data: await Promise.all(
-              records.slice(0, limit).map((value) =>
-                project(context, value, displayQuery)
-              ),
+              records.slice(0, limit).map((value) => project(context, value)),
             ),
             pageInfo: {
               hasMore: records.length > limit,
@@ -159,7 +125,6 @@ export function createCoreHttpAdapter(
           return await project(
             context,
             await thread(context, context.params.id),
-            displayQuery,
           );
         },
       },
@@ -168,7 +133,7 @@ export function createCoreHttpAdapter(
         method: "GET",
         path: "/threads/:id/messages",
         async handler(context) {
-          const selectedThread = await thread(context, context.params.id);
+          await thread(context, context.params.id);
           // Capture before the read. Live discovery replays every overlapping operation,
           // including ones that start and settle while history is being projected.
           const checkpoint = await context.operations.checkpoint(
@@ -194,17 +159,9 @@ export function createCoreHttpAdapter(
           const senderIds = [
             ...new Set(page.map((record) => String(record.senderId))),
           ];
-          const senderRows = displayQuery
-            ? await readParticipantDisplays(
-              context,
-              displayQuery,
-              selectedThread,
-              senderIds,
-              "senders",
-            )
-            : await Promise.all(
-              senderIds.map((id) => context.read.get("participant", id)),
-            );
+          const senderRows = await Promise.all(
+            senderIds.map((id) => context.read.get("participant", id)),
+          );
           const senders = new Map(
             senderRows.flatMap((sender) =>
               sender ? [[String(sender.id), sender] as const] : []

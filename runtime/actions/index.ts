@@ -136,7 +136,6 @@ export type {
   ProtectedActionDefinitions,
   ProtectedActionIngress,
   ProtectedActionOwnerContext,
-  ProtectedActionParentCapture,
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "./protected-action-types.ts";

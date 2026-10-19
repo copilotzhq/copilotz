@@ -23,6 +23,7 @@ import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   type ContentCatalog,
   createContentCatalog,
+  openLogicalBody,
 } from "../content/catalog.ts";
 import {
   type BodyStore,
@@ -882,7 +883,17 @@ async function authorizedWriterFailure(
         assertEquals(logical?.terminal?.length, 8);
         assertEquals(
           (await f.store.head({ bodyId: logical!.copy.key }))?.byteLength,
-          8,
+          17,
+        );
+        assertEquals(
+          await new Response(
+            await openLogicalBody(
+              f.catalog,
+              logical!.bodyId,
+              () => f.store,
+            ),
+          ).text(),
+          "accepted",
         );
         if (method === "streams.open") {
           const projected = await operations.getStream(

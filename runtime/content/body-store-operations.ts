@@ -53,7 +53,7 @@ export type BodyDriver = Readonly<{
     body: StoredBody,
     previous: string | null,
     writes: readonly PartWrite[],
-  ): Promise<boolean>;
+  ): Promise<string | false>;
   readRange(
     stored: StoredVersion,
     start: number,
@@ -433,7 +433,10 @@ export function createBodyStoreOperations(driver: BodyDriver): BodyStore {
           byteLength: input.bytes.length,
           parts: writes.map((x) => x.part),
         };
-        await driver.compareAndSwap(body, null, writes);
+        const versionToken = await driver.compareAndSwap(body, null, writes);
+        if (versionToken) {
+          return bodyHead({ body, versionToken }) as ReadyBodyHead;
+        }
         stored = await driver.load(input.bodyId);
       }
       if (
@@ -548,14 +551,22 @@ export function createBodyStoreOperations(driver: BodyDriver): BodyStore {
           length: input.bytes.length,
           digest,
         };
-        await driver.compareAndSwap(
-          changed(stored.body, {
-            byteLength: input.expectedOffset + input.bytes.length,
-            parts: [...stored.body.parts, part],
-          }),
+        const body = changed(stored.body, {
+          byteLength: input.expectedOffset + input.bytes.length,
+          parts: [...stored.body.parts, part],
+        });
+        const versionToken = await driver.compareAndSwap(
+          body,
           stored.versionToken,
           [{ part, bytes: input.bytes }],
         );
+        if (versionToken) {
+          return Object.freeze({
+            startOffset: input.expectedOffset,
+            endOffset: body.byteLength,
+            versionToken,
+          });
+        }
         stored = requireWriter(
           await driver.load(input.writer.bodyId),
           input.writer,
@@ -661,7 +672,7 @@ export function createMemoryOperations(backendId: string): BodyStore {
       }
       bytes.set(body.bodyId, parts);
       records.set(body.bodyId, { body, versionToken: body.nonce });
-      return Promise.resolve(true);
+      return Promise.resolve(body.nonce);
     },
     readRange(stored, start, end) {
       const output = new Uint8Array(end - start);

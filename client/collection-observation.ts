@@ -1,7 +1,6 @@
 /** Authorized Collection snapshots use the canonical observation decoder and request path. */
 import type { ObserveOptions } from "./index.ts";
 import { ProtocolError } from "./protocol.ts";
-import { snapshotViewData } from "../runtime/views/renderer.ts";
 
 export type CollectionObserveSelection = Readonly<
   { id: string; query?: never; queryName?: never } | {
@@ -85,10 +84,6 @@ export function createCollectionObserver(
           ) {
             throw new ProtocolError("Collection snapshot coverage has a gap.");
           }
-          const value = snapshotViewData(output.value, {
-            maxBytes: 1024 * 1024,
-            maxNodes: 40000,
-          });
           await options.onSnapshot({
             collection,
             reset: output.reset,
@@ -96,7 +91,7 @@ export function createCollectionObserver(
               ? {}
               : { from: output.from as string }),
             to: output.to,
-            value,
+            value: output.value,
             status: output.status,
             pending: false,
             checkpoint: frame.checkpoint,

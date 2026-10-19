@@ -1,4 +1,3 @@
-import type { AssetOrigin, ContentSequence } from "../content/types.ts";
 import type {
   CollectionMutationRef,
   CollectionRecord,
@@ -40,16 +39,6 @@ export type ProtectedActionSource =
     ancestors: readonly ProtectedActionSourceEntry[];
   }>;
 
-/** Exact local capture assertion; the owner resolves the immediate parent's input. */
-export type ProtectedActionParentCapture = Readonly<{
-  captureKey: string;
-  parentInputPath: string;
-  content: ContentSequence;
-  /** Authorized registered destination; diagnostic Asset origin is not ownership. */
-  origin: AssetOrigin;
-}>;
-
-/** Query-only transaction authority, revoked when each local callback ends. */
 export type ProtectedActionOwnerContext<Input = unknown, Output = unknown> =
   Readonly<{
     query: SqlExecutor["query"];
@@ -65,10 +54,6 @@ export type ProtectedActionOwnerContext<Input = unknown, Output = unknown> =
     commandTime: string;
     signal: AbortSignal;
     resolveSource(): Promise<ProtectedActionSource>;
-    /** Verify exact parent content without opening stored bytes. In acceptOutput,
-     * destination edges are checked after staged Collection SQL, before acceptance.
-     * Other phases require already durable destination edges. */
-    assertParentCapture(input: ProtectedActionParentCapture): Promise<void>;
     /** Fixed accepted output of this Action/run; authorize provenance before reading. */
     readAcceptedOutput(): Promise<Output | undefined>;
   }>;

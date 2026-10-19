@@ -7,7 +7,7 @@ import {
 import { inheritActionCaller } from "./caller-identity.ts";
 import {
   bindContentStreamCommands,
-  inheritContentStreamFailure,
+  contentStreamLifecycle,
 } from "../streams/stream.ts";
 import type { ActionContext } from "./types.ts";
 const readResourceOwners = new WeakMap<object, object>();
@@ -307,6 +307,9 @@ export function authorizeActionCapabilities(
       : Object.create(Object.getPrototypeOf(value));
     const facade: object = new Proxy(target, {
       get(_target, key) {
+        if (key === contentStreamLifecycle) {
+          return Reflect.get(value, key, value);
+        }
         if (!cleanup(value, key)) check();
         const property = Reflect.get(value, key, value);
         if (typeof property !== "function") return wrap(property);
@@ -346,7 +349,6 @@ export function authorizeActionCapabilities(
       },
     });
     inheritActionCaller(value, facade);
-    inheritContentStreamFailure(value, facade);
     if (!receiver) cache.set(value, facade);
     return facade;
   };

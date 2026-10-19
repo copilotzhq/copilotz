@@ -52,6 +52,9 @@ export function createS3Fixture(gcs = false) {
         }</ListBucketResult>`,
       );
     }
+    const payload = input.method === "PUT"
+      ? new Uint8Array(await input.arrayBuffer())
+      : undefined;
     const object = objects.get(key),
       match = input.headers.get("if-match"),
       absent = input.headers.get("if-none-match"),
@@ -95,7 +98,7 @@ export function createS3Fixture(gcs = false) {
     if (input.method === "PUT") {
       assert(gcs ? generation !== null : match !== null || absent === "*");
       const value = {
-        bytes: new Uint8Array(await input.arrayBuffer()),
+        bytes: payload!,
         generation: ++sequence,
         etag: `"version-${sequence}"`,
       };

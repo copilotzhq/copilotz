@@ -325,6 +325,8 @@ Deno.test("offline catalog upgrade backfills opaque domain keys and event ordina
     await db.query(
       `ALTER TABLE ${tables.metadata} DROP CONSTRAINT copilotz_operation_catalog_metadata_fingerprint_check`,
     );
+    await db.query(`ALTER TABLE ${tables.operationStreams}
+      ADD COLUMN committed_offset BIGINT NOT NULL DEFAULT 0, ADD COLUMN digest TEXT`);
     await db.query(
       `UPDATE ${tables.metadata} SET fingerprint = 'retained-terminal-streams'`,
     );

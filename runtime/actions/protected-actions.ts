@@ -1,10 +1,5 @@
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
-import { assetBodySchemaPrefix } from "../content/body-store.ts";
-import {
-  assertProtectedParentCapture,
-  captureParentCapture,
-} from "./protected-action-content.ts";
 import { resolveProtectedActionParent } from "./protected-action-parent.ts";
 import {
   protectedActionCollectionFacade,
@@ -59,7 +54,6 @@ import {
 import type {
   ProtectedActionDefinitions,
   ProtectedActionOwnerContext,
-  ProtectedActionParentCapture,
 } from "./protected-action-types.ts";
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
@@ -167,7 +161,6 @@ export function createProtectedActions(
     source: ProtectedActionSourceBinding,
     run: (context: ProtectedActionOwnerContext) => T | Promise<T>,
     adoption?: CollectionTransactionCollections,
-    adoptionChecks?: Array<(transaction: SqlExecutor) => Promise<void>>,
   ) => {
     const signal = AbortSignal.any([
       options.signal,
@@ -249,37 +242,6 @@ export function createProtectedActions(
           }),
           input: captureHostCommandJson(input),
           resolveSource,
-          assertParentCapture(request: ProtectedActionParentCapture) {
-            assertActive();
-            let assertion;
-            try {
-              assertion = captureParentCapture(request);
-            } catch (error) {
-              return track(Promise.reject(error));
-            }
-            return track(
-              assertProtectedParentCapture({
-                transaction,
-                databaseSchema,
-                namespace,
-                source,
-                frame,
-                parentId,
-                actions: options.actions,
-                writer: options.writer,
-                assertion,
-                streamBodyPrefix: options.streamBodyPrefix ??
-                  assetBodySchemaPrefix({ databaseSchema }),
-                registeredOrigins: Object.values(
-                  options.collections?.definitions ?? {},
-                ).map((definition) => definition.name),
-              }).then(async (check) => {
-                assertActive();
-                if (adoptionChecks) adoptionChecks.push(check);
-                else await check(transaction);
-              }),
-            );
-          },
           readAcceptedOutput() {
             try {
               assertActive();
@@ -551,9 +513,6 @@ export function createProtectedActions(
           await authority(schemaCommandContext(tx, databaseSchema), frame);
           const capturedInput = await captured(tx);
           if (hook.acceptOutput) {
-            const adoptionChecks: Array<
-              (transaction: SqlExecutor) => Promise<void>
-            > = [];
             const accept = (collections: CollectionTransactionCollections) =>
               phase(
                 schemaCommandContext(tx, databaseSchema),
@@ -577,7 +536,6 @@ export function createProtectedActions(
                     : validateVoid(result);
                 },
                 collections,
-                adoptionChecks,
               );
             const command = schemaCommandContext(tx, databaseSchema);
             if (options.collections) {
@@ -615,9 +573,6 @@ export function createProtectedActions(
             }
             // Public handles are closed; all staged Collection SQL has run in
             // this same command. These fixed checks cannot commit or publish.
-            for (const check of adoptionChecks) {
-              await check(command.transaction);
-            }
           }
           await authority(schemaCommandContext(tx, databaseSchema), frame);
         }

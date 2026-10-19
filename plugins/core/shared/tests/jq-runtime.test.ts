@@ -1,46 +1,32 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { evaluateCoreJq } from "../jq.ts";
-import type { JqWorkerRequest } from "../jq-worker.ts";
 
-Deno.test("production jq admission runs 47 evaluations in FIFO order with one worker", async () => {
-  let active = 0;
-  let maximum = 0;
-  const order: number[] = [];
-  class Worker {
-    onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
-    onerror: ((event: ErrorEvent) => void) | null = null;
-    terminated = false;
-    constructor() {
-      active++;
-      maximum = Math.max(maximum, active);
-    }
-    postMessage(request: JqWorkerRequest) {
-      const { branch } = JSON.parse(request.input);
-      order.push(branch);
-      queueMicrotask(() =>
-        this.onmessage?.(
-          new MessageEvent("message", { data: { ok: true, value: [branch] } }),
-        )
-      );
-    }
-    terminate() {
-      if (this.terminated) return;
-      this.terminated = true;
-      active--;
-    }
-  }
-  const original = globalThis.Worker;
-  globalThis.Worker = Worker as unknown as typeof globalThis.Worker;
-  try {
-    const expected = Array.from({ length: 47 }, (_, branch) => branch);
-    const results = await Promise.all(
-      expected.map((branch) => evaluateCoreJq({ branch }, ".")),
-    );
-    assertEquals(results, expected);
-    assertEquals(order, expected);
-    assertEquals(active, 0);
-    assertEquals(maximum, 1);
-  } finally {
-    globalThis.Worker = original;
-  }
+Deno.test("jq executes bounded single outputs and releases capacity after invalid input/output", async () => {
+  assertEquals(await evaluateCoreJq({ n: 2 }, ".n + 1"), 3);
+  await assertRejects(() => evaluateCoreJq({}, "empty"), Error, "exactly one");
+  await assertRejects(() => evaluateCoreJq({}, "1,2"), Error, "exactly one");
+  await assertRejects(
+    () => evaluateCoreJq("a".repeat(1024 * 1024), "."),
+    Error,
+    "1 MiB",
+  );
+  await assertRejects(() => evaluateCoreJq({}, "bad syntax ["));
+  assertEquals(await evaluateCoreJq({ n: 2 }, ".n"), 2);
+});
+Deno.test("jq immediately refuses capacity and cancellation releases its worker", async () => {
+  const controller = new AbortController();
+  const pending = evaluateCoreJq({}, "while(true; .)", controller.signal);
+  const rejected = assertRejects(() => pending, DOMException, "cancelled");
+  await assertRejects(() => evaluateCoreJq({}, "."), Error, "capacity");
+  controller.abort(new DOMException("cancelled", "AbortError"));
+  await rejected;
+  assertEquals(await evaluateCoreJq(1, "."), 1);
+});
+Deno.test("jq preempts a nonterminating filter at the execution deadline", async () => {
+  await assertRejects(
+    () => evaluateCoreJq({}, "def forever: forever; forever"),
+    Error,
+    "5 second",
+  );
+  assertEquals(await evaluateCoreJq(1, "."), 1);
 });

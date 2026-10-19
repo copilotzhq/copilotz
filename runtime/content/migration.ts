@@ -37,6 +37,7 @@ export type ContentMigrationPlan = Readonly<
       streamId: string;
       physicalKey: string;
       bodyId: string;
+      reason?: string;
     }[];
     fingerprint: string;
   }
@@ -207,18 +208,21 @@ export async function inspectEmbeddedContent(
         stream_id: string;
         body_id: string;
         state: string;
-        outcome: Copy["outcome"];
+        outcome: Copy["outcome"] | "superseded" | "abandoned";
+        reason: string | null;
         committed_offset: string | number;
         digest: string;
         availability: string;
       }
-    >(`SELECT namespace,stream_id,body_id,state,outcome,committed_offset,digest,availability FROM ${streams}`))
+    >(`SELECT s.*,to_jsonb(s)->>'reason' AS reason FROM ${streams} s`))
       .rows;
     for (const stream of entries) {
       if (stream.state !== "terminal") {
         throw new Error("Drain in-flight streams before content migration.");
       }
-      if (stream.availability !== "retained") continue;
+      if (!["retained", "purge_pending"].includes(stream.availability)) {
+        continue;
+      }
       if (!input.streamBackend) {
         throw new TypeError(
           "Stream backend must be selected explicitly for migration.",
@@ -231,13 +235,21 @@ export async function inspectEmbeddedContent(
           key: stream.body_id,
         },
         { byteLength: Number(stream.committed_offset), digest: stream.digest },
-        stream.outcome,
+        stream.outcome === "superseded"
+          ? "cancelled"
+          : stream.outcome === "abandoned"
+          ? "failed"
+          : stream.outcome,
       );
       streamRows.push({
         namespace: stream.namespace,
         streamId: stream.stream_id,
         physicalKey: stream.body_id,
         bodyId: copy.bodyId,
+        ...((stream.reason || stream.outcome === "superseded" ||
+            stream.outcome === "abandoned")
+          ? { reason: stream.reason ?? stream.outcome }
+          : {}),
       });
     }
   }
@@ -341,7 +353,7 @@ export async function migrateEmbeddedContent(
             : null,
           JSON.stringify({
             length: copy.length,
-            digest: copy.digest,
+            ...(copy.outcome === "completed" ? { digest: copy.digest } : {}),
             outcome: copy.outcome,
           }),
         ],
@@ -406,6 +418,12 @@ export async function migrateEmbeddedContent(
       }
     }
     for (const stream of plan.streamRows) {
+      if (stream.reason) {
+        await transaction.query(
+          `UPDATE ${tables.content_logical_bodies} SET terminal=terminal || jsonb_build_object('reason',$2::text) WHERE body_id=$1`,
+          [stream.bodyId, stream.reason],
+        );
+      }
       await transaction.query(
         `UPDATE "${plan.schema}"."copilotz_operation_streams" SET body_id=$3 WHERE namespace=$1 AND stream_id=$2 AND body_id=$4`,
         [stream.namespace, stream.streamId, stream.bodyId, stream.physicalKey],

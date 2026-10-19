@@ -122,8 +122,6 @@ Deno.test("Channel exports expose transport helpers and Resource/Adapter composi
       "discordChannelPlugin",
       "discordChannelResource",
       "createDiscordTransport",
-      "TELEGRAM_SEND_TEXT_ACTION_ID",
-      "telegramSendTextAction",
       "telegramChannelAdapter",
       "telegramChannelPlugin",
       "telegramChannelResource",

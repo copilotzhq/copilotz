@@ -4,7 +4,6 @@ import {
   createTextRenderer,
   createViewResolver,
   snapshotViewData,
-  type TextRendererOptions,
   type ViewContext,
   type ViewReference,
   type ViewShows,
@@ -50,11 +49,6 @@ export function createContextViewRenderer(
     /** Explicitly host-approved inert presentation resources, never the complete
      * registry (which can contain secrets and executable capabilities). */
     resources?: ViewContext["resources"];
-    /** Private host bounds; admission is shared across contributions/scopes. */
-    limits?: Pick<
-      TextRendererOptions,
-      "maxDepth" | "maxNodes" | "maxBytes" | "maxPending" | "timeoutMs"
-    >;
   }>,
 ): ContextContributionRenderer {
   if (typeof options.project !== "function") {
@@ -62,12 +56,8 @@ export function createContextViewRenderer(
   }
   const project = options.project;
   const resolveView = options.registry.resolveView.bind(options.registry);
-  const limits = snapshotViewData(options.limits ?? {}) as NonNullable<
-    typeof options.limits
-  >;
   const resources = snapshotViewData(
     options.resources ?? {},
-    limits,
   ) as ViewContext["resources"];
   const bindings = snapshotViewData(
     options.bindings,
@@ -92,85 +82,27 @@ export function createContextViewRenderer(
     }
     validateReference(shows, "context", "text");
   }
-  const maxPending = limits.maxPending ?? 16;
-  if (!Number.isSafeInteger(maxPending) || maxPending < 1) {
-    throw new TypeError("Invalid Context View pending bound.");
-  }
-  let pending = 0;
   return async (input) => {
     input.signal.throwIfAborted();
     if (!Object.hasOwn(bindings, input.contribution.resourceId)) {
       return undefined;
     }
-    if (pending >= maxPending) {
-      throw new RangeError("Context View pending capacity exceeded.");
-    }
-    pending++;
-    let physical = 0;
-    let finished = false;
-    let released = false;
-    const release = () => {
-      if (finished && physical === 0 && !released) {
-        released = true;
-        pending--;
-      }
-    };
-    // A renderer has a per-scope lifetime. Keep this helper's admission across
-    // those instances until original project/View work, not abort races, settles.
-    const track = <T>(invoke: () => T | Promise<T>): Promise<T> => {
-      physical++;
-      let work: Promise<T>;
-      try {
-        work = Promise.resolve(invoke());
-      } catch (error) {
-        work = Promise.reject(error);
-      }
-      const settled = () => {
-        physical--;
-        release();
-      };
-      work.then(settled, settled);
-      return work;
-    };
-    try {
-      const renderer = createTextRenderer({
-        ...limits,
-        registry: {
-          resolveView(shows, mode, renderer) {
-            const view = resolveView(shows, mode, renderer);
-            const renderView = view?.render;
-            return view
-              ? {
-                ...view,
-                render: (value: never, context: ViewContext) =>
-                  track(() => renderView!.call(view, value, context)),
-              }
-              : undefined;
-          },
-        },
-        scope: input.scope,
-        resources,
-        project: (reference, context) =>
-          track(() =>
-            project({
-              ...input,
-              reference,
-              scope: context.scope as ContextViewScope,
-              signal: context.signal,
-            })
-          ),
-      });
-      return await renderer.render(
-        {
-          shows: bindings[input.contribution.resourceId],
-          value: input.content,
-        },
-        { mode: "context", renderer: "text" },
-        input.signal,
-      );
-    } finally {
-      finished = true;
-      release();
-    }
+    const renderer = createTextRenderer({
+      registry: { resolveView },
+      scope: input.scope,
+      resources,
+      project: (reference, context) =>
+        project({
+          ...input,
+          reference,
+          scope: context.scope as ContextViewScope,
+          signal: context.signal,
+        }),
+    });
+    return await renderer.render(
+      { shows: bindings[input.contribution.resourceId], value: input.content },
+      { mode: "context", renderer: "text" },
+      input.signal,
+    );
   };
 }

@@ -158,15 +158,6 @@ export interface TextRendererOptions {
   resources?: ViewContext["resources"];
   scope: unknown;
   renderers?: Readonly<Record<string, OneShotViewRenderer>>;
-  /** Maximum nested View and data depth (default 32). */
-  maxDepth?: number;
-  /** Cumulative nodes and UTF-8 bytes across a root render and its children. */
-  maxNodes?: number;
-  maxBytes?: number;
-  /** Concurrent render sessions and collection reads; excess work rejects without queuing. */
-  maxPending?: number;
-  /** Root deadline, including nested rendering and cleanup (default 1000ms). */
-  timeoutMs?: number;
 }
 const textRenderer: OneShotViewRenderer = {
   open: () => ({
@@ -201,16 +192,9 @@ export function createTextRenderer(
   if (typeof options.project !== "function") {
     throw new TypeError("An authorized View projection is required.");
   }
-  const limits = dataBudget(options);
-  const maxPending = positiveBound(options.maxPending ?? 16, "pending");
-  const timeoutMs = positiveBound(options.timeoutMs ?? 1_000, "timeout");
-  if (timeoutMs > 2_147_483_647) {
-    throw new TypeError("Invalid View timeout bound.");
-  }
-  const scope = copyData(options.scope, dataBudget(options));
-  const resources = copyData(
+  const scope = snapshotViewData(options.scope);
+  const resources = snapshotViewData(
     options.resources ?? {},
-    dataBudget(options),
   ) as ViewContext["resources"];
   const renderers: Readonly<Record<string, OneShotViewRenderer>> = {
     text: textRenderer,
@@ -223,239 +207,132 @@ export function createTextRenderer(
       );
     }]),
   );
-  let pending = 0;
-  function reserve(): () => void {
-    if (pending >= maxPending) {
-      throw new RangeError("View pending capacity exceeded.");
-    }
-    pending++;
-    return () => {
-      pending--;
-    };
-  }
-  return ({
+  const renderer: TextViewRenderer = {
     async render(
-      reference,
-      hints = {},
+      rawReference,
+      requested = {},
       externalSignal = new AbortController().signal,
-    ): Promise<string> {
+    ) {
       externalSignal.throwIfAborted();
-      const deadline = new AbortController();
-      const rootSignal = AbortSignal.any([externalSignal, deadline.signal]);
-      const timer = setTimeout(
-        () => deadline.abort(new Error("View rendering timed out.")),
-        timeoutMs,
-      );
-      const budget = { ...limits };
-      const render = async (
-        rawReference: ViewReference,
-        requested: ViewHints,
-        depth: number,
-        parentSignal: AbortSignal,
-      ): Promise<string> => {
-        parentSignal.throwIfAborted();
-        if (depth > limits.depth) {
-          throw new RangeError("View nesting limit exceeded.");
+      const lifetime = new AbortController();
+      const signal = AbortSignal.any([externalSignal, lifetime.signal]);
+      const exposedSignal = AbortSignal.any([signal]);
+      let session: ReturnType<OneShotViewRenderer["open"]> | undefined;
+      try {
+        if (
+          !rawReference || typeof rawReference !== "object" ||
+          ![Object.prototype, null].includes(
+            Object.getPrototypeOf(rawReference),
+          )
+        ) {
+          throw new TypeError("View reference must be a plain object.");
         }
-        const release = reserve();
-        const lifetime = new AbortController();
-        const signal = AbortSignal.any([parentSignal, lifetime.signal]);
-        const exposedSignal = AbortSignal.any([signal]);
-        const children = new Set<Promise<string>>();
-        const physical = new Set<Promise<unknown>>();
-        let finished = false;
-        let released = false;
-        const maybeRelease = () => {
-          if (finished && physical.size === 0 && !released) {
-            released = true;
-            release();
-          }
+        const descriptors = Object.getOwnPropertyDescriptors(rawReference);
+        if (
+          Reflect.ownKeys(rawReference).some((key) =>
+            typeof key !== "string" ||
+            !["shows", "value"].includes(key) || !("value" in descriptors[key])
+          ) ||
+          !descriptors.shows || !descriptors.value
+        ) {
+          throw new TypeError("Unsafe View reference property.");
+        }
+        const reference: ViewReference = {
+          shows: snapshotViewData(descriptors.shows.value) as ViewShows,
+          value: descriptors.value.value,
         };
-        // Observe the original callback promises, never only their abort races.
-        const track = <T>(invoke: () => T | Promise<T>): Promise<T> => {
-          let work: Promise<T>;
-          try {
-            work = Promise.resolve(invoke());
-          } catch (error) {
-            work = Promise.reject(error);
-          }
-          physical.add(work);
-          const settled = () => {
-            physical.delete(work);
-            maybeRelease();
-          };
-          work.then(settled, settled);
-          return work;
+        viewShowsKey(reference.shows);
+        const copiedHints = snapshotViewData(requested) as ViewHints;
+        const hints = {
+          mode: viewText(copiedHints.mode ?? "context", "View mode"),
+          renderer: viewText(copiedHints.renderer ?? "text", "View renderer"),
         };
-        let session: ReturnType<OneShotViewRenderer["open"]> | undefined;
-        try {
-          // Inspect selectors without executing getters. Raw values go only to
-          // the trusted projector; only its authorized snapshot reaches the View.
-          if (
-            !rawReference || typeof rawReference !== "object" ||
-            ![Object.prototype, null].includes(
-              Object.getPrototypeOf(rawReference),
-            )
-          ) {
-            throw new TypeError("View reference must be a plain object.");
-          }
-          const descriptors = Object.getOwnPropertyDescriptors(rawReference);
-          if (
-            Reflect.ownKeys(rawReference).some((key) =>
-              typeof key !== "string" ||
-              !["shows", "value"].includes(key) ||
-              !("value" in descriptors[key])
-            ) ||
-            !descriptors.shows || !descriptors.value
-          ) {
-            throw new TypeError("Unsafe View reference property.");
-          }
-          const ref: ViewReference = {
-            shows: copyData(descriptors.shows.value, budget) as ViewShows,
-            value: descriptors.value.value,
-          };
-          viewShowsKey(ref.shows);
-          const copiedHints = copyData(requested, budget) as ViewHints;
-          const hints = {
-            mode: viewText(copiedHints.mode ?? "context", "View mode"),
-            renderer: viewText(copiedHints.renderer ?? "text", "View renderer"),
-          };
-          const adapter = Object.hasOwn(renderers, hints.renderer)
-            ? renderers[hints.renderer]
-            : undefined;
-          if (!adapter) {
-            throw new TypeError(`No one-shot renderer '${hints.renderer}'.`);
-          }
-          const hostContext = {
-            scope: copyData(scope, budget),
-            signal: exposedSignal,
-          };
-          const projected = copyData(
-            await abortable(
-              track(() => {
-                signal.throwIfAborted();
-                return options.project(ref, hostContext);
-              }),
-              signal,
-            ),
-            budget,
-          );
+        const adapter = Object.hasOwn(renderers, hints.renderer)
+          ? renderers[hints.renderer]
+          : undefined;
+        if (!adapter) {
+          throw new TypeError(`No one-shot renderer '${hints.renderer}'.`);
+        }
+        const hostContext = {
+          scope: snapshotViewData(scope),
+          signal: exposedSignal,
+        };
+        const read = async (invoke: () => unknown | Promise<unknown>) => {
           signal.throwIfAborted();
-          const view = options.registry.resolveView(
-            ref.shows,
-            hints.mode,
-            hints.renderer,
-          );
-          const read = async (
-            invoke: () => Promise<unknown>,
-          ): Promise<unknown> => {
-            signal.throwIfAborted();
-            const releaseRead = reserve();
-            const work = track(() => {
+          const value = await abortable(
+            Promise.resolve().then(() => {
               signal.throwIfAborted();
               return invoke();
-            });
-            work.then(releaseRead, releaseRead);
-            const value = await abortable(work, signal);
-            signal.throwIfAborted();
-            return copyData(value, budget);
-          };
-          const collections = Object.fromEntries(
-            Object.entries(options.collections ?? {}).map(
-              ([name, collection]) => [name, {
-                get: (input: unknown) => read(() => collection.get(input)),
-                list: (input: unknown) => read(() => collection.list(input)),
-                ...(collection.query
-                  ? {
-                    query: (
-                      name: string,
-                      input: Readonly<Record<string, unknown>>,
-                    ) => read(() => collection.query!(name, input)),
-                  }
-                  : {}),
-              }],
-            ),
-          ) as ViewCollections;
-          const context: ViewContext = {
-            collections,
-            actions: { ...actions },
-            resources: copyData(resources, budget) as ViewContext["resources"],
-            scope: copyData(scope, budget),
-            signal: exposedSignal,
-            hints: { ...hints },
-            show: (nested, next = {}) => {
-              // Snapshot before spreading: a nested selector cannot smuggle getters.
-              const child = (async () => {
-                signal.throwIfAborted();
-                const nextHints = copyData(next, budget) as ViewHints;
-                return await render(
-                  nested,
-                  { ...hints, ...nextHints },
-                  depth + 1,
-                  signal,
-                );
-              })();
-              children.add(child);
-              child.then(
-                () => children.delete(child),
-                () => children.delete(child),
-              );
-              return child;
-            },
-          };
-          session = adapter.open(hostContext);
-          const currentSession = session;
-          let evaluated = false;
-          const result = await abortable(
-            track(() => {
-              signal.throwIfAborted();
-              return currentSession.render(() => {
-                signal.throwIfAborted();
-                if (evaluated) {
-                  throw new TypeError(
-                    "A one-shot renderer cannot evaluate twice.",
-                  );
-                }
-                evaluated = true;
-                return track(async () => {
-                  signal.throwIfAborted();
-                  const value = view
-                    ? await view.render(projected as never, context)
-                    : projected;
-                  signal.throwIfAborted();
-                  return copyData(value, budget);
-                });
-              });
             }),
             signal,
           );
           signal.throwIfAborted();
-          if (typeof result !== "string") {
-            throw new TypeError("One-shot renderer must return text.");
-          }
-          chargeBytes(budget, result);
-          return result;
-        } finally {
-          lifetime.abort(new Error("View render lifetime ended."));
-          try {
-            await abortable(Promise.allSettled([...children]), rootSignal);
-          } finally {
-            try {
-              if (session?.dispose) {
-                await abortable(track(() => session!.dispose!()), rootSignal);
+          return snapshotViewData(value);
+        };
+        const projected = await read(() =>
+          options.project(reference, hostContext)
+        );
+        const view = options.registry.resolveView(
+          reference.shows,
+          hints.mode,
+          hints.renderer,
+        );
+        const collections = Object.fromEntries(
+          Object.entries(options.collections ?? {}).map((
+            [name, collection],
+          ) => [name, {
+            get: (input: unknown) => read(() => collection.get(input)),
+            list: (input: unknown) => read(() => collection.list(input)),
+            ...(collection.query
+              ? {
+                query: (
+                  name: string,
+                  input: Readonly<Record<string, unknown>>,
+                ) => read(() => collection.query!(name, input)),
               }
-            } finally {
-              finished = true;
-              maybeRelease();
+              : {}),
+          }]),
+        ) as ViewCollections;
+        const context: ViewContext = {
+          collections,
+          actions: { ...actions },
+          resources: snapshotViewData(resources) as ViewContext["resources"],
+          scope: snapshotViewData(scope),
+          signal: exposedSignal,
+          hints: { ...hints },
+          show: async (nested, next = {}) => {
+            signal.throwIfAborted();
+            return await renderer.render(nested, {
+              ...hints,
+              ...snapshotViewData(next) as ViewHints,
+            }, signal);
+          },
+        };
+        session = adapter.open(hostContext);
+        let evaluated = false;
+        const result = await abortable(
+          Promise.resolve(session.render(async () => {
+            signal.throwIfAborted();
+            if (evaluated) {
+              throw new TypeError("A one-shot renderer cannot evaluate twice.");
             }
-          }
+            evaluated = true;
+            return await read(() =>
+              view ? view.render(projected as never, context) : projected
+            );
+          })),
+          signal,
+        );
+        signal.throwIfAborted();
+        if (typeof result !== "string") {
+          throw new TypeError("One-shot renderer must return text.");
         }
-      };
-      try {
-        return await render(reference, hints, 1, rootSignal);
+        return snapshotViewData(result) as string;
       } finally {
-        clearTimeout(timer);
+        lifetime.abort(new Error("View render lifetime ended."));
+        if (session?.dispose) await session.dispose();
       }
     },
-  });
+  };
+  return renderer;
 }

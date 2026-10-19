@@ -101,7 +101,11 @@ export function createS3Requester(
         "Physical S3 payload exceeds its byte bound.",
       );
     }
-    const body = supplied === undefined ? undefined : new Uint8Array(supplied);
+    const body = supplied === undefined ? undefined : new Uint8Array(
+      supplied.buffer,
+      supplied.byteOffset,
+      supplied.byteLength,
+    );
     if (
       [...headers.keys()].some((key) =>
         ![
@@ -163,7 +167,7 @@ export function createS3Requester(
       const signed = await signer.sign(url, {
         method,
         headers,
-        body,
+        body: body as Uint8Array<ArrayBuffer> | undefined,
         signal: controller.signal,
         redirect: "error",
         aws: { allHeaders: true, signQuery: false },

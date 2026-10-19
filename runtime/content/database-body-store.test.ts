@@ -12,6 +12,7 @@ Deno.test("database BodyStore ranges use indexed overlapping parts and transfer 
   });
   const schema = `body_indexed_${crypto.randomUUID().replaceAll("-", "")}`;
   const ranges: { rows: number; bytes: number; sql: string }[] = [];
+  const appendStatements: string[] = [];
   const query: SqlExecutor["query"] = async (sql, params) => {
     const result = await db.query(sql, params);
     if (sql.includes("WITH anchor AS")) {
@@ -28,7 +29,21 @@ Deno.test("database BodyStore ranges use indexed overlapping parts and transfer 
     return result as never;
   };
   const store = createDatabaseBodyStore({
-    session: { query, transaction: db.transaction } as SqlExecutor,
+    session: {
+      query,
+      transaction: <T>(run: (tx: SqlExecutor) => Promise<T>) =>
+        db.transaction((tx) =>
+          run({
+            query(sql, params) {
+              if (
+                sql.includes("content_bodies") ||
+                sql.includes("content_body_parts")
+              ) appendStatements.push(sql);
+              return tx.query(sql, params);
+            },
+          })
+        ),
+    } as SqlExecutor,
     schema,
   });
   try {
@@ -40,12 +55,15 @@ Deno.test("database BodyStore ranges use indexed overlapping parts and transfer 
     });
     const chunk = Uint8Array.from({ length: 4096 }, (_, index) => index % 251);
     for (let part = 0; part < 32; part++) {
+      appendStatements.length = 0;
       await store.append({
         writer,
         expectedOffset: part * chunk.length,
         appendId: `part-${part}`,
         bytes: chunk,
       });
+      assertEquals(appendStatements.length, 1);
+      assertEquals(appendStatements[0].includes("jsonb_agg"), false);
     }
     const offset = 31 * chunk.length - 16;
     const expected = new Uint8Array(33);
@@ -195,7 +213,7 @@ Deno.test("database body CAS rolls back header updates when writing a part fails
           query(sql, params) {
             if (
               refuse &&
-              sql.startsWith(`INSERT INTO "${schema}"."content_body_parts"`)
+              sql.includes(`INSERT INTO "${schema}"."content_body_parts"`)
             ) throw new Error("injected part failure");
             return tx.query(sql, params);
           },
@@ -248,7 +266,7 @@ Deno.test("database body retries reconcile lost commit acknowledgement and rejec
           query(sql, params) {
             if (
               lose &&
-              (sql.startsWith(`UPDATE "${schema}"."content_bodies"`) ||
+              (sql.includes(`UPDATE "${schema}"."content_bodies"`) ||
                 sql.startsWith(`INSERT INTO "${schema}"."content_bodies"`))
             ) mutated = true;
             return tx.query(sql, params);
@@ -293,6 +311,11 @@ Deno.test("database body retries reconcile lost commit acknowledgement and rejec
     };
     lose = true;
     await assertRejects(() => store.append(request));
+    store = createDatabaseBodyStore({
+      session: { ...session },
+      schema,
+      provisioned: true,
+    });
     const head = (await store.head({ bodyId: writer.bodyId }))!;
     assertEquals((await store.append(request)).versionToken, head.versionToken);
     await db.query(

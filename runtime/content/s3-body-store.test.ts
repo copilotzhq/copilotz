@@ -246,7 +246,7 @@ Deno.test("S3 exact retries reconcile lost committed reserve, append and fence a
   assertEquals(fenced.generation, 2);
   assertEquals(await store.fence({ writer }), fenced);
 });
-Deno.test("S3 rejects missing guards, mixed HEAD/GET versions, malformed identity and missing parts", async () => {
+Deno.test("S3 rejects missing GET version tokens, malformed identity and missing parts", async () => {
   const fixture = createS3Fixture();
   let mode = "ordinary";
   const store = createS3BodyStore(s3TestConfig, {
@@ -255,17 +255,9 @@ Deno.test("S3 rejects missing guards, mixed HEAD/GET versions, malformed identit
       if (!(input instanceof Request) || response.status !== 200) {
         return response;
       }
-      if (mode === "no-etag" && input.method === "HEAD") {
+      if (mode === "no-etag" && input.method === "GET") {
         const headers = new Headers(response.headers);
         headers.delete("etag");
-        return new Response(null, { headers });
-      }
-      if (
-        mode === "mixed" && input.method === "GET" &&
-        input.url.endsWith("manifest.json")
-      ) {
-        const headers = new Headers(response.headers);
-        headers.set("etag", '"other"');
         return new Response(await response.arrayBuffer(), { headers });
       }
       return response;
@@ -284,8 +276,6 @@ Deno.test("S3 rejects missing guards, mixed HEAD/GET versions, malformed identit
     bytes: bytes("abcd"),
   });
   mode = "no-etag";
-  await assertRejects(() => store.head({ bodyId: writer.bodyId }));
-  mode = "mixed";
   await assertRejects(() => store.head({ bodyId: writer.bodyId }));
   mode = "ordinary";
   const part = [...fixture.objects.keys()].find((key) =>
@@ -476,5 +466,27 @@ Deno.test("GCS retirement discovers late speculative uploads and sweeps only its
       reservationId: writer.reservationId,
       generation: writer.generation,
     })
+  );
+});
+
+Deno.test("fresh S3 append uses one manifest GET and two conditional PUTs", async () => {
+  const fixture = createS3Fixture();
+  const store = createS3BodyStore(s3TestConfig, { fetch: fixture.fetch });
+  const writer = await store.reserve({
+    bodyId: "counted",
+    reservationId: "counted",
+    generation: 1,
+    mediaType: "text/plain",
+  });
+  const before = fixture.requests.length;
+  await store.append({
+    writer,
+    expectedOffset: 0,
+    appendId: "one",
+    bytes: bytes("prefix"),
+  });
+  assertEquals(
+    fixture.requests.slice(before).map((request) => request.method),
+    ["GET", "PUT", "PUT"],
   );
 });

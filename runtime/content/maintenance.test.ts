@@ -58,7 +58,7 @@ Deno.test("catalog maintenance freezes expired accepted prefixes without semanti
     assertEquals(result.errors, []);
     assertEquals(
       (await f.store.head({ bodyId: identity.bodyId }))?.state,
-      "incomplete",
+      "open",
     );
   } finally {
     await f.db.close();
@@ -212,6 +212,44 @@ Deno.test("transient storage failure leaves recovery retryable without inventing
         deadline: new Date(Date.now() + 60000).toISOString(),
       })
     );
+  } finally {
+    await f.db.close();
+  }
+});
+
+Deno.test("missing failed-prefix bytes cannot postpone the accepted failure", async () => {
+  const f = await fixture();
+  try {
+    const { identity, writer } = await f.reserve("missing-prefix");
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await f.catalog.checkpoint({ ...identity, expectedOffset: 0, offset: 3 });
+    const unavailable = {
+      ...f.store,
+      readRange() {
+        throw new Error("missing prefix bytes");
+      },
+      terminate() {
+        throw new Error("must not normalize a failure");
+      },
+    };
+    assertEquals(
+      await recoverLogicalBody(
+        f.catalog,
+        (await f.catalog.read(identity.bodyId))!,
+        unavailable,
+      ),
+      "terminated",
+    );
+    assertEquals((await f.catalog.read(identity.bodyId))?.terminal, {
+      outcome: "failed",
+      reason: "abandoned",
+      length: 3,
+    });
   } finally {
     await f.db.close();
   }

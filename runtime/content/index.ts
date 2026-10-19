@@ -62,14 +62,6 @@ export type {
   PromotedBodyStoreOptions,
 } from "./promoted-body-store.ts";
 export {
-  createProgressiveBodyWriter,
-  openProgressiveBodyFollower,
-} from "./progressive.ts";
-export type {
-  ProgressiveBodyFollower,
-  ProgressiveBodyWriter,
-} from "./progressive.ts";
-export {
   EMPTY_PROGRESSIVE_BODY_MAINTENANCE,
   maintainProgressiveBodies,
 } from "./maintenance.ts";

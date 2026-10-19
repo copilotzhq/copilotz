@@ -8,7 +8,6 @@ import {
 } from "../events/index.ts";
 import {
   createOperationCatalog,
-  OPERATION_CATALOG_FINGERPRINT,
   provisionOperationCatalog,
   validateOperationCatalog,
 } from "../streams/catalog.ts";
@@ -51,6 +50,8 @@ async function fixture(active = false) {
   await db.query(
     `ALTER TABLE ${catalogTables.metadata} DROP CONSTRAINT copilotz_operation_catalog_metadata_fingerprint_check`,
   );
+  await db.query(`ALTER TABLE ${catalogTables.operationStreams}
+    ADD COLUMN committed_offset BIGINT NOT NULL DEFAULT 0, ADD COLUMN digest TEXT`);
   await db.query(
     `UPDATE ${catalogTables.metadata} SET fingerprint = 'indexed-observation-ordinals-v1'`,
   );
@@ -147,7 +148,7 @@ Deno.test("failed finalization keeps the prepared non-ready marker and resumes",
     assertEquals(
       (await f.db.query(`SELECT fingerprint FROM ${f.catalogTables.metadata}`))
         .rows[0].fingerprint,
-      OPERATION_CATALOG_FINGERPRINT,
+      "indexed-observation-ordinals-v1",
     );
     assertEquals(
       (await f.db.query(

@@ -270,12 +270,6 @@ Deno.test("public storage mutations use the schema owner fence", async (test) =>
         bodyId: "stream-body",
         descriptor,
       });
-      await catalog.commitStreamOffset({
-        namespace: "space",
-        operationId,
-        streamId: "stream",
-        committedOffset: 4,
-      });
       const body = await bodies.head({ bodyId: "stream-body" });
       assertExists(body);
       assert(body.state === "ready");

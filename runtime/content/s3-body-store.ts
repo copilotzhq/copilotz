@@ -105,32 +105,16 @@ export function createS3BodyStore(
   async function readMetadata(
     objectName: string,
   ): Promise<{ bytes: Uint8Array; versionToken: string } | null> {
-    const inspected = await send({
-      method: "HEAD",
-      objectName,
-      maxResponseBytes: 0,
-    });
-    if (inspected.status === 404) return null;
-    if (inspected.status !== 200) unavailable();
-    const token = version(inspected);
     const response = await send({
       method: "GET",
       objectName,
-      headers: guard(token),
       maxResponseBytes: BODY_MANIFEST_DECODE_BYTES,
     });
-    if ([409, 412].includes(response.status)) bodyConflict();
     if (response.status === 404) return null;
     if (response.status !== 200) unavailable();
-    if (conditionalDelete) { if (version(response) !== token) unavailable(); }
-    else {
-      const returned = response.headers.get("etag");
-      if (returned !== null && parseStrongEtag(returned) !== token) {
-        unavailable();
-      }
-    }
-    return { bytes: response.bytes, versionToken: token };
+    return { bytes: response.bytes, versionToken: version(response) };
   }
+
   async function* objectKeys(prefix: string): AsyncGenerator<string> {
     let continuation: string | undefined;
     const seen = new Set<string>();
@@ -353,7 +337,7 @@ export function createS3BodyStore(
       // A losing request never deletes parts: an identical winner may reference them.
       if ([409, 412].includes(response.status)) return false;
       if (![200, 201, 204].includes(response.status)) unavailable();
-      return true;
+      return version(response);
     },
     async readRange(stored, start, end) {
       const output = new Uint8Array(end - start);

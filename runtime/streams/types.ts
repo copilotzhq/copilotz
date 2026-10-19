@@ -1,10 +1,5 @@
 import type { ContentCatalog, ContentCopy } from "../content/catalog.ts";
-import type { ProgressiveBodyFollower } from "../content/progressive.ts";
-import type {
-  BodyStore,
-  IncompleteBodyHead,
-  ReadyBodyHead,
-} from "../content/body-store.ts";
+import type { BodyStore, ReadyBodyHead } from "../content/body-store.ts";
 import type {
   AssetOrigin,
   ContentKind,
@@ -190,7 +185,16 @@ export type ContentStreamRuntime = Readonly<{
   follow(
     input: ContentStreamFollowInput,
     options?: { signal?: AbortSignal },
-  ): Promise<ProgressiveBodyFollower>;
+  ): Promise<
+    Readonly<
+      {
+        bodyId: string;
+        offset: number;
+        mediaType: string;
+        body: ReadableStream<Uint8Array>;
+      }
+    >
+  >;
 }>;
 
 export type CreateContentStreamRuntimeOptions = Readonly<{
@@ -235,7 +239,7 @@ export type CreateContentStreamRuntimeOptions = Readonly<{
   /** Records a retained, immutable, non-adoptable committed prefix. */
   onTerminate?(
     stream: ContentStreamOpened,
-    body: IncompleteBodyHead,
+    body: Readonly<{ bodyId: string; byteLength: number }>,
     input: Readonly<{
       outcome: Exclude<StreamTerminalOutcome, "completed">;
       /** Cause of the logical outcome, independent of byte availability. */

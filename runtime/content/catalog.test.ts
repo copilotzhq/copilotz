@@ -93,7 +93,7 @@ Deno.test("catalog checkpoints are exact receipts and revocation excludes renewa
     await f.db.close();
   }
 });
-Deno.test("recovery drops tentative bytes and records one immutable terminal", async () => {
+Deno.test("recovery bounds reads to the accepted prefix and records one immutable terminal", async () => {
   const f = await fixture();
   try {
     const { identity, writer } = await reserved(f);

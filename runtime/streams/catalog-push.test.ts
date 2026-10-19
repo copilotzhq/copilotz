@@ -1,4 +1,4 @@
-import { createSchemaCommandRunner } from "../engine/commands.ts";
+import { createContentCatalog } from "../content/catalog.ts";
 import { assert, assertEquals } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createEventStore } from "../events/store.ts";
@@ -58,16 +58,20 @@ Deno.test("catalog stream lifecycle, availability and selection retirement join 
       descriptor,
     };
     await catalog.openStream(input);
-    await createSchemaCommandRunner(db, schema)(
-      "test.acceptedPrefix",
-      {},
-      async (_input, { transaction }) => {
-        // Projection-only fixture: progress changes the replay position, not lifecycle history.
-        await transaction.query(
-          `UPDATE "${schema}".copilotz_operation_streams SET committed_offset=4 WHERE stream_id='stream'`,
-        );
-      },
-    );
+    const content = createContentCatalog(db, schema);
+    const identity = { bodyId: "body", writerId: "writer", generation: 1 };
+    await content.reserve({
+      ...identity,
+      namespace: "scope",
+      copy: { key: "body", backendKind: "memory", backendId: "fixture" },
+    });
+    // Accepted progress changes the replay position, not lifecycle history.
+    await catalog.acceptStreamCheckpoint({
+      namespace: "scope",
+      operationId,
+      streamId: "stream",
+      content: { ...identity, expectedOffset: 0, offset: 4 },
+    });
     await catalog.openStream(input);
     assertEquals(
       (await db.query(`SELECT seq FROM ${core.events} ORDER BY seq`)).rows.map(

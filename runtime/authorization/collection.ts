@@ -109,12 +109,14 @@ export function captureCollectionPolicy(
       collectionPolicyRefused();
     }
     await policyAuthority.authorizeIntent?.(fixed, read);
+    if (policyAuthority.trustedHost) return;
     let binding = policyAuthority.authority;
     if (!binding) {
       const source = await policyAuthority.resolveSource(read.transaction);
       binding = source.ingress?.authority ??
         source.ancestors.find((entry) => entry.ingress?.authority)?.ingress
           ?.authority;
+      if (!binding && source.ingress?.kind === "host") return;
     }
     if (!binding) authorizationRefused();
     const decision = await operation.registration.evaluate(binding, {

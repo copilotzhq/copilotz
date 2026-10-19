@@ -148,6 +148,9 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
       result.rows.map((row) => row.table_name),
       [
         "action_effects",
+        "authorization_channels",
+        "authorization_invocations",
+        "authorization_sessions",
         "content_adoptions",
         "content_copies",
         "content_logical_bodies",

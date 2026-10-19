@@ -27,6 +27,7 @@ export type InlineCollectionCompletion = {
 export async function completeHostCollection(
   runtime: {
     store: EventStore;
+    owner: import("../../engine/commands.ts").DatabaseOwner;
     collections: CollectionRuntime;
     catalog: OperationCatalog;
     registry: PluginRegistry;
@@ -47,6 +48,7 @@ export async function completeHostCollection(
   const run = createSchemaCommandRunner(
     runtime.store.session,
     runtime.store.databaseSchema,
+    () => Promise.resolve(runtime.owner),
   );
   const binding = {
     principal: `host:${draft.namespace}`,

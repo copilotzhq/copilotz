@@ -76,6 +76,7 @@ Deno.test({
           server: {
             default: fixtureServerFacade({
               authenticate: () => ({ actor: { id: "owner" } }),
+              evaluate: () => ({ assets: { read: [retainedAssetId] } }),
             }),
           },
         },

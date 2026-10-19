@@ -1,3 +1,4 @@
+import { ActionError } from "../actions/errors.ts";
 import { coreThreadObservationKey } from "../../plugins/core/shared/events/index.ts";
 /** Native owner-policy fixtures for transport tests; no production compatibility API. */
 import { defineServerFacade } from "../../plugins/server/resources/facade/index.ts";
@@ -57,6 +58,7 @@ export function defineTestServerFacade(
               JSON.stringify({
                 path: new URL(request.url).pathname,
                 method: request.method,
+                headers: [...request.headers],
                 endpoint: context.endpoint,
                 actor: scope.actor ?? null,
               }),
@@ -123,6 +125,7 @@ function fixtureOptions<
           const facts = authority.requestFacts.input as {
             path: string;
             method: string;
+            headers: [string, string][];
             endpoint: ServerEndpointDescriptor;
             actor: ServerAuthorizedScope["actor"];
           };
@@ -130,6 +133,7 @@ function fixtureOptions<
             ? await policy(
               new Request(`https://fixture.invalid${facts.path}`, {
                 method: facts.method,
+                headers: facts.headers,
               }),
               {
                 scope: {
@@ -156,7 +160,10 @@ function fixtureOptions<
           if (constraints instanceof Response) {
             const value = await constraints.json().catch(() => ({}));
             throw Object.assign(
-              new Error(value.error?.message ?? "Forbidden"),
+              new ActionError(value.error?.message ?? "Forbidden", {
+                code: value.error?.code ?? "forbidden",
+                status: constraints.status,
+              }),
               {
                 code: value.error?.code ?? "forbidden",
                 status: constraints.status,
@@ -201,10 +208,14 @@ function hostScope<T extends object>(
   value: T,
   schema: string,
   namespace: string,
+  publicHost = false,
 ): T {
   const authority = testAuthority(schema, namespace, "fixture-host");
   const record = value as Record<string, unknown>;
-  const result = { ...record };
+  const result: Record<string, unknown> = Object.defineProperties(
+    Object.create(Object.getPrototypeOf(value)),
+    Object.getOwnPropertyDescriptors(value),
+  );
   const databaseScope = record.databaseScope;
   if (typeof databaseScope === "function") {
     result.databaseScope = async (selected: string) =>
@@ -214,17 +225,17 @@ function hostScope<T extends object>(
         namespace,
       );
   }
-  if (record.actions && typeof record.actions === "object") {
+  if (!publicHost && record.actions && typeof record.actions === "object") {
     result.actions = bindTestActions(record.actions, authority);
   }
   if (record.engine && typeof record.engine === "object") {
     result.engine = hostScope(record.engine, schema, namespace);
   }
   if (record.host && typeof record.host === "object") {
-    result.host = hostScope(record.host, schema, namespace);
+    result.host = hostScope(record.host, schema, namespace, true);
   }
   const collections = record.collections as Record<string, unknown> | undefined;
-  if (collections) {
+  if (collections && !publicHost) {
     const bindCollections = (
       scope: Record<string, object>,
       selectedNamespace = namespace,
@@ -319,5 +330,6 @@ export const createTestCopilotz =
       application,
       configured.databaseSchema ?? "public",
       configured.namespace ?? "default",
+      true,
     );
   }) as typeof createCopilotz;

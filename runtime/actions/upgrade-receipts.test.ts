@@ -1,3 +1,4 @@
+import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
 import {
@@ -63,10 +64,17 @@ Deno.test("offline upgrade preserves fixed receipt principals and grants while r
     await f.db.query(
       `UPDATE "${f.schema}".copilotz_schema_metadata SET version=9`,
     );
-    await upgradeActionLifecycle(f.db, f.schema);
-    await upgradeActionLifecycle(f.db, f.schema);
+    const options = await testUpgradeOptions(f.db, f.schema);
+    await upgradeActionLifecycle(f.db, f.schema, options);
+    await upgradeActionLifecycle(f.db, f.schema, options);
     await validateCopilotzSchema(f.db, f.schema);
-    const after = await f.receipts();
+    const upgraded = await f.receipts();
+    const after = upgraded.filter((receipt) => receipt.key === "retained");
+    assertEquals(
+      upgraded.filter((receipt) => receipt.principal === "offline-upgrade")
+        .map((receipt) => receipt.kind).sort(),
+      ["authorization.upgrade", "owner-keys.upgrade"],
+    );
     assertEquals(
       after.map(({ readers: _readers, ...receipt }) => receipt),
       before.receipts,

@@ -211,5 +211,10 @@ Deno.test("runtime has no conversational event, vector-model or plugin policy vo
         .test(text),
       relative(repositoryRoot, file),
     );
+    // Server composes the runtime; the runtime never reaches back into it.
+    assert(
+      !/(?:from|import)\s*\(?\s*["'](?:\.\.\/)+server\//.test(text),
+      relative(repositoryRoot, file),
+    );
   }
 });

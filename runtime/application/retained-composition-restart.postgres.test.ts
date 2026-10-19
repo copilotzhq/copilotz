@@ -232,9 +232,16 @@ for (const mode of ["in-process", "websocket"] as const) {
                   authenticate: () => ({ actor: { id: "retained-reader" } }),
                   evaluate() {
                     authorizations++;
-                    return allowed ? {} : Response.json({
-                      error: { code: "forbidden", message: "Forbidden" },
-                    }, { status: 403 });
+                    return allowed
+                      ? {
+                        collectionMutations: {
+                          records: { create: {} },
+                          results: { create: {} },
+                        },
+                      }
+                      : Response.json({
+                        error: { code: "forbidden", message: "Forbidden" },
+                      }, { status: 403 });
                   },
                 }),
               },
@@ -526,7 +533,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           receipts: beforeRestart.receipts.length,
           nodes: beforeRestart.nodes.length,
           sequence: beforeRestart.sequence.length,
-        }, { events: 8, bodies: 7, receipts: 0, nodes: 2, sequence: 8 });
+        }, { events: 8, bodies: 7, receipts: 2, nodes: 2, sequence: 8 });
         current = await start();
         assertEquals(await epoch(), 2);
         await settled();
@@ -641,7 +648,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           receipts: secondSnapshot.receipts.length,
           nodes: secondSnapshot.nodes.length,
           sequence: secondSnapshot.sequence.length,
-        }, { events: 18, bodies: 14, receipts: 0, nodes: 4, sequence: 18 });
+        }, { events: 18, bodies: 14, receipts: 4, nodes: 4, sequence: 18 });
         assertEquals(claims.length, 3);
         assertEquals(claims[2].opening, 2);
         assert(claims[2].deliveryId !== firstDelivery.id);

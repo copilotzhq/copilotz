@@ -205,8 +205,48 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
                   actor: { id: request.headers.get("x-user") ?? "person" },
                 };
               },
-              evaluate(_request, context) {
+              async evaluate(_request, context) {
+                const asset = new URL(_request.url).pathname.match(
+                  /\/messages\/([^/]+)\/assets\/([^/]+)$/,
+                );
+                const message = asset
+                  ? await context.read.get(
+                    "message",
+                    decodeURIComponent(asset[1]),
+                  )
+                  : null;
+                const references = [
+                  ...(Array.isArray(message?.content) ? message.content : []),
+                  ...((message?.metadata as { llmReasoning?: unknown[] })
+                    ?.llmReasoning ?? []),
+                ];
+                const assetId = asset ? decodeURIComponent(asset[2]) : "";
                 return {
+                  assets: {
+                    read: references.some((ref) =>
+                        (ref as { assetId?: string }).assetId === assetId
+                      )
+                      ? [assetId]
+                      : [],
+                  },
+                  collections: {
+                    participant: {},
+                    thread: context.endpoint.kind !== "action"
+                      ? {
+                        contains: { participantIds: [context.scope.actor!.id] },
+                      }
+                      : {},
+                    message: {},
+                  },
+                  collectionMutations: {
+                    participant: { create: {}, update: {} },
+                    thread: {
+                      create: {},
+                      update: {},
+                      commands: { ensureMembership: {} },
+                    },
+                    message: { create: {}, update: {} },
+                  },
                   operations: {
                     metadata: { actorId: context.scope.actor!.id },
                   },

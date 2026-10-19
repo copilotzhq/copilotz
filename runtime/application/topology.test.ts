@@ -2,13 +2,15 @@ import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin
 import { coreEvent } from "../../plugins/core/shared/events/index.ts";
 import type { ActionCallers } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import {
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
 import { serverPlugin } from "../../plugins/server/plugin.ts";
-import { createCopilotz } from "../../create-copilotz.ts";
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";

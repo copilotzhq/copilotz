@@ -1028,7 +1028,7 @@ export function createCollectionKernel(
     const registration = options.policies?.get(name);
     const trusted = hasTrustedCollectionPolicyRead();
     if (trusted) {
-      if (policyReads.getStore()) return await load();
+      if (method === "query" || policyReads.getStore()) return await load();
       const authority = captureCollectionInvocation();
       return await runCommand(
         "collections.authenticate",
@@ -1088,6 +1088,16 @@ export function createCollectionKernel(
       : undefined;
     const disclose = async (read: PolicyRead, result: unknown) => {
       if (!registration) return;
+      if (method === "query") {
+        // Selectors may return hydrated content. Authorize its canonical Asset
+        // references, as nested reads do, without embedding decoded body bytes.
+        assertJsonValue(result, {
+          allowBytes: true,
+          maxDepth: 64,
+          maxNodes: 100_000,
+        });
+        result = canonicalizeContentRefs(result);
+      }
       const rows = Array.isArray(result) && result.length ? result : [result];
       for (const row of rows) {
         const value = row && typeof row === "object"
@@ -1128,32 +1138,42 @@ export function createCollectionKernel(
     if (snapshot && snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
     }
-    const result = await runCommand(
-      "collections.read",
-      {},
-      async (_input, command) => {
-        // This read's captured aggregation belongs to its own queued command.
-        if (!disclosure.active) collectionPolicyRefused();
-        const read = { ...command, authority, active: true, snapshot };
-        return await policyDisclosures.run(
-          disclosure,
-          () =>
-            policyReads.run(read, async () => {
-              try {
-                await policy?.authorize(command, "read");
-                const value = await load(policy?.args());
-                await disclose(command, value);
-                if (snapshot && snapshot.state !== "open") {
-                  throw new Error("Read snapshot access has already closed.");
+    // Named selectors orchestrate authorized reads and may hydrate external
+    // content. Never hold the owner queue across their body I/O. Each nested
+    // read decides atomically; the shared disclosure gate rechecks all results.
+    const result = method === "query"
+      ? await (async () => {
+        await runCommand("collections.read", {}, async (_input, command) => {
+          await policy?.authorize(command, "read");
+        });
+        return await load(policy?.args());
+      })()
+      : await runCommand(
+        "collections.read",
+        {},
+        async (_input, command) => {
+          // This read's captured aggregation belongs to its own queued command.
+          if (!disclosure.active) collectionPolicyRefused();
+          const read = { ...command, authority, active: true, snapshot };
+          return await policyDisclosures.run(
+            disclosure,
+            () =>
+              policyReads.run(read, async () => {
+                try {
+                  await policy?.authorize(command, "read");
+                  const value = await load(policy?.args());
+                  await disclose(command, value);
+                  if (snapshot && snapshot.state !== "open") {
+                    throw new Error("Read snapshot access has already closed.");
+                  }
+                  return value;
+                } finally {
+                  read.active = false;
                 }
-                return value;
-              } finally {
-                read.active = false;
-              }
-            }),
-        );
-      },
-    );
+              }),
+          );
+        },
+      );
     disclosure.checks.push((read) => disclose(read, result));
     // Hydrated endpoints and named-query reads share the root's final fresh gate.
     // An unprotected root cannot disclose a protected descendant on an old check.

@@ -329,7 +329,12 @@ async function fixture(
                   ? new Response(null, { status: 403 })
                   : request.headers.has("x-hide-operation")
                   ? { operations: { metadata: { hidden: true } } }
-                  : {},
+                  : {
+                    collectionMutations: {
+                      records: { create: {} },
+                      results: { create: {} },
+                    },
+                  },
             }),
           },
         },

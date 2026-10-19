@@ -21,6 +21,7 @@ import {
 export async function admitInlineAction(
   runtime: {
     store: EventStore;
+    owner: import("../../engine/commands.ts").DatabaseOwner;
     coordinator: EventCoordinator;
     registry: PluginRegistry;
     protectedValues?: ProtectedValueRuntime;
@@ -35,6 +36,7 @@ export async function admitInlineAction(
   const admitted = await createSchemaCommandRunner(
     runtime.store.session,
     runtime.store.databaseSchema,
+    () => Promise.resolve(runtime.owner),
   )(
     "ingress.action",
     { requestId: request.requestId },

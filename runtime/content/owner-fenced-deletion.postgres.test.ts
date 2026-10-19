@@ -533,9 +533,9 @@ Deno.test({
           "no longer current",
         );
         assertEquals(
-          f.trace.slice(before).map((tx) => tx.length),
-          [1],
-          "the stale command stops at its first fence statement, before asset or edge reads",
+          f.trace.slice(before).map((tx) => tx.slice(1)),
+          [["ROLLBACK AND CHAIN"]],
+          "the stale command only confirms rollback after its fence, without asset or edge reads",
         );
         assertEquals(
           (await f.assets.get(namespace, retained.id))?.state,

@@ -14,6 +14,8 @@ import type {
 } from "./intent.ts";
 
 type OwnerBinding = Readonly<{
+  /** Minted only by the in-process host surface, never by a wire binding. */
+  trustedHost?: boolean;
   authority?: import("./authority.ts").AuthenticatedAuthority;
   /** Owner-resolved logical Processor run, independent of its current attempt. */
   logicalRunId?: string;

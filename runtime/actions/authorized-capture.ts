@@ -129,14 +129,17 @@ export function createAuthorizedActions(
       `SELECT intent,result FROM ${store.tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND key=$1 AND kind='action.protected-input'`,
       [key(runId)],
     )).rows[0];
-  const invoked = async (
+  // A verified terminal contains the captured input too. Replaying completed
+  // work must not reopen an invoked body that is no longer needed.
+  const capturedInput = async (
     tx: SqlExecutor,
     action: AnyActionDefinition,
     runId: string,
   ) => {
     const event = (await tx.query<{ payload: unknown }>(
-      `SELECT payload FROM ${store.tables.events} WHERE namespace=$1 AND deduplication_id=$2`,
-      [namespace, `${runId}:action:invoked`],
+      `SELECT payload FROM ${store.tables.events} WHERE namespace=$1 AND deduplication_id IN ($2,$3)
+       ORDER BY CASE WHEN deduplication_id=$2 THEN 0 ELSE 1 END LIMIT 1`,
+      [namespace, `${runId}:action:terminal`, `${runId}:action:invoked`],
     )).rows[0];
     if (!event) return;
     const body = await readEventBody(
@@ -152,7 +155,8 @@ export function createAuthorizedActions(
       transaction: tx,
     });
     if (
-      data.status !== "invoked" || data.actionId !== action.id ||
+      !["invoked", "completed", "failed", "cancelled"].includes(data.status) ||
+      data.actionId !== action.id ||
       data.actionRunId !== runId
     ) throw new Error("Protected Action input capture is invalid.");
     return data;
@@ -191,6 +195,17 @@ export function createAuthorizedActions(
           resolved.ancestors.find((entry) => entry.ingress?.authority)?.ingress
             ?.authority
         : undefined);
+    if (
+      !binding && resolved.ingress?.kind === "host" &&
+      !resolved.ingress.authority
+    ) {
+      return {
+        input: captureHostCommandJson(input),
+        metadata: captureHostCommandJson(
+          "metadata" in frame ? frame.metadata as Record<string, unknown> : {},
+        ),
+      };
+    }
     if (!binding) authorizationRefused();
     const decision = await evaluate(binding, {
       kind: "action",
@@ -275,7 +290,7 @@ export function createAuthorizedActions(
         async (_input, command) => {
           await authority(command, frame);
           const prior = await read(command.transaction, frame.actionRunId);
-          const existing = await invoked(
+          const existing = await capturedInput(
             command.transaction,
             action,
             frame.actionRunId,
@@ -388,7 +403,7 @@ export function createAuthorizedActions(
     const action = actionDefinitionById(options.actions, frame.actionId);
     const captured = async (tx: SqlExecutor) => {
       const prior = await read(tx, frame.actionRunId);
-      const input = await invoked(tx, action, frame.actionRunId);
+      const input = await capturedInput(tx, action, frame.actionRunId);
       if (
         !prior || !input || !matchesCapture(prior.intent, action) ||
         input.parentActionRunId !== frame.parentActionRunId

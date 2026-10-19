@@ -709,6 +709,7 @@ Deno.test("shutdown ends an unawaited stream terminal wait", async () => {
   assertEquals(settled, "rejected");
 });
 Deno.test("operation attachment replays a retained failed prefix with generic terminal state", async () => {
+  const prefix = "rejected bytes".padEnd(64 * 1024, ".");
   const db = await createTestDatabase({ url: ":memory:" });
   const plugin = definePlugin({
     id: "test.application.retained-failed-prefix",
@@ -724,8 +725,13 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
             role: "assistant",
           });
           await writer.append({
-            bytes: new TextEncoder().encode("rejected bytes"),
+            bytes: new TextEncoder().encode(prefix),
             appendId: "retained-failed-prefix:1",
+          });
+          // A size checkpoint commits the prefix; a later tail remains tentative.
+          await writer.append({
+            bytes: new TextEncoder().encode("tentative tail"),
+            appendId: "retained-failed-prefix:2",
           });
           await writer.abort({ outcome: "failed", reason: "provider_error" });
         },
@@ -753,12 +759,12 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
       | StreamOutput
       | undefined;
     assertExists(stream);
-    assertEquals(await new Response(stream.payload).text(), "rejected bytes");
+    assertEquals(await new Response(stream.payload).text(), prefix);
     assertEquals(await stream.terminal, {
       outcome: "failed",
       reason: "provider_error",
       availability: "retained",
-      offset: "rejected bytes".length,
+      offset: prefix.length,
       terminalAt:
         (await createOperationCatalog(db, `${SCHEMA}_retained_failed_prefix`)
           .findStream(NAMESPACE, stream.streamId))!.terminalAt!,
@@ -788,7 +794,7 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
     // Pending cleanup is internal; retained bytes remain readable until deletion.
     assertEquals(
       await new Response(tombstoned.payload).text(),
-      "rejected bytes",
+      prefix,
     );
     assertEquals((await tombstoned.terminal)?.availability, "retained");
   } finally {

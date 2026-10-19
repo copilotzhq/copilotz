@@ -42,7 +42,12 @@ export type AuthorizationOwner = Readonly<{
   ): Promise<import("../streams/catalog.ts").OperationRecord>;
   observe(
     authority: AuthenticatedAuthority,
-    input: Readonly<{ threadId?: string; operationIds?: readonly string[] }>,
+    input: Readonly<
+      {
+        record?: Readonly<{ collection: string; id: string }>;
+        operationIds?: readonly string[];
+      }
+    >,
     failed: (error: unknown) => void,
   ): Promise<AuthorityObservation>;
   notice(change: { namespace: string; collection?: string; id?: string }): void;
@@ -136,21 +141,22 @@ export function createAuthorizationOwner(
     const decision = await evaluate(channel.authority, channel.intent, command);
     channel.authority = decision.authority;
     const input = channel.intent.input as {
-      threadId?: string;
+      record?: Readonly<{ collection: string; id: string }>;
       operationIds?: readonly string[];
     };
     const dependencies = [...decision.dependencies];
-    if (input.threadId) {
-      const definition = options.collections.thread;
-      const filter = decision.constraints.collections?.thread ??
-        (definition && decision.constraints.collections?.[definition.name]);
+    if (input.record) {
+      const definition = options.collections[input.record.collection];
+      const filter =
+        decision.constraints.collections?.[input.record.collection] ??
+          (definition && decision.constraints.collections?.[definition.name]);
       if (!definition || !filter) authorizationRefused();
       const record = await loadCollectionRecord(
         command.transaction,
         createCoreTableNames(options.databaseSchema),
         channel.authority.scope.namespace,
         definition.name,
-        input.threadId,
+        input.record.id,
       );
       if (!record || !matchesCollectionFilter(filter, record)) {
         authorizationRefused();
@@ -159,7 +165,7 @@ export function createAuthorizationOwner(
         owner: channel.authority.scope.owner,
         namespace: channel.authority.scope.namespace,
         collection: definition.name,
-        id: input.threadId,
+        id: input.record.id,
       });
     }
     for (const id of input.operationIds ?? []) {
@@ -189,7 +195,12 @@ export function createAuthorizationOwner(
   }".authorization_channels`;
   const observe = async (
     value: AuthenticatedAuthority,
-    input: Readonly<{ threadId?: string; operationIds?: readonly string[] }>,
+    input: Readonly<
+      {
+        record?: Readonly<{ collection: string; id: string }>;
+        operationIds?: readonly string[];
+      }
+    >,
     failed: (error: unknown) => void,
   ) => {
     const authority = retainedAuthority(value);
@@ -198,7 +209,7 @@ export function createAuthorizationOwner(
       authority,
       intent: {
         kind: "observation",
-        resource: input.threadId ?? "operations",
+        resource: input.record?.id ?? "operations",
         operation: "attach",
         input,
       },

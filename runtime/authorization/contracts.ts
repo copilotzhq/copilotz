@@ -31,7 +31,7 @@ export type ServerConstraints = Readonly<{
     Record<string, Readonly<{ input?: Readonly<Record<string, unknown>> }>>
   >;
   /** Host-selected conversation group for bounded HTTP admission. */
-  admission?: Readonly<{ key: string; threadId?: string }>;
+  admission?: Readonly<{ key: string }>;
   actionMetadata?: ActionInvocationMetadata;
   collections?: Readonly<
     Record<string, CollectionFilter>

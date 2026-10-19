@@ -2,7 +2,7 @@ import type { AgentResource } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertExists } from "@std/assert";
-import { createCopilotzApplication } from "../../runtime/application/application.ts";
+import { createTestApplication as createCopilotzApplication } from "../../runtime/testing/server-authorization.test.ts";
 import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
 import { projectActionEvents } from "../core/shared/testing/projections.ts";
@@ -131,6 +131,7 @@ Deno.test("signed WhatsApp server ingress persists no credentials and never retr
   const deliveryKeys: string[] = [];
   const configOperations: string[] = [];
   let attempts = 0;
+  const attempted = Promise.withResolvers<void>();
   const transport: WhatsAppTransport = Object.freeze({
     download(_config, input) {
       downloads.push(input.id);
@@ -147,6 +148,7 @@ Deno.test("signed WhatsApp server ingress persists no credentials and never retr
     },
     send(_config, body) {
       attempts += 1;
+      attempted.resolve();
       sends.push(structuredClone(body));
       if (attempts === 1) {
         return Promise.reject(new Error("transient provider failure"));
@@ -274,7 +276,7 @@ Deno.test("signed WhatsApp server ingress persists no credentials and never retr
     );
     assertEquals(response.status, 200);
     assertEquals(await response.json(), { status: "ok" });
-    await waitFor(() => attempts >= 1);
+    await attempted.promise;
     await waitFor(async () =>
       (await application.deliveries.list({
         namespace: NAMESPACE,

@@ -405,7 +405,11 @@ export function createDatabaseScope(
       const commit = (
         transaction?: import("../events/session.ts").SqlExecutor,
       ) =>
-        createSchemaCommandRunner(transaction ?? store.session, databaseSchema)(
+        createSchemaCommandRunner(
+          transaction ?? store.session,
+          databaseSchema,
+          () => Promise.resolve(options.owner),
+        )(
           "ingress.authorize",
           {},
           async (_, command) => {
@@ -509,9 +513,6 @@ export function createDatabaseScope(
               if (constraints.admission) {
                 operationMetadata.httpAdmissionKey = constraints.admission.key;
                 operationMetadata.httpIdempotencyKey = deduplicationId;
-                if (constraints.admission.threadId) {
-                  operationMetadata.threadId = constraints.admission.threadId;
-                }
               }
               if (constraints.observationKeys) {
                 metadata.observationKeys = [...constraints.observationKeys];
@@ -591,6 +592,7 @@ export function createDatabaseScope(
             registry: options.registry,
             protectedValues,
             authorization: engine.authorization,
+            owner: options.owner,
           },
           draft,
           commit,
@@ -604,6 +606,7 @@ export function createDatabaseScope(
           catalog: options.operationCatalog,
           registry: options.registry,
           signal: options.owner.signal,
+          owner: options.owner,
           protectedValues,
         },
         draft,
@@ -644,6 +647,7 @@ export function createDatabaseScope(
           const committed = await createSchemaCommandRunner(
             store.session,
             databaseSchema,
+            () => Promise.resolve(options.owner),
           )("ingress.event", {}, async (_, command) => {
             if (!engine.authorization) authorizationRefused();
             const decision = await createOwnerEvaluator({
@@ -820,6 +824,7 @@ export function createDatabaseScope(
           ? await createSchemaCommandRunner(
             store.session,
             options.databaseSchema,
+            () => Promise.resolve(options.owner),
           )(
             "actions.readAuthorizedResult",
             {},

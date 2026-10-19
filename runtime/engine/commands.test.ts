@@ -1,3 +1,4 @@
+import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { receipt } from "../testing/owner-helpers.ts";
 import { bounded } from "../testing/effect-commit-proxy.ts";
 import { upgradeActionLifecycle } from "../actions/upgrade.ts";
@@ -289,11 +290,16 @@ Deno.test("versioned owner upgrade preserves an existing event and Action baseli
     await db.query(
       `INSERT INTO ${tables.events} (seq,id,schema_version,type,namespace,payload,correlation_id) VALUES (1,'existing',1,'test.event','space','{}','existing')`,
     );
+    const upgradeOptions = await testUpgradeOptions(db, schema);
     await db.query(
       `DROP TABLE ${tables.owner_body_retirements}, ${tables.owner_deadlines}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
     await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=8`);
-    await upgradeActionLifecycle(db, schema);
+    await upgradeActionLifecycle(
+      db,
+      schema,
+      upgradeOptions,
+    );
     assertEquals(
       (await provisionCopilotzSchema(db, schema)).version,
       EVENT_SCHEMA_VERSION,

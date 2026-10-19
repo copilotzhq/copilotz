@@ -1,3 +1,4 @@
+import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
@@ -67,6 +68,7 @@ async function fixture(url: string) {
   });
   const lifecycle = createActionLifecycleEmitter({
     namespace: "test",
+    metadata: { sourceEventId: root.event.id },
     append: createActionLifecycleAppender({
       store,
       coordinator,
@@ -485,9 +487,14 @@ for (const backend of ["memory", "postgres"] as const) {
     const before = (await f.db.query(
       `SELECT * FROM ${f.store.tables.events} ORDER BY position`,
     )).rows;
+    const upgradeOptions = await testUpgradeOptions(f.db, f.schema);
     const plan = await prepareRetainedDataUpgrade(f.db, f.schema);
     if (!plan) throw new Error("Expected an offline upgrade plan.");
-    const options = { plan, reviewedFingerprint: plan.fingerprint };
+    const options = {
+      ...upgradeOptions,
+      plan,
+      reviewedFingerprint: plan.fingerprint,
+    };
     await upgradeActionLifecycle(f.db, f.schema, options);
     await upgradeActionLifecycle(f.db, f.schema, options);
     await validateCopilotzSchema(f.db, f.schema);

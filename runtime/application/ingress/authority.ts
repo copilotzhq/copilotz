@@ -1,3 +1,4 @@
+import { authorizationRefused } from "../../authorization/evaluator.ts";
 import { captureCollectionInvocation } from "../../authorization/invocation.ts";
 /** Package-private admission evidence. No wire value can create this authority. */
 import { captureHostCommandJson } from "../host-command-json.ts";
@@ -15,7 +16,11 @@ function proof(ingress: ProtectedActionIngress): OwnerIngressProof {
   };
 }
 export const hostIngressProof = (): OwnerIngressProof => {
-  const authority = captureCollectionInvocation()?.authority;
+  const invocation = captureCollectionInvocation();
+  const authority = invocation?.authority;
+  if (invocation && !invocation.trustedHost && !authority) {
+    authorizationRefused();
+  }
   return proof({ kind: "host", ...(authority ? { authority } : {}) });
 };
 export const authenticatedServerIngressProof = (

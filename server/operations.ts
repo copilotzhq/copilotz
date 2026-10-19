@@ -256,7 +256,9 @@ export async function createHttpOperations(
         authorityChannel = await runtime.authorization.observe(
           scope.authority,
           {
-            ...(selection.threadId ? { threadId: selection.threadId } : {}),
+            ...(selection.threadId
+              ? { record: { collection: "thread", id: selection.threadId } }
+              : {}),
             ...(selection.operationIds
               ? { operationIds: selection.operationIds }
               : {}),

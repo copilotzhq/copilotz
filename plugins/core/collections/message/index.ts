@@ -151,13 +151,24 @@ function projectHistoryRecord(
     ...record,
     content: [],
     metadata: {
-      toolStatus: metadata.toolStatus,
-      toolId: metadata.toolId,
-      toolInvocation: { id: invocation?.id, tool: { id: metadata.toolId } },
-      copilotzWorkflow: { sourceMessageId: workflow?.sourceMessageId },
+      ...(metadata.toolStatus !== undefined
+        ? { toolStatus: metadata.toolStatus }
+        : {}),
+      ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
+      toolInvocation: {
+        ...(invocation?.id !== undefined ? { id: invocation.id } : {}),
+        tool: metadata.toolId !== undefined ? { id: metadata.toolId } : {},
+      },
+      copilotzWorkflow: workflow?.sourceMessageId !== undefined
+        ? { sourceMessageId: workflow.sourceMessageId }
+        : {},
       copilotzToolAction: {
-        actionRunId: action?.actionRunId,
-        planMessageId: action?.planMessageId,
+        ...(action?.actionRunId !== undefined
+          ? { actionRunId: action.actionRunId }
+          : {}),
+        ...(action?.planMessageId !== undefined
+          ? { planMessageId: action.planMessageId }
+          : {}),
       },
     },
   };

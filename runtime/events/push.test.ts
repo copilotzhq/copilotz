@@ -1,3 +1,4 @@
+import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { upgradeActionLifecycle } from "../actions/upgrade.ts";
@@ -257,7 +258,11 @@ Deno.test("sequence upgrade backfills retained row identities and resumes the co
     await f.db.query(
       `UPDATE ${f.tables.copilotz_schema_metadata} SET version=9`,
     );
-    await upgradeActionLifecycle(f.db, f.schema);
+    await upgradeActionLifecycle(
+      f.db,
+      f.schema,
+      await testUpgradeOptions(f.db, f.schema),
+    );
     const upgradedOwner = await openDatabaseOwner(f.db, f.schema);
     const upgradedStore = createEventStore({ session: f.db, schema: f.schema });
     try {

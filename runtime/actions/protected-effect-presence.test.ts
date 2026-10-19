@@ -52,7 +52,6 @@ Deno.test("plain effect confirm refuses every occupied protected slot independen
           plainConfirms++;
           return Promise.resolve();
         },
-        confirmOutput: () => Promise.resolve(),
         notStarted: () => Promise.resolve(),
       }),
     });

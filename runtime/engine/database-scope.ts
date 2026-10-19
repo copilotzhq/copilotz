@@ -546,10 +546,6 @@ export function createDatabaseScope(
           async (_, command) => {
             const guard = createProtectedActions({
               definitions: options.engine.protectedActions ?? {},
-              collections: {
-                runtime: collections,
-                definitions: options.registry.collections,
-              },
               actions: options.registry.actions,
               store,
               coordinator,

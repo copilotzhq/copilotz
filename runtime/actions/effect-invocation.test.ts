@@ -99,7 +99,6 @@ Deno.test("interruption around begin, provider, confirm and terminal never blind
               schema,
               namespace: "space",
               actionRunId: frame.actionRunId,
-              parentActionRunId: frame.parentActionRunId,
             });
             return {
               ...client,
@@ -178,7 +177,6 @@ Deno.test("recovery reconciles removed effect steps before current execute and d
             schema,
             namespace: "space",
             actionRunId: frame.actionRunId,
-            parentActionRunId: frame.parentActionRunId,
           }),
       });
       // Obtain the exact host-derived run identity without inferring its encoding.
@@ -226,12 +224,12 @@ Deno.test("recovery reconciles removed effect steps before current execute and d
   }
 });
 
-Deno.test("swallowed effect failures, open effects and nested ambiguity cannot produce success", async () => {
+Deno.test("swallowed own effect failures cannot produce success; caught child failures do not poison parents", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const schema = "effect_success_guard";
   try {
     await provisionCopilotzSchema(db, schema);
-    for (const mode of ["swallowed", "open", "nested"] as const) {
+    for (const mode of ["swallowed", "nested"] as const) {
       const history = lifecycle();
       const child = defineAction({
         id: "fixture.child",
@@ -267,9 +265,13 @@ Deno.test("swallowed effect failures, open effects and nested ambiguity cannot p
             schema,
             namespace: "space",
             actionRunId: frame.actionRunId,
-            parentActionRunId: frame.parentActionRunId,
           }) as ActionEffectClient,
       });
+      if (mode === "nested") {
+        assertEquals(await callers.root(null), "must not succeed");
+        assertEquals(await callers.root(null), "must not succeed");
+        continue;
+      }
       const error = await assertRejects(() => callers.root(null));
       assertEquals((error as { code?: string }).code, "effect_indeterminate");
       const replayed = await assertRejects(() => callers.root(null));
@@ -286,7 +288,7 @@ Deno.test("swallowed effect failures, open effects and nested ambiguity cannot p
   }
 });
 
-Deno.test("restarted parents cannot omit an unresolved descendant from an older deployment", async () => {
+Deno.test("restarted parents may complete independently while descendant effect evidence remains", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const schema = "effect_descendant_recovery";
   try {
@@ -334,14 +336,19 @@ Deno.test("restarted parents cannot omit an unresolved descendant from an older 
             schema,
             namespace: "space",
             actionRunId: frame.actionRunId,
-            parentActionRunId: frame.parentActionRunId,
           }),
       });
     await assertRejects(() => create(original).root(null));
     history.restart();
-    const error = await assertRejects(() => create(changed).root(null));
-    assertEquals((error as { code?: string }).code, "effect_indeterminate");
-    assertEquals(rootCalls, 1);
+    assertEquals(
+      await create(changed).root(null),
+      "new deployment omitted the child",
+    );
+    assertEquals(rootCalls, 2);
+    const unresolved = await db.query(
+      `SELECT status FROM ${schema}.action_effects`,
+    );
+    assertEquals(unresolved.rows, [{ status: "begun" }]);
     assertEquals(sends, 1);
   } finally {
     await db.close();

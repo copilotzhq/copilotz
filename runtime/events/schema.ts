@@ -62,7 +62,6 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
 
 const CORE_SCHEMA_COLUMNS = {
   action_effects: [
-    "ancestors",
     "namespace",
     "action_run_id",
     "step",
@@ -627,7 +626,6 @@ export function createEffectSchemaStatements(
   const tables = createCoreTableNames(schemaName);
   return [`CREATE TABLE IF NOT EXISTS ${tables.action_effects} (
     namespace TEXT NOT NULL, action_run_id TEXT NOT NULL, step TEXT NOT NULL,
-    ancestors JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(ancestors)='array'),
     status TEXT NOT NULL CHECK (status IN ('begun','confirmed','not_started')),
     outcome JSONB, evidence JSONB,
     PRIMARY KEY (namespace, action_run_id, step),

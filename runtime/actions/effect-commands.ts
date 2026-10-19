@@ -2,7 +2,6 @@
 import {
   type CommandContext,
   createSchemaCommandRunner,
-  schemaCommandContext,
 } from "../engine/commands.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -12,32 +11,20 @@ import type {
   ActionEffectEvidence,
   ActionEffectOutcome,
   ActionEffectState,
+  AnyActionDefinition,
 } from "./types.ts";
 import {
   type ActionEffectClient,
-  assertPlainEffectOutcome,
+  bindCapturedConfirmation,
   copy,
-  EFFECT_STEP_LIMIT,
   type EffectInventoryEntry,
   effectKey,
   type EffectReference,
   evidence,
   fail,
-  PROTECTED_EFFECT_OUTPUT_SCHEMA,
   text,
+  validateEffectData,
 } from "./effect-client.ts";
-
-import {
-  type ActionOutputBinding,
-  actionOutputKey,
-  adoptCapturedActionOutput,
-  assertCapturedActionOutput,
-  captureActionOutput,
-  openCapturedActionOutput,
-  prepareCapturedActionOutput,
-  type ProtectedEffectOutput,
-  readCapturedActionOutput,
-} from "./protected-effect-output.ts";
 
 type EffectRow = {
   step: string;
@@ -54,39 +41,18 @@ function state(row?: EffectRow): ActionEffectState {
   if (row.status === "not_started") return { status: "not_started" };
   return fail("effect_state_invalid", "Invalid retained effect state.");
 }
-/** Complete bounded inventory: one extra row detects overflow, never truncates. */
+/** Retained steps belonging to this Action, including steps removed by new code. */
 export async function readActionEffectInventory(
   transaction: SqlExecutor,
   scope: { schema: string; namespace: string; actionRunId: string },
 ): Promise<readonly EffectInventoryEntry[]> {
-  text(scope.namespace);
-  text(scope.actionRunId);
-  const table = createCoreTableNames(scope.schema).action_effects;
-  const rows = (await transaction.query<EffectInventoryEntry>(
-    `SELECT step,status,CASE WHEN action_run_id<>$2 THEN action_run_id END AS "actionRunId"
-     FROM ${table} WHERE namespace=$1 AND (action_run_id=$2 OR (status='begun' AND ancestors @> $4::jsonb))
-     ORDER BY action_run_id,step LIMIT $3`,
-    [
-      scope.namespace,
-      scope.actionRunId,
-      EFFECT_STEP_LIMIT + 1,
-      JSON.stringify([scope.actionRunId]),
-    ],
-  )).rows;
-  if (rows.length > EFFECT_STEP_LIMIT) {
-    fail("effect_step_limit", "Effect inventory exceeds its bound.");
-  }
-  for (const row of rows) {
-    text(row.step);
-    if (!["begun", "confirmed", "not_started"].includes(row.status)) {
-      fail("effect_state_invalid", "Invalid retained effect state.");
+  return (await transaction.query<EffectInventoryEntry>(
+    `SELECT step,status FROM ${
+      createCoreTableNames(scope.schema).action_effects
     }
-  }
-  return rows.map(({ step, status, actionRunId }) => ({
-    step,
-    status,
-    ...(actionRunId ? { actionRunId } : {}),
-  }));
+     WHERE namespace=$1 AND action_run_id=$2 ORDER BY step`,
+    [scope.namespace, scope.actionRunId],
+  )).rows;
 }
 
 export function createOwnerEffectClient(
@@ -95,7 +61,6 @@ export function createOwnerEffectClient(
     schema: string;
     namespace: string;
     actionRunId: string;
-    parentActionRunId?: string;
     writer?: Readonly<{ deliveryId: string; leaseOwner: string }>;
     signal?: AbortSignal;
     /** Trusted owner-only verifier; a worker's evidence assertion is never proof. */
@@ -105,133 +70,21 @@ export function createOwnerEffectClient(
       proof: ActionEffectEvidence,
     ): boolean | Promise<boolean>;
     validateOutcome?(outcome: ActionEffectOutcome): void;
-    /** Owner-bound registered Action output; never accepted from the worker. */
-    output?: Omit<
-      ActionOutputBinding,
-      "databaseSchema" | "namespace" | "actionRunId"
-    >;
-    /** Same output-slot authority used by the normal completion path. */
-    authorizeOutput?(context: CommandContext): void | Promise<void>;
+    /** Registered owner schema rejects secret-bearing effect outcomes. */
+    action?: AnyActionDefinition;
+    authorize?(transaction: SqlExecutor): Promise<void>;
   }>,
 ): ActionEffectClient {
   const { namespace, actionRunId, schema } = options;
   text(namespace);
   text(actionRunId);
   const tables = createCoreTableNames(schema);
-  const outputBinding = options.output &&
-    {
-      ...options.output,
-      action: {
-        ...options.output.action,
-        ...(options.output.action.outputSchema
-          ? {
-            outputSchema: snapshotActionSchema(
-              options.output.action.outputSchema,
-            ),
-          }
-          : {}),
-      },
-      databaseSchema: schema,
-      namespace,
-      actionRunId,
-    };
-  const requireOutput = () =>
-    outputBinding ??
-      fail(
-        "effect_output_unavailable",
-        "A bound protected Action output is required.",
-      );
-  const outputState = async (
-    tx: SqlExecutor,
-    row?: EffectRow,
-  ): Promise<ActionEffectState> => {
-    if (
-      row?.status === "confirmed" && row.outcome &&
-      typeof row.outcome === "object" && !Array.isArray(row.outcome) &&
-      (row.outcome as Record<string, unknown>).schema ===
-        PROTECTED_EFFECT_OUTPUT_SCHEMA
-    ) {
-      const binding = requireOutput();
-      if (
-        Object.keys(row.outcome).sort().join(",") !== "captureKey,schema" ||
-        (row.outcome as Record<string, unknown>).captureKey !==
-          actionOutputKey(binding)
-      ) {
-        fail(
-          "effect_output_binding",
-          "Retained effect output has a different binding.",
-        );
-      }
-      await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-      const capture = await readCapturedActionOutput(tx, binding);
-      if (!capture) {
-        fail("effect_output_binding", "Retained Action output is missing.");
-      }
-      const outcome = await openCapturedActionOutput(binding, capture, tx);
-      await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-      options.signal?.throwIfAborted();
-      return { status: "replay", outcome };
-    }
-    return state(row);
-  };
+  const outputSchema = options.action?.outputSchema &&
+    snapshotActionSchema(options.action.outputSchema);
   const run = createSchemaCommandRunner(options.session, schema);
-  const scopeKey = (runId: string) =>
-    JSON.stringify(["effect-scope", namespace, runId]);
-  const ancestry = async (tx: SqlExecutor): Promise<readonly string[]> => {
-    const load = async (runId: string) =>
-      (await tx.query<
-        {
-          intent: { parentActionRunId: string | null };
-          result: { ancestors: string[] };
-        }
-      >(
-        `SELECT intent,result FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND key=$1`,
-        [scopeKey(runId)],
-      )).rows[0];
-    const prior = await load(actionRunId);
-    if (prior) {
-      if (
-        prior.intent.parentActionRunId !== (options.parentActionRunId ?? null)
-      ) {
-        fail(
-          "effect_scope_conflict",
-          "Effect ancestry changed between attempts.",
-        );
-      }
-      return prior.result.ancestors;
-    }
-    let ancestors: string[] = [];
-    if (options.parentActionRunId) {
-      const parent = await load(options.parentActionRunId);
-      if (!parent) {
-        fail(
-          "effect_indeterminate",
-          "Original parent effect scope is unavailable.",
-        );
-      }
-      ancestors = [...parent.result.ancestors, options.parentActionRunId];
-    }
-    if (
-      ancestors.length > EFFECT_STEP_LIMIT || ancestors.includes(actionRunId)
-    ) {
-      fail("effect_step_limit", "Effect ancestry exceeds its bound.");
-    }
-    await tx.query(
-      `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result)
-       VALUES ('schema','logical',$1,'runtime','effect.scope',$2::jsonb,$3::jsonb)`,
-      [
-        scopeKey(actionRunId),
-        JSON.stringify({
-          parentActionRunId: options.parentActionRunId ?? null,
-        }),
-        JSON.stringify({ ancestors }),
-      ],
-    );
-    return ancestors;
-  };
   const authorize = async (context: CommandContext) => {
     options.signal?.throwIfAborted();
-    await outputBinding?.authorize?.(context.transaction);
+    await options.authorize?.(context.transaction);
     if (options.writer) {
       const rows = await context.transaction.query(
         `SELECT 1 FROM ${tables.event_deliveries} AS delivery JOIN ${tables.open_actions} AS action
@@ -246,7 +99,7 @@ export function createOwnerEffectClient(
           context.caller.epoch,
           namespace,
           actionRunId,
-          outputBinding?.action.id ?? null,
+          options.action?.id ?? null,
         ],
       );
       if (!rows.rows.length) {
@@ -289,15 +142,19 @@ export function createOwnerEffectClient(
     operation: string,
     extra: object,
     result: object,
+    mutation: string,
+    values: readonly unknown[],
   ) => {
     await tx.query(
-      `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result)
-       VALUES ('schema','logical',$1,'runtime',$2,$3::jsonb,$4::jsonb)`,
+      `WITH effect_mutation AS (${mutation} RETURNING step)
+       INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result)
+       SELECT 'schema','logical',$1,'runtime',$2,$3::jsonb,$4::jsonb FROM effect_mutation`,
       [
         effectKey(ref, operation),
         `effect.${operation}`,
         JSON.stringify({ ...ref, ...extra }),
         JSON.stringify({ ...ref, ...result }),
+        ...values,
       ],
     );
   };
@@ -306,28 +163,21 @@ export function createOwnerEffectClient(
       execute("begin", step, active, async (tx, ref) => {
         const current = await read(tx, step);
         if (current) {
-          return await outputState(tx, current) as Exclude<
+          return state(current) as Exclude<
             ActionEffectState,
             { status: "none" }
           >;
         }
-        const inventory = await readActionEffectInventory(tx, {
-          schema,
-          namespace,
-          actionRunId,
-        });
-        if (inventory.length >= EFFECT_STEP_LIMIT) {
-          fail(
-            "effect_step_limit",
-            "An Action exceeded its effect step limit.",
-          );
-        }
-        await tx.query(
-          `INSERT INTO ${tables.action_effects} (namespace,action_run_id,step,status,ancestors) VALUES ($1,$2,$3,'begun',$4::jsonb)`,
-          [namespace, actionRunId, step, JSON.stringify(await ancestry(tx))],
-        );
         // The receipt records begun, never a reusable dispatch permission.
-        await receipt(tx, ref, "begin", {}, { status: "begun" });
+        await receipt(
+          tx,
+          ref,
+          "begin",
+          {},
+          { status: "begun" },
+          `INSERT INTO ${tables.action_effects} (namespace,action_run_id,step,status) VALUES ($5,$6,$7,'begun')`,
+          [namespace, actionRunId, step],
+        );
         return { status: "proceed" } as const;
       }),
     inspect: (step, active) =>
@@ -335,20 +185,19 @@ export function createOwnerEffectClient(
         "inspect",
         step,
         active,
-        async (tx) => await outputState(tx, await read(tx, step)),
+        async (tx) => state(await read(tx, step)),
       ),
-    confirm: (step, value, active) => {
-      const outcome = copy(value);
-      assertPlainEffectOutcome(outcome);
+    confirm: bindCapturedConfirmation((step, outcome, active) => {
+      validateEffectData(outcome);
       options.validateOutcome?.(outcome);
       if (
-        outputBinding &&
-        splitSecretActionValue(outputBinding.action.outputSchema, outcome)
+        outputSchema &&
+        splitSecretActionValue(outputSchema, outcome)
           .secret
       ) {
         fail(
           "effect_outcome_invalid",
-          "Protected outputs require confirmOutput.",
+          "Protected effect outcomes must use safe references.",
         );
       }
       return execute("confirm", step, active, async (tx, ref) => {
@@ -363,90 +212,20 @@ export function createOwnerEffectClient(
             "Only a begun effect can be confirmed with this outcome.",
           );
         }
-        await tx.query(
-          `UPDATE ${tables.action_effects} SET status='confirmed',outcome=$4::jsonb WHERE namespace=$1 AND action_run_id=$2 AND step=$3`,
-          [namespace, actionRunId, step, JSON.stringify(outcome)],
-        );
-        await receipt(tx, ref, "confirm", { outcome }, {
-          status: "confirmed",
-          outcome,
-        });
-      });
-    },
-    confirmOutput: (step, value, active) => {
-      // Snapshot and full schema validation happen before asynchronous admission.
-      const binding = requireOutput();
-      const output = captureActionOutput(binding, value);
-      const outcome: ProtectedEffectOutput = {
-        schema: PROTECTED_EFFECT_OUTPUT_SCHEMA,
-        captureKey: actionOutputKey(binding),
-      } as const;
-      const checkStep = (current?: EffectRow) => {
-        if (
-          current?.status === "confirmed" &&
-          sameActionValue(current.outcome, outcome)
-        ) return;
-        if (current?.status !== "begun") {
-          fail(
-            "effect_transition_conflict",
-            "Only a begun effect can capture this Action output.",
-          );
-        }
-      };
-      return (async () => {
-        const existing = await execute(
-          "inspectOutput",
-          step,
-          active,
-          async (tx) => {
-            await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-            checkStep(await read(tx, step));
-            const capture = await readCapturedActionOutput(tx, binding);
-            if (capture) {
-              await assertCapturedActionOutput(
-                binding,
-                capture,
-                output,
-                tx,
-              );
-            }
-            return capture;
-          },
-        );
-        // A committed capture is checked before sealing. Staging is outside the
-        // owner transaction; unused bytes remain unowned under catalog protection.
-        const prepared = existing
-          ? undefined
-          : await prepareCapturedActionOutput(binding, output);
-        await execute("confirmOutput", step, active, async (tx, ref) => {
-          await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-          const current = await read(tx, step);
-          checkStep(current);
-          const accepted = prepared
-            ? await adoptCapturedActionOutput(tx, binding, output, prepared)
-            : await readCapturedActionOutput(tx, binding);
-          if (!accepted) {
-            fail("effect_output_binding", "Retained Action output is missing.");
-          }
-          if (existing && !sameActionValue(existing, accepted)) {
-            fail("effect_output_binding", "Retained Action output changed.");
-          }
-          if (current?.status === "confirmed") {
-            await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-            return;
-          }
-          await tx.query(
-            `UPDATE ${tables.action_effects} SET status='confirmed',outcome=$4::jsonb WHERE namespace=$1 AND action_run_id=$2 AND step=$3`,
-            [namespace, actionRunId, step, JSON.stringify(outcome)],
-          );
-          await receipt(tx, ref, "confirm", { outcome }, {
+        await receipt(
+          tx,
+          ref,
+          "confirm",
+          { outcome },
+          {
             status: "confirmed",
             outcome,
-          });
-          await options.authorizeOutput?.(schemaCommandContext(tx, schema));
-        });
-      })();
-    },
+          },
+          `UPDATE ${tables.action_effects} SET status='confirmed',outcome=$8::jsonb WHERE namespace=$5 AND action_run_id=$6 AND step=$7`,
+          [namespace, actionRunId, step, JSON.stringify(outcome)],
+        );
+      });
+    }),
     notStarted: (step, value, active) => {
       const proof = evidence(value);
       return execute("notStarted", step, active, async (tx, ref) => {
@@ -467,13 +246,15 @@ export function createOwnerEffectClient(
             "Only a begun effect can be closed as not started.",
           );
         }
-        await tx.query(
-          `UPDATE ${tables.action_effects} SET status='not_started',evidence=$4::jsonb WHERE namespace=$1 AND action_run_id=$2 AND step=$3`,
+        await receipt(
+          tx,
+          ref,
+          "notStarted",
+          { evidence: proof },
+          { status: "not_started" },
+          `UPDATE ${tables.action_effects} SET status='not_started',evidence=$8::jsonb WHERE namespace=$5 AND action_run_id=$6 AND step=$7`,
           [namespace, actionRunId, step, JSON.stringify(proof)],
         );
-        await receipt(tx, ref, "notStarted", { evidence: proof }, {
-          status: "not_started",
-        });
       });
     },
     inventory: (active) =>
@@ -482,7 +263,6 @@ export function createOwnerEffectClient(
         { namespace, actionRunId },
         async (_ref, context) => {
           await authorize(context);
-          await ancestry(context.transaction);
           active?.signal?.throwIfAborted();
           return await readActionEffectInventory(context.transaction, {
             schema,

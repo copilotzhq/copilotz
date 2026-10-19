@@ -1,3 +1,7 @@
+import {
+  type ActionEffectClient,
+  wrapEffectConfirmation,
+} from "./effect-client.ts";
 /** Carry owner-created policy into local and reverse-called Action capabilities. */
 import {
   type OwnerCommandAuthorization,
@@ -13,7 +17,7 @@ import type { ActionContext } from "./types.ts";
 const readResourceOwners = new WeakMap<object, object>();
 export function authorizeActionCapabilities(
   context: ActionContext,
-  guard: OwnerCommandAuthorization,
+  guard: OwnerCommandAuthorization | undefined,
   check: () => void,
   onError?: (error: unknown) => void,
   authorizeDisclosure?: () => Promise<void>,
@@ -21,10 +25,13 @@ export function authorizeActionCapabilities(
 ): ActionContext {
   const owner = {};
   const delivered = new WeakSet<object>();
-  const isReadResource = (value: unknown): value is object =>
-    value instanceof ReadableStream ||
-    value instanceof ReadableStreamDefaultReader ||
-    value instanceof ReadableStreamBYOBReader;
+  const readResource = (value: unknown): ReadableStream | undefined =>
+    value instanceof ReadableStream
+      ? value
+      : value && typeof value === "object" && "body" in value &&
+          value.body instanceof ReadableStream
+      ? value.body
+      : undefined;
   const own = (value: unknown) => {
     if (value && typeof value === "object") {
       // Bind before the acquisition scope closes or post-open disclosure waits.
@@ -35,8 +42,9 @@ export function authorizeActionCapabilities(
           withoutOwnerCommandAuthorization(() => call(run)) as Promise<T>,
       );
     }
-    if (isReadResource(value) && !readResourceOwners.has(value)) {
-      readResourceOwners.set(value, owner);
+    const resource = readResource(value);
+    if (resource && !readResourceOwners.has(resource)) {
+      readResourceOwners.set(resource, owner);
     }
   };
   const observeCleanup = (pending: Promise<unknown>): Promise<void> => {
@@ -47,29 +55,15 @@ export function authorizeActionCapabilities(
     return settled;
   };
   const disposeUndisclosed = (value: unknown) => {
+    const resource = readResource(value);
     if (
-      !isReadResource(value) || readResourceOwners.get(value) !== owner ||
-      delivered.has(value)
+      !resource || readResourceOwners.get(resource) !== owner ||
+      delivered.has(resource)
     ) return;
-    // Physical cleanup may be noncooperative. Start it without reviving a policy
-    // lifetime; observe it until actual settlement, never treating timeout as release.
-    const disposal = value instanceof ReadableStream
-      ? () => ReadableStream.prototype.cancel.call(value)
-      : value instanceof ReadableStreamDefaultReader
-      ? () =>
-        ReadableStreamDefaultReader.prototype.cancel.call(value).finally(() =>
-          value.releaseLock()
-        )
-      : () =>
-        ReadableStreamBYOBReader.prototype.cancel.call(value).finally(() =>
-          (value as ReadableStreamBYOBReader).releaseLock()
-        );
     try {
-      void observeCleanup(Promise.resolve(disposal()));
+      void observeCleanup(ReadableStream.prototype.cancel.call(resource));
     } catch { /* Already closed or otherwise undisposable. */ }
   };
-  const cache = new WeakMap<object, object>();
-  const streamHandles = new WeakSet<object>();
   const nativeStreams = new WeakSet<object>();
   const disclose = async () => {
     check();
@@ -80,22 +74,30 @@ export function authorizeActionCapabilities(
   };
   const call = (
     invoke: () => unknown,
-    disclosure = true,
+    beforeDisclosure = false,
     cleanupOnFailure?: () => Promise<unknown>,
   ) => {
     const pending = (async () => {
       let acquired: unknown;
       try {
-        if (disclosure) await disclose();
-        const value = await withOwnerCommandAuthorization(guard, async () => {
+        if (beforeDisclosure && authorizeDisclosure) await disclose();
+        const invokeOwned = async () => {
           check();
           const result = acquired = await invoke();
           own(result);
           check();
           return result;
-        });
-        if (disclosure) await disclose();
-        if (isReadResource(value)) delivered.add(value);
+        };
+        const value = await (guard
+          ? withOwnerCommandAuthorization(guard, invokeOwned)
+          : invokeOwned());
+        if (authorizeDisclosure) {
+          await disclose();
+        }
+        const resource = readResource(value);
+        if (resource) {
+          delivered.add(resource);
+        }
         return value;
       } catch (error) {
         disposeUndisclosed(acquired);
@@ -170,207 +172,213 @@ export function authorizeActionCapabilities(
       })
       : new ReadableStream(callbacks, { highWaterMark: 0 });
   };
-  const wrap = (
-    value: unknown,
-    receiver?: object,
-    name?: PropertyKey,
-  ): unknown => {
-    if (!value || (typeof value !== "object" && typeof value !== "function")) {
-      return value;
-    }
-    if (Array.isArray(value)) return value.map((item) => wrap(item));
-    if (!receiver) {
-      const existing = cache.get(value);
-      if (existing) return existing;
-    }
-    if (value instanceof ReadableStream) {
-      if (nativeStreams.has(value)) return value;
-      const stream = pipingSource(value);
-      nativeStreams.add(stream);
-      readResourceOwners.set(stream, owner);
-      delivered.add(stream);
-      cache.set(value, stream);
-      for (
-        const key of [
-          "getReader",
-          "tee",
-          "pipeThrough",
-          "pipeTo",
-          "cancel",
-          "values",
-          Symbol.asyncIterator,
-        ] as const
-      ) {
-        const method = Reflect.get(ReadableStream.prototype, key);
-        Object.defineProperty(stream, key, {
-          configurable: true,
-          value: (...args: unknown[]) => {
-            const invoke = () => Reflect.apply(method, stream, args);
-            if (key === "cancel") {
-              const cancellation = Promise.resolve(invoke());
-              void observeCleanup(cancellation);
-              return cancellation.then(() => undefined);
-            }
-            check();
-            if (key === "pipeTo") return call(invoke);
-            const result = invoke();
-            if (
-              key === "getReader" || key === "values" ||
-              key === Symbol.asyncIterator
-            ) {
-              streamHandles.add(result);
-              own(result);
-              if (isReadResource(result)) delivered.add(result);
-            }
-            return wrap(result);
-          },
-        });
-      }
-      return stream;
-    }
-    const methods = new Map<PropertyKey, unknown>();
-    const cleanup = (
-      target: object | undefined,
-      key: PropertyKey | undefined,
-    ) =>
-      Boolean(
-        target && streamHandles.has(target) &&
-          ["cancel", "releaseLock", "return"].includes(key as string),
-      );
-    const invoke = (originalReceiver: unknown, args: unknown[]) => {
-      if (cleanup(receiver, name)) {
-        const result = Reflect.apply(
-          value as (...args: unknown[]) => unknown,
-          receiver,
-          args,
-        );
-        if (name === "releaseLock") return undefined;
-        const cancellation = Promise.resolve(result);
-        void observeCleanup(cancellation);
-        return cancellation.then(() =>
-          name === "return" ? { done: true, value: undefined } : undefined
-        );
-      }
-      check();
-      const target = receiver ?? originalReceiver;
-      const fn = value as (...args: unknown[]) => unknown;
-      const run = () => Reflect.apply(fn, target, args);
-      // A writer's offset is already-held local state, not an asynchronous read
-      // or mutation. Preserve its synchronous contract at the wire boundary.
-      if (
-        name === "offset" && receiver &&
-        typeof Reflect.get(receiver, "append") === "function" &&
-        typeof Reflect.get(receiver, "abort") === "function"
-      ) {
-        const result = run();
+  // Bind only the declared interfaces. Data results are never recursively wrapped.
+  const method = (
+    target: object,
+    key: PropertyKey,
+    result: (value: unknown) => unknown = (value) => value,
+  ) => {
+    const fn = Reflect.get(target, key);
+    if (typeof fn !== "function") return undefined;
+    const bind =
+      (fn: ActionEffectClient["confirm"]) => (...args: unknown[]) => {
         check();
-        return result;
-      }
-      if (
-        [
-          "getReader",
-          "getWriter",
-          "releaseLock",
-          "tee",
-          "pipeThrough",
-          "values",
-          Symbol.asyncIterator,
-        ].includes(name as string | symbol)
-      ) {
-        const result = run();
+        // Sealed retention can mutate physical storage without an owner command.
+        // Check its current policy before invoking that mutation.
+        return call(() => Reflect.apply(fn, target, args), key === "retain")
+          .then(result);
+      };
+    return wrapEffectConfirmation(
+      fn as ActionEffectClient["confirm"],
+      (confirm) => bind(confirm) as ActionEffectClient["confirm"],
+    );
+  };
+  const methods = (
+    target: object | undefined,
+    keys: readonly PropertyKey[],
+    result?: (value: unknown) => unknown,
+  ) =>
+    Object.fromEntries(keys.flatMap((key) => {
+      const bound = target && method(target, key, result);
+      return bound ? [[key, bound]] : [];
+    }));
+  const named = (target: object | undefined) =>
+    methods(target, Object.keys(target ?? {}));
+  const writer = (value: unknown) => {
+    const source = value as import("../streams/types.ts").ContentStreamWriter;
+    const facade = Object.freeze({
+      id: source.id,
+      offset: () => {
         check();
-        return wrap(result);
-      }
-      return call(
-        run,
-        !(receiver && streamHandles.has(receiver) &&
-          (name === "cancel" || name === "return")),
-      ).then((result) => {
-        if (
-          typeof result === "function" || result === receiver ||
-          result === value
-        ) return wrap(result);
-        if (
-          result && typeof result === "object" &&
-          (result instanceof ReadableStream ||
-            ["append", "getReader", "read"].some((key) =>
-              typeof Reflect.get(result, key) === "function"
-            ))
-        ) return wrap(result);
-        return result;
-      });
-    };
-    // Never proxy a frozen capability itself: wrapping a nonconfigurable value
-    // violates Proxy invariants. This fresh facade has no immutable own slots.
-    const target = typeof value === "function"
-      ? (..._args: unknown[]) => {}
-      : Object.create(Object.getPrototypeOf(value));
-    const facade: object = new Proxy(target, {
-      get(_target, key) {
-        if (!cleanup(value, key)) check();
-        const property = Reflect.get(value, key, value);
-        if (typeof property !== "function") return wrap(property);
-        if (!methods.has(key)) methods.set(key, wrap(property, value, key));
-        return methods.get(key);
+        return source.offset();
       },
-      apply(_target, originalReceiver, args) {
-        return invoke(originalReceiver, args);
-      },
-      ownKeys() {
-        return Reflect.ownKeys(value);
-      },
-      getOwnPropertyDescriptor(_target, key): PropertyDescriptor | undefined {
-        const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
-        if (!descriptor) return;
-        if ("value" in descriptor) {
-          return {
-            ...descriptor,
-            configurable: true,
-            value: Reflect.get(facade, key),
-          };
-        }
-        return {
-          enumerable: descriptor.enumerable,
-          configurable: true,
-          get: () => Reflect.get(facade, key),
-        };
-      },
-      set() {
-        throw new TypeError("Action capability is read-only.");
-      },
-      defineProperty() {
-        throw new TypeError("Action capability is read-only.");
-      },
-      deleteProperty() {
-        throw new TypeError("Action capability is read-only.");
-      },
+      ...methods(source, [
+        "append",
+        "close",
+        "abort",
+        "retain",
+        Symbol.asyncDispose,
+      ]),
     });
-    inheritActionCaller(value, facade);
-    inheritContentStreamFailure(value, facade);
-    if (!receiver) cache.set(value, facade);
+    inheritContentStreamFailure(source, facade);
     return facade;
   };
-  const descriptors = Object.getOwnPropertyDescriptors(context);
-  for (
-    const key of [
-      "actions",
-      "collections",
-      "content",
-      "streams",
-      "vectors",
-      "operations",
-      "effect",
-      "transaction",
-      "readSnapshot",
-      "progress",
-    ]
-  ) {
-    if (descriptors[key] && "value" in descriptors[key]) {
-      descriptors[key] = {
-        ...descriptors[key],
-        value: wrap(descriptors[key].value),
+  const native = (value: unknown): ReadableStream => {
+    const source = value as ReadableStream;
+    if (nativeStreams.has(source)) return source;
+    const stream = pipingSource(source);
+    nativeStreams.add(stream);
+    readResourceOwners.set(stream, owner);
+    delivered.add(stream);
+    // Native consumers use the guarded source. Reader facades also protect bytes
+    // already buffered by BYOB, tee, or a transform before revocation.
+    const reader = (
+      value: ReadableStreamDefaultReader | ReadableStreamBYOBReader,
+    ) => ({
+      get closed() {
+        check();
+        return value.closed;
+      },
+      read: method(value, "read"),
+      cancel: (reason?: unknown) => observeCleanup(value.cancel(reason)),
+      releaseLock: () => value.releaseLock(),
+    });
+    Object.defineProperties(stream, {
+      getReader: {
+        value: (options?: ReadableStreamGetReaderOptions) => {
+          check();
+          return reader(
+            ReadableStream.prototype.getReader.call(stream, options),
+          );
+        },
+      },
+      tee: {
+        value: () => {
+          check();
+          return ReadableStream.prototype.tee.call(stream).map(native);
+        },
+      },
+      pipeThrough: {
+        value: (
+          transform: ReadableWritablePair,
+          options?: StreamPipeOptions,
+        ) => {
+          check();
+          return native(
+            ReadableStream.prototype.pipeThrough.call(
+              stream,
+              transform,
+              options,
+            ),
+          );
+        },
+      },
+      pipeTo: {
+        value: (destination: WritableStream, options?: StreamPipeOptions) => {
+          check();
+          const pending = ReadableStream.prototype.pipeTo.call(
+            stream,
+            destination,
+            options,
+          );
+          observeCleanup(pending);
+          return pending;
+        },
+      },
+      cancel: {
+        value: (reason?: unknown) =>
+          observeCleanup(ReadableStream.prototype.cancel.call(stream, reason)),
+      },
+    });
+    const values = (options?: ReadableStreamIteratorOptions) => {
+      check();
+      const iterator = ReadableStream.prototype.values.call(stream, options);
+      return {
+        next: method(iterator, "next"),
+        return: async (value?: unknown) => {
+          await observeCleanup(iterator.return!(value));
+          return { done: true, value: undefined };
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
       };
-    }
+    };
+    Object.defineProperty(stream, "values", { value: values });
+    Object.defineProperty(stream, Symbol.asyncIterator, { value: values });
+    return stream;
+  };
+  const actions = Object.fromEntries(
+    Object.entries(context.actions ?? {}).map(([name, action]) => {
+      const bound = Object.assign(
+        method(context.actions, name)!,
+        methods(action, ["prepare"]),
+      );
+      inheritActionCaller(action, bound);
+      return [name, bound];
+    }),
+  );
+  const collections = Object.fromEntries(
+    Object.entries(context.collections ?? {}).map((
+      [name, collection],
+    ) => [
+      name,
+      Object.freeze({
+        definition: collection.definition,
+        ...methods(collection, [
+          "get",
+          "list",
+          "aggregate",
+          "search",
+          "create",
+          "update",
+          "delete",
+        ]),
+        relations: methods(collection.relations, ["list"]),
+        commands: named(collection.commands),
+        queries: named(collection.queries),
+      }),
+    ]),
+  );
+  const bindings = {
+    actions,
+    collections,
+    content: {
+      ...methods(context.content, [
+        "authorize",
+        "capture",
+        "prepare",
+        "materialize",
+        "publish",
+        "get",
+        "getMany",
+        "resolve",
+        "resolveMany",
+      ]),
+      ...methods(context.content, ["open"], native),
+      ...methods(context.content, ["openCapture"], writer),
+    },
+    streams: {
+      ...methods(context.streams, ["open"], writer),
+      ...methods(context.streams, ["follow"], (value) => {
+        const follower =
+          value as import("../content/progressive.ts").ProgressiveBodyFollower;
+        return { ...follower, body: native(follower.body) };
+      }),
+    },
+    vectors: methods(context.vectors, ["search"]),
+    operations: methods(context.operations, ["start"]),
+    effect: methods(context.effect, [
+      "begin",
+      "inspect",
+      "confirm",
+      "notStarted",
+    ]),
+    ...methods(context, ["transaction", "readSnapshot", "progress"]),
+  };
+  const descriptors = Object.getOwnPropertyDescriptors(context);
+  for (const [key, value] of Object.entries(bindings)) {
+    if (descriptors[key]) descriptors[key] = { ...descriptors[key], value };
   }
   return Object.defineProperties({}, descriptors) as ActionContext;
 }

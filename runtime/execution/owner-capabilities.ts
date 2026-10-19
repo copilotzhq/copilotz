@@ -172,7 +172,6 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
         "begin",
         "inspect",
         "confirm",
-        "confirmOutput",
         "notStarted",
         "inventory",
       ].includes(
@@ -1161,9 +1160,7 @@ export function createOwnerCapabilityHost(
         if (path[0] === "effect") {
           validateOptions(
             args[
-              ["confirm", "confirmOutput", "notStarted"].includes(path[1])
-                ? 2
-                : 1
+              ["confirm", "notStarted"].includes(path[1]) ? 2 : 1
             ],
           );
         }

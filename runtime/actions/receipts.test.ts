@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/application.ts";
@@ -54,6 +54,16 @@ async function receiptScenarios(url: string) {
     id: "test.plain",
     execute: (input: { value: number }) => input.value,
   });
+  const openEffect = defineAction({
+    id: "test.open-effect",
+    async execute(
+      _input: unknown,
+      context: import("./types.ts").ActionContext,
+    ) {
+      await context.effect.begin("send");
+      return "unconfirmed";
+    },
+  });
   const withContent = defineAction({
     id: "test.with-content",
     content: { input: ["content"] },
@@ -66,7 +76,7 @@ async function receiptScenarios(url: string) {
     plugins: [definePlugin({
       version: "1.0.0",
       id: "test.receipts",
-      actions: { plain, withContent },
+      actions: { plain, withContent, openEffect },
       processors: {
         go: defineProcessor({
           id: "test.receipts.go",
@@ -118,6 +128,29 @@ async function receiptScenarios(url: string) {
         receiptReads().length,
         0,
         "a fresh run reads no receipts before claiming it",
+      );
+
+      assertEquals(
+        recorder.statements.filter(({ text }) =>
+          /SELECT step,status|effect\.scope/.test(text)
+        ).length,
+        0,
+        "a fresh successful Action performs no effect inventory or scope receipt query",
+      );
+      run = async () => {
+        const error = await assertRejects(async () =>
+          await captured.actions!.openEffect(null)
+        );
+        assertEquals((error as { code?: string }).code, "effect_indeterminate");
+      };
+      await send("open-effect");
+      const terminal = await db.query(
+        `SELECT body FROM ${tables.event_bodies} WHERE body->>'actionId'='test.open-effect' AND body->>'status'='completed'`,
+      );
+      assertEquals(
+        terminal.rows.length,
+        0,
+        "an unresolved own effect cannot publish success",
       );
 
       // Inline content records only execution history; it creates no domain records.

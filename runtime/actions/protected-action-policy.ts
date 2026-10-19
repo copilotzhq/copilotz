@@ -2,7 +2,6 @@
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import {
-  actionDefinitionHasSecrets,
   actionSchemaHasSecrets,
   protectedActionStrings,
   splitSecretActionValue,
@@ -46,29 +45,15 @@ export function validateProtectedActions(
     const action = Object.values(actions).find((action) => action.id === id);
     if (
       !action || !definition || typeof definition.authorize !== "function" ||
-      (definition.prepareInput !== undefined &&
-        typeof definition.prepareInput !== "function") ||
-      (definition.acceptOutput !== undefined &&
-        typeof definition.acceptOutput !== "function") ||
-      (!definition.prepareInput && !definition.acceptOutput)
+      typeof definition.prepareInput !== "function"
     ) {
       throw new TypeError(
         "Protected Actions require registered definitions, authorization and an owner phase.",
       );
     }
-    if (
-      definition.prepareInput && !actionSchemaHasSecrets(action.inputSchema)
-    ) {
+    if (!actionSchemaHasSecrets(action.inputSchema)) {
       throw new TypeError(
         "Protected input preparation requires declared secret slots.",
-      );
-    }
-    if (
-      definition.acceptOutput &&
-      (!actionDefinitionHasSecrets(action) || !action.outputSchema)
-    ) {
-      throw new TypeError(
-        "Protected output adoption requires declared output and a protected Action.",
       );
     }
     if (action.content) {
@@ -77,10 +62,7 @@ export function validateProtectedActions(
       );
     }
     const revisions = definition.publicRevisionFields ?? [];
-    if (
-      !Array.isArray(revisions) ||
-      (revisions.length && !definition.prepareInput)
-    ) {
+    if (!Array.isArray(revisions)) {
       throw new TypeError("Public revision fields require input preparation.");
     }
     const paths = revisions.map(revisionPath);
@@ -163,12 +145,12 @@ export function validateProtectedActions(
   });
   const registered = Object.fromEntries(entries);
   for (const action of Object.values(actions)) {
-    for (const phase of ["prepareInput", "acceptOutput"] as const) {
-      if (action.ownerHooks?.[phase] && !registered[action.id]?.[phase]) {
-        throw new TypeError(
-          "A required protected Action owner hook is missing.",
-        );
-      }
+    if (
+      action.ownerHooks?.prepareInput && !registered[action.id]?.prepareInput
+    ) {
+      throw new TypeError(
+        "A required protected Action owner hook is missing.",
+      );
     }
   }
   return Object.freeze(registered);

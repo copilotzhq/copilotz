@@ -520,19 +520,10 @@ After dispatch, `confirm(step, safeOutcome)` records a bounded, non-secret
 result or reference. `externalEffect(context, step, callback)` performs this
 pattern for JSON-result operations.
 
-If the provider result is the Action's complete declared protected output, use
-`await context.effect.confirmOutput(step, output)` before returning that same
-output. The owner validates the registered output schema, captures its secret
-fields using the normal protected-output storage boundary, and atomically
-confirms the effect. A replay from `begin` or `inspect` restores that complete
-output only to the same owner-authorized Action attempt. The worker supplies no
-storage reference, encryption key, namespace, owner identity or slot.
-
-The first accepted output is immutable. Repeating `confirmOutput` with the same
-output reuses its capture; other steps and terminal completion must use that
-same output. A different output is rejected. A lost confirmation reply must be
-recovered from the retained effect state, never by repeating the provider call.
-Plain `confirm` continues to reject protected outputs and owner-only references.
+Protected outputs are stored through the Action lifecycle. Effect confirmation
+accepts only bounded, non-secret results or references. A lost confirmation
+reply must be recovered from retained effect state, never by repeating the
+provider call.
 
 A committed `begin` whose reply was lost does not grant dispatch permission. An
 interrupted begun effect invokes the Action's optional
@@ -545,10 +536,10 @@ only when the owner can verify trusted no-start evidence. A subsequent dispatch
 requires a different step name. The built-in provider adapters do not invent
 such evidence.
 
-Recovery checks the complete bounded inventory, including unresolved descendants
-and steps removed by a newer deployment. Old attempts without the original
-replay contract cannot acquire it retroactively. Swallowing an effect error does
-not permit a successful Action terminal.
+Recovery checks each Action's retained effect steps, including steps removed by
+a newer deployment. Old attempts without the original replay contract cannot
+acquire it retroactively. Swallowing an effect error does not permit a
+successful Action terminal.
 
 Built-in channel delivery, command execution, file mutation, mutating HTTP and
 unknown MCP calls use this protocol. Read-only filesystem tools, HTTP
@@ -557,32 +548,28 @@ For MCP, declare host-reviewed tool names in `readOnlyTools`; provider
 annotations alone do not establish read-only safety. Do not classify a mutating
 operation as read-only merely because its provider supports idempotency.
 
-### Owner-local protected preparation and acceptance
+### Owner-local protected preparation
 
 For declared secret Actions, an embedded host or Gateway may register local
 `protectedActions` keyed by the stable Action ID. Declare required phases on the
-Action as `ownerHooks: { prepareInput: true, acceptOutput: true }`; startup
-refuses missing registrations or phases. Ordinary secret Actions need no hooks.
-Worker configuration refuses callbacks, and Workers have no hook RPC.
+Action as `ownerHooks: { prepareInput: true }`; startup refuses missing
+registrations or phases. Ordinary secret Actions need no hooks. Worker
+configuration refuses callbacks, and Workers have no hook RPC.
 
 Each registration supplies:
 
 - `authorize(input, context)`: required, read-only current-domain authorization
-  on preparation, replay, effect commands, acceptance and protected result
+  on preparation, replay, effect commands, completion and protected result
   recovery.
-- `prepareInput(input, context)`: optional first-capture preparation. Return the
+- `prepareInput(input, context)`: required first-capture preparation. Return the
   complete input. Only declared secret slots and explicit `publicRevisionFields`
   may change; all other public fields must remain identical.
-- `acceptOutput(output, context)`: optional, void local storage adoption. The
-  output and captured input are immutable. It runs once in the same transaction
-  as the first accepted output. `effect.confirmOutput` and ordinary completion
-  share this acceptance receipt, so later completion cannot repeat adoption.
-
-`publicRevisionFields` contains exact, non-overlapping JSON Pointers to explicit
-public string/number/null revision properties, such as `/credentialRevision`.
-Ownership and identity coordinates cannot be selected. Keep owner-filled fields
-optional in the admitted input schema; the completed prepared input is fully
-validated. Retries authorize again and reuse the exact first input capture.
+  `publicRevisionFields` contains exact, non-overlapping JSON Pointers to
+  explicit public string/number/null revision properties, such as
+  `/credentialRevision`. Ownership and identity coordinates cannot be selected.
+  Keep owner-filled fields optional in the admitted input schema; the completed
+  prepared input is fully validated. Retries authorize again and reuse the exact
+  first input capture.
 
 A sealed object may contain public coordinates alongside credentials. Mark each
 explicit public scalar property with `"x-copilotz-secret": false` for metadata
@@ -596,18 +583,16 @@ marker outside a secret aggregate is a no-op, allowing schema reuse. Undeclared
 leaves stay confidential, and a token remains protected even when its bytes
 equal a separately annotated public coordinate.
 
-The `ProtectedActionOwnerContext<Input, Output>` type is exported from
-`/actions`, `/application`, and the package root. It exposes only a revocable
-`query` handle, fixed `scope.databaseSchema` and `scope.namespace`, the current
+The `ProtectedActionOwnerContext<Input>` type is exported from `/actions`,
+`/application`, and the package root. It exposes only a revocable `query`
+handle, fixed `scope.databaseSchema` and `scope.namespace`, the current
 validated `action.id`, `action.runId` and optional `action.parentRunId`,
 immutable captured `input`, `commandTime`, and `signal`. `resolveSource()`
 resolves the retained original event/body and root-first operation ancestry,
-including protected source data. `readAcceptedOutput()` lazily reads only this
-Action/run's accepted declared output, or `undefined`; authorize baseline
-provenance before reading it. Neither method accepts a caller-selected event,
-record, schema, run or capture reference. All handles expire when the callback
-finishes, throws or is cancelled, including before a synchronous callback's
-queued microtask can use them.
+including protected source data. It accepts no caller-selected event, record,
+schema, run or capture reference. All handles expire when the callback finishes,
+throws or is cancelled, including before a synchronous callback's queued
+microtask can use them.
 
 Source `ingress` is owner-created evidence bound atomically to the exact
 retained event/body, never a metadata flag:
@@ -633,40 +618,15 @@ account selections and identifiers remain claims. Bootstrap policy must verify
 its own purpose-bound signed state or ticket before granting domain authority.
 
 Callbacks are local policy/storage phases, never external-network effect phases.
-Use the Action's effect protocol for provider work. Acceptance may conditionally
-adopt a candidate or leave a newer/disconnected/deleted record unchanged, but
-cannot transform the accepted output. A subsequent selection Action can return
-the current authorized winner. Unknown COMMIT outcomes require durable receipt
-recovery; they never imply rollback. Hook failures preserve only vetted
-standardized error codes and fixed public messages; arbitrary exception details
-are scrubbed. Secret values stay out of public Events, effect records and
-receipt payloads.
+Use the Action's effect protocol for provider work. Unknown COMMIT outcomes
+require durable receipt recovery; they never imply rollback. Hook failures
+preserve only vetted standardized error codes and fixed public messages;
+arbitrary exception details are scrubbed. Secret values stay out of public
+Events, effect records and receipt payloads.
 
 Transactional protected captures use durable database staging. For configured
 external storage, the existing logical-body promotion protocol uploads only
 after confirmed commit and retains the logical identity and database read
 fallback. Failed uploads remain tracked by the content catalog. A replay after
 an unknown commit can recover the staged value and resume promotion without
-repeating the owner preparation or domain adoption.
-
-### Registered Collection adoption
-
-An owner `acceptOutput` callback receives `ProtectedActionAdoptionContext`. Its
-`collections` map contains registered aliases with `create`, `update`, `delete`,
-and declared `commands`. Each method returns a `Promise<CollectionMutationRef>`
-and stages the normal Collection mutation in the same accepted-output command.
-The callback has no scope, operation-key, transaction, or commit selector.
-Authorization and input preparation contexts have no mutation helpers.
-
-Inputs are captured synchronously. Awaiting a method completes its planning; SQL
-queries in the callback do not read staged Collection changes. After the
-callback finishes, all admitted work is drained and the normal Collection
-policies, projection, event, and alarm updates execute before output acceptance.
-Failure rolls back the entire command. Publication waits for confirmed outer
-commit. Replaying an accepted output never repeats adoption.
-
-Handles close when the callback returns, fails, or is cancelled, including
-synchronously queued microtasks. Content fields accept only existing canonical
-references, checked by the normal namespace-bound Asset resolver. Capture or
-materialize new content before acceptance. Domain policy must separately verify
-that referenced content belongs to the authorized source and purpose.
+repeating the owner preparation.

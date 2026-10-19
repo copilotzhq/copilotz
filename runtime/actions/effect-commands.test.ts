@@ -1,4 +1,7 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { createActionEffectController } from "./effects.ts";
+import { externalEffect } from "./external-effect.ts";
+import type { ActionContext } from "./types.ts";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreTableNames,
@@ -9,7 +12,7 @@ import {
   createOwnerEffectClient,
   readActionEffectInventory,
 } from "./effect-commands.ts";
-import { EFFECT_STEP_LIMIT, effectKey } from "./effect-client.ts";
+import { effectKey } from "./effect-client.ts";
 
 for (
   const url of [
@@ -155,7 +158,7 @@ for (
       await db.close();
     }
   });
-  Deno.test(`${backend}: complete effect inventory enforces its bound without silent truncation`, async () => {
+  Deno.test(`${backend}: recovery inventory includes every own step without descendants or truncation`, async () => {
     const db = await createTestDatabase({ url });
     const schema = `effects_${crypto.randomUUID().replaceAll("-", "")}`;
     try {
@@ -166,26 +169,86 @@ for (
         namespace: "space",
         actionRunId: "run",
       });
-      for (let n = 0; n < EFFECT_STEP_LIMIT; n++) {
+      for (let n = 0; n < 101; n++) {
         await client.begin(`step:${n}`);
       }
-      assertEquals((await client.inventory()).length, EFFECT_STEP_LIMIT);
-      await assertRejects(() => client.begin("overflow"), Error, "step limit");
-      await db.query(
-        `INSERT INTO ${
-          createCoreTableNames(schema).action_effects
-        } (namespace,action_run_id,step,status) VALUES ('space','run','corrupt-extra','begun')`,
+      await createOwnerEffectClient({
+        session: db,
+        schema,
+        namespace: "space",
+        actionRunId: "child",
+      }).begin("child-step");
+      const inventory = await readActionEffectInventory(db, {
+        schema,
+        namespace: "space",
+        actionRunId: "run",
+      });
+      assertEquals(inventory.length, 101);
+      assertEquals(
+        inventory.some((entry) => entry.step === "child-step"),
+        false,
       );
-      await assertRejects(
-        () =>
-          readActionEffectInventory(db, {
-            schema,
-            namespace: "space",
-            actionRunId: "run",
-          }),
-        Error,
-        "exceeds its bound",
+      const scopes = await db.query(
+        `SELECT 1 FROM ${
+          createCoreTableNames(schema).owner_receipts
+        } WHERE kind='effect.scope'`,
       );
+      assertEquals(scopes.rows.length, 0);
+    } finally {
+      await db.close();
+    }
+  });
+  Deno.test(`${backend}: effect ingress captures once before a deferred tracker and rejects malformed outcomes`, async () => {
+    const db = await createTestDatabase({ url });
+    const schema = `effect_capture_${crypto.randomUUID().replaceAll("-", "")}`;
+    try {
+      await provisionCopilotzSchema(db, schema);
+      const client = createOwnerEffectClient({
+        session: db,
+        schema,
+        namespace: "space",
+        actionRunId: "run",
+      });
+      const signal = new AbortController().signal;
+      const effect = createActionEffectController({
+        client,
+        signal,
+        check() {},
+        context: () => ({}) as ActionContext,
+        track: (start) => Promise.resolve().then(start),
+      }).effect;
+      await effect.begin("capture");
+      const value = { reference: "first" };
+      const pending = effect.confirm("capture", value);
+      value.reference = "changed";
+      await pending;
+      assertEquals(await client.inspect("capture"), {
+        status: "replay",
+        outcome: { reference: "first" },
+      });
+      for (
+        const invalid of [NaN, {
+          get value() {
+            throw new Error("accessor invoked");
+          },
+        }, "x".repeat(1024 * 1024 + 1)]
+      ) {
+        assertThrows(() => client.confirm("invalid", invalid as never));
+      }
+      let dispatches = 0;
+      const dispatch = () => {
+        dispatches++;
+        return { reference: "provider" };
+      };
+      assertEquals(
+        await externalEffect({ effect, signal }, "helper", dispatch),
+        { reference: "provider" },
+      );
+      assertEquals(
+        await externalEffect({ effect, signal }, "helper", dispatch),
+        { reference: "provider" },
+      );
+      assertEquals(dispatches, 1);
     } finally {
       await db.close();
     }

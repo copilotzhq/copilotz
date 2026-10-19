@@ -12,10 +12,10 @@ Deno.test({
   async fn() {
     const database = await createTestDatabase({ url, pgPoolMax: 1 });
     const schema = `public_scalars_${crypto.randomUUID().replaceAll("-", "")}`;
-    let executed = 0, adopted = 0;
+    let executed = 0;
     const action = defineAction({
       id: "fixture.public-scalars",
-      ownerHooks: { prepareInput: true, acceptOutput: true },
+      ownerHooks: { prepareInput: true },
       inputSchema: {
         type: "object",
         properties: {
@@ -59,9 +59,6 @@ Deno.test({
               },
             };
           },
-          acceptOutput() {
-            adopted++;
-          },
         },
       },
     });
@@ -89,7 +86,6 @@ Deno.test({
         })
       );
       assertEquals(executed, 1);
-      assertEquals(adopted, 1);
       const rows = await database.query(
         `SELECT intent,result FROM "${schema}".owner_receipts`,
       );

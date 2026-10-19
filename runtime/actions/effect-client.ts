@@ -7,31 +7,12 @@ import type {
   ActionEffectState,
 } from "./types.ts";
 
-export const EFFECT_STEP_LIMIT = 100;
-/** Reserved owner-only outcome discriminator; never accepted from a caller. */
-export const PROTECTED_EFFECT_OUTPUT_SCHEMA =
-  "copilotz.action.effect-output.v1" as const;
-export function assertPlainEffectOutcome(value: ActionEffectOutcome): void {
-  if (!value || typeof value !== "object") return;
-  if (
-    !Array.isArray(value) &&
-    (value as Record<string, unknown>).schema === PROTECTED_EFFECT_OUTPUT_SCHEMA
-  ) {
-    fail(
-      "effect_outcome_invalid",
-      "An owner-only effect outcome cannot be supplied by a caller.",
-    );
-  }
-  for (const child of Object.values(value)) assertPlainEffectOutcome(child);
-}
 export type EffectReference = Readonly<{
   namespace: string;
   actionRunId: string;
   step: string;
 }>;
 export type EffectInventoryEntry = Readonly<{
-  /** Present only for an unresolved descendant, which cannot use this Action's reconciler. */
-  actionRunId?: string;
   step: string;
   status: "begun" | "confirmed" | "not_started";
 }>;
@@ -43,14 +24,10 @@ export type ActionEffectClient = Readonly<{
     step: string,
     options?: ActionEffectOptions,
   ): Promise<ActionEffectState>;
+  /** Capture caller-owned data synchronously, before asynchronous admission. */
   confirm(
     step: string,
     outcome: ActionEffectOutcome,
-    options?: ActionEffectOptions,
-  ): Promise<void>;
-  confirmOutput(
-    step: string,
-    output: ActionEffectOutcome,
     options?: ActionEffectOptions,
   ): Promise<void>;
   notStarted(
@@ -62,6 +39,32 @@ export type ActionEffectClient = Readonly<{
     options?: ActionEffectOptions,
   ): Promise<readonly EffectInventoryEntry[]>;
 }>;
+type Confirm = ActionEffectClient["confirm"];
+const capturedConfirmations = new WeakMap<Confirm, Confirm>();
+/** Private owned-value port. Public callers still synchronously capture their data. */
+export function bindCapturedConfirmation(captured: Confirm): Confirm {
+  const confirm: Confirm = (step, value, options) =>
+    captured(step, copy(value), options);
+  capturedConfirmations.set(confirm, captured);
+  return confirm;
+}
+/** Preserve admission/secret guards when binding the owned-value port. */
+export function wrapEffectConfirmation(
+  confirm: Confirm,
+  wrap: (confirm: Confirm) => Confirm,
+): Confirm {
+  const bound = wrap(confirm);
+  const captured = capturedConfirmations.get(confirm);
+  if (captured) capturedConfirmations.set(bound, wrap(captured));
+  return bound;
+}
+export function confirmCapturedEffect(
+  client: Pick<ActionEffectClient, "confirm">,
+  ...args: Parameters<Confirm>
+): Promise<void> {
+  const captured = capturedConfirmations.get(client.confirm);
+  return captured ? captured(...args) : client.confirm(...args);
+}
 export function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), {
     name: "ActionEffectError",
@@ -77,7 +80,7 @@ export function text(value: unknown): asserts value is string {
     );
   }
 }
-export function copy<T>(value: T): T {
+export function validateEffectData(value: unknown): void {
   assertJsonValue(value, {
     label: "Effect data",
     maxDepth: 64,
@@ -89,6 +92,9 @@ export function copy<T>(value: T): T {
   ) {
     fail("effect_data_invalid", "Effect data exceeds its byte limit.");
   }
+}
+export function copy<T>(value: T): T {
+  validateEffectData(value);
   return structuredClone(value);
 }
 export function evidence(value: ActionEffectEvidence): ActionEffectEvidence {

@@ -129,9 +129,6 @@ export {
 export { externalEffect } from "./external-effect.ts";
 
 export type {
-  ProtectedActionAdoptionContext,
-  ProtectedActionCollection,
-  ProtectedActionCollections,
   ProtectedActionDefinition,
   ProtectedActionDefinitions,
   ProtectedActionIngress,

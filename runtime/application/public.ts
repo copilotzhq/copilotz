@@ -27,9 +27,6 @@ export type {
 } from "../execution/index.ts";
 
 export type {
-  ProtectedActionAdoptionContext,
-  ProtectedActionCollection,
-  ProtectedActionCollections,
   ProtectedActionDefinition,
   ProtectedActionDefinitions,
   ProtectedActionIngress,

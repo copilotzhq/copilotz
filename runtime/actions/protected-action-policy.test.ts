@@ -81,7 +81,7 @@ Deno.test("protected registrations reject missing phases unknown Actions and ove
   assertThrows(
     () =>
       validateProtectedActions({
-        [action.id]: { authorize() {}, acceptOutput() {} },
+        [action.id]: { authorize() {} },
       }, { action }),
     TypeError,
   );

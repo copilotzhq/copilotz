@@ -29,7 +29,7 @@ import {
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 const action = defineAction({
   id: "fixture.owner-ingress",
-  ownerHooks: { prepareInput: true, acceptOutput: true },
+  ownerHooks: { prepareInput: true },
   inputSchema: {
     type: "object",
     properties: {
@@ -62,7 +62,7 @@ async function fixture(
     pgPoolMax: 1,
   });
   const schema = `ingress_${crypto.randomUUID().replaceAll("-", "")}`;
-  let allowed = true, adopted = 0;
+  let allowed = true;
   const sources: ProtectedActionSource[] = [];
   const app = await createCopilotzApplication({
     database,
@@ -182,14 +182,9 @@ async function fixture(
             (source.data as { actionAlias?: string }).actionAlias !==
               "protected"
           ) throw new Error("unsupported root");
-          const accepted = await context.readAcceptedOutput();
-          if (accepted !== undefined) assertEquals(accepted, { ok: true });
         },
         prepareInput(input) {
           return { ...input as object, credential: "bound-owner-secret" };
-        },
-        acceptOutput() {
-          adopted++;
         },
       },
     },
@@ -206,7 +201,6 @@ async function fixture(
     sources,
     client,
     handler,
-    adopted: () => adopted,
     revoke() {
       allowed = false;
     },
@@ -224,7 +218,6 @@ Deno.test("authenticated facade and custom invoke retain bound server identity; 
     assertEquals(await f.client.operations.result(receipt.operationId), {
       ok: true,
     });
-    assertEquals(f.adopted(), 1);
     const source = f.sources[0];
     assertEquals(source.ingress, {
       kind: "authenticated-server",
@@ -258,7 +251,6 @@ Deno.test("authenticated facade and custom invoke retain bound server identity; 
     );
     f.revoke();
     await assertRejects(() => f.client.operations.result(receipt.operationId));
-    assertEquals(f.adopted(), 2);
     const bodies = await f.database.query(
       `SELECT body FROM "${f.schema}".event_bodies`,
     );
@@ -284,7 +276,6 @@ Deno.test("ordinary unauthenticated HTTP and spoofed ingress fields never acquir
     await assertRejects(() => f.client.operations.result(receipt.operationId));
     assert(f.sources.length > 0);
     assert(f.sources.every((source) => source.ingress === undefined));
-    assertEquals(f.adopted(), 0);
   } finally {
     await f.app.close();
     await f.database.close();
@@ -392,7 +383,6 @@ Deno.test("bootstrap proof is an exact opted-in custom server route with explici
     }, { idempotencyKey: "generic" });
     await assertRejects(() => f.client.operations.result(receipt.operationId));
     assertEquals(f.sources.at(-1)?.ingress, undefined);
-    assertEquals(f.adopted(), 1);
   } finally {
     await f.app.close();
     await f.database.close();
@@ -412,7 +402,6 @@ Deno.test("worker-authored child metadata and collection events cannot mint or s
       "forge",
     );
     assertEquals(f.sources[0].ingress?.kind, "authenticated-server");
-    assertEquals(f.adopted(), 0);
     const handle = await f.app.sendProtected(
       {
         namespace: "space",
@@ -457,7 +446,7 @@ Deno.test("worker-authored child metadata and collection events cannot mint or s
   }
 });
 
-Deno.test("protected resumption keeps original authenticated ingress and adopts once", async () => {
+Deno.test("protected resumption keeps original authenticated ingress", async () => {
   const f = await fixture(true, "authenticated-server", false, true);
   try {
     const receipt = await f.client.actions.submit(action.id, {
@@ -470,7 +459,6 @@ Deno.test("protected resumption keeps original authenticated ingress and adopts 
       ),
       { ok: true },
     );
-    assertEquals(f.adopted(), 1);
     const sourceIds = new Set(f.sources.map((source) => source.event.id));
     assertEquals(sourceIds.size, 1);
     assert(
@@ -486,7 +474,6 @@ Deno.test("protected resumption keeps original authenticated ingress and adopts 
     assertEquals(await f.client.operations.result(receipt.operationId), {
       ok: true,
     });
-    assertEquals(f.adopted(), 1);
     const other = await f.client.actions.submit(action.id, {
       label: "unrelated",
     }, { idempotencyKey: "unrelated" });
@@ -603,7 +590,6 @@ Deno.test("first unclassified admission stays unclassified on a trusted retry; e
     );
     assert(f.sources.length > 0);
     assert(f.sources.every((source) => source.ingress === undefined));
-    assertEquals(f.adopted(), 0);
     const proofs = await f.database.query(
       `SELECT key FROM "${f.schema}".owner_receipts WHERE kind='owner.ingress'`,
     );

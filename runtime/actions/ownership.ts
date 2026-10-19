@@ -1,3 +1,4 @@
+import { fail } from "./effect-client.ts";
 import type { CoreTableName } from "../events/schema.ts";
 import type { EventStatement } from "../events/store.ts";
 import type { ActionLifecycleAppendInput } from "./types.ts";
@@ -27,15 +28,35 @@ export function actionOwnershipStatement(
   if (data.status === "awaiting" && writer?.kind !== "delivery") {
     throw new TypeError("Awaiting Actions require a durable delivery owner.");
   }
+  const effectsSettled =
+    data.status === "completed" || data.status === "awaiting"
+      ? `NOT EXISTS (SELECT 1 FROM ${tables.action_effects} WHERE namespace=${
+        param(draft.namespace)
+      } AND action_run_id=${param(data.actionRunId)} AND status='begun')`
+      : "TRUE";
+  const checkEffects = (value: { effectsSettled?: boolean }) => {
+    if (value.effectsSettled === false) {
+      fail(
+        "effect_indeterminate",
+        "An external effect has no confirmed outcome.",
+      );
+    }
+  };
   // Live/direct calls have no durable lease to recover after a crash. Their
   // receipts remain observable, but only delivery-owned work is an obligation.
   if (!writer) {
     return {
       ctes: [],
-      gate: "TRUE",
+      gate: effectsSettled,
       effects: () => [],
-      report: "NULL",
-      resolve() {},
+      report: `jsonb_build_object('effectsSettled', ${effectsSettled})`,
+      resolve(report, inserted) {
+        if (!inserted) {
+          checkEffects(
+            typeof report === "string" ? JSON.parse(report) : report,
+          );
+        }
+      },
     };
   }
   const namespace = param(draft.namespace);
@@ -85,7 +106,7 @@ export function actionOwnershipStatement(
     }) AND ${owner})`;
   const gate = `${
     writer && !cancellation ? "EXISTS (SELECT 1 FROM action_writer) AND " : ""
-  }${stateGate}`;
+  }${stateGate} AND ${effectsSettled}`;
   const terminal = ["completed", "failed", "cancelled"].includes(data.status);
   return {
     ctes,
@@ -109,7 +130,13 @@ export function actionOwnershipStatement(
         : data.status === "awaiting"
         ? [`awaiting_action AS (
           UPDATE ${tables.open_actions} AS action
-          SET state = 'awaiting', owner_delivery_id = NULL, await_event_id = ${source}.id
+          SET state = 'awaiting', owner_delivery_id = NULL, await_event_id = ${source}.id,
+            child_operation_id = ${
+          param(
+            data.operationId ?? data.start?.operationId ??
+              `${data.actionRunId}:child`,
+          )
+        }
           FROM ${source}
           WHERE action.namespace = ${namespace} AND action.action_run_id = ${runId}
         )`]
@@ -119,10 +146,12 @@ export function actionOwnershipStatement(
           WHERE action.namespace = ${namespace} AND action.action_run_id = ${runId}
         )`]
         : [],
-    report: `jsonb_build_object('owned', ${gate})`,
+    report:
+      `jsonb_build_object('owned', ${gate}, 'effectsSettled', ${effectsSettled})`,
     resolve(report, inserted) {
       if (inserted) return;
       const value = typeof report === "string" ? JSON.parse(report) : report;
+      checkEffects(value);
       if (!(value as { owned?: boolean } | undefined)?.owned) {
         throw new ActionOwnershipLost(data.actionRunId);
       }

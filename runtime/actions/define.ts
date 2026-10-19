@@ -65,7 +65,7 @@ export function isActionDefinition(
     value.ownerHooks !== undefined &&
     (!isRecord(value.ownerHooks) || !Object.keys(value.ownerHooks).length ||
       Object.entries(value.ownerHooks).some(([key, value]) =>
-        !["prepareInput", "acceptOutput"].includes(key) || value !== true
+        key !== "prepareInput" || value !== true
       ))
   ) return false;
   try {
@@ -195,7 +195,7 @@ export function defineAction<
     ownerHooks !== undefined &&
     (!isRecord(ownerHooks) || !Object.keys(ownerHooks).length ||
       Object.entries(ownerHooks).some(([key, value]) =>
-        !["prepareInput", "acceptOutput"].includes(key) || value !== true
+        key !== "prepareInput" || value !== true
       ))
   ) {
     throw new TypeError(

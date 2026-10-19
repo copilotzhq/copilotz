@@ -21,7 +21,6 @@ import {
   resolveProtectedActionSource,
 } from "./protected-action-source.ts";
 
-const postgres = Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL");
 const namespace = "scope";
 const ingress = {
   kind: "authenticated-server",
@@ -118,8 +117,7 @@ async function fixture() {
 
 Deno.test({
   name:
-    "PostgreSQL detached owner indexes preserve original ingress across two levels and replay",
-  ignore: !postgres,
+    "retained detached owner indexes preserve original ingress across two levels and replay",
   async fn() {
     const f = await fixture();
     try {
@@ -185,7 +183,6 @@ Deno.test({
 
 Deno.test({
   name: "PostgreSQL parent-only source ancestry and replay remain unchanged",
-  ignore: !postgres,
   async fn() {
     const f = await fixture();
     try {
@@ -221,8 +218,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL detached ancestry never promotes spoofed payload, metadata or causation to ingress",
-  ignore: !postgres,
+    "retained detached ancestry never promotes spoofed payload, metadata or causation to ingress",
   async fn() {
     const f = await fixture();
     try {
@@ -267,8 +263,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL detached replay refuses unrelated operations and original or current event substitution",
-  ignore: !postgres,
+    "retained detached replay refuses unrelated operations and original or current event substitution",
   async fn() {
     const f = await fixture();
     try {
@@ -328,8 +323,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL detached source and replay fail closed on missing, mismatched, cross-namespace or cyclic ancestry",
-  ignore: !postgres,
+    "retained detached source and replay fail closed on missing, mismatched, cross-namespace or cyclic ancestry",
   async fn(t) {
     const f = await fixture();
     try {
@@ -444,8 +438,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL detached source and replay retain the 64-operation depth bound",
-  ignore: !postgres,
+    "retained detached source and replay retain the 64-operation depth bound",
   async fn() {
     const f = await fixture();
     try {

@@ -51,7 +51,7 @@ function publicContract(context: ProtectedActionOwnerContext) {
     protectedActions: {
       fixture: {
         authorize(_input, owner) {
-          void owner.readAcceptedOutput();
+          void owner.resolveSource();
         },
         prepareInput(input) {
           return input;
@@ -61,8 +61,6 @@ function publicContract(context: ProtectedActionOwnerContext) {
   });
   // @ts-expect-error No caller-selected source reference.
   void context.resolveSource("event-id");
-  // @ts-expect-error No caller-selected output reference.
-  void context.readAcceptedOutput("other-run");
   // @ts-expect-error No session authority.
   void context.session;
   // @ts-expect-error No transaction authority.

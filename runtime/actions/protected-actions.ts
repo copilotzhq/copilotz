@@ -1,12 +1,6 @@
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
-import {
-  protectedActionCollectionFacade,
-  type ProtectedActionCollectionRuntime,
-  withProtectedActionCollections,
-} from "./protected-action-collections.ts";
-import type { CollectionTransactionCollections } from "../collections/kernel.ts";
 import { standardActionError } from "./errors.ts";
 import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
 import {
@@ -14,10 +8,7 @@ import {
   markOwnerAuthorizationRefusal,
   withOwnerPolicyRefusal,
 } from "../engine/authorization-refusal.ts";
-import {
-  openCapturedActionOutput,
-  readCapturedActionOutput,
-} from "./protected-effect-output.ts";
+
 /** Owner-local Action policy and first input capture on the existing owner queue. */
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import {
@@ -73,7 +64,6 @@ export function createProtectedActions(
     signal: AbortSignal;
     protectedValues?: ProtectedValueRuntime;
     lifecycleMetadata?: Readonly<Record<string, unknown>>;
-    collections?: ProtectedActionCollectionRuntime;
   }>,
 ) {
   const { store, namespace } = options;
@@ -159,7 +149,6 @@ export function createProtectedActions(
     input: unknown,
     source: ProtectedActionSourceBinding,
     run: (context: ProtectedActionOwnerContext) => T | Promise<T>,
-    adoption?: CollectionTransactionCollections,
   ) => {
     const signal = AbortSignal.any([
       options.signal,
@@ -211,18 +200,6 @@ export function createProtectedActions(
           );
         };
         return withProtectedEventResolver({
-          ...(adoption
-            ? {
-              collections: options.collections
-                ? protectedActionCollectionFacade(
-                  options.collections.definitions,
-                  adoption,
-                  assertActive,
-                  track,
-                )
-                : Object.freeze({}),
-            }
-            : {}),
           query: watchedQuery,
           scope: Object.freeze({ databaseSchema, namespace }),
           action: Object.freeze({
@@ -234,42 +211,6 @@ export function createProtectedActions(
           }),
           input: captureHostCommandJson(input),
           resolveSource,
-          readAcceptedOutput() {
-            try {
-              assertActive();
-            } catch (error) {
-              return Promise.reject(error);
-            }
-            return track((async () => {
-              if (!options.protectedValues) return undefined;
-              const action = actionDefinitionById(
-                options.actions,
-                frame.actionId,
-              );
-              const binding = {
-                databaseSchema,
-                namespace,
-                actionRunId: frame.actionRunId,
-                action,
-                protectedValues: options.protectedValues,
-                ...(definition(frame.actionId)?.acceptOutput
-                  ? { accept: async () => {} }
-                  : {}),
-              };
-              const accepted = await readCapturedActionOutput(
-                transaction,
-                binding,
-              );
-              if (!accepted) return undefined;
-              const output = await openCapturedActionOutput(
-                binding,
-                accepted,
-                transaction,
-              );
-              assertActive();
-              return captureHostCommandJson(output);
-            })());
-          },
         }, async () => (await resolveSource()).data);
       },
     ).catch((caught) => {
@@ -500,73 +441,6 @@ export function createProtectedActions(
           value.source,
         );
       },
-      accept: hook.acceptOutput
-        ? async (value: unknown, tx: SqlExecutor) => {
-          await authority(schemaCommandContext(tx, databaseSchema), frame);
-          const capturedInput = await captured(tx);
-          if (hook.acceptOutput) {
-            const accept = (collections: CollectionTransactionCollections) =>
-              phase(
-                schemaCommandContext(tx, databaseSchema),
-                frame,
-                capturedInput.input,
-                capturedInput.source,
-                (context) => {
-                  const result = hook.acceptOutput!(
-                    captureHostCommandJson(value),
-                    context as import("./protected-action-types.ts").ProtectedActionAdoptionContext,
-                  );
-                  const validateVoid = (value: unknown) => {
-                    if (value !== undefined) {
-                      throw new TypeError(
-                        "Protected output acceptance must return void.",
-                      );
-                    }
-                  };
-                  return result instanceof Promise
-                    ? result.then(validateVoid)
-                    : validateVoid(result);
-                },
-                collections,
-              );
-            const command = schemaCommandContext(tx, databaseSchema);
-            if (options.collections) {
-              await withProtectedActionCollections(
-                options.collections,
-                command,
-                {
-                  scope: { databaseSchema, namespace },
-                  source: capturedInput.source,
-                  action: {
-                    id: frame.actionId,
-                    runId: frame.actionRunId,
-                    ...(frame.parentActionRunId
-                      ? { parentRunId: frame.parentActionRunId }
-                      : {}),
-                  },
-                  signal: AbortSignal.any([
-                    options.signal,
-                    frame.signal,
-                    command.signal,
-                  ]),
-                  resolveSource: (transaction) =>
-                    resolveProtectedActionSource({
-                      transaction,
-                      databaseSchema,
-                      namespace,
-                      source: capturedInput.source,
-                      protectedValues: options.protectedValues,
-                    }),
-                },
-                accept,
-              );
-            } else {
-              await accept({});
-            }
-          }
-          await authority(schemaCommandContext(tx, databaseSchema), frame);
-        }
-        : undefined,
     };
   };
   return { prepareInput, output };

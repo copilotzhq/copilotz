@@ -1,3 +1,4 @@
+import { isOwnerExecutionInterrupted } from "./owner-interruption.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createOwnerCapabilityHost } from "./owner-capabilities.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
@@ -20,6 +21,7 @@ async function setup(
   afterRegistration?: (options: Record<string, unknown>) => void,
 ) {
   let epoch = 1;
+  const failure = Promise.withResolvers<unknown>();
   let held: Promise<unknown> | undefined;
   let authorityGate: (() => Promise<void>) | undefined;
   const abort = new AbortController();
@@ -66,8 +68,13 @@ async function setup(
       >[0],
     ) => ({
       test: async () => {
-        await registry.actions.run.execute({} as never, context as never);
-        return {};
+        try {
+          await registry.actions.run.execute({} as never, context as never);
+          return {};
+        } catch (error) {
+          failure.resolve(error);
+          throw error;
+        }
       },
     }),
   };
@@ -117,6 +124,7 @@ async function setup(
   const id = poll.invocation!.context;
   return {
     host,
+    failure: failure.promise,
     hostOptions,
     call,
     binding,
@@ -899,6 +907,121 @@ Deno.test("owner capability registration captures authority callbacks synchronou
       );
     }
     assertEquals(getters, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("trusted disconnect classification does not replace a prior explicit invocation cancellation", async () => {
+  const f = await setup();
+  try {
+    const reason = new DOMException("explicit user cancellation", "AbortError");
+    f.abortContext(reason);
+    await f.host.lifecycle!.onDisconnect!({ fence: f.binding.fence } as never);
+    assertEquals(await f.failure, reason);
+    assertEquals(isOwnerExecutionInterrupted(await f.failure), false);
+  } finally {
+    await f.close();
+  }
+});
+Deno.test("trusted disconnect classification cannot replace a received worker business error", async () => {
+  const f = await setup();
+  try {
+    await f.call({
+      kind: "complete",
+      id: f.id,
+      error: Object.assign(new Error("business failure"), {
+        code: "connection_lost",
+      }),
+    });
+    await f.host.lifecycle!.onDisconnect!({ fence: f.binding.fence } as never);
+    assertEquals(isOwnerExecutionInterrupted(await f.failure), false);
+    assertEquals((await f.failure as Error).message, "business failure");
+  } finally {
+    await f.close();
+  }
+});
+Deno.test("old completion cannot retire a replacement of the same operation or settle its Action", async () => {
+  const f = await setup();
+  const replacement = {
+    ...f.binding,
+    fence: {
+      ...f.binding.fence,
+      connectionId: "new-connection",
+      sessionGeneration: 2,
+    },
+    parent: { ...f.binding.parent!, streamId: "new-stream" },
+  };
+  try {
+    await f.call({ kind: "open", value: new Uint8Array() }, replacement);
+    const next = await f.call({ kind: "next" }, replacement) as CapabilityPoll;
+    await f.host.lifecycle!.onDisconnect!({ fence: f.binding.fence } as never);
+    await f.host.lifecycle!.onComplete!(
+      {
+        operationId: f.binding.parent!.operationId,
+        fence: f.binding.fence,
+      } as never,
+    );
+    assertEquals(f.host.snapshot().assignments, 1);
+    await assertRejects(
+      () => f.call({ kind: "complete", id: f.id, value: "late old success" }),
+      Error,
+      "owner_assignment_unknown",
+    );
+    assertEquals(
+      await f.call({
+        kind: "call",
+        context: next.invocation!.context,
+        path: ["collections", "notes", "list"],
+      }, replacement),
+      [{ id: "visible" }],
+    );
+    f.setEpoch(2);
+    await assertRejects(
+      () =>
+        f.call({
+          kind: "complete",
+          id: next.invocation!.context,
+          value: "retired epoch success",
+        }, replacement),
+      Error,
+      "retired owner epoch",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("late completion is fenced by stream even when operation and connection are unchanged", async () => {
+  const f = await setup();
+  const replacement = {
+    ...f.binding,
+    parent: { ...f.binding.parent!, streamId: "replacement-same-session" },
+  };
+  try {
+    await f.call({ kind: "open", value: new Uint8Array() }, replacement);
+    const next = await f.call({ kind: "next" }, replacement) as CapabilityPoll;
+    const old = {
+      operationId: f.binding.parent!.operationId,
+      streamId: f.binding.parent!.streamId,
+      fence: f.binding.fence,
+    };
+    await f.host.lifecycle!.onComplete!(old as never);
+    await f.host.lifecycle!.onComplete!(old as never);
+    assertEquals(f.host.snapshot().assignments, 1);
+    assertEquals(
+      await f.call({
+        kind: "call",
+        context: next.invocation!.context,
+        path: ["collections", "notes", "list"],
+      }, replacement),
+      [{ id: "visible" }],
+    );
+    await assertRejects(
+      () => f.call({ kind: "complete", id: f.id, value: "late success" }),
+      Error,
+      "owner_assignment_unknown",
+    );
   } finally {
     await f.close();
   }

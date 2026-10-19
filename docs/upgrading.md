@@ -8,18 +8,72 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Schema owner upgrade: v9
+## Current owner schema: v10
 
-Each physical database schema now has one fenced owner shared by its namespaces.
-Fresh provisioning installs v9. Existing v8 schemas gain owner epochs, receipts,
-alarms, body retirement claims, and event sequence records without rewriting
-immutable events or open Action obligations. Call `upgradeActionLifecycle` or
-`provisionCopilotzSchema` before starting the new runtime. The owner acquires
-its epoch before accepting storage commands.
+Each physical database schema has one fenced owner shared by its namespaces.
+Fresh, absent-only provisioning installs schema **v10** and the operation
+catalog fingerprint **`stream-taxonomy-content-v1`**. Startup validates the
+complete current shape; it does not upgrade an existing or partially provisioned
+schema. `provisionCopilotzSchema` is not a retained-data migration command.
 
-The v5, v6 and v7 lifecycle upgrades below first replace drained obligations
-with the v8 continuation layout, then install the v9 owner tables in the same
-atomic upgrade. Their drain refusal still applies.
+Existing supported v5–v9 schemas use the single explicit offline retained-data
+conversion. Rehearse on a disposable restored backup first, then stop admission,
+schedules, workers and every other writer. Do not run old and new runtimes
+against the same schema during conversion.
+
+1. Run `inspectRetainedDataDrain(session, schema)` from
+   `@copilotz/copilotz/actions`. Deliveries, obligations, operations, streams,
+   begun effects and physical writers must have confirmed terminal states;
+   requesting cancellation alone is insufficient. The application must also
+   account for its own external-work journals.
+2. Call `prepareRetainedDataUpgrade(session, schema)`. Preparation commits the
+   physical/catalog conversion and records a unique source/target identity with
+   reserved schema version `0`. Both runtime generations refuse that marker.
+   Keep the returned plan privately with the backup; repeat preparation after
+   interruption to recover the same identity and physical versions.
+3. Review the exact plan fingerprint, content copies and ownership decisions.
+   Use explicit storage backend mappings for external stores. Missing bytes,
+   ambiguous ownership or mixed inventory fail closed.
+4. Finalize with
+   `upgradeActionLifecycle(session, schema, { plan,
+   reviewedFingerprint: plan.fingerprint, contentDecisions })`.
+   The owner revalidates physical evidence and exact intent, installs the
+   complete v10 shape, removes execution retention pins, migrates logical
+   content, backfills sequence and restores immutable-history protection in one
+   transaction. Only successful final validation publishes the ready marker.
+
+A lost commit reply is an unknown outcome. Inspect durable state or retry the
+same reviewed plan and decisions; never infer rollback or change the marker by
+hand. Finalization persists both accepted commitments, so changed-intent retries
+are rejected even after completion. Historical sequence preserves canonical
+position order and existing cursors; it does not reconstruct concurrent commit
+chronology that was never recorded. New owner writes follow commit order.
+
+The repository's [offline guide](../scripts/upgrade-retained-data.md) documents
+the `drain`, `prepare` and `apply` CLI, backend selection, failure recovery and
+retained-data rehearsal. None of these steps runs automatically in production.
+
+### Receipt authority limitations
+
+Historical logical Collection receipts bound only to a physical `worker:`
+principal do not prove the original Action/Processor authority. The current
+conversion refuses them without advancing readiness. It cannot guess from
+receipt keys, accept an operator override, or grant a replacement worker access.
+Keep such data offline until a separately reviewed conversion can establish its
+original durable invocation binding. Fixed-principal receipts and supported
+pre-conversion histories without owner receipts remain eligible.
+
+Earlier unpublished v10 schemas missing the required receipt-reader column are
+also refused by current validation. Do not relabel them or add a runtime
+compatibility path. See the offline guide for the exact supported inventory.
+
+## Historical migration notes
+
+The following sections describe earlier releases and their original migration
+procedures. They are retained as historical context, not instructions to chain
+those procedures into the current conversion. Use the v10 procedure above for
+this runtime; its single offline path incorporates the supported catalog,
+content, continuation and owner changes.
 
 ## Stream taxonomy upgrade
 
@@ -72,8 +126,8 @@ receipts remain readable event history; the new runtime does not execute old
 deferred workflows.
 
 The release notes below describe earlier schema versions and their migrations.
-Use the continuation procedure and v9 owner upgrade above for the current
-runtime.
+Use the current v10 retained-data procedure above, rather than these historical
+one-step migration examples.
 
 ## 0.88.0: durable compaction waits
 
@@ -388,11 +442,11 @@ separate procedure, described in
 
 ### Upgrade layers
 
-| Layer              | Current state                      | How it is applied                                                    |
-| ------------------ | ---------------------------------- | -------------------------------------------------------------------- |
-| Event schema       | v8, operation continuations        | Provision fresh; explicitly upgrade drained v5/v6/v7 schemas offline |
-| Operation catalog  | `stream-taxonomy-continuations-v1` | Provision fresh; upgrade the supported legacy catalog offline        |
-| Core history index | Optional since 0.85.1              | `provisionCoreHistoryIndexes`, once per physical Core schema         |
+| Layer              | Current state                        | How it is applied                                                                                          |
+| ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Event/owner schema | v10, complete converted owner layout | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
+| Operation catalog  | `stream-taxonomy-content-v1`         | Installed by fresh provisioning or the same retained-data conversion                                       |
+| Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

@@ -1,3 +1,4 @@
+import { isOwnerExecutionInterrupted } from "../execution/owner-interruption.ts";
 import { bindActionInvocationParent } from "./invocation-parent.ts";
 import {
   closeCollectionPolicyInvocation,
@@ -934,6 +935,10 @@ function actionCaller(
         await authorize?.(frame, "result");
         return restoreTerminal(existingTerminal);
       }
+      // Physical placement loss is not an Action business terminal. A later
+      // owner-authorized attempt must reconcile the durable effect inventory
+      // before user code can run again. Accepted terminals above still win.
+      if (isOwnerExecutionInterrupted(caught)) throw caught;
       const status = frame.signal?.aborted || isCancellationError(error)
         ? "cancelled" as const
         : "failed" as const;

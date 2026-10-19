@@ -1,3 +1,4 @@
+import { ownerExecutionInterrupted } from "../execution/owner-interruption.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { isNonRetryableError } from "../failure.ts";
 import { ActionError } from "./errors.ts";
@@ -1119,4 +1120,110 @@ Deno.test("unawaited native acquisition reserves its physical tail before Action
     cleanup.resolve();
   }
   assertEquals(await invocation, "complete");
+});
+
+Deno.test("owner physical interruption preserves the invocation for a reconciled retry", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let calls = 0;
+  const action = defineAction({
+    id: "test.interrupted",
+    execute() {
+      if (++calls === 1) throw ownerExecutionInterrupted();
+      return { done: true };
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "physical-interruption",
+    createContext: invocationContext,
+  });
+  await assertRejects(() => callers.action({}));
+  assertEquals(emitted.map((x) => x.status), ["invoked"]);
+  assertEquals(await callers.action({}), { done: true });
+  assertEquals(calls, 2);
+  assertEquals(emitted.map((x) => x.status), ["invoked", "completed"]);
+});
+Deno.test("accepted Action terminal wins over a later physical interruption", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const action = defineAction({
+    id: "test.accepted",
+    async execute() {
+      const invoked = emitted.find((x) => x.status === "invoked")!;
+      await lifecycle.emit({
+        ...invoked,
+        status: "completed",
+        output: { accepted: true },
+      });
+      throw ownerExecutionInterrupted();
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "accepted-before-disconnect",
+    createContext: invocationContext,
+  });
+  assertEquals(await callers.action({}), { accepted: true });
+  assertEquals(emitted.map((x) => x.status), ["invoked", "completed"]);
+});
+Deno.test("worker-shaped disconnect errors cannot mint owner interruption authority", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let calls = 0;
+  const action = defineAction({
+    id: "test.forged-disconnect",
+    execute() {
+      calls++;
+      throw Object.assign(new Error("The worker placement was interrupted."), {
+        code: "connection_lost",
+      });
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "forged-disconnect",
+    createContext: invocationContext,
+  });
+  await assertRejects(() => callers.action({}));
+  await assertRejects(() => callers.action({}));
+  assertEquals(calls, 1);
+  assertEquals(emitted.map((x) => x.status), ["invoked", "failed"]);
+});
+
+Deno.test("durable cancellation accepted after disconnect wins while the old failure is still held", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const signal = new AbortController();
+  const interruption = ownerExecutionInterrupted();
+  const action = defineAction({
+    id: "test.cancel-after-disconnect",
+    async execute() {
+      entered.resolve();
+      await release.promise;
+      throw interruption;
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: signal.signal,
+    createInvocationKey: () => "cancel-after-disconnect",
+    createContext: invocationContext,
+  });
+  const result = callers.action({});
+  void result.catch(() => undefined);
+  await entered.promise;
+  signal.abort(interruption);
+  const invoked = emitted.find((item) => item.status === "invoked")!;
+  // The real cancellation writer records this terminal and closes the open
+  // obligation in the same transaction that removes delivery retry eligibility.
+  await lifecycle.emit({
+    ...invoked,
+    status: "cancelled",
+    error: { name: "AbortError", message: "Explicit operation cancellation." },
+  });
+  release.resolve();
+  await assertRejects(() => result, Error, "Explicit operation cancellation");
+  assertEquals(emitted.map((item) => item.status), ["invoked", "cancelled"]);
 });

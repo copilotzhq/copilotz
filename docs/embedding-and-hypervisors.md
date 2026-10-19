@@ -303,6 +303,29 @@ recorded, and deliveries that are pending, retryable or under an expired lease
 are picked up by a Worker later. Report a Worker host ready only after
 `worker.ready` resolves.
 
+### Interrupted placement and logical replay
+
+A trusted worker-connection loss does not create a failed or cancelled Action
+receipt. The owner retires that exact connection/session/stream assignment and
+waits for its admitted calls and resource cleanup. A replacement must obtain
+fresh owner authority; a late completion from the retired assignment cannot
+settle its successor.
+
+- Before execution admission, no Action or effect has started.
+- After a database commit whose reply was lost, the same logical Action or
+  Processor command can recover its exact receipt after current authorization; a
+  new worker placement does not change the logical mutation identity.
+- After an external effect has begun without confirmation, the replacement
+  checks the durable effect inventory before user code runs. It requires the
+  declared reconciliation protocol or reports an indeterminate outcome; it never
+  blindly redispatches the external effect.
+- An already accepted terminal Action receipt remains authoritative even if its
+  response was lost. Explicit caller cancellation and accepted worker business
+  failures retain their semantic outcomes.
+
+Only the owner transport lifecycle classifies physical interruption. A worker
+error message or a `connection_lost` error code cannot request replay authority.
+
 ## Reference
 
 - **Capacity** is configured per Worker with `capacity` (default 8). Add

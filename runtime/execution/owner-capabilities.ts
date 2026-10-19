@@ -1,3 +1,4 @@
+import { ownerExecutionInterrupted } from "./owner-interruption.ts";
 import { collectionReceiptInvocation } from "../collections/policy-invocation.ts";
 import { withCollectionReadBudget } from "../collections/read-budget.ts";
 import {
@@ -62,6 +63,8 @@ type ResourceReservation = {
 
 type Invocation = {
   sealed: boolean;
+  logicalAbort: boolean;
+  semanticFailure: boolean;
   calls: Set<Promise<void>>;
   context: ProcessorContext | ActionContext;
   receiptPrincipal?: string;
@@ -80,6 +83,8 @@ type Assignment = {
   calls: number;
   terminal?: { result?: WorkerWorkResult; error?: unknown };
   snapshotAuthority?: Promise<() => Promise<void>>;
+  interruption?: Error;
+  semanticRetirement?: boolean;
 };
 
 function own(value: unknown, key: string): unknown {
@@ -328,6 +333,8 @@ export function createOwnerCapabilityHost(
     const result = Promise.withResolvers<unknown>();
     void result.promise.catch(() => undefined);
     const abort = () => {
+      // A caller cancellation predating placement revocation stays semantic.
+      if (!assignment.abort.signal.aborted) invocationState.logicalAbort = true;
       invocationState.sealed = true;
       result.reject(context.signal.reason);
       for (const resource of assignment.resources.values()) {
@@ -356,6 +363,8 @@ export function createOwnerCapabilityHost(
     const invocationState: Invocation = {
       receiptPrincipal,
       sealed: false,
+      logicalAbort: false,
+      semanticFailure: false,
       calls: new Set(),
       context,
       result,
@@ -379,6 +388,14 @@ export function createOwnerCapabilityHost(
       await check(assignment);
       context.signal.throwIfAborted();
       return value;
+    } catch (error) {
+      // Only the trusted transport lifecycle can classify a physical loss.
+      // Wire codes and worker-thrown AbortErrors never grant logical replay.
+      if (
+        assignment.interruption && !invocationState.logicalAbort &&
+        !invocationState.semanticFailure
+      ) throw assignment.interruption;
+      throw error;
     } finally {
       context.signal.removeEventListener("abort", abort);
       invocationState.sealed = true;
@@ -837,6 +854,7 @@ export function createOwnerCapabilityHost(
         if (invocation.sealed) throw capabilityError("owner_context_closed");
         invocation.sealed = true;
         if (invocation.calls.size) {
+          invocation.semanticFailure = true;
           const error = capabilityError("owner_calls_pending");
           invocation.result.reject(error);
           for (const resource of active.resources.values()) {
@@ -847,6 +865,7 @@ export function createOwnerCapabilityHost(
             }
           }
         } else if (call.error !== undefined) {
+          invocation.semanticFailure = true;
           invocation.result.reject(call.error);
         } else invocation.result.resolve(call.value);
         return undefined;
@@ -1152,16 +1171,46 @@ export function createOwnerCapabilityHost(
     },
     lifecycle: {
       onDisconnect(event) {
+        // Oxian invokes this callback synchronously after aborting its calls.
+        // Record the private classification before their rejected continuations
+        // resume; an already accepted semantic retirement cannot be upgraded.
+        for (const assignment of assignments.values()) {
+          if (
+            assignment.binding.fence.connectionId ===
+              event.fence.connectionId &&
+            assignment.binding.fence.sessionGeneration ===
+              event.fence.sessionGeneration &&
+            !assignment.semanticRetirement
+          ) assignment.interruption ??= ownerExecutionInterrupted();
+        }
         return retire(
           (assignment) =>
-            assignment.binding.fence.connectionId === event.fence.connectionId,
+            assignment.binding.fence.connectionId ===
+              event.fence.connectionId &&
+            assignment.binding.fence.sessionGeneration ===
+              event.fence.sessionGeneration,
           capabilityError("owner_connection_lost"),
         );
       },
       onComplete(event) {
+        for (const assignment of assignments.values()) {
+          if (
+            assignment.binding.parent?.operationId === event.operationId &&
+            assignment.binding.parent.streamId === event.streamId &&
+            assignment.binding.fence.connectionId ===
+              event.fence.connectionId &&
+            assignment.binding.fence.sessionGeneration ===
+              event.fence.sessionGeneration
+          ) assignment.semanticRetirement = true;
+        }
         return retire(
           (assignment) =>
-            assignment.binding.parent?.operationId === event.operationId,
+            assignment.binding.parent?.operationId === event.operationId &&
+            assignment.binding.parent.streamId === event.streamId &&
+            assignment.binding.fence.connectionId ===
+              event.fence.connectionId &&
+            assignment.binding.fence.sessionGeneration ===
+              event.fence.sessionGeneration,
           capabilityError("owner_assignment_ended"),
         );
       },

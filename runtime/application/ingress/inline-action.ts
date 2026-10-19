@@ -3,6 +3,9 @@ import { awaitEventPublication } from "../../events/coordinator.ts";
 import { createSchemaCommandRunner } from "../../engine/commands.ts";
 import { createActionLifecycleAppender } from "../../actions/persistence.ts";
 import { createActionLifecycleEmitter } from "../../actions/lifecycle.ts";
+import { createAuthorizedActions } from "../../actions/authorized-capture.ts";
+import { durableActionContentInput } from "../../actions/content.ts";
+import type { OperationCatalog } from "../../streams/catalog.ts";
 import type {
   CoordinatedMutationResult,
   DurableEventDraft,
@@ -24,6 +27,7 @@ export async function admitInlineAction(
     owner: import("../../engine/commands.ts").DatabaseOwner;
     coordinator: EventCoordinator;
     registry: PluginRegistry;
+    operationCatalog: OperationCatalog;
     protectedValues?: ProtectedValueRuntime;
     authorization?:
       import("../../authorization/evaluator.ts").OwnerAuthorization;
@@ -46,38 +50,76 @@ export async function admitInlineAction(
         delivery.consumerId === "processor:copilotz.server.action-request"
       );
       if (
-        !admitted.deduplicated && delivery?.status === "leased" &&
-        !action.content && !runtime.authorization?.actions[request.actionAlias]
+        !admitted.deduplicated && delivery?.status === "leased"
       ) {
         const runId = serverActionRunId(
           delivery.id,
           action.id,
           request.requestId,
         );
+        const metadata = {
+          sourceEventId: admitted.event.id,
+          sourceDeliveryId: delivery.id,
+          sourceConsumerId: delivery.consumerId,
+        };
+        const writer = {
+          kind: "delivery" as const,
+          deliveryId: delivery.id,
+          leaseOwner: delivery.leaseOwner!,
+        };
+        const input = action.content
+          ? durableActionContentInput(request.input, action.content)
+          : request.input;
+        const prepared = createAuthorizedActions({
+          ...runtime,
+          collections: runtime.registry.collections,
+          actions: runtime.registry.actions,
+          namespace: draft.namespace,
+          source: {
+            eventId: admitted.event.id,
+            operationId: admitted.settlementScopeId,
+          },
+          writer,
+          signal: command.signal,
+          lifecycleMetadata: metadata,
+        }).prepareInput(
+          {
+            actionId: action.id,
+            actionRunId: runId,
+            rootKey: delivery.id,
+            operationKey: `server:${request.requestId}:invoke`,
+            metadata: serverActionInvocationMetadata(request),
+            identity: {
+              causationId: admitted.event.id,
+              correlationId: admitted.event.correlationId,
+              settlementScopeId: admitted.settlementScopeId,
+            },
+            signal: command.signal,
+            nextActionIndex: () => 1,
+          },
+          input,
+          command.transaction,
+        );
+        if (prepared) {
+          await prepared;
+          return admitted;
+        }
         const lifecycle = createActionLifecycleEmitter({
           namespace: draft.namespace,
-          metadata: {
-            sourceEventId: admitted.event.id,
-            sourceDeliveryId: delivery.id,
-            sourceConsumerId: delivery.consumerId,
-          },
+          metadata,
           append: createActionLifecycleAppender({
             store: runtime.store,
             coordinator: runtime.coordinator,
             actions: runtime.registry.actions,
             protectedValues: runtime.protectedValues,
-            writer: {
-              kind: "delivery",
-              deliveryId: delivery.id,
-              leaseOwner: delivery.leaseOwner!,
-            },
+            writer,
             transaction: command.transaction,
           }),
         });
         await lifecycle.emit({
           actionId: action.id,
           actionRunId: runId,
-          input: request.input,
+          input,
           metadata: serverActionInvocationMetadata(request),
           status: "invoked",
           effectProtocol: 1,

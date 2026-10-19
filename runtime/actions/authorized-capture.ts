@@ -42,6 +42,7 @@ import {
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
 import { durableActionValue, sameActionValue } from "./value.ts";
+import { durableActionContentInput } from "./content.ts";
 import type { ActionWriter } from "./ownership.ts";
 
 export function createAuthorizedActions(
@@ -270,8 +271,12 @@ export function createAuthorizedActions(
     >
     | undefined => {
     if (!definition(frame.actionId)) return;
-    const input = captureHostCommandJson(durableActionValue(raw));
     const action = actionDefinitionById(options.actions, frame.actionId);
+    const input = captureHostCommandJson(
+      action.content
+        ? durableActionContentInput(raw, action.content)
+        : durableActionValue(raw),
+    );
     const request = protectedActionPublicInput(
       action,
       input,

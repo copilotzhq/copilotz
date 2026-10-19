@@ -3,7 +3,10 @@ import {
   protectedActionStrings,
 } from "./secret.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
-import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
+  afterCommandAuthorization,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
 import {
   prepareActionOperation,
   startAwaitedOperation,
@@ -275,16 +278,22 @@ export function createActionLifecycleAppender(
     }
 
     if (
-      options.finishTerminal && !outputHooks?.authorize &&
-      !data.parentActionRunId &&
-      ["completed", "failed", "cancelled"].includes(data.status)
+      (options.finishTerminal && !data.parentActionRunId &&
+        ["completed", "failed", "cancelled"].includes(data.status)) ||
+      (data.status === "completed" && outputHooks?.authorize &&
+        options.store?.databaseSchema)
     ) {
       const complete = async (transaction: SqlExecutor) => {
         if (data.status === "completed") {
           await outputHooks?.authorize?.(transaction);
         }
         const result = await commit(transaction);
-        await options.finishTerminal!(transaction, data);
+        if (options.finishTerminal && !data.parentActionRunId) {
+          afterCommandAuthorization(
+            transaction,
+            () => options.finishTerminal!(transaction, data),
+          );
+        }
         return result;
       };
       if (options.transaction) return await complete(options.transaction);
@@ -300,28 +309,6 @@ export function createActionLifecycleAppender(
       return result;
     }
 
-    if (
-      data.status === "completed" && outputHooks?.authorize &&
-      options.store?.databaseSchema
-    ) {
-      const completeAuthorized = async (transaction: SqlExecutor) => {
-        await outputHooks.authorize!(transaction);
-        return await commit(transaction);
-      };
-      if (options.transaction) {
-        return await completeAuthorized(options.transaction);
-      }
-      const result = await createSchemaCommandRunner(
-        options.store.session,
-        options.store.databaseSchema,
-      )(
-        "actions.completeAuthorized",
-        { actionRunId: data.actionRunId },
-        async (_, command) => await completeAuthorized(command.transaction),
-      );
-      await awaitEventPublication(result);
-      return result;
-    }
     return await commit(options.transaction);
   };
 }

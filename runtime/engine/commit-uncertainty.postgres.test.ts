@@ -20,7 +20,7 @@ import {
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 
-function startOwner(url: string, schema: string) {
+function startOwner(url: string, schema: string, mode: string) {
   const config = Deno.env.get("COPILOTZ_TEST_DENO_CONFIG") ??
     new URL("../../deno.json", import.meta.url).pathname;
   const child = new Deno.Command(Deno.execPath(), {
@@ -33,6 +33,7 @@ function startOwner(url: string, schema: string) {
         .pathname,
       url,
       schema,
+      mode,
     ],
     stdin: "piped",
     stdout: "piped",
@@ -185,322 +186,383 @@ function assertGraph(
   assertEquals(value.sequence, String(ids.length));
 }
 
-for (const loss of ["connection loss", "owner process death"] as const) {
-  for (const committed of [true, false]) {
-    Deno.test({
-      name: `PostgreSQL ${loss} during unresolved sole-command COMMIT: ${
-        committed ? "committed" : "aborted"
-      } exact-fence receipt recovery`,
-      ignore: !url,
-      sanitizeResources: false,
-      sanitizeOps: false,
-      async fn() {
-        const schema = `uncertain_${crypto.randomUUID().replaceAll("-", "")}`;
-        const direct = localPostgresUrl(url!);
-        const db = await createTestDatabase({ url: direct, pgPoolMax: 2 });
-        const control = await createTestDatabase({ url: direct, pgPoolMax: 1 });
-        const successorDb = await createTestDatabase({
-          url: localPostgresUrl(direct, `${schema}_successor`),
-          pgPoolMax: 1,
-        });
-        const proxy = await commitProxy(direct);
-        const release = Promise.withResolvers<void>();
-        let gate: Promise<void> | undefined;
-        let child: ReturnType<typeof startOwner> | undefined;
-        let successor: ReturnType<typeof commitFixtureOwner> | undefined;
-        let acquisition: Promise<number> | undefined;
-        const notices: FixtureNotice[] = [];
-        try {
-          await provisionCopilotzSchema(db, schema);
-          child = startOwner(proxy.url, schema);
-          await child.wait("ready");
-          const seed = await snapshot(db, schema);
-          assertGraph(seed, ["existing"]);
-          await db.query(
-            `CREATE FUNCTION "${schema}".pause_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+for (const grouped of [false, true]) {
+  for (const loss of ["connection loss", "owner process death"] as const) {
+    for (const committed of [true, false]) {
+      Deno.test({
+        name: `PostgreSQL ${loss} during unresolved ${
+          grouped ? "mixed-group" : "sole-command"
+        } COMMIT: ${
+          committed ? "committed" : "aborted"
+        } exact-fence receipt recovery`,
+        ignore: !url,
+        sanitizeResources: false,
+        sanitizeOps: false,
+        async fn() {
+          const schema = `uncertain_${crypto.randomUUID().replaceAll("-", "")}`;
+          const direct = localPostgresUrl(url!);
+          const db = await createTestDatabase({ url: direct, pgPoolMax: 2 });
+          const control = await createTestDatabase({
+            url: direct,
+            pgPoolMax: 1,
+          });
+          const successorDb = await createTestDatabase({
+            url: localPostgresUrl(direct, `${schema}_successor`),
+            pgPoolMax: 1,
+          });
+          const proxy = await commitProxy(direct);
+          const release = Promise.withResolvers<void>();
+          let gate: Promise<void> | undefined;
+          let child: ReturnType<typeof startOwner> | undefined;
+          let successor: ReturnType<typeof commitFixtureOwner> | undefined;
+          let acquisition: Promise<number> | undefined;
+          const notices: FixtureNotice[] = [];
+          try {
+            await provisionCopilotzSchema(db, schema);
+            child = startOwner(proxy.url, schema, grouped ? "group" : "commit");
+            await child.wait("ready");
+            const seed = await snapshot(db, schema);
+            assertGraph(seed, ["existing"]);
+            await db.query(
+              `CREATE FUNCTION "${schema}".pause_commit() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN PERFORM pg_advisory_xact_lock(hashtext(TG_TABLE_SCHEMA), 57219); RETURN NEW; END $$`,
-          );
-          await db.query(
-            `CREATE CONSTRAINT TRIGGER test_commit_gate AFTER INSERT ON "${schema}".owner_receipts
+            );
+            await db.query(
+              `CREATE CONSTRAINT TRIGGER test_commit_gate AFTER INSERT ON "${schema}".owner_receipts
             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${schema}".pause_commit()`,
-          );
-          const locked = Promise.withResolvers<number>();
-          gate = control.transaction(async (tx) => {
-            await tx.query("SELECT pg_advisory_xact_lock(hashtext($1),57219)", [
+            );
+            const locked = Promise.withResolvers<number>();
+            gate = control.transaction(async (tx) => {
+              await tx.query(
+                "SELECT pg_advisory_xact_lock(hashtext($1),57219)",
+                [
+                  schema,
+                ],
+              );
+              locked.resolve(
+                Number(
+                  (await tx.query("SELECT pg_backend_pid() AS pid")).rows[0]
+                    .pid,
+                ),
+              );
+              await release.promise;
+            });
+            const gatePid = await bounded(
+              locked.promise,
+              "deferred COMMIT gate",
+            );
+            const beforeMessages = child.messages.length;
+            proxy.arm();
+            await child.send(grouped ? "group" : "commit");
+            const oldPid = await bounded(
+              proxy.forwarded,
+              "actual COMMIT forwarding",
+            );
+            const activity = async () =>
+              (await db.query<
+                {
+                  pid: number;
+                  xid: string;
+                  query: string;
+                  wait_event_type: string;
+                  wait_event: string;
+                  blockers: number[];
+                }
+              >(
+                "SELECT pid,backend_xid::text AS xid,query,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=$1",
+                [oldPid],
+              )).rows[0];
+            const committing = await until(async () => {
+              const row = await activity();
+              return row && /^COMMIT\b/i.test(row.query) &&
+                  row.wait_event_type === "Lock" &&
+                  row.wait_event === "advisory" &&
+                  row.blockers.includes(gatePid)
+                ? row
+                : undefined;
+            }, "actual backend inside unresolved COMMIT");
+            assert(committing.xid);
+            successor = commitFixtureOwner(
+              successorDb,
               schema,
-            ]);
-            locked.resolve(
-              Number(
-                (await tx.query("SELECT pg_backend_pid() AS pid")).rows[0].pid,
-              ),
+              "successor",
+              (notice) => notices.push(notice),
             );
-            await release.promise;
-          });
-          const gatePid = await bounded(locked.promise, "deferred COMMIT gate");
-          const beforeMessages = child.messages.length;
-          proxy.arm();
-          await child.send("commit");
-          const oldPid = await bounded(
-            proxy.forwarded,
-            "actual COMMIT forwarding",
-          );
-          const activity = async () =>
-            (await db.query<
-              {
-                pid: number;
-                xid: string;
-                query: string;
-                wait_event_type: string;
-                wait_event: string;
-                blockers: number[];
-              }
-            >(
-              "SELECT pid,backend_xid::text AS xid,query,wait_event_type,wait_event,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=$1",
-              [oldPid],
-            )).rows[0];
-          const committing = await until(async () => {
-            const row = await activity();
-            return row && /^COMMIT\b/i.test(row.query) &&
-                row.wait_event_type === "Lock" &&
-                row.wait_event === "advisory" && row.blockers.includes(gatePid)
-              ? row
-              : undefined;
-          }, "actual backend inside unresolved COMMIT");
-          assert(committing.xid);
-          successor = commitFixtureOwner(
-            successorDb,
-            schema,
-            "successor",
-            (notice) => notices.push(notice),
-          );
-          let acquired = false;
-          acquisition = successor.acquire(1).then((epoch) => {
-            acquired = true;
-            return epoch;
-          });
-          void acquisition.catch(() => undefined);
-          const waiting = await until(async () => {
-            const rows = (await db.query<
-              { pid: number; query: string; blockers: number[] }
-            >(
-              "SELECT pid,query,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'",
-              [`${schema}_successor`],
+            let acquired = false;
+            acquisition = successor.acquire(1).then((epoch) => {
+              acquired = true;
+              return epoch;
+            });
+            void acquisition.catch(() => undefined);
+            const waiting = await until(async () => {
+              const rows = (await db.query<
+                { pid: number; query: string; blockers: number[] }
+              >(
+                "SELECT pid,query,pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'",
+                [`${schema}_successor`],
+              )).rows;
+              return rows.find((row) =>
+                row.query.includes("owner_epochs") &&
+                /^(?:INSERT|UPDATE|SELECT)/.test(row.query) &&
+                row.blockers.includes(oldPid)
+              );
+            }, "successor blocked on exact predecessor PID");
+            const locks = (await db.query<{ xid: string }>(
+              "SELECT transactionid::text AS xid FROM pg_locks WHERE pid=$1 AND NOT granted AND locktype='transactionid'",
+              [waiting.pid],
             )).rows;
-            return rows.find((row) =>
-              row.query.includes("owner_epochs") &&
-              /^(?:INSERT|UPDATE|SELECT)/.test(row.query) &&
-              row.blockers.includes(oldPid)
-            );
-          }, "successor blocked on exact predecessor PID");
-          const locks = (await db.query<{ xid: string }>(
-            "SELECT transactionid::text AS xid FROM pg_locks WHERE pid=$1 AND NOT granted AND locktype='transactionid'",
-            [waiting.pid],
-          )).rows;
-          assert(
-            locks.some((row) => row.xid === committing.xid),
-            "successor must wait on exact predecessor xid",
-          );
-          console.log(
-            JSON.stringify({
-              phase: "unresolved-commit-fence",
-              loss,
-              committed,
-              oldPid,
-              oldXid: committing.xid,
-              gatePid,
-              successorPid: waiting.pid,
-              waitingXids: locks.map((row) => row.xid),
-            }),
-          );
-          assertEquals(acquired, false);
-          assertEquals(successor.state, "acquiring");
-          assertEquals(await snapshot(db, schema), seed);
-          assertEquals(
-            child.messages.slice(beforeMessages).filter((row) =>
-              ["result", "published", "dispatch-callback"].includes(row.type)
-            ),
-            [],
-          );
-          assertEquals(
-            child.messages.slice(beforeMessages).filter((row) =>
-              row.type === "handler"
-            ).map((row) => row.id),
-            ["new"],
-          );
-          if (loss === "connection loss") {
-            proxy.cutClient();
-            const settled = await child.wait("settled");
-            assertEquals(settled.state, "stopped");
-            assertEquals(settled.statuses, ["rejected", "rejected"]);
-            const results = child.messages.slice(beforeMessages).filter((row) =>
-              row.type === "result"
-            );
-            assertEquals(results.length, 2);
             assert(
-              results.every((row) =>
-                row.status === "rejected" &&
-                ["owner_commit_unknown", "persistence_indeterminate"].includes(
-                  String(row.code),
-                )
-              ),
+              locks.some((row) => row.xid === committing.xid),
+              "successor must wait on exact predecessor xid",
             );
-          } else {
-            child.child.kill("SIGKILL");
-            assertEquals(
-              (await bounded(child.status, "SIGKILL owner exit")).signal,
-              "SIGKILL",
-            );
-            await until(
-              () =>
-                proxy.evidence.includes("client transport closed")
-                  ? true
-                  : undefined,
-              "dead owner transport loss",
-            );
-          }
-          const afterLoss = await activity();
-          assertEquals(afterLoss.xid, committing.xid);
-          assert(/^COMMIT\b/i.test(afterLoss.query));
-          assertEquals(afterLoss.wait_event, "advisory");
-          assert(afterLoss.blockers.includes(gatePid));
-          assertEquals(acquired, false);
-          assertEquals(await snapshot(db, schema), seed);
-          assertEquals(
-            child.messages.slice(beforeMessages).filter((row) =>
-              ["published", "dispatch-callback"].includes(row.type)
-            ),
-            [],
-          );
-          if (committed) {
-            release.resolve();
-            await gate;
-            assertEquals(
-              await bounded(proxy.resolved, "actual committed resolution"),
-              "COMMIT",
-            );
-          } else {
-            assertEquals(
-              (await db.query("SELECT pg_terminate_backend($1) AS killed", [
+            console.log(
+              JSON.stringify({
+                phase: "unresolved-commit-fence",
+                loss,
+                committed,
                 oldPid,
-              ])).rows[0].killed,
-              true,
+                oldXid: committing.xid,
+                gatePid,
+                successorPid: waiting.pid,
+                waitingXids: locks.map((row) => row.xid),
+              }),
+            );
+            assertEquals(acquired, false);
+            assertEquals(successor.state, "acquiring");
+            assertEquals(await snapshot(db, schema), seed);
+            assertEquals(
+              child.messages.slice(beforeMessages).filter((row) =>
+                ["result", "published", "dispatch-callback"].includes(row.type)
+              ),
+              [],
             );
             assertEquals(
-              await bounded(proxy.resolved, "actual aborted resolution"),
-              "server connection closed",
+              child.messages.slice(beforeMessages).filter((row) =>
+                row.type === "handler"
+              ).map((row) => row.id),
+              grouped ? ["new", "failed"] : ["new"],
             );
-            release.resolve();
-            await gate;
-          }
-          assertEquals(
-            await bounded(acquisition, "successor after physical resolution"),
-            2,
-          );
-          assertEquals(successor.state, "acquired");
-          assertGraph(
-            await snapshot(db, schema),
-            committed ? ["existing", "new"] : ["existing"],
-          );
-          assertEquals(notices, []);
-          const oldCaller = { principal: "fixture-worker", epoch: 1 };
-          assertExists(
-            await receipt(db, schema, oldCaller, {
-              domain: "logical",
-              key: "existing",
-            }),
-          );
-          assertEquals(
-            Boolean(
+            if (loss === "connection loss") {
+              proxy.cutClient();
+              const settled = await child.wait("settled");
+              assertEquals(settled.state, "stopped");
+              assertEquals(
+                settled.statuses,
+                Array(grouped ? 5 : 2).fill("rejected"),
+              );
+              const results = child.messages.slice(beforeMessages).filter((
+                row,
+              ) => row.type === "result");
+              assertEquals(results.length, grouped ? 5 : 2);
+              assert(
+                results.every((row) =>
+                  row.status === "rejected" &&
+                  ["owner_commit_unknown", "persistence_indeterminate"]
+                    .includes(
+                      String(row.code),
+                    )
+                ),
+              );
+            } else {
+              child.child.kill("SIGKILL");
+              assertEquals(
+                (await bounded(child.status, "SIGKILL owner exit")).signal,
+                "SIGKILL",
+              );
+              await until(
+                () =>
+                  proxy.evidence.includes("client transport closed")
+                    ? true
+                    : undefined,
+                "dead owner transport loss",
+              );
+            }
+            const afterLoss = await activity();
+            assertEquals(afterLoss.xid, committing.xid);
+            assert(/^COMMIT\b/i.test(afterLoss.query));
+            assertEquals(afterLoss.wait_event, "advisory");
+            assert(afterLoss.blockers.includes(gatePid));
+            assertEquals(acquired, false);
+            assertEquals(await snapshot(db, schema), seed);
+            assertEquals(
+              child.messages.slice(beforeMessages).filter((row) =>
+                ["published", "dispatch-callback"].includes(row.type)
+              ),
+              [],
+            );
+            if (committed) {
+              release.resolve();
+              await gate;
+              assertEquals(
+                await bounded(proxy.resolved, "actual committed resolution"),
+                "COMMIT",
+              );
+            } else {
+              assertEquals(
+                (await db.query("SELECT pg_terminate_backend($1) AS killed", [
+                  oldPid,
+                ])).rows[0].killed,
+                true,
+              );
+              assertEquals(
+                await bounded(proxy.resolved, "actual aborted resolution"),
+                "server connection closed",
+              );
+              release.resolve();
+              await gate;
+            }
+            assertEquals(
+              await bounded(acquisition, "successor after physical resolution"),
+              2,
+            );
+            assertEquals(successor.state, "acquired");
+            assertGraph(
+              await snapshot(db, schema),
+              committed ? ["existing", "new"] : ["existing"],
+            );
+            assertEquals(notices, []);
+            const oldCaller = { principal: "fixture-worker", epoch: 1 };
+            assertExists(
               await receipt(db, schema, oldCaller, {
                 domain: "logical",
-                key: "new",
+                key: "existing",
               }),
-            ),
-            committed,
-          );
-          assertEquals(
-            await receipt(db, schema, oldCaller, {
-              domain: "logical",
-              key: "failed",
-            }),
-            undefined,
-          );
-          assertEquals(
-            await receipt(db, schema, oldCaller, {
-              domain: "logical",
-              key: "queued",
-            }),
-            undefined,
-          );
-          assertEquals(
-            await receipt(db, schema, { principal: "other-worker", epoch: 2 }, {
-              domain: "logical",
-              key: "existing",
-            }),
-            undefined,
-          );
-          const caller = { principal: "fixture-worker", epoch: 2 };
-          assertEquals(
-            await successor.execute(
-              "write",
-              caller,
-              fixtureRequest("existing"),
-            ),
-            { id: "existing" },
-          );
-          assertEquals(notices, []);
-          assertEquals(
-            await successor.execute("write", caller, fixtureRequest("new")),
-            { id: "new" },
-          );
-          if (!committed) {
-            await until(
-              () =>
-                notices.some((row) => row.type === "dispatch-callback")
-                  ? true
-                  : undefined,
-              "recovered publication",
             );
-          }
-          assertEquals(
-            notices.filter((row) => row.type === "handler").map((row) =>
-              row.id
-            ),
-            committed ? [] : ["new"],
-          );
-          const recovered = await snapshot(db, schema);
-          assertGraph(recovered, ["existing", "new"]);
-          const noticesBeforeReplay = structuredClone(notices);
-          await successor.execute("write", caller, fixtureRequest("new"));
-          assertEquals(await snapshot(db, schema), recovered);
-          assertEquals(notices, noticesBeforeReplay);
-          await assertRejects(
-            () =>
-              successor!.execute("write", caller, {
-                ...fixtureRequest("new"),
-                receipt: {
-                  identity: { domain: "logical", key: "new" },
-                  intent: { id: "changed", fail: false },
-                },
+            assertEquals(
+              Boolean(
+                await receipt(db, schema, oldCaller, {
+                  domain: "logical",
+                  key: "new",
+                }),
+              ),
+              committed,
+            );
+            assertEquals(
+              await receipt(db, schema, oldCaller, {
+                domain: "logical",
+                key: "failed",
               }),
-            Error,
-            "intent",
-          );
-          assertEquals(await snapshot(db, schema), recovered);
-          assertEquals(proxy.errors, []);
-        } finally {
-          release.resolve();
-          await gate?.catch(() => undefined);
-          await proxy.close();
-          await child?.close();
-          await acquisition?.catch(() => undefined);
-          successor?.stop();
-          await successorDb.close();
-          await control.close();
-          await db.query(`DROP SCHEMA "${schema}" CASCADE`);
-          await db.close();
-        }
-      },
-    });
+              undefined,
+            );
+            assertEquals(
+              await receipt(db, schema, oldCaller, {
+                domain: "logical",
+                key: "queued",
+              }),
+              undefined,
+            );
+            assertEquals(
+              await receipt(
+                db,
+                schema,
+                { principal: "other-worker", epoch: 2 },
+                {
+                  domain: "logical",
+                  key: "existing",
+                },
+              ),
+              undefined,
+            );
+            const caller = { principal: "fixture-worker", epoch: 2 };
+            assertEquals(
+              await successor.execute(
+                "write",
+                caller,
+                fixtureRequest("existing"),
+              ),
+              { id: "existing" },
+            );
+            assertEquals(notices, []);
+            assertEquals(
+              await successor.execute("write", caller, fixtureRequest("new")),
+              { id: "new" },
+            );
+            if (!committed) {
+              await until(
+                () =>
+                  notices.some((row) => row.type === "dispatch-callback")
+                    ? true
+                    : undefined,
+                "recovered publication",
+              );
+            }
+            assertEquals(
+              notices.filter((row) => row.type === "handler").map((row) =>
+                row.id
+              ),
+              committed ? [] : ["new"],
+            );
+            const recovered = await snapshot(db, schema);
+            assertGraph(recovered, ["existing", "new"]);
+            const noticesBeforeReplay = structuredClone(notices);
+            await successor.execute("write", caller, fixtureRequest("new"));
+            assertEquals(await snapshot(db, schema), recovered);
+            assertEquals(notices, noticesBeforeReplay);
+            await assertRejects(
+              () =>
+                successor!.execute("write", caller, {
+                  ...fixtureRequest("new"),
+                  receipt: {
+                    identity: { domain: "logical", key: "new" },
+                    intent: { id: "changed", fail: false },
+                  },
+                }),
+              Error,
+              "intent",
+            );
+            assertEquals(await snapshot(db, schema), recovered);
+            if (grouped) {
+              // Failed and queued commands had no receipt. The successor executes
+              // them once; the rejected conflicting duplicate remains a conflict.
+              await assertRejects(
+                () =>
+                  successor!.execute("write", caller, {
+                    ...fixtureRequest("existing"),
+                    receipt: {
+                      ...fixtureRequest("existing").receipt,
+                      intent: { changed: true },
+                    },
+                  }),
+                Error,
+                "intent",
+              );
+              for (const id of ["failed", "queued"]) {
+                assertEquals(
+                  await successor.execute("write", caller, fixtureRequest(id)),
+                  { id },
+                );
+                assertEquals(
+                  await successor.execute("write", caller, fixtureRequest(id)),
+                  { id },
+                );
+                assertEquals(
+                  notices.filter((n) => n.type === "handler" && n.id === id)
+                    .length,
+                  1,
+                );
+              }
+              assertGraph(await snapshot(db, schema), [
+                "existing",
+                "new",
+                "failed",
+                "queued",
+              ]);
+            }
+            assertEquals(proxy.errors, []);
+          } finally {
+            release.resolve();
+            await gate?.catch(() => undefined);
+            await proxy.close();
+            await child?.close();
+            await acquisition?.catch(() => undefined);
+            successor?.stop();
+            await successorDb.close();
+            await control.close();
+            await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+            await db.close();
+          }
+        },
+      });
+    }
   }
 }

@@ -385,7 +385,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "Postgres command rejection rolls back its savepoint and keeps the owner usable",
+    "Postgres singleton rejection confirms rollback and keeps the owner usable",
   ignore: !postgres,
   async fn() {
     const db = await createTestDatabase({ url: postgres! });

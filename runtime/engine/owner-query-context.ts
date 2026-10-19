@@ -22,14 +22,25 @@ async function withQueryContext<T, Fields extends object>(
   bind?: (context: object, assertActive: () => void) => void,
 ): Promise<T> {
   let active = true;
-  const pending: Promise<unknown>[] = [];
+  let pending = 0;
+  let queryFailed = false;
+  let queryError: unknown;
+  let drained: (() => void) | undefined;
   const assertActive = () => {
     signal.throwIfAborted();
     if (!active) throw new Error("Owner query handle is closed.");
   };
   const track = <V>(promise: Promise<V>): Promise<V> => {
-    pending.push(promise);
-    void promise.catch(() => undefined);
+    pending++;
+    void promise.then(() => {
+      if (--pending === 0) drained?.();
+    }, (error) => {
+      if (!queryFailed) {
+        queryFailed = true;
+        queryError = error;
+      }
+      if (--pending === 0) drained?.();
+    });
     return promise;
   };
   const query: SqlExecutor["query"] = <Row extends Record<string, unknown>>(
@@ -78,11 +89,14 @@ async function withQueryContext<T, Fields extends object>(
   } finally {
     active = false;
   }
-  const results = await Promise.allSettled(pending);
+  if (pending) {
+    await new Promise<void>((resolve) => {
+      drained = resolve;
+    });
+  }
   signal.throwIfAborted();
   if (failed) throw failure;
-  const rejected = results.find((result) => result.status === "rejected");
-  if (rejected?.status === "rejected") throw rejected.reason;
+  if (queryFailed) throw queryError;
   return value as T;
 }
 

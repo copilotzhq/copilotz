@@ -5,7 +5,6 @@ import type {
 } from "../contracts.ts";
 import { mapParticipantRecord } from "../projections.ts";
 import type { ActionEventData } from "@copilotz/copilotz/actions";
-import type { ProcessorEvent } from "@copilotz/copilotz/plugins";
 import {
   createTestDomainContext,
   projectTestMessage,
@@ -112,21 +111,28 @@ export async function projectActionEvents(
   }> = {},
 ): Promise<readonly ActionEventData[]> {
   const projected: ActionEventData[] = [];
-  const unbind = await host.bindTransient({
-    id: `test.action-events.${crypto.randomUUID()}`,
-    on: [{ eventType: "*" }],
-    handle(event: ProcessorEvent) {
-      if (!isActionEventData(event.data)) return;
-      if (event.data.actionId !== actionId) return;
-      if (options.status && event.data.status !== options.status) return;
-      if (
-        options.threadId &&
-        actionThreadId(event.data.input) !== options.threadId
-      ) return;
-      projected.push(event.data);
-    },
-  }, { namespace, afterPosition: "0" });
-  unbind();
+  let afterPosition = "0";
+  for (;;) {
+    const events = await host.events.list({
+      namespace,
+      afterPosition,
+      limit: 1000,
+    });
+    for (const event of events) {
+      const data = await host.events.resolveActionLifecycle(
+        namespace,
+        event.id,
+      );
+      if (!isActionEventData(data) || data.actionId !== actionId) continue;
+      if (options.status && data.status !== options.status) continue;
+      if (options.threadId && actionThreadId(data.input) !== options.threadId) {
+        continue;
+      }
+      projected.push(data);
+    }
+    if (events.length < 1000) break;
+    afterPosition = events.at(-1)!.position;
+  }
   return projected;
 }
 

@@ -352,11 +352,6 @@ export type CopilotzEngine = Readonly<{
   shutdown(reason?: string): Promise<void>;
   bindTransient(
     processor: Processor,
-    options?: Readonly<{
-      namespace?: string;
-      afterPosition?: string;
-      signal?: AbortSignal;
-    }>,
   ): Promise<() => void>;
 }>;
 

@@ -51,7 +51,7 @@ async function fixture() {
         dispatch: { handles: [], failures: [] },
       };
     },
-    flushCommitted: () => Promise.resolve({ handles: [], failures: [] }),
+
     append() {
       throw new Error("unused");
     },
@@ -111,7 +111,7 @@ Deno.test({
         await ended.promise;
         assertStrictEquals(currentCollectionReadBudget(), bBudget);
         assertEquals(bBudget!.maxResultBytes, 100 - bytes);
-        assertEquals(readViews.memo()?.recall("same-key"), { value: "B" });
+        assertEquals(readViews.memo(), undefined);
         assertEquals(
           await queryCollectionRows(command.transaction, sql, []),
           rows,
@@ -119,7 +119,7 @@ Deno.test({
         const joined = createSchemaCommandRunner(command.transaction, f.schema);
         await joined("boundary.nested", {}, async () => {
           assertStrictEquals(currentCollectionReadBudget(), bBudget);
-          assertEquals(readViews.memo()?.recall("same-key"), { value: "B" });
+          assertEquals(readViews.memo(), undefined);
           assertEquals(
             await queryCollectionRows(command.transaction, sql, []),
             rows,

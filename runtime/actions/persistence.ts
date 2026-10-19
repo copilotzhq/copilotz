@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import {
   adoptCapturedActionOutput,
   assertCapturedActionOutput,
@@ -272,7 +273,7 @@ export function createActionLifecycleAppender(
           return appended;
         },
       );
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
       await flush();
       return result;
     }
@@ -341,7 +342,7 @@ export function createActionLifecycleAppender(
         { actionRunId: data.actionRunId },
         async (_input, { transaction }) => await commitOutput(transaction),
       );
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
       return result;
     }
     if (
@@ -363,7 +364,7 @@ export function createActionLifecycleAppender(
         { actionRunId: data.actionRunId },
         async (_, command) => await completeAuthorized(command.transaction),
       );
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
       return result;
     }
     return await commit(options.transaction);

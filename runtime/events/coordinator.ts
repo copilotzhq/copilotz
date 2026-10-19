@@ -1,6 +1,3 @@
-import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
-import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
-import { assertEventCommitted } from "./store.ts";
 import type {
   DeliveryDispatchFailure,
   DeliveryExecutionHandle,
@@ -18,11 +15,12 @@ import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 export type CoordinatedMutationOptions<T> =
   & Omit<
     CommitEventMutationOptions<T>,
-    "consumers"
+    "consumers" | "onCommitted"
   >
   & Readonly<{
-    /** When false, leave publication to flushCommitted after the outer commit.
-     * Joined transactions always defer publication, regardless of this option. */
+    /** Explicit runtime obligations for child/resume events. */
+    consumers?: CommitEventMutationOptions<T>["consumers"];
+    /** When false, return without waiting for the committed publication. */
     dispatch?: boolean;
     /** Prepared JSON body used for precommit matching. Not persisted. */
     matchData?: unknown;
@@ -60,15 +58,13 @@ export type CreateEventCoordinatorOptions = Readonly<{
   executor: DeliveryExecutor;
   publish?: EventPublisher;
   onDispatchFailure?: (failure: DeliveryDispatchFailure) => void;
+  deferPublication?(publish: () => Promise<void>): Promise<void>;
 }>;
 
 export type EventCoordinator = Readonly<{
   commitMutation<T>(
     options: CoordinatedMutationOptions<T>,
   ): Promise<CoordinatedMutationResult<T>>;
-  flushCommitted(
-    result: CommitEventMutationResult<unknown>,
-  ): Promise<EventDispatchReport>;
   append(
     draft: DurableEventDraft,
     options?: { maxAttempts?: number },
@@ -80,6 +76,13 @@ export type EventCoordinator = Readonly<{
     limit?: number;
   }): Promise<DeliveryRecoveryDispatch>;
 }>;
+
+/** Wait for publication already registered at the command's outer commit gate. */
+export function awaitEventPublication(
+  result: CommitEventMutationResult<unknown>,
+): Promise<EventDispatchReport> {
+  return result.publication ?? Promise.resolve(EMPTY_DISPATCH);
+}
 
 /** Coordinates the post-commit publication and Oxian dispatch boundary. */
 export function createEventCoordinator(
@@ -150,22 +153,23 @@ export function createEventCoordinator(
     } as const);
   };
 
-  const publications = new WeakMap<
-    CopilotzEvent,
-    Promise<Readonly<{ dispatch: EventDispatchReport; publishError?: unknown }>>
-  >();
-  const publishCommitted = (
-    result: CommitEventMutationResult<unknown>,
-  ) => {
-    assertEventCommitted(result.event);
-    const existing = publications.get(result.event);
-    if (existing) return existing;
-    // Install the promise before invoking user publication callbacks, which
-    // may reenter the coordinator. Repeated flushes share one publication.
-    const pending = Promise.resolve().then(() =>
-      withoutCollectionPolicyInvocation(() =>
-        withoutOwnerCommandAuthorization(async () => {
-          let publishError: unknown;
+  const commitMutation = async <T>(
+    mutation: CoordinatedMutationOptions<T>,
+  ): Promise<CoordinatedMutationResult<T>> => {
+    // Durable filters are synchronous so the complete obligation set is known
+    // before entering the database transaction.
+    const enableDispatch = mutation.transaction === undefined &&
+      mutation.dispatch !== false;
+    const consumers = mutation.consumers ?? options.registry.durableConsumers(
+      mutation.draft,
+      mutation.matchData,
+    );
+    const publication = Promise.withResolvers<EventDispatchReport>();
+    void publication.promise.catch(() => undefined);
+    let publishError: unknown;
+    const committed = await options.store.commitMutation({
+      async onCommitted(result) {
+        const publish = async () => {
           if (!result.deduplicated) {
             try {
               await options.publish?.(result.event, {
@@ -176,29 +180,16 @@ export function createEventCoordinator(
               publishError = error;
             }
           }
-          return {
-            dispatch: await dispatch(result),
-            ...(publishError === undefined ? {} : { publishError }),
-          };
-        })
-      )
-    );
-    publications.set(result.event, pending);
-    return pending;
-  };
-
-  const commitMutation = async <T>(
-    mutation: CoordinatedMutationOptions<T>,
-  ): Promise<CoordinatedMutationResult<T>> => {
-    // Durable filters are synchronous so the complete obligation set is known
-    // before entering the database transaction.
-    const enableDispatch = mutation.transaction === undefined &&
-      mutation.dispatch !== false;
-    const consumers = options.registry.durableConsumers(
-      mutation.draft,
-      mutation.matchData,
-    );
-    const committed = await options.store.commitMutation({
+          try {
+            publication.resolve(await dispatch(result));
+          } catch (error) {
+            publication.reject(error);
+          }
+        };
+        if (options.deferPublication) await options.deferPublication(publish);
+        else await publish();
+        await publication.promise;
+      },
       draft: mutation.draft,
       eventId: mutation.eventId,
       body: mutation.body,
@@ -214,19 +205,20 @@ export function createEventCoordinator(
     if (!enableDispatch) {
       return ({
         ...committed,
+        publication: publication.promise,
         dispatch: EMPTY_DISPATCH,
       } as const);
     }
-    return { ...committed, ...await publishCommitted(committed) };
+    return {
+      ...committed,
+      publication: publication.promise,
+      dispatch: await publication.promise,
+      ...(publishError === undefined ? {} : { publishError }),
+    };
   };
-
-  const flushCommitted = async (
-    result: CommitEventMutationResult<unknown>,
-  ): Promise<EventDispatchReport> => (await publishCommitted(result)).dispatch;
 
   return ({
     commitMutation,
-    flushCommitted,
     append(draft, appendOptions = {}) {
       return commitMutation({
         draft,

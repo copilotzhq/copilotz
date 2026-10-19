@@ -55,7 +55,6 @@ function databaseGeneration(
       operation: TransactionOperation,
       query: CopilotzDatabase["query"],
     ) => Promise<unknown>;
-    listen?: NonNullable<CopilotzDatabase["listen"]>;
     close?: () => void | Promise<void>;
   }> = {},
 ): CopilotzDatabase {
@@ -79,7 +78,6 @@ function databaseGeneration(
       }
       return await operation(Object.freeze({ query }));
     },
-    ...(options.listen ? { listen: options.listen } : {}),
     async close() {
       await options.close?.();
     },
@@ -179,37 +177,6 @@ Deno.test("persistence reconnects once, never replays the failed operation, and 
     await persistence.close();
   }
   assertEquals(closes, [1, 2]);
-});
-
-Deno.test("recoverable persistence reconnects without resurrecting database notification listeners", async () => {
-  let listens = 0;
-  const persistence = await openCopilotzPersistence({
-    database: {
-      connect({ generation }) {
-        return databaseGeneration(generation, {
-          query(sql) {
-            return sql === "fail"
-              ? Promise.reject(connectionError())
-              : Promise.resolve([{ generation }]);
-          },
-          listen() {
-            listens++;
-            return Promise.resolve({ close: () => Promise.resolve() });
-          },
-        });
-      },
-    },
-    databaseRecovery: { waitMs: 100 },
-  });
-  try {
-    assertEquals(persistence.database.listen, undefined);
-    await assertRejects(() => persistence.database.query("fail"));
-    await persistence.recovery!.admit();
-    assertEquals(listens, 0);
-    assertEquals(persistence.recovery!.snapshot().state, "ready");
-  } finally {
-    await persistence.close();
-  }
 });
 
 Deno.test("persistence bounds admission while one reconnect attempt is pending", async () => {

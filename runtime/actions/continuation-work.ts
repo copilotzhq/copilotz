@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import {
   createSchemaCommandRunner,
   schemaCommandContext,
@@ -101,7 +102,7 @@ export async function admitActionOperation(
     return;
   }
   const bodyId = `event-body:${namespace}:${operationId}:start`;
-  return await store.commitMutation({
+  return await runtime.coordinator.commitMutation({
     eventId: operationId,
     draft: {
       namespace,
@@ -141,7 +142,7 @@ export async function startAwaitedOperation(
   writer: ActionWriter | undefined,
   preparedChild: Awaited<ReturnType<typeof prepareActionOperation>> | undefined,
 ): Promise<() => Promise<void>> {
-  const { store, coordinator } = runtime;
+  const { store } = runtime;
   const { draft, data } = input;
   if (
     data.status !== "awaiting" || writer?.kind !== "delivery" ||
@@ -291,7 +292,7 @@ export async function startAwaitedOperation(
     childId,
   );
   return async () => {
-    if (committed) await coordinator.flushCommitted(committed);
+    if (committed) await awaitEventPublication(committed);
     await resume();
   };
 }
@@ -304,7 +305,7 @@ export async function scheduleResumptions(
   > = {},
   transaction?: SqlExecutor,
 ): Promise<() => Promise<void>> {
-  const { store, coordinator } = runtime;
+  const { store } = runtime;
   const operations =
     createOperationCatalogTables(store.databaseSchema).operations;
   const committed: Awaited<ReturnType<typeof store.commitMutation>>[] = [];
@@ -341,7 +342,7 @@ export async function scheduleResumptions(
     for (const row of waiters.rows) {
       const key = `${row.action_run_id}:resume`;
       const bodyId = `event-body:${row.namespace}:${key}`;
-      const result = await store.commitMutation({
+      const result = await runtime.coordinator.commitMutation({
         draft: {
           namespace: row.namespace,
           type: ACTION_RESUME_EVENT,
@@ -394,6 +395,6 @@ export async function scheduleResumptions(
       (_input, { transaction }) => run(transaction),
     );}
   return async () => {
-    for (const result of committed) await coordinator.flushCommitted(result);
+    for (const result of committed) await awaitEventPublication(result);
   };
 }

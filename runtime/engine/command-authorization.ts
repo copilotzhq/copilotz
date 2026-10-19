@@ -94,23 +94,18 @@ export function captureOwnerCommandAuthorization():
 export const withoutOwnerCommandAuthorization = <T>(
   run: () => T | Promise<T>,
 ): Promise<T> => scopes.run(undefined, run);
-const checked = new WeakMap<object, Set<OwnerCommandAuthorization>>();
 export async function authorizeOwnerCommand(
   guard: OwnerCommandAuthorization | undefined,
   context: CommandContext,
   purpose: "mutation" | "result",
 ): Promise<void> {
-  let guards = checked.get(context.transaction);
+  const guards = context.authorizationGuards;
   if (guard) {
     const authority = captured.get(guard) ?? { guards: [guard], checks: [] };
     // The capability call must be live at admission. Once joined, its immutable
     // policy belongs to this owner transaction through the outer result gate.
     // The call wrapper may finish before its transaction commits.
     authority.checks.forEach((check) => check());
-    if (!guards) {
-      guards = new Set();
-      checked.set(context.transaction, guards);
-    }
     for (const member of authority.guards) {
       if (!guards.has(member)) {
         await invoke(member, context, "mutation");
@@ -120,7 +115,7 @@ export async function authorizeOwnerCommand(
   }
   // An unguarded outer command must still check guards contributed by joined work.
   if (purpose === "result") {
-    for (const member of guards ?? []) {
+    for (const member of guards) {
       await invoke(member, context, "result");
     }
   }

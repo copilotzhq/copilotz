@@ -1,6 +1,22 @@
-import { assertSchemaCommandTransaction } from "./commands.ts";
+import {
+  assertSchemaCommandTransaction,
+  schemaCommandContext,
+} from "./commands.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import { createCoreTableNames } from "../events/schema.ts";
+
+// A command owns its dirty sources; rollback discards them with the context.
+const dirty = new WeakMap<object, Set<string>>();
+export function invalidateOwnerAlarm(
+  transaction: SqlExecutor,
+  schema: string,
+  source = "",
+): void {
+  const context = schemaCommandContext(transaction, schema);
+  let sources = dirty.get(context);
+  if (!sources) dirty.set(context, sources = new Set());
+  sources.add(source);
+}
 
 /** Durable work identity includes its namespace; opaque keys never use delimiters. */
 export type OwnerDeadline = Readonly<{
@@ -49,6 +65,7 @@ export async function writeOwnerDeadline(
   owner = "schema",
 ): Promise<void> {
   assertSchemaCommandTransaction(transaction, schema);
+  invalidateOwnerAlarm(transaction, schema);
   const table = createCoreTableNames(schema).owner_deadlines;
   if (input.dueAt === null) {
     await transaction.query(
@@ -82,6 +99,7 @@ export async function completeOwnerDeadline(
   owner = "schema",
 ): Promise<void> {
   assertSchemaCommandTransaction(transaction, schema);
+  invalidateOwnerAlarm(transaction, schema);
   await transaction.query(
     `DELETE FROM ${createCoreTableNames(schema).owner_deadlines}
      WHERE owner=$1 AND source=$2 AND key=$3 AND revision=$4::bigint`,
@@ -97,7 +115,6 @@ export function createOwnerAlarmDriver(options: {
   ready(): boolean;
   stopped(): boolean;
   fail(error: unknown): void;
-  refreshAfterWake(): Promise<void>;
   scheduler?: OwnerAlarmScheduler;
 }) {
   const tables = createCoreTableNames(options.schema);
@@ -108,6 +125,7 @@ export function createOwnerAlarmDriver(options: {
     cancel: (handle: unknown) => clearTimeout(handle as number),
   };
   let timer: unknown;
+  let dueAt: string | null | undefined;
   let generation = 0;
   let waking = false;
   let paused = false;
@@ -125,21 +143,28 @@ export function createOwnerAlarmDriver(options: {
     if (pending !== undefined) scheduler.cancel(pending);
   }
   function rearm(): Promise<void> {
-    return track(arm());
+    return track((async () => {
+      if (dueAt === undefined) {
+        const result = await options.session.query<{ due_at: string | Date }>(
+          `SELECT due_at FROM ${tables.owner_alarms} WHERE owner=$1`,
+          [options.owner],
+        );
+        // A command may have committed while the activation read was pending.
+        if (dueAt === undefined) {
+          dueAt = result.rows[0]
+            ? new Date(result.rows[0].due_at).toISOString()
+            : null;
+        }
+      }
+      arm();
+    })());
   }
-  async function arm(): Promise<void> {
+  function arm(): void {
     if (paused || !options.ready() || options.stopped() || waking) return;
-    const current = ++generation;
-    const result = await options.session.query<{ due_at: string | Date }>(
-      `SELECT due_at FROM ${tables.owner_alarms} WHERE owner=$1`,
-      [options.owner],
-    );
-    if (paused || current !== generation || options.stopped() || waking) return;
-    const pending = timer;
-    timer = undefined;
-    if (pending !== undefined) scheduler.cancel(pending);
-    const due = result.rows[0]?.due_at;
-    if (due === undefined) return;
+    cancel();
+    const current = generation;
+    const due = dueAt;
+    if (!due) return;
     // Long delays are re-armed against the persisted timestamp, never overflow.
     const delay = Math.min(
       2_147_483_647,
@@ -197,7 +222,6 @@ export function createOwnerAlarmDriver(options: {
         }
         await source.wake(deadlines);
       }
-      if (!options.stopped()) await options.refreshAfterWake();
     } finally {
       waking = false;
     }
@@ -214,29 +238,42 @@ export function createOwnerAlarmDriver(options: {
         if (!registrations.length) sources.delete(source.name);
       };
     },
-    async refresh(transaction: SqlExecutor, now: string): Promise<void> {
-      for (const registrations of sources.values()) {
-        const source = registrations.at(-1)!;
-        if (source.nextDeadline) {
+    async refresh(
+      transaction: SqlExecutor,
+      now: string,
+    ): Promise<string | null | undefined> {
+      const changed = dirty.get(
+        schemaCommandContext(transaction, options.schema),
+      );
+      if (!changed) return undefined;
+      for (const name of changed) {
+        const source = sources.get(name)?.at(-1);
+        if (source?.nextDeadline) {
           await writeOwnerDeadline(transaction, options.schema, {
-            source: source.name,
+            source: name,
             key: "source",
             namespace: null,
             dueAt: await source.nextDeadline(transaction, now),
           }, options.owner);
         }
       }
-      await transaction.query(
-        `INSERT INTO ${tables.owner_alarms} (owner,name,due_at)
-         SELECT $1,'wake',MIN(due_at) FROM ${tables.owner_deadlines} WHERE owner=$1 HAVING MIN(due_at) IS NOT NULL
-         ON CONFLICT (owner) DO UPDATE SET due_at=EXCLUDED.due_at`,
+      const result = await transaction.query<{ due_at: string | Date | null }>(
+        `WITH next AS (SELECT MIN(due_at) AS due_at FROM ${tables.owner_deadlines} WHERE owner=$1),
+         removed AS (DELETE FROM ${tables.owner_alarms} WHERE owner=$1 AND (SELECT due_at FROM next) IS NULL),
+         saved AS (INSERT INTO ${tables.owner_alarms} (owner,name,due_at)
+           SELECT $1,'wake',due_at FROM next WHERE due_at IS NOT NULL
+           ON CONFLICT (owner) DO UPDATE SET due_at=EXCLUDED.due_at)
+         SELECT due_at FROM next`,
         [options.owner],
       );
-      await transaction.query(
-        `DELETE FROM ${tables.owner_alarms} WHERE owner=$1
-         AND NOT EXISTS (SELECT 1 FROM ${tables.owner_deadlines} WHERE owner=$1)`,
-        [options.owner],
-      );
+      return result.rows[0]?.due_at
+        ? new Date(result.rows[0].due_at).toISOString()
+        : null;
+    },
+    committed(next: string | null | undefined) {
+      if (next === undefined || next === dueAt) return;
+      dueAt = next;
+      arm();
     },
     rearm,
     wake,

@@ -336,3 +336,31 @@ Deno.test("refused admission, unjoined transactions and stale epochs cannot cons
     await f.close();
   }
 });
+
+Deno.test("owner push shares one immutable capture across listeners", async () => {
+  const f = await fixture("push_immutable");
+  const received: OwnerPushFrame[] = [];
+  const first = await attachOwnerPush(f.db, f.schema, (frame) => {
+    if (frame.kind !== "change") return;
+    received.push(frame);
+    try {
+      (frame.change.event!.payload as { key: string }).key = "corrupted";
+    } catch { /* immutable internal delivery */ }
+  });
+  const second = await attachOwnerPush(f.db, f.schema, (frame) => {
+    if (frame.kind === "change") received.push(frame);
+  });
+  try {
+    await f.store.append(draft("original"));
+    await turn();
+    assertEquals(received.length, 2);
+    const [a, b] = received;
+    assert(a.kind === "change" && b.kind === "change");
+    assert(a.change === b.change);
+    assertEquals(b.change.event!.payload, { key: "original" });
+  } finally {
+    first.close();
+    second.close();
+    await f.close();
+  }
+});

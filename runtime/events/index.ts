@@ -36,10 +36,7 @@ export type {
   SqlSession,
   SqlSnapshotCleanup,
 } from "./session.ts";
-export type {
-  SqlNotification,
-  SqlNotificationSubscription,
-} from "./session.ts";
+export type {} from "./session.ts";
 export { createEventStore, serializeError } from "./store.ts";
 export type {
   CommitEventMutationOptions,

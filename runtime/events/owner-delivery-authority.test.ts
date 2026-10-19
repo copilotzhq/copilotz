@@ -1,3 +1,4 @@
+import { claimFirst, heartbeat } from "../testing/owner-helpers.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { openDatabaseOwner } from "../engine/commands.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -44,7 +45,7 @@ for (const backend of ["memory", "postgres"] as const) {
         );
         assertEquals(await store.listRecoverable(), []);
         assertEquals(
-          await store.heartbeatDelivery({ id, owner: "local-attempt" }),
+          await heartbeat(store, { id, owner: "local-attempt" }),
           false,
         );
         assertEquals(
@@ -97,6 +98,11 @@ for (const backend of ["memory", "postgres"] as const) {
         const successor = createEventStore({ session, schema });
         const authority = await successor.executionAuthority();
         assertEquals(authority.epoch, previous.epoch! + 1);
+        await assertRejects(
+          () => store.executionAuthority(),
+          Error,
+          "simulated process loss",
+        );
         assertEquals(
           (await successor.listRecoverable()).map((d) => d.id).sort(),
           [local.id, remote.id].sort(),
@@ -106,7 +112,7 @@ for (const backend of ["memory", "postgres"] as const) {
           null,
         );
         assertEquals(
-          await successor.heartbeatDelivery({
+          await heartbeat(successor, {
             id: remote.id,
             owner: "old-remote",
           }),
@@ -179,10 +185,10 @@ for (const backend of ["memory", "postgres"] as const) {
         );
         assertEquals(winners.filter(Boolean).length, 1);
         assertEquals(
-          (await store.claimNext({ owner: "next" }))?.id,
+          (await claimFirst(store, { owner: "next" }))?.id,
           second.deliveries[0].id,
         );
-        assertEquals(await store.claimNext({ owner: "empty" }), null);
+        assertEquals(await claimFirst(store, { owner: "empty" }), null);
       } finally {
         await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
         await db.close();

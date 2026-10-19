@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import { validateCollectionProjections } from "../collections/projection-registration.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/policy-receipt.ts";
@@ -73,7 +74,6 @@ import {
 import { reportDeliveryDiagnostic } from "../execution/diagnostics.ts";
 import {
   createTransientProcessorSet,
-  matchProcessor,
   type Processor,
   type ProcessorContext,
   resolveProcessorEvent,
@@ -546,30 +546,33 @@ export async function createCopilotzEngine(
               base.databaseSchema,
             )("actions.start", input, async (_input, command) => {
               const { transaction, commandTime } = command;
-              if (base.settlementScopeId) {
-                const source = await transaction.query(
-                  `SELECT operation_id
-                  FROM ${
-                    createOperationCatalogTables(base.databaseSchema)
-                      .operations
+              if (base.settlementScopeId || base.source?.kind === "delivery") {
+                const live = await transaction.query<
+                  { operation: boolean; delivery: boolean }
+                >(
+                  `SELECT ($2::text IS NULL OR EXISTS(SELECT 1 FROM ${
+                    createOperationCatalogTables(base.databaseSchema).operations
                   }
-                  WHERE namespace = $1 AND operation_id = $2
-                    AND state IN ('accepted','running') AND cancellation_requested_at IS NULL`,
-                  [base.event.namespace, base.settlementScopeId],
+                    WHERE namespace=$1 AND operation_id=$2 AND state IN ('accepted','running') AND cancellation_requested_at IS NULL)) AS operation,
+                    ($3::text IS NULL OR EXISTS(SELECT 1 FROM ${scopedStore.tables.event_deliveries}
+                    WHERE id=$3 AND status='leased' AND lease_owner=$4
+                    AND (lease_expires_at IS NULL OR lease_expires_at>$5::timestamptz)
+                    AND owner_epoch=$6::bigint)) AS delivery`,
+                  [
+                    base.event.namespace,
+                    base.settlementScopeId ?? null,
+                    base.source?.kind === "delivery" ? base.source.id : null,
+                    base.executionIncarnationId,
+                    commandTime,
+                    command.caller.epoch,
+                  ],
                 );
-                if (!source.rows.length) {
+                if (!live.rows[0].operation) {
                   throw new Error(
                     "Operation admission lost its active source operation.",
                   );
                 }
-              }
-              if (base.source?.kind === "delivery") {
-                const lease = await transaction.query(
-                  `SELECT id FROM ${scopedStore.tables.event_deliveries}
-                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND (lease_expires_at IS NULL OR lease_expires_at > $3::timestamptz) AND owner_epoch=(SELECT epoch FROM ${scopedStore.tables.owner_epochs} WHERE owner='schema')`,
-                  [base.source.id, base.executionIncarnationId, commandTime],
-                );
-                if (!lease.rows.length) {
+                if (!live.rows[0].delivery) {
                   throw new Error(
                     "Operation admission lost its delivery lease.",
                   );
@@ -599,7 +602,7 @@ export async function createCopilotzEngine(
                 preparedOperation,
               );
             });
-            if (committed) await scopedCoordinator.flushCommitted(committed);
+            if (committed) await awaitEventPublication(committed);
             return operationId;
           },
         },
@@ -1208,80 +1211,8 @@ export async function createCopilotzEngine(
             failures: results.flatMap((result) => result.failures),
           } as const);
         },
-        async bindTransient(processor: Processor, bindOptions = {}) {
-          if (bindOptions.afterPosition === undefined) {
-            return transients.add(processor);
-          }
-          const namespace = bindOptions.namespace?.trim();
-          if (!namespace) {
-            throw new TypeError("Transient catch-up requires a namespace.");
-          }
-          let catchingUp = true;
-          const handled = new Set<string>();
-          let serial = Promise.resolve();
-          const catchupProcessor: Processor = {
-            id: processor.id,
-            on: processor.on,
-            settlement: processor.settlement,
-            handle(event, context) {
-              const next = serial.then(async () => {
-                const eventId = event.durable ? event.id : undefined;
-                if (catchingUp && eventId && handled.has(eventId)) return;
-                await processor.handle(event, context);
-                if (catchingUp && eventId) handled.add(eventId);
-              });
-              serial = next.catch(() => undefined);
-              return next;
-            },
-          } as const;
-          const unbind = transients.add(catchupProcessor);
-          const solo = createTransientProcessorSet([catchupProcessor]);
-          const signal = bindOptions.signal ?? new AbortController().signal;
-          let afterPosition = bindOptions.afterPosition;
-          try {
-            while (true) {
-              const events = await store.listEvents({
-                namespace,
-                afterPosition,
-                limit: 1_000,
-              });
-              for (const event of events) {
-                const resolvedEvent = await resolveEventInScope(
-                  event,
-                  databaseSchema,
-                );
-                const eventData = resolvedEvent.data;
-                if (!matchProcessor(catchupProcessor, event, eventData)) {
-                  continue;
-                }
-                await invokeLiveProcessors({
-                  databaseSchema,
-                  registry: options.registry,
-                  transients: solo,
-                  event,
-                  eventData,
-                  resolvedEvent,
-                  signal,
-                  createContext: createLiveContext,
-                });
-              }
-              if (events.length < 1_000) break;
-              const nextPosition = events.at(-1)?.position;
-              if (!nextPosition || nextPosition === afterPosition) {
-                throw new Error(
-                  "Transient catch-up pagination did not advance.",
-                );
-              }
-              afterPosition = nextPosition;
-            }
-            await serial;
-            catchingUp = false;
-            handled.clear();
-            return unbind;
-          } catch (error) {
-            unbind();
-            throw error;
-          }
+        bindTransient(processor: Processor) {
+          return Promise.resolve(transients.add(processor));
         },
         shutdown(reason = "copilotz_engine_shutdown") {
           if (shutdownPromise) return shutdownPromise;

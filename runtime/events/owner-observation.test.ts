@@ -369,8 +369,7 @@ Deno.test("engine durable repair scans bounded pages once and discovers a lost f
     await turn();
   }
   let loads = 0;
-  const loaded = Promise.withResolvers<void>(),
-    release = Promise.withResolvers<void>();
+  const loaded = Promise.withResolvers<void>();
   const engine = await createCopilotzEngine({
     session: {
       ...f.db,
@@ -401,20 +400,19 @@ Deno.test("engine durable repair scans bounded pages once and discovers a lost f
     await loaded.promise;
     await new Promise((resolve) => setTimeout(resolve, 1100));
     assertEquals(loads, 2);
-    await f.run(
-      "test.holdLastPublication",
-      {},
-      (_input, context) => context.afterCommit(() => release.promise),
-    );
-    const target = (await f.store.append({
-      namespace: "scope",
-      type: "target",
-      payload: {},
-    })).event;
+    const target =
+      (await f.run("test.dropLastPublication", {}, async (_input, context) => {
+        // Lose the transport hint, while the transaction still commits its head.
+        Object.defineProperty(context, "afterCommit", { value: () => {} });
+        return await f.store.commitMutation({
+          transaction: context.transaction,
+          consumers: [],
+          draft: { namespace: "scope", type: "target", payload: {} },
+        });
+      })).event;
     assertEquals(await waiting, target);
     assertEquals(loads, 3);
   } finally {
-    release.resolve();
     await waiting.catch(() => {});
     await engine.shutdown();
     await f.close();

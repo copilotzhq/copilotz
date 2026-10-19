@@ -1,3 +1,4 @@
+import { receipt } from "../testing/owner-helpers.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createCoreTableNames,
@@ -403,14 +404,14 @@ for (const loss of ["connection loss", "owner process death"] as const) {
           assertEquals(notices, []);
           const oldCaller = { principal: "fixture-worker", epoch: 1 };
           assertExists(
-            await successor.readReceipt(oldCaller, {
+            await receipt(db, schema, oldCaller, {
               domain: "logical",
               key: "existing",
             }),
           );
           assertEquals(
             Boolean(
-              await successor.readReceipt(oldCaller, {
+              await receipt(db, schema, oldCaller, {
                 domain: "logical",
                 key: "new",
               }),
@@ -418,24 +419,24 @@ for (const loss of ["connection loss", "owner process death"] as const) {
             committed,
           );
           assertEquals(
-            await successor.readReceipt(oldCaller, {
+            await receipt(db, schema, oldCaller, {
               domain: "logical",
               key: "failed",
             }),
             undefined,
           );
           assertEquals(
-            await successor.readReceipt(oldCaller, {
+            await receipt(db, schema, oldCaller, {
               domain: "logical",
               key: "queued",
             }),
             undefined,
           );
           assertEquals(
-            await successor.readReceipt(
-              { principal: "other-worker", epoch: 2 },
-              { domain: "logical", key: "existing" },
-            ),
+            await receipt(db, schema, { principal: "other-worker", epoch: 2 }, {
+              domain: "logical",
+              key: "existing",
+            }),
             undefined,
           );
           const caller = { principal: "fixture-worker", epoch: 2 };

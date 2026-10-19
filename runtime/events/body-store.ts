@@ -58,16 +58,15 @@ function canonicalJson(value: unknown): string {
   return text;
 }
 
-async function eventBodyDigest(value: unknown): Promise<`sha256:${string}`> {
+async function eventBodyDigest(text: string): Promise<`sha256:${string}`> {
   if (!globalThis.crypto?.subtle) {
     throw new TypeError(
       "A Web Crypto SHA-256 implementation is required to persist event bodies.",
     );
   }
-  const bytes = new TextEncoder().encode(canonicalJson(value));
-  const input = bytes.slice().buffer as ArrayBuffer;
+  const bytes = new TextEncoder().encode(text);
   const digest = new Uint8Array(
-    await globalThis.crypto.subtle.digest("SHA-256", input),
+    await globalThis.crypto.subtle.digest("SHA-256", bytes),
   );
   const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0"))
     .join("");
@@ -97,10 +96,10 @@ async function requireStoredBody(
 export async function encodeEventBody(
   json: unknown,
 ): Promise<Readonly<{ body: string; digest: string }>> {
-  const canonical = canonicalizeContentRefs(json);
+  const body = canonicalJson(canonicalizeContentRefs(json));
   return ({
-    body: canonicalJson(canonical),
-    digest: await eventBodyDigest(canonical),
+    body,
+    digest: await eventBodyDigest(body),
   } as const);
 }
 
@@ -157,7 +156,7 @@ export async function readEventBody<T>(
       `Event body '${eventBodyId}' has the wrong schema version.`,
     );
   }
-  const digest = await eventBodyDigest(row.body);
+  const digest = await eventBodyDigest(canonicalJson(row.body));
   if (digest !== row.digest) {
     throw new Error(`Event body '${eventBodyId}' digest verification failed.`);
   }

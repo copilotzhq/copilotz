@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import type { CollectionProjectionRegistrations } from "./projection-registration.ts";
 import { withOwnerReadQueryContext } from "../engine/owner-query-context.ts";
 import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
@@ -1819,7 +1820,9 @@ export function createCollectionKernel(
         options.assets.publishMaterializations(resolvedPlan!.content);
         const reports = [];
         for (const item of pending) {
-          reports.push(await options.coordinator.flushCommitted(item));
+          if (!collectionRuntimeCommitPending(options)) {
+            reports.push(await awaitEventPublication(item));
+          }
         }
         return ({
           ...result,
@@ -4131,7 +4134,9 @@ export function createCollectionKernel(
 
     const reports: EventDispatchReport[] = [];
     for (const committed of pending) {
-      reports.push(await options.coordinator.flushCommitted(committed));
+      if (!collectionRuntimeCommitPending(options)) {
+        reports.push(await awaitEventPublication(committed));
+      }
     }
     if (policies.length) {
       try {

@@ -32,6 +32,9 @@ Deno.test({
       );
       assertEquals(tables.rows.map((row) => row.table_name), [
         "action_effects",
+        "content_adoptions",
+        "content_copies",
+        "content_logical_bodies",
         "copilotz_schema_metadata",
         "edges",
         "event_bodies",
@@ -40,11 +43,11 @@ Deno.test({
         "nodes",
         "open_actions",
         "owner_alarms",
-        "owner_deadlines",
         "owner_body_retirements",
+        "owner_deadlines",
         "owner_epochs",
-        "owner_event_sequences",
         "owner_receipts",
+        "pending_content",
       ]);
       const store = createEventStore({
         session,

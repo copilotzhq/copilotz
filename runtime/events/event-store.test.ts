@@ -1,3 +1,4 @@
+import { claimFirst, heartbeat } from "../testing/owner-helpers.ts";
 import {
   createSchemaCommandRunner,
   openDatabaseOwner,
@@ -146,6 +147,10 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
     assertEquals(
       result.rows.map((row) => row.table_name),
       [
+        "action_effects",
+        "content_adoptions",
+        "content_copies",
+        "content_logical_bodies",
         "copilotz_schema_metadata",
         "edges",
         "event_bodies",
@@ -154,11 +159,11 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
         "nodes",
         "open_actions",
         "owner_alarms",
-        "owner_deadlines",
         "owner_body_retirements",
+        "owner_deadlines",
         "owner_epochs",
-        "owner_event_sequences",
         "owner_receipts",
+        "pending_content",
       ],
     );
 
@@ -679,7 +684,7 @@ Deno.test("A22 delivery claims retry three times and retain dead-letter state", 
     assertEquals(first?.attempts, 1);
     assertEquals(await store.succeedDelivery(id, "wrong-owner"), null);
     assertEquals(
-      await store.heartbeatDelivery({
+      await heartbeat(store, {
         id,
         owner: "owner-1",
         leaseMs: 60_000,
@@ -907,7 +912,7 @@ Deno.test("delivery recovery and claims order by availability, creation time, th
     );
     for (const id of expected) {
       assertEquals(
-        (await store.claimNext({
+        (await claimFirst(store, {
           owner: "ordered-worker",
           namespace: "tenant-a",
           consumerIds: ["worker"],
@@ -975,7 +980,7 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
       [secondQueued.deliveries[0].id, "2000-01-02T00:00:00Z"],
     );
     assertEquals(
-      (await store.claimNext({
+      (await claimFirst(store, {
         owner: "next",
         namespace: "tenant-a",
         consumerIds: ["worker"],

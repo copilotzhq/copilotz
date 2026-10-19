@@ -94,7 +94,7 @@ async function fixture() {
       afterMutation?.();
       return { ...committed, dispatch: { handles: [], failures: [] } };
     },
-    flushCommitted: () => Promise.resolve({ handles: [], failures: [] }),
+
     append() {
       throw new Error("unused");
     },

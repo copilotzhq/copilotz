@@ -12,15 +12,6 @@ export type SqlExecutor = {
   ): Promise<SqlQueryResult<TRow>>;
 };
 
-export type SqlNotification = Readonly<{
-  channel: string;
-  payload?: string;
-}>;
-
-export type SqlNotificationSubscription = Readonly<{
-  close(): Promise<void>;
-}>;
-
 /** Cleanup is confirmed only after the backend has released the exact resource. */
 export type SqlSnapshotCleanup = "confirmed" | "unknown";
 export type SqlReadSnapshot =
@@ -55,11 +46,6 @@ export type SqlSession = SqlExecutor & {
       }
     >,
   ): Promise<T>;
-  /** Optional PostgreSQL notification seam; absence enables bounded fallback. */
-  listen?(
-    channel: string,
-    handler: (notification: SqlNotification) => void,
-  ): Promise<SqlNotificationSubscription>;
 };
 
 type TransactionCompletion = {
@@ -194,7 +180,6 @@ type DatabaseLike = SqlExecutor & {
   transaction?: <T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ) => Promise<T>;
-  listen?: SqlSession["listen"];
   withReadSnapshot?: SqlSession["withReadSnapshot"];
 };
 
@@ -222,9 +207,6 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
     query,
     ...(typeof database.withReadSnapshot === "function"
       ? { withReadSnapshot: database.withReadSnapshot.bind(database) }
-      : {}),
-    ...(typeof database.listen === "function"
-      ? { listen: database.listen.bind(database) }
       : {}),
     transaction,
     async readSnapshot(operation) {

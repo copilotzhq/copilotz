@@ -120,13 +120,15 @@ async function fixture() {
   const coordinator: EventCoordinator = {
     async commitMutation(input) {
       return {
-        ...await store.commitMutation({ ...input, consumers: [] }),
+        ...await store.commitMutation({
+          ...input,
+          consumers: [],
+          onCommitted() {
+            published++;
+          },
+        }),
         dispatch: { handles: [], failures: [] },
       };
-    },
-    flushCommitted() {
-      published++;
-      return Promise.resolve({ handles: [], failures: [] });
     },
     append() {
       throw new Error("unused");

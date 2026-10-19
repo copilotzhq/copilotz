@@ -400,7 +400,7 @@ for (const baseline of [8, 9]) {
       );
       assertEquals(
         (await db.query(
-          `SELECT COUNT(*)::integer AS count FROM ${tables.owner_event_sequences}`,
+          `SELECT COUNT(*)::integer AS count FROM ${tables.events}`,
         )).rows[0].count,
         1,
       );

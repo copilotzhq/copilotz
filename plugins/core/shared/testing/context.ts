@@ -15,7 +15,7 @@ import {
   type ActionHostContext,
   createActionContext,
 } from "@copilotz/copilotz/actions";
-import type { PluginRegistry, Processor } from "@copilotz/copilotz/plugins";
+import type { PluginRegistry } from "@copilotz/copilotz/plugins";
 import type { ConversationMessage, ConversationThread } from "../contracts.ts";
 import {
   mapMessageRecord,
@@ -35,14 +35,10 @@ export type TestDomainHost = Readonly<{
     preparer: ContentPreparer;
     resolver: ContentResolver;
   }>;
-  bindTransient(
-    processor: Processor,
-    options?: Readonly<{
-      namespace?: string;
-      afterPosition?: string;
-      signal?: AbortSignal;
-    }>,
-  ): Promise<() => void>;
+  events: Pick<
+    import("@copilotz/copilotz/engine").CopilotzEngine["events"],
+    "list" | "resolveActionLifecycle"
+  >;
 }>;
 
 async function materialize(

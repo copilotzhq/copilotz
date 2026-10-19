@@ -15,6 +15,7 @@ import { defineServerFacade } from "../../server/index.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createEventStore } from "../events/store.ts";
+import { openDatabaseOwner, releaseDatabaseOwner } from "../engine/commands.ts";
 
 const selected = Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL");
 const namespace = "integrity-space";
@@ -59,6 +60,7 @@ async function fixture(
     | "captured-retry"
     | "open-effect"
     | "host-open-effect"
+    | "consumed-recovery"
     | "quiet"
     | "settled",
 ) {
@@ -156,6 +158,23 @@ async function fixture(
         context: ActionContext,
       ) {
         counts.children++;
+        if (boundary === "consumed-recovery" && ordinal === 1) {
+          assertEquals(await context.effect.begin("synthetic-send"), {
+            status: "proceed",
+          });
+          counts.providers++;
+          childEntered.resolve();
+          // The actual owner is stopped at this retained boundary before close.
+          // Its fenced attempt cannot turn shutdown into a terminal receipt.
+          if (!context.signal.aborted) {
+            await new Promise<void>((resolve) =>
+              context.signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              })
+            );
+          }
+          throw context.signal.reason;
+        }
         if (
           ["open-effect", "host-open-effect"].includes(boundary) &&
           ordinal === 1
@@ -340,7 +359,7 @@ async function fixture(
         };
       },
       engine: {
-        maxAttempts: 2,
+        maxAttempts: boundary === "consumed-recovery" ? 1 : 2,
         retryBaseMs: 0,
         random: () => 0,
         alarmScheduler: {
@@ -363,6 +382,17 @@ async function fixture(
       "ready",
     );
     const factoryCounts = { ...counts };
+    // Use the real owner boundary already used by retained-attempt tests. This
+    // does not fabricate a delivery, Action, receipt, or recovery implementation.
+    const retainedOwner = boundary === "consumed-recovery"
+      ? await openDatabaseOwner(database, schema)
+      : undefined;
+    if (retainedOwner) {
+      resources.push(() => {
+        releaseDatabaseOwner(retainedOwner);
+        return Promise.resolve();
+      });
+    }
     const listener = listen(gateway, { hostname: "127.0.0.1", port: 0 });
     resources.push(() => listener.shutdown());
     const workerUrl = new URL("/workers", listener.url);
@@ -409,7 +439,18 @@ async function fixture(
       alarms.clear();
       for (const callback of callbacks) callback();
     };
-    return { gateway, close, wake, ordinal, factoryCounts };
+    return {
+      gateway,
+      close,
+      wake,
+      ordinal,
+      factoryCounts,
+      stopOwner() {
+        assertExists(retainedOwner);
+        assertEquals(retainedOwner.state, "ready");
+        retainedOwner.stop(new Error("test retains the final active attempt"));
+      },
+    };
   }
   type Opened = Awaited<ReturnType<typeof start>>;
   const submit = (app: Opened, id: string) =>
@@ -1207,3 +1248,210 @@ Deno.test({
     }
   },
 });
+
+// REGISTER21–36 and F5-owner-contract60–65 retain accepted-work evidence and
+// fail-closed captured-input recovery. This exercises the actual consuming
+// recovery path, not validation of an unused invoked body with a valid terminal
+// or the retired global startup-history scanner (ledger3-054 /4-046).
+for (const corrupt of [false, true]) {
+  Deno.test({
+    name: `PostgreSQL consumed-history recovery ${
+      corrupt
+        ? "refuses a corrupt required body"
+        : "settles a healthy required body"
+    } before replaying accepted open work`,
+    ignore: !selected,
+    async fn() {
+      const f = await fixture("consumed-recovery");
+      try {
+        const first = await f.start();
+        const originalRoot = await f.accepted(first, "consumed-original");
+        await bounded(f.childEntered, "accepted child effect boundary");
+        const parent = await f.delivery("leased", 1);
+        assertEquals(parent.max_attempts, 1);
+        const children = await f.childEvidence();
+        assertEquals(children.map((row) => row.body.status), ["invoked"]);
+        const invoked = children[0];
+        assertEquals(
+          invoked.body.actionRunId,
+          `${parent.id}:action:integrity.child:first-capture`,
+        );
+        assertEquals(invoked.body.input, {
+          id: "consumed-original",
+          value: "value-consumed-original",
+          revision: 1,
+        });
+        const open = await f.rows("open_actions", "namespace,action_run_id");
+        assertEquals(open.length, 1);
+        assertEquals(open[0].action_run_id, invoked.body.actionRunId);
+        assertEquals(open[0].invoked_event_id, invoked.id);
+        assertEquals(open[0].owner_delivery_id, parent.id);
+        const counts = {
+          roots: 1,
+          processors: 1,
+          preparations: 1,
+          children: 1,
+          providers: 1,
+        };
+        assertEquals(f.counts, counts);
+        first.stopOwner();
+        await bounded(first.close(), "all original owners and workers closed");
+        const before = await f.immutable();
+        const retainedDelivery = (await f.query(
+          `SELECT * FROM "${schema}".event_deliveries WHERE id=$1`,
+          [parent.id],
+        )).rows[0];
+        assertEquals(retainedDelivery.status, "leased");
+        assertEquals(retainedDelivery.attempts, retainedDelivery.max_attempts);
+        assertEquals(retainedDelivery.settled_at, null);
+        assertEquals(
+          await f.rows("open_actions", "namespace,action_run_id"),
+          open,
+        );
+        assert(before.receipts.length > 0);
+        assert(before.events.some((row) => row.id === invoked.id));
+        assertEquals(before.effects, [{
+          namespace,
+          action_run_id: invoked.body.actionRunId,
+          step: "synthetic-send",
+          ancestors: [],
+          status: "begun",
+          outcome: null,
+          evidence: null,
+        }]);
+        const operations = await f.rows(
+          "copilotz_operations",
+          "namespace,operation_id",
+        );
+        const digest = `sha256:${"0".repeat(64)}`;
+        if (corrupt) {
+          assert(invoked.digest !== digest);
+          const changed = await f.query(
+            `UPDATE "${schema}".event_bodies SET digest=$1 WHERE namespace=$2 AND event_body_id=$3 AND digest=$4 RETURNING *`,
+            [digest, namespace, invoked.event_body_id, invoked.digest],
+          );
+          assertEquals(changed.rows.length, 1);
+        }
+        const retained = await f.immutable();
+        assertEquals(retained, {
+          ...before,
+          bodies: before.bodies.map((row) =>
+            corrupt && row.event_body_id === invoked.event_body_id
+              ? { ...row, digest }
+              : row
+          ),
+        });
+        if (corrupt) {
+          // Final-attempt takeover invokes recoverDeliveryActions at activation.
+          // Its delivery.exhaust transaction must roll back when readEventBody
+          // rejects the exact captured invoked body, before readiness/execution.
+          const error = await assertRejects(
+            () => bounded(f.start(), "consumed captured-input refusal"),
+            Error,
+            `Event body '${invoked.event_body_id}' digest verification failed.`,
+          );
+          assertEquals(
+            error.message.includes("value-consumed-original"),
+            false,
+          );
+          assertEquals(await f.immutable(), retained);
+          assertEquals(
+            await f.rows("open_actions", "namespace,action_run_id"),
+            open,
+          );
+          assertEquals(
+            await f.rows("copilotz_operations", "namespace,operation_id"),
+            operations,
+          );
+          assertEquals(await f.childEvidence(), [{ ...invoked, digest }]);
+          const after = (await f.query(
+            `SELECT * FROM "${schema}".event_deliveries WHERE id=$1`,
+            [parent.id],
+          )).rows[0];
+          // Activation may expire the retained lease. It must not consume the
+          // accepted obligation or certify a terminal from unverified input.
+          assertEquals({
+            ...after,
+            lease_expires_at: retainedDelivery.lease_expires_at,
+            updated_at: retainedDelivery.updated_at,
+          }, retainedDelivery);
+          assertEquals(f.outputs, []);
+          console.log("consumed-history recovery refusal", {
+            originalRoot,
+            parentDeliveryId: parent.id,
+            invokedEventId: invoked.id,
+            eventBodyId: invoked.event_body_id,
+            actionRunId: invoked.body.actionRunId,
+            originalDigest: invoked.digest,
+            alteredDigest: digest,
+            outcome: error.message,
+            factoryReady: false,
+            delivery: after.status,
+            originalEvidenceUnchanged: true,
+            counts: f.counts,
+          });
+        } else {
+          const reopened = await bounded(
+            f.start(),
+            "healthy consuming recovery",
+          );
+          assertEquals(reopened.factoryCounts, counts);
+          const recovered = (await f.query(
+            `SELECT * FROM "${schema}".event_deliveries WHERE id=$1`,
+            [parent.id],
+          )).rows[0];
+          assertEquals(recovered.status, "dead_letter");
+          assertEquals(recovered.attempts, 1);
+          assertEquals(
+            (recovered.last_error as { name: string }).name,
+            "DeliveryLeaseExpired",
+          );
+          const history = await f.childEvidence();
+          assertEquals(history[0], invoked);
+          assertEquals(history.length, 2);
+          assertEquals(history[1].body.status, "failed");
+          assertEquals(history[1].body.input, invoked.body.input);
+          const terminal = history[1].body as typeof invoked.body & {
+            error: { name: string; code: string };
+          };
+          assertEquals(terminal.error.name, "ActionEffectError");
+          assertEquals(terminal.error.code, "effect_indeterminate");
+          assertEquals(
+            await f.rows("open_actions", "namespace,action_run_id"),
+            [],
+          );
+          const after = await f.immutable();
+          assertEquals(after.effects, before.effects);
+          assertEquals(after.receipts, before.receipts);
+          assertEquals(after.nodes, before.nodes);
+          const rootResult = await reopened.gateway.fetch(
+            new Request(
+              `http://integrity.test/api/operations/${originalRoot}/result`,
+            ),
+          );
+          assertEquals(rootResult.status, 200);
+          assertEquals(
+            (await rootResult.json()).data,
+            "accepted:consumed-original",
+          );
+          assertEquals(f.outputs, []);
+          console.log("consumed-history healthy recovery", {
+            originalRoot,
+            parentDeliveryId: parent.id,
+            invokedEventId: invoked.id,
+            eventBodyId: invoked.event_body_id,
+            actionRunId: invoked.body.actionRunId,
+            originalDigest: invoked.digest,
+            factoryReady: true,
+            delivery: recovered.status,
+            terminal: terminal.error,
+            counts: f.counts,
+          });
+        }
+        assertEquals(f.counts, counts);
+      } finally {
+        await f.cleanup();
+      }
+    },
+  });
+}

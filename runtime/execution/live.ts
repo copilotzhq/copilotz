@@ -1,3 +1,4 @@
+import { closeCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
 import { readViews } from "../collections/read-view.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {
@@ -344,8 +345,12 @@ async function runOne(
       `Live processor '${processorId}' is unavailable or no longer matches.`,
     );
   }
-  await processor.handle(processorEvent, context);
-  options.signal.throwIfAborted();
+  try {
+    await processor.handle(processorEvent, context);
+    options.signal.throwIfAborted();
+  } finally {
+    closeCollectionPolicyInvocation(context);
+  }
 }
 
 /** Invokes independent live subscriptions inside an already running worker. */

@@ -1,3 +1,4 @@
+import { recordTestContentTerminal } from "../testing/content-catalog.ts";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/application.ts";
@@ -287,6 +288,14 @@ Deno.test("operation continuation waits for the child's last stream terminal wit
       await store.getEventByDeduplicationId("test", `${runId}:action:terminal`),
       null,
     );
+    await recordTestContentTerminal(db, "continuation_stream", "test", {
+      bodyId: "body",
+      mediaType: "text/plain",
+      byteLength: 0,
+      digest:
+        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      versionToken: "fixture-generation-1",
+    });
     await app.operations.sealStream({
       namespace: "test",
       operationId: childId,
@@ -295,7 +304,9 @@ Deno.test("operation continuation waits for the child's last stream terminal wit
         bodyId: "body",
         mediaType: "text/plain",
         byteLength: 0,
-        digest: "sha256:empty",
+        digest:
+          "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        versionToken: "fixture-generation-1",
         maintenanceVersion: 1,
         state: "ready",
       },

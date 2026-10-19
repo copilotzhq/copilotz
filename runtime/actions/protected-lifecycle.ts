@@ -1,3 +1,4 @@
+import type { SqlExecutor } from "../events/session.ts";
 import type { OperationStart } from "./continuation.ts";
 /** Internal protected representation of one Action lifecycle Event Body. @module */
 
@@ -60,12 +61,7 @@ export function actionDefinitionById(
   return definition;
 }
 
-export function actionDefinitionHasSecrets(
-  action: AnyActionDefinition,
-): boolean {
-  return actionSchemaHasSecrets(action.inputSchema) ||
-    actionSchemaHasSecrets(action.outputSchema);
-}
+export { actionDefinitionHasSecrets } from "./secret.ts";
 
 /** Whether the Action's input carries values that are stored sealed. */
 export function actionInputHasSecrets(action: AnyActionDefinition): boolean {
@@ -135,7 +131,9 @@ export async function prepareActionLifecycleBody(
     data: ActionEventData;
     action: AnyActionDefinition;
     protectedValues?: ProtectedValueRuntime;
+    transaction?: SqlExecutor;
     existingInput?: ProtectedValueRef;
+    existingOutput?: ProtectedValueRef;
     awaitedAction?: AnyActionDefinition;
   }>,
 ): Promise<PreparedActionLifecycleBody> {
@@ -165,6 +163,7 @@ export async function prepareActionLifecycleBody(
     const value = await input.protectedValues.prepare(
       coordinates(input.namespace, data, "start"),
       data.start,
+      input.transaction,
     );
     prepared.push(value);
     startRef = value.ref;
@@ -174,6 +173,7 @@ export async function prepareActionLifecycleBody(
     const value = await input.protectedValues!.prepare(
       coordinates(input.namespace, input.data, "input"),
       data.input,
+      input.transaction,
     );
     prepared.push(value);
     inputRef = value.ref;
@@ -181,11 +181,12 @@ export async function prepareActionLifecycleBody(
   if (!inputSplit.secret && inputRef) {
     throw new Error("Protected Action input reference is unexpected.");
   }
-  let outputRef: ProtectedValueRef | undefined;
-  if (data.status === "completed" && outputSplit?.secret) {
+  let outputRef = input.existingOutput;
+  if (data.status === "completed" && outputSplit?.secret && !outputRef) {
     const value = await input.protectedValues!.prepare(
       coordinates(input.namespace, data, "output"),
       data.output,
+      input.transaction,
     );
     prepared.push(value);
     outputRef = value.ref;
@@ -230,6 +231,7 @@ export async function hydrateActionLifecycleBody(
     body: ActionEventData | ProtectedActionLifecycleBody;
     action: AnyActionDefinition;
     protectedValues?: ProtectedValueRuntime;
+    transaction?: SqlExecutor;
   }>,
 ): Promise<ActionEventData> {
   const protectedBody = protectedActionLifecycleBody(input.body);
@@ -245,6 +247,7 @@ export async function hydrateActionLifecycleBody(
     const plaintext = await input.protectedValues.open(
       coordinates(input.namespace, data, "input"),
       protectedBody.protected.input,
+      input.transaction,
     );
     hydratedInput = rehydrateSecretActionValue(
       input.action.inputSchema,
@@ -259,6 +262,7 @@ export async function hydrateActionLifecycleBody(
       const plaintext = await input.protectedValues.open(
         coordinates(input.namespace, data, "output"),
         protectedBody.protected.output,
+        input.transaction,
       );
       hydratedOutput = rehydrateSecretActionValue(
         input.action.outputSchema,
@@ -274,6 +278,7 @@ export async function hydrateActionLifecycleBody(
       ? await input.protectedValues.open(
         coordinates(input.namespace, data, "start"),
         protectedBody.protected.start,
+        input.transaction,
       ) as OperationStart
       : undefined;
   return ({

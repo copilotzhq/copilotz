@@ -20,9 +20,11 @@ import type {
   ContentInput,
   ContentRef,
   ContentSequence,
+  GeneratedContentSequence,
+  PendingContentRef,
   PreparedContent,
 } from "@copilotz/copilotz/content";
-import { adoptPreparedBody } from "@copilotz/copilotz/content";
+import { isPendingContentRef } from "@copilotz/copilotz/content";
 import {
   type LlmAdapter,
   type LlmAdapterAttempt,
@@ -199,7 +201,13 @@ type SettledStream = Readonly<{
   lane: string;
   mediaType: string;
   writer: OpenWriter;
-  prepared: PreparedContent;
+  prepared: PendingContentRef;
+}>;
+
+type PreparedResultContent = Readonly<{
+  content: PreparedContent;
+  reasoning?: PreparedContent;
+  nativeReasoning?: PreparedContent;
 }>;
 
 type StreamFrameBatch = {
@@ -465,6 +473,7 @@ function connectionContext(context: LlmActionContext): LlmConnectionContext {
     identity: context.identity,
     action: context.action,
     collections: context.collections,
+    actions: context.actions,
     signal: context.signal,
     now: context.now,
   } as const);
@@ -2166,6 +2175,7 @@ async function settleInvocation(
 
 async function abortWriters(
   state: StreamState,
+  _reason: unknown,
   outcome: "failed" | "cancelled" = "failed",
 ): Promise<void> {
   const reason = outcome === "cancelled" ? "cancelled" : "provider_error";
@@ -2180,6 +2190,7 @@ async function abortWriters(
 async function settleWriters(
   state: StreamState,
   signal: AbortSignal,
+  final: PreparedResultContent,
 ): Promise<readonly SettledStream[]> {
   const writers = [...state.writers.entries()];
   state.writers.clear();
@@ -2193,10 +2204,38 @@ async function settleWriters(
         await writer.abort({ reason: "related_stream_failed" });
         continue;
       }
-      const prepared = await writer.close({ assetId: `stream:${writer.id}` }, {
-        signal,
-      });
       const [lane, mediaType] = JSON.parse(key) as [string, string];
+      const target = lane === "content"
+        ? final.content
+        : lane === "reasoning"
+        ? final.reasoning
+        : undefined;
+      const candidate =
+        target?.content.length === 1 && target.assets.length === 1
+          ? target.assets[0]
+          : undefined;
+      const uniqueLane = writers.filter(([other]) =>
+        (JSON.parse(other) as [string, string])[0] === lane
+      ).length === 1;
+      // The final descriptor is immutable once sealed. Byte equivalence is
+      // checked against the returned digest before forwarding a pending pointer.
+      const descriptor = target && candidate && uniqueLane &&
+          target.content[0].assetId === candidate.id &&
+          candidate.mediaType === mediaType &&
+          candidate.byteLength === writer.offset()
+        ? {
+          reference: (({ assetId: _id, mediaType: _media, ...reference }) =>
+            reference)(target.content[0]),
+          asset: {
+            ...(candidate.origin ? { origin: candidate.origin } : {}),
+            metadata: candidate.metadata ?? {},
+          },
+        }
+        : undefined;
+      const prepared = await writer.close({
+        assetId: `stream:${writer.id}`,
+        ...(descriptor ? { descriptor } : {}),
+      }, { signal });
       settled.push(
         {
           key,
@@ -2506,12 +2545,24 @@ function matchingSettledStream(
   lane: "content" | "reasoning",
   prepared: PreparedContent,
   streams: readonly SettledStream[],
-): { stream: SettledStream; prepared: PreparedContent } | undefined {
+):
+  | { stream: SettledStream; prepared: PendingContentRef }
+  | undefined {
   const candidates = streams.filter((stream) => stream.lane === lane);
   if (candidates.length !== 1) return undefined;
   const stream = candidates[0];
-  const adopted = adoptPreparedBody(prepared, stream.prepared);
-  return adopted ? { stream, prepared: adopted } : undefined;
+  if (isPendingContentRef(stream.prepared)) {
+    const candidate = prepared.assets[0];
+    if (
+      prepared.content.length !== 1 || prepared.assets.length !== 1 ||
+      prepared.content[0].assetId !== candidate.id ||
+      candidate.mediaType !== stream.prepared.mediaType ||
+      candidate.byteLength !== stream.prepared.byteLength ||
+      candidate.digest !== stream.prepared.digest
+    ) return undefined;
+    return { stream, prepared: stream.prepared };
+  }
+  return undefined;
 }
 
 async function retainSettledStream(
@@ -2531,31 +2582,44 @@ async function retainSettledStream(
   await stream.writer.retain({ retention: "observation" });
 }
 
-async function materializeResultContent(
+async function prepareResultContent(
   result: LlmAdapterResult,
+  attemptIndex: number,
+  context: LlmActionContext,
+): Promise<PreparedResultContent> {
+  const content = await context.content.prepare(result.content, {
+    operationKey: `attempt:${attemptIndex}:content`,
+  });
+  const reasoning = result.reasoning === undefined
+    ? undefined
+    : await context.content.prepare(result.reasoning, {
+      operationKey: `attempt:${attemptIndex}:reasoning`,
+    });
+  const nativeReasoning = result.nativeReasoning === undefined
+    ? undefined
+    : await context.content.prepare(result.nativeReasoning.blocks, {
+      operationKey: `attempt:${attemptIndex}:native-reasoning`,
+    });
+  return { content, reasoning, nativeReasoning };
+}
+
+async function materializeResultContent(
+  final: PreparedResultContent,
   attemptIndex: number,
   streams: readonly SettledStream[],
   context: LlmActionContext,
 ): Promise<
   Readonly<{
-    content: ContentSequence;
-    reasoning?: ContentSequence;
-    nativeReasoning?: ContentSequence;
+    content: GeneratedContentSequence;
+    reasoning?: GeneratedContentSequence;
+    nativeReasoning?: GeneratedContentSequence;
   }>
 > {
-  const contentPrepared = await context.content.prepare(result.content, {
-    operationKey: `attempt:${attemptIndex}:content`,
-  });
-  const reasoningPrepared = result.reasoning === undefined
-    ? undefined
-    : await context.content.prepare(result.reasoning, {
-      operationKey: `attempt:${attemptIndex}:reasoning`,
-    });
-  const nativeReasoningPrepared = result.nativeReasoning === undefined
-    ? undefined
-    : await context.content.prepare(result.nativeReasoning.blocks, {
-      operationKey: `attempt:${attemptIndex}:native-reasoning`,
-    });
+  const {
+    content: contentPrepared,
+    reasoning: reasoningPrepared,
+    nativeReasoning: nativeReasoningPrepared,
+  } = final;
   const contentStream = matchingSettledStream(
     "content",
     contentPrepared,
@@ -2581,24 +2645,40 @@ async function materializeResultContent(
       );
     }
   }
-  const content = await context.content.materialize(
+  const materialize = (
+    value: PreparedContent | PendingContentRef,
+    lane: string,
+  ): Promise<GeneratedContentSequence> =>
+    isPendingContentRef(value)
+      ? Promise.resolve([value])
+      : context.content.capture(value, {
+        operationKey: `attempt:${attemptIndex}:capture:${lane}`,
+      });
+  const content = await materialize(
     contentStream?.prepared ?? contentPrepared,
+    "content",
   );
   const reasoning = reasoningPrepared === undefined
     ? undefined
-    : await context.content.materialize(
+    : await materialize(
       reasoningStream?.prepared ?? reasoningPrepared,
+      "reasoning",
     );
   const nativeReasoning = nativeReasoningPrepared === undefined
     ? undefined
-    : await context.content.materialize(nativeReasoningPrepared);
-  if (contentStream && content.length === 1) {
+    : await materialize(nativeReasoningPrepared, "native-reasoning");
+  if (
+    contentStream && content.length === 1 && !isPendingContentRef(content[0])
+  ) {
     await retainSettledStream(
       contentStream.stream,
       { retention: "canonical", assetId: content[0].assetId },
     );
   }
-  if (reasoningStream && reasoning?.length === 1) {
+  if (
+    reasoningStream && reasoning?.length === 1 &&
+    !isPendingContentRef(reasoning[0])
+  ) {
     await retainSettledStream(
       reasoningStream.stream,
       { retention: "canonical", assetId: reasoning[0].assetId },
@@ -2614,9 +2694,9 @@ async function materializeResultContent(
 function outputFor(
   selected: ResolvedModel,
   result: LlmAdapterResult,
-  content: ContentSequence,
-  reasoning: ContentSequence | undefined,
-  nativeReasoning: ContentSequence | undefined,
+  content: GeneratedContentSequence,
+  reasoning: GeneratedContentSequence | undefined,
+  nativeReasoning: GeneratedContentSequence | undefined,
   attempts: readonly LlmAttemptUsage[],
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
@@ -2836,7 +2916,7 @@ async function executeLlmCall(
       attemptController.abort(error);
       if (attemptInput) disposeWithoutWaiting(attemptInput.dispose, error);
       const cancelled = isAbort(error, context.signal);
-      await abortWriters(streams, cancelled ? "cancelled" : "failed");
+      await abortWriters(streams, error, cancelled ? "cancelled" : "failed");
       let failure = error;
       const evidence = rejectedAttemptEvidence(error);
       let reported: readonly LlmAdapterAttempt[] = [] as const;
@@ -2865,7 +2945,12 @@ async function executeLlmCall(
 
     let resultAccounted = false;
     try {
-      const settledStreams = await settleWriters(streams, attemptSignal);
+      const finalContent = await prepareResultContent(result, index, context);
+      const settledStreams = await settleWriters(
+        streams,
+        attemptSignal,
+        finalContent,
+      );
       appendDurableAttempts(
         attempts,
         candidate,
@@ -2876,7 +2961,7 @@ async function executeLlmCall(
       resultAccounted = true;
       const { content, reasoning, nativeReasoning } =
         await materializeResultContent(
-          result,
+          finalContent,
           index,
           settledStreams,
           context,
@@ -2890,6 +2975,13 @@ async function executeLlmCall(
         attempts,
       );
     } catch (error) {
+      // Final normalization now happens before close; failure must also drain
+      // writers which have not yet reached settleWriters.
+      await abortWriters(
+        streams,
+        error,
+        isAbort(error, context.signal) ? "cancelled" : "failed",
+      );
       if (!resultAccounted) {
         appendDurableAttempts(
           attempts,
@@ -2938,6 +3030,7 @@ export type {
   LlmCallPreparation,
   LlmCallPreparationCandidate,
   LlmCost,
+  LlmGeneratedNativeReasoning,
   LlmMessage,
   LlmNativeReasoning,
   LlmNativeReasoningInput,

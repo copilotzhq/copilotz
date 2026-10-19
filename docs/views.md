@@ -98,19 +98,47 @@ the host. No persistence handles, writes, transactions, adapters or subscription
 capabilities enter the View context. Plugin code remains trusted in-process
 code.
 
-`ctx.show` inherits the current scope, mode and renderer. Rendering has a
-nesting limit of 32 by default, configurable with `maxDepth`, and accepts an
-external abort signal. Each captured context expires when its render ends,
-before adapter cleanup. Detached nested renders are cancelled and their cleanup
-is drained before the parent settles.
+`ctx.show` inherits the current scope, mode and renderer. Each captured context
+expires when its render ends, before adapter cleanup. Detached nested renders
+are cancelled and their cleanup is drained before normal completion. All nested
+renders share the root deadline and data budget; nesting cannot reset them.
 
 Hosts can supply `renderers` adapters. An adapter opens one session per render
 with `render(evaluate)` and optional `dispose()`. It may evaluate a View at most
 once and must return text. Cross-renderer nesting requires the requested
-adapter; a missing adapter fails. Disposal runs after success, failure or
-cancellation. Host cleanup must finish cooperatively. V1 does not impose a
-deadline, output-byte budget or capacity admission policy, and cannot forcibly
-terminate plugin code.
+adapter; a missing adapter fails. Disposal is started after success, failure or
+cancellation.
+
+## Resource bounds
+
+`createTextRenderer` accepts positive integer limits:
+
+- `maxDepth`, default 32: nested Views and inert data depth
+- `maxNodes`, default 20,000: cumulative snapshot nodes per root render
+- `maxBytes`, default 65,536: cumulative UTF-8 bytes of snapshots and text per
+  root render
+- `maxPending`, default 16: concurrent render sessions and Collection reads on
+  this renderer instance, including nested sessions
+- `timeoutMs`, default 1,000: the root deadline in milliseconds, including
+  projection, View evaluation, nested rendering and cleanup
+
+The data budget charges selectors, copied scope/resources, projected and read
+values, View results and final text. Repeated snapshots and nested outputs each
+consume budget. A large input can therefore leave less room for output.
+`snapshotViewData(value, { maxDepth, maxNodes, maxBytes })` also accepts
+standalone snapshot limits with the same defaults. Sparse arrays and executable
+or accessor properties fail closed.
+
+Capacity is reserved synchronously. Excess work rejects instead of joining a
+queue. Aborting or timing out rejects the caller and revokes its context, but
+noncooperative projectors, Views, adapters, Collection reads and cleanup retain
+their reservations until their actual promises settle. An adapter cannot free a
+reservation by discarding a pending evaluation. Reuse a renderer instance for
+work that must share its admission limit.
+
+These bounds do not forcibly terminate JavaScript. Hosts and plugin callbacks
+remain trusted in-process code; synchronous work must also cooperate so the
+platform can deliver cancellation and deadlines.
 
 ## Package and build surface
 

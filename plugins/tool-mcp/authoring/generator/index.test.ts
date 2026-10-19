@@ -1,8 +1,11 @@
+import { testEffect } from "../../../../runtime/testing/effects.ts";
+import { createHash } from "node:crypto";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type {
   ContentInput,
   ContentRef,
+  PendingContentRef,
   PreparedContent,
 } from "@copilotz/copilotz/content";
 import type { MCPServer } from "../contracts/index.ts";
@@ -12,6 +15,21 @@ import {
   type McpRuntimeConnection,
 } from "./index.ts";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
+function pendingMedia(
+  index: number,
+  mediaType: string,
+  bytes: string,
+): PendingContentRef {
+  const body = new TextEncoder().encode(bytes);
+  return {
+    type: "content.pending",
+    pendingRef: `pending:mcp-media:${index}`,
+    mediaType,
+    byteLength: body.byteLength,
+    digest: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+  };
+}
+
 async function prepareFixture(
   options: {
     servers: readonly MCPServer[];
@@ -53,6 +71,7 @@ const context = (
   overrides: Partial<ActionContext> = {},
 ): ActionContext =>
   ({
+    effect: testEffect,
     namespace: "tenant-a",
     operationKey: "mcp-test",
     identity: {},
@@ -203,7 +222,7 @@ Deno.test("MCP clones and deeply freezes discovered input schemas", async () => 
   }
 });
 
-Deno.test("MCP lowers standard media bodies to canonical lifecycle-safe refs", async () => {
+Deno.test("MCP captures standard media bodies as pending lifecycle-safe descriptors", async () => {
   const raw = {
     content: [
       { type: "text", text: "ready" },
@@ -246,7 +265,7 @@ Deno.test("MCP lowers standard media bodies to canonical lifecycle-safe refs", a
     }>
   > = [];
   let prepareOperationKey = "";
-  let materializeCalls = 0;
+  let captureCalls = 0;
   let prepared: PreparedContent | undefined;
   const actionContext = context(undefined, {
     adapters: plugin.adapters,
@@ -280,10 +299,21 @@ Deno.test("MCP lowers standard media bodies to canonical lifecycle-safe refs", a
         prepared = { content: refs, assets: [] };
         return Promise.resolve(prepared);
       },
-      materialize(input: PreparedContent) {
-        materializeCalls += 1;
+      capture(input: PreparedContent, options: { operationKey: string }) {
+        captureCalls += 1;
         assertEquals(input, prepared);
-        return Promise.resolve(input.content);
+        assertEquals(
+          options.operationKey,
+          "mcp:search-server:media:action-run-a:result-capture",
+        );
+        return Promise.resolve(
+          preparedBodies.map((item, index) =>
+            pendingMedia(index, item.mediaType, item.body)
+          ),
+        );
+      },
+      materialize() {
+        throw new Error("Generated output must remain pending.");
       },
     },
   } as unknown as Partial<ActionContext>);
@@ -313,30 +343,18 @@ Deno.test("MCP lowers standard media bodies to canonical lifecycle-safe refs", a
     prepareOperationKey,
     "mcp:search-server:media:action-run-a:result-content",
   );
-  assertEquals(materializeCalls, 1);
+  assertEquals(captureCalls, 1);
   const content = result.content as Array<Record<string, unknown>>;
   assertEquals(content[0], { type: "text", text: "ready" });
   assertEquals(content[1], {
     type: "image",
     mimeType: "image/png",
-    asset: {
-      assetId: "asset-0",
-      kind: "image",
-      role: "tool.output",
-      mediaType: "image/png",
-      disposition: "attachment",
-    } satisfies ContentRef,
+    asset: pendingMedia(0, "image/png", "image bytes"),
   });
   assertEquals(content[2], {
     type: "audio",
     mimeType: "audio/wav",
-    asset: {
-      assetId: "asset-1",
-      kind: "audio",
-      role: "tool.output",
-      mediaType: "audio/wav",
-      disposition: "attachment",
-    } satisfies ContentRef,
+    asset: pendingMedia(1, "audio/wav", "audio bytes"),
   });
   assertEquals(content[3], {
     type: "resource",
@@ -344,14 +362,7 @@ Deno.test("MCP lowers standard media bodies to canonical lifecycle-safe refs", a
       uri: "file:///report.bin",
       mimeType: "application/octet-stream",
       name: "report.bin",
-      asset: {
-        assetId: "asset-2",
-        kind: "file",
-        role: "tool.output",
-        mediaType: "application/octet-stream",
-        disposition: "attachment",
-        name: "report.bin",
-      } satisfies ContentRef,
+      asset: pendingMedia(2, "application/octet-stream", "resource bytes"),
     },
   });
   assertEquals(JSON.stringify(result).includes("data"), false);
@@ -370,7 +381,7 @@ Deno.test("MCP rejects non-JSON host values before Action lifecycle output", asy
       }),
   });
   let prepares = 0;
-  let materializes = 0;
+  let captures = 0;
   const actionContext = context(undefined, {
     adapters: plugin.adapters,
     content: {
@@ -378,9 +389,12 @@ Deno.test("MCP rejects non-JSON host values before Action lifecycle output", asy
         prepares += 1;
         throw new Error("must not prepare");
       },
+      capture() {
+        captures += 1;
+        throw new Error("must not capture");
+      },
       materialize() {
-        materializes += 1;
-        throw new Error("must not materialize");
+        throw new Error("Generated output must remain pending.");
       },
     },
   } as unknown as Partial<ActionContext>);
@@ -427,10 +441,10 @@ Deno.test("MCP rejects non-JSON host values before Action lifecycle output", asy
         .execute({}, actionContext) as Promise<unknown>,
   );
   assertEquals(prepares, 0);
-  assertEquals(materializes, 0);
+  assertEquals(captures, 0);
 });
 
-Deno.test("MCP stages all media before one atomic materialization", async () => {
+Deno.test("MCP stages all media before one pending capture", async () => {
   const raw = {
     content: [
       { type: "image", data: btoa("one"), mimeType: "image/png" },
@@ -447,7 +461,7 @@ Deno.test("MCP stages all media before one atomic materialization", async () => 
       }),
   });
   let preparedInputs = 0;
-  let materializeCalls = 0;
+  let captureCalls = 0;
   const refs: readonly ContentRef[] = [
     {
       assetId: "asset-one",
@@ -470,10 +484,13 @@ Deno.test("MCP stages all media before one atomic materialization", async () => 
         preparedInputs = Array.isArray(input) ? input.length : 1;
         return Promise.resolve(prepared);
       },
-      materialize(input: PreparedContent) {
-        materializeCalls += 1;
+      capture(input: PreparedContent) {
+        captureCalls += 1;
         assertEquals(input, prepared);
-        return Promise.reject(new Error("atomic materialization failed"));
+        return Promise.reject(new Error("atomic capture failed"));
+      },
+      materialize() {
+        throw new Error("Generated output must remain pending.");
       },
     },
   } as unknown as Partial<ActionContext>);
@@ -482,10 +499,10 @@ Deno.test("MCP stages all media before one atomic materialization", async () => 
       (plugin.actions.search_server_atomic as unknown as Executable)
         .execute({}, actionContext) as Promise<unknown>,
     Error,
-    "atomic materialization failed",
+    "atomic capture failed",
   );
   assertEquals(preparedInputs, 2);
-  assertEquals(materializeCalls, 1);
+  assertEquals(captureCalls, 1);
 });
 
 Deno.test("MCP discovery and execution close connections on failure and cancellation", async () => {
@@ -509,6 +526,7 @@ Deno.test("MCP discovery and execution close connections on failure and cancella
   assertEquals(discoveryClosed, 1);
 
   let executionClosed = 0;
+  const started = Promise.withResolvers<void>();
   const plugin = await prepareFixture({
     servers: [server()],
     connect: () =>
@@ -516,6 +534,7 @@ Deno.test("MCP discovery and execution close connections on failure and cancella
         listTools: () => Promise.resolve([{ name: "cancel" }]),
         callTool: (_name, _args, signal) =>
           new Promise((_resolve, reject) => {
+            started.resolve();
             if (signal?.aborted) {
               reject(new DOMException("cancelled", "AbortError"));
               return;
@@ -539,6 +558,7 @@ Deno.test("MCP discovery and execution close connections on failure and cancella
   const execution =
     (plugin.actions.search_server_cancel as unknown as Executable)
       .execute({}, context(controller.signal, { adapters: plugin.adapters }));
+  await started.promise;
   controller.abort();
   const error = await assertRejects(async () => await execution);
   assertEquals((error as Error).name, "AbortError");
@@ -593,4 +613,52 @@ Deno.test("MCP preserves the primary failure when connection close also fails", 
     Error,
     "close after success",
   );
+});
+
+Deno.test("MCP only bypasses effect tracking for host-reviewed read-only names", async () => {
+  for (const reviewed of [false, true]) {
+    let dispatches = 0;
+    let begins = 0;
+    let outcome: unknown;
+    const plugin = await prepareFixture({
+      servers: [server(reviewed ? { readOnlyTools: ["lookup"] } : {})],
+      connect: () =>
+        Promise.resolve({
+          listTools: () =>
+            Promise.resolve([{
+              name: "lookup",
+              annotations: { readOnlyHint: true },
+            }]),
+          callTool: () => {
+            dispatches++;
+            return Promise.resolve({ ok: true });
+          },
+          close() {},
+        }),
+    });
+    const ctx = context(undefined, {
+      adapters: plugin.adapters,
+      effect: {
+        ...testEffect,
+        begin: () => {
+          begins++;
+          return Promise.resolve(
+            outcome === undefined
+              ? { status: "proceed" } as const
+              : { status: "replay", outcome } as never,
+          );
+        },
+        confirm: (_step, value) => {
+          outcome = value;
+          return Promise.resolve();
+        },
+      },
+    });
+    const executable = plugin.actions
+      .search_server_lookup as unknown as Executable;
+    assertEquals(await executable.execute({}, ctx), { ok: true });
+    assertEquals(await executable.execute({}, ctx), { ok: true });
+    assertEquals(dispatches, reviewed ? 2 : 1);
+    assertEquals(begins, reviewed ? 0 : 2);
+  }
 });

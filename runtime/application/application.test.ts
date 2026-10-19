@@ -1,3 +1,7 @@
+import {
+  CONTENT_CHUNK_BYTES,
+  createContentCatalog,
+} from "../content/catalog.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin.ts";
 import { message as coreMessage } from "@copilotz/copilotz/core";
@@ -43,6 +47,21 @@ import {
 const SCHEMA = "copilotz_application";
 const NAMESPACE = "tenant-a";
 const LARGE_STREAM_BYTES = 1024 * 1024 + 1;
+async function expireTestContent(db: TestDatabase, schema: string) {
+  await createSchemaCommandRunner(db, schema)(
+    "test.expireContent",
+    {},
+    async (_input, { transaction }) => {
+      await transaction.query(
+        `UPDATE "${schema}".content_logical_bodies SET protected_until=NOW()-INTERVAL '1 second'`,
+      );
+      await transaction.query(
+        `UPDATE "${schema}".pending_content SET expires_at=NOW()-INTERVAL '1 second'`,
+      );
+    },
+  );
+}
+
 function replyPlugin(): AnyCopilotzPlugin {
   const processor = defineProcessor<ProcessorContext>({
     id: "application.reply",
@@ -91,10 +110,17 @@ function runtimeNeutralStreamPlugin(): AnyCopilotzPlugin {
         metadata: { source: "test-plugin" },
         correlationId: event.correlationId,
       });
-      await writer.append({
-        bytes: new Uint8Array(LARGE_STREAM_BYTES).fill(0x78),
-        appendId: "runtime-neutral-stream-chunk",
-      });
+      const bytes = new Uint8Array(LARGE_STREAM_BYTES).fill(0x78);
+      for (
+        let offset = 0;
+        offset < bytes.length;
+        offset += CONTENT_CHUNK_BYTES
+      ) {
+        await writer.append({
+          bytes: bytes.slice(offset, offset + CONTENT_CHUNK_BYTES),
+          appendId: `runtime-neutral-stream-chunk:${offset}`,
+        });
+      }
       await writer.close({ assetId: "runtime-neutral-stream-asset" });
     },
   });
@@ -854,7 +880,6 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
           deployment: {
             durability: "durable",
             reach: "cluster",
-            minimumProtectionMs: 0,
             readyGarbageCollection: true,
           },
         },
@@ -866,11 +891,13 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
     const sent = await application.send({
       type: "test.quiet-reconnect-stream",
     });
+    void sent.done.catch(() => undefined);
     await didAppend;
     const attachment = await application.attach({
       operationId: sent.operationId,
       cursor: sent.replayCursor,
     });
+    void attachment.done.catch(() => undefined);
     const output = await attachment.outputs.getReader().read();
     assertEquals(output.done, false);
     assertEquals(output.value?.type, "stream.output");
@@ -883,9 +910,18 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
       resolved = true;
       return value;
     });
+    void pending.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const beforeQuiet = { ...calls };
     await new Promise((resolve) => setTimeout(resolve, 150));
     assertEquals(resolved, false);
-    assertEquals(calls, { head: 0, read: 0, follow: 0 });
+    assertEquals(
+      calls,
+      beforeQuiet,
+      "An idle reconnect reader performs no physical body polling.",
+    );
+    assertEquals(calls.read, 0);
+    assertEquals(calls.follow, 0);
     release();
     await pending;
     assertEquals(calls.follow, 0);
@@ -901,7 +937,7 @@ Deno.test("quiet reconnect stream waits on catalog changes without polling its B
 });
 Deno.test("sealed stream defaults to expiring observation retention when its processor fails before retain", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const store = createMemoryBodyStore({ protectionMs: 0 });
+  const store = createMemoryBodyStore();
   const databaseSchema = `${SCHEMA}_failed_stream_retention`;
   const plugin = definePlugin({
     id: "test.application.failed-stream-retention",
@@ -939,7 +975,6 @@ Deno.test("sealed stream defaults to expiring observation retention when its pro
           deployment: {
             durability: "durable",
             reach: "cluster",
-            minimumProtectionMs: 0,
             readyGarbageCollection: true,
           },
         },
@@ -965,6 +1000,7 @@ Deno.test("sealed stream defaults to expiring observation retention when its pro
     assertExists(cataloged);
     const bodyId = cataloged.bodyId;
     assertExists(await store.head({ bodyId }));
+    await expireTestContent(db, databaseSchema);
     const retentionDisabled = await application.maintenance({
       now: new Date("2030-08-31T12:16:00.000Z"),
       operationRetentionMs: null,
@@ -987,9 +1023,9 @@ Deno.test("sealed stream defaults to expiring observation retention when its pro
 });
 Deno.test("observation retirement preserves a Body already adopted by a canonical Asset", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const store = createMemoryBodyStore({ protectionMs: 100 });
+  const store = createMemoryBodyStore();
   const databaseSchema = `${SCHEMA}_stream_partial_adoption`;
-  const assetId = "adopted-stream-asset";
+  let assetId = "";
   const plugin = definePlugin({
     id: "test.application.stream-partial-adoption",
     version: "1.0.0",
@@ -1007,8 +1043,13 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
             bytes: new TextEncoder().encode("canonical"),
             appendId: "adopted-stream:1",
           });
-          const prepared = await writer.close({ assetId });
-          await context.content.materialize(prepared);
+          const pending = await writer.close({
+            assetId: "adopted-stream-asset",
+          });
+          const [adopted] = await context.content.materialize([pending], {
+            origin: { type: "test.stream-result", id: "adopted-stream-owner" },
+          });
+          assetId = adopted.assetId;
           // Simulate a crash between Asset adoption and catalog canonical bind.
           throw new Error("catalog retain was not reached");
         },
@@ -1028,7 +1069,6 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
           deployment: {
             durability: "durable",
             reach: "cluster",
-            minimumProtectionMs: 0,
             readyGarbageCollection: true,
           },
         },
@@ -1054,7 +1094,7 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
     assertExists(cataloged);
     const bodyId = cataloged.bodyId;
     assertExists(await application.content.assets.get(NAMESPACE, assetId));
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await expireTestContent(db, databaseSchema);
     const maintained = await application.maintenance({
       now: new Date("2030-08-31T12:16:00.000Z"),
       operationRetentionMs: 0,
@@ -1080,7 +1120,7 @@ Deno.test("observation retirement preserves a Body already adopted by a canonica
 });
 Deno.test("concurrent observation retirement cannot resurrect a deleted Body", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const baseStore = createMemoryBodyStore({ protectionMs: 0 });
+  const baseStore = createMemoryBodyStore();
   let deleteCalls = 0;
   const store = Object.freeze({
     ...baseStore,
@@ -1135,7 +1175,6 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
           deployment: {
             durability: "durable" as const,
             reach: "cluster" as const,
-            minimumProtectionMs: 0,
             readyGarbageCollection: true,
           },
         },
@@ -1152,19 +1191,21 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
       .listStreams({ namespace: NAMESPACE, operationId: sent.operationId });
     assertExists(stream);
     const catalog = createOperationCatalog(db, databaseSchema);
+    await expireTestContent(db, databaseSchema);
     await application.maintenance({
       now: new Date("2030-09-01T12:00:00.000Z"),
       operationRetentionMs: 0,
     });
     assertEquals(deleteCalls, 1);
     assertEquals(await store.head({ bodyId: stream.bodyId }), null);
-    assertEquals(
-      (await catalog.getStream(NAMESPACE, sent.operationId, stream.streamId))
-        ?.availability,
-      "retained",
+    const firstRetired = await catalog.getStream(
+      NAMESPACE,
+      sent.operationId,
+      stream.streamId,
     );
-    // The next pass observes the missing physical Body and monotonically
-    // completes the logical tombstone without another destructive call.
+    assert(firstRetired === null || firstRetired.availability === "purged");
+    // A lost delete receipt is resolved by observing absence. A later pass
+    // cannot resurrect the copy or repeat the destructive call.
     await application.maintenance({
       now: new Date("2030-09-01T12:00:01.000Z"),
       operationRetentionMs: 0,
@@ -1185,7 +1226,7 @@ Deno.test("concurrent observation retirement cannot resurrect a deleted Body", a
 });
 Deno.test("maintenance reconciles physical stream crash windows before terminalizing operations", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  const store = createMemoryBodyStore({ protectionMs: 0 });
+  const store = createMemoryBodyStore();
   const databaseSchema = `${SCHEMA}_stream_reconcile`;
   const application = await createCopilotzApplication({
     database: db,
@@ -1200,7 +1241,6 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
           deployment: {
             durability: "durable",
             reach: "cluster",
-            minimumProtectionMs: 0,
             readyGarbageCollection: true,
           },
         },
@@ -1259,9 +1299,29 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
       bodyId: incompleteBodyId,
       descriptor: descriptor("incomplete-crash"),
     });
+    const contentCatalog = createContentCatalog(db, databaseSchema);
+    const reservation = (bodyId: string) => ({
+      bodyId,
+      writerId: `fixture:${bodyId}`,
+      generation: 1,
+    });
+    for (const bodyId of [readyBodyId, missingBodyId, incompleteBodyId]) {
+      await contentCatalog.reserve({
+        ...reservation(bodyId),
+        namespace: NAMESPACE,
+        copy: {
+          key: bodyId,
+          backendKind: store.kind,
+          backendId: store.backendId,
+        },
+        protectForMs: 0,
+      });
+    }
     const crashedWriter = await store.reserve({
       bodyId: incompleteBodyId,
       mediaType: "text/plain",
+      reservationId: reservation(incompleteBodyId).writerId,
+      generation: 1,
     });
     const incompleteBytes = new TextEncoder().encode("retained crash prefix");
     await store.append({
@@ -1269,6 +1329,11 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
       expectedOffset: 0,
       appendId: "incomplete-crash:1",
       bytes: incompleteBytes,
+    });
+    await contentCatalog.checkpoint({
+      ...reservation(incompleteBodyId),
+      expectedOffset: 0,
+      offset: incompleteBytes.byteLength,
     });
     assertEquals(
       (await catalog.reconcile({ namespace: NAMESPACE, operationId })) > 0,
@@ -1296,12 +1361,80 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
         `schemas/${databaseSchema}/content-streams/${NAMESPACE}/active-reserve-race`,
       descriptor: descriptor("active-reserve-race"),
     });
+    const activeBodyId =
+      `schemas/${databaseSchema}/content-streams/${NAMESPACE}/active-reserve-race`;
+    await contentCatalog.reserve({
+      ...reservation(activeBodyId),
+      namespace: NAMESPACE,
+      copy: {
+        key: activeBodyId,
+        backendKind: store.kind,
+        backendId: store.backendId,
+      },
+    });
     const bytes = new TextEncoder().encode("sealed before catalog callback");
+    await contentCatalog.checkpoint({
+      ...reservation(readyBodyId),
+      expectedOffset: 0,
+      offset: bytes.byteLength,
+    });
+    await contentCatalog.sealIntent({
+      ...reservation(readyBodyId),
+      length: bytes.byteLength,
+      digest: await digestContent(bytes),
+    });
     await store.put({
       bodyId: readyBodyId,
       bytes,
       mediaType: "text/plain",
       digest: await digestContent(bytes),
+    });
+    // A completed logical seal stands even when bytes disappear before its
+    // operational terminal projection is reconciled.
+    const lostBodyId =
+      `schemas/${databaseSchema}/content-streams/${NAMESPACE}/accepted-missing`;
+    await catalog.openStream({
+      namespace: NAMESPACE,
+      operationId,
+      semanticStreamId: "accepted-missing",
+      bodyId: lostBodyId,
+      descriptor: descriptor("accepted-missing"),
+    });
+    await contentCatalog.reserve({
+      ...reservation(lostBodyId),
+      namespace: NAMESPACE,
+      copy: {
+        key: lostBodyId,
+        backendKind: store.kind,
+        backendId: store.backendId,
+      },
+      protectForMs: 0,
+    });
+    const lostHead = await store.put({
+      bodyId: lostBodyId,
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+    });
+    await contentCatalog.checkpoint({
+      ...reservation(lostBodyId),
+      expectedOffset: 0,
+      offset: bytes.byteLength,
+    });
+    await contentCatalog.sealIntent({
+      ...reservation(lostBodyId),
+      length: bytes.byteLength,
+      digest: lostHead.digest,
+    });
+    await contentCatalog.sealAccepted({
+      ...reservation(lostBodyId),
+      head: lostHead,
+    });
+    await store.maintenance.delete({
+      bodyId: lostBodyId,
+      expectedState: "ready",
+      expectedVersionToken: lostHead.versionToken,
+      idleForMs: 0,
     });
     const maintained = await application.maintenance({
       operationRetentionMs: null,
@@ -1319,6 +1452,11 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
         offset: stream.committedOffset,
       })).sort((left, right) => left.id.localeCompare(right.id)),
       [{
+        id: "accepted-missing",
+        state: "terminal",
+        retention: "observation",
+        offset: bytes.byteLength,
+      }, {
         id: "incomplete-crash",
         state: "terminal",
         retention: "observation",
@@ -1335,6 +1473,16 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
         offset: bytes.byteLength,
       }],
     );
+    const lost = streams.find((stream) =>
+      stream.streamId === "accepted-missing"
+    )!;
+    assertEquals(lost.outcome, "completed");
+    assertEquals(lost.reason, undefined);
+    assertEquals(lost.availability, "purged");
+    assertEquals(
+      (await contentCatalog.read(lostBodyId))?.terminal?.outcome,
+      "completed",
+    );
     assertEquals(
       (await store.head({ bodyId: incompleteBodyId }))?.state,
       "incomplete",
@@ -1350,7 +1498,7 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
         namespace: NAMESPACE,
         operationId: activeOperationId,
       }))[0].state,
-      "terminal",
+      "open",
     );
     assertEquals(
       (await catalog.get(NAMESPACE, operationId))?.state,
@@ -1358,14 +1506,22 @@ Deno.test("maintenance reconciles physical stream crash windows before terminali
     );
     assertEquals(
       (await catalog.get(NAMESPACE, activeOperationId))?.state,
-      "completed",
+      "accepted",
     );
+    await expireTestContent(db, databaseSchema);
     const retired = await application.maintenance({
       now: new Date("2030-09-01T00:00:00.000Z"),
       operationRetentionMs: 0,
       assetOrphanAfterMs: 0,
     });
-    assertEquals(retired.operations.expiredObservationStreams, 2);
+    assertEquals(retired.operations.expiredObservationStreams, 4);
+    assertEquals(
+      (await catalog.listStreams({
+        namespace: NAMESPACE,
+        operationId: activeOperationId,
+      })).length,
+      0,
+    );
     assertEquals(retired.operations.observationRetirementBlocked, 0);
     assertEquals(await store.head({ bodyId: incompleteBodyId }), null);
   } finally {

@@ -1,3 +1,4 @@
+import { recordTestContentTerminal } from "../testing/content-catalog.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { provisionCopilotzSchema } from "../events/index.ts";
@@ -275,6 +276,7 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
         mediaType: "text/plain",
         digest: `sha256:${"a".repeat(64)}` as const,
         maintenanceVersion: 1,
+        versionToken: "test-version",
       };
       assertExists(
         await catalog.openStream({
@@ -284,6 +286,7 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
           descriptor: descriptor(outcome),
         }),
       );
+      await recordTestContentTerminal(db, schema, "scope", body, outcome);
       assertEquals(
         outcome === "completed"
           ? await catalog.sealStream({
@@ -381,6 +384,12 @@ Deno.test("completion requires a full sealed body and an unaccepted seal can fai
       bodyId: "lane",
       descriptor: descriptor("lane"),
     });
+    await recordTestContentTerminal(db, schema, "scope", {
+      bodyId: "lane",
+      byteLength: 7,
+      digest: `sha256:${"a".repeat(64)}`,
+      mediaType: "text/plain",
+    }, "failed");
     await catalog.commitStreamOffset({ ...target, committedOffset: 7 });
     const body = {
       bodyId: "lane",
@@ -389,6 +398,7 @@ Deno.test("completion requires a full sealed body and an unaccepted seal can fai
       mediaType: "text/plain",
       digest: `sha256:${"a".repeat(64)}` as const,
       maintenanceVersion: 1,
+      versionToken: "test-version",
     };
     await assertRejects(
       () =>

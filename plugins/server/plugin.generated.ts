@@ -4,7 +4,22 @@ import entry0 from "./actions/invoke-action/index.ts";
 import entry1 from "./processors/action-request/index.ts";
 import entry2 from "./processors/collection-mutation-request/index.ts";
 import entry3 from "./resources/server/default/index.ts";
-const definition = {
+const definition: {
+  readonly id: "copilotz.server";
+  readonly version: "1.0.0";
+  readonly actions: {
+    readonly "serverInvoke": typeof entry0;
+  };
+  readonly processors: {
+    readonly "serverActionRequest": typeof entry1;
+    readonly "serverCollectionMutationRequest": typeof entry2;
+  };
+  readonly resources: {
+    readonly "server": {
+      readonly "default": typeof entry3;
+    };
+  };
+} = {
   id: "copilotz.server",
   version: "1.0.0",
   actions: {

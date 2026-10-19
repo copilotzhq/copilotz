@@ -1,3 +1,4 @@
+import { externalEffect } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
  * Defines the configurable Persistent Terminal Action.
@@ -7,7 +8,9 @@ import type { ActionDefinition } from "@copilotz/copilotz/actions";
 
 import {
   assetIdFromRef,
+  type ContentRef,
   formatAssetRef,
+  type PendingContentRef,
   type PreparedContent,
 } from "@copilotz/copilotz/content";
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
@@ -145,126 +148,133 @@ export const persistentTerminalAction: ActionDefinition<
     },
     required: ["action"],
   },
-  async execute(raw: PersistentTerminalInput, context: ActionContext) {
-    const namespace = context.namespace;
-    const staged: Array<
-      Readonly<{
-        candidateAssetId: string;
-        candidateAssetRef: string;
-        prepared: PreparedContent;
-      }>
-    > = [];
-    const terminal = context.adapters.terminal?.default as
-      | PersistentTerminalService
-      | undefined;
-    if (!terminal || typeof terminal.execute !== "function") {
-      throw new TypeError(
-        "A persistent terminal service is required in adapters.terminal.default.",
+  execute: (raw: PersistentTerminalInput, context: ActionContext) => {
+    const dispatch = async () => {
+      const namespace = context.namespace;
+      const staged: Array<
+        Readonly<{
+          candidateAssetId: string;
+          candidateAssetRef: string;
+          prepared: PreparedContent;
+        }>
+      > = [];
+      const terminal = context.adapters.terminal?.default as
+        | PersistentTerminalService
+        | undefined;
+      if (!terminal || typeof terminal.execute !== "function") {
+        throw new TypeError(
+          "A persistent terminal service is required in adapters.terminal.default.",
+        );
+      }
+      const result = await terminal.execute(raw, {
+        namespace,
+        project: projectFrom(context),
+        agentId: metadataText(context.action.metadata, "agentId") ??
+          "anonymous",
+        threadId: metadataText(context.action.metadata, "threadId"),
+        signal: context.signal,
+        async readAsset(ref) {
+          const id = assetIdFromRef(namespace, ref);
+          const asset = await context.content.get(id);
+          if (!asset) throw new Error(`Asset '${id}' was not found.`);
+          const resolved = await context.content.resolve({
+            assetId: id,
+            kind: assetKind(asset.mediaType),
+            role: "attachment",
+            mediaType: asset.mediaType,
+          });
+          return ({
+            assetRef: formatAssetRef(namespace, id),
+            mediaType: asset.mediaType,
+            bytes: resolved.bytes,
+          } as const);
+        },
+        async publishAsset(input) {
+          const prepared = await context.content.prepare({
+            type: assetKind(input.mediaType),
+            bytes: input.bytes,
+            mediaType: input.mediaType,
+            role: "tool.output",
+            disposition: "attachment",
+            ...(input.name ? { name: input.name } : {}),
+          }, {
+            operationKey: `persistent-terminal:${
+              operationSegment(input.operationKey)
+            }`,
+          });
+          if (prepared.content.length !== 1) {
+            throw new TypeError(
+              "Persistent terminal publish must prepare exactly one ContentRef.",
+            );
+          }
+          const candidate = prepared.content[0];
+          const candidateAssetRef = formatAssetRef(
+            namespace,
+            candidate.assetId,
+          );
+          staged.push({
+            candidateAssetId: candidate.assetId,
+            candidateAssetRef,
+            prepared,
+          });
+          return ({
+            assetId: candidate.assetId,
+            assetRef: candidateAssetRef,
+            mediaType: candidate.mediaType,
+            byteLength: input.bytes.byteLength,
+          } as const);
+        },
+      });
+      const validated = cloneLosslessJson(
+        result,
+        "Persistent terminal result",
       );
-    }
-    const result = await terminal.execute(raw, {
-      namespace,
-      project: projectFrom(context),
-      agentId: metadataText(context.action.metadata, "agentId") ??
-        "anonymous",
-      threadId: metadataText(context.action.metadata, "threadId"),
-      signal: context.signal,
-      async readAsset(ref) {
-        const id = assetIdFromRef(namespace, ref);
-        const asset = await context.content.get(id);
-        if (!asset) throw new Error(`Asset '${id}' was not found.`);
-        const resolved = await context.content.resolve({
-          assetId: id,
-          kind: assetKind(asset.mediaType),
-          role: "attachment",
-          mediaType: asset.mediaType,
-        });
-        return ({
-          assetRef: formatAssetRef(namespace, id),
-          mediaType: asset.mediaType,
-          bytes: resolved.bytes,
-        } as const);
-      },
-      async publishAsset(input) {
-        const prepared = await context.content.prepare({
-          type: assetKind(input.mediaType),
-          bytes: input.bytes,
-          mediaType: input.mediaType,
-          role: "tool.output",
-          disposition: "attachment",
-          ...(input.name ? { name: input.name } : {}),
-        }, {
-          operationKey: `persistent-terminal:${
-            operationSegment(input.operationKey)
-          }`,
-        });
-        if (prepared.content.length !== 1) {
+      if (staged.length === 0) return validated;
+      const combined: PreparedContent = {
+        content: staged.flatMap(({ prepared }) => prepared.content),
+        assets: staged.flatMap(({ prepared }) => prepared.assets),
+      } as const;
+      const materialized = await context.content.capture(combined, {
+        operationKey: `terminal:${context.action.runId}:result-capture`,
+      });
+      if (materialized.length !== staged.length) {
+        throw new TypeError(
+          "Persistent terminal content materialization must return one ContentRef per publish.",
+        );
+      }
+      const replacements = new Map<string, ContentRef | PendingContentRef>();
+      staged.forEach((candidate, index) => {
+        const ref = materialized[index];
+        if (ref.mediaType !== candidate.prepared.content[0].mediaType) {
           throw new TypeError(
-            "Persistent terminal publish must prepare exactly one ContentRef.",
+            "Persistent terminal content materialization changed media type.",
           );
         }
-        const candidate = prepared.content[0];
-        const candidateAssetRef = formatAssetRef(
-          namespace,
-          candidate.assetId,
+        replacements.set(candidate.candidateAssetId, ref);
+        replacements.set(
+          candidate.candidateAssetRef,
+          ref,
         );
-        staged.push({
-          candidateAssetId: candidate.assetId,
-          candidateAssetRef,
-          prepared,
-        });
-        return ({
-          assetId: candidate.assetId,
-          assetRef: candidateAssetRef,
-          mediaType: candidate.mediaType,
-          byteLength: input.bytes.byteLength,
-        } as const);
-      },
-    });
-    const validated = cloneLosslessJson(
-      result,
-      "Persistent terminal result",
-    );
-    if (staged.length === 0) return validated;
-    const combined: PreparedContent = {
-      content: staged.flatMap(({ prepared }) => prepared.content),
-      assets: staged.flatMap(({ prepared }) => prepared.assets),
-    } as const;
-    const materialized = await context.content.materialize(combined);
-    if (materialized.length !== staged.length) {
-      throw new TypeError(
-        "Persistent terminal content materialization must return one ContentRef per publish.",
-      );
-    }
-    const replacements = new Map<string, string>();
-    staged.forEach((candidate, index) => {
-      const ref = materialized[index];
-      if (ref.mediaType !== candidate.prepared.content[0].mediaType) {
-        throw new TypeError(
-          "Persistent terminal content materialization changed media type.",
-        );
-      }
-      replacements.set(candidate.candidateAssetId, ref.assetId);
-      replacements.set(
-        candidate.candidateAssetRef,
-        formatAssetRef(namespace, ref.assetId),
-      );
-    });
-    const substitute = (value: unknown): unknown => {
-      if (typeof value === "string") return replacements.get(value) ?? value;
-      if (Array.isArray(value)) {
-        return (value.map(substitute));
-      }
-      if (value && typeof value === "object") {
-        return (Object.fromEntries(
-          Object.entries(value).map(([key, child]) => [
-            key,
-            substitute(child),
-          ]),
-        ));
-      }
-      return value;
+      });
+      const substitute = (value: unknown): unknown => {
+        if (typeof value === "string") return replacements.get(value) ?? value;
+        if (Array.isArray(value)) {
+          return (value.map(substitute));
+        }
+        if (value && typeof value === "object") {
+          return (Object.fromEntries(
+            Object.entries(value).map(([key, child]) => [
+              key,
+              substitute(child),
+            ]),
+          ));
+        }
+        return value;
+      };
+      return substitute(validated);
     };
-    return substitute(validated);
+    return ["info", "list", "export_file"].includes(raw.action)
+      ? dispatch()
+      : externalEffect(context, "terminal.execute", dispatch);
   },
 });

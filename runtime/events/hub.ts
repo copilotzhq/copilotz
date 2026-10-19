@@ -10,11 +10,15 @@ export type CopilotzEventFilter = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
   /** Durable database position must be strictly greater than this cursor. */
   afterPosition?: string;
+  /** Owner-scoped consumed sequence, independent of database row positions. */
+  afterSeq?: string;
 }>;
 
 export type CopilotzEventHub = Readonly<{
   publish(event: CopilotzEvent): Promise<void>;
   subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
+  /** Reject current observers while allowing a new cursor-based attachment. */
+  reset(reason: Error): void;
   close(reason?: unknown): void;
 }>;
 
@@ -72,6 +76,12 @@ export function matchesCopilotzEvent(
   if (filter.durable !== undefined && event.durable !== filter.durable) {
     return false;
   }
+  if (filter.afterSeq !== undefined) {
+    if (!event.durable || !/^(0|[1-9][0-9]*)$/.test(filter.afterSeq)) {
+      return false;
+    }
+    if (BigInt(event.seq) <= BigInt(filter.afterSeq)) return false;
+  }
   if (filter.afterPosition !== undefined) {
     if (!event.durable) return false;
     try {
@@ -112,10 +122,21 @@ export function createCopilotzEventHub(): CopilotzEventHub {
       for (const [id, controller] of subscribers) {
         if (!matchesCopilotzEvent(event, filters.get(id))) continue;
         try {
+          if ((controller.desiredSize ?? 0) <= 0) {
+            throw Object.assign(
+              new Error(
+                "Owner push overflow; replay from the applied checkpoint.",
+              ),
+              { code: "observation_reset_required" },
+            );
+          }
           controller.enqueue(structuredClone(event));
-        } catch {
+        } catch (error) {
           subscribers.delete(id);
           filters.delete(id);
+          try {
+            controller.error(error);
+          } catch { /* detached */ }
         }
       }
       return Promise.resolve();
@@ -137,6 +158,15 @@ export function createCopilotzEventHub(): CopilotzEventHub {
           filters.delete(id);
         },
       }, { highWaterMark: 256 });
+    },
+    reset(reason) {
+      for (const controller of subscribers.values()) {
+        try {
+          controller.error(reason);
+        } catch { /* detached */ }
+      }
+      subscribers.clear();
+      filters.clear();
     },
     close(reason) {
       if (closed) return;

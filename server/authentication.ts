@@ -1,3 +1,9 @@
+import { withTrustedCollectionPolicyRead } from "../runtime/collections/policy-invocation.ts";
+import {
+  authenticatedServerIngressProof,
+  serverRouteIngressProof,
+} from "../runtime/application/ingress/authority.ts";
+import { withFacadeIngress } from "./context.ts";
 /** Resolves trusted scope and policy once for a compiled HTTP endpoint. @module */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type {
@@ -44,6 +50,17 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
       !text((input.actor as Record<string, unknown>).id)
     )
   ) throw new TypeError("Server actor must have a non-empty id.");
+  if (
+    input.actor &&
+    Object.entries(input.actor as Record<string, unknown>).some((
+      [key, value],
+    ) =>
+      !["id", "externalId", "name", "email"].includes(key) ||
+      typeof value !== "string"
+    )
+  ) {
+    throw new TypeError("Server actor contains unsupported identity fields.");
+  }
   const plain = (candidate: unknown, label: string) => {
     if (candidate === undefined) return undefined;
     if (
@@ -105,9 +122,11 @@ export async function authenticateHttpRequest(
   const authenticationRequest = request.clone();
   let authenticated;
   try {
-    authenticated = await facade.authenticate?.(
-      authenticationRequest,
-      authenticationContext,
+    authenticated = await withTrustedCollectionPolicyRead(() =>
+      facade.authenticate?.(
+        authenticationRequest,
+        authenticationContext,
+      )
     );
   } finally {
     if (!authenticationRequest.bodyUsed) {
@@ -126,11 +145,13 @@ export async function authenticateHttpRequest(
   const policyRequest = request.clone();
   let authorized;
   try {
-    authorized = await facade.authorize?.(policyRequest, {
-      ...authenticationContext,
-      scope,
-      read,
-    });
+    authorized = await withTrustedCollectionPolicyRead(() =>
+      facade.authorize?.(policyRequest, {
+        ...authenticationContext,
+        scope,
+        read,
+      })
+    );
   } finally {
     if (!policyRequest.bodyUsed) {
       void policyRequest.body?.cancel().catch(() => undefined);
@@ -143,25 +164,35 @@ export async function authenticateHttpRequest(
     match.endpoint,
     facade.maxAssetUploadBytes,
   );
-  return ({
-    ...(scope.context ?? {}),
-    serverScope: scope,
-    serverConstraints: constraints,
-    serverRequest: request,
-    namespace: scope.namespace,
-    databaseSchema: scope.databaseSchema,
-    serverEndpointKey: match.endpoint.key,
-    serverParams: match.params,
-    serverActionMetadata: {
-      ...scope.actionMetadata,
-      ...constraints.actionMetadata,
-      ...(scope.actor ? { httpActor: scope.actor } : {}),
-    },
-    operationMetadata: {
-      ...scope.operationMetadata,
-      ...(scope.actor ? { actorId: scope.actor.id } : {}),
-    },
-    serverIdentity: scope.identity ?? ({} as const),
-    serverSignal: request.signal,
-  } as const);
+  return withFacadeIngress(
+    {
+      ...(scope.context ?? {}),
+      serverScope: scope,
+      serverConstraints: constraints,
+      serverRequest: request,
+      namespace: scope.namespace,
+      databaseSchema: scope.databaseSchema,
+      serverEndpointKey: match.endpoint.key,
+      serverParams: match.params,
+      serverActionMetadata: {
+        ...scope.actionMetadata,
+        ...constraints.actionMetadata,
+        ...(scope.actor ? { httpActor: scope.actor } : {}),
+      },
+      operationMetadata: {
+        ...scope.operationMetadata,
+        ...(scope.actor ? { actorId: scope.actor.id } : {}),
+      },
+      serverIdentity: scope.identity ?? ({} as const),
+      serverSignal: request.signal,
+    } as const,
+    facade.authenticate && facade.authorize && authenticated && authorized
+      ? scope.actor
+        ? authenticatedServerIngressProof(scope.actor)
+        : match.endpoint.kind === "http" &&
+            facade.protectedBootstrapRoutes?.includes(match.endpoint.id)
+        ? serverRouteIngressProof(match.endpoint.id)
+        : undefined
+      : undefined,
+  );
 }

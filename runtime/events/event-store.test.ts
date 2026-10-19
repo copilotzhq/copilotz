@@ -23,6 +23,18 @@ import {
   validateCopilotzSchema,
 } from "./index.ts";
 
+async function persistedDeliveryDelayMs(
+  store: EventStore,
+): Promise<number | null> {
+  const result = await store.session.query<
+    { delay_ms: string | number | null }
+  >(
+    `SELECT EXTRACT(EPOCH FROM (MIN(due_at)-NOW()))*1000 AS delay_ms
+     FROM ${store.tables.owner_deadlines} WHERE owner='schema' AND source='deliveries'`,
+  );
+  const value = result.rows[0]?.delay_ms;
+  return value == null ? null : Math.max(0, Number(value));
+}
 const TEST_SCHEMA = "copilotz_event_native";
 
 Deno.test("status reads leave final-attempt expiry to explicit recovery and schedule its wake", async () => {
@@ -57,7 +69,7 @@ Deno.test("status reads leave final-attempt expiry to explicit recovery and sche
       cancelled: 0,
       succeeded: 0,
     });
-    assertEquals(await reads.nextRecoveryDelayMs(), 0);
+    assertEquals(await persistedDeliveryDelayMs(reads), 0);
     assertEquals(await reads.listRecoverable(), []);
     assertEquals(statements.length, 4);
     assertEquals(
@@ -70,7 +82,7 @@ Deno.test("status reads leave final-attempt expiry to explicit recovery and sche
     ]);
     assertEquals(await reads.recoverExpiredDeliveries(), []);
     assertEquals((await reads.getDelivery(id))?.status, "dead_letter");
-    assertEquals(await reads.nextRecoveryDelayMs(), null);
+    assertEquals(await persistedDeliveryDelayMs(reads), null);
   } finally {
     await closeFixture(fixture);
   }
@@ -142,6 +154,7 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
         "nodes",
         "open_actions",
         "owner_alarms",
+        "owner_deadlines",
         "owner_body_retirements",
         "owner_epochs",
         "owner_event_sequences",
@@ -768,7 +781,7 @@ for (
 ) {
   Deno.test({
     name:
-      `recovery delay distinguishes empty, due, deferred and settled queues (${backend.name})`,
+      `durable deadlines distinguish empty, due, deferred and settled queues (${backend.name})`,
     ignore: backend.ignore,
     async fn() {
       const schema = `recovery_delay_${
@@ -777,19 +790,19 @@ for (
       const fixture = await createFixture(backend.url, schema);
       const { store } = fixture;
       try {
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
         const committed = await store.append({
           type: "work.created",
           namespace: "tenant-a",
           payload: {},
         }, ["worker"]);
         const id = committed.deliveries[0].id;
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
 
         assertExists(
           await store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 }),
         );
-        const leaseDelay = await store.nextRecoveryDelayMs();
+        const leaseDelay = await persistedDeliveryDelayMs(store);
         assert(leaseDelay !== null && leaseDelay > 0 && leaseDelay <= 60_000);
 
         await store.failDelivery({
@@ -798,7 +811,7 @@ for (
           error: new Error("retry later"),
           backoffMs: 60_000,
         });
-        const retryDelay = await store.nextRecoveryDelayMs();
+        const retryDelay = await persistedDeliveryDelayMs(store);
         assert(retryDelay !== null && retryDelay > 0 && retryDelay <= 60_000);
         const tables = createCoreTableNames(schema);
         await fixture.session.query(
@@ -806,7 +819,11 @@ for (
            SET available_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
           [id],
         );
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        await fixture.session.query(
+          `UPDATE ${tables.owner_deadlines} SET due_at=NOW()-INTERVAL '1 second' WHERE source='deliveries' AND key=$1`,
+          [id],
+        );
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
         assertExists(
           await store.claimDelivery({ id, owner: "retry", leaseMs: 60_000 }),
         );
@@ -814,7 +831,7 @@ for (
           (await store.succeedDelivery(id, "retry"))?.status,
           "succeeded",
         );
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
 
         // Scheduling is pure; the explicit sweep terminalizes exhausted leases.
         const exhausted = await store.append(
@@ -834,10 +851,10 @@ for (
             leaseMs: 0,
           }),
         );
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
         assertEquals((await store.getDelivery(exhaustedId))?.status, "leased");
         await store.recoverExpiredDeliveries();
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
         assertEquals(
           (await store.getDelivery(exhaustedId))?.status,
           "dead_letter",
@@ -1201,8 +1218,8 @@ Deno.test("internal scope check reads only non-success rows as successful histor
     let previousCount = 0;
     for (const count of [1_000, 10_000]) {
       await fixture.session.query(
-        `INSERT INTO ${store.tables.events} (id, schema_version, type, namespace, payload, correlation_id)
-         SELECT 'history-event-' || n, 5, 'history.fixture', 'tenant-a', '{}', 'history-correlation'
+        `INSERT INTO ${store.tables.events} (seq, id, schema_version, type, namespace, payload, correlation_id)
+         SELECT (SELECT COALESCE(MAX(seq),0) FROM ${store.tables.events}) + row_number() OVER (ORDER BY n), 'history-event-' || n, 5, 'history.fixture', 'tenant-a', '{}', 'history-correlation'
          FROM generate_series($1::integer, $2::integer) AS fixture(n)`,
         [previousCount + 1, count],
       );

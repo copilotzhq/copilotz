@@ -510,3 +510,171 @@ or a custom route that forwards them to `app.send`.
   explains delivery scopes, retries and operation keys.
 - Reference: [Content and Assets](content-assets.md) covers content preparation
   and references.
+
+## External effects and recovery
+
+Mutating external calls use `context.effect` inside an Action. `begin(step)` is
+keyed by the durable Action run and a bounded step name. Only `proceed` permits
+a new dispatch. `replay` carries a confirmed JSON outcome and must not dispatch.
+After dispatch, `confirm(step, safeOutcome)` records a bounded, non-secret
+result or reference. `externalEffect(context, step, callback)` performs this
+pattern for JSON-result operations.
+
+If the provider result is the Action's complete declared protected output, use
+`await context.effect.confirmOutput(step, output)` before returning that same
+output. The owner validates the registered output schema, captures its secret
+fields using the normal protected-output storage boundary, and atomically
+confirms the effect. A replay from `begin` or `inspect` restores that complete
+output only to the same owner-authorized Action attempt. The worker supplies no
+storage reference, encryption key, namespace, owner identity or slot.
+
+The first accepted output is immutable. Repeating `confirmOutput` with the same
+output reuses its capture; other steps and terminal completion must use that
+same output. A different output is rejected. A lost confirmation reply must be
+recovered from the retained effect state, never by repeating the provider call.
+Plain `confirm` continues to reject protected outputs and owner-only references.
+
+A committed `begin` whose reply was lost does not grant dispatch permission. An
+interrupted begun effect invokes the Action's optional
+`reconcile(step,
+context)` hook before ordinary execution resumes. Without a
+known outcome it fails with `effect_indeterminate`. Provider exceptions,
+timeouts and cancellation are not proof that the operation did not happen.
+Reconciliation may confirm a known result, or close the step with `notStarted`
+only when the owner can verify trusted no-start evidence. A subsequent dispatch
+requires a different step name. The built-in provider adapters do not invent
+such evidence.
+
+Recovery checks the complete bounded inventory, including unresolved descendants
+and steps removed by a newer deployment. Old attempts without the original
+replay contract cannot acquire it retroactively. Swallowing an effect error does
+not permit a successful Action terminal.
+
+Built-in channel delivery, command execution, file mutation, mutating HTTP and
+unknown MCP calls use this protocol. Read-only filesystem tools, HTTP
+GET/HEAD/OPTIONS and terminal inspection/export keep ordinary retry behavior.
+For MCP, declare host-reviewed tool names in `readOnlyTools`; provider
+annotations alone do not establish read-only safety. Do not classify a mutating
+operation as read-only merely because its provider supports idempotency.
+
+### Owner-local protected preparation and acceptance
+
+For declared secret Actions, an embedded host or Gateway may register local
+`protectedActions` keyed by the stable Action ID. Declare required phases on the
+Action as `ownerHooks: { prepareInput: true, acceptOutput: true }`; startup
+refuses missing registrations or phases. Ordinary secret Actions need no hooks.
+Worker configuration refuses callbacks, and Workers have no hook RPC.
+
+Each registration supplies:
+
+- `authorize(input, context)`: required, read-only current-domain authorization
+  on preparation, replay, effect commands, acceptance and protected result
+  recovery.
+- `prepareInput(input, context)`: optional first-capture preparation. Return the
+  complete input. Only declared secret slots and explicit `publicRevisionFields`
+  may change; all other public fields must remain identical.
+- `acceptOutput(output, context)`: optional, void local storage adoption. The
+  output and captured input are immutable. It runs once in the same transaction
+  as the first accepted output. `effect.confirmOutput` and ordinary completion
+  share this acceptance receipt, so later completion cannot repeat adoption.
+
+`publicRevisionFields` contains exact, non-overlapping JSON Pointers to explicit
+public string/number/null revision properties, such as `/credentialRevision`.
+Ownership and identity coordinates cannot be selected. Keep owner-filled fields
+optional in the admitted input schema; the completed prepared input is fully
+validated. Retries authorize again and reuse the exact first input capture.
+
+A sealed object may contain public coordinates alongside credentials. Mark each
+explicit public scalar property with `"x-copilotz-secret": false` for metadata
+leak analysis only. The enclosing secret object remains fully encrypted and
+redacted; this does not permit preparation to change other public input fields.
+Object and array containers cannot opt out. Only unambiguous typed object
+properties, including properties in homogeneous arrays of typed objects, support
+this annotation. Nullable properties use a `type` array; references, unions,
+conditionals, pattern properties and tuple paths are refused. A validated scalar
+marker outside a secret aggregate is a no-op, allowing schema reuse. Undeclared
+leaves stay confidential, and a token remains protected even when its bytes
+equal a separately annotated public coordinate.
+
+The `ProtectedActionOwnerContext<Input, Output>` type is exported from
+`/actions`, `/application`, and the package root. It exposes only a revocable
+`query` handle, fixed `scope.databaseSchema` and `scope.namespace`, the current
+validated `action.id`, `action.runId` and optional `action.parentRunId`,
+immutable captured `input`, `commandTime`, and `signal`. `resolveSource()`
+resolves the retained original event/body and root-first operation ancestry,
+including protected source data. `readAcceptedOutput()` lazily reads only this
+Action/run's accepted declared output, or `undefined`; authorize baseline
+provenance before reading it. Neither method accepts a caller-selected event,
+record, schema, run or capture reference. All handles expire when the callback
+finishes, throws or is cancelled, including before a synchronous callback's
+queued microtask can use them.
+
+Source `ingress` is owner-created evidence bound atomically to the exact
+retained event/body, never a metadata flag:
+
+- `host` proves in-process host admission, not an end-user identity.
+- `authenticated-server` includes the server-owned actor after configured
+  authentication and authorization hooks both succeed.
+- `server-route` includes an exact custom HTTP `routeId`, only for an explicitly
+  configured `defineServerFacade({ protectedBootstrapRoutes: [...] })` route
+  with both policy hooks. It proves the selected bootstrap route, not a user.
+  Unmatched IDs, generic Action endpoints and missing policy hooks are rejected
+  at facade setup; ordinary anonymous HTTP has no authenticated provenance.
+
+The first admission classification is immutable. An exact retry of an
+unclassified event remains unclassified even from a trusted host; it cannot
+create or upgrade provenance. Classified retries must retain their original
+class, actor and route. Changed payloads or metadata conflict. Protected policy
+still refuses an unclassified original when its required authority is absent.
+
+Policy must validate the original root Action and purpose, re-resolve current
+membership and domain state, and refuse unsupported ancestry. Worker metadata,
+account selections and identifiers remain claims. Bootstrap policy must verify
+its own purpose-bound signed state or ticket before granting domain authority.
+
+Callbacks are local policy/storage phases, never external-network effect phases.
+Use the Action's effect protocol for provider work. Acceptance may conditionally
+adopt a candidate or leave a newer/disconnected/deleted record unchanged, but
+cannot transform the accepted output. A subsequent selection Action can return
+the current authorized winner. Unknown COMMIT outcomes require durable receipt
+recovery; they never imply rollback. Hook failures preserve only vetted
+standardized error codes and fixed public messages; arbitrary exception details
+are scrubbed. Secret values stay out of public Events, effect records and
+receipt payloads.
+
+Transactional protected captures use durable database staging. For configured
+external storage, the existing logical-body promotion protocol uploads only
+after confirmed commit and retains the logical identity and database read
+fallback. Failed uploads remain tracked by the content catalog. A replay after
+an unknown commit can recover the staged value and resume promotion without
+repeating the owner preparation or domain adoption.
+
+### Registered Collection adoption
+
+An owner `acceptOutput` callback receives `ProtectedActionAdoptionContext`. Its
+`collections` map contains registered aliases with `create`, `update`, `delete`,
+and declared `commands`. Each method returns a `Promise<CollectionMutationRef>`
+and stages the normal Collection mutation in the same accepted-output command.
+The callback has no scope, operation-key, transaction, or commit selector.
+Authorization and input preparation contexts have no mutation helpers.
+
+Inputs are captured synchronously. Awaiting a method completes its planning; SQL
+queries in the callback do not read staged Collection changes. After the
+callback finishes, all admitted work is drained and the normal Collection
+policies, projection, event, and alarm updates execute before output acceptance.
+Failure rolls back the entire command. Publication waits for confirmed outer
+commit. Replaying an accepted output never repeats adoption.
+
+Handles close when the callback returns, fails, or is cancelled, including
+synchronously queued microtasks. Content fields accept only existing canonical
+references, checked by the normal namespace-bound Asset resolver. Capture or
+materialize new content before acceptance. Domain policy must separately verify
+that referenced content belongs to the authorized source and purpose.
+
+`context.action.parentId` identifies the immediate parent Action declaration,
+when a parent exists. The owner resolves it from the exact retained parent
+invocation and validates this child's linkage. It remains available after the
+parent leaves the active-run index. It is an additional scope fact: policy must
+still validate the original authenticated actor or delegation, current domain
+permissions, and the exact resource and purpose. Worker metadata cannot supply
+or replace this parent identity.

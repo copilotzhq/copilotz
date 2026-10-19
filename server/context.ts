@@ -1,3 +1,4 @@
+import type { OwnerIngressProof } from "../runtime/application/ingress/authority.ts";
 import type {
   ServerAuthorizedScope,
   ServerConstraints,
@@ -16,3 +17,19 @@ export type FacadeContext = Readonly<{
   namespace?: string;
   databaseSchema?: string;
 }>;
+
+// Enumerable symbol survives package-owned context copies; JSON/wire values cannot supply it.
+const ingressKey = Symbol("ownerIngress");
+export function withFacadeIngress<T extends object>(
+  context: T,
+  proof?: OwnerIngressProof,
+): T {
+  return proof ? Object.assign(context, { [ingressKey]: proof }) : context;
+}
+export function facadeIngress(
+  context: FacadeContext,
+): OwnerIngressProof | undefined {
+  return (context as FacadeContext & { [ingressKey]?: OwnerIngressProof })[
+    ingressKey
+  ];
+}

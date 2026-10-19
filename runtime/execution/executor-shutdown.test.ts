@@ -14,6 +14,7 @@ const event: DurableEvent = {
   durable: true,
   id: "event",
   position: "1",
+  seq: "1",
   schemaVersion: 1,
   type: "test.created",
   namespace: "test",
@@ -53,9 +54,6 @@ function fixture(options: {
   getDelivery?: () => Promise<void>;
   dispatch?: () => Promise<void>;
   recoverExpiredDeliveries?: () => Promise<void>;
-  nextRecoveryDelayMs?: () => Promise<void>;
-  recoveryDelayMs?: number;
-  scheduler?: CreateDeliveryExecutorOptions["scheduler"];
   completed?: WorkHandle["completed"];
   cancel?: WorkHandle["cancel"];
   onDeliverySettled?: CreateDeliveryExecutorOptions["onDeliverySettled"];
@@ -90,11 +88,6 @@ function fixture(options: {
     listRecoverable() {
       calls.push("listRecoverable");
       return Promise.resolve([]);
-    },
-    async nextRecoveryDelayMs() {
-      calls.push("nextRecoveryDelayMs");
-      await options.nextRecoveryDelayMs?.();
-      return options.recoveryDelayMs ?? null;
     },
   } as unknown as EventStore;
   const executor = createDeliveryExecutor({
@@ -131,8 +124,6 @@ function fixture(options: {
         } satisfies WorkHandle;
       },
     },
-    continuousRecovery: true,
-    scheduler: options.scheduler,
     onDeliverySettled: options.onDeliverySettled,
   });
   return { executor, calls };
@@ -344,87 +335,6 @@ Deno.test("shutdown includes admitted recovery reads and rejects recovery after 
   );
 });
 
-Deno.test("shutdown drains detached recovery schedule reads", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const f = fixture({
-    async nextRecoveryDelayMs() {
-      entered.resolve();
-      await release.promise;
-    },
-  });
-  await f.executor.dispatchRecoverable();
-  await entered.promise;
-  const shutdown = f.executor.shutdown();
-  const returned = observe(shutdown);
-  try {
-    await nextTurn();
-    assertEquals(returned(), false);
-  } finally {
-    release.resolve();
-    await shutdown;
-  }
-});
-
-Deno.test("shutdown preserves cleanup errors after draining late settlement callbacks", async () => {
-  const scheduled = Promise.withResolvers<void>();
-  const admitted = Promise.withResolvers<void>();
-  const releaseDispatch = Promise.withResolvers<void>();
-  const entered = Promise.withResolvers<void>();
-  const releaseCallback = Promise.withResolvers<void>();
-  const cleanupError = new Error("timer cancellation failed");
-  let holdDispatch = false;
-  const f = fixture({
-    async resolveStore() {
-      if (holdDispatch) {
-        admitted.resolve();
-        await releaseDispatch.promise;
-      }
-    },
-    recoveryDelayMs: 1_000,
-    scheduler: {
-      schedule() {
-        scheduled.resolve();
-        return "fake timer";
-      },
-      cancel() {
-        throw cleanupError;
-      },
-    },
-    async onDeliverySettled() {
-      entered.resolve();
-      await releaseCallback.promise;
-    },
-  });
-  await f.executor.dispatchRecoverable();
-  await scheduled.promise;
-  holdDispatch = true;
-  const dispatch = f.executor.dispatchDelivery(delivery);
-  await admitted.promise;
-  const shutdown = f.executor.shutdown();
-  const outcome = shutdown.then(() => undefined, (error) => error);
-  const returned = observe(shutdown);
-  try {
-    await nextTurn();
-    assertEquals(
-      returned(),
-      false,
-      "cleanup failure cannot skip admitted work",
-    );
-    releaseDispatch.resolve();
-    await entered.promise;
-    await nextTurn();
-    assertEquals(returned(), false, "cleanup failure cannot skip settlement");
-  } finally {
-    releaseDispatch.resolve();
-    releaseCallback.resolve();
-    const handle = await dispatch;
-    await handle.done;
-    await entered.promise;
-    assertEquals(await outcome, cleanupError);
-  }
-});
-
 Deno.test("shutdown drains rejected admitted calls without running settlement callbacks", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -454,70 +364,4 @@ Deno.test("shutdown drains rejected admitted calls without running settlement ca
   }
   assertEquals(settlements, 0);
   await nextTurn();
-});
-
-Deno.test("shutdown drains a rejected detached recovery read", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const f = fixture({
-    async nextRecoveryDelayMs() {
-      entered.resolve();
-      await release.promise;
-      throw new Error("recovery read failed");
-    },
-  });
-  await f.executor.dispatchRecoverable();
-  await entered.promise;
-  const shutdown = f.executor.shutdown();
-  const returned = observe(shutdown);
-  try {
-    await nextTurn();
-    assertEquals(returned(), false);
-  } finally {
-    release.resolve();
-    await shutdown;
-  }
-  await nextTurn();
-});
-
-Deno.test("shutdown cancels live deliveries even when timer cleanup fails", async () => {
-  const scheduled = Promise.withResolvers<void>();
-  const completed = Promise.withResolvers<typeof terminal>();
-  const cleanupError = new Error("timer cancellation failed");
-  let cancellations = 0;
-  const f = fixture({
-    completed: completed.promise,
-    cancel() {
-      cancellations++;
-      completed.resolve(terminal);
-      return Promise.resolve(terminal);
-    },
-    recoveryDelayMs: 1000,
-    scheduler: {
-      schedule() {
-        scheduled.resolve();
-        return "timer";
-      },
-      cancel() {
-        throw cleanupError;
-      },
-    },
-  });
-  await f.executor.dispatchRecoverable();
-  await scheduled.promise;
-  const handle = await f.executor.dispatchDelivery(delivery);
-  const closing = f.executor.shutdown();
-  const outcome = closing.catch((error) => error);
-  try {
-    await nextTurn();
-    assertEquals(
-      cancellations,
-      1,
-      "live work must still receive cancellation after a timer cleanup error",
-    );
-  } finally {
-    completed.resolve(terminal);
-    await handle.done;
-    assertEquals(await outcome, cleanupError);
-  }
 });

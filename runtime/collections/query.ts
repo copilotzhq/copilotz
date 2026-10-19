@@ -3,6 +3,11 @@ import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
+import {
+  type CollectionReadBudget,
+  currentCollectionReadBudget,
+  queryCollectionRows,
+} from "./read-budget.ts";
 import type {
   CollectionGraphRelation,
   CollectionQuery,
@@ -71,22 +76,35 @@ async function resolveCursorAnchor(
   namespace: string,
   boundary: "after" | "before",
   cursor: string,
+  budget: CollectionReadBudget | undefined = currentCollectionReadBudget(),
+  sourceCheck?: string,
 ): Promise<CursorAnchorRow> {
   const params = [...filterParams, cursor];
   // Text preserves PostgreSQL's microseconds across the driver round trip;
   // decoding timestamptz as a JavaScript Date would truncate them.
-  const result = await executor.query<CursorAnchorRow>(
+  const rows = await queryCollectionRows<CursorAnchorRow>(
+    executor,
     `SELECT id${
       order.expression === "id"
         ? ""
-        : `, (${order.expression})::text AS order_value`
+        : `, (${
+          sourceCheck === undefined
+            ? order.expression
+            : `CASE WHEN (${sourceCheck}) IS TRUE THEN (${order.expression}) ELSE NULL END`
+        })::text AS order_value`
+    }${
+      sourceCheck === undefined
+        ? ""
+        : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
     }
        FROM ${table}
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
       LIMIT 1`,
     params,
+    budget,
+    { sourceChecked: sourceCheck !== undefined },
   );
-  const anchor = result.rows[0];
+  const anchor = rows[0];
   if (!anchor) {
     throw new RangeError(
       `Collection '${definition.name}' ${boundary} cursor '${cursor}' does not match the current query scope in namespace '${namespace}'.`,
@@ -202,7 +220,8 @@ export async function queryCollectionRelations(
   if (types.length) {
     filters.push(`edge.type = ANY($${params.push([...types])}::text[])`);
   }
-  const result = await executor.query<EdgeRow>(
+  const result = await queryCollectionRows<EdgeRow>(
+    executor,
     `SELECT edge.*, source.type AS source_type, target.type AS target_type
        FROM ${tables.edges} edge
        JOIN ${tables.nodes} source
@@ -216,7 +235,7 @@ export async function queryCollectionRelations(
       LIMIT ${relationLimit(query.limit)}`,
     params,
   );
-  return (result.rows.map((row) => {
+  return (result.map((row) => {
     const data = jsonRecord(row.data);
     return ({
       id: row.id,
@@ -239,6 +258,13 @@ export async function queryCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionQuery = {},
+  budget: CollectionReadBudget | undefined = currentCollectionReadBudget(),
+  /** Trusted fixed source check, never caller-authored SQL. */
+  sourceCheck?: string,
+  readRelated?: (
+    collection: string,
+    id: string,
+  ) => Promise<CollectionRecord | null>,
 ): Promise<readonly CollectionRecord[]> {
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
@@ -302,6 +328,8 @@ export async function queryCollectionRecords(
       namespace,
       boundary,
       cursor,
+      budget,
+      sourceCheck,
     );
     filters.push(cursorFilter(params, order, boundary, anchor));
   }
@@ -309,14 +337,25 @@ export async function queryCollectionRecords(
   const orderBy = order.expression === "id"
     ? `id ${order.direction}`
     : `(${order.expression}) ${order.direction}, id ${order.direction}`;
-  const result = await executor.query<NodeRow>(
-    `SELECT * FROM ${tables.nodes}
+  const rows = await queryCollectionRows<NodeRow>(
+    executor,
+    `SELECT ${
+      budget
+        ? `id, namespace, data, row_number() OVER (ORDER BY ${orderBy}) AS __collection_read_order${
+          sourceCheck === undefined
+            ? ""
+            : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
+        }`
+        : "*"
+    } FROM ${tables.nodes}
      WHERE ${filters.join(" AND ")}
      ORDER BY ${orderBy}
      LIMIT ${limit}`,
     params,
+    budget,
+    { ordered: budget !== undefined, sourceChecked: sourceCheck !== undefined },
   );
-  const records = result.rows.map(mapNode);
+  const records = rows.map(mapNode);
   if (!query.include?.length) return records;
 
   const hydrated = [];
@@ -332,18 +371,21 @@ export async function queryCollectionRecords(
       if (relation.type === "belongsTo") {
         const parentId = value[relation.foreignKey];
         extra[name] = typeof parentId === "string"
-          ? await loadCollectionRecord(
-            executor,
-            tables,
-            namespace,
-            relation.collection,
-            parentId,
-          )
+          ? await (readRelated
+            ? readRelated(relation.collection, parentId)
+            : loadCollectionRecord(
+              executor,
+              tables,
+              namespace,
+              relation.collection,
+              parentId,
+            ))
           : null;
       } else {
         const edgeType = relation.edgeType ?? `has_${relation.collection}`;
         const invert = relation.edge === "child-to-parent";
-        const edges = await executor.query<{ related_id: string }>(
+        const edges = await queryCollectionRows<{ related_id: string }>(
+          executor,
           invert
             ? `SELECT source_node_id AS related_id FROM ${tables.edges}
                WHERE namespace = $1 AND target_node_id = $2 AND type = $3
@@ -353,17 +395,24 @@ export async function queryCollectionRecords(
                ORDER BY target_node_id`,
           [namespace, value.id, edgeType],
         );
-        extra[name] = (await Promise.all(
-          edges.rows.map((edge) =>
-            loadCollectionRecord(
+        const related = [];
+        // Hydration participates in the same transfer budget; avoid materializing
+        // a fan-out of independently bounded rows concurrently.
+        for (const edge of edges) {
+          const record = await (readRelated
+            ? readRelated(relation.collection, edge.related_id)
+            : loadCollectionRecord(
               executor,
               tables,
               namespace,
               relation.collection,
               edge.related_id,
-            )
-          ),
-        )).filter((item) => item !== null);
+            ));
+          if (record !== null) {
+            related.push(record);
+          }
+        }
+        extra[name] = related;
       }
     }
     hydrated.push({ ...value, ...extra } as const);

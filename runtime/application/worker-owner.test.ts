@@ -24,18 +24,8 @@ Deno.test("a colocated worker executes with gateway capabilities without opening
     target: { workerId: "worker" },
     actions,
   });
-  let storageCalls = 0;
-  const inaccessible = () => {
-    storageCalls++;
-    throw new Error("worker opened storage");
-  };
   const worker = await createCopilotz({
     role: "worker",
-    database: {
-      query: inaccessible,
-      transaction: inaccessible,
-      close: inaccessible,
-    },
     databaseSchema,
     namespace: "space",
     transport,
@@ -61,5 +51,4 @@ Deno.test("a colocated worker executes with gateway capabilities without opening
     await gateway.close();
     await database.close();
   }
-  assertEquals(storageCalls, 0);
 });

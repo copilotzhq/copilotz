@@ -46,7 +46,11 @@ function requiredMetadataString(
   key: keyof DeliveryDispatchMetadata,
 ): string {
   const value = metadata[key];
-  if (typeof value !== "string" || !value.trim()) {
+  if (
+    typeof value !== "string" || !value.trim() || value !== value.trim() ||
+    value.length > 1024 ||
+    [...value].some((character) => character.charCodeAt(0) < 32)
+  ) {
     throw new TypeError(`Delivery dispatch metadata requires '${key}'.`);
   }
   return value;
@@ -149,6 +153,7 @@ export function createDeliveryWorkload(
       id: metadata.deliveryId,
       owner: metadata.dispatchAttemptId,
       leaseMs,
+      ...(options.localExecution ? { localExecution: true } : {}),
     });
     if (!delivery) {
       const current = await store.getDelivery(metadata.deliveryId);
@@ -212,7 +217,7 @@ export function createDeliveryWorkload(
         }).catch((error) => abort.abort(error));
       }, heartbeatMs);
     };
-    heartbeat();
+    if (!options.localExecution) heartbeat();
 
     try {
       const mismatch = deliveryMismatch(delivery, metadata);
@@ -391,100 +396,13 @@ export function createDeliveryWorkload(
 
 export type OwnerExecutionOptions = Readonly<{
   registry: import("../plugins/index.ts").PluginRegistry;
-  publish: import("../engine/types.ts").RuntimeOutputPublisher;
+  /** Trusted owner placement; never supplied by a worker. */
+  localExecution?: boolean;
+  publish?: import("../engine/types.ts").RuntimeOutputPublisher;
   workerId: string;
   onDiagnostic?:
     import("./types.ts").CreateDeliveryWorkloadOptions["onDiagnostic"];
 }>;
-type OwnerExecutionFactory = (
+export type OwnerExecutionFactory = (
   options: OwnerExecutionOptions,
 ) => Readonly<Record<string, DeliveryWorkload>>;
-const executionHosts = new WeakMap<object, OwnerExecutionFactory>();
-const injectedHosts = new Set<{
-  factory: OwnerExecutionFactory;
-  database: unknown;
-  schema: string;
-}>();
-const transportHosts = new Map<
-  string,
-  Set<{ factory: OwnerExecutionFactory; database: unknown; schema: string }>
->();
-
-/** Binds execution to the engine's existing schema capabilities, without opening storage. */
-export function bindOwnerExecution(
-  execution: object,
-  factory: OwnerExecutionFactory,
-): void {
-  executionHosts.set(execution, factory);
-}
-function transportKey(transport: { type: string; config?: unknown }): string {
-  const config = transport.config as {
-    topic?: string;
-    path?: string;
-    url?: string | URL;
-  };
-  if (transport.type === "in-process" && config.topic) {
-    return `in-process:${config.topic}`;
-  }
-  if (transport.type === "websocket") {
-    const path = config.url ? new URL(config.url).pathname : config.path;
-    if (path) return `websocket:${path}`;
-  }
-  throw new Error("Execution transport has no owner rendezvous identity.");
-}
-export function hostOwnerExecution(
-  execution: object,
-  transports: readonly { type: string; config?: unknown }[],
-  database: unknown,
-  schema: string,
-): () => void {
-  const factory = executionHosts.get(execution);
-  if (!factory) throw new Error("Execution owner has not activated.");
-  const injected = !transports.length && database !== undefined
-    ? { factory, database, schema }
-    : undefined;
-  if (injected) injectedHosts.add(injected);
-  const registrations = transports.map((transport) => {
-    const key = transportKey(transport);
-    const hosts = transportHosts.get(key) ?? new Set();
-    const entry = { factory, database, schema };
-    hosts.add(entry);
-    transportHosts.set(key, hosts);
-    return { key, hosts, entry };
-  });
-  return () => {
-    if (injected) injectedHosts.delete(injected);
-    for (const { key, hosts, entry } of registrations) {
-      hosts.delete(entry);
-      if (!hosts.size) transportHosts.delete(key);
-    }
-  };
-}
-export function connectOwnerExecution(
-  transport: { type: string; config?: unknown },
-  database: unknown,
-  schema: string,
-  options: OwnerExecutionOptions,
-): Readonly<Record<string, DeliveryWorkload>> {
-  const hosts = [...transportHosts.get(transportKey(transport)) ?? []];
-  if (!hosts.length && database !== undefined) {
-    hosts.push(
-      ...[...injectedHosts].filter((host) =>
-        host.database === database && host.schema === schema
-      ),
-    );
-  }
-  const matching = hosts.filter((host) => host.schema === schema).filter((
-    host,
-  ) =>
-    transport.type === "websocket" || hosts.length > 1
-      ? database !== undefined && host.database === database
-      : true
-  );
-  if (matching.length !== 1) {
-    throw new Error(
-      "Worker requires one colocated execution owner. Cross-process owner capabilities require reverse-call transport support.",
-    );
-  }
-  return matching[0].factory(options);
-}

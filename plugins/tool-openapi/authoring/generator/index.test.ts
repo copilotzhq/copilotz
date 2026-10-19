@@ -1,3 +1,4 @@
+import { testEffect } from "../../../../runtime/testing/effects.ts";
 import {
   assert,
   assertEquals,
@@ -7,7 +8,7 @@ import {
 } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type {
-  ContentRef,
+  PendingContentRef,
   PreparedContent,
   PublishAssetInput,
 } from "@copilotz/copilotz/content";
@@ -67,6 +68,7 @@ function actionContext(
   overrides: Partial<ActionContext> = {},
 ): ActionContext {
   return {
+    effect: testEffect,
     namespace: "tenant-a",
     databaseSchema: "tenant_a",
     operationKey: "openapi-test",
@@ -184,16 +186,16 @@ Deno.test("OpenAPI request preparation receives each execution's runtime databas
   }
 });
 
-Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before completion", async () => {
+Deno.test("OpenAPI NDJSON returns sealed pending descriptors for domain adoption", async () => {
   const definition = api("terminal", { streamNdjson: true });
   const seen: unknown[] = [];
-  const ref: ContentRef = {
-    assetId: "stream-asset-a",
-    kind: "text",
-    role: "tool.output",
+  const pending: PendingContentRef = {
+    type: "content.pending",
+    pendingRef: "pending:stream-a",
     mediaType: "text/plain",
+    byteLength: 6,
+    digest: `sha256:${"a".repeat(64)}`,
   };
-  const prepared: PreparedContent = { content: [ref], assets: [] };
   const context = actionContext({
     streams: {
       async open(input: ContentStreamOpenInput) {
@@ -210,7 +212,7 @@ Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before
           },
           async close() {
             seen.push({ type: "close" });
-            return prepared;
+            return pending;
           },
           async abort() {},
           async [Symbol.asyncDispose]() {},
@@ -221,10 +223,10 @@ Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before
       },
     },
     content: {
-      materialize(value: PreparedContent) {
-        assertEquals(value, prepared);
-        seen.push({ type: "materialize" });
-        return Promise.resolve(value.content);
+      materialize() {
+        throw new Error(
+          "Generated tool output must stay pending until domain adoption.",
+        );
       },
     },
   } as unknown as Partial<ActionContext>);
@@ -252,13 +254,12 @@ Deno.test("OpenAPI NDJSON uses live Content Streams and materializes them before
     ).execute({}, context);
     assertEquals(result, {
       exitCode: 0,
-      streams: { stdout: ref },
+      streams: { stdout: pending },
     });
     assertEquals(seen.map((entry) => (entry as { type: string }).type), [
       "open",
       "append",
       "close",
-      "materialize",
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -413,7 +414,13 @@ Deno.test("OpenAPI NDJSON close failure aborts that and every later writer", asy
             if (channel === "stderr") {
               return Promise.reject(new Error("close failed"));
             }
-            return Promise.resolve({ content: [], assets: [] });
+            return Promise.resolve({
+              type: "content.pending",
+              pendingRef: `pending:${channel}`,
+              mediaType: "text/plain",
+              byteLength: 3,
+              digest: `sha256:${"a".repeat(64)}`,
+            });
           },
           abort: () => {
             state.aborts += 1;
@@ -473,30 +480,15 @@ Deno.test("OpenAPI NDJSON close failure aborts that and every later writer", asy
   }
 });
 
-Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async () => {
+Deno.test("OpenAPI NDJSON returns every sealed channel as pending without materialization", async () => {
   const definition = api("terminal_combined", { streamNdjson: true });
-  const refs: Record<string, ContentRef> = {
-    stdout: {
-      assetId: "stream-stdout",
-      kind: "text",
-      role: "tool.output",
+  const refs: Record<string, PendingContentRef> = Object.fromEntries(
+    ["stdout", "stderr"].map((channel) => [channel, {
+      type: "content.pending",
+      pendingRef: `pending:stream-${channel}`,
       mediaType: "text/plain",
-    },
-    stderr: {
-      assetId: "stream-stderr",
-      kind: "text",
-      role: "tool.output",
-      mediaType: "text/plain",
-    },
-  };
-  const assets = Object.fromEntries(
-    Object.entries(refs).map(([channel, ref]) => [channel, {
-      id: ref.assetId,
-      namespace: "tenant-a",
-      mediaType: ref.mediaType,
-      body: new TextEncoder().encode(channel),
-      byteLength: channel.length,
-      digest: `sha256:${channel}` as const,
+      byteLength: 3,
+      digest: `sha256:${"a".repeat(64)}`,
     }]),
   );
   let materializeCalls = 0;
@@ -508,11 +500,7 @@ Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async 
           id: input.id ?? channel,
           offset: () => 0,
           append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
-          close: () =>
-            Promise.resolve({
-              content: [refs[channel]],
-              assets: [assets[channel]],
-            }),
+          close: () => Promise.resolve(refs[channel]),
           abort: () => Promise.resolve(),
           async [Symbol.asyncDispose]() {},
         };
@@ -524,9 +512,9 @@ Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async 
     content: {
       materialize(prepared: PreparedContent) {
         materializeCalls += 1;
-        assertEquals(prepared.content, [refs.stdout, refs.stderr]);
-        assertEquals(prepared.assets, [assets.stdout, assets.stderr]);
-        return Promise.resolve(prepared.content);
+        throw new Error(
+          `Unexpected domain materialization: ${JSON.stringify(prepared)}`,
+        );
       },
     },
   } as unknown as Partial<ActionContext>);
@@ -548,7 +536,7 @@ Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async 
       compileFixture({ apis: [definition] }),
       "terminal_combined",
     ).execute({}, context);
-    assertEquals(materializeCalls, 1);
+    assertEquals(materializeCalls, 0);
     assertEquals(result, {
       exitCode: 0,
       streams: { stdout: refs.stdout, stderr: refs.stderr },
@@ -558,7 +546,7 @@ Deno.test("OpenAPI NDJSON materializes all closed channels in one batch", async 
   }
 });
 
-Deno.test("OpenAPI NDJSON settles all writers before one failing materialization", async () => {
+Deno.test("OpenAPI NDJSON settles every writer before returning pending output", async () => {
   const definition = api("terminal_materialize_failure", {
     streamNdjson: true,
   });
@@ -568,11 +556,12 @@ Deno.test("OpenAPI NDJSON settles all writers before one failing materialization
     streams: {
       async open(input: ContentStreamOpenInput) {
         const channel = String(input.metadata?.channel);
-        const ref: ContentRef = {
-          assetId: `stream-${channel}`,
-          kind: "text",
-          role: "tool.output",
+        const ref: PendingContentRef = {
+          type: "content.pending",
+          pendingRef: `pending:stream-${channel}`,
           mediaType: "text/plain",
+          byteLength: 3,
+          digest: `sha256:${"b".repeat(64)}`,
         };
         return {
           id: input.id ?? channel,
@@ -580,7 +569,7 @@ Deno.test("OpenAPI NDJSON settles all writers before one failing materialization
           append: () => Promise.resolve({ startOffset: 0, endOffset: 1 }),
           close: () => {
             closes += 1;
-            return Promise.resolve({ content: [ref], assets: [] });
+            return Promise.resolve(ref);
           },
           abort: () => Promise.resolve(),
           async [Symbol.asyncDispose]() {},
@@ -612,23 +601,21 @@ Deno.test("OpenAPI NDJSON settles all writers before one failing materialization
       ),
     );
   try {
-    await assertRejects(
-      () =>
-        action(
-          compileFixture({ apis: [definition] }),
-          "terminal_materialize_failure",
-        ).execute({}, context) as Promise<unknown>,
-      Error,
-      "materialize failed",
-    );
+    const result = await action(
+      compileFixture({ apis: [definition] }),
+      "terminal_materialize_failure",
+    ).execute({}, context) as { streams: Record<string, PendingContentRef> };
+    assertEquals(Object.keys(result.streams), ["stdout", "stderr"]);
+    assertEquals(result.streams.stdout.pendingRef, "pending:stream-stdout");
+    assertEquals(result.streams.stderr.pendingRef, "pending:stream-stderr");
     assertEquals(closes, 2);
-    assertEquals(materializeCalls, 1);
+    assertEquals(materializeCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-Deno.test("OpenAPI NDJSON requires exactly one ref from every closed channel", async () => {
+Deno.test("OpenAPI NDJSON requires one valid pending descriptor from every closed channel", async () => {
   const definition = api("terminal_invalid_close", { streamNdjson: true });
   let materializeCalls = 0;
   const context = actionContext({
@@ -674,7 +661,6 @@ Deno.test("OpenAPI NDJSON requires exactly one ref from every closed channel", a
           "terminal_invalid_close",
         ).execute({}, context) as Promise<unknown>,
       TypeError,
-      "exactly one ContentRef",
     );
     assertEquals(materializeCalls, 0);
   } finally {
@@ -787,7 +773,7 @@ Deno.test("OpenAPI response assets publish canonical content and return a Conten
           byteLength: input.body.byteLength,
           digest: "sha256:fixture",
           state: "ready",
-          location: { kind: "database", key: "asset-a" },
+          bodyId: "logical:asset-a",
           createdAt: "2026-08-23T00:00:00.000Z",
         });
       },
@@ -868,7 +854,7 @@ Deno.test("OpenAPI response assets promote explicit data URLs as one ref per fie
           byteLength: input.body.byteLength,
           digest: `sha256:${id}`,
           state: "ready",
-          location: { kind: "database", key: id },
+          bodyId: `logical:${id}`,
           createdAt: "2026-08-23T00:00:00.000Z",
         });
       },
@@ -1171,6 +1157,82 @@ Deno.test("OpenAPI dynamic authentication honors Action cancellation", async () 
     const error = await assertRejects(async () => await execution);
     assertEquals((error as Error).name, "AbortError");
     assertEquals((error as Error).message, cancellation.message);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("OpenAPI classifies the final prepared method and never blindly replays a mutation", async () => {
+  for (
+    const method of ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
+  ) {
+    let dispatches = 0;
+    let begins = 0;
+    let outcome: unknown;
+    const plugin = compileFixture({
+      apis: [api("classified", {
+        prepareRequest: (request) => ({ ...request, method, body: undefined }),
+      } as Partial<API>)],
+    });
+    // fetch is an adapter capability, never a portable declaration callback.
+    const configured = plugin.adapters.openapi as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const ctx = actionContext({
+      adapters: {
+        openapi: {
+          "fixture-api": {
+            ...configured["fixture-api"],
+            fetch: () => {
+              dispatches++;
+              return Promise.resolve(Response.json({ ok: true }));
+            },
+          },
+        },
+      },
+      effect: {
+        ...testEffect,
+        begin: () => {
+          begins++;
+          return Promise.resolve(
+            outcome === undefined
+              ? { status: "proceed" } as const
+              : { status: "replay", outcome } as never,
+          );
+        },
+        confirm: (_step, value) => {
+          outcome = value;
+          return Promise.resolve();
+        },
+      },
+    });
+    const call = () => action(plugin, "classified").execute({}, ctx);
+    assertEquals(await call(), { ok: true });
+    assertEquals(await call(), { ok: true });
+    const readOnly = ["GET", "HEAD", "OPTIONS"].includes(method);
+    assertEquals(dispatches, readOnly ? 2 : 1, method);
+    assertEquals(begins, readOnly ? 0 : 2, method);
+  }
+});
+
+Deno.test("OpenAPI terminal-only NDJSON preserves scalar, object and array result shapes", async () => {
+  const definition = api("terminalonly", { streamNdjson: true }),
+    originalFetch = globalThis.fetch;
+  try {
+    for (const value of ["scalar", 42, [1, "two"], { ok: true }]) {
+      globalThis.fetch = () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ type: "result", value }) + "\n", {
+            headers: { "content-type": "application/x-ndjson" },
+          }),
+        );
+      const result = await action(
+        compileFixture({ apis: [definition] }),
+        "terminalonly",
+      ).execute({}, actionContext());
+      assertEquals(result, value);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

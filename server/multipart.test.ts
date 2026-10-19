@@ -175,6 +175,7 @@ Deno.test("multipart reports oversized output as a non-retryable observation fai
     durable: true,
     id: "safe-event",
     position: "1",
+    seq: "1",
     schemaVersion: 1,
     data: { value: "safe" },
   }) as ApplicationOutput;
@@ -194,6 +195,7 @@ Deno.test("multipart reports oversized output as a non-retryable observation fai
           durable: true,
           id: "oversized-event",
           position: "2",
+          seq: "2",
           schemaVersion: 1,
           data: { value: "x".repeat(2048) },
         } as ApplicationOutput);
@@ -480,6 +482,7 @@ Deno.test("multipart truncation rejects the observation after its last applied d
     "content-type: application/json; charset=utf-8",
     `content-length: ${new TextEncoder().encode(descriptor).byteLength}`,
     "x-copilotz-frame: output",
+    "x-copilotz-position: 1",
     "x-copilotz-cursor: checkpoint",
     "",
     descriptor,

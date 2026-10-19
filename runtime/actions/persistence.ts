@@ -1,3 +1,12 @@
+import {
+  adoptCapturedActionOutput,
+  assertCapturedActionOutput,
+  prepareCapturedActionOutput,
+  readCapturedActionOutput,
+} from "./protected-effect-output.ts";
+import { copy } from "./effect-client.ts";
+import { actionSchemaHasSecrets } from "./secret.ts";
+import type { ActionEffectOutcome } from "./types.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import {
   prepareActionOperation,
@@ -16,6 +25,7 @@ import {
   actionInputHasSecrets,
   hydrateActionLifecycleBody,
   prepareActionLifecycleBody,
+  PROTECTED_ACTION_LIFECYCLE_SCHEMA,
   protectedActionLifecycleBody,
   publicActionLifecycleData,
   samePreparedActionLifecycleBody,
@@ -28,10 +38,12 @@ import type {
   AnyActionDefinition,
 } from "./types.ts";
 
-type LifecycleStore = Pick<
-  EventStore,
-  "getEventByDeduplicationId" | "session" | "tables"
->;
+type LifecycleStore =
+  & Pick<
+    EventStore,
+    "getEventByDeduplicationId" | "session" | "tables"
+  >
+  & Partial<Pick<EventStore, "databaseSchema">>;
 
 type ActionLifecyclePersistenceOptions = Readonly<{
   store?: LifecycleStore;
@@ -39,6 +51,12 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   protectedValues?: ProtectedValueRuntime;
   writer?: ActionWriter;
   transaction?: SqlExecutor;
+  protectedActionOutput?(
+    data: ActionEventData,
+  ): Pick<
+    import("./protected-effect-output.ts").ActionOutputBinding,
+    "authorize" | "accept"
+  >;
 }>;
 
 async function rawEventBody(
@@ -104,7 +122,36 @@ export function createActionLifecycleAppender(
     if (action && actionDefinitionHasSecrets(action) && !options.store) {
       throw new Error("Protected Action lifecycle requires an Event Store.");
     }
-    const prepared = action
+    const outputHooks = options.protectedActionOutput?.(data);
+    const outputBinding = action &&
+        (actionSchemaHasSecrets(action.outputSchema) || outputHooks?.accept) &&
+        options.protectedValues && options.store
+      ? {
+        action,
+        ...outputHooks,
+        protectedValues: options.protectedValues,
+        databaseSchema: options.store.databaseSchema!,
+        namespace: draft.namespace,
+        actionRunId: data.actionRunId,
+      }
+      : undefined;
+    const existingOutput = data.status === "completed" && outputBinding
+      ? await readCapturedActionOutput(
+        options.transaction ?? options.store!.session,
+        outputBinding,
+      )
+      : undefined;
+    if (
+      existingOutput && data.status === "completed" && !outputBinding?.authorize
+    ) {
+      await assertCapturedActionOutput(
+        outputBinding!,
+        existingOutput,
+        copy(data.output) as ActionEffectOutcome,
+        options.transaction,
+      );
+    }
+    let prepared = action
       ? await prepareActionLifecycleBody({
         namespace: draft.namespace,
         data,
@@ -113,6 +160,8 @@ export function createActionLifecycleAppender(
           ? options.actions?.[data.start.action]
           : undefined,
         protectedValues: options.protectedValues,
+        transaction: options.transaction,
+        existingOutput: existingOutput?.ref,
         // Only a secret input is sealed once, by the invoked receipt; a later
         // receipt of that run reuses its reference.
         existingInput: actionInputHasSecrets(action)
@@ -206,10 +255,6 @@ export function createActionLifecycleAppender(
         "actions.await",
         { actionRunId: data.actionRunId },
         async (_input, { transaction }) => {
-          await transaction.query(
-            "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-            [store.databaseSchema, `continuation:${draft.namespace}`],
-          );
           const appended = await commit(transaction);
           flush = await startAwaitedOperation(
             {
@@ -231,6 +276,95 @@ export function createActionLifecycleAppender(
       return result;
     }
 
+    if (data.status === "completed" && outputBinding) {
+      const commitOutput = async (transaction: SqlExecutor) => {
+        // Recheck in the same owner transaction as terminal acceptance. A racing
+        // output confirmation cannot revise or be revised by the terminal.
+        let accepted = await readCapturedActionOutput(
+          transaction,
+          outputBinding,
+        );
+        if (!accepted) {
+          const protectedBody = protectedActionLifecycleBody(prepared.body);
+          const outputRef = protectedBody?.protected.output;
+          const staged = prepared.prepared.find((value) =>
+            value.ref.ownerNodeId === outputRef?.ownerNodeId
+          ) ??
+            await prepareCapturedActionOutput(
+              outputBinding,
+              copy(data.output) as ActionEffectOutcome,
+              transaction,
+            );
+          accepted = await adoptCapturedActionOutput(
+            transaction,
+            outputBinding,
+            copy(data.output) as ActionEffectOutcome,
+            staged,
+          );
+        }
+        if (accepted) {
+          await assertCapturedActionOutput(
+            outputBinding,
+            accepted,
+            copy(data.output) as ActionEffectOutcome,
+            transaction,
+          );
+          const protectedBody = protectedActionLifecycleBody(prepared.body) ?? {
+            schema: PROTECTED_ACTION_LIFECYCLE_SCHEMA,
+            data: prepared.publicData,
+            protected: {},
+          };
+          const obsolete = "output" in protectedBody.protected
+            ? protectedBody.protected.output
+            : undefined;
+          prepared = {
+            ...prepared,
+            body: {
+              ...protectedBody,
+              protected: { ...protectedBody.protected, output: accepted.ref },
+            },
+            prepared: prepared.prepared.filter((value) =>
+              value.ref !== obsolete &&
+              value.ref.ownerNodeId !== obsolete?.ownerNodeId
+            ),
+          };
+        }
+        return await commit(transaction);
+      };
+      if (options.transaction) return await commitOutput(options.transaction);
+      const result = await createSchemaCommandRunner(
+        options.store!.session,
+        outputBinding.databaseSchema,
+      )(
+        "actions.completeOutput",
+        { actionRunId: data.actionRunId },
+        async (_input, { transaction }) => await commitOutput(transaction),
+      );
+      await options.coordinator.flushCommitted(result);
+      return result;
+    }
+    if (
+      data.status === "completed" && outputHooks?.authorize &&
+      options.store?.databaseSchema
+    ) {
+      const completeAuthorized = async (transaction: SqlExecutor) => {
+        await outputHooks.authorize!(transaction);
+        return await commit(transaction);
+      };
+      if (options.transaction) {
+        return await completeAuthorized(options.transaction);
+      }
+      const result = await createSchemaCommandRunner(
+        options.store.session,
+        options.store.databaseSchema,
+      )(
+        "actions.completeAuthorized",
+        { actionRunId: data.actionRunId },
+        async (_, command) => await completeAuthorized(command.transaction),
+      );
+      await options.coordinator.flushCommitted(result);
+      return result;
+    }
     return await commit(options.transaction);
   };
 }

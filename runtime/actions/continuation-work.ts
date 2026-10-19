@@ -14,7 +14,7 @@ import type {
 } from "../events/index.ts";
 import {
   createOperationCatalogTables,
-  notifyOperationChange,
+  publishOperationChange,
 } from "../streams/catalog.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
 import type { ActionLifecycleAppendInput } from "./types.ts";
@@ -185,7 +185,7 @@ export async function startAwaitedOperation(
         ARRAY(SELECT jsonb_array_elements_text(COALESCE(event.metadata -> 'observationKeys', '[]'::jsonb)))) AS key ORDER BY key) AS observation_keys
       FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
       WHERE operation.namespace = $1 AND operation.operation_id = $2
-      AND operation.state IN ('accepted','running') AND operation.cancellation_requested_at IS NULL FOR UPDATE OF operation`,
+      AND operation.state IN ('accepted','running') AND operation.cancellation_requested_at IS NULL`,
     [namespace, parentId],
   );
   if (!parent.rows[0]) throw new ActionOwnershipLost(data.actionRunId);
@@ -193,8 +193,8 @@ export async function startAwaitedOperation(
     `SELECT action.action_run_id FROM ${store.tables.open_actions} AS action
      JOIN ${store.tables.event_deliveries} AS delivery ON delivery.id = $3
      WHERE action.namespace = $1 AND action.action_run_id = $2 AND action.state = 'awaiting'
-       AND delivery.status = 'leased' AND delivery.lease_owner = $4 AND delivery.lease_expires_at > NOW()
-     FOR UPDATE OF action, delivery`,
+       AND delivery.status = 'leased' AND delivery.lease_owner = $4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at > NOW()) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema')
+    `,
     [namespace, data.actionRunId, writer.deliveryId, writer.leaseOwner],
   );
   if (!authority.rows.length) throw new ActionOwnershipLost(data.actionRunId);
@@ -208,7 +208,7 @@ export async function startAwaitedOperation(
   >(
     `SELECT event.payload, operation.parent_operation_id, operation.parent_action_run_id
      FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
-     WHERE operation.namespace = $1 AND operation.operation_id = $2 FOR UPDATE OF operation`,
+     WHERE operation.namespace = $1 AND operation.operation_id = $2`,
     [namespace, childId],
   );
   if (!data.start) {
@@ -274,7 +274,7 @@ export async function startAwaitedOperation(
     namespace,
     operationId: childId,
   }, tx);
-  await notifyOperationChange(
+  await publishOperationChange(
     store.session,
     tx,
     store.databaseSchema,
@@ -322,7 +322,7 @@ export async function scheduleResumptions(
       JOIN ${store.tables.events} AS event ON event.id = action.await_event_id
       WHERE action.state = 'awaiting' AND action.owner_delivery_id IS NULL AND child.state IN ('completed','failed','cancelled')
         AND ($1::text IS NULL OR action.namespace = $1) AND ($2::text IS NULL OR child.operation_id = $2)
-      ORDER BY action.namespace, action.action_run_id LIMIT $3 FOR UPDATE OF action`,
+      ORDER BY action.namespace, action.action_run_id LIMIT $3`,
       [
         input.namespace ?? null,
         input.operationId ?? null,

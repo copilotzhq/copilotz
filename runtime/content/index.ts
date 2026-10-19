@@ -17,7 +17,6 @@ export type {
   AppendResult,
   BodyMaintenanceDeleteInput,
   BodyMaintenanceListInput,
-  BodyProtection,
   BodyState,
   BodyStorageConfig,
   BodyStorageOptions,
@@ -32,7 +31,6 @@ export type {
   PutBodyInput,
   ReadBodyRangeInput,
   ReadyBodyHead,
-  RenewBodyInput,
   ReserveBodyInput,
   S3BodyStorageConfig,
   TerminalBodyHead,
@@ -146,7 +144,10 @@ export type {
   ContentRole,
   ContentSequence,
   DurableContentInput,
+  GeneratedContentSequence,
   NormalizeContentOptions,
+  PendingContentDescriptor,
+  PendingContentRef,
   PreparedAsset,
   PreparedContent,
   PublishAssetInput,
@@ -157,13 +158,31 @@ export type {
 export { type ContentValue, resolveContentInputs } from "./values.ts";
 
 export {
+  capturePendingContentDescriptor,
+  capturePendingContentRef,
   contentRefSchema,
   contentSequenceSchema,
+  generatedContentSequenceSchema,
   isContentRef,
+  isPendingContentRef,
+  pendingContentRefSchema,
 } from "./schema.ts";
 
 export {
   type ContentWireInput,
   decodeContent,
+  decodeGeneratedContent,
   encodeContent,
 } from "./codec.ts";
+
+export {
+  type ContentMigrationPlan,
+  type EmbeddedBodyLocation,
+  inspectEmbeddedContent,
+  migrateEmbeddedContent,
+} from "./migration.ts";
+export {
+  importS3BodyCopies,
+  type S3BodyImport,
+  type S3BodyImportResult,
+} from "./s3-body-migration.ts";

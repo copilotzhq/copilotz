@@ -1,3 +1,4 @@
+import { isCallerSafeActionStatus } from "./errors.ts";
 import type {
   ActionEventData,
   ActionStatus,
@@ -212,7 +213,12 @@ export function parseActionLifecycleEvent(
   if (
     !hasExactKeys(
       lifecycle,
-      statusKeys(actionStatus, hasParent, "operationId" in lifecycle),
+      [
+        ...statusKeys(actionStatus, hasParent, "operationId" in lifecycle),
+        ...(actionStatus === "invoked" && lifecycle.effectProtocol === 1
+          ? ["effectProtocol"]
+          : []),
+      ],
     )
   ) {
     return null;
@@ -265,8 +271,8 @@ export function parseActionLifecycleEvent(
       (error.code !== undefined &&
         (!nonEmptyText(error.code) || error.code !== error.code.trim())) ||
       (error.callerSafe === true &&
-        (!nonEmptyText(error.code) || !Number.isInteger(error.status) ||
-          Number(error.status) < 400 || Number(error.status) > 499))
+        (!nonEmptyText(error.code) ||
+          !isCallerSafeActionStatus(error.status, error.code, error.message)))
     ) return null;
   }
 

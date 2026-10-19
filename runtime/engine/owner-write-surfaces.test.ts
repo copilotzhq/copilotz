@@ -1,3 +1,5 @@
+import { createContentCatalog } from "../content/catalog.ts";
+import { digestCatalogPrefix } from "../content/prefix-digest.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { secret } from "../actions/index.ts";
 import { assert, assertEquals, assertExists } from "@std/assert";
@@ -168,9 +170,26 @@ Deno.test("public storage mutations use the schema owner fence", async (test) =>
       });
     });
     await surface("database body bytes and asset adoption", async () => {
-      const writer = await bodies.reserve({
+      const catalog = createContentCatalog(session, schema);
+      const identity = {
         bodyId: "stream-body",
+        writerId: "owner-fixture",
+        generation: 1,
+      };
+      await catalog.reserve({
+        ...identity,
+        namespace: "space",
+        copy: {
+          key: identity.bodyId,
+          backendKind: bodies.kind,
+          backendId: bodies.backendId,
+        },
+      });
+      const writer = await bodies.reserve({
+        bodyId: identity.bodyId,
         mediaType: "text/plain",
+        reservationId: identity.writerId,
+        generation: identity.generation,
       });
       await bodies.append({
         writer,
@@ -178,8 +197,19 @@ Deno.test("public storage mutations use the schema owner fence", async (test) =>
         appendId: "part",
         bytes: new TextEncoder().encode("body"),
       });
-      await bodies.renew({ writer });
-      await bodies.seal({ writer, expectedByteLength: 4 });
+      await catalog.checkpoint({ ...identity, expectedOffset: 0, offset: 4 });
+      await catalog.renew({
+        ...identity,
+        deadline: new Date(Date.now() + 60_000).toISOString(),
+      });
+      const digest = await digestCatalogPrefix(bodies, identity.bodyId, 4);
+      await catalog.sealIntent({ ...identity, length: 4, digest });
+      const head = await bodies.seal({
+        writer,
+        expectedByteLength: 4,
+        expectedDigest: digest,
+      });
+      await catalog.sealAccepted({ ...identity, head });
       await scope.content.assets.publish({
         namespace: "space",
         id: "asset",

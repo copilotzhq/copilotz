@@ -1,3 +1,5 @@
+import type { OwnerIngressProof } from "../application/ingress/authority.ts";
+import type { OwnerAlarmScheduler } from "./alarms.ts";
 import type { DeliveryScopeOutstanding } from "../events/store.ts";
 import type {
   AuthorizeContent,
@@ -95,7 +97,25 @@ export type CopilotzEngineExecutionOptions = Omit<
   | "createContext"
 >;
 
+/** Owner-local proof adapter. Evidence is never trusted merely because a worker sent it. */
+export type EffectNoStartVerifier = (
+  reference: Readonly<
+    {
+      databaseSchema: string;
+      namespace: string;
+      actionRunId: string;
+      step: string;
+    }
+  >,
+  evidence: import("../actions/types.ts").ActionEffectEvidence,
+  options: Readonly<{ signal: AbortSignal }>,
+) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
+  collectionPolicies?:
+    import("../collections/policy-types.ts").CollectionPolicies;
+  protectedActions?:
+    import("../actions/protected-action-types.ts").ProtectedActionDefinitions;
+  verifyEffectNotStarted?: EffectNoStartVerifier;
   session: SqlSession;
   registry: PluginRegistry;
   defaultDatabaseSchema?: string;
@@ -116,6 +136,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   authorizeContent?: AuthorizeContent;
   createId?: () => string;
   now?: () => Date;
+  /** One platform alarm per database owner. */
+  alarmScheduler?: OwnerAlarmScheduler;
   random?: () => number;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
   assets?: BodyStorageOptions;
@@ -197,7 +219,19 @@ export type CopilotzEngine = Readonly<{
     ownership: DeliveryExecutorOwnership;
     workload: string;
     liveWorkload: string;
-    /** Register these closures in a worker created within this runtime. */
+    createWorkerWorkloads:
+      import("../execution/workload.ts").OwnerExecutionFactory;
+    lookupReceipt(
+      identity:
+        import("../../dependencies/oxian-hypervisor.ts").WorkerCallContext[
+          "fence"
+        ]["identity"],
+      input: unknown,
+    ): Promise<boolean>;
+    resolveAuthority(
+      schema: string,
+    ): Promise<Readonly<{ epoch: number; signal: AbortSignal }>>;
+    /** Portable handlers for the current worker connection. */
     workloads: Readonly<Record<string, DeliveryWorkload>>;
     dispatchWork(input: ExecutionWorkInput): Promise<ExecutionWorkHandle>;
     /** Waits until output already relayed for one durable causal scope settles. */
@@ -230,6 +264,7 @@ export type CopilotzEngine = Readonly<{
       draft: DurableEventDraft,
       schema: ActionSchema,
       ownerId: string,
+      ingress?: OwnerIngressProof,
     ): Promise<CoordinatedMutationResult<void>>;
     emit(input: EphemeralEventInput): Promise<EphemeralEvent>;
     subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
@@ -260,6 +295,7 @@ export type CopilotzEngine = Readonly<{
       metadata?: Readonly<Record<string, unknown>>;
       correlationId?: string;
       afterPosition?: string;
+      afterSeq?: string;
       order?: "asc" | "desc";
       limit?: number;
     }): Promise<readonly DurableEvent[]>;
@@ -323,6 +359,13 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  collectionInvocation?: Readonly<{
+    owner: Parameters<
+      typeof import("../collections/policy-invocation.ts").bindProcessorCollectionInvocation
+    >[1];
+    invocation:
+      import("../collections/policy-types.ts").CollectionPolicyInvocation;
+  }>;
   operations: import("../actions/types.ts").RuntimeOperations;
   base: EngineContextSeed;
   registry: PluginRegistry;
@@ -333,6 +376,12 @@ export type CreateProcessorContextOptions = Readonly<{
   eventHub: CopilotzEventHub;
   publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
   publishLocalStream?: (output: StreamOutput) => Promise<void>;
+  createEffectClient?:
+    import("../actions/invoker.ts").CreateActionCallersOptions[
+      "createEffectClient"
+    ];
+  prepareActionInput?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["prepareInput"];
   actionLifecycle: ActionLifecycleEmitter;
   actionResumption?:
     import("../actions/invoker.ts").CreateActionCallersOptions["resumption"];

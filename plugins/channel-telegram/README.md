@@ -31,3 +31,9 @@ discovery.
 
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.
+
+The plugin also exports the bounded
+[send-text Action](actions/send-text/README.md). Both explicit text sends and
+standard channel delivery require a fresh durable effect permit. A confirmed
+result replays safely; an uncertain send fails for reconciliation rather than
+automatically resending.

@@ -1,3 +1,5 @@
+import { standardActionError } from "../../actions/errors.ts";
+import type { SerializedActionError } from "../../actions/types.ts";
 import type { ActionDefinition } from "../../actions/index.ts";
 /** Owns the durable Server-to-Action invocation bridge. @module */
 
@@ -21,10 +23,20 @@ export type ServerInvokeActionOutput =
   | Readonly<{ status: "completed"; targetActionRunId: string }>
   | Readonly<{
     status: "failed";
-    error: Readonly<{ name: string; message: string }>;
+    error: SerializedActionError;
   }>;
 
-function safeError(): Readonly<{ name: string; message: string }> {
+function safeError(error: unknown): SerializedActionError {
+  const safe = standardActionError(error);
+  if (safe) {
+    return {
+      name: safe.name,
+      message: safe.message,
+      code: safe.code,
+      status: safe.status,
+      callerSafe: true,
+    };
+  }
   return ({
     name: "Error",
     message: "Action execution failed.",
@@ -71,6 +83,9 @@ export const serverInvokeAction: ActionDefinition<
             properties: {
               name: { type: "string" },
               message: { type: "string" },
+              code: { type: "string" },
+              status: { type: "integer" },
+              callerSafe: { type: "boolean", const: true },
             },
             required: ["name", "message"],
             additionalProperties: false,
@@ -130,7 +145,7 @@ export const serverInvokeAction: ActionDefinition<
       if (context.signal.aborted) throw error;
       return ({
         status: "failed" as const,
-        error: safeError(),
+        error: safeError(error),
       } as const);
     }
   },

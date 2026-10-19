@@ -1,14 +1,14 @@
 /** Explicit provisioning for Core's chronological Message access path. @module */
 import {
   provisionNodeIndex,
-  type SqlSession,
+  type SqlExecutor,
   validateCopilotzSchema,
   validateEventSchemaName,
 } from "@copilotz/copilotz/events";
 
 /** Installs and validates the history index during owner-controlled provisioning. */
 export async function provisionCoreHistoryIndexes(
-  session: SqlSession,
+  session: SqlExecutor,
   schemaName = "public",
 ): Promise<void> {
   const schema = validateEventSchemaName(schemaName);

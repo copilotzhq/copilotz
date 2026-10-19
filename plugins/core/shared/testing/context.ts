@@ -30,7 +30,7 @@ export type TestDomainHost = Readonly<{
   content: Readonly<{
     assets: Pick<
       DatabaseAssetRepository,
-      "get" | "getMany" | "materialize" | "publish"
+      "capture" | "get" | "getMany" | "materialize" | "publish"
     >;
     preparer: ContentPreparer;
     resolver: ContentResolver;
@@ -88,6 +88,18 @@ export function createTestDomainContext(
           throw new Error("Test content streams are not configured.");
         },
       } as const,
+      openCapture() {
+        throw new Error("Test content captures are not configured.");
+      },
+      capture: (input, captureOptions) =>
+        host.content.assets.capture({
+          namespace: scopedNamespace,
+          content: input,
+          operationKey:
+            `test-action:${scopedNamespace}:${captureOptions.operationKey}`,
+          producer: `test-action:${scopedNamespace}`,
+          origin: captureOptions.origin,
+        }),
       prepare: (input, prepareOptions) =>
         host.content.preparer.prepare(input, {
           namespace: scopedNamespace,

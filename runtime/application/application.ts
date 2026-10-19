@@ -1,3 +1,5 @@
+import type { OwnerIngressProof } from "./ingress/authority.ts";
+import { createHostCommands, hostDatabaseScopes } from "./host-commands.ts";
 import { createHostServices } from "./host.ts";
 import { withApplicationIngress } from "./ingress/registry.ts";
 import { createSharedOperationReaders } from "./operation-readers.ts";
@@ -327,7 +329,13 @@ export async function createCopilotzApplication(
   options: CreateCopilotzApplicationOptions,
   lifecycle: CopilotzPersistenceLifecycleCallbacks =
     options.databaseLifecycle ?? {},
+  beforeRecovery?: (engine: CopilotzEngine) => void | Promise<void>,
 ): Promise<InternalCopilotzApplication> {
+  const requestedScopes = hostDatabaseScopes(
+    options.databaseSchema ?? "public",
+    options.databaseScopes,
+    options.hostCommands,
+  );
   const persistence = await openCopilotzPersistence(options, lifecycle);
   const namespace = optionalText(options.namespace, "Namespace");
   const databaseSchema = optionalText(
@@ -352,6 +360,13 @@ export async function createCopilotzApplication(
     | ReturnType<typeof createSharedOperationReaders>
     | undefined;
   const lifetime = new AbortController();
+  const hostCommands = createHostCommands({
+    definitions: options.hostCommands,
+    defaultSchema: databaseSchema,
+    signal: lifetime.signal,
+    admit: () => persistence.recovery?.admit() ?? Promise.resolve(),
+    openScope: (schema) => openRecoveredScope(schema),
+  });
   const outputHub = createApplicationOutputHub(async (output, schema) => {
     const scoped = await openRecoveredScope(schema);
     return ({
@@ -382,6 +397,8 @@ export async function createCopilotzApplication(
         }
         : {}),
       session: persistence.session,
+      protectedActions: options.protectedActions,
+      collectionPolicies: options.collectionPolicies,
       registry,
       defaultDatabaseSchema: databaseSchema,
       assets: options.assets,
@@ -392,7 +409,7 @@ export async function createCopilotzApplication(
       async publishLocalStream(stream, context) {
         await outputHub.emit(stream, context.databaseSchema);
       },
-    });
+    }, { ownerAcquired: hostCommands.install, beforeRecovery });
   } catch (error) {
     outputHub.close();
     await persistence.close("copilotz_application_initialization_failed").catch(
@@ -450,10 +467,12 @@ export async function createCopilotzApplication(
       await operationReaders?.close(reason);
       interruptActiveSends(new Error(reason));
       activeSends.clear();
-      const settled = await Promise.allSettled([
-        engine.shutdown(reason),
-        persistence.close(reason),
-      ]);
+      // Owner alarms and execution callbacks may still use persistence while
+      // draining. Teardown must happen after that drain, even on failure.
+      const settled = [
+        ...(await Promise.allSettled([engine.shutdown(reason)])),
+        ...(await Promise.allSettled([persistence.close(reason)])),
+      ];
       outputHub.close();
       const failures = settled.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : []
@@ -471,8 +490,11 @@ export async function createCopilotzApplication(
   };
   const sendWithProtection = async (
     input: ApplicationSendInput,
-    protection?: Readonly<{ schema: ActionSchema; ownerId: string }>,
+    protection?: Readonly<
+      { schema: ActionSchema; ownerId: string; ingress?: OwnerIngressProof }
+    >,
   ): Promise<ApplicationSendHandle> => {
+    if (protection) input = structuredClone(input);
     await persistence.recovery?.admit();
     const inputType = requiredType(input.type);
     const inputNamespace = requiredNamespace(input.namespace, namespace);
@@ -512,6 +534,7 @@ export async function createCopilotzApplication(
           draft,
           protection.schema,
           protection.ownerId,
+          protection.ingress,
         )
         : await scopedEngine.events.append(draft);
     } catch (error) {
@@ -766,7 +789,10 @@ export async function createCopilotzApplication(
     engine,
     execution: engine.execution,
     interruptActiveSends,
+    hostCommands: hostCommands.commands,
     async startRecovery() {
+      // Only explicit host scopes are opened; no catalog-wide schema discovery.
+      for (const schema of requestedScopes) await engine.databaseScope(schema);
       recoveryOwner = true;
       const recovery = engine.recoverAll({ limit: 1_000 }).then(() =>
         undefined
@@ -781,8 +807,8 @@ export async function createCopilotzApplication(
         throw error;
       }
     },
-    sendProtected(input, schema, ownerId) {
-      return sendWithProtection(input, { schema, ownerId });
+    sendProtected(input, schema, ownerId, ingress) {
+      return sendWithProtection(input, { schema, ownerId, ingress });
     },
     async databaseScope(requestedDatabaseSchema) {
       await persistence.recovery?.admit();

@@ -7,7 +7,24 @@ import entry3 from "./processors/pause-space-jobs/index.ts";
 import entry4 from "./resources/tools/scheduled-jobs/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
 import { schedulesPlugin as dependency1 } from "../schedules/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/core-schedules";
+  readonly version: "0.65.1";
+  readonly plugins: readonly [typeof dependency0, typeof dependency1];
+  readonly actions: {
+    readonly "dispatchScheduledMessage": typeof entry0;
+    readonly "scheduled_jobs": typeof entry1;
+  };
+  readonly processors: {
+    readonly "dispatchScheduledMessage": typeof entry2;
+    readonly "pauseSpaceJobs": typeof entry3;
+  };
+  readonly resources: {
+    readonly "tools": {
+      readonly "scheduled_jobs": typeof entry4;
+    };
+  };
+} = {
   id: "@copilotz/core-schedules",
   version: "0.65.1",
   plugins: [dependency0, dependency1],

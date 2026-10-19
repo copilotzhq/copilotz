@@ -3,7 +3,21 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./adapters/channels/web/index.ts";
 import entry1 from "./resources/channels/web/index.ts";
 import { channelsPlugin as dependency0 } from "../channel-core/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/channel-web";
+  readonly version: "4.0.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly resources: {
+    readonly "channels": {
+      readonly "web": typeof entry1;
+    };
+  };
+  readonly adapters: {
+    readonly "channels": {
+      readonly "web": typeof entry0;
+    };
+  };
+} = {
   id: "@copilotz/channel-web",
   version: "4.0.0",
   plugins: [dependency0],

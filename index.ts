@@ -2,6 +2,7 @@
 export { createCopilotz } from "./create-copilotz.ts";
 export type { CreateCopilotzOptions } from "./create-copilotz.ts";
 
+export * from "./authoring.ts";
 export * from "./runtime/actions/index.ts";
 export * from "./runtime/collections/index.ts";
 export type { CollectionNamedQueryRead } from "./runtime/collections/authoring.ts";
@@ -36,4 +37,13 @@ export type {
   CopilotzInputEnvelope,
   DeliveryDiagnostic,
   DeliveryDiagnosticSink,
+} from "./runtime/application/public.ts";
+
+export type {
+  HostCommandContext,
+  HostCommandDefinition,
+  HostCommandDefinitions,
+  HostCommandJson,
+  HostCommandOptions,
+  HostCommands,
 } from "./runtime/application/public.ts";

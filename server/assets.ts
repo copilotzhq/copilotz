@@ -1,10 +1,10 @@
 import type { AssetRecord } from "../runtime/content/index.ts";
 
 /** Safe transport metadata. Physical body locations remain server-private. */
-export type PublicAsset = Omit<AssetRecord, "location">;
+export type PublicAsset = Omit<AssetRecord, "bodyId">;
 
 export function publicAsset(asset: AssetRecord): PublicAsset {
-  const { location: _location, ...safe } = asset;
+  const { bodyId: _bodyId, ...safe } = asset;
   return (structuredClone(safe));
 }
 

@@ -1,3 +1,4 @@
+import type { SqlExecutor } from "../events/session.ts";
 /** Generic internal Event-body protection used before semantic bridges. @module */
 
 import type {
@@ -139,6 +140,7 @@ export async function openProtectedEventBody(
     namespace: string;
     body: unknown;
     protectedValues?: ProtectedValueRuntime;
+    transaction?: SqlExecutor;
   }>,
 ): Promise<unknown> {
   const body = protectedEventBody(input.body);
@@ -146,11 +148,15 @@ export async function openProtectedEventBody(
   if (!input.protectedValues) {
     throw new Error("Protected Event recovery requires a Secret Adapter.");
   }
-  return await input.protectedValues.open({
-    namespace: input.namespace,
-    ownerId: body.ownerId,
-    slot: "data",
-  }, body.protected);
+  return await input.protectedValues.open(
+    {
+      namespace: input.namespace,
+      ownerId: body.ownerId,
+      slot: "data",
+    },
+    body.protected,
+    input.transaction,
+  );
 }
 
 export function samePreparedProtectedEventBody(

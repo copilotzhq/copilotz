@@ -606,6 +606,12 @@ export async function createHttpOperations(
       void done.catch(() => undefined);
       return {
         type: HTTP_OBSERVATION,
+        heartbeat: (streamIds) =>
+          runtime.operations.pushState({
+            namespace,
+            operationIds: [...new Set([...ids, ...attachments.keys()])],
+            streamIds,
+          }),
         ...(bootstrap ? { bootstrap } : {}),
         outputs: transport.readable,
         done,

@@ -1,7 +1,7 @@
 import type { AgentResource } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { assertEquals, assertExists } from "@std/assert";
+import { assert, assertEquals, assertExists } from "@std/assert";
 import { createCopilotzApplication } from "../../runtime/application/application.ts";
 import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
@@ -124,7 +124,7 @@ function withToolRecipient(adapter: ChannelAdapter): ChannelAdapter {
   });
 }
 
-Deno.test("signed WhatsApp server ingress persists no credentials and retries one stable external delivery key", async () => {
+Deno.test("signed WhatsApp server ingress persists no credentials and never retries an ambiguous send", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const downloads: string[] = [];
   const sends: Array<Readonly<Record<string, unknown>>> = [];
@@ -284,7 +284,7 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
       })).some((delivery) =>
         delivery.consumerId ===
           "processor:copilotz.channels.external-egress" &&
-        delivery.status === "retry_wait"
+        delivery.status === "dead_letter"
       )
     );
     const recovery = await application.recover({
@@ -293,41 +293,28 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
       limit: 100,
     });
     await Promise.all(recovery.handles.map((handle) => handle.done));
-    try {
-      await waitFor(() => attempts >= 2);
-    } catch (error) {
-      const events = await application.events.list({ namespace: NAMESPACE });
-      const deliveries = await application.deliveries.list({
-        namespace: NAMESPACE,
-        limit: 100,
-      });
-      throw new Error(JSON.stringify({
-        cause: String(error),
-        actions: await projectActionEvents(
-          application,
-          NAMESPACE,
-          CHANNEL_INGRESS_ACTION_ID,
-          { status: "failed" },
-        ),
-        attempts,
-        configOperations,
-        events: events.map((event) => event.type),
-        deliveries: deliveries.map((delivery) => ({
-          consumerId: delivery.consumerId,
-          status: delivery.status,
-          lastError: delivery.lastError,
-        })),
-      }));
-    }
+    assertEquals(attempts, 1);
+    const failures = await projectActionEvents(
+      application,
+      NAMESPACE,
+      "copilotz.channels.deliver",
+      { status: "failed" },
+    );
+    assertEquals(failures.length, 1);
+    assert(failures[0].status === "failed");
+    assertEquals(
+      (failures[0].error as { code?: string }).code,
+      "effect_indeterminate",
+    );
     assertEquals(downloads, ["media-a"]);
-    assertEquals(sends.length, 2);
-    assertEquals(deliveryKeys.length, 2);
+    assertEquals(sends.length, 1);
+    assertEquals(deliveryKeys.length, 1);
     assertEquals(new Set(deliveryKeys).size, 1);
     assertEquals(configOperations.includes("accept:request"), true);
     assertEquals(configOperations.includes("receive:worker"), false);
     assertEquals(
       configOperations.filter((value) => value === "deliver:worker").length,
-      2,
+      1,
     );
 
     const ingress = (await application.events.list({ namespace: NAMESPACE }))

@@ -6,7 +6,22 @@ import entry2 from "./actions/send-conversation/index.ts";
 import entry3 from "./actions/update-conversation/index.ts";
 import entry4 from "./adapters/http/core/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "copilotz.core.http";
+  readonly version: "0.75.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly actions: {
+    readonly "deleteConversation": typeof entry0;
+    readonly "editConversationMessage": typeof entry1;
+    readonly "sendConversation": typeof entry2;
+    readonly "updateConversation": typeof entry3;
+  };
+  readonly adapters: {
+    readonly "http": {
+      readonly "core": typeof entry4;
+    };
+  };
+} = {
   id: "copilotz.core.http",
   version: "0.75.0",
   plugins: [dependency0],

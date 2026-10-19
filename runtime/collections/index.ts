@@ -6,6 +6,7 @@ export {
 } from "./indexes.ts";
 export { defineCollection, relation } from "./definition.ts";
 export type {
+  CollectionAlarmDefinition,
   CollectionCommandDefinition,
   CollectionDefinition,
   CollectionDefinitionInput,
@@ -86,3 +87,11 @@ export type {
   CollectionPredicate,
   CollectionPredicateValue,
 } from "./predicate.ts";
+
+export type {
+  CollectionPolicies,
+  CollectionPolicy,
+  CollectionPolicyContext,
+  CollectionPolicyIntent,
+  CollectionPolicyInvocation,
+} from "./policy-types.ts";

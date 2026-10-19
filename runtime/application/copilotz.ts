@@ -1,3 +1,5 @@
+import { withOwnedHosting } from "./hosting.ts";
+import { hostDatabaseScopes } from "./host-commands.ts";
 import type { HypervisorTransport } from "../../dependencies/oxian-hypervisor.ts";
 import { createCopilotzGateway } from "./gateway.ts";
 import type {
@@ -65,6 +67,11 @@ export async function createCopilotz(
     options.databaseLifecycle ?? {},
   createFetch?: EmbeddedFetchFactory,
 ): Promise<CopilotzEmbeddedApplication | CopilotzEmbeddedFetchApplication> {
+  hostDatabaseScopes(
+    options.databaseSchema ?? "public",
+    options.databaseScopes,
+    options.hostCommands,
+  );
   const persistence = await openCopilotzPersistence(options, lifecycle);
   const workerId = options.worker?.id?.trim() ||
     `copilotz-embedded-${crypto.randomUUID()}`;
@@ -82,6 +89,10 @@ export async function createCopilotz(
     gateway = await createCopilotzGateway({
       namespace: options.namespace,
       databaseSchema: options.databaseSchema,
+      databaseScopes: options.databaseScopes,
+      hostCommands: options.hostCommands,
+      protectedActions: options.protectedActions,
+      collectionPolicies: options.collectionPolicies,
       plugins: options.plugins,
       collections: options.collections,
       actions: options.actions,
@@ -106,9 +117,7 @@ export async function createCopilotz(
       views: options.views,
       resources: options.resources,
       adapters: options.adapters,
-      assets: options.assets,
       onDeliveryDiagnostic: options.onDeliveryDiagnostic,
-      persistence,
       id: workerId,
       transport,
       capacity: options.worker?.capacity ?? 8,
@@ -156,20 +165,24 @@ export async function createCopilotz(
     return shutdownTask;
   };
 
-  return ({
-    async send(input: Parameters<CopilotzApplication["send"]>[0]) {
-      return await gateway!.send(input);
-    },
-    actions: gateway.actions,
-    collections: gateway.collections,
-    attach: (input) => gateway!.attach(input),
-    operationStatus: (input) => gateway!.operationStatus(input),
-    listOperations: (input) => gateway!.listOperations(input),
-    operationCheckpoint: (input) => gateway!.operationCheckpoint(input),
-    cancelOperation: (input) => gateway!.cancelOperation(input),
-    maintenance: (input) => gateway!.maintenance(input),
-    observe: () => gateway!.observe(),
-    close: shutdown,
-    ...(fetch ? { fetch } : {}),
-  } as const);
+  return withOwnedHosting(
+    {
+      async send(input: Parameters<CopilotzApplication["send"]>[0]) {
+        return await gateway!.send(input);
+      },
+      hostCommands: gateway.hostCommands,
+      actions: gateway.actions,
+      collections: gateway.collections,
+      attach: (input) => gateway!.attach(input),
+      operationStatus: (input) => gateway!.operationStatus(input),
+      listOperations: (input) => gateway!.listOperations(input),
+      operationCheckpoint: (input) => gateway!.operationCheckpoint(input),
+      cancelOperation: (input) => gateway!.cancelOperation(input),
+      maintenance: (input) => gateway!.maintenance(input),
+      observe: () => gateway!.observe(),
+      close: shutdown,
+      ...(fetch ? { fetch } : {}),
+    } as const,
+    gateway.hypervisor,
+  );
 }

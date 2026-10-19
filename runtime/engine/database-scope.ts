@@ -1,3 +1,14 @@
+import { validateCollectionPolicies } from "../collections/policy-registration.ts";
+import { createProtectedActions } from "../actions/protected-actions.ts";
+import {
+  assertOwnerIngressReplay,
+  recordOwnerIngress,
+} from "../application/ingress/authority.ts";
+import { readLogicalHead } from "../content/catalog.ts";
+import { registerDeliveryAlarms } from "../execution/alarms.ts";
+import { registerCollectionAlarms } from "../collections/alarms.ts";
+import { completeOwnerDeadline } from "./alarms.ts";
+import { attachOwnerPush, type OwnerPushSubscription } from "../events/push.ts";
 import {
   activateDatabaseOwner,
   type CommandContext,
@@ -18,7 +29,6 @@ import {
   createDatabaseBodyStore,
   type DatabaseAssetRepository,
   maintainProgressiveBodies,
-  readBodyBytes,
   type ReadBodyRangeInput,
 } from "../content/index.ts";
 import { collectionAssetAdopterFor } from "../content/database-repository.ts";
@@ -97,7 +107,9 @@ export type DatabaseScopeCapabilities = Readonly<{
 export type DatabaseScopeRuntime = Readonly<{
   owner: DatabaseOwner;
   activate(): Promise<void>;
+  closePush(): void;
   publishActivation(): Promise<void>;
+  closeAlarms(): void;
   deferPublication(publish: () => Promise<void>): () => Promise<void>;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
@@ -160,8 +172,6 @@ export function createDatabaseScope(
     maxAttempts: engine.maxAttempts,
     retryBaseMs: engine.retryBaseMs,
     retryCapMs: engine.retryCapMs,
-    lockSettlementScope: (transaction, scopeId) =>
-      options.operationCatalog.lockScope(transaction, scopeId),
     onScopeCancellation: (transaction, input) =>
       onScopeCancellation(transaction, input),
     settleActionOwners: (transaction, delivery) =>
@@ -276,6 +286,7 @@ export function createDatabaseScope(
       session: engine.session,
       schema: databaseSchema,
     });
+  assets.registerStore(streamBodyStore);
   const protectedValues = engine.secretAdapter
     ? createProtectedValueRuntime({
       databaseSchema,
@@ -290,6 +301,10 @@ export function createDatabaseScope(
     databaseSchema,
   });
   const collections = createCollectionRuntime({
+    policies: validateCollectionPolicies(
+      engine.collectionPolicies,
+      options.registry.collections,
+    ),
     coordinator,
     session: engine.session,
     eventStore: store,
@@ -342,7 +357,7 @@ export function createDatabaseScope(
           : { delta: canonicalizeContentRefs(draft.delta) }),
       }, appendOptions);
     },
-    async appendProtected(draft, schema, ownerId) {
+    async appendProtected(draft, schema, ownerId, ingress) {
       if (
         isReservedActionLifecycleDeduplicationId(draft.deduplicationId) ||
         isRegisteredActionLifecycleEventType(
@@ -376,24 +391,36 @@ export function createDatabaseScope(
           mediaType: "application/json" as const,
         } as const,
       } as const;
+      const eventId = crypto.randomUUID();
       return await coordinator.commitMutation({
+        eventId,
         draft: { ...draft, payload: persistedPayload },
         matchData: prepared.publicData,
         body: { id: bodyId, json: prepared.body },
-        ...(prepared.prepared.length > 0
-          ? {
-            mutate: async (context) => {
-              for (const value of prepared.prepared) {
-                await protectedValues!.adopt(context, draft.namespace, value);
-              }
-            },
+        mutate: async (context) => {
+          for (const value of prepared.prepared) {
+            await protectedValues!.adopt(context, draft.namespace, value);
           }
-          : {}),
+          await recordOwnerIngress(
+            context,
+            options.databaseSchema,
+            { ...draft, id: eventId, payload: persistedPayload },
+            prepared.body,
+            ingress,
+          );
+        },
         recoverDuplicate: async (event, context) => {
           const existing = await readEventBody(
             context,
             event.namespace,
             eventDataRef(event.payload),
+          );
+          await assertOwnerIngressReplay(
+            context,
+            options.databaseSchema,
+            event,
+            existing,
+            ingress,
           );
           if (!samePreparedProtectedEventBody(existing, prepared.body)) {
             throw Object.assign(
@@ -427,6 +454,7 @@ export function createDatabaseScope(
             metadata: filter.metadata,
             correlationId: filter.correlationId,
             afterPosition: filter.afterPosition,
+            afterSeq: filter.afterSeq,
             limit: 1_000,
           }),
       });
@@ -478,12 +506,46 @@ export function createDatabaseScope(
         publicActionLifecycleData(raw),
       ));
       if (!parsed) return null;
-      const data = await hydrateActionLifecycleBody({
-        namespace,
-        body: raw as never,
-        action: actionDefinitionById(options.registry.actions, parsed.actionId),
-        protectedValues,
-      });
+      const restore = (
+        transaction?: import("../events/session.ts").SqlExecutor,
+      ) =>
+        hydrateActionLifecycleBody({
+          namespace,
+          body: raw as never,
+          action: actionDefinitionById(
+            options.registry.actions,
+            parsed.actionId,
+          ),
+          protectedValues,
+          transaction,
+        });
+      const data = options.engine.protectedActions?.[parsed.actionId]
+        ? await createSchemaCommandRunner(
+          store.session,
+          options.databaseSchema,
+        )(
+          "actions.readProtectedResult",
+          {},
+          async (_, command) => {
+            const guard = createProtectedActions({
+              definitions: options.engine.protectedActions!,
+              actions: options.registry.actions,
+              store,
+              coordinator,
+              namespace,
+              protectedValues,
+              signal: command.signal,
+            }).output({
+              actionId: parsed.actionId,
+              actionRunId: parsed.actionRunId,
+              parentActionRunId: parsed.parentActionRunId,
+              signal: command.signal,
+            });
+            await guard.authorize?.(command.transaction);
+            return await restore(command.transaction);
+          },
+        )
+        : await restore();
       if (data.status !== "completed") return data;
       return {
         ...data,
@@ -524,9 +586,17 @@ export function createDatabaseScope(
   const recoverCatalog = async (
     maintenanceOptions: { limit?: number } = {},
   ) => {
-    // Catalog-owned published lanes are reconciled before generic progressive
-    // maintenance can settle unknown staging. Publication changes an expired
-    // writer from disposable staging into a replay obligation.
+    const recoveredBodies = await maintainProgressiveBodies(
+      assets.catalog,
+      assets.storeForCopy,
+      {
+        limit: maintenanceOptions.limit,
+        ...(progressiveMaintenanceAfter
+          ? { after: progressiveMaintenanceAfter }
+          : {}),
+      },
+    );
+    progressiveMaintenanceAfter = recoveredBodies.after;
     const openStreams = await options.operationCatalog.listOpenStreams({
       ...(openStreamReconcileAfter
         ? { afterReplayKey: openStreamReconcileAfter }
@@ -536,111 +606,62 @@ export function createDatabaseScope(
     let reconciledStreams = 0;
     for (const stream of openStreams) {
       openStreamReconcileAfter = stream.replayKey;
-      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
-      const intendedOutcome = stream.state === "terminating"
-        ? stream.outcome
-        : undefined;
-      const failedOutcome = intendedOutcome && intendedOutcome !== "completed"
-        ? intendedOutcome
-        : "failed";
-      const reason = stream.reason ?? "abandoned";
+      const observed = await readLogicalHead(
+        assets.catalog,
+        stream.bodyId,
+        assets.storeForCopy,
+      );
+      const logical = observed?.body, physical = observed?.head;
+      if (!logical?.terminal) continue;
       if (
-        !head || head.state === "aborted" ||
-        head.byteLength < stream.committedOffset
+        !physical || physical.state === "aborted" ||
+        physical.byteLength < logical.terminal.length
       ) {
-        const transitioned = await options.operationCatalog
-          .markStreamUnavailable({
+        if (
+          await options.operationCatalog.markStreamUnavailable({
             namespace: stream.namespace,
             operationId: stream.operationId,
             streamId: stream.streamId,
-            outcome: failedOutcome,
-            reason,
-            availabilityReason: head?.state === "aborted"
-              ? "deleted"
-              : "missing",
-          });
-        if (transitioned) reconciledStreams += 1;
+            outcome: logical.terminal.outcome,
+            reason: logical.terminal.reason,
+            availabilityReason: "missing",
+          })
+        ) reconciledStreams++;
         continue;
       }
-      if (head.state === "ready") {
-        const transitioned = await options.operationCatalog.sealStream({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-          body: head,
-        });
-        if (transitioned) reconciledStreams += 1;
-        else if (intendedOutcome && intendedOutcome !== "completed") {
-          const terminated = await options.operationCatalog.terminateStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: intendedOutcome,
-            reason,
-            body: head,
-          });
-          if (terminated) reconciledStreams += 1;
-        }
-        continue;
-      }
-      if (head.state === "incomplete") {
-        // An incomplete physical body cannot certify a pending completion.
-        const transitioned = await options.operationCatalog.terminateStream({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-          body: head,
-          outcome: failedOutcome,
-          reason,
-        });
-        if (transitioned) reconciledStreams += 1;
-        continue;
-      }
-      if (head.writerLeaseRemainingMs > 0) continue;
-      const outcome = intendedOutcome ??
-        (head.state === "sealing" ? "completed" : "failed");
-      if (
-        !await options.operationCatalog.beginStreamTerminalization({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-          outcome,
-          ...(outcome !== "completed" ? { reason } : {}),
-        })
-      ) continue;
-      const writer = await streamBodyStore.reserve({
-        bodyId: head.bodyId,
-        mediaType: head.mediaType,
-        expectedGeneration: head.writerGeneration,
-      });
-      if (outcome === "completed") {
-        const ready = await streamBodyStore.seal({
-          writer,
-          expectedByteLength: head.byteLength,
-        });
+      const common = {
+        namespace: stream.namespace,
+        operationId: stream.operationId,
+        streamId: stream.streamId,
+      };
+      const terminal = logical.terminal;
+      if (terminal.outcome === "completed") {
+        if (
+          physical.state !== "ready" || physical.digest !== terminal.digest ||
+          physical.byteLength !== terminal.length
+        ) continue;
         if (
           await options.operationCatalog.sealStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: ready,
+            ...common,
+            body: { ...physical, bodyId: stream.bodyId },
           })
-        ) reconciledStreams += 1;
+        ) reconciledStreams++;
       } else {
-        const incomplete = await streamBodyStore.terminate({
-          writer,
-          expectedByteLength: head.byteLength,
-        });
+        const body = {
+          ...physical,
+          state: "incomplete" as const,
+          bodyId: stream.bodyId,
+          byteLength: terminal.length,
+          digest: terminal.digest,
+        };
         if (
           await options.operationCatalog.terminateStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: incomplete,
-            outcome,
-            reason,
+            ...common,
+            body,
+            outcome: terminal.outcome,
+            reason: terminal.reason ?? "abandoned",
           })
-        ) reconciledStreams += 1;
+        ) reconciledStreams++;
       }
     }
     if (
@@ -650,7 +671,11 @@ export function createDatabaseScope(
     const reconciled = await options.operationCatalog.reconcile({
       limit: maintenanceOptions.limit,
     });
-    return { reconciledStreams, reconciled };
+    return {
+      reconciledStreams,
+      reconciled,
+      progressiveBodies: recoveredBodies,
+    };
   };
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
     maintenanceOptions = {},
@@ -666,16 +691,10 @@ export function createDatabaseScope(
       now: maintenanceOptions.now,
       limit: maintenanceOptions.limit,
     });
-    const { reconciledStreams, reconciled } = await recoverCatalog(
-      maintenanceOptions,
-    );
-    const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
-      limit: maintenanceOptions.limit,
-      ...(progressiveMaintenanceAfter
-        ? { after: progressiveMaintenanceAfter }
-        : {}),
-    });
-    progressiveMaintenanceAfter = progressiveBodies.after;
+    const { reconciledStreams, reconciled, progressiveBodies } =
+      await recoverCatalog(
+        maintenanceOptions,
+      );
     const assetMaintenance = await assets.maintainBodies({
       now: maintenanceOptions.now,
       orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
@@ -706,11 +725,23 @@ export function createDatabaseScope(
           streamId: stream.streamId,
         })
       ) continue;
-      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
+      const logical = await assets.catalog.read(stream.bodyId);
+      const physicalStore = logical
+        ? assets.storeForCopy(logical.copy)
+        : streamBodyStore;
+      const head = logical
+        ? await physicalStore.head({ bodyId: logical.copy.key })
+        : null;
       let retired = head === null;
-      if (head?.state === "ready" && readyGarbageCollection) {
+      if (
+        head &&
+        (head.state === "ready" || head.state === "incomplete" ||
+          head.state === "aborted") &&
+        physicalStore.conditionalDelete &&
+        (head.state !== "ready" || readyGarbageCollection)
+      ) {
         const retirement = await assets.retireUnownedReadyBody({
-          store: streamBodyStore,
+          store: physicalStore,
           body: head,
         });
         if (retirement.status === "owned" && retirement.ownerType === "asset") {
@@ -724,13 +755,6 @@ export function createDatabaseScope(
           continue;
         }
         retired = retirement.status === "deleted";
-      } else if (head?.state === "incomplete" || head?.state === "aborted") {
-        retired = await streamBodyStore.maintenance.delete({
-          bodyId: head.bodyId,
-          expectedState: head.state,
-          expectedMaintenanceVersion: head.maintenanceVersion,
-          idleForMs: 0,
-        });
       }
       if (!retired) {
         observationRetirementBlocked += 1;
@@ -783,28 +807,33 @@ export function createDatabaseScope(
         const follower = await createContentStreamRuntime({
           namespace,
           store: streamBodyStore,
+          catalog: assets.catalog,
+          storeForCopy: assets.storeForCopy,
           createId: engine.createId,
           bodyPrefix: streamBodyPrefix,
         }).follow(input);
         return follower.body;
       },
       async readCommittedRange(input: ReadBodyRangeInput) {
-        if (streamBodyStore.readRange) {
-          return await streamBodyStore.readRange(input);
+        const logical = await assets.catalog.read(input.bodyId);
+        if (!logical) return null;
+        const limit = logical.terminal?.length ?? logical.committedOffset;
+        if (input.end > limit) return null;
+        let copy = logical.copy;
+        try {
+          return await assets.storeForCopy(copy).readRange({
+            ...input,
+            bodyId: copy.key,
+          });
+        } catch (error) {
+          const next = await assets.catalog.read(input.bodyId);
+          if (!next || next.copy.key === copy.key) throw error;
+          copy = next.copy;
+          return await assets.storeForCopy(copy).readRange({
+            ...input,
+            bodyId: copy.key,
+          });
         }
-        // Compatibility fallback for third-party stores compiled before finite
-        // range reads. Never attach their polling follower: wait until an
-        // immutable terminal Body, then perform one bounded replay read.
-        const head = await streamBodyStore.head({ bodyId: input.bodyId });
-        if (head?.state !== "ready" && head?.state !== "incomplete") {
-          return null;
-        }
-        const bytes = await readBodyBytes(streamBodyStore, {
-          bodyId: input.bodyId,
-        });
-        const start = Math.min(input.offset, bytes.byteLength);
-        const end = Math.min(input.end, bytes.byteLength);
-        return bytes.slice(start, end);
       },
     } as const,
     operations: options.operationCatalog,
@@ -814,43 +843,144 @@ export function createDatabaseScope(
     maintenance,
   } as const;
 
+  const closeContentAlarms = options.owner.registerAlarmSource({
+    name: "content",
+    nextDeadline: (transaction) => assets.catalog.nextDeadline(transaction),
+    wake: async () => {
+      await maintenance({ limit: 100 });
+    },
+  });
+  const runAlarmCommand = createSchemaCommandRunner(
+    engine.session,
+    databaseSchema,
+  );
+  const collectionAlarms = registerCollectionAlarms({
+    owner: options.owner,
+    session: engine.session,
+    schema: databaseSchema,
+    definitions: Object.values(options.registry.collections).filter(
+      isKernelCollection,
+    ),
+    collections,
+    now: options.now,
+    onDiagnostic: engine.execution?.onDiagnostic,
+  });
+  const closeDeliveryAlarms = registerDeliveryAlarms(
+    options.owner,
+    store,
+    options.executor,
+  );
+  const closeReconciliationAlarms = options.owner.registerAlarmSource({
+    name: "reconciliation",
+    async wake(deadlines) {
+      for (const deadline of deadlines) {
+        const operationId =
+          (deadline.payload as { operationId?: string } | null)?.operationId;
+        await options.operationCatalog.reconcile({
+          namespace: deadline.namespace ?? undefined,
+          operationId,
+          limit: 1000,
+        });
+        await resumeSettled({
+          namespace: deadline.namespace ?? undefined,
+          operationId,
+          limit: 1000,
+        });
+        await runAlarmCommand(
+          "alarm.reconciliation.complete",
+          {},
+          (_input, context) =>
+            completeOwnerDeadline(
+              context.transaction,
+              databaseSchema,
+              deadline,
+            ),
+        );
+      }
+    },
+  });
+  let pushSubscription: OwnerPushSubscription | undefined;
+  let pushedHead: string | undefined;
   const activate = async () => {
-    await activateDatabaseOwner(options.owner, async () => {
-      await createSchemaCommandRunner(engine.session, databaseSchema)(
-        "owner.invalidateAttempts",
-        {},
-        async (_input, { transaction }) => {
-          await transaction.query(
-            `UPDATE ${store.tables.event_deliveries}
+    await collectionAlarms.seed();
+    pushSubscription ??= await attachOwnerPush(
+      engine.session,
+      databaseSchema,
+      (frame) => {
+        const lost = pushedHead !== undefined &&
+          BigInt(frame.headSeq) >
+            BigInt(pushedHead) +
+              (frame.kind === "change" && frame.change.event ? 1n : 0n);
+        if (lost || frame.kind === "reset") {
+          options.eventHub.reset(
+            Object.assign(
+              new Error("Owner push reset; reattach from the consumed cursor."),
+              { code: "observation_reset_required" },
+            ),
+          );
+        }
+        if (
+          pushedHead === undefined || BigInt(frame.headSeq) > BigInt(pushedHead)
+        ) pushedHead = frame.headSeq;
+        if (frame.kind === "change" && frame.change.event) {
+          void options.eventHub.publish(frame.change.event);
+        }
+      },
+    );
+    pushedHead ??= pushSubscription.cursor;
+    try {
+      await activateDatabaseOwner(options.owner, async () => {
+        await createSchemaCommandRunner(engine.session, databaseSchema)(
+          "owner.invalidateAttempts",
+          {},
+          async (_input, { transaction }) => {
+            await transaction.query(
+              `UPDATE ${store.tables.event_deliveries}
           SET lease_expires_at=NOW(), updated_at=NOW()
           WHERE status='leased' AND owner_epoch <> $1`,
-            [options.owner.epoch],
-          );
-        },
-      );
-      while (
-        (await store.recoverExpiredDeliveries({ limit: 1000 })).length === 1000
-      ) { /* recover every exhausted attempt */ }
-      do {
-        await recoverCatalog({ limit: 1000 });
-      } while (openStreamReconcileAfter !== undefined);
-      while (
-        await options.operationCatalog.reconcile({ limit: 1000 })
-      ) { /* bounded pages across all namespaces */ }
-      for (;;) {
-        const pending = await engine.session.query(
-          `SELECT 1 FROM ${store.tables.open_actions} AS action
+              [options.owner.epoch],
+            );
+            await transaction.query(
+              `INSERT INTO ${store.tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
+            SELECT 'schema','deliveries',d.id,e.namespace,
+              CASE WHEN d.status='leased' THEN d.lease_expires_at ELSE d.available_at END,
+              jsonb_build_object('deliveryId',d.id)
+            FROM ${store.tables.event_deliveries} d JOIN ${store.tables.events} e ON e.id=d.event_id
+            WHERE (d.status IN ('pending','retry_wait') AND d.attempts<d.max_attempts)
+              OR (d.status='leased' AND d.lease_expires_at IS NOT NULL)
+            ON CONFLICT (owner,source,key) DO UPDATE SET due_at=EXCLUDED.due_at,namespace=EXCLUDED.namespace,payload=EXCLUDED.payload,revision=EXCLUDED.revision`,
+            );
+          },
+        );
+        while (
+          (await store.recoverExpiredDeliveries({ limit: 1000 })).length ===
+            1000
+        ) { /* recover every exhausted attempt */ }
+        do {
+          await recoverCatalog({ limit: 1000 });
+        } while (openStreamReconcileAfter !== undefined);
+        while (
+          await options.operationCatalog.reconcile({ limit: 1000 })
+        ) { /* bounded pages across all namespaces */ }
+        for (;;) {
+          const pending = await engine.session.query(
+            `SELECT 1 FROM ${store.tables.open_actions} AS action
           JOIN ${
-            createOperationCatalogTables(databaseSchema).operations
-          } AS child
+              createOperationCatalogTables(databaseSchema).operations
+            } AS child
           ON child.namespace=action.namespace AND child.operation_id=action.child_operation_id
           WHERE action.state='awaiting' AND action.owner_delivery_id IS NULL
             AND child.state IN ('completed','failed','cancelled') LIMIT 1`,
-        );
-        if (!pending.rows.length) break;
-        await resumeSettled({ limit: 1000 });
-      }
-    });
+          );
+          if (!pending.rows.length) break;
+          await resumeSettled({ limit: 1000 });
+        }
+      });
+    } catch (error) {
+      pushSubscription?.close();
+      pushSubscription = undefined;
+      throw error;
+    }
   };
   const publishActivation = async () => {
     for (const publish of activationPublications.splice(0)) await publish();
@@ -858,7 +988,17 @@ export function createDatabaseScope(
   return ({
     owner: options.owner,
     activate,
+    closePush() {
+      pushSubscription?.close();
+      pushSubscription = undefined;
+    },
     publishActivation,
+    closeAlarms() {
+      closeContentAlarms();
+      collectionAlarms.close();
+      closeDeliveryAlarms();
+      closeReconciliationAlarms();
+    },
     deferPublication,
     public: publicScope,
     store,

@@ -198,10 +198,6 @@ export async function provisionCollectionIndexes(
   await createSchemaCommandRunner(session, schema)("schema.collectionIndexes", {
     indexes: expected.map((plan) => plan.name),
   }, async (_input, { transaction }) => {
-    await transaction.query(
-      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-      [schema, "copilotz-collection-indexes"],
-    );
     await apply(transaction);
   });
 }
@@ -220,7 +216,7 @@ export type NodeIndexDefinition = Readonly<{
 
 /** Installs a typed record access path through the schema's provisioning owner. */
 export async function provisionNodeIndex(
-  session: SqlSession,
+  session: SqlExecutor,
   schemaName: string,
   definition: NodeIndexDefinition,
 ): Promise<void> {

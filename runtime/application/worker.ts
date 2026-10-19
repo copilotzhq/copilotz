@@ -1,3 +1,4 @@
+import { recoverOwnerReceipt } from "../execution/owner-receipt.ts";
 import {
   createWorker,
   type Worker,
@@ -5,24 +6,37 @@ import {
   type WorkerOptions,
   type WorkerResult,
 } from "../../dependencies/oxian-worker.ts";
-import { createCopilotzWorkOutputRelay } from "../execution/index.ts";
-import { connectOwnerExecution } from "../execution/workload.ts";
-import { createPluginRegistry } from "../plugins/index.ts";
-import { withApplicationIngress } from "./ingress/registry.ts";
+import { createOwnerWorkerWorkloads } from "../execution/owner-capability-worker.ts";
+import { createPluginRegistry } from "../plugins/registry.ts";
 import type { CreateCopilotzApplicationOptions } from "./types.ts";
-import type { CopilotzPersistenceOptions } from "@copilotz/copilotz/persistence";
 
 export type CreateCopilotzWorkerOptions =
-  & Omit<
+  & Pick<
     CreateCopilotzApplicationOptions,
-    "database" | "engine"
+    | "namespace"
+    | "databaseSchema"
+    | "plugins"
+    | "collections"
+    | "actions"
+    | "processors"
+    | "views"
+    | "resources"
+    | "adapters"
+    | "onDeliveryDiagnostic"
   >
-  & CopilotzPersistenceOptions
-  & Omit<WorkerOptions, "workloads">;
+  & Omit<WorkerOptions, "workloads">
+  & Readonly<
+    {
+      hostCommands?: never;
+      databaseScopes?: never;
+      protectedActions?: never;
+      collectionPolicies?: never;
+    }
+  >;
 
 /** Private execution-role authority projected by the package factory. */
 export type InternalCopilotzWorker =
-  & Omit<Worker, "closed" | "stop">
+  & Omit<Worker, "closed" | "stop" | "callHost">
   & Readonly<{
     role: "worker";
     closed: Promise<WorkerResult>;
@@ -34,29 +48,36 @@ export async function createCopilotzWorker(
   options: CreateCopilotzWorkerOptions,
   lifecycle: WorkerLifecycleCallbacks = {},
 ): Promise<InternalCopilotzWorker> {
-  const relay = createCopilotzWorkOutputRelay();
-  const registry = withApplicationIngress(
-    createPluginRegistry({
-      plugins: options.plugins,
-      collections: options.collections,
-      actions: options.actions,
-      processors: options.processors,
-      views: options.views,
-      resources: options.resources,
-      adapters: options.adapters,
-    }),
-  );
-  const workloads = connectOwnerExecution(
-    options.transport,
-    options.database ?? options.persistence,
-    options.databaseSchema?.trim() || "public",
-    {
-      registry,
-      publish: relay.publish,
-      workerId: options.id,
-      onDiagnostic: options.onDeliveryDiagnostic,
-    },
-  );
+  if (
+    [
+      "database",
+      "persistence",
+      "assets",
+      "hostCommands",
+      "databaseScopes",
+      "protectedActions",
+      "collectionPolicies",
+    ]
+      .some((key) => Object.hasOwn(options, key))
+  ) {
+    throw new TypeError(
+      "Workers accept transport capabilities, never database or persistence options.",
+    );
+  }
+  const registry = createPluginRegistry({
+    plugins: options.plugins,
+    collections: options.collections,
+    actions: options.actions,
+    processors: options.processors,
+    views: options.views,
+    resources: options.resources,
+    adapters: options.adapters,
+  });
+  const workloads = createOwnerWorkerWorkloads({
+    registry,
+    onDiagnostic: options.onDeliveryDiagnostic,
+    recoverReceipt: (receipt) => recoverOwnerReceipt(worker, receipt),
+  });
   const worker = createWorker({
     id: options.id,
     transport: options.transport,
@@ -74,7 +95,11 @@ export async function createCopilotzWorker(
     now: options.now,
     capacity: options.capacity ?? 8,
     signal: options.signal,
-    workloads: relay.wrap(workloads),
+    hostCalls: {
+      ...options.hostCalls,
+      maxConcurrent: options.hostCalls?.maxConcurrent ?? 128,
+    },
+    workloads,
   }, lifecycle);
   return await Promise.resolve({
     role: "worker",

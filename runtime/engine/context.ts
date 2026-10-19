@@ -1,5 +1,9 @@
+import { bindProcessorCollectionInvocation } from "../collections/policy-invocation.ts";
+import {
+  snapshotControl,
+  withSnapshotControl,
+} from "../collections/snapshot-control.ts";
 import type { CollectionDefinition } from "../collections/index.ts";
-import { openProgressiveBodyFollower } from "../content/progressive.ts";
 import {
   ContentStreamOwnershipLostError,
   createContentStreamRuntime,
@@ -13,7 +17,7 @@ import {
   type ActionTransactionOptions,
   createActionCallers,
 } from "../actions/index.ts";
-import { createActionInvocationContext } from "../actions/host.ts";
+import { createActionInvocationContext } from "../actions/execution-context.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 import type {
   CreateProcessorContextOptions,
@@ -91,6 +95,9 @@ export function createProcessorContext(
   const streams = createContentStreamRuntime({
     namespace,
     store: options.streamBodyStore,
+    catalog: options.assets.catalog,
+    producerId: settlementScopeId,
+    storeForCopy: options.assets.storeForCopy,
     bodyPrefix: options.streamBodyPrefix,
     incarnationId: options.base.executionIncarnationId,
     signal: options.base.signal,
@@ -135,16 +142,7 @@ export function createProcessorContext(
         const outputWithAuthority: StreamOutput = {
           ...descriptor,
           payload: lazyBodyFollower(async () => {
-            const follower = await openProgressiveBodyFollower(
-              options.streamBodyStore,
-              {
-                bodyId: operationStreamBodyId({
-                  namespace,
-                  streamId: output.id,
-                  bodyPrefix: options.streamBodyPrefix,
-                }),
-              },
-            );
+            const follower = await streams.follow({ id: output.id });
             return follower.body;
           }),
           terminal,
@@ -315,6 +313,44 @@ export function createProcessorContext(
   });
 
   const content: ProcessorContext["content"] = {
+    openCapture(input) {
+      const identity = mutation(`content.capture:${input.operationKey}`);
+      const capture = createContentStreamRuntime({
+        namespace,
+        store: options.streamBodyStore,
+        catalog: options.assets.catalog,
+        storeForCopy: options.assets.storeForCopy,
+        producerId: settlementScopeId ??
+          (options.base.event.durable
+            ? options.base.event.id
+            : options.base.event.correlationId),
+        bodyPrefix: options.streamBodyPrefix,
+        incarnationId: options.base.executionIncarnationId,
+        signal: options.base.signal,
+        onOpen(_opened, publication) {
+          publication.established();
+        },
+      });
+      return capture.open({
+        ...input,
+        id: `capture:${identity.deduplicationId ?? input.operationKey}`,
+      });
+    },
+    capture(input, captureOptions) {
+      const identity = mutation(
+        `content.capture:${captureOptions.operationKey}`,
+      );
+      return options.assets.capture({
+        namespace,
+        content: input,
+        operationKey: identity.deduplicationId ?? captureOptions.operationKey,
+        producer: settlementScopeId ??
+          (options.base.event.durable
+            ? options.base.event.id
+            : options.base.event.correlationId),
+        origin: captureOptions.origin,
+      });
+    },
     authorize: (ref) =>
       options.resolver.authorize(ref, {
         namespace,
@@ -439,7 +475,8 @@ export function createProcessorContext(
   const readSnapshot: ProcessorContext["readSnapshot"] = async (execute) => {
     return await options.collections.readSnapshot(
       { namespace },
-      async ({ collections: byName }) => {
+      async (snapshotScope) => {
+        const { collections: byName } = snapshotScope;
         const snapshotCollections = Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
@@ -454,7 +491,10 @@ export function createProcessorContext(
           ),
         );
         return await execute(
-          { collections: snapshotCollections } as const,
+          withSnapshotControl(
+            { collections: snapshotCollections } as const,
+            snapshotControl(snapshotScope),
+          ),
         );
       },
     );
@@ -476,6 +516,8 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
+    prepareInput: options.prepareActionInput,
+    createEffectClient: options.createEffectClient,
     resumption: options.actionResumption,
     content: {
       ...content,
@@ -527,6 +569,12 @@ export function createProcessorContext(
     transaction,
     readSnapshot,
   }, options.protectedEventResolver);
-  const context: ProcessorContext = contextValue;
+  const context: ProcessorContext = options.collectionInvocation
+    ? bindProcessorCollectionInvocation(
+      contextValue,
+      options.collectionInvocation.owner,
+      options.collectionInvocation.invocation,
+    )
+    : contextValue;
   return context;
 }

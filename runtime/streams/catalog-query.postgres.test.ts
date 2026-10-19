@@ -151,10 +151,10 @@ function generatedFixtureSql(schema: string): readonly string[] {
          (operation_seed.operation_no || ' seconds')::interval
      ${operationSeed}`,
     `INSERT INTO ${events} (
-       id, schema_version, type, namespace, payload, metadata,
+       seq, id, schema_version, type, namespace, payload, metadata,
        correlation_id, created_at
      )
-     SELECT
+     SELECT (SELECT COALESCE(MAX(seq),0) FROM ${events}) + row_number() OVER (),
        'catalog-event-' || operation_seed.operation_no || '-' || event_seed.event_no,
        5,
        'catalog.fixture',
@@ -177,10 +177,10 @@ function generatedFixtureSql(schema: string): readonly string[] {
        AND operation_seed.operation_no % 8 = 0
        AND event_seed.event_no = 0`,
     `INSERT INTO ${events} (
-       id, schema_version, type, namespace, payload, metadata,
+       seq, id, schema_version, type, namespace, payload, metadata,
        correlation_id, created_at
      )
-     SELECT
+     SELECT (SELECT COALESCE(MAX(seq),0) FROM ${events}) + row_number() OVER (),
        'catalog-event-' || operation_seed.operation_no || '-' || event_seed.event_no,
        5,
        'catalog.fixture',
@@ -703,8 +703,8 @@ Deno.test({
         WHERE operation_id = 'catalog-op-1600'`);
       await database.query(`WITH inserted AS (
         INSERT INTO ${eventsTable} (
-          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
-        ) SELECT 'discovery-long-' || event_no, 5, 'catalog.fixture',
+          seq, id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) SELECT (SELECT COALESCE(MAX(seq),0) FROM ${eventsTable}) + row_number() OVER (), 'discovery-long-' || event_no, 5, 'catalog.fixture',
           '${SPARSE_NAMESPACE}', '{}', '{"discoveryGroup":"history"}',
           'catalog-correlation-1600', TIMESTAMPTZ '2026-02-01 00:00:00+00'
           FROM generate_series(52, 7499) AS seed(event_no)
@@ -718,8 +718,8 @@ Deno.test({
       assert(fixedWatermark);
       await database.query(`WITH inserted AS (
         INSERT INTO ${eventsTable} (
-          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
-        ) VALUES ('discovery-late-progress', 5, 'catalog.fixture',
+          seq, id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) VALUES ((SELECT COALESCE(MAX(seq),0)+1 FROM ${eventsTable}), 'discovery-late-progress', 5, 'catalog.fixture',
           '${SPARSE_NAMESPACE}', '{}', '{}', 'catalog-correlation-1592',
           TIMESTAMPTZ '2026-03-01 00:00:00+00')
           RETURNING namespace, id, position, created_at
@@ -855,8 +855,8 @@ Deno.test({
       // work should stay stable even as namespace history grows.
       await database.query(`WITH inserted AS (
         INSERT INTO ${eventsTable} (
-          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
-        ) SELECT 'discovery-extra-' || event_no, 5, 'catalog.fixture',
+          seq, id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) SELECT (SELECT COALESCE(MAX(seq),0) FROM ${eventsTable}) + row_number() OVER (), 'discovery-extra-' || event_no, 5, 'catalog.fixture',
           '${SPARSE_NAMESPACE}', '{}', '{"discoveryGroup":"history"}',
           'catalog-correlation-1598', TIMESTAMPTZ '2026-01-01 00:00:00+00'
           FROM generate_series(1, 50000) AS seed(event_no)
@@ -872,8 +872,8 @@ Deno.test({
       assert(largerHistoryWatermark);
       await database.query(`WITH inserted AS (
         INSERT INTO ${eventsTable} (
-          id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
-        ) VALUES ('discovery-larger-late-progress', 5, 'catalog.fixture',
+          seq, id, schema_version, type, namespace, payload, metadata, correlation_id, created_at
+        ) VALUES ((SELECT COALESCE(MAX(seq),0)+1 FROM ${eventsTable}), 'discovery-larger-late-progress', 5, 'catalog.fixture',
           '${SPARSE_NAMESPACE}', '{}', '{}', 'catalog-correlation-1592',
           TIMESTAMPTZ '2026-03-01 00:00:01+00')
           RETURNING namespace, id, position, created_at

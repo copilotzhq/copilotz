@@ -1,3 +1,9 @@
+import type { OwnerIngressProof } from "./ingress/authority.ts";
+import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
+import type {
+  HostCommandDefinitions,
+  HostCommands,
+} from "./host-command-types.ts";
 import type { ViewMap } from "../views/index.ts";
 import type {
   CopilotzEngine,
@@ -43,6 +49,14 @@ export type CreateCopilotzApplicationOptions =
     /** Default tenant namespace used when run/connect omit one. */
     namespace?: string;
     databaseSchema?: string;
+    /** Trusted owner-local data commands; never sent to workers or HTTP routes. */
+    hostCommands?: HostCommandDefinitions;
+    /** Trusted owner-only Collection authorization callbacks. */
+    collectionPolicies?:
+      import("../collections/policy-types.ts").CollectionPolicies;
+    protectedActions?: ProtectedActionDefinitions;
+    /** Explicit pre-provisioned schemas to activate before factory readiness. */
+    databaseScopes?: readonly string[];
     plugins?: readonly AnyCopilotzPlugin[];
     collections?: CollectionMap;
     actions?: import("../actions/types.ts").ActionMap;
@@ -56,6 +70,7 @@ export type CreateCopilotzApplicationOptions =
     onDeliveryDiagnostic?: DeliveryDiagnosticSink;
     engine?: Omit<
       CreateCopilotzEngineOptions,
+      | "protectedActions"
       | "session"
       | "registry"
       | "defaultDatabaseSchema"
@@ -325,7 +340,9 @@ export type ApplicationCollections<
 export type CopilotzApplication<
   TActions extends ActionMap = ActionMap,
   TCollections extends CollectionMap = CollectionMap,
+  THostCommands extends HostCommandDefinitions = HostCommandDefinitions,
 > = Readonly<{
+  hostCommands: HostCommands<THostCommands>;
   actions: ApplicationActions<TActions>;
   collections: ApplicationCollections<TCollections>;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
@@ -364,6 +381,7 @@ export type InternalCopilotzApplication =
       input: ApplicationSendInput,
       schema: ActionSchema,
       ownerId: string,
+      ingress?: OwnerIngressProof,
     ): Promise<ApplicationSendHandle>;
     /** Internal-only transport interruption used by persistence recovery. */
     interruptActiveSends(error: unknown): void;

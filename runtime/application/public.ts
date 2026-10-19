@@ -25,3 +25,24 @@ export type {
   DeliveryDiagnostic,
   DeliveryDiagnosticSink,
 } from "../execution/index.ts";
+
+export type {
+  HostCommandContext,
+  HostCommandDefinition,
+  HostCommandDefinitions,
+  HostCommandJson,
+  HostCommandOptions,
+  HostCommands,
+} from "./host-command-types.ts";
+
+export type {
+  ProtectedActionAdoptionContext,
+  ProtectedActionCollection,
+  ProtectedActionCollections,
+  ProtectedActionDefinition,
+  ProtectedActionDefinitions,
+  ProtectedActionIngress,
+  ProtectedActionOwnerContext,
+  ProtectedActionSource,
+  ProtectedActionSourceEntry,
+} from "../actions/protected-action-types.ts";

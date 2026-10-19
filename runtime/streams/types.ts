@@ -1,3 +1,4 @@
+import type { ContentCatalog, ContentCopy } from "../content/catalog.ts";
 import type { ProgressiveBodyFollower } from "../content/progressive.ts";
 import type {
   BodyStore,
@@ -8,7 +9,8 @@ import type {
   AssetOrigin,
   ContentKind,
   ContentRole,
-  PreparedContent,
+  PendingContentDescriptor,
+  PendingContentRef,
 } from "../content/types.ts";
 import type { CopilotzEvent, ResolvedCopilotzEvent } from "../events/index.ts";
 
@@ -132,6 +134,7 @@ export type ContentStreamAppendResult = Readonly<{
 }>;
 
 export type ContentStreamCloseInput = Readonly<{
+  descriptor?: PendingContentDescriptor;
   assetId: string;
   origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
@@ -166,7 +169,7 @@ export type ContentStreamWriter = Readonly<
     close(
       input: ContentStreamCloseInput,
       options?: { signal?: AbortSignal },
-    ): Promise<PreparedContent>;
+    ): Promise<PendingContentRef>;
     abort(
       input?: ContentStreamAbortInput,
       options?: { signal?: AbortSignal },
@@ -193,6 +196,11 @@ export type ContentStreamRuntime = Readonly<{
 export type CreateContentStreamRuntimeOptions = Readonly<{
   namespace: string;
   store: BodyStore;
+  catalog: ContentCatalog;
+  producerId?: string;
+  checkpointIntervalMs?: number;
+  protectionMs?: number;
+  storeForCopy?: (copy: ContentCopy) => BodyStore;
   /** Internal storage-root prefix. */
   bodyPrefix?: string;
   /** Makes every physical lane unique to one execution/recovery attempt. */

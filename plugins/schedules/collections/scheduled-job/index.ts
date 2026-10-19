@@ -117,6 +117,28 @@ export const scheduledJobCollection: CollectionDefinition<
   relations: {
     space: relation.belongsTo("space", "spaceId"),
   },
+  alarm: {
+    ingress: "scheduled-occurrence",
+    deadline(current) {
+      return current.status === "active" &&
+          typeof current.nextRunAtMs === "number"
+        ? new Date(current.nextRunAtMs).toISOString()
+        : null;
+    },
+    command(current, { dueAt, now }) {
+      const occurrenceId = `${current.id}:${new Date(dueAt).getTime()}`;
+      return {
+        name: "due",
+        key: `scheduled_job.due:${occurrenceId}`,
+        input: {
+          occurrenceId,
+          mode: "scheduled",
+          scheduledFor: dueAt,
+          checkedAt: now,
+        },
+      };
+    },
+  },
   commands: {
     due: {
       event: "scheduled_job.due",

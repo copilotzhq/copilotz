@@ -2,7 +2,7 @@ import {
   type ActionContentDeclaration,
   actionContentDeclaration,
 } from "./content.ts";
-import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
+import { actionDefinitionHasSecrets } from "./secret.ts";
 import type {
   ActionContext,
   ActionDefinition,
@@ -15,11 +15,13 @@ import { snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
   "id",
+  "ownerHooks",
   "content",
   "inputSchema",
   "outputSchema",
   "execute",
   "resume",
+  "reconcile",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,7 +58,15 @@ export function isActionDefinition(
     typeof value.id !== "string" || !value.id.trim() ||
     !/^[a-z][a-z0-9_.-]*$/i.test(value.id.trim()) ||
     typeof value.execute !== "function" ||
-    (value.resume !== undefined && typeof value.resume !== "function")
+    (value.resume !== undefined && typeof value.resume !== "function") ||
+    (value.reconcile !== undefined && typeof value.reconcile !== "function")
+  ) return false;
+  if (
+    value.ownerHooks !== undefined &&
+    (!isRecord(value.ownerHooks) || !Object.keys(value.ownerHooks).length ||
+      Object.entries(value.ownerHooks).some(([key, value]) =>
+        !["prepareInput", "acceptOutput"].includes(key) || value !== true
+      ))
   ) return false;
   try {
     if (value.content !== undefined) actionContentDeclaration(value.content);
@@ -77,9 +87,11 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -110,9 +122,11 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -136,9 +150,11 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
+    reconcile?: Definition<TInput, TOutput, TContext>["reconcile"];
     execute(
       input: TInput,
       context: TContext,
@@ -168,6 +184,24 @@ export function defineAction<
   ) {
     throw new TypeError(`Action '${id}' resume must be a function.`);
   }
+  if (
+    definition.reconcile !== undefined &&
+    typeof definition.reconcile !== "function"
+  ) {
+    throw new TypeError(`Action '${id}' reconcile must be a function.`);
+  }
+  const ownerHooks = definition.ownerHooks;
+  if (
+    ownerHooks !== undefined &&
+    (!isRecord(ownerHooks) || !Object.keys(ownerHooks).length ||
+      Object.entries(ownerHooks).some(([key, value]) =>
+        !["prepareInput", "acceptOutput"].includes(key) || value !== true
+      ))
+  ) {
+    throw new TypeError(
+      "Action ownerHooks must declare required owner phases.",
+    );
+  }
   const inputSchema = optionalSchema(
     id,
     "inputSchema",
@@ -196,10 +230,12 @@ export function defineAction<
   }
   return ({
     id,
+    ...(ownerHooks ? { ownerHooks: Object.freeze({ ...ownerHooks }) } : {}),
     ...(content ? { content } : {}),
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     execute: definition.execute,
+    ...(definition.reconcile ? { reconcile: definition.reconcile } : {}),
     ...(definition.resume ? { resume: definition.resume } : {}),
   } as const) as ActionDefinition<
     TInput,

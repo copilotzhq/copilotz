@@ -133,7 +133,8 @@ export async function materializeContentInput(
       "Content namespace must be a non-empty string.",
     );
   }
-  const values = Array.isArray(input) ? input : [input];
+  const captured = captureContentInput(input);
+  const values = Array.isArray(captured) ? captured : [captured];
   const refs: ContentRef[] = [];
 
   const body = async (
@@ -270,4 +271,76 @@ export async function materializeContentInput(
   }
 
   return refs;
+}
+
+/** Detach authored preparation data before hashing or another asynchronous step.
+ * Like the JSON boundary, this never evaluates getters, iterators or toJSON;
+ * byte arrays are the one additional input value accepted by preparation. */
+export function captureContentInput<T>(input: T): T {
+  const ancestors = new Set<object>();
+  let nodes = 0;
+  const invalid = (): never => {
+    throw new TypeError(
+      "Content input must contain plain data and byte arrays.",
+    );
+  };
+  const visit = (value: unknown, depth: number): unknown => {
+    if (++nodes > 100_000 || depth > 64) invalid();
+    if (
+      value === null || typeof value === "string" ||
+      typeof value === "boolean"
+    ) return value;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (!value || typeof value !== "object" || ancestors.has(value)) invalid();
+    if (value instanceof Uint8Array) {
+      const length = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(Uint8Array.prototype),
+        "byteLength",
+      )!.get!.call(value) as number;
+      const copied = new Uint8Array(length);
+      Uint8Array.prototype.set.call(copied, value);
+      return copied;
+    }
+    const array = Array.isArray(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (
+      array
+        ? prototype !== Array.prototype
+        : prototype !== Object.prototype && prototype !== null
+    ) invalid();
+    const properties = Object.getOwnPropertyDescriptors(value);
+    const names = Reflect.ownKeys(properties);
+    if (names.some((name) => typeof name !== "string")) invalid();
+    ancestors.add(value as object);
+    try {
+      if (array) {
+        const length = properties.length?.value;
+        if (
+          !Number.isSafeInteger(length) || length < 0 || length > 100_000 ||
+          names.length !== length + 1
+        ) invalid();
+        const result: unknown[] = [];
+        for (let index = 0; index < length; index++) {
+          const field = properties[String(index)];
+          if (!field?.enumerable || !("value" in field)) invalid();
+          result.push(visit(field.value, depth + 1));
+        }
+        return result;
+      }
+      const result: Record<string, unknown> = {};
+      for (const name of names as string[]) {
+        const field = properties[name];
+        if (!field.enumerable || !("value" in field)) invalid();
+        if (field.value === undefined) continue;
+        Object.defineProperty(result, name, {
+          value: visit(field.value, depth + 1),
+          enumerable: true,
+        });
+      }
+      return result;
+    } finally {
+      ancestors.delete(value as object);
+    }
+  };
+  return visit(input, 0) as T;
 }

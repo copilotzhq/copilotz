@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import type { CopilotzEvent, DurableEvent, EphemeralEvent } from "./types.ts";
 import {
   createCopilotzEventHub,
@@ -9,6 +9,7 @@ const durable: DurableEvent = Object.freeze({
   durable: true,
   id: "event-a",
   position: "1",
+  seq: "1",
   schemaVersion: 1,
   type: "message.created",
   namespace: "tenant-a",
@@ -95,4 +96,78 @@ Deno.test("A55 event hub is factory-first and runtime-neutral", async () => {
     false,
   );
   assertEquals(/from\s+["']node:/.test(source), false);
+});
+
+Deno.test("event hub resets a full observer while a drained observer keeps ordered events", async () => {
+  const hub = createCopilotzEventHub();
+  const slow = hub.subscribe().getReader();
+  const healthy = hub.subscribe().getReader();
+  try {
+    for (let index = 1; index <= 257; index++) {
+      await hub.publish({
+        ...durable,
+        id: `event-${index}`,
+        seq: String(index),
+        position: String(index + 100),
+      });
+      const received = (await healthy.read()).value;
+      assert(received?.durable);
+      assertEquals(received.id, `event-${index}`);
+    }
+    let error: unknown;
+    try {
+      await slow.read();
+    } catch (cause) {
+      error = cause;
+    }
+    assertEquals(
+      (error as { code?: string })?.code,
+      "observation_reset_required",
+    );
+    assertEquals(
+      matchesCopilotzEvent({ ...durable, seq: "3", position: "90" }, {
+        afterSeq: "2",
+      }),
+      true,
+    );
+    assertEquals(
+      matchesCopilotzEvent({ ...durable, seq: "3", position: "90" }, {
+        afterSeq: "3",
+      }),
+      false,
+    );
+  } finally {
+    await slow.cancel().catch(() => undefined);
+    await healthy.cancel();
+    hub.close();
+  }
+});
+
+Deno.test("event hub loss reset permits replay attachment from the consumed sequence", async () => {
+  const hub = createCopilotzEventHub();
+  const old = hub.subscribe().getReader();
+  hub.reset(
+    Object.assign(new Error("lost final push"), {
+      code: "observation_reset_required",
+    }),
+  );
+  let failure: unknown;
+  try {
+    await old.read();
+  } catch (error) {
+    failure = error;
+  }
+  assertEquals(
+    (failure as { code?: string }).code,
+    "observation_reset_required",
+  );
+  const resumed = hub.subscribe({ afterSeq: "1" }).getReader();
+  await hub.publish({ ...durable, seq: "1" });
+  await hub.publish({ ...durable, seq: "2" });
+  const event = (await resumed.read()).value;
+  assert(event?.durable);
+  assertEquals(event.seq, "2");
+  await resumed.cancel();
+  await old.cancel().catch(() => undefined);
+  hub.close();
 });

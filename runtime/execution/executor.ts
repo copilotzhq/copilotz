@@ -1,6 +1,12 @@
+import { readSchemaReceipt } from "../engine/commands.ts";
+import { recoverOwnerReceipt } from "./owner-receipt.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
-import type { DurableEvent, EventDelivery } from "../events/index.ts";
+import type {
+  DurableEvent,
+  EventDelivery,
+  EventStore,
+} from "../events/index.ts";
 import {
   COPILOTZ_DELIVERY_WORKLOAD,
   type CreateDeliveryExecutorOptions,
@@ -15,14 +21,14 @@ import {
   type ExecutionWorkTarget,
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
+import { createOwnerCapabilityHost } from "./owner-capabilities.ts";
+import { createOwnerWorkerWorkloads } from "./owner-capability-worker.ts";
 import { relayCopilotzWorkHandle } from "./protocol.ts";
 import { reportDeliveryDiagnostic } from "./diagnostics.ts";
 import { isStreamOutputDescriptor } from "../streams/index.ts";
 
-const RECOVERY_MINIMUM_DELAY_MS = 1_000;
 const PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS = 1_000;
 const MAX_PLACEMENT_FAILURE_DIAGNOSTICS = 10_000;
-const SCOPE_PROGRESS_POLL_MS = 250;
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -38,10 +44,46 @@ function assertWorkload(value: string): string {
   return workload;
 }
 
+/** Registration is inert and detached before any asynchronous placement. */
+function captureRegistration<T extends object>(value: T): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Execution registration must be a data record.");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = Reflect.get(descriptors, key) as PropertyDescriptor;
+    if (!("value" in descriptor)) {
+      throw new TypeError(
+        "Execution registration must contain data properties.",
+      );
+    }
+  }
+  return Object.freeze(Object.defineProperties({}, descriptors)) as T;
+}
+function captureTarget(
+  value: ExecutionWorkTarget | undefined,
+): ExecutionWorkTarget | undefined {
+  if (value === undefined) return undefined;
+  const captured = captureRegistration(value);
+  if (
+    Reflect.ownKeys(captured).length !== 1 ||
+    typeof captured.workerId !== "string" || !captured.workerId.trim()
+  ) {
+    throw new TypeError("Execution target requires only a workerId.");
+  }
+  return Object.freeze({ workerId: captured.workerId });
+}
+
 /** Creates the Copilotz delivery dispatcher and optional embedded Oxian worker. */
 export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
+  options = captureRegistration(options);
+  const capturedTarget = captureTarget(options.target);
+  const capturedTargets = Object.entries(
+    captureRegistration(options.workloadTargets ?? {}),
+  )
+    .map(([name, value]) => [name, captureTarget(value)!] as const);
   if (!options.store && !options.resolveStore) {
     throw new TypeError("Delivery executor requires a store resolver.");
   }
@@ -69,6 +111,10 @@ export function createDeliveryExecutor(
     `copilotz-delivery-${crypto.randomUUID()}`;
   const defaultDatabaseSchema = options.defaultDatabaseSchema?.trim() ||
     options.store?.databaseSchema || "public";
+  const knownStores = new Map<string, EventStore>();
+  if (options.store) {
+    knownStores.set(options.store.databaseSchema, options.store);
+  }
   const resolveStore = async (databaseSchema: string) => {
     const requested = databaseSchema.trim();
     if (!requested) throw new TypeError("Database schema must be non-empty.");
@@ -80,27 +126,20 @@ export function createDeliveryExecutor(
         `Resolved store '${store.databaseSchema}' does not match '${requested}'.`,
       );
     }
+    knownStores.set(requested, store);
     return store;
   };
-  const handler = createDeliveryWorkload({
-    store: options.store,
-    resolveStore: options.resolveStore,
-    registry: options.registry,
-    createContext: options.createContext,
-    executeContinuation: options.executeContinuation,
-    leaseMs: options.leaseMs,
-    heartbeatMs: options.heartbeatMs,
-    scheduler: options.scheduler,
-    workerId,
-    onDiagnostic: options.onDiagnostic,
-  });
   if (Object.prototype.hasOwnProperty.call(options.workloads ?? {}, workload)) {
     throw new TypeError(
       `Additional workload '${workload}' conflicts with durable deliveries.`,
     );
   }
-  const additionalWorkloads = options.workloads ?? {};
-  const localWorkloadWorkers = options.localWorkloadWorkers ?? {};
+  const additionalWorkloads = captureRegistration(options.workloads ?? {});
+  const localWorkloadWorkers = Object.fromEntries(
+    Object.entries(captureRegistration(options.localWorkloadWorkers ?? {})).map(
+      ([name, configuration]) => [name, captureRegistration(configuration)],
+    ),
+  );
   if (options.dispatcher && Object.keys(localWorkloadWorkers).length > 0) {
     throw new TypeError(
       "Local workload workers cannot be attached to an injected dispatcher.",
@@ -113,23 +152,44 @@ export function createDeliveryExecutor(
       );
     }
   }
-  const primaryAdditional = Object.fromEntries(
-    Object.entries(additionalWorkloads).filter(([name]) =>
-      !Object.prototype.hasOwnProperty.call(localWorkloadWorkers, name)
-    ),
-  );
-  const hostedWorkloads = {
-    ...primaryAdditional,
-    [workload]: handler,
-  } as const;
+  const ownerCapabilities = options.dispatcher
+    ? undefined
+    : createOwnerCapabilityHost({
+      registry: options.registry,
+      localExecution: true,
+      lookupReceipt: async (identity, input) => {
+        const schema = String(
+          (input as { databaseSchema?: unknown })?.databaseSchema ?? "",
+        );
+        const store = knownStores.get(schema);
+        if (!store) return false;
+        return await readSchemaReceipt(
+          store.session,
+          schema,
+          `worker:${identity.workerId}`,
+          input,
+        );
+      },
+      resolveAuthority: async (schema) =>
+        await (await resolveStore(schema)).executionAuthority(),
+      createWorkloads: options.createWorkerWorkloads ?? ((execution) => ({
+        ...additionalWorkloads,
+        [workload]: createDeliveryWorkload({
+          ...options,
+          registry: execution.registry,
+          workerId: execution.workerId,
+          localExecution: true,
+        }),
+      })),
+    });
 
   let dispatcher: DeliveryDispatcher;
   let ownership: DeliveryExecutorOwnership;
   const attachedWorkers: ReturnType<typeof createWorker>[] = [];
   let privateHypervisor: ReturnType<typeof createHypervisor> | undefined;
-  let target = options.target;
+  let target = capturedTarget;
   const workloadTargets = new Map<string, ExecutionWorkTarget>(
-    Object.entries(options.workloadTargets ?? {}),
+    capturedTargets,
   );
   let localCapacity: number | undefined;
   const transport: DeliveryInProcessTransport | undefined = options.dispatcher
@@ -152,7 +212,13 @@ export function createDeliveryExecutor(
       id: config.id,
       transport: transport!,
       capacity: config.capacity,
-      workloads: config.workloads,
+      workloads: createOwnerWorkerWorkloads({
+        registry: options.registry,
+        workloads: Object.keys(config.workloads),
+        onDiagnostic: options.onDiagnostic,
+        recoverReceipt: (receipt) => recoverOwnerReceipt(worker, receipt),
+      }),
+      hostCalls: { maxConcurrent: 128 },
     });
     attachedWorkers.push(worker);
     void worker.closed.catch(() => undefined);
@@ -162,7 +228,14 @@ export function createDeliveryExecutor(
     startWorker({
       id: workerId,
       capacity: localCapacity!,
-      workloads: hostedWorkloads,
+      workloads: {
+        ...Object.fromEntries(
+          Object.entries(additionalWorkloads).filter(([name]) =>
+            !Object.hasOwn(localWorkloadWorkers, name)
+          ),
+        ),
+        [workload]: undefined!,
+      },
     });
     target = { workerId };
     const workerIds = new Set([workerId]);
@@ -195,6 +268,12 @@ export function createDeliveryExecutor(
     ownership = "injected_dispatcher";
   } else if (options.hypervisor) {
     localCapacity = positiveCapacity(options.capacity);
+    if (!options.bindOwnerCapabilities) {
+      throw new TypeError(
+        "An injected Hypervisor requires an owner-capability admission binding.",
+      );
+    }
+    options.bindOwnerCapabilities(ownerCapabilities!);
     attachLocalWorkers();
     dispatcher = options.hypervisor;
     ownership = "shared_hypervisor";
@@ -202,6 +281,16 @@ export function createDeliveryExecutor(
     localCapacity = positiveCapacity(options.capacity);
     privateHypervisor = createHypervisor({
       transports: [transport!],
+      workerCalls: ownerCapabilities!.workerCalls,
+    }, {
+      ...ownerCapabilities!.lifecycle,
+      onReady(event) {
+        if (!event.workerCalls) {
+          throw new Error(
+            "Copilotz workers require negotiated owner capabilities.",
+          );
+        }
+      },
     });
     attachLocalWorkers();
     dispatcher = privateHypervisor;
@@ -211,15 +300,6 @@ export function createDeliveryExecutor(
     attachedWorkers.map((worker) => worker.ready),
   ).then(() => undefined);
   void ready.catch(() => {});
-
-  const retryScheduler = options.scheduler ?? ({
-    schedule(callback: () => void, delayMs: number): unknown {
-      return setTimeout(callback, delayMs);
-    },
-    cancel(handle: unknown): void {
-      clearTimeout(handle as ReturnType<typeof setTimeout>);
-    },
-  } as const);
 
   let closed = false;
   let shutdownPromise: Promise<void> | undefined;
@@ -249,19 +329,10 @@ export function createDeliveryExecutor(
   >();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
-  const retryTimers = new Map<
-    string,
-    Readonly<{ handle: unknown; dueAtMs: number }>
-  >();
-  const recoveryTimers = new Map<
-    string,
-    Readonly<{ handle: unknown; dueAtMs: number }>
-  >();
-  const continuousRecoverySchemas = new Set<string>();
   const lastPlacementFailureDiagnosticAt = new Map<string, number>();
   let scheduling = false;
   let capacityBlocked = false;
-  let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
+  let pumpQueued = false;
   const deliveryKey = (
     delivery: string | EventDelivery,
     databaseSchema = defaultDatabaseSchema,
@@ -314,18 +385,22 @@ export function createDeliveryExecutor(
       if (tasks.size === 0) activeOutputScopes.delete(key);
     }).catch(() => undefined);
   };
-  const schedulePump = (delayMs = 0): void => {
-    if (closed || scheduling || scheduleTimer !== undefined) return;
-    scheduleTimer = setTimeout(() => {
-      scheduleTimer = undefined;
-      void pumpScheduled();
-    }, delayMs);
+  const schedulePump = (): void => {
+    if (closed || pumpQueued) return;
+    pumpQueued = true;
+    queueMicrotask(() => {
+      pumpQueued = false;
+      void trackTask(admittedTasks, pumpScheduled()).catch(() => undefined);
+    });
   };
   const pumpScheduled = async (): Promise<void> => {
     if (closed || scheduling) return;
     scheduling = true;
     try {
       for (const [id, delivery] of scheduled) {
+        // An alarm may commit/consume the next retry while the previous Work
+        // handle is still draining. Retain the wake until completion re-pumps.
+        if (active.has(id) || dispatchTasks.has(id)) continue;
         if (
           localCapacity !== undefined &&
           active.size + dispatchTasks.size >= localCapacity
@@ -384,53 +459,35 @@ export function createDeliveryExecutor(
             queuedCount: scheduled.size,
           });
         }
+        // Consume only this selected queue entry before awaiting placement. A
+        // later alarm for the same key owns a new entry and must survive it.
+        scheduled.delete(id);
         try {
           const handle = await dispatchDelivery(delivery, {
             origin: "scheduled",
           });
-          scheduled.delete(id);
           void handle.done.finally(() => schedulePump()).catch(() => undefined);
         } catch {
-          // Placement does not claim the durable delivery. Keep it queued and
-          // retry after another operation can release worker capacity.
-          break;
+          // A placement failure is durable owner work, never a second timer.
+          const schema = typeof delivery === "string"
+            ? defaultDatabaseSchema
+            : delivery.databaseSchema;
+          const deliveryId = typeof delivery === "string"
+            ? delivery
+            : delivery.id;
+          if (!closed) {
+            await trackTask(
+              admittedTasks,
+              resolveStore(schema).then((store) =>
+                store.deferDeliveryPlacement(deliveryId, 1000)
+              ),
+            );
+          }
         }
       }
     } finally {
       scheduling = false;
-      if (!closed && scheduled.size > 0) schedulePump(10);
     }
-  };
-
-  const cancelRetryTimer = (key: string): void => {
-    const timer = retryTimers.get(key);
-    if (!timer) return;
-    retryTimers.delete(key);
-    retryScheduler.cancel(timer.handle);
-  };
-
-  const scheduleRetry = (delivery: EventDelivery): void => {
-    if (closed || delivery.status !== "retry_wait") return;
-    const key = deliveryKey(delivery);
-    const parsed = Date.parse(delivery.availableAt);
-    const dueAtMs = Number.isFinite(parsed) ? parsed : Date.now();
-    const existing = retryTimers.get(key);
-    if (existing && existing.dueAtMs <= dueAtMs) return;
-    if (existing) retryScheduler.cancel(existing.handle);
-    const handle = retryScheduler.schedule(() => {
-      retryTimers.delete(key);
-      if (closed || active.has(key) || dispatchTasks.has(key)) return;
-      scheduled.set(key, delivery);
-      schedulePump();
-    }, Math.max(0, dueAtMs - Date.now()));
-    retryTimers.set(key, { handle, dueAtMs } as const);
-  };
-
-  const cancelRecoveryTimer = (databaseSchema: string): void => {
-    const timer = recoveryTimers.get(databaseSchema);
-    if (!timer) return;
-    recoveryTimers.delete(databaseSchema);
-    retryScheduler.cancel(timer.handle);
   };
 
   /**
@@ -488,7 +545,6 @@ export function createDeliveryExecutor(
           `Delivery '${delivery.id}' disappeared after execution.`,
         );
       }
-      scheduleRetry(current);
       return ({
         event,
         delivery: current,
@@ -537,7 +593,6 @@ export function createDeliveryExecutor(
       throw new Error(`Delivery '${deliveryInput}' was not found.`);
     }
     const key = deliveryKey(delivery);
-    cancelRetryTimer(key);
     const existing = active.get(key);
     if (existing) return existing;
     const dispatching = dispatchTasks.get(key);
@@ -656,9 +711,6 @@ export function createDeliveryExecutor(
       });
       const handle = createHandle(delivery, event, store, attemptId, work);
       active.set(key, handle);
-      if (continuousRecoverySchemas.has(delivery.databaseSchema)) {
-        refreshRecoverySchedule(delivery.databaseSchema);
-      }
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
       void handle.done.finally(() => {
@@ -675,6 +727,10 @@ export function createDeliveryExecutor(
     } finally {
       if (dispatchTasks.get(key) === task) {
         dispatchTasks.delete(key);
+        // A consumed wake may also be waiting on a placement that rejected
+        // before producing an active handle. Admission/authority checks still
+        // run through the ordinary dispatcher path.
+        schedulePump();
       }
     }
   };
@@ -690,12 +746,7 @@ export function createDeliveryExecutor(
   ): Promise<DeliveryRecoveryDispatch> => {
     const databaseSchema = listOptions.databaseSchema?.trim() ||
       defaultDatabaseSchema;
-    const continuous = listOptions.namespace === undefined &&
-      listOptions.consumerIds === undefined;
-    if (options.continuousRecovery === true && continuous) {
-      continuousRecoverySchemas.add(databaseSchema);
-    }
-    try {
+    {
       const store = await resolveStore(databaseSchema);
       const { databaseSchema: _databaseSchema, ...filters } = listOptions;
       await store.recoverExpiredDeliveries({
@@ -735,8 +786,6 @@ export function createDeliveryExecutor(
         handles: handles,
         failures: failures,
       } as const);
-    } finally {
-      if (continuous) refreshRecoverySchedule(databaseSchema);
     }
   };
 
@@ -745,57 +794,17 @@ export function createDeliveryExecutor(
   ): Promise<DeliveryRecoveryDispatch> =>
     admitTask(() => dispatchAdmittedRecoverable(listOptions));
 
-  function refreshRecoverySchedule(requestedDatabaseSchema: string): void {
-    const databaseSchema = requestedDatabaseSchema.trim();
-    if (closed || !continuousRecoverySchemas.has(databaseSchema)) return;
-    trackTask(
-      admittedTasks,
-      resolveStore(databaseSchema).then((store) => store.nextRecoveryDelayMs())
-        .then((delay) => {
-          if (closed) return;
-          if (delay === null) {
-            cancelRecoveryTimer(databaseSchema);
-            return;
-          }
-          const dueAtMs = Date.now() +
-            Math.max(RECOVERY_MINIMUM_DELAY_MS, delay);
-          const existing = recoveryTimers.get(databaseSchema);
-          if (existing && existing.dueAtMs <= dueAtMs) return;
-          if (existing) retryScheduler.cancel(existing.handle);
-          const handle = retryScheduler.schedule(() => {
-            recoveryTimers.delete(databaseSchema);
-            if (closed) return;
-            // dispatchRecoverable rearms the schema in its own finally block.
-            void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
-          }, Math.max(0, dueAtMs - Date.now()));
-          recoveryTimers.set(databaseSchema, { handle, dueAtMs } as const);
-        }).catch(() => undefined),
-    );
-  }
-
   return ({
     ownership,
     workload,
-    workloads: hostedWorkloads,
+    workloads: createOwnerWorkerWorkloads({
+      registry: options.registry,
+      workloads: [workload, ...Object.keys(additionalWorkloads)],
+    }),
     scheduleDelivery(delivery) {
       if (closed) throw new Error("Delivery executor is shut down.");
       const id = deliveryKey(delivery);
-      if (active.has(id) || dispatchTasks.has(id) || scheduled.has(id)) return;
-      cancelRetryTimer(id);
-      scheduled.set(id, delivery);
-      if (
-        continuousRecoverySchemas.has(
-          typeof delivery === "string"
-            ? defaultDatabaseSchema
-            : delivery.databaseSchema,
-        )
-      ) {
-        refreshRecoverySchedule(
-          typeof delivery === "string"
-            ? defaultDatabaseSchema
-            : delivery.databaseSchema,
-        );
-      }
+      if (!scheduled.has(id)) scheduled.set(id, delivery);
       schedulePump();
     },
     async dispatchWork(input) {
@@ -864,13 +873,9 @@ export function createDeliveryExecutor(
       if (!tasks?.size || signal?.aborted) return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
         const finish = () => {
-          clearTimeout(timer);
           signal?.removeEventListener("abort", finish);
           resolve(true);
         };
-        // Work elsewhere can change the scope too, so this only shortens a
-        // poll interval instead of replacing it.
-        const timer = setTimeout(finish, SCOPE_PROGRESS_POLL_MS);
         signal?.addEventListener("abort", finish, { once: true });
         for (const task of tasks.keys()) void task.then(finish, finish);
       });
@@ -889,16 +894,6 @@ export function createDeliveryExecutor(
             cleanupErrors.push(error);
           }
         };
-        if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
-        scheduleTimer = undefined;
-        for (const timer of retryTimers.values()) {
-          await cleanUp(() => retryScheduler.cancel(timer.handle));
-        }
-        retryTimers.clear();
-        for (const timer of recoveryTimers.values()) {
-          await cleanUp(() => retryScheduler.cancel(timer.handle));
-        }
-        recoveryTimers.clear();
         scheduled.clear();
         // Admission is closed. These producers finish at handle creation or the
         // end of a recovery read, never at handle.done or callback completion.
@@ -926,6 +921,7 @@ export function createDeliveryExecutor(
         await Promise.allSettled(
           attachedWorkers.map((worker) => worker.closed),
         );
+        await cleanUp(() => ownerCapabilities?.close(reason));
         await cleanUp(() => privateHypervisor?.shutdown(reason));
         // Timer/resource errors must not skip cancellation: a delivery may need
         // it to finish. Only then drain the callbacks, independently of done.

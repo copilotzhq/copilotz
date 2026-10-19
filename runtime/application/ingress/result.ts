@@ -1,3 +1,4 @@
+import { standardActionError } from "../../actions/errors.ts";
 /** Restores admitted outcomes from lifecycle Events and retained mutation failures. @module */
 import type { DurableEvent } from "../../events/index.ts";
 import type {
@@ -39,10 +40,7 @@ type ServerInvokeTerminal =
     }>
     | Readonly<{
       status: "failed";
-      error: Readonly<{
-        name: string;
-        message: string;
-      }>;
+      error: SerializedActionError;
     }>
   );
 function actionTerminal(
@@ -86,6 +84,9 @@ function actionTerminal(
     const wrapperActionRunId = text(data.actionRunId);
     if (!wrapperActionRunId) return undefined;
     const error = record(result.error);
+    const safe = error.callerSafe === true
+      ? standardActionError(error)
+      : undefined;
     return ({
       status: "failed",
       wrapperActionRunId,
@@ -93,7 +94,11 @@ function actionTerminal(
         `${wrapperActionRunId}/action:${targetActionId}:target`,
       error: {
         name: text(error.name) ?? "Error",
-        message: text(error.message) ?? "Action execution failed.",
+        message: safe?.message ?? text(error.message) ??
+          "Action execution failed.",
+        ...(safe
+          ? { code: safe.code, status: safe.status, callerSafe: true as const }
+          : {}),
       } as const,
     } as const);
   }
@@ -396,10 +401,14 @@ export async function recordedOperationResult(
     throw actionFailure(target.error, audience);
   }
   if (terminal.status === "failed") {
-    // Older wrapper receipts and failures before target invocation still work.
+    // The current invocation bridge can fail admission before a target lifecycle
+    // exists; its retained standard failure is the authoritative result.
     throw actionFailure(terminal.error, audience);
   }
   if (!target || target.status !== "completed") {
+    if (status.state === "accepted" || status.state === "running") {
+      return pending();
+    }
     throw appError(409, "action_not_completed", "Action did not complete.");
   }
   let afterStreamOrdinal: string | undefined;

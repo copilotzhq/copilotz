@@ -1,4 +1,4 @@
-import type { ActionSchema } from "./types.ts";
+import type { ActionSchema, AnyActionDefinition } from "./types.ts";
 
 const SECRET_MARKER = "x-copilotz-secret";
 const REDACTED_SECRET_VALUE = { "$copilotz-secret": true } as const;
@@ -160,6 +160,129 @@ function visitSchemaChildren(
   }
 }
 
+const ARRAY_OBJECT_ITEM = Symbol("array-object-item");
+type PublicScalarPath = readonly (string | typeof ARRAY_OBJECT_ITEM)[];
+
+/** Public scalar leaves are an explicit leak-analysis annotation, never storage declassification. */
+function publicScalarSecretPointers(
+  root: Record<string, unknown>,
+): readonly PublicScalarPath[] {
+  const pointers: PublicScalarPath[] = [];
+  const applicators = [
+    "$ref",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "if",
+    "then",
+    "else",
+    "not",
+    "dependentSchemas",
+    "patternProperties",
+    "unevaluatedProperties",
+    "contains",
+    "unevaluatedItems",
+    "additionalItems",
+  ];
+  const scalarTypes = new Set([
+    "string",
+    "number",
+    "integer",
+    "boolean",
+    "null",
+  ]);
+  const visit = (
+    node: boolean | Record<string, unknown>,
+    pointer: PublicScalarPath | undefined,
+    exactProperty = false,
+  ): void => {
+    if (typeof node === "boolean") return;
+    const types = Array.isArray(node.type) ? node.type : [node.type];
+    const ambiguous = applicators.some((key) => Object.hasOwn(node, key));
+    if (node[SECRET_MARKER] === false) {
+      if (
+        pointer === undefined || !exactProperty || ambiguous ||
+        !types.length ||
+        types.some((type) =>
+          typeof type !== "string" || !scalarTypes.has(type)
+        ) ||
+        [
+          "properties",
+          "items",
+          "prefixItems",
+          "additionalProperties",
+          "contains",
+          "propertyNames",
+        ].some((key) => Object.hasOwn(node, key))
+      ) {
+        invalidSchema(
+          "a public scalar annotation must name an explicit scalar property on an unambiguous property path",
+        );
+      }
+      pointers.push(pointer);
+    }
+    const objectPath = pointer !== undefined && !ambiguous &&
+      types.includes("object") &&
+      types.every((type) => type === "object" || type === "null");
+    const arrayPath = pointer !== undefined && !ambiguous &&
+      !Object.hasOwn(node, "prefixItems") &&
+      types.includes("array") &&
+      types.every((type) => type === "array" || type === "null");
+    for (
+      const key of [
+        "properties",
+        "patternProperties",
+        "dependentSchemas",
+        "$defs",
+        "definitions",
+      ]
+    ) {
+      if (!Object.hasOwn(node, key)) continue;
+      for (const [name, child] of Object.entries(schemaMap(node[key], key))) {
+        visit(
+          schemaNode(child, key),
+          key === "properties" && objectPath ? [...pointer!, name] : undefined,
+          key === "properties" && objectPath,
+        );
+      }
+    }
+    for (
+      const key of [
+        "additionalProperties",
+        "unevaluatedProperties",
+        "contains",
+        "propertyNames",
+        "not",
+        "if",
+        "then",
+        "else",
+      ]
+    ) {
+      if (Object.hasOwn(node, key)) {
+        visit(schemaNode(node[key], key), undefined);
+      }
+    }
+    for (const key of ["items", "prefixItems", "allOf", "anyOf", "oneOf"]) {
+      if (!Object.hasOwn(node, key)) continue;
+      const children = Array.isArray(node[key])
+        ? node[key] as unknown[]
+        : [node[key]];
+      for (const child of children) {
+        const next = schemaNode(child, key);
+        const itemTypes = typeof next === "object"
+          ? (Array.isArray(next.type) ? next.type : [next.type])
+          : [];
+        const objectItem = key === "items" && arrayPath &&
+          !Array.isArray(node.items) && itemTypes.includes("object") &&
+          itemTypes.every((type) => type === "object" || type === "null");
+        visit(next, objectItem ? [...pointer!, ARRAY_OBJECT_ITEM] : undefined);
+      }
+    }
+  };
+  visit(root, []);
+  return pointers;
+}
+
 /** Validates the JSON Schema features used by the secret traversal. */
 export function validateSecretActionSchema(schema: ActionSchema): void {
   const root = schemaNode(schema, "root");
@@ -181,6 +304,7 @@ export function validateSecretActionSchema(schema: ActionSchema): void {
     }
   };
   visit(root, new Set());
+  publicScalarSecretPointers(root);
 }
 
 /** Whether a schema contains a true `x-copilotz-secret` marker. */
@@ -496,6 +620,52 @@ export function splitSecretActionValue(
   } as const);
 }
 
+/** Exact schema-protected string leaves for metadata/outcome leak analysis. */
+export function protectedActionStrings(
+  schema: ActionSchema | undefined,
+  value: unknown,
+): readonly string[] {
+  const snapshot = cloneJsonValue(value, "value");
+  if (!schema) return [];
+  const roots = secretPointers(schema, snapshot);
+  const publicScalars = publicScalarSecretPointers(
+    schema as Record<string, unknown>,
+  );
+  const strings = new Set<string>();
+  const visit = (
+    value: JsonValue,
+    pointer: string,
+    path: readonly (string | number)[],
+  ): void => {
+    if (typeof value === "string") {
+      const publicScalar = publicScalars.some((declared) =>
+        declared.length === path.length &&
+        declared.every((segment, index) =>
+          segment === ARRAY_OBJECT_ITEM
+            ? typeof path[index] === "number"
+            : segment === path[index]
+        )
+      );
+      if (
+        value && !publicScalar &&
+        roots.some((root) =>
+          root === "" || pointer === root || pointer.startsWith(`${root}/`)
+        )
+      ) strings.add(value);
+    } else if (Array.isArray(value)) {
+      value.forEach((child, index) =>
+        visit(child, appendPointer(pointer, String(index)), [...path, index])
+      );
+    } else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        visit(child, appendPointer(pointer, key), [...path, key]);
+      }
+    }
+  };
+  visit(snapshot, "", []);
+  return [...strings].sort((left, right) => right.length - left.length);
+}
+
 function sameJsonValue(left: JsonValue, right: JsonValue): boolean {
   if (left === right) return true;
   if (
@@ -535,4 +705,12 @@ export function rehydrateSecretActionValue(
     invalidValue("sealed plaintext does not match the durable public value");
   }
   return plaintextSnapshot;
+}
+
+/** Pure schema predicate shared by authoring and owner hydration. */
+export function actionDefinitionHasSecrets(
+  action: AnyActionDefinition,
+): boolean {
+  return actionSchemaHasSecrets(action.inputSchema) ||
+    actionSchemaHasSecrets(action.outputSchema);
 }

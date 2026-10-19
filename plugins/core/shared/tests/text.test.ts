@@ -1,3 +1,4 @@
+import { recordTestContentTerminal } from "../../../../runtime/testing/content-catalog.ts";
 import {
   createBundledSkill as defineSkill,
   createInlineSkill,
@@ -751,6 +752,19 @@ for (const cancelWaiting of [false, true]) {
         async handle() {
           releaseCount += 1;
           checkpointReady = true;
+          await recordTestContentTerminal(
+            fixture.db,
+            databaseSchema,
+            NAMESPACE,
+            {
+              bodyId: "checkpoint-body",
+              mediaType: "text/plain",
+              byteLength: 0,
+              digest:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              versionToken: "fixture-generation-1",
+            },
+          );
           await fixture.engine.operations.sealStream({
             namespace: NAMESPACE,
             operationId: producerOperationId,
@@ -759,7 +773,9 @@ for (const cancelWaiting of [false, true]) {
               bodyId: "checkpoint-body",
               mediaType: "text/plain",
               byteLength: 0,
-              digest: "sha256:empty",
+              digest:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              versionToken: "fixture-generation-1",
               maintenanceVersion: 1,
               state: "ready",
             },

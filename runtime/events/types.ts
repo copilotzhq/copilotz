@@ -17,6 +17,8 @@ export type DurableEvent<TPayload = unknown> = Readonly<{
   id: string;
   /** Database-assigned monotonic position, serialized without precision loss. */
   position: string;
+  /** Gap-free owner sequence; namespaces interleave within one database schema. */
+  seq: string;
   schemaVersion: number;
   type: string;
   namespace: string;

@@ -1,29 +1,20 @@
-import type {
-  ActiveMutableBodyHead,
-  BodyStore,
-  MutableBodyHead,
-  TerminalBodyHead,
-} from "./body-store.ts";
-
-export type ProgressiveBodyMaintenanceError = Readonly<{
-  bodyId: string;
-  message: string;
-}>;
-
-/** Result of domain-neutral recovery for expired progressive Body writers. */
-export type ProgressiveBodyMaintenanceResult = Readonly<{
-  examined: number;
-  aborted: number;
-  /** Expired frozen sealing bodies finalized without reopening appends. */
-  sealed: number;
-  /** Expired open/terminating bodies frozen as immutable incomplete prefixes. */
-  terminated: number;
-  deferred: number;
-  errors: readonly ProgressiveBodyMaintenanceError[];
-  /** Opaque BodyStore continuation for the next bounded maintenance pass. */
-  after?: string;
-}>;
-
+import type { BodyStore, WriterCapability } from "./body-store.ts";
+import type { ContentCatalog, ContentCopy, LogicalBody } from "./catalog.ts";
+import { digestCatalogPrefix } from "./prefix-digest.ts";
+export type ProgressiveBodyMaintenanceError = Readonly<
+  { bodyId: string; message: string }
+>;
+export type ProgressiveBodyMaintenanceResult = Readonly<
+  {
+    examined: number;
+    aborted: number;
+    sealed: number;
+    terminated: number;
+    deferred: number;
+    errors: readonly ProgressiveBodyMaintenanceError[];
+    after?: string;
+  }
+>;
 export const EMPTY_PROGRESSIVE_BODY_MAINTENANCE:
   ProgressiveBodyMaintenanceResult = {
     examined: 0,
@@ -31,118 +22,115 @@ export const EMPTY_PROGRESSIVE_BODY_MAINTENANCE:
     sealed: 0,
     terminated: 0,
     deferred: 0,
-    errors: [] as const,
-  } as const;
-
-function isActive(
-  head: TerminalBodyHead | MutableBodyHead,
-): head is ActiveMutableBodyHead {
-  return head.state === "open" || head.state === "sealing" ||
-    head.state === "terminating";
-}
-
-/**
- * Recovers progressive Bodies whose writer lease has expired.
- *
- * This is deliberately ignorant of the semantic owner of a Body. A live body
- * renews its lease independently of byte traffic. Expired open/terminating
- * bodies are fenced and frozen as incomplete so generic recovery never erases
- * a prefix that may already have been published. Sealing is irrevocable, so an
- * expired frozen body is fenced and finalized. Terminal-body collection stays
- * with retention/orphan maintenance.
- */
-export async function maintainProgressiveBodies(
+    errors: [],
+  };
+/** Recovery authority comes exclusively from a catalog revocation claim. */
+export async function recoverLogicalBody(
+  catalog: ContentCatalog,
+  body: LogicalBody,
   store: BodyStore,
+): Promise<"sealed" | "terminated" | "deferred"> {
+  if (body.terminal) return "deferred";
+  let head = await store.head({ bodyId: body.copy.key });
+  if (
+    body.sealIntent && head?.state === "ready" &&
+    head.byteLength === body.sealIntent.length &&
+    head.digest === body.sealIntent.digest
+  ) {
+    await catalog.sealAccepted({ ...body, head });
+    return "sealed";
+  }
+  const claimed = await catalog.beginRevocation({ ...body, expiredOnly: true });
+  if (claimed.terminal || claimed.revocation === "active") return "deferred";
+  const original: WriterCapability = {
+    bodyId: body.copy.key,
+    mediaType: head?.mediaType ?? "application/octet-stream",
+    reservationId: body.writerId,
+    generation: body.generation,
+    byteLength: head?.byteLength ?? 0,
+    discarded: 0,
+  };
+  const writer = await store.fence({ writer: original });
+  const length = await catalog.revoked(body);
+  head = await store.head({ bodyId: body.copy.key });
+  // A seal that won the physical fence is accepted only against the prior intent.
+  if (
+    body.sealIntent && head?.state === "ready" &&
+    head.byteLength === body.sealIntent.length &&
+    head.digest === body.sealIntent.digest
+  ) {
+    await catalog.sealAccepted({ ...body, head });
+    return "sealed";
+  }
+  if (
+    body.sealIntent && head && head.byteLength >= body.sealIntent.length &&
+    (head.state === "open" || head.state === "sealing" ||
+      head.state === "terminating")
+  ) {
+    const digest = await digestCatalogPrefix(
+      store,
+      body.copy.key,
+      body.sealIntent.length,
+    );
+    if (digest === body.sealIntent.digest) {
+      const sealed = await store.seal({
+        writer,
+        expectedByteLength: body.sealIntent.length,
+        expectedDigest: digest,
+      });
+      await catalog.sealAccepted({ ...body, head: sealed });
+      return "sealed";
+    }
+  }
+  const digest = await digestCatalogPrefix(store, body.copy.key, length);
+  if (
+    head?.state === "open" || head?.state === "sealing" ||
+    head?.state === "terminating"
+  ) {
+    await store.terminate({
+      writer,
+      expectedByteLength: length,
+      expectedDigest: digest,
+    });
+  }
+  await catalog.recordFailure({ ...body, digest, reason: "abandoned" });
+  return "terminated";
+}
+export async function maintainProgressiveBodies(
+  catalog: ContentCatalog,
+  storeFor: (copy: ContentCopy) => BodyStore,
   input: Readonly<{ limit?: number; after?: string }> = {},
 ): Promise<ProgressiveBodyMaintenanceResult> {
-  const limit = input.limit ?? 100;
-  if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 10_000) {
-    throw new TypeError("Progressive body maintenance limit must be 1..10000.");
-  }
-  const page = await store.maintenance.list({
-    states: ["open", "sealing", "terminating", "aborted"],
-    idleForMs: 0,
-    ...(input.after ? { after: input.after } : {}),
-    limit,
-  });
-  let examined = 0;
-  let aborted = 0;
-  let sealed = 0;
-  let terminated = 0;
-  let deferred = 0;
+  const page = await catalog.recoveryCandidates(input);
+  let sealed = 0, terminated = 0, deferred = 0;
   const errors: ProgressiveBodyMaintenanceError[] = [];
-  for (const body of page.bodies) {
-    examined++;
-    if (body.state === "aborted") {
-      try {
-        const deleted = await store.maintenance.delete({
-          bodyId: body.bodyId,
-          expectedState: "aborted",
-          expectedMaintenanceVersion: body.maintenanceVersion,
-          idleForMs: 0,
-        });
-        if (deleted) aborted++;
-        else deferred++;
-      } catch (error) {
-        errors.push(
-          {
-            bodyId: body.bodyId,
-            message: error instanceof Error ? error.message : String(error),
-          } as const,
-        );
-      }
-      continue;
-    }
-    if (!isActive(body)) continue;
-    if (body.writerLeaseRemainingMs > 0) {
-      deferred++;
-      continue;
-    }
+  for (const body of page) {
     try {
-      // The reserve generation is the cross-process fence. Only the winner
-      // may abort this expired operational body.
-      const writer = await store.reserve({
-        bodyId: body.bodyId,
-        mediaType: body.mediaType,
-        expectedGeneration: body.writerGeneration,
-      });
-      if (body.state === "sealing") {
-        await store.seal({
-          writer,
-          expectedByteLength: body.byteLength,
-        });
-        sealed++;
-      } else if (
-        (await store.head({ bodyId: body.bodyId }))?.state === "ready"
-      ) {
-        // Seal publishes Ready before opportunistic staging cleanup. A crash
-        // in that cleanup leaves an open-looking residue whose bytes are
-        // already represented by the immutable canonical Body.
-        await store.abort({ writer });
-        aborted++;
-      } else {
-        await store.terminate({
-          writer,
-          expectedByteLength: body.byteLength,
-        });
-        terminated++;
-      }
-    } catch (error) {
-      errors.push(
-        {
-          bodyId: body.bodyId,
-          message: error instanceof Error ? error.message : String(error),
-        } as const,
+      const result = await recoverLogicalBody(
+        catalog,
+        body,
+        storeFor(body.copy),
       );
+      if (result === "sealed") sealed++;
+      else if (result === "terminated") terminated++;
+      else deferred++;
+    } catch (error) {
+      await catalog.deferRecovery(body.bodyId);
+      errors.push({
+        bodyId: body.bodyId,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  return ({
-    examined,
-    aborted,
+  return {
+    examined: page.length,
+    aborted: 0,
     sealed,
     terminated,
     deferred,
-    errors: errors,
-    ...(page.after ? { after: page.after } : {}),
-  } as const);
+    errors,
+    ...(page.length === (input.limit ?? 100)
+      ? { after: page.at(-1)!.bodyId }
+      : {}),
+  };
 }

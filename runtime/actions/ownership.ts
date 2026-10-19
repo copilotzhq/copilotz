@@ -56,10 +56,9 @@ export function actionOwnershipStatement(
       writer.kind === "delivery"
         ? `status = 'leased' AND lease_owner = ${
           param(writer.leaseOwner)
-        } AND lease_expires_at > NOW()`
+        } AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
         : "status IN ('dead_letter', 'cancelled', 'succeeded')"
     }
-      FOR UPDATE
     )`);
   }
   ctes.push(`action_obligation AS MATERIALIZED (
@@ -68,7 +67,6 @@ export function actionOwnershipStatement(
       AND EXISTS (SELECT 1 FROM ${
     writer && !cancellation ? "action_writer" : "event_admission"
   })
-    FOR UPDATE
   )`);
   const owner = cancellation
     ? `scope_id = ${param(writer.operationId)}`

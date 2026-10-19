@@ -1,3 +1,4 @@
+import { wakeOwnerAlarms } from "../../runtime/testing/owner-alarms.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
 import type { LlmAdapter, LlmAdapterCallInput } from "@copilotz/copilotz/llm";
@@ -18,7 +19,7 @@ import {
   projectMessages,
   projectThreads,
 } from "../core/shared/testing/projections.ts";
-import { createScheduledJob, scheduleTick } from "../schedules/index.ts";
+import { createScheduledJob } from "../schedules/index.ts";
 import {
   CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
   coreSchedulesPlugin,
@@ -44,12 +45,13 @@ async function close(db: TestDatabase): Promise<void> {
 }
 Deno.test("Core Schedules composes its dependencies and turns only typed due payloads into messages", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
+  let now = BASE;
   const application = await createCopilotzApplication({
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_core_schedules",
     plugins: [coreSchedulesPlugin],
-    engine: { now: () => BASE },
+    engine: { now: () => now },
   });
   try {
     const context = createTestDomainContext(application, NAMESPACE, {
@@ -101,12 +103,8 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     );
     assertEquals(created.payload.type, CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE);
     assertEquals(created.content?.length, 2);
-    const sent = await application.send(scheduleTick({
-      namespace: NAMESPACE,
-      checkedAt: "2026-01-01T00:01:00.000Z",
-      deduplicationId: "core-tick-a",
-    }));
-    await sent.done;
+    now = new Date("2026-01-01T00:01:00.000Z");
+    await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
     const threads = await projectThreads(application, NAMESPACE);
     assertEquals(threads.map((thread) => thread.id), ["thread-a"]);
     const messages = await projectMessages(application, NAMESPACE, "thread-a");
@@ -188,6 +186,7 @@ for (
 ) {
   Deno.test(`Space-owned queued delivery is gated when ${scenario}`, async () => {
     const db = await createTestDatabase({ url: ":memory:" });
+    const now = BASE;
     const application = await createCopilotzApplication({
       database: db,
       namespace: "tenant-space-schedules",
@@ -219,7 +218,7 @@ for (
           },
         }),
       ],
-      engine: { now: () => BASE, retryBaseMs: 0 },
+      engine: { now: () => now, retryBaseMs: 0 },
     });
     try {
       const context = createTestDomainContext(
@@ -430,6 +429,7 @@ for (
 
 Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
+  let now = BASE;
   const calls: LlmAdapterCallInput[] = [];
   const adapter: LlmAdapter = Object.freeze({
     call(input) {
@@ -472,7 +472,7 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
       },
     },
     adapters: { llm: { fixture: adapter } },
-    engine: { now: () => BASE, retryBaseMs: 0, random: () => 0 },
+    engine: { now: () => now, retryBaseMs: 0, random: () => 0 },
   });
   try {
     const context = createTestDomainContext(application, NAMESPACE, {
@@ -511,12 +511,8 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
       }),
       context,
     );
-    const sent = await application.send(scheduleTick({
-      namespace: NAMESPACE,
-      checkedAt: "2026-01-01T00:01:00.000Z",
-      deduplicationId: "core-tick-agent-route",
-    }));
-    await sent.done;
+    now = new Date("2026-01-01T00:01:00.000Z");
+    await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
     assertEquals(calls.length, 1);
     assertEquals(calls[0].model, "fixture-scheduled-model");
     const [thread] = await projectThreads(application, NAMESPACE);

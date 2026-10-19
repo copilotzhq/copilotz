@@ -3,7 +3,21 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./adapters/channels/discord/index.ts";
 import entry1 from "./resources/channels/discord/index.ts";
 import { channelsPlugin as dependency0 } from "../channel-core/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/channel-discord";
+  readonly version: "4.0.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly resources: {
+    readonly "channels": {
+      readonly "discord": typeof entry1;
+    };
+  };
+  readonly adapters: {
+    readonly "channels": {
+      readonly "discord": typeof entry0;
+    };
+  };
+} = {
   id: "@copilotz/channel-discord",
   version: "4.0.0",
   plugins: [dependency0],

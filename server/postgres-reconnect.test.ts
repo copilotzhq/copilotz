@@ -23,6 +23,7 @@ Deno.test({
     let release!: () => void;
     const finish = new Promise<void>((resolve) => release = resolve);
     let executions = 0;
+    let retainedAssetId = "";
     const plugins = [
       definePlugin({
         id: "test.reconnect",
@@ -49,10 +50,16 @@ Deno.test({
               const prepared = await stream.close({
                 assetId: "retained-answer",
               });
-              await context.content.materialize(prepared);
+              const [adopted] = await context.content.materialize([prepared], {
+                origin: {
+                  type: "test.reconnect.result",
+                  id: "retained-answer",
+                },
+              });
+              retainedAssetId = adopted.assetId;
               await stream.retain({
                 retention: "canonical",
-                assetId: "retained-answer",
+                assetId: adopted.assetId,
               });
               return "complete";
             },
@@ -155,7 +162,7 @@ Deno.test({
       const before = await database.query(
         `SELECT id, data FROM "${schema}".nodes WHERE type = 'asset' ORDER BY id`,
       );
-      const stored = await reconnect.assets.get("retained-answer");
+      const stored = await reconnect.assets.get(retainedAssetId);
       assertEquals(new Uint8Array(await stored.arrayBuffer()), bytes);
       assertEquals(
         (await database.query(

@@ -1,6 +1,11 @@
-import type { ContentInput, ContentSequence } from "@copilotz/copilotz/content";
+import type {
+  ContentInput,
+  ContentSequence,
+  GeneratedContentSequence,
+} from "@copilotz/copilotz/content";
 import type {
   ActionContentEntry,
+  ActionContext,
   ActionInvocationMetadata,
   RuntimeCollections,
   RuntimeIdentity,
@@ -55,8 +60,7 @@ export type LlmConnectionExecution = Readonly<{
 
 /**
  * The deliberately narrow, trusted runtime view available to a credential
- * resolver. It permits tenant/user-scoped collection lookups without handing
- * a credential policy the ability to invoke Actions or publish content.
+ * resolver. Scoped child Actions keep credential work on the current invocation.
  */
 export type LlmConnectionContext = Readonly<{
   namespace: string;
@@ -69,6 +73,7 @@ export type LlmConnectionContext = Readonly<{
     metadata: ActionInvocationMetadata;
   }>;
   collections: RuntimeCollections;
+  actions: ActionContext["actions"];
   signal: AbortSignal;
   now(): Date;
 }>;
@@ -222,6 +227,11 @@ export type LlmNativeReasoning = Readonly<{
   reasoningTokens?: number;
 }>;
 
+/** Generated blocks still awaiting atomic adoption by their domain record. */
+export type LlmGeneratedNativeReasoning =
+  & Omit<LlmNativeReasoning, "blocks">
+  & Readonly<{ blocks: GeneratedContentSequence }>;
+
 /** Resolved native state passed to an LLM Adapter. */
 export type LlmAdapterNativeReasoning = Readonly<{
   schema: "copilotz.llm-native-reasoning.v1";
@@ -355,9 +365,9 @@ export type LlmCallOutput = Readonly<{
   /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
   providerModel: string;
-  content: ContentSequence;
-  reasoning?: ContentSequence;
-  nativeReasoning?: LlmNativeReasoning;
+  content: GeneratedContentSequence;
+  reasoning?: GeneratedContentSequence;
+  nativeReasoning?: LlmGeneratedNativeReasoning;
   toolCalls?: readonly LlmToolCall[];
   usage?: LlmUsage;
   attempts?: readonly LlmAttemptUsage[];

@@ -1,3 +1,4 @@
+import { externalEffect } from "@copilotz/copilotz/actions";
 import {
   type CompositionContribution,
   contribution,
@@ -16,11 +17,7 @@ import {
   type ActionSchema,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import {
-  base64ToBytes,
-  type ContentInput,
-  type ContentRef,
-} from "@copilotz/copilotz/content";
+import { base64ToBytes, type ContentInput } from "@copilotz/copilotz/content";
 
 import {
   defineTool,
@@ -183,16 +180,19 @@ async function lowerMcpResult(
     operationKey:
       `mcp:${serverId}:${toolName}:${context.action.runId}:result-content`,
   });
-  const refs = await context.content.materialize(prepared);
+  const refs = await context.content.capture(prepared, {
+    operationKey:
+      `mcp:${serverId}:${toolName}:${context.action.runId}:result-capture`,
+  });
   if (refs.length !== bodies.length) {
     throw new TypeError(
-      "MCP result content materialization must return one ContentRef per body.",
+      "MCP result content materialization must return one content pointer per body.",
     );
   }
   const substitute = (candidate: unknown): unknown => {
     if (candidate && typeof candidate === "object") {
       const index = slots.get(candidate);
-      if (index !== undefined) return refs[index] as ContentRef;
+      if (index !== undefined) return refs[index];
       if (Array.isArray(candidate)) {
         return (candidate.map(substitute));
       }
@@ -279,23 +279,28 @@ function entryFrom(
       generatedActionIdSegment(toolName, "tool")
     }`,
     inputSchema: inputSchema(descriptor.inputSchema),
-    async execute(args: unknown, context: ActionContext): Promise<unknown> {
-      const capability = context.adapters.mcp?.[serverId] as
-        | McpConnection
-        | undefined;
-      if (!capability?.connect) {
-        throw new TypeError(
-          `MCP connector is required in adapters.mcp.${serverId}.`,
+    execute: (args: unknown, context: ActionContext): Promise<unknown> => {
+      const dispatch = async () => {
+        const capability = context.adapters.mcp?.[serverId] as
+          | McpConnection
+          | undefined;
+        if (!capability?.connect) {
+          throw new TypeError(
+            `MCP connector is required in adapters.mcp.${serverId}.`,
+          );
+        }
+        const result = await withConnection(
+          capability.connect,
+          { ...server, transport: capability.transport, env: capability.env },
+          context.signal,
+          (connection) =>
+            connection.callTool(toolName, record(args), context.signal),
         );
-      }
-      const result = await withConnection(
-        capability.connect,
-        { ...server, transport: capability.transport, env: capability.env },
-        context.signal,
-        (connection) =>
-          connection.callTool(toolName, record(args), context.signal),
-      );
-      return await lowerMcpResult(result, context, serverId, toolName);
+        return await lowerMcpResult(result, context, serverId, toolName);
+      };
+      return server.readOnlyTools?.includes(toolName)
+        ? dispatch()
+        : externalEffect(context, "mcp.callTool", dispatch);
     },
   });
   const history = server.toolPolicies?.[alias] ??
@@ -331,6 +336,11 @@ async function discoverTools(
     signal,
     (client) => client.listTools(signal),
   );
+  for (const name of server.readOnlyTools ?? []) {
+    if (!descriptors.some((descriptor) => descriptor.name === name)) {
+      throw new TypeError(`Unknown read-only MCP tool '${name}'.`);
+    }
+  }
   const allowed = selected ? new Set(selected) : undefined;
   for (const name of allowed ?? []) {
     if (!descriptors.some((descriptor) => descriptor.name === name)) {
@@ -432,6 +442,17 @@ export async function defineMcp(input: DefineMcpInput): Promise<DefinedMcp> {
       ) ||
       new Set(input.tools).size !== input.tools.length)
   ) throw new TypeError("MCP tools must be a distinct list of tool names.");
+  if (
+    input.readOnlyTools && (!Array.isArray(input.readOnlyTools) ||
+      input.readOnlyTools.some((name) =>
+        typeof name !== "string" || !name.trim() || name !== name.trim()
+      ) ||
+      new Set(input.readOnlyTools).size !== input.readOnlyTools.length)
+  ) {
+    throw new TypeError(
+      "MCP readOnlyTools must be a distinct list of reviewed tool names.",
+    );
+  }
   const timeoutMs = input.timeoutMs ?? 30_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
     throw new TypeError("MCP timeoutMs must be a positive safe integer.");

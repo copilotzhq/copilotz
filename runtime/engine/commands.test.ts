@@ -1,3 +1,5 @@
+import { upgradeActionLifecycle } from "../actions/upgrade.ts";
+import { provisionOperationCatalog } from "../streams/catalog.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
@@ -258,18 +260,22 @@ Deno.test("unknown command commit stops the owner and prevents readiness", async
 });
 
 Deno.test("versioned owner upgrade preserves an existing event and Action baseline", async () => {
-  const db = await createTestDatabase();
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  });
+  const schema = `owner_upgrade_${crypto.randomUUID().replaceAll("-", "")}`;
   try {
-    const schema = "owner_upgrade";
     const tables = createCoreTableNames(schema);
     await provisionCopilotzSchema(db, schema);
+    await provisionOperationCatalog(db, schema);
     await db.query(
-      `INSERT INTO ${tables.events} (id,schema_version,type,namespace,payload,correlation_id) VALUES ('existing',1,'test.event','space','{}','existing')`,
+      `INSERT INTO ${tables.events} (seq,id,schema_version,type,namespace,payload,correlation_id) VALUES (1,'existing',1,'test.event','space','{}','existing')`,
     );
     await db.query(
-      `DROP TABLE ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+      `DROP TABLE ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_deadlines}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
     await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=8`);
+    await upgradeActionLifecycle(db, schema);
     assertEquals(
       (await provisionCopilotzSchema(db, schema)).version,
       EVENT_SCHEMA_VERSION,
@@ -282,6 +288,7 @@ Deno.test("versioned owner upgrade preserves an existing event and Action baseli
       EVENT_SCHEMA_VERSION,
     );
   } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });

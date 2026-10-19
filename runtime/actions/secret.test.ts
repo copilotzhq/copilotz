@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import { defineAction } from "./define.ts";
 import { secret } from "./index.ts";
 import {
@@ -123,6 +123,7 @@ Deno.test("only boolean true marks a secret", () => {
     type: "object",
     properties: {
       value: {
+        type: "string",
         "x-copilotz-secret": false,
       },
     },

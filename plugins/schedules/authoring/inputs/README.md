@@ -2,7 +2,7 @@
 
 ## What it is
 
-These helpers create typed tick and manual-run application envelopes.
+These helpers create typed manual-run application envelopes.
 
 ## Why it exists
 
@@ -11,9 +11,11 @@ constructing internal Event shapes.
 
 ## How to use it
 
-Call `scheduleTick(...)` or `runScheduledJobNow(...)`, then pass the envelope to
+Call `runScheduledJobNow(...)`, then pass the envelope to
 `application.send(...)`.
 
 ## How it works
 
 The helpers separate routing identity from immutable semantic payload data.
+
+Scheduled occurrences use owner alarms and need no application input.

@@ -51,27 +51,6 @@ export type ScheduledJobOccurrence<
   metadata: Readonly<Record<string, unknown>>;
 }>;
 
-export type ScheduledJobTickInput = Readonly<{
-  checkedAt?: string;
-  limit?: number;
-}>;
-
-export type ScheduledJobTickItem = Readonly<{
-  jobId: string;
-  name: string;
-  occurrenceId: string;
-  status: "claimed" | "skipped" | "failed";
-  error?: string;
-}>;
-
-export type ScheduledJobTickResult = Readonly<{
-  checkedAt: string;
-  claimed: number;
-  skipped: number;
-  failed: number;
-  jobs: readonly ScheduledJobTickItem[];
-}>;
-
 export type ScheduledJobRunNowInput = Readonly<{
   id: string;
   scheduledFor?: string;

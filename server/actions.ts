@@ -1,3 +1,4 @@
+import { facadeIngress } from "./context.ts";
 import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 import { admitHttpOperation } from "./admission.ts";
 /** Durable Action ingress and authorized result recovery. @module */
@@ -60,37 +61,42 @@ export async function actionResponse(
   const observationThreadId =
     context.serverConstraints.operations?.metadata?.threadId ??
       context.operationMetadata.threadId;
-  const handle = await admitActionRequest(application, {
-    type: SERVER_ACTION_REQUEST_EVENT_TYPE,
-    payload: {
-      schema: SERVER_ACTION_REQUEST_SCHEMA,
-      requestId,
-      actionAlias: endpoint.actionAlias!,
-      input,
-      actionMetadata: context.serverActionMetadata,
-    } as const,
-    namespace: context.namespace,
-    databaseSchema: context.databaseSchema,
-    correlationId,
-    causationId: context.serverIdentity.causationId,
-    deduplicationId: context.serverIdentity.deduplicationId ??
-      header(request.headers, "idempotency-key") ?? requestId,
-    operationMetadata: {
-      ...context.operationMetadata,
-      ...(context.serverScope.actor
-        ? { actorId: context.serverScope.actor.id }
-        : {}),
-    },
-    metadata: {
-      ...(typeof observationThreadId === "string"
-        ? coreThreadObservationMetadata(observationThreadId)
-        : {}),
-      ...({ sourceAdapter: "server" } as const),
-      core: {
-        visibility: { kind: "internal" },
+  const handle = await admitActionRequest(
+    application,
+    {
+      type: SERVER_ACTION_REQUEST_EVENT_TYPE,
+      payload: {
+        schema: SERVER_ACTION_REQUEST_SCHEMA,
+        requestId,
+        actionAlias: endpoint.actionAlias!,
+        input,
+        actionMetadata: context.serverActionMetadata,
+      } as const,
+      namespace: context.namespace,
+      databaseSchema: context.databaseSchema,
+      correlationId,
+      causationId: context.serverIdentity.causationId,
+      deduplicationId: context.serverIdentity.deduplicationId ??
+        header(request.headers, "idempotency-key") ?? requestId,
+      operationMetadata: {
+        ...context.operationMetadata,
+        ...(context.serverScope.actor
+          ? { actorId: context.serverScope.actor.id }
+          : {}),
+      },
+      metadata: {
+        ...(typeof observationThreadId === "string"
+          ? coreThreadObservationMetadata(observationThreadId)
+          : {}),
+        ...({ sourceAdapter: "server" } as const),
+        core: {
+          visibility: { kind: "internal" },
+        },
       },
     },
-  }, endpoint.inputSchema).catch((error) => {
+    endpoint.inputSchema,
+    facadeIngress(context),
+  ).catch((error) => {
     if (error?.code === "event_deduplication_conflict") {
       throw appError(
         409,

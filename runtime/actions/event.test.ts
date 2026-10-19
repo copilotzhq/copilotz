@@ -288,6 +288,7 @@ Deno.test("Action receipt loading rejects public inline dedup poisoning", async 
           durable: true as const,
           id: "event-poison",
           position: "1",
+          seq: "1",
           schemaVersion: 1,
           type: "search.query.completed",
           namespace: "tenant-actions",

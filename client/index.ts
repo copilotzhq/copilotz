@@ -5,6 +5,7 @@ import {
   type ObservationFrame as DecodedObservationFrame,
   ProtocolError,
   RenewalObservationError,
+  ResetObservationError,
   TruncatedObservationError,
 } from "./protocol.ts";
 export { decodeObservation, ProtocolError } from "./protocol.ts";
@@ -242,14 +243,19 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           error instanceof CopilotzHttpError ||
           (error instanceof ProtocolError &&
             !(error instanceof TruncatedObservationError) &&
-            !(error instanceof RenewalObservationError)) ||
+            !(error instanceof RenewalObservationError) &&
+            !(error instanceof ResetObservationError)) ||
           (!(error instanceof TransportError) &&
             !(responseReceived && error instanceof TypeError) &&
             !(error instanceof TruncatedObservationError) &&
-            !(error instanceof RenewalObservationError)) ||
+            !(error instanceof RenewalObservationError) &&
+            !(error instanceof ResetObservationError)) ||
           attempt >= 3
         ) throw error;
-        if (!(error instanceof RenewalObservationError)) {
+        if (
+          !(error instanceof RenewalObservationError) &&
+          !(error instanceof ResetObservationError)
+        ) {
           await pause(100 * 2 ** attempt, observation.signal);
         }
       }

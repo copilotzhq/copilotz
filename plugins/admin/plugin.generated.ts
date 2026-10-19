@@ -6,7 +6,18 @@ import entry2 from "./actions/overview/index.ts";
 import entry3 from "./actions/participants/index.ts";
 import entry4 from "./actions/threads/index.ts";
 import entry5 from "./actions/usage/index.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/admin";
+  readonly version: "3.0.0";
+  readonly actions: {
+    readonly "adminActivity": typeof entry0;
+    readonly "adminAgents": typeof entry1;
+    readonly "adminOverview": typeof entry2;
+    readonly "adminParticipants": typeof entry3;
+    readonly "adminThreads": typeof entry4;
+    readonly "adminUsage": typeof entry5;
+  };
+} = {
   id: "@copilotz/admin",
   version: "3.0.0",
   actions: {

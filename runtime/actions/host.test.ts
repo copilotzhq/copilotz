@@ -108,6 +108,12 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
             throw new Error("Content streams are not configured.");
           },
         }),
+        openCapture() {
+          throw new Error("Content is not configured.");
+        },
+        capture() {
+          throw new Error("Content is not configured.");
+        },
         prepare() {
           throw new Error("Content is not configured.");
         },
@@ -260,6 +266,8 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
       Object.freeze({
         resolver: { getMany: () => Promise.resolve([]) },
         stream: streams,
+        openCapture: unavailableContent,
+        capture: unavailableContent,
         prepare: unavailableContent,
         materialize: unavailableContent,
         publish: unavailableContent,

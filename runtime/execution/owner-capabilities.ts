@@ -1,0 +1,1164 @@
+import { withCollectionReadBudget } from "../collections/read-budget.ts";
+import {
+  capabilityReceiptIntent,
+  withCollectionCommandReceipt,
+} from "../collections/command-receipt.ts";
+import { snapshotControl } from "../collections/snapshot-control.ts";
+/** Owner-side capability admission. Worker code never imports this module. */
+import type {
+  HypervisorLifecycleCallbacks,
+  WorkerCallContext,
+  WorkerCallOptions,
+} from "../../dependencies/oxian-hypervisor.ts";
+import type {
+  WorkerWorkContext,
+  WorkerWorkResult,
+} from "../../dependencies/oxian-worker.ts";
+import type { PluginRegistry } from "../plugins/registry.ts";
+import type { ProcessorContext } from "../plugins/processor.ts";
+import type { ActionContext } from "../actions/types.ts";
+import { protectedEventResolverFrom } from "../actions/protected-context.ts";
+import type { OwnerExecutionFactory } from "./workload.ts";
+import {
+  type CapabilityCall,
+  capabilityError,
+  type CapabilityInvocation,
+  type CapabilityPoll,
+  encodeCapability,
+  OWNER_CAPABILITY_BYTES,
+  OWNER_CAPABILITY_WORKLOAD,
+  readCapability,
+} from "./owner-capability-wire.ts";
+
+type Method = (...args: unknown[]) => unknown;
+type RecordValue = Record<string, unknown>;
+type Deferred<T> = ReturnType<typeof Promise.withResolvers<T>>;
+const MAX_CONTEXTS = 256;
+const MAX_RESOURCES = 32;
+const MAX_ASSIGNMENTS = 256;
+const MAX_CALLS = 4096;
+const POLL_MS = 10_000;
+const RESOURCE_IDLE_MS = 30_000;
+const RESOURCE_LIFETIME_MS = 120_000;
+
+type Resource = {
+  id: string;
+  context: string;
+  kind: "snapshot" | "writer" | "reader";
+  value: RecordValue;
+  serial: Promise<unknown>;
+  created: number;
+  used: number;
+  closed: boolean;
+  close(reason?: unknown): Promise<void>;
+  run?(path: readonly string[], args: readonly unknown[]): Promise<unknown>;
+};
+type ResourceReservation = {
+  resource: Resource;
+  ready: Deferred<Resource["close"] | undefined>;
+  consumed: boolean;
+};
+
+type Invocation = {
+  sealed: boolean;
+  calls: Set<Promise<void>>;
+  context: ProcessorContext | ActionContext;
+  result: Deferred<unknown>;
+  removeAbort(): void;
+};
+type Assignment = {
+  key: string;
+  binding: WorkerCallContext;
+  abort: AbortController;
+  contexts: Map<string, Invocation>;
+  resources: Map<string, Resource>;
+  queue: CapabilityPoll[];
+  wake?: Deferred<void>;
+  task: Promise<void>;
+  calls: number;
+  terminal?: { result?: WorkerWorkResult; error?: unknown };
+  snapshotAuthority?: Promise<() => Promise<void>>;
+};
+
+function own(value: unknown, key: string): unknown {
+  if (
+    !value || (typeof value !== "object" && typeof value !== "function") ||
+    !Object.hasOwn(value, key) ||
+    ["__proto__", "prototype", "constructor"].includes(key)
+  ) throw capabilityError("owner_capability_refused");
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+  if (!("value" in descriptor)) {
+    throw capabilityError("owner_capability_refused");
+  }
+  return descriptor.value;
+}
+function callPath(
+  root: unknown,
+  path: readonly string[],
+  args: readonly unknown[],
+): unknown {
+  if (!path.length || path.length > 4) {
+    throw capabilityError("owner_capability_refused");
+  }
+  let parent = root;
+  for (const segment of path.slice(0, -1)) parent = own(parent, segment);
+  const method = own(parent, path.at(-1)!);
+  if (typeof method !== "function") {
+    throw capabilityError("owner_capability_refused");
+  }
+  return (method as Method).apply(parent, [...args]);
+}
+function scopeOf(context: ProcessorContext | ActionContext): RecordValue {
+  const action = context as ActionContext;
+  return {
+    namespace: context.namespace,
+    databaseSchema: context.databaseSchema,
+    operationKey: context.operationKey,
+    identity: context.identity,
+    ...(action.action ? { action: action.action } : {}),
+    now: context.now().toISOString(),
+  };
+}
+function allowedPath(path: readonly string[], snapshot = false): boolean {
+  const [root, method, leaf, nested] = path;
+  if (root === "collections") {
+    if (!method || path.length < 3) return false;
+    if (leaf === "commands") return !snapshot && path.length === 4 && !!nested;
+    if (leaf === "queries") return path.length === 4 && !!nested;
+    if (leaf === "relations") return nested === "list" && path.length === 4;
+    return path.length === 3 &&
+      [
+        "get",
+        "list",
+        "aggregate",
+        "search",
+        ...(!snapshot ? ["create", "update", "delete"] : []),
+      ].includes(leaf);
+  }
+  if (snapshot) return false;
+  if (root === "actions") {
+    return path.length === 2 || path.length === 3 && leaf === "prepare";
+  }
+  if (root === "vectors") return path.length === 2 && method === "search";
+  if (root === "operations") return path.length === 2 && method === "start";
+  if (root === "effect") {
+    return path.length === 2 &&
+      [
+        "begin",
+        "inspect",
+        "confirm",
+        "confirmOutput",
+        "notStarted",
+        "inventory",
+      ].includes(
+        method,
+      );
+  }
+  if (root === "content") {
+    return path.length === 2 &&
+      [
+        "authorize",
+        "prepare",
+        "capture",
+        "openCapture",
+        "materialize",
+        "publish",
+        "get",
+        "getMany",
+        "resolve",
+        "resolveMany",
+        "open",
+      ].includes(method);
+  }
+  if (root === "streams") {
+    return path.length === 2 && ["open", "follow"].includes(method);
+  }
+  return path.length === 1 && ["progress", "protectedEvent"].includes(root);
+}
+
+export type OwnerCapabilityHost = Readonly<{
+  workerCalls: WorkerCallOptions;
+  lifecycle: HypervisorLifecycleCallbacks;
+  close(reason?: string): Promise<void>;
+  snapshot(): Readonly<{ assignments: number; resources: number }>;
+}>;
+
+export function createOwnerCapabilityHost(
+  options: Readonly<{
+    registry: PluginRegistry;
+    createWorkloads: OwnerExecutionFactory;
+    localExecution?: boolean;
+    resolveAuthority(
+      schema: string,
+    ): Promise<Readonly<{ epoch: number; signal: AbortSignal }>>;
+    lookupReceipt?(
+      identity: WorkerCallContext["fence"]["identity"],
+      input: unknown,
+    ): Promise<unknown>;
+    resourceIdleMs?: number;
+    resourceLifetimeMs?: number;
+  }>,
+): OwnerCapabilityHost {
+  // Capture trusted registration synchronously. Later caller mutation must not
+  // replace authority/receipt callbacks after admission has already begun.
+  const descriptors = Object.getOwnPropertyDescriptors(options);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = Reflect.get(descriptors, key) as PropertyDescriptor;
+    if (!("value" in descriptor)) {
+      throw new TypeError(
+        "Owner capability configuration must contain data properties.",
+      );
+    }
+  }
+  options = Object.freeze(
+    Object.defineProperties({}, descriptors),
+  ) as typeof options;
+  const assignments = new Map<string, Assignment>();
+  let closed = false;
+  const idleMs = options.resourceIdleMs ?? RESOURCE_IDLE_MS;
+  const lifetimeMs = options.resourceLifetimeMs ?? RESOURCE_LIFETIME_MS;
+  for (const duration of [idleMs, lifetimeMs]) {
+    if (!Number.isSafeInteger(duration) || duration < 1) {
+      throw new TypeError("Resource timeouts must be positive integers.");
+    }
+  }
+  const keyOf = (binding: WorkerCallContext) =>
+    `${binding.fence.connectionId}:${binding.fence.sessionGeneration}:${
+      binding.parent!.streamId
+    }`;
+  const notify = (assignment: Assignment, event: CapabilityPoll) => {
+    if (assignment.queue.length >= MAX_CONTEXTS) {
+      throw capabilityError("owner_capacity");
+    }
+    assignment.queue.push(event);
+    assignment.wake?.resolve();
+  };
+  const closeResource = async (
+    assignment: Assignment,
+    resource: Resource,
+    reason?: unknown,
+  ) => {
+    if (resource.closed) {
+      await resource.serial;
+      return;
+    }
+    resource.closed = true;
+    // Retain the slot until actual cleanup settles, even after revocation.
+    // Revoke/cancel immediately: a pending follower read must not prevent its
+    // own cancellation. Keep capacity until both the call and cleanup settle.
+    const inFlight = resource.serial.catch(() => undefined);
+    const cleanup = Promise.resolve().then(() => resource.close(reason));
+    resource.serial = Promise.all([inFlight, cleanup]).then(() => undefined);
+    try {
+      await resource.serial;
+      assignment.resources.delete(resource.id);
+    } catch (error) {
+      if ((error as { code?: unknown })?.code !== "owner_cleanup_unknown") {
+        assignment.resources.delete(resource.id);
+      }
+      throw error;
+    }
+  };
+  const abortAssignment = (assignment: Assignment, reason: unknown) => {
+    if (!assignment.abort.signal.aborted) assignment.abort.abort(reason);
+    for (const invocation of assignment.contexts.values()) {
+      invocation.result.reject(reason);
+    }
+    for (const resource of assignment.resources.values()) {
+      void closeResource(assignment, resource, reason).catch(() => undefined);
+    }
+    assignment.wake?.resolve();
+  };
+  const check = async (assignment: Assignment) => {
+    assignment.abort.signal.throwIfAborted();
+    if (assignment.snapshotAuthority) {
+      await (await assignment.snapshotAuthority)();
+      return;
+    }
+    const metadata = assignment.binding.parent!.metadata;
+    const authority = await options.resolveAuthority(
+      String(metadata.databaseSchema),
+    );
+    assignment.abort.signal.throwIfAborted();
+    if (authority.epoch !== metadata.ownerEpoch || authority.signal.aborted) {
+      const error = capabilityError(
+        "ActionOwnershipLost",
+        "The assignment belongs to a retired owner epoch.",
+      );
+      abortAssignment(assignment, error);
+      throw error;
+    }
+  };
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const assignment of assignments.values()) {
+      for (const resource of assignment.resources.values()) {
+        if (
+          !resource.closed &&
+          (now - resource.used >= idleMs ||
+            now - resource.created >= lifetimeMs)
+        ) {
+          const error = capabilityError("owner_handle_expired");
+          void closeResource(assignment, resource, error).catch(() =>
+            undefined
+          );
+          // Expiry fails the execution, including a callback that caught a read failure.
+          abortAssignment(assignment, error);
+        }
+      }
+    }
+  }, Math.min(1000, idleMs, lifetimeMs));
+  (timer as unknown as { unref?: () => void }).unref?.();
+
+  const invoke = async (
+    assignment: Assignment,
+    kind: CapabilityInvocation["kind"],
+    alias: string,
+    args: readonly unknown[],
+    context: ProcessorContext | ActionContext,
+  ): Promise<unknown> => {
+    await check(assignment);
+    if (assignment.contexts.size >= MAX_CONTEXTS) {
+      throw capabilityError("owner_capacity");
+    }
+    const id = crypto.randomUUID();
+    const result = Promise.withResolvers<unknown>();
+    void result.promise.catch(() => undefined);
+    const abort = () => {
+      invocationState.sealed = true;
+      result.reject(context.signal.reason);
+      for (const resource of assignment.resources.values()) {
+        if (resource.context === id) {
+          void closeResource(assignment, resource, context.signal.reason).catch(
+            () => undefined,
+          );
+        }
+      }
+      if (assignment.queue.length < MAX_CONTEXTS) {
+        notify(assignment, { aborted: id });
+      } else abortAssignment(assignment, capabilityError("owner_capacity"));
+    };
+    const invocationState: Invocation = {
+      sealed: false,
+      calls: new Set(),
+      context,
+      result,
+      removeAbort: () => context.signal.removeEventListener("abort", abort),
+    };
+    assignment.contexts.set(id, invocationState);
+    context.signal.addEventListener("abort", abort, { once: true });
+    if (context.signal.aborted) abort();
+    try {
+      const invocation: CapabilityInvocation = {
+        id,
+        context: id,
+        kind,
+        alias,
+        args,
+        scope: scopeOf(context),
+      };
+      encodeCapability(invocation);
+      notify(assignment, { invocation });
+      const value = await result.promise;
+      await check(assignment);
+      context.signal.throwIfAborted();
+      return value;
+    } finally {
+      context.signal.removeEventListener("abort", abort);
+      invocationState.sealed = true;
+      while (invocationState.calls.size) {
+        await Promise.allSettled([...invocationState.calls]);
+      }
+      // Leaked handles must settle before publishing an Action result.
+      const resources = [...assignment.resources.values()].filter((resource) =>
+        resource.context === id
+      );
+      await Promise.all(
+        resources.map((resource) => closeResource(assignment, resource)),
+      );
+      assignment.contexts.delete(id);
+    }
+  };
+  const rehost = (assignment: Assignment): PluginRegistry => {
+    const registry = options.registry;
+    const actions = Object.fromEntries(
+      Object.entries(registry.actions).map((
+        [alias, action],
+      ) => [
+        alias,
+        alias === "serverInvoke" ? action : {
+          ...action,
+          execute: (input: unknown, context: ActionContext) =>
+            invoke(assignment, "action", alias, [input], context),
+          ...(action.resume
+            ? {
+              resume: (
+                handoff: unknown,
+                outcome: unknown,
+                context: ActionContext,
+              ) =>
+                invoke(
+                  assignment,
+                  "resume",
+                  alias,
+                  [handoff, outcome],
+                  context,
+                ),
+            }
+            : {}),
+          ...((action as unknown as RecordValue).reconcile
+            ? {
+              reconcile: (step: unknown, context: ActionContext) =>
+                invoke(assignment, "reconcile", alias, [step], context),
+            }
+            : {}),
+        },
+      ]),
+    );
+    const processors = Object.fromEntries(
+      Object.entries(registry.processors).map((
+        [alias, processor],
+      ) => [
+        alias,
+        ["serverActionRequest", "serverCollectionMutationRequest"].includes(
+            alias,
+          )
+          ? processor
+          : {
+            ...processor,
+            handle: (event: unknown, context: ProcessorContext) =>
+              invoke(assignment, "processor", alias, [event], context).then(
+                () => undefined,
+              ),
+            ...(processor.onError
+              ? {
+                onError: (
+                  error: unknown,
+                  event: unknown,
+                  context: ProcessorContext,
+                ) =>
+                  invoke(
+                    assignment,
+                    "processorError",
+                    alias,
+                    [error, event],
+                    context,
+                  ) as Promise<boolean>,
+              }
+              : {}),
+          },
+      ]),
+    );
+    return {
+      ...registry,
+      actions,
+      processors,
+      processorForConsumer(id) {
+        const processor = registry.processorForConsumer(id);
+        return processor &&
+          Object.values(processors).find((candidate) =>
+            candidate.id === processor.id
+          );
+      },
+    } as PluginRegistry;
+  };
+  const addResource = (
+    assignment: Assignment,
+    resource: Omit<Resource, "id" | "created" | "used" | "closed" | "serial">,
+    reservation?: ResourceReservation,
+  ): Resource => {
+    if (reservation) {
+      // The exact slot already owns admission and pending cleanup. Preserve its
+      // closed/serial state if cancellation arrived while physical open waited.
+      Object.assign(reservation.resource, resource);
+      reservation.consumed = true;
+      reservation.ready.resolve(resource.close);
+      return reservation.resource;
+    }
+    if (assignment.resources.size >= MAX_RESOURCES) {
+      throw capabilityError("owner_capacity");
+    }
+    const value: Resource = {
+      ...resource,
+      id: crypto.randomUUID(),
+      created: Date.now(),
+      used: Date.now(),
+      closed: false,
+      serial: Promise.resolve(),
+    };
+    assignment.resources.set(value.id, value);
+    return value;
+  };
+  const reserveResource = (
+    assignment: Assignment,
+    context: string,
+  ): ResourceReservation => {
+    const ready = Promise.withResolvers<Resource["close"] | undefined>();
+    const resource = addResource(assignment, {
+      kind: "reader",
+      context,
+      value: {},
+      async close(reason) {
+        const cleanup = await ready.promise;
+        await cleanup?.(reason);
+      },
+    });
+    return { resource, ready, consumed: false };
+  };
+  const exposeResult = async (
+    assignment: Assignment,
+    context: string,
+    value: unknown,
+    reservation?: ResourceReservation,
+  ): Promise<unknown> => {
+    if (value instanceof ReadableStream) {
+      const reader = value.getReader();
+      let remainder: Uint8Array | undefined;
+      const resource = addResource(assignment, {
+        kind: "reader",
+        context,
+        value: {
+          async read() {
+            const next = remainder
+              ? { done: false, value: remainder }
+              : await reader.read();
+            if (next.done) return { done: true };
+            if (!(next.value instanceof Uint8Array)) {
+              throw capabilityError("owner_data_invalid");
+            }
+            remainder = next.value.length > 64 * 1024
+              ? next.value.subarray(64 * 1024)
+              : undefined;
+            return { done: false, value: next.value.subarray(0, 64 * 1024) };
+          },
+        },
+        async close(reason) {
+          await reader.cancel(reason);
+          reader.releaseLock();
+        },
+      }, reservation);
+      return { $ownerResource: "reader", handle: resource.id };
+    }
+    if (
+      value && typeof value === "object" &&
+      typeof (value as RecordValue).append === "function" &&
+      typeof (value as RecordValue).abort === "function"
+    ) {
+      const writer = value as RecordValue;
+      const resource = addResource(assignment, {
+        kind: "writer",
+        context,
+        value: writer,
+        async close(reason) {
+          await (writer.abort as Method)({
+            reason: reason instanceof Error
+              ? reason.message
+              : "worker_context_closed",
+            outcome: "cancelled",
+          });
+        },
+      }, reservation);
+      return {
+        $ownerResource: "writer",
+        handle: resource.id,
+        id: writer.id,
+        offset: (writer.offset as Method)(),
+      };
+    }
+    if (
+      value && typeof value === "object" &&
+      (value as RecordValue).body instanceof ReadableStream
+    ) {
+      const record = value as RecordValue;
+      // Followers carry an executable lifecycle; retain it with the reader only.
+      return {
+        bodyId: record.bodyId,
+        offset: record.offset,
+        mediaType: record.mediaType,
+        body: await exposeResult(assignment, context, record.body, reservation),
+      };
+    }
+    return value;
+  };
+  const snapshot = async (
+    assignment: Assignment,
+    contextId: string,
+    context: ProcessorContext | ActionContext,
+  ) => {
+    if (assignment.resources.size >= MAX_RESOURCES) {
+      throw capabilityError("owner_capacity");
+    }
+    if (assignment.snapshotAuthority) {
+      throw capabilityError("owner_snapshot_nested");
+    }
+    const authority = Promise.withResolvers<() => Promise<void>>();
+    assignment.snapshotAuthority = authority.promise;
+    void authority.promise.catch(() => undefined);
+    const opened = Promise.withResolvers<RecordValue>();
+    const exit = Promise.withResolvers<void>();
+    const wake = { current: Promise.withResolvers<void>() };
+    const jobs: {
+      path: readonly string[];
+      args: readonly unknown[];
+      result: Deferred<unknown>;
+    }[] = [];
+    let closing = false;
+    let closeError: unknown;
+    let cleanup:
+      | Promise<import("../events/session.ts").SqlSnapshotCleanup>
+      | undefined;
+    const task = context.readSnapshot(async (scope) => {
+      const control = snapshotControl(scope);
+      if (!control) throw capabilityError("owner_snapshot_unavailable");
+      cleanup = control.cleanup;
+      const schema = context.databaseSchema;
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
+        throw capabilityError("owner_snapshot_scope");
+      }
+      const validate = async () => {
+        assignment.abort.signal.throwIfAborted();
+        const read = async (
+          query: import("../events/session.ts").SqlExecutor,
+        ) => {
+          const result = await query.query<{ epoch: number | string }>(
+            `SELECT epoch FROM "${schema}".owner_epochs WHERE owner='schema'`,
+          );
+          if (
+            Number(result.rows[0]?.epoch) !==
+              assignment.binding.parent!.metadata.ownerEpoch
+          ) {
+            throw capabilityError("ActionOwnershipLost");
+          }
+        };
+        if (control.kind === "pooled") await control.current(read);
+        else await read(control.snapshot);
+      };
+      authority.resolve(validate);
+      await validate();
+      opened.resolve(scope);
+      while (!closing || jobs.length) {
+        const job = jobs.shift();
+        if (!job) {
+          await wake.current.promise;
+          wake.current = Promise.withResolvers<void>();
+          continue;
+        }
+        try {
+          await check(assignment);
+          job.result.resolve(
+            await withCollectionReadBudget(async () =>
+              await callPath(scope, job.path, job.args)
+            ),
+          );
+        } catch (error) {
+          job.result.reject(error);
+        }
+      }
+      if (closeError) throw closeError;
+    });
+    void task.then(exit.resolve, (error) => {
+      authority.reject(error);
+      opened.reject(error);
+      exit.reject(error);
+    });
+    void opened.promise.catch(() => undefined);
+    void exit.promise.catch(() => undefined);
+    const resource = addResource(assignment, {
+      kind: "snapshot",
+      context: contextId,
+      value: {},
+      async close(reason) {
+        closing = true;
+        closeError = reason;
+        wake.current.resolve();
+        let failed = false;
+        let failure: unknown;
+        try {
+          await exit.promise;
+        } catch (error) {
+          failed = true;
+          failure = error;
+        } finally {
+          assignment.snapshotAuthority = undefined;
+        }
+        // Unknown cleanup takes precedence over callback failure; a confirmed
+        // cleanup preserves the original callback error without throwing from
+        // finally (including an explicitly thrown undefined value).
+        if (!cleanup || (await cleanup) !== "confirmed") {
+          throw capabilityError("owner_cleanup_unknown");
+        }
+        if (failed) throw failure;
+      },
+      run(path, args) {
+        const result = Promise.withResolvers<unknown>();
+        jobs.push({ path, args, result });
+        wake.current.resolve();
+        return result.promise;
+      },
+    });
+    try {
+      await opened.promise;
+      await check(assignment);
+      return { handle: resource.id };
+    } catch (error) {
+      await closeResource(assignment, resource, error).catch(() => undefined);
+      throw error;
+    }
+  };
+  const execute = async (
+    binding: WorkerCallContext,
+    call: CapabilityCall,
+  ): Promise<unknown> => {
+    if (closed) throw capabilityError("owner_closed");
+    if (!binding.parent) {
+      if (call.kind !== "receipt" || !options.lookupReceipt) {
+        throw capabilityError("owner_capability_refused");
+      }
+      return await options.lookupReceipt(binding.fence.identity, call.value);
+    }
+    const key = keyOf(binding);
+    let assignment = assignments.get(key);
+    if (call.kind === "open") {
+      if (assignment) throw capabilityError("owner_assignment_started");
+      if (assignments.size >= MAX_ASSIGNMENTS) {
+        throw capabilityError("owner_capacity");
+      }
+      assignment = {
+        key,
+        binding,
+        abort: new AbortController(),
+        contexts: new Map(),
+        resources: new Map(),
+        queue: [],
+        task: Promise.resolve(),
+        calls: 0,
+      };
+      const active = assignment;
+      assignments.set(key, active);
+      try {
+        await check(active);
+        binding.signal.throwIfAborted();
+        const workloads = options.createWorkloads({
+          registry: rehost(active),
+          workerId: binding.fence.identity.workerId,
+          localExecution: options.localExecution,
+          onDiagnostic: (diagnostic) => notify(active, { diagnostic }),
+        });
+        const workload = workloads[binding.parent.workload];
+        if (!workload) throw capabilityError("owner_workload_refused");
+        if (!(call.value instanceof Uint8Array)) {
+          throw capabilityError("owner_data_invalid");
+        }
+        const bytes = call.value;
+        const work: WorkerWorkContext = {
+          streamId: binding.parent.streamId,
+          workload: binding.parent.workload,
+          metadata: binding.parent.metadata,
+          input: new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes);
+              controller.close();
+            },
+          }),
+          signal: active.abort.signal,
+          sendMetadata: () => Promise.resolve(),
+          callHost: () =>
+            Promise.reject(capabilityError("owner_internal_call")),
+        };
+        active.task = Promise.resolve().then(() => workload(work)).then(
+          (result) => {
+            active.terminal = { result };
+          },
+          (error) => {
+            active.terminal = { error };
+          },
+        ).finally(() => active.wake?.resolve());
+        return undefined;
+      } catch (error) {
+        abortAssignment(active, error);
+        if (assignments.get(key) === active) assignments.delete(key);
+        throw error;
+      }
+    }
+    if (!assignment) throw capabilityError("owner_assignment_unknown");
+    const active = assignment;
+    if (++active.calls > MAX_CALLS) throw capabilityError("owner_capacity");
+    await check(active);
+    const abort = () => abortAssignment(active, binding.signal.reason);
+    binding.signal.addEventListener("abort", abort, { once: true });
+    try {
+      // Cancellation may have happened while authority resolution was awaited.
+      if (binding.signal.aborted) abort();
+      active.abort.signal.throwIfAborted();
+      if (call.kind === "next") {
+        if (!active.queue.length && !active.terminal) {
+          active.wake = Promise.withResolvers<void>();
+          const timeout = setTimeout(() => active.wake?.resolve(), POLL_MS);
+          try {
+            await active.wake.promise;
+          } finally {
+            clearTimeout(timeout);
+            active.wake = undefined;
+          }
+        }
+        await check(active);
+        const next = active.queue.shift();
+        if (next) return next;
+        if (active.terminal) {
+          await Promise.all(
+            [...active.resources.values()].map((resource) =>
+              closeResource(active, resource)
+            ),
+          );
+          assignments.delete(key);
+          return { done: true, ...active.terminal };
+        }
+        return {};
+      }
+      if (call.kind === "complete") {
+        const invocation = active.contexts.get(call.id ?? "");
+        if (!invocation) throw capabilityError("owner_context_unknown");
+        if (invocation.sealed) throw capabilityError("owner_context_closed");
+        invocation.sealed = true;
+        if (invocation.calls.size) {
+          const error = capabilityError("owner_calls_pending");
+          invocation.result.reject(error);
+          for (const resource of active.resources.values()) {
+            if (resource.context === call.id) {
+              void closeResource(active, resource, error).catch(() =>
+                undefined
+              );
+            }
+          }
+        } else if (call.error !== undefined) {
+          invocation.result.reject(call.error);
+        } else invocation.result.resolve(call.value);
+        return undefined;
+      }
+      const invocation = active.contexts.get(call.context ?? "");
+      if (!invocation) throw capabilityError("owner_context_unknown");
+      const checkInvocation = () => {
+        if (invocation.sealed) throw capabilityError("owner_context_closed");
+        invocation.context.signal.throwIfAborted();
+      };
+      checkInvocation();
+      const callDone = Promise.withResolvers<void>();
+      invocation.calls.add(callDone.promise);
+      try {
+        if (call.kind === "snapshot") {
+          const result = await snapshot(
+            active,
+            call.context!,
+            invocation.context,
+          );
+          checkInvocation();
+          return result;
+        }
+        if (call.kind === "close") {
+          const resource = active.resources.get(call.id ?? "");
+          if (!resource || resource.context !== call.context) {
+            throw capabilityError("owner_handle_unknown");
+          }
+          await closeResource(active, resource, call.error);
+          await check(active);
+          checkInvocation();
+          return undefined;
+        }
+        const path = call.path ?? [];
+        const args = call.args ?? [];
+        // Runtime placement and causal scope are owner-issued capabilities.
+        // A local operation/deduplication key is replay identity, never authority.
+        const validateOptions = (value: unknown) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            return;
+          }
+          const input = value as RecordValue;
+          for (
+            const field of [
+              "databaseSchema",
+              "namespace",
+              "deliveryLease",
+              "ownerEpoch",
+              "workerId",
+              "context",
+            ]
+          ) {
+            if (Object.hasOwn(input, field)) {
+              throw capabilityError("owner_scope_refused");
+            }
+          }
+          if (input.identity && typeof input.identity === "object") {
+            const identity = input.identity as RecordValue;
+            for (const field of Object.keys(identity)) {
+              if (
+                ![
+                  "causationId",
+                  "correlationId",
+                  "deduplicationId",
+                  "settlementScopeId",
+                  "actionScopeId",
+                  "metadata",
+                ].includes(field)
+              ) throw capabilityError("owner_scope_refused");
+              if (
+                ["settlementScopeId", "actionScopeId"].includes(field) &&
+                identity[field] !==
+                  invocation.context
+                    .identity[field as "settlementScopeId" | "actionScopeId"]
+              ) throw capabilityError("owner_scope_refused");
+            }
+          }
+        };
+        validateOptions(call.options);
+        // Validate only option slots, never domain payloads (an effect outcome or
+        // content metadata may legitimately contain a field named namespace).
+        if (
+          ["actions", "collections", "content", "operations"].includes(path[0])
+        ) validateOptions(args[1]);
+        if (path[0] === "effect") {
+          validateOptions(
+            args[
+              ["confirm", "confirmOutput", "notStarted"].includes(path[1])
+                ? 2
+                : 1
+            ],
+          );
+        }
+
+        if (call.kind === "transaction") {
+          const plan = call.plan;
+          if (!Array.isArray(plan) || plan.length > 100) {
+            throw capabilityError("owner_plan_limit");
+          }
+          // Per-operation options are independent authority-bearing inputs. Check
+          // the complete plan before entering the transaction or any planner.
+          for (const operation of plan) {
+            if (
+              !operation || !Array.isArray(operation.path) ||
+              !Array.isArray(operation.args)
+            ) throw capabilityError("owner_plan_invalid");
+            validateOptions(operation.args[1]);
+          }
+          const expectedKey = JSON.stringify([
+            invocation.context.namespace,
+            invocation.context.operationKey,
+            call.options?.operationKey,
+          ]);
+          const receipt = call.receipt;
+          if (
+            !receipt || receipt.key !== expectedKey ||
+            receipt.databaseSchema !== invocation.context.databaseSchema
+          ) throw capabilityError("owner_receipt_scope");
+          const intent = capabilityReceiptIntent(
+            encodeCapability({ plan, options: call.options }),
+          );
+          if (JSON.stringify(intent) !== JSON.stringify(receipt.intent)) {
+            throw capabilityError("owner_receipt_intent");
+          }
+          await withCollectionCommandReceipt({
+            principal: `worker:${binding.fence.identity.workerId}`,
+            receipt: {
+              identity: { domain: "logical", key: receipt.key },
+              intent,
+            },
+            signal: invocation.context.signal,
+          }, () =>
+            invocation.context.transaction(async (scope) => {
+              for (const operation of plan) {
+                const [root, , method, nested] = operation.path;
+                const collection = root === "collections" &&
+                  (operation.path.length === 3 &&
+                      ["create", "update", "delete"].includes(method) ||
+                    operation.path.length === 4 && method === "commands" &&
+                      !!nested);
+                if (
+                  !collection &&
+                  !(operation.path.length === 2 &&
+                    ["relations", "vectors"].includes(root) &&
+                    operation.path[1] === "upsert")
+                ) throw capabilityError("owner_plan_invalid");
+                await callPath(scope, operation.path, operation.args);
+              }
+            }, call.options));
+          await check(active);
+          checkInvocation();
+          return undefined;
+        }
+        if (call.kind !== "call") {
+          throw capabilityError("owner_capability_refused");
+        }
+        if (call.id) {
+          const resource = active.resources.get(call.id);
+          if (
+            !resource || resource.context !== call.context || resource.closed
+          ) {
+            throw capabilityError("owner_handle_unknown");
+          }
+          resource.used = Date.now();
+          if (
+            resource.kind === "snapshot"
+              ? !allowedPath(path, true)
+              : path.length !== 1 || !(resource.kind === "reader"
+                ? ["read"]
+                : ["append", "close", "abort", "retain"]).includes(path[0])
+          ) throw capabilityError("owner_capability_refused");
+          const result = resource.serial.then(async () => {
+            await check(active);
+            return resource.run
+              ? await resource.run(path, args)
+              : await callPath(resource.value, path, args);
+          });
+          resource.serial = result.catch(() => undefined);
+          const value = await result;
+          await check(active);
+          checkInvocation();
+          if (
+            resource.kind === "writer" && ["close", "abort"].includes(path[0])
+          ) {
+            resource.closed = true;
+            active.resources.delete(resource.id);
+          }
+          return await exposeResult(active, call.context!, value);
+        }
+        if (!allowedPath(path)) {
+          throw capabilityError("owner_capability_refused");
+        }
+        const opensResource = path[0] === "streams" ||
+          path[0] === "content" && ["open", "openCapture"].includes(path[1]);
+        // Reserve synchronously before any owner method can open physical I/O.
+        const reservation = opensResource
+          ? reserveResource(active, call.context!)
+          : undefined;
+        const callArgs = path[0] === "actions" && path[2] === "prepare"
+          ? [
+            () =>
+              invoke(
+                active,
+                "prepare",
+                String(args[0]),
+                [],
+                invocation.context,
+              ),
+            args[1],
+          ]
+          : args;
+        const read = path[0] === "vectors" ||
+          path[0] === "collections" &&
+            ["get", "list", "aggregate", "search", "queries", "relations"]
+              .includes(path[2]);
+        const executeCall = async () =>
+          await callPath(invocation.context, path, callArgs);
+        try {
+          const value = path[0] === "protectedEvent"
+            ? await protectedEventResolverFrom(invocation.context)?.()
+            : read
+            ? await withCollectionReadBudget(executeCall)
+            : await executeCall();
+          // Adopt the physical result into its reserved cleanup slot before any
+          // asynchronous output gate can reject it after takeover/cancellation.
+          const exposed = await exposeResult(
+            active,
+            call.context!,
+            value,
+            reservation,
+          );
+          if (reservation && !reservation.consumed) {
+            reservation.ready.resolve(undefined);
+            await closeResource(active, reservation.resource);
+          }
+          await check(active);
+          checkInvocation();
+          return exposed;
+        } catch (error) {
+          if (reservation) {
+            if (!reservation.consumed) reservation.ready.resolve(undefined);
+            await closeResource(active, reservation.resource, error);
+          }
+          throw error;
+        }
+      } finally {
+        invocation.calls.delete(callDone.promise);
+        callDone.resolve();
+      }
+    } finally {
+      binding.signal.removeEventListener("abort", abort);
+    }
+  };
+  const admit: WorkerCallOptions["admit"] = (binding) => {
+    if (closed || binding.workload !== OWNER_CAPABILITY_WORKLOAD) {
+      return undefined;
+    }
+    if (!binding.parent && !options.lookupReceipt) return undefined;
+    return async ({ input }) => {
+      try {
+        const call = await readCapability(input) as CapabilityCall;
+        if (
+          !call || typeof call !== "object" || typeof call.kind !== "string"
+        ) throw capabilityError("owner_data_invalid");
+        const output = await execute(binding, call);
+        return encodeCapability({ value: output });
+      } catch (error) {
+        return encodeCapability({
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    };
+  };
+  const retire = async (
+    predicate: (assignment: Assignment) => boolean,
+    reason: unknown,
+  ) => {
+    const selected = [...assignments.values()].filter(predicate);
+    for (const assignment of selected) abortAssignment(assignment, reason);
+    await Promise.allSettled(selected.map(async (assignment) => {
+      await assignment.task;
+      await Promise.allSettled(
+        [...assignment.resources.values()].map((resource) =>
+          closeResource(assignment, resource, reason)
+        ),
+      );
+      if (!assignment.resources.size) assignments.delete(assignment.key);
+    }));
+  };
+  return {
+    workerCalls: {
+      admit,
+      admitUnassigned: admit,
+      maxConcurrent: 1024,
+      maxPerConnection: 128,
+      maxRequestBytes: OWNER_CAPABILITY_BYTES,
+      maxResponseBytes: OWNER_CAPABILITY_BYTES,
+      timeoutMs: 120_000,
+    },
+    lifecycle: {
+      onDisconnect(event) {
+        return retire(
+          (assignment) =>
+            assignment.binding.fence.connectionId === event.fence.connectionId,
+          capabilityError("owner_connection_lost"),
+        );
+      },
+      onComplete(event) {
+        return retire(
+          (assignment) =>
+            assignment.binding.parent?.operationId === event.operationId,
+          capabilityError("owner_assignment_ended"),
+        );
+      },
+    },
+    async close(reason = "owner_closed") {
+      closed = true;
+      clearInterval(timer);
+      await retire(() => true, capabilityError(reason));
+    },
+    snapshot() {
+      return {
+        assignments: assignments.size,
+        resources: [...assignments.values()].reduce(
+          (count, item) => count + item.resources.size,
+          0,
+        ),
+      };
+    },
+  };
+}

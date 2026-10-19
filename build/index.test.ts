@@ -1,3 +1,4 @@
+import { testEffect } from "../runtime/testing/effects.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { build, generate } from "./index.ts";
 import { createPluginRegistry } from "../runtime/plugins/index.ts";
@@ -88,6 +89,7 @@ Deno.test("filesystem convention loading installs Skill, API, and awaited MCP re
       await registry.actions.docs_search.execute(
         {},
         {
+          effect: testEffect,
           adapters: registry.adapters,
           signal: new AbortController().signal,
         } as never,

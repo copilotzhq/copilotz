@@ -1,3 +1,4 @@
+import { queryCollectionRows } from "./read-budget.ts";
 import { createCollectionValidationError } from "./errors.ts";
 import { getPath } from "./content-path.ts";
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
@@ -154,7 +155,7 @@ function manifestNodeData(
     byteLength: entry.byteLength,
     digest: entry.digest,
     state: "ready",
-    location: entry.location,
+    bodyId: entry.bodyId,
     ...(entry.origin ? { origin: structuredClone(entry.origin) } : {}),
     createdAt: entry.createdAt,
     readyAt: entry.readyAt ?? entry.createdAt,
@@ -429,7 +430,7 @@ export function composeCollectionProjection(
     `projection_current AS (
        SELECT id, namespace, data FROM ${tables.nodes}
        WHERE namespace = ${namespace} AND id = ${id} AND type = ${type}
-       LIMIT 1 FOR UPDATE
+       LIMIT 1
      )`,
   ];
   const gates: string[] = [];
@@ -664,7 +665,7 @@ export function composeCollectionProjection(
            FROM ${tables.nodes}
            WHERE namespace = ${namespace} AND type = 'asset'
              AND id = ANY(${assetIds}::text[])
-           ORDER BY id FOR UPDATE
+           ORDER BY id
          )`,
         `projection_asset_refused AS (
            SELECT link.id, asset.id IS NOT NULL AS found, asset.state
@@ -873,15 +874,15 @@ export async function loadCollectionRecord(
   namespace: string,
   name: string,
   id: string,
-  lock = false,
 ): Promise<CollectionRecord | null> {
-  const result = await executor.query<NodeRow>(
-    `SELECT * FROM ${tables.nodes}
+  const rows = await queryCollectionRows<NodeRow>(
+    executor,
+    `SELECT id,namespace,data FROM ${tables.nodes}
      WHERE namespace = $1 AND id = $2 AND type = $3
-     LIMIT 1${lock ? " FOR UPDATE" : ""}`,
+     LIMIT 1`,
     [namespace, id, name],
   );
-  return result.rows[0] ? mapNode(result.rows[0]) : null;
+  return rows[0] ? mapNode(rows[0]) : null;
 }
 
 /** Loads many records of one collection in one statement, keyed by id. */
@@ -892,10 +893,11 @@ export async function loadCollectionRecords(
   name: string,
   ids: readonly string[],
 ): Promise<ReadonlyMap<string, CollectionRecord>> {
-  const result = await executor.query<NodeRow>(
-    `SELECT * FROM ${tables.nodes}
+  const rows = await queryCollectionRows<NodeRow>(
+    executor,
+    `SELECT id,namespace,data FROM ${tables.nodes}
      WHERE namespace = $1 AND type = $2 AND id = ANY($3::text[])`,
     [namespace, name, [...new Set(ids)]],
   );
-  return new Map(result.rows.map((row) => [row.id, mapNode(row)]));
+  return new Map(rows.map((row) => [row.id, mapNode(row)]));
 }

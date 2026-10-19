@@ -1,9 +1,12 @@
 import { assertEquals } from "@std/assert";
-import { scheduleTick } from "./index.ts";
+import { runScheduledJobNow } from "./index.ts";
 
-Deno.test("scheduleTick creates the canonical input envelope", () => {
-  assertEquals(scheduleTick({ checkedAt: "2026-01-01T00:00:00.000Z" }), {
-    type: "copilotz.schedules.tick.input",
-    payload: { checkedAt: "2026-01-01T00:00:00.000Z" },
-  });
+Deno.test("manual schedule input retains its canonical envelope", () => {
+  assertEquals(
+    runScheduledJobNow({ id: "job", scheduledFor: "2026-01-01T00:00:00.000Z" }),
+    {
+      type: "copilotz.schedules.run-now.input",
+      payload: { id: "job", scheduledFor: "2026-01-01T00:00:00.000Z" },
+    },
+  );
 });

@@ -337,6 +337,7 @@ Deno.test("Action invocation receipts are validated before retry execution", asy
     actionId: "test.invoked-receipt",
     metadata: { requestId: "request-1" },
     status: "invoked",
+    effectProtocol: 1,
     input: { value: 1 },
   };
   const mismatches = [
@@ -625,6 +626,7 @@ Deno.test("prepared Action reloads the first durable invoked capture after a rac
             actionId: event.actionId,
             metadata: { winner: true },
             status: "invoked",
+            effectProtocol: 1,
             input: { value: "winner" },
           });
           throw new Error("duplicate invoked receipt");
@@ -667,6 +669,7 @@ Deno.test("prepared Action replays hydrated secret input without evaluating a ne
     actionRunId: "lifecycle:action:test.prepare.secret:latest",
     actionId: "test.prepare.secret",
     status: "invoked",
+    effectProtocol: 1,
     metadata: { source: "captured" },
     // The real protected lifecycle loader hydrates this value before it reaches
     // the invoker; the prepared path must keep it intact and never call factory.

@@ -88,6 +88,21 @@ export type CollectionNamedQuery = Readonly<{
     | Promise<readonly Record<string, unknown>[]>;
 }>;
 
+/** A durable deadline for this record, dispatched as one ordinary Collection command. */
+export type CollectionAlarmDefinition = Readonly<{
+  /** Trusted registration-only occurrence classification for the Scheduled Job alarm. */
+  ingress?: "scheduled-occurrence";
+  deadline(record: Readonly<Record<string, unknown>>): string | null;
+  command(
+    record: Readonly<Record<string, unknown>>,
+    time: { dueAt: string; now: string },
+  ): {
+    name: string;
+    key: string;
+    input: Readonly<Record<string, unknown>>;
+  };
+}>;
+
 export type CollectionDefinition<
   S extends JsonSchema = JsonSchema,
   TSelect = S extends JsonSchema ? FromSchema<S> : Record<string, unknown>,
@@ -98,6 +113,8 @@ export type CollectionDefinition<
     : Record<string, unknown>,
 > = Readonly<{
   name: string;
+  /** Requires a host-only collectionPolicies registration before owner startup. */
+  ownerPolicy?: "required";
   schema: S;
   timestamps?: Readonly<{ createdAt?: string; updatedAt?: string }>;
   defaults?: Readonly<Record<string, unknown>>;
@@ -119,6 +136,7 @@ export type CollectionDefinition<
     context: CollectionHookContext,
   ) => void;
   commands?: Readonly<Record<string, CollectionCommandDefinition>>;
+  alarm?: CollectionAlarmDefinition;
   queries?: Readonly<Record<string, CollectionNamedQuery>>;
   readonly $inferSelect: TSelect;
   readonly $inferInsert: TInsert;
@@ -254,7 +272,27 @@ export function defineCollection<S extends JsonSchema>(
   if (!input.schema || typeof input.schema !== "object") {
     throw new TypeError("Collection schema is required.");
   }
+  if (
+    input.alarm &&
+    (typeof input.alarm.deadline !== "function" ||
+      typeof input.alarm.command !== "function")
+  ) {
+    throw new TypeError(
+      "Collection alarm requires deadline and command functions.",
+    );
+  }
   const name = requiredText(input.name, "Collection name");
+  if (
+    input.alarm?.ingress !== undefined &&
+    (input.alarm.ingress !== "scheduled-occurrence" ||
+      name !== "scheduled_job" ||
+      input.commands?.due?.event !== "scheduled_job.due")
+  ) {
+    throw new TypeError(
+      "Scheduled occurrence ingress requires the Scheduled Job due alarm.",
+    );
+  }
+
   if (!/^[a-z][a-z0-9_.-]*$/i.test(name)) {
     throw new TypeError(`Collection name '${name}' cannot form an event type.`);
   }

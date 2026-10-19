@@ -144,6 +144,8 @@ export type ServerFacadeResource = Readonly<{
   }>;
   authenticate?: ServerAuthenticate;
   authorize?: ServerAuthorize;
+  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
+  protectedBootstrapRoutes?: readonly string[];
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
@@ -153,6 +155,8 @@ export type DefineServerFacadeInput = Readonly<{
   expose?: ServerExposureOptions;
   authenticate?: ServerAuthenticate;
   authorize?: ServerAuthorize;
+  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
+  protectedBootstrapRoutes?: readonly string[];
 }>;
 
 export {

@@ -1,11 +1,18 @@
+import {
+  CONTENT_CATALOG_COLUMNS,
+  contentCatalogStatements,
+} from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 9;
+export const EVENT_SCHEMA_VERSION = 10;
 
 export type CoreTableName =
+  | "action_effects"
+  | keyof typeof CONTENT_CATALOG_COLUMNS
   | "owner_epochs"
   | "owner_receipts"
   | "owner_alarms"
+  | "owner_deadlines"
   | "owner_body_retirements"
   | "owner_event_sequences"
   | "nodes"
@@ -34,9 +41,15 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
   const table = (name: CoreTableName) =>
     `${schema}.${quoteEventIdentifier(name)}`;
   return ({
+    action_effects: table("action_effects"),
+    content_logical_bodies: table("content_logical_bodies"),
+    content_copies: table("content_copies"),
+    pending_content: table("pending_content"),
+    content_adoptions: table("content_adoptions"),
     owner_epochs: table("owner_epochs"),
     owner_receipts: table("owner_receipts"),
     owner_alarms: table("owner_alarms"),
+    owner_deadlines: table("owner_deadlines"),
     owner_body_retirements: table("owner_body_retirements"),
     owner_event_sequences: table("owner_event_sequences"),
     nodes: table("nodes"),
@@ -50,6 +63,16 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
 }
 
 const CORE_SCHEMA_COLUMNS = {
+  action_effects: [
+    "ancestors",
+    "namespace",
+    "action_run_id",
+    "step",
+    "status",
+    "outcome",
+    "evidence",
+  ],
+  ...CONTENT_CATALOG_COLUMNS,
   owner_epochs: ["owner", "epoch", "holder", "last_seq"],
   owner_receipts: [
     "owner",
@@ -61,6 +84,15 @@ const CORE_SCHEMA_COLUMNS = {
     "result",
   ],
   owner_alarms: ["owner", "name", "due_at"],
+  owner_deadlines: [
+    "owner",
+    "source",
+    "key",
+    "namespace",
+    "due_at",
+    "payload",
+    "revision",
+  ],
   owner_event_sequences: ["owner", "sequence", "event_id"],
   owner_body_retirements: [
     "owner",
@@ -94,6 +126,7 @@ const CORE_SCHEMA_COLUMNS = {
   ] as const,
   events: [
     "position",
+    "seq",
     "id",
     "schema_version",
     "type",
@@ -171,7 +204,9 @@ export async function validateCopilotzSchema(
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
-          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_body_retirements', 'owner_event_sequences',
+          'action_effects',
+          'content_logical_bodies', 'content_copies', 'pending_content', 'content_adoptions',
+          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements', 'owner_event_sequences',
           'nodes',
           'edges',
           'events',
@@ -232,7 +267,7 @@ export async function validateCopilotzSchema(
   return ({ schema, version: EVENT_SCHEMA_VERSION } as const);
 }
 
-type SchemaClassification = "fresh" | "current" | "upgrade" | "incompatible";
+type SchemaClassification = "fresh" | "current" | "incompatible";
 
 async function classifySchema(
   executor: SqlExecutor,
@@ -260,7 +295,6 @@ async function classifySchema(
     }
       WHERE singleton = TRUE LIMIT 1`,
   );
-  if (Number(marker.rows[0]?.version) === 8) return "upgrade";
   if (Number(marker.rows[0]?.version) !== EVENT_SCHEMA_VERSION) {
     return "incompatible";
   }
@@ -270,7 +304,7 @@ async function classifySchema(
 function incompatibleSchema(schemaName: string): Error {
   const schema = validateEventSchemaName(schemaName);
   const error = new Error(
-    `Copilotz database schema '${schema}' is incompatible with this release; provision a new schema. Existing data is never modified by provisioning.`,
+    `Copilotz database schema '${schema}' is incompatible with this release; run the explicit offline retained-data upgrade or provision a new schema. Existing data is never modified by provisioning.`,
   );
   Object.assign(error, {
     name: "CopilotzSchemaError",
@@ -281,7 +315,7 @@ function incompatibleSchema(schemaName: string): Error {
   return error;
 }
 
-/** Installs fresh schemas or atomically upgrades the supported event baseline. */
+/** Installs an absent schema only. Retained data requires the offline upgrade. */
 export async function provisionCopilotzSchema(
   session: SqlSession,
   schemaName = "public",
@@ -293,8 +327,8 @@ export async function provisionCopilotzSchema(
   }
   if (classification === "incompatible") throw incompatibleSchema(schema);
   return await session.transaction(async (transaction) => {
-    // Recheck inside the DDL transaction so a competing provisioner cannot turn
-    // a released schema into a partial upgrade between classification and DDL.
+    // Bootstrap exclusion is required before the singleton epoch row exists.
+    // Once installed, provisioning work uses the fenced owner command queue.
     await transaction.query(
       "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
       [schema, "copilotz-schema-provision"],
@@ -304,10 +338,7 @@ export async function provisionCopilotzSchema(
       return await validateCopilotzSchema(transaction, schema);
     }
     if (current === "incompatible") throw incompatibleSchema(schema);
-    const statements = current === "upgrade"
-      ? createOwnerSchemaStatements(schema)
-      : createCoreSchemaStatements(schema);
-    for (const statement of statements) {
+    for (const statement of createCoreSchemaStatements(schema)) {
       await transaction.query(statement);
     }
     await transaction.query(
@@ -326,6 +357,8 @@ export function createOwnerSchemaStatements(
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [
+    ...createEffectSchemaStatements(schemaName),
+    ...contentCatalogStatements(validateEventSchemaName(schemaName)),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (
       owner TEXT PRIMARY KEY,
       epoch BIGINT NOT NULL CHECK (epoch >= 0),
@@ -350,6 +383,22 @@ export function createOwnerSchemaStatements(
       due_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (owner, name)
     )`,
+    `CREATE TABLE IF NOT EXISTS ${tables.owner_deadlines} (
+      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      source TEXT NOT NULL,
+      key TEXT NOT NULL,
+      namespace TEXT,
+      due_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL DEFAULT 'null',
+      revision BIGSERIAL NOT NULL,
+      PRIMARY KEY (owner, source, key)
+    )`,
+    `CREATE INDEX IF NOT EXISTS "owner_deadlines_due_idx" ON ${tables.owner_deadlines} (owner,due_at,source,key)`,
+    `INSERT INTO ${tables.owner_deadlines} (owner,source,key,due_at)
+      SELECT owner,'reconciliation',name,due_at FROM ${tables.owner_alarms} WHERE name <> 'wake'
+      ON CONFLICT DO NOTHING`,
+    `DELETE FROM ${tables.owner_alarms} WHERE name <> 'wake'`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "owner_alarms_owner_idx" ON ${tables.owner_alarms} (owner)`,
     `CREATE TABLE IF NOT EXISTS ${tables.owner_body_retirements} (
       owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       backend_kind TEXT NOT NULL,
@@ -436,12 +485,9 @@ export function createCoreSchemaStatements(
     `CREATE INDEX IF NOT EXISTS "nodes_ready_asset_body_idx"
       ON ${tables.nodes} (namespace, (data ->> 'bodyId'))
       WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
-    `CREATE INDEX IF NOT EXISTS "nodes_ready_asset_body_backend_idx"
-      ON ${tables.nodes} (
-        (data ->> 'bodyId'),
-        (data -> 'location' ->> 'kind'),
-        (COALESCE(data -> 'location' ->> 'backendId', ''))
-      ) WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
+    `CREATE INDEX IF NOT EXISTS "nodes_ready_content_body_idx"
+      ON ${tables.nodes} ((data ->> 'bodyId'))
+      WHERE type IN ('asset','protected_value') AND data ->> 'state' = 'ready'`,
     `CREATE INDEX IF NOT EXISTS "nodes_data_gin_idx"
       ON ${tables.nodes} USING GIN (data)`,
     `CREATE TABLE IF NOT EXISTS ${tables.edges} (
@@ -463,6 +509,7 @@ export function createCoreSchemaStatements(
       WHERE type = 'has_asset'`,
     `CREATE TABLE IF NOT EXISTS ${tables.events} (
       position BIGSERIAL PRIMARY KEY,
+      seq BIGINT NOT NULL UNIQUE CHECK (seq > 0),
       id TEXT NOT NULL UNIQUE,
       schema_version INTEGER NOT NULL,
       type TEXT NOT NULL,
@@ -586,5 +633,40 @@ export function createCoreSchemaStatements(
           ON CONFLICT (singleton) DO UPDATE SET version = EXCLUDED.version`,
       ]
       : []),
+  ];
+}
+
+/** Additive v10 effect state; old invoked receipts do not acquire replay safety. */
+export function createEffectSchemaStatements(
+  schemaName: string,
+): readonly string[] {
+  const tables = createCoreTableNames(schemaName);
+  return [`CREATE TABLE IF NOT EXISTS ${tables.action_effects} (
+    namespace TEXT NOT NULL, action_run_id TEXT NOT NULL, step TEXT NOT NULL,
+    ancestors JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(ancestors)='array'),
+    status TEXT NOT NULL CHECK (status IN ('begun','confirmed','not_started')),
+    outcome JSONB, evidence JSONB,
+    PRIMARY KEY (namespace, action_run_id, step),
+    CHECK ((status='confirmed') = (outcome IS NOT NULL)),
+    CHECK ((status='not_started') = (evidence IS NOT NULL))
+  )`];
+}
+
+/** Number retained history in its original order before enabling owner push. */
+export function createOwnerSequenceStatements(
+  schemaName: string,
+): readonly string[] {
+  const tables = createCoreTableNames(schemaName);
+  return [
+    `ALTER TABLE ${tables.events} ADD COLUMN IF NOT EXISTS seq BIGINT`,
+    `ALTER TABLE ${tables.events} DISABLE TRIGGER copilotz_events_immutable`,
+    `WITH numbered AS (SELECT id, row_number() OVER (ORDER BY position) AS seq FROM ${tables.events})
+     UPDATE ${tables.events} AS event SET seq=numbered.seq FROM numbered WHERE event.id=numbered.id`,
+    `ALTER TABLE ${tables.events} ENABLE TRIGGER copilotz_events_immutable`,
+    `ALTER TABLE ${tables.events} ALTER COLUMN seq SET NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS events_owner_seq_idx ON ${tables.events} (seq)`,
+    `DELETE FROM ${tables.owner_event_sequences}`,
+    `INSERT INTO ${tables.owner_event_sequences} (owner,sequence,event_id) SELECT 'schema',seq,id FROM ${tables.events}`,
+    `UPDATE ${tables.owner_epochs} SET last_seq=COALESCE((SELECT MAX(seq) FROM ${tables.events}),0) WHERE owner='schema'`,
   ];
 }

@@ -1,3 +1,4 @@
+import { queryCollectionRows } from "../collections/read-budget.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 /** Optional pgvector storage for collection-owned vector projections. @module */
 import {
@@ -5,7 +6,7 @@ import {
   quoteEventIdentifier,
   validateEventSchemaName,
 } from "../events/schema.ts";
-import type { SqlExecutor, SqlSession } from "../events/session.ts";
+import type { SqlExecutor } from "../events/session.ts";
 import {
   type CollectionPredicate,
   compileCollectionPredicate,
@@ -94,7 +95,7 @@ function field(value: string): string {
 }
 /** Explicit host setup. Base runtime provisioning never requires the extension. */
 export async function provisionVectorStorage(
-  session: SqlSession,
+  session: SqlExecutor,
   schema = "public",
 ): Promise<void> {
   const table = vectorTable(schema);
@@ -193,7 +194,8 @@ export async function searchVectors(
   const predicate = compileCollectionPredicate(input.filter, params);
   const limitParameter = params.push(limit);
   // The subquery applies the same bounded predicates as Collection reads. No candidate cap precedes authorization.
-  const result = await executor.query<NodeRow & { distance: number }>(
+  const result = await queryCollectionRows<NodeRow & { distance: number }>(
+    executor,
     `SELECT owner.*, (vectors.value ${operator} $5::vector) AS distance
     FROM (SELECT * FROM ${
       createCoreTableNames(schema).nodes
@@ -205,7 +207,7 @@ export async function searchVectors(
     ORDER BY distance, owner.id LIMIT $${limitParameter}`,
     params,
   );
-  return result.rows.map((row) => ({
+  return result.map((row) => ({
     record: mapNode(row),
     distance: Number(row.distance),
   }));

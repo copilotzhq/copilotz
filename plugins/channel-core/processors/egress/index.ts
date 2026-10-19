@@ -1,5 +1,5 @@
 /**
- * Delivers prepared channel intents through retryable provider adapters.
+ * Delivers prepared channel intents through effect-aware Actions.
  *
  * @module
  */
@@ -16,6 +16,7 @@ import type {
   ChannelActionAdapters,
   ChannelActionResources,
 } from "../../actions/ingress/index.ts";
+import type { channelDeliverAction } from "../../actions/deliver/index.ts";
 import type { channelEgressAction } from "../../actions/egress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
 import type { ChannelEgressMessage } from "../../shared/contracts.ts";
@@ -24,7 +25,12 @@ import { isPublicChannelMessage } from "../../shared/helpers.ts";
 type ChannelProcessorContext = ProcessorContext<
   ChannelActionResources,
   ChannelActionAdapters,
-  Readonly<{ channelEgress: ActionCaller<typeof channelEgressAction> }>
+  Readonly<
+    {
+      channelEgress: ActionCaller<typeof channelEgressAction>;
+      channelDeliver: ActionCaller<typeof channelDeliverAction>;
+    }
+  >
 >;
 
 function record(value: unknown): Record<string, unknown> {
@@ -120,21 +126,6 @@ function message(value: Record<string, unknown>): ChannelEgressMessage | null {
   };
 }
 
-function receipt(
-  value: { deliveryKey: string; delivered: number } | void,
-  deliveryKey: string,
-): void {
-  if (value === undefined) return;
-  if (value.deliveryKey !== deliveryKey) {
-    throw new Error(
-      `Channel delivery receipt '${value.deliveryKey}' does not match '${deliveryKey}'.`,
-    );
-  }
-  if (!Number.isSafeInteger(value.delivered) || value.delivered < 0) {
-    throw new TypeError("Channel delivery receipt count must be non-negative.");
-  }
-}
-
 export const channelEgressProcessor: Processor<ChannelProcessorContext> =
   defineProcessor<ChannelProcessorContext>({
     id: "copilotz.channels.external-egress",
@@ -195,40 +186,10 @@ export const channelEgressProcessor: Processor<ChannelProcessorContext> =
         throw error;
       }
       for (const intent of output.intents) {
-        const channel = context.resources.channels?.[intent.channelId];
-        if (!channel) {
-          throw new Error(
-            `Unknown Channel Resource alias '${intent.channelId}'.`,
-          );
-        }
-        const resource = defineChannelResource(channel);
-        if (resource.egress !== "external") {
-          throw new Error(
-            `Channel '${intent.channelId}' is not configured for external egress.`,
-          );
-        }
-        const adapter = context.adapters.channels?.[intent.channelId];
-        if (!adapter || typeof adapter.deliver !== "function") {
-          throw new Error(
-            `Channel Adapter '${intent.channelId}' cannot deliver externally.`,
-          );
-        }
-        const result = await adapter.deliver(
-          {
-            intent,
-            content: await context.content.resolveMany(intent.content),
-          } as const,
-          {
-            namespace: context.namespace,
-            resources: context.resources,
-            adapters: context.adapters,
-            channelId: intent.channelId,
-            channel: resource,
-            signal: context.signal,
-            now: context.now,
-          },
-        );
-        receipt(result, intent.deliveryKey);
+        await context.actions.channelDeliver(intent, {
+          operationKey: `deliver:${intent.deliveryKey}`,
+          signal: context.signal,
+        });
       }
     },
   });

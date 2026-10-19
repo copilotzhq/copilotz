@@ -2,6 +2,7 @@
 import { assertEquals } from "@std/assert";
 
 import * as copilotz from "../../index.ts";
+import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as engine from "../../runtime/engine/index.ts";
@@ -131,6 +132,7 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertFunctions(persistence, ["createCopilotzPersistence"]);
   assertFunctions(coreCli, ["createInteractiveCli", "startInteractiveCli"]);
   assertFunctions(denoAdapters, ["listen"]);
+  assertFunctions(nodeAdapters, ["listen"]);
   for (
     const moved of [
       "createPersistentTerminalService",
@@ -203,7 +205,7 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertFunctions(schedules, [
     "createScheduledJob",
     "getNextScheduledRunAt",
-    "scheduleTick",
+    "runScheduledJobNow",
   ]);
   assertEquals(typeof schedules.schedulesPlugin, "object");
   assertFunctions(coreSchedules, [

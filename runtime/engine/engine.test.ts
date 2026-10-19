@@ -238,6 +238,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "nodes",
       "open_actions",
       "owner_alarms",
+      "owner_deadlines",
       "owner_body_retirements",
       "owner_epochs",
       "owner_event_sequences",

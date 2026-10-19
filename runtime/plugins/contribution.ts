@@ -75,7 +75,15 @@ export function resolveContributions(input: {
   views?: ViewMap;
   resources?: PluginNamespaceMap;
   adapters?: PluginNamespaceMap;
-}) {
+}): {
+  actions: ActionMap;
+  collections: CollectionMap;
+  processors: ProcessorMap;
+  views: ViewMap;
+  resources: Record<string, Record<string, unknown>>;
+  adapters: Record<string, Record<string, unknown>>;
+  plugins: AnyCopilotzPlugin[];
+} {
   const copy = (map: PluginNamespaceMap = {}) =>
     Object.fromEntries(
       Object.entries(map).map(([name, values]) => [name, { ...values }]),

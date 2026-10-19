@@ -1,3 +1,5 @@
+import { withOwnedHosting } from "./runtime/application/hosting.ts";
+import type { HostCommandDefinitions } from "./runtime/application/host-command-types.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
@@ -55,7 +57,9 @@ type ApplicationComposition<T extends CompositionOptions> = RegistryComposition<
 type GatewayApplication<T extends CompositionOptions = CompositionOptions> =
   & CopilotzApplication<
     ApplicationComposition<T>["actions"],
-    ApplicationComposition<T>["collections"]
+    ApplicationComposition<T>["collections"],
+    T extends { hostCommands: infer H extends HostCommandDefinitions } ? H
+      : Readonly<Record<never, never>>
   >
   & Readonly<{
     fetch(request: Request): Promise<Response>;
@@ -84,13 +88,13 @@ function serverFetch(
 }
 
 export function createCopilotz<const T extends GatewayOptions>(
-  options: T,
+  options: T & GatewayOptions,
 ): Promise<GatewayApplication<T>>;
 export function createCopilotz(
   options: WorkerOptions,
 ): Promise<WorkerFactoryResult>;
-export function createCopilotz<const T extends EmbeddedOptions = {}>(
-  options?: T,
+export function createCopilotz<const T extends EmbeddedOptions = EmptyMap>(
+  options?: T & EmbeddedOptions,
 ): Promise<EmbeddedApplication<T>>;
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
@@ -115,20 +119,24 @@ export async function createCopilotz(
     try {
       const fetch = serverFetch(gateway);
       gateway.installFetchFallback(fetch);
-      return ({
-        send: gateway.send,
-        actions: gateway.actions,
-        collections: gateway.collections,
-        attach: gateway.attach,
-        operationStatus: gateway.operationStatus,
-        listOperations: gateway.listOperations,
-        operationCheckpoint: gateway.operationCheckpoint,
-        cancelOperation: gateway.cancelOperation,
-        maintenance: gateway.maintenance,
-        observe: gateway.observe,
-        close: gateway.close,
-        fetch,
-      } as const);
+      return withOwnedHosting(
+        {
+          send: gateway.send,
+          hostCommands: gateway.hostCommands,
+          actions: gateway.actions,
+          collections: gateway.collections,
+          attach: gateway.attach,
+          operationStatus: gateway.operationStatus,
+          listOperations: gateway.listOperations,
+          operationCheckpoint: gateway.operationCheckpoint,
+          cancelOperation: gateway.cancelOperation,
+          maintenance: gateway.maintenance,
+          observe: gateway.observe,
+          close: gateway.close,
+          fetch,
+        } as const,
+        gateway.hypervisor,
+      );
     } catch (error) {
       await gateway.close("copilotz_gateway_initialization_failed").catch(() =>
         undefined

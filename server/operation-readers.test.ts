@@ -1,3 +1,4 @@
+import { digestCatalogPrefix } from "../runtime/content/prefix-digest.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createMemoryBodyStore } from "../runtime/content/body-store.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
@@ -40,6 +41,8 @@ async function fixture(
   const writer = await body.reserve({
     bodyId: "body",
     mediaType: "text/plain",
+    reservationId: "reader-fixture",
+    generation: 1,
   });
   const counts = {
     watches: 0,
@@ -182,6 +185,7 @@ async function fixture(
           durable: true,
           id,
           position: String(1000 + Number(row.eventOrdinal)),
+          seq: String(1000 + Number(row.eventOrdinal)),
           schemaVersion: 1,
           type: "test.event",
           namespace: "tenant",
@@ -226,6 +230,7 @@ async function fixture(
           bodyId: "body",
           expectedState: "ready",
           expectedMaintenanceVersion: head.maintenanceVersion,
+          expectedVersionToken: head.versionToken,
           idleForMs: 0,
         }),
         true,
@@ -252,7 +257,15 @@ async function fixture(
       notify("event");
     },
     async complete() {
-      await body.seal({ writer, expectedByteLength: record.committedOffset });
+      await body.seal({
+        writer,
+        expectedByteLength: record.committedOffset,
+        expectedDigest: await digestCatalogPrefix(
+          body,
+          "body",
+          record.committedOffset,
+        ),
+      });
       record = {
         ...record,
         state: "terminal",
@@ -265,7 +278,7 @@ async function fixture(
   };
 }
 
-const fast = { minimumScanMs: 0, safetyScanMs: 10 };
+const fast = { minimumScanMs: 0 };
 const text = (bytes?: Uint8Array) => new TextDecoder().decode(bytes);
 const cursor = (offset: number) =>
   encodeOperationReplayCursor({
@@ -278,7 +291,6 @@ Deno.test("byte-only hints share reads without repeating topology or settlement 
   const f = await fixture();
   const readers = createSharedOperationReaders(f.application, {
     minimumScanMs: 50,
-    safetyScanMs: 5000,
   });
   const attachment = await readers.attach({ operationId: "op" });
   const output = (await attachment.outputs.getReader().read())
@@ -630,7 +642,6 @@ Deno.test("shared readers integrate real application catalog settlement and data
   };
   const readers = createSharedOperationReaders(instrumented, {
     ...fast,
-    safetyScanMs: 20,
   });
   const attached: Awaited<ReturnType<typeof readers.attach>>[] = [];
   try {
@@ -885,7 +896,7 @@ Deno.test("detachment and shutdown discard undrained renewal prefixes after rele
 });
 
 Deno.test("missing retained stream bytes fail reads without rewriting completion", async () => {
-  const f = await fixture({ protectionMs: 0 });
+  const f = await fixture();
   await f.append("complete bytes");
   await f.complete();
   await f.loseBytes();

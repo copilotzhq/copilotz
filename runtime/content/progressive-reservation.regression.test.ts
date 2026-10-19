@@ -1,517 +1,209 @@
 import { assertEquals, assertRejects } from "@std/assert";
-
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
+import { createContentCatalog } from "./catalog.ts";
 import { createDatabaseBodyStore } from "./database-body-store.ts";
+import { createContentStreamRuntime } from "../streams/stream.ts";
 import { digestContent } from "./digest.ts";
-import {
-  createProgressiveBodyWriter,
-  openProgressiveBodyFollower,
-} from "./progressive.ts";
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-async function readAll(
-  stream: ReadableStream<Uint8Array>,
-): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-    byteLength += chunk.byteLength;
-  }
-  const bytes = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+const schema = "content_reservation_test", namespace = "namespace-a";
+async function fixture() {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  await provisionCopilotzSchema(db, schema);
+  const catalog = createContentCatalog(db, schema),
+    store = createDatabaseBodyStore({ session: db, schema });
+  return { db, catalog, store };
 }
-
-Deno.test("a remote follower can open an empty reserved progressive body", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "copilotz_progressive_remote_follower";
-  const writerStore = createDatabaseBodyStore({
-    session: db,
-    schema,
-    backendId: "database:writer-process",
-  });
-  const followerStore = createDatabaseBodyStore({
-    session: db,
-    schema,
-    backendId: "database:follower-process",
-  });
-  const writer = await createProgressiveBodyWriter(writerStore, {
-    bodyId: "streams/remote-before-first-byte",
-    mediaType: "text/plain",
-  });
+Deno.test("a remote catalog follower attaches to an empty reservation before first byte", async () => {
+  const f = await fixture();
   try {
-    const follower = await openProgressiveBodyFollower(followerStore, {
-      bodyId: writer.bodyId,
-    });
-    const reading = readAll(follower.body);
-    await writer.write(encoder.encode("remote stream"));
-    await writer.finalize();
-    assertEquals(decoder.decode(await reading), "remote stream");
-    const tables = await db.query<{ table_name: string }>(
-      `SELECT table_name
-         FROM information_schema.tables
-        WHERE table_schema = $1
-        ORDER BY table_name`,
-      [schema],
-    );
-    assertEquals(
-      tables.rows.map((row) => row.table_name).filter((name) =>
-        name.startsWith("content_")
-      ),
-      ["content_bodies", "content_body_parts"],
-    );
-    assertEquals(
-      (await db.query(
-        `SELECT count(*)::int AS n FROM "${schema}".owner_epochs`,
-      )).rows,
-      [{ n: 1 }],
-    );
-  } finally {
-    await writer.abandon().catch(() => undefined);
-    await db.close();
-  }
-});
-
-Deno.test("progressive writer ownership is exclusive across store instances", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const firstStore = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_progressive_writer_fence",
-    backendId: "database:first-process",
-  });
-  const secondStore = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_progressive_writer_fence",
-    backendId: "database:second-process",
-  });
-  const first = await createProgressiveBodyWriter(firstStore, {
-    bodyId: "streams/one-writer",
-    mediaType: "text/plain",
-  });
-  let second:
-    | Awaited<ReturnType<typeof createProgressiveBodyWriter>>
-    | undefined;
-  let rejected = false;
-  try {
-    try {
-      second = await createProgressiveBodyWriter(secondStore, {
-        bodyId: "streams/one-writer",
+    const writerRuntime = createContentStreamRuntime({
+        namespace,
+        store: f.store,
+        catalog: f.catalog,
+        onOpen(_o, p) {
+          p.established();
+        },
+      }),
+      writer = await writerRuntime.open({
+        id: "empty",
         mediaType: "text/plain",
+        role: "content",
+      }),
+      remote = createContentStreamRuntime({
+        namespace,
+        store: createDatabaseBodyStore({ session: f.db, schema }),
+        catalog: createContentCatalog(f.db, schema),
       });
-    } catch {
-      rejected = true;
-    }
-    assertEquals(rejected, true);
-  } finally {
-    await second?.abandon().catch(() => undefined);
-    await first.abandon().catch(() => undefined);
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore maintenance compare-deletes exact body version only", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_maintenance",
-    protectionMs: 0,
-  });
-  try {
-    const bytes = encoder.encode("orphan");
-    const head = await store.put({
-      bodyId: "bodies/orphan",
-      bytes,
-      mediaType: "text/plain",
-      digest: await digestContent(bytes),
-    });
-    const page = await store.maintenance.list({
-      states: ["ready"],
-      idleForMs: 0,
-      limit: 10,
-    });
-    assertEquals(page.bodies.map((body) => body.bodyId), [head.bodyId]);
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: head.maintenanceVersion + 1,
-        idleForMs: 0,
-      }),
-      false,
-    );
-    assertEquals(
-      (await store.head({ bodyId: head.bodyId }))?.bodyId,
-      head.bodyId,
-    );
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: head.maintenanceVersion,
-        idleForMs: 0,
-      }),
-      true,
-    );
-    assertEquals(await store.head({ bodyId: head.bodyId }), null);
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore maintenance refuses unexpired ready protection", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_maintenance_protection",
-  });
-  try {
-    const bytes = encoder.encode("protected");
-    const head = await store.put({
-      bodyId: "bodies/protected",
-      bytes,
-      mediaType: "text/plain",
-      digest: await digestContent(bytes),
-    });
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: head.maintenanceVersion,
-        idleForMs: 0,
-      }),
-      false,
-    );
-    assertEquals(
-      (await store.head({ bodyId: head.bodyId }))?.bodyId,
-      head.bodyId,
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore matching put renews protection and advances the maintenance fence", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_put_renewal",
-    protectionMs: 60_000,
-  });
-  try {
-    const bytes = encoder.encode("renewable");
-    const input = {
-      bodyId: "bodies/renewable",
-      bytes,
-      mediaType: "text/plain",
-      digest: await digestContent(bytes),
-    } as const;
-    const expired = await store.put({
-      ...input,
-      protectedUntil: "2000-01-01T00:00:00.000Z",
-    });
-    const renewed = await store.put(input);
-    assertEquals(
-      renewed.maintenanceVersion,
-      expired.maintenanceVersion + 1,
-    );
-    assertEquals(Date.parse(renewed.protectedUntil!) > Date.now(), true);
-    const kept = await store.put({
-      ...input,
-      protectedUntil: "2000-01-01T00:00:00.000Z",
-    });
-    assertEquals(kept.maintenanceVersion, renewed.maintenanceVersion + 1);
-    assertEquals(kept.protectedUntil, renewed.protectedUntil);
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: input.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: expired.maintenanceVersion,
-        idleForMs: 0,
-      }),
-      false,
-    );
-    await assertRejects(() =>
-      store.put({
-        ...input,
-        bytes: encoder.encode("conflict"),
-        digest:
-          "sha256:fa9e1d222a14b79755c8b9d5523c2c8fc73a4ca5a7f25f518c5b1d17770d0fab",
-      })
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore acquire-or-create is linearizable across store instances", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "copilotz_body_put_linearizable";
-  const firstStore = createDatabaseBodyStore({
-    session: db,
-    schema,
-    protectionMs: 0,
-  });
-  const secondStore = createDatabaseBodyStore({
-    session: db,
-    schema,
-    protectionMs: 0,
-  });
-  try {
-    const bytes = encoder.encode("one-body");
-    const input = {
-      bodyId: "bodies/linearizable",
-      bytes,
-      mediaType: "text/plain",
-      digest: await digestContent(bytes),
-      protectedUntil: "2000-01-01T00:00:00.000Z",
-    } as const;
-    const heads = await Promise.all([
-      firstStore.put(input),
-      secondStore.put(input),
-    ]);
-    assertEquals(
-      heads.map((head) => head.maintenanceVersion).sort((left, right) =>
-        left - right
-      ),
-      [1, 2],
-    );
-    assertEquals(
-      new TextDecoder().decode(
-        await readAll(
-          await firstStore.read({
-            bodyId: input.bodyId,
-          }),
-        ),
-      ),
-      "one-body",
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore delete enforces idle duration in its SQL CAS", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_maintenance_idle",
-    protectionMs: 0,
-  });
-  try {
-    const bytes = encoder.encode("idle-guarded");
-    const head = await store.put({
-      bodyId: "bodies/idle-guarded",
-      bytes,
-      mediaType: "text/plain",
-      digest: await digestContent(bytes),
-      protectedUntil: "2000-01-01T00:00:00.000Z",
-    });
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: head.maintenanceVersion,
-        idleForMs: 60_000,
-      }),
-      false,
-    );
-    assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "ready",
-        expectedMaintenanceVersion: head.maintenanceVersion,
-        idleForMs: 0,
-      }),
-      true,
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore append is expected-offset and append-id stable", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_append_identity",
-  });
-  try {
-    const writer = await store.reserve({
-      bodyId: "bodies/progressive",
-      mediaType: "text/plain",
-    });
-    const bytes = encoder.encode("abc");
-    const first = await store.append({
-      writer,
-      expectedOffset: 0,
-      appendId: "append-a",
-      bytes,
-    });
-    assertEquals(first.endOffset, 3);
-    const duplicate = await store.append({
-      writer,
-      expectedOffset: 0,
-      appendId: "append-a",
-      bytes,
-    });
-    assertEquals(duplicate.startOffset, first.startOffset);
-    assertEquals(duplicate.endOffset, first.endOffset);
-    assertEquals(duplicate.protection.remainingMs > 0, true);
-    await assertRejects(() =>
-      store.append({
-        writer,
-        expectedOffset: 0,
-        appendId: "append-a",
-        bytes: encoder.encode("xyz"),
-      })
-    );
-    await assertRejects(() =>
-      store.append({
-        writer,
-        expectedOffset: 1,
-        appendId: "append-b",
-        bytes: encoder.encode("d"),
-      })
-    );
-  } finally {
-    await db.close();
-  }
-});
-
-Deno.test("database BodyStore seal compacts parts and clears writer capabilities atomically", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "copilotz_body_seal_compaction";
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema,
-    protectionMs: 0,
-  });
-  try {
-    const writer = await store.reserve({
-      bodyId: "bodies/compacted",
-      mediaType: "text/plain",
-    });
-    await store.append({
-      writer,
-      expectedOffset: 0,
+    const reading = new Response((await remote.follow({ id: "empty" })).body)
+      .text();
+    await writer.append({
       appendId: "first",
-      bytes: encoder.encode("abc"),
+      bytes: new TextEncoder().encode("remote"),
     });
-    await store.append({
-      writer,
-      expectedOffset: 3,
-      appendId: "second",
-      bytes: encoder.encode("def"),
-    });
-    const head = await store.seal({
-      writer,
-      expectedByteLength: 6,
-    });
-    assertEquals(head.state, "ready");
-    assertEquals(
-      decoder.decode(
-        await readAll(await store.read({ bodyId: writer.bodyId })),
-      ),
-      "abcdef",
-    );
-
-    const body = await db.query<{
-      state: string;
-      writer_generation: string | number | null;
-      writer_token_hash: string | null;
-      lease_expires_at: string | null;
-    }>(
-      `SELECT state, writer_generation, writer_token_hash, lease_expires_at
-         FROM "${schema}"."content_bodies"
-        WHERE body_id = $1`,
-      [writer.bodyId],
-    );
-    assertEquals(body.rows[0], {
-      state: "ready",
-      writer_generation: null,
-      writer_token_hash: null,
-      lease_expires_at: null,
-    });
-
-    const parts = await db.query<{
-      start_offset: string | number;
-      append_id: string;
-      byte_length: string | number;
-    }>(
-      `SELECT start_offset, append_id, OCTET_LENGTH(bytes) AS byte_length
-         FROM "${schema}"."content_body_parts"
-        WHERE body_id = $1
-        ORDER BY start_offset`,
-      [writer.bodyId],
-    );
-    assertEquals(
-      parts.rows.map((part) => ({
-        startOffset: Number(part.start_offset),
-        appendId: part.append_id,
-        byteLength: Number(part.byte_length),
-      })),
-      [{ startOffset: 0, appendId: "sealed", byteLength: 6 }],
-    );
+    await writer.close({ assetId: "unused" });
+    assertEquals(await reading, "remote");
   } finally {
-    await db.close();
+    await f.db.close();
   }
 });
-
-Deno.test("database retained termination compacts readable bytes and exact-CAS purges", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const store = createDatabaseBodyStore({
-    session: db,
-    schema: "copilotz_body_incomplete",
-    protectionMs: 0,
-  });
+Deno.test("database exact append replay uses the original offset and rejects changed bytes", async () => {
+  const f = await fixture();
   try {
-    const bytes = encoder.encode("durable rejected prefix");
-    const writer = await store.reserve({
-      bodyId: "bodies/incomplete",
-      mediaType: "text/plain",
-    });
-    await store.append({
-      writer,
-      expectedOffset: 0,
-      appendId: "prefix",
-      bytes,
-    });
-    const head = await store.terminate!({
-      writer,
-      expectedByteLength: bytes.byteLength,
-      expectedDigest: await digestContent(bytes),
-    });
-    assertEquals(head.state, "incomplete");
+    const writer = await f.store.reserve({
+        bodyId: "physical",
+        mediaType: "text/plain",
+        reservationId: "writer",
+        generation: 1,
+      }),
+      bytes = new TextEncoder().encode("a");
+    await f.store.append({ writer, appendId: "one", expectedOffset: 0, bytes });
+    await f.store.append({ writer, appendId: "two", expectedOffset: 1, bytes });
     assertEquals(
-      await readAll(await store.read({ bodyId: head.bodyId })),
-      bytes,
+      (await f.store.append({
+        writer,
+        appendId: "one",
+        expectedOffset: 0,
+        bytes,
+      })).endOffset,
+      1,
     );
+    await assertRejects(() =>
+      f.store.append({ writer, appendId: "one", expectedOffset: 1, bytes })
+    );
+    await assertRejects(() =>
+      f.store.append({
+        writer,
+        appendId: "one",
+        expectedOffset: 0,
+        bytes: new Uint8Array([2]),
+      })
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("database fencing preserves accepted prefix and rejects stale physical authority", async () => {
+  const f = await fixture();
+  try {
+    const writer = await f.store.reserve({
+      bodyId: "physical",
+      mediaType: "text/plain",
+      reservationId: "writer",
+      generation: 1,
+    });
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    const fenced = await f.store.fence({ writer });
     assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "incomplete",
-        expectedMaintenanceVersion: head.maintenanceVersion - 1,
+      (await f.store.fence({ writer })).generation,
+      fenced.generation,
+    );
+    await assertRejects(() =>
+      f.store.append({
+        writer,
+        appendId: "late",
+        expectedOffset: 3,
+        bytes: new Uint8Array([4]),
+      })
+    );
+    const prefix = new Uint8Array([1, 2]),
+      head = await f.store.terminate({
+        writer: fenced,
+        expectedByteLength: 2,
+        expectedDigest: await digestContent(prefix),
+      });
+    assertEquals(head.byteLength, 2);
+    assertEquals(
+      await f.store.readRange({ bodyId: "physical", offset: 0, end: 2 }),
+      prefix,
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("database physical exact-version deletion refuses a stale observation", async () => {
+  const f = await fixture();
+  try {
+    const writer = await f.store.reserve({
+        bodyId: "physical",
+        mediaType: "text/plain",
+        reservationId: "writer",
+        generation: 1,
+      }),
+      before = (await f.store.head({ bodyId: "physical" }))!;
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1]),
+    });
+    const head = await f.store.seal({
+      writer,
+      expectedByteLength: 1,
+      expectedDigest: await digestContent(new Uint8Array([1])),
+    });
+    assertEquals(
+      await f.store.maintenance.delete({
+        bodyId: "physical",
+        expectedState: "ready",
+        expectedVersionToken: before.versionToken,
         idleForMs: 0,
       }),
       false,
     );
     assertEquals(
-      await store.maintenance.delete({
-        bodyId: head.bodyId,
-        expectedState: "incomplete",
-        expectedMaintenanceVersion: head.maintenanceVersion,
+      await f.store.maintenance.delete({
+        bodyId: "physical",
+        expectedState: "ready",
+        expectedVersionToken: head.versionToken,
         idleForMs: 0,
       }),
       true,
     );
   } finally {
-    await db.close();
+    await f.db.close();
+  }
+});
+Deno.test("physical appends never renew logical catalog protection", async () => {
+  const f = await fixture();
+  try {
+    const identity = { bodyId: "logical", writerId: "writer", generation: 1 };
+    await f.catalog.reserve({
+      ...identity,
+      namespace,
+      copy: {
+        key: "physical",
+        backendKind: f.store.kind,
+        backendId: f.store.backendId,
+      },
+      protectForMs: 0,
+    });
+    const protectedUntil =
+        (await f.catalog.read(identity.bodyId))!.protectedUntil,
+      writer = await f.store.reserve({
+        bodyId: "physical",
+        mediaType: "text/plain",
+        reservationId: "writer",
+        generation: 1,
+      });
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1]),
+    });
+    assertEquals(
+      (await f.catalog.read(identity.bodyId))!.protectedUntil,
+      protectedUntil,
+    );
+  } finally {
+    await f.db.close();
   }
 });

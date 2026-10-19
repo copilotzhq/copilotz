@@ -1,3 +1,4 @@
+import { hostIngressProof } from "./ingress/authority.ts";
 /** Trusted in-process ingress and reads over the ordinary application runtime. @module */
 import type { ActionSchema } from "../actions/types.ts";
 import type {
@@ -169,6 +170,7 @@ export function createHostServices(
         },
       },
       typeof inputSchema === "object" ? inputSchema as ActionSchema : undefined,
+      hostIngressProof(),
     );
     return await result(handle, envelope);
   };
@@ -182,17 +184,22 @@ export function createHostServices(
           validateAgainstJsonSchema(action.inputSchema, input, "Action input");
         }
         const { id, envelope } = admission(options);
-        const handle = await admitActionRequest(application(), {
-          ...envelope,
-          type: SERVER_ACTION_REQUEST_EVENT_TYPE,
-          payload: {
-            schema: SERVER_ACTION_REQUEST_SCHEMA,
-            requestId: id,
-            actionAlias: alias,
-            input,
-            actionMetadata: structuredClone(options.actionMetadata ?? {}),
+        const handle = await admitActionRequest(
+          application(),
+          {
+            ...envelope,
+            type: SERVER_ACTION_REQUEST_EVENT_TYPE,
+            payload: {
+              schema: SERVER_ACTION_REQUEST_SCHEMA,
+              requestId: id,
+              actionAlias: alias,
+              input,
+              actionMetadata: structuredClone(options.actionMetadata ?? {}),
+            },
           },
-        }, action.inputSchema);
+          action.inputSchema,
+          hostIngressProof(),
+        );
         return await result(handle, envelope);
       }]),
   );

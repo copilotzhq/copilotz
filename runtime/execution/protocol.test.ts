@@ -195,6 +195,7 @@ Deno.test("Copilotz work framing omits derived ProcessorEvent data", async () =>
     durable: true,
     id: "large-event",
     position: "1",
+    seq: "1",
     schemaVersion: 1,
     type: "large.created",
     namespace: "protocol-test",

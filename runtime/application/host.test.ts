@@ -527,7 +527,6 @@ Deno.test("Gateway host API dispatches Actions and mutations to a Worker", async
   const worker = await createTypedCopilotz({
     role: "worker",
     namespace: "split",
-    database,
     plugins: [workerFixture.plugin],
     transport,
     id: "host-worker",

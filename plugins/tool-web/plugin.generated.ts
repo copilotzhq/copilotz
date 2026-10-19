@@ -3,7 +3,17 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./resources/tools/fetch-text/index.ts";
 import entry1 from "./resources/tools/http-request/index.ts";
 import entry2 from "./resources/tools/web-search/index.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/web-tools";
+  readonly version: "3.0.0";
+  readonly resources: {
+    readonly "tools": {
+      readonly "fetch_text": typeof entry0;
+      readonly "http_request": typeof entry1;
+      readonly "web_search": typeof entry2;
+    };
+  };
+} = {
   id: "@copilotz/web-tools",
   version: "3.0.0",
   resources: {

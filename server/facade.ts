@@ -83,7 +83,17 @@ export function createServerFacadeFetchHandler(
   application: InternalCopilotzApplication,
   options: CreateServerFacadeFetchHandlerOptions = {},
 ): ServerFacadeFetchHandler {
-  const facade = facadeResource(application, options.facade);
+  const configuredFacade = facadeResource(application, options.facade);
+  const facade = Object.freeze({
+    ...configuredFacade,
+    ...(configuredFacade.protectedBootstrapRoutes
+      ? {
+        protectedBootstrapRoutes: Object.freeze([
+          ...configuredFacade.protectedBootstrapRoutes,
+        ]),
+      }
+      : {}),
+  });
   const routes = compileServerRoutes(application.plugins, facade);
   const httpRoutes = new Map(
     Object.values(application.plugins.adapters.http ?? {})
@@ -176,6 +186,9 @@ export function createServerFacadeFetchHandler(
             serverActionMetadata: {
               ...context.serverActionMetadata,
               ...options.actionMetadata,
+              ...(context.serverScope.actor
+                ? { httpActor: context.serverScope.actor }
+                : {}),
             },
           })).data;
         };

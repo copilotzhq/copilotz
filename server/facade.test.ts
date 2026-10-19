@@ -708,7 +708,6 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
   });
   const worker = await createCopilotz({
     role: "worker",
-    database,
     namespace: "tenant-a",
     databaseSchema: "server_gateway_test",
     plugins,

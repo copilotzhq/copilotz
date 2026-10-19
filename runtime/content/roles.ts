@@ -1,7 +1,6 @@
 import type {
   ContentRef,
   ContentSequence,
-  DurableContentInput,
   PreparedAsset,
   PreparedContent,
 } from "./types.ts";
@@ -9,7 +8,7 @@ import { cloneContentRef } from "./input.ts";
 
 export type RoleContentInput = Readonly<{
   role: string;
-  input: DurableContentInput;
+  input: ContentSequence | PreparedContent;
   cardinality?: "one" | "many";
 }>;
 
@@ -28,11 +27,13 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-function isSequence(value: DurableContentInput): value is ContentSequence {
+function isSequence(
+  value: ContentSequence | PreparedContent,
+): value is ContentSequence {
   return Array.isArray(value);
 }
 
-function asPrepared(value: DurableContentInput): PreparedContent {
+function asPrepared(value: ContentSequence | PreparedContent): PreparedContent {
   return isSequence(value) ? { content: value, assets: [] } : value;
 }
 

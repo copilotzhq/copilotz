@@ -1,3 +1,10 @@
+import { bindActionInvocationParent } from "./invocation-parent.ts";
+import { closeCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
+import { createActionEffectController } from "./effects.ts";
+import {
+  type ActionEffectClient,
+  fail as effectFailure,
+} from "./effect-client.ts";
 import {
   awaitingAction,
   isActionContinuation,
@@ -28,14 +35,13 @@ import type {
   ActionMap,
   ActionPrepareFactory,
   ActionPrepareOptions,
-  ActionTransactionOptions,
   AnyActionDefinition,
   BoundActionCaller,
   RuntimeActionCallers,
   RuntimeIdentity,
 } from "./types.ts";
 import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
-import { splitSecretActionValue } from "./secret.ts";
+import { protectedActionStrings, splitSecretActionValue } from "./secret.ts";
 import type {
   ActionAwaitingData,
   ActionEventData,
@@ -45,6 +51,7 @@ import type {
 } from "./types.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
+const unresolvedEffectFailures = new WeakMap<object, unknown>();
 const settledActionErrors = new WeakSet<object>();
 const actionInputValidationErrors = new WeakSet<object>();
 // A composed Action alias is presentation only: Core needs the immutable
@@ -107,6 +114,11 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
+  /** Owner-only preparation; no worker-callable hook. */
+  prepareInput?(
+    frame: ActionInvocationFrame,
+    input: unknown,
+  ): Promise<{ input: unknown; claimed: boolean }> | undefined;
   /** Runtime-only resumption delivery; never exposed through ActionCallOptions. */
   resumption?: Readonly<
     {
@@ -122,6 +134,8 @@ export type CreateActionCallersOptions = Readonly<{
   invocationScope?: string;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
+  /** Invocation-bound data capability, supplied only by the owner host. */
+  createEffectClient?(frame: ActionInvocationFrame): ActionEffectClient;
   createContext(
     input: Readonly<{
       frame: ActionInvocationFrame;
@@ -159,36 +173,6 @@ function mergeIdentity(
     deduplicationId: child.deduplicationId ?? parent.deduplicationId,
     settlementScopeId: child.settlementScopeId ?? parent.settlementScopeId,
     actionScopeId: child.actionScopeId ?? parent.actionScopeId,
-  } as const);
-}
-
-/**
- * Carries causal authority into an Action-owned graph transaction. The
- * transaction keeps its own operation-derived deduplication identity unless
- * the Action explicitly supplies one for that transaction.
- */
-export function actionTransactionIdentity(
-  action: RuntimeIdentity | undefined,
-  transaction: ActionTransactionOptions["identity"],
-): ActionTransactionOptions["identity"] {
-  const causationId = transaction?.causationId ?? action?.causationId;
-  const correlationId = transaction?.correlationId ?? action?.correlationId;
-  const settlementScopeId = transaction?.settlementScopeId ??
-    action?.settlementScopeId;
-  const actionScopeId = transaction?.actionScopeId ?? action?.actionScopeId;
-  const deduplicationId = transaction?.deduplicationId;
-  const metadata = transaction?.metadata;
-  if (
-    !causationId && !correlationId && !settlementScopeId &&
-    !deduplicationId && !metadata && !actionScopeId
-  ) return undefined;
-  return ({
-    ...(causationId ? { causationId } : {}),
-    ...(correlationId ? { correlationId } : {}),
-    ...(deduplicationId ? { deduplicationId } : {}),
-    ...(settlementScopeId ? { settlementScopeId } : {}),
-    ...(actionScopeId ? { actionScopeId } : {}),
-    ...(metadata ? { metadata } : {}),
   } as const);
 }
 
@@ -240,50 +224,6 @@ function protectedActionError(
   } as const);
 }
 
-function isRedactedSecret(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return Reflect.ownKeys(record).length === 1 &&
-    record["$copilotz-secret"] === true;
-}
-
-function protectedStrings(
-  schema: AnyActionDefinition["inputSchema"],
-  value: unknown,
-): readonly string[] {
-  const projected = splitSecretActionValue(schema, value).publicValue;
-  const strings = new Set<string>();
-  const visit = (raw: unknown, safe: unknown): void => {
-    if (isRedactedSecret(safe)) {
-      const nested = (candidate: unknown): void => {
-        if (typeof candidate === "string" && candidate.length > 0) {
-          strings.add(candidate);
-        } else if (Array.isArray(candidate)) {
-          candidate.forEach(nested);
-        } else if (candidate && typeof candidate === "object") {
-          Object.values(candidate as Record<string, unknown>).forEach(nested);
-        }
-      };
-      nested(raw);
-      return;
-    }
-    if (Array.isArray(raw) && Array.isArray(safe)) {
-      raw.forEach((child, index) => visit(child, safe[index]));
-      return;
-    }
-    if (
-      raw && typeof raw === "object" && !Array.isArray(raw) &&
-      safe && typeof safe === "object" && !Array.isArray(safe)
-    ) {
-      for (const [key, child] of Object.entries(raw)) {
-        visit(child, (safe as Record<string, unknown>)[key]);
-      }
-    }
-  };
-  visit(value, projected);
-  return ([...strings].sort((left, right) => right.length - left.length));
-}
-
 function assertMetadataIsSecretFree(
   metadata: ActionInvocationMetadata,
   secrets: readonly string[],
@@ -309,6 +249,12 @@ function restoredActionError(
   error.name = status === "cancelled" ? "AbortError" : serialized.name;
   if (serialized.code !== undefined) {
     Object.assign(error, { code: serialized.code });
+  }
+  if (
+    serialized.name === "ActionEffectError" ||
+    serialized.code === "owner_commit_unknown"
+  ) {
+    markNonRetryable(error);
   }
   return error;
 }
@@ -381,21 +327,24 @@ function createFrame(
       ? `${rootKey}/action:${action.id}:${localKey}`
       : `${rootKey}/action:${action.id}`);
   let actionIndex = 0;
-  return ({
-    actionId: action.id,
-    actionRunId,
-    rootKey,
-    operationKey: resumption ? `${actionRunId}/resume` : actionRunId,
-    ...(parent
-      ? { parentActionRunId: parent.actionRunId }
-      : resumption?.receipt.parentActionRunId
-      ? { parentActionRunId: resumption.receipt.parentActionRunId }
-      : {}),
-    metadata,
-    ...(identity ? { identity } : {}),
-    signal,
-    nextActionIndex: () => ++actionIndex,
-  } as const);
+  return bindActionInvocationParent(
+    {
+      actionId: action.id,
+      actionRunId,
+      rootKey,
+      operationKey: resumption ? `${actionRunId}/resume` : actionRunId,
+      ...(parent
+        ? { parentActionRunId: parent.actionRunId }
+        : resumption?.receipt.parentActionRunId
+        ? { parentActionRunId: resumption.receipt.parentActionRunId }
+        : {}),
+      metadata,
+      ...(identity ? { identity } : {}),
+      signal,
+      nextActionIndex: () => ++actionIndex,
+    } as const,
+    parent,
+  );
 }
 
 function lifecycleCommon(
@@ -506,7 +455,7 @@ function actionCaller(
   invoker: CreateActionCallersOptions,
   parent?: ActionInvocationFrame,
 ): BoundActionCaller<AnyActionDefinition> {
-  const invoke = async (
+  const invokeBody = async (
     input: unknown,
     options: ActionCallOptions = {},
     captureRace = false,
@@ -514,6 +463,9 @@ function actionCaller(
   ): Promise<unknown> => {
     const frame = createFrame(action, options, parent, invoker, prepared);
     throwIfAborted(frame.signal);
+    const preparation = invoker.prepareInput?.(frame, input);
+    const ownerPrepared = preparation ? await preparation : undefined;
+    if (ownerPrepared) input = ownerPrepared.input;
 
     // Execution receives the canonical value; lifecycle persistence applies
     // the schema-owned protected projection inside its storage boundary.
@@ -568,7 +520,10 @@ function actionCaller(
       }
     };
     if (!preparedContent) validateInput(durableInput);
-    const inputSecrets = protectedStrings(action.inputSchema, durableInput);
+    const inputSecrets = protectedActionStrings(
+      action.inputSchema,
+      durableInput,
+    );
     assertMetadataIsSecretFree(frame.metadata, inputSecrets);
     const executionInput = preparedContent
       ? await preparedContent.hydrate()
@@ -593,13 +548,18 @@ function actionCaller(
       );
       if (terminal) return restoreTerminal(terminal);
     }
+    let replayProtocol: number | undefined = resumption
+      ? (await loadInvoked(invoker.actionLifecycle, frame, durableInput))
+        ?.effectProtocol
+      : 1;
     let claimError: unknown;
-    let claimed = Boolean(resumption);
+    let claimed = Boolean(resumption) || (ownerPrepared?.claimed ?? false);
     try {
-      if (!resumption) {
+      if (!resumption && !ownerPrepared) {
         const receipt = await invoker.actionLifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status: "invoked",
+          effectProtocol: 1,
           deduplicationId: `${frame.actionRunId}:action:invoked`,
         });
         claimed =
@@ -650,6 +610,7 @@ function actionCaller(
         validateReceipt(awaiting, frame, durableInput);
         return awaitingAction(frame.actionRunId);
       }
+      replayProtocol = invoked?.effectProtocol;
       // A receipt permits replay only when the current lease still owns the Action.
       if (claimError !== undefined) throw claimError;
     }
@@ -682,14 +643,92 @@ function actionCaller(
       invoker,
       frame,
     ) as RuntimeActionCallers;
-    const context = invoker.createContext({
+    let context = invoker.createContext({
       frame,
       actions: nestedActions,
       progress,
     });
 
+    const collectionPolicyContext = context;
+    const rawClient = invoker.createEffectClient?.(frame);
+    const client = rawClient && {
+      ...rawClient,
+      confirm: (
+        step: string,
+        outcome: Parameters<ActionEffectClient["confirm"]>[1],
+        callOptions?: Parameters<ActionEffectClient["confirm"]>[2],
+      ) => {
+        assertMetadataIsSecretFree({ outcome }, inputSecrets);
+        if (splitSecretActionValue(action.outputSchema, outcome).secret) {
+          effectFailure(
+            "effect_outcome_invalid",
+            "Protected effect outcomes must use safe references.",
+          );
+        }
+        return rawClient.confirm(step, outcome, callOptions);
+      },
+    };
+    const pendingEffects = new Set<Promise<unknown>>();
+    let effectError: unknown;
+    let closed = false;
+    const controller = client && createActionEffectController({
+      client,
+      signal: frame.signal,
+      check() {
+        if (closed) {
+          effectFailure("ActionOwnershipLost", "The Action attempt has ended.");
+        }
+        frame.signal.throwIfAborted();
+      },
+      context: () => context,
+      reconcile: action.reconcile as never,
+      track(start) {
+        const pending = Promise.resolve().then(start);
+        pendingEffects.add(pending);
+        void pending.then(() => pendingEffects.delete(pending), (error) => {
+          pendingEffects.delete(pending);
+          effectError ??= error;
+        });
+        return pending;
+      },
+    });
+    if (controller) {
+      // Preserve nonenumerable host capabilities (including source resolution).
+      context = Object.defineProperties({}, {
+        ...Object.getOwnPropertyDescriptors(context),
+        effect: { value: controller.effect, enumerable: true },
+      }) as ActionContext;
+    }
+    const drainEffects = async () => {
+      while (pendingEffects.size) await Promise.allSettled([...pendingEffects]);
+      if (effectError) throw effectError;
+      if (unresolvedEffectFailures.has(frame)) {
+        throw unresolvedEffectFailures.get(frame);
+      }
+    };
     try {
       throwIfAborted(frame.signal);
+      if (replayProtocol !== 1) {
+        effectFailure(
+          "effect_indeterminate",
+          "The original Action attempt did not capture the effect replay contract.",
+        );
+      }
+      // Reconcile before re-entering user code, including effects a new deployment
+      // no longer mentions. An empty current inventory cannot upgrade an old run.
+      if (client && controller) {
+        for (const entry of await client.inventory()) {
+          if (entry.status === "begun") {
+            if (entry.actionRunId) {
+              effectFailure(
+                "effect_indeterminate",
+                "An interrupted descendant Action requires reconciliation.",
+              );
+            }
+            await controller.recover(entry.step);
+          }
+        }
+      }
       const output = resumption
         ? await action.resume!(
           resumption.receipt.handoff as never,
@@ -698,6 +737,16 @@ function actionCaller(
         )
         : await action.execute(executionInput as never, context as never);
       await progressTail;
+      await drainEffects();
+      if (
+        client &&
+        (await client.inventory()).some((entry) => entry.status === "begun")
+      ) {
+        effectFailure(
+          "effect_indeterminate",
+          "An external effect has no confirmed outcome.",
+        );
+      }
       throwIfAborted(frame.signal);
       if (isActionContinuation(output)) {
         if (!action.resume) {
@@ -756,7 +805,32 @@ function actionCaller(
         throw error;
       }
       return structuredClone(durableOutput);
-    } catch (error) {
+    } catch (caught) {
+      await Promise.allSettled([...pendingEffects]);
+      let error = effectError ?? caught;
+      // A provider exception after dispatch proves neither success nor no-start.
+      // Preserve ambiguity in the terminal so ancestors cannot swallow it.
+      if (client) {
+        try {
+          if (
+            (await client.inventory()).some((entry) => entry.status === "begun")
+          ) {
+            effectFailure(
+              "effect_indeterminate",
+              "An external effect has no confirmed outcome.",
+            );
+          }
+        } catch (classification) {
+          error = classification;
+        }
+      }
+      const code = (error as { code?: unknown } | null)?.code;
+      if (
+        parent && (effectError || unresolvedEffectFailures.has(frame) ||
+          code === "effect_indeterminate" || code === "owner_commit_unknown")
+      ) {
+        unresolvedEffectFailures.set(parent, error);
+      }
       const existingTerminal = captureRace
         ? await invoker.actionLifecycle.terminal(frame.actionRunId)
         : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
@@ -785,6 +859,25 @@ function actionCaller(
         throw settlementError;
       }
       throw settledActionError(error);
+    } finally {
+      closed = true;
+      closeCollectionPolicyInvocation(collectionPolicyContext);
+    }
+  };
+  const invoke = async (
+    ...args: Parameters<typeof invokeBody>
+  ): Promise<unknown> => {
+    try {
+      return await invokeBody(...args);
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (
+        parent &&
+        (code === "effect_indeterminate" || code === "owner_commit_unknown")
+      ) {
+        unresolvedEffectFailures.set(parent, error);
+      }
+      throw error;
     }
   };
   const caller = Object.assign(invoke, {

@@ -42,6 +42,7 @@ function output(
     durable: true,
     id: "event-a",
     position: "1",
+    seq: "1",
     schemaVersion: 1,
     type: "message.created",
     namespace: "tenant-a",

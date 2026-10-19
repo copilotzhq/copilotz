@@ -18,7 +18,42 @@ import entry14 from "./resources/tools/inspect-memory/index.ts";
 import entry15 from "./resources/tools/list-knowledge-spaces/index.ts";
 import entry16 from "./resources/tools/search-memory/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/core-long-term-memory";
+  readonly version: "5.0.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly collections: {
+    readonly "longTermMemory": typeof entry5;
+    readonly "memoryNote": typeof entry6;
+    readonly "memorySpaceAccess": typeof entry7;
+    readonly "memorySpace": typeof entry8;
+  };
+  readonly actions: {
+    readonly "consolidate_memory": typeof entry0;
+    readonly "inspect_memory": typeof entry1;
+    readonly "list_knowledge_spaces": typeof entry2;
+    readonly "produceCheckpoint": typeof entry3;
+    readonly "search_memory": typeof entry4;
+  };
+  readonly processors: {
+    readonly "dispatchConsolidation": typeof entry9;
+    readonly "settleConsolidation": typeof entry10;
+  };
+  readonly resources: {
+    readonly "memory": {
+      readonly "config": typeof entry11;
+    };
+    readonly "promptContext": {
+      readonly "memory": typeof entry12;
+    };
+    readonly "tools": {
+      readonly "consolidate_memory": typeof entry13;
+      readonly "inspect_memory": typeof entry14;
+      readonly "list_knowledge_spaces": typeof entry15;
+      readonly "search_memory": typeof entry16;
+    };
+  };
+} = {
   id: "@copilotz/core-long-term-memory",
   version: "5.0.0",
   plugins: [dependency0],

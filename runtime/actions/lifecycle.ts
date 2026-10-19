@@ -1,3 +1,4 @@
+import { isCallerSafeActionStatus } from "./errors.ts";
 import { awaitOperation } from "./continuation.ts";
 import type {
   ActionAwaitingData,
@@ -38,11 +39,10 @@ function safeError(error: SerializedActionError): SerializedActionError {
   const code = optionalText(error.code);
   if (
     error.callerSafe &&
-    (!code || !Number.isInteger(error.status) || error.status! < 400 ||
-      error.status! > 499)
+    (!code || !isCallerSafeActionStatus(error.status, code, message))
   ) {
     throw new TypeError(
-      "Caller-safe Action errors require a code and 4xx status.",
+      "Caller-safe Action errors require an approved status and code.",
     );
   }
   return {
@@ -68,7 +68,11 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   };
   switch (input.status) {
     case "invoked":
-      return ({ ...base, status: "invoked" } as const);
+      return ({
+        ...base,
+        status: "invoked",
+        ...(input.effectProtocol === 1 ? { effectProtocol: 1 as const } : {}),
+      } as const);
     case "awaiting":
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 0

@@ -34,10 +34,10 @@ Deno.test("transient catch-up reads every event page beyond 1,000 events", async
     const tables = createCoreTableNames(schema);
     await db.query(
       `INSERT INTO ${tables.events} (
-         id, schema_version, type, namespace, payload,
+         seq, id, schema_version, type, namespace, payload,
          metadata, correlation_id
        )
-       SELECT
+       SELECT value,
          'catchup-' || value::text,
          3,
          'thread.created',

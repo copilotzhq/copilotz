@@ -1,16 +1,12 @@
 /**
- * Creates typed Schedule input envelopes for ticks and manual runs.
+ * Creates typed Schedule input envelopes for manual runs.
  *
  * @module
  */
 
 import type { CopilotzInputEnvelope } from "@copilotz/copilotz/application";
-import type {
-  ScheduledJobRunNowInput,
-  ScheduledJobTickInput,
-} from "../../shared/contracts.ts";
+import type { ScheduledJobRunNowInput } from "../../shared/contracts.ts";
 
-export const SCHEDULED_JOBS_TICK_INPUT_EVENT = "copilotz.schedules.tick.input";
 export const SCHEDULED_JOB_RUN_NOW_INPUT_EVENT =
   "copilotz.schedules.run-now.input";
 
@@ -21,13 +17,7 @@ type InputIdentity = Readonly<{
   deduplicationId?: string;
 }>;
 
-export type ScheduledJobsTickRequest = ScheduledJobTickInput & InputIdentity;
 export type ScheduledJobRunNowRequest = ScheduledJobRunNowInput & InputIdentity;
-
-export type ScheduledJobsTickInputEnvelope = CopilotzInputEnvelope<
-  typeof SCHEDULED_JOBS_TICK_INPUT_EVENT,
-  ScheduledJobTickInput
->;
 
 export type ScheduledJobRunNowInputEnvelope = CopilotzInputEnvelope<
   typeof SCHEDULED_JOB_RUN_NOW_INPUT_EVENT,
@@ -53,13 +43,6 @@ function envelope<TType extends string, TPayload extends object>(
     ...(causationId ? { causationId } : {}),
     ...(deduplicationId ? { deduplicationId } : {}),
   } as const);
-}
-
-/** Typed clock input. Runtime treats the result as an opaque envelope. */
-export function scheduleTick(
-  input: ScheduledJobsTickRequest = {},
-): ScheduledJobsTickInputEnvelope {
-  return envelope(SCHEDULED_JOBS_TICK_INPUT_EVENT, input);
 }
 
 /** Typed manual-run input. Runtime treats the result as an opaque envelope. */

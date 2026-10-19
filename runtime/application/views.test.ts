@@ -48,7 +48,8 @@ test("public embedded, Gateway, and Worker factories forward Views for collision
     );
     await rejects(() =>
       createCopilotz({
-        ...options,
+        plugins: options.plugins,
+        views: options.views,
         role: "worker",
         id: "view-test-worker",
         transport: { type: "in-process", config: { topic: "views-test" } },

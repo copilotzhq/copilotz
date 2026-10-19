@@ -1,3 +1,5 @@
+import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
+import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import { assertEventCommitted } from "./store.ts";
 import type {
   DeliveryDispatchFailure,
@@ -105,7 +107,8 @@ export function createEventCoordinator(
       result.event.metadata.sourceDeliveryId,
       result.event.metadata.sourceStreamId,
       result.event.metadata.sourceLiveDispatchId,
-    ].some((value) => typeof value === "string" && value.trim().length > 0);
+    ].some((value) => typeof value === "string" && value.trim().length > 0) ||
+      result.event.metadata.sourceOwnerAlarm === true;
     if (workerOriginated) {
       for (const delivery of actionable) {
         options.executor.scheduleDelivery(delivery);
@@ -159,23 +162,27 @@ export function createEventCoordinator(
     if (existing) return existing;
     // Install the promise before invoking user publication callbacks, which
     // may reenter the coordinator. Repeated flushes share one publication.
-    const pending = Promise.resolve().then(async () => {
-      let publishError: unknown;
-      if (!result.deduplicated) {
-        try {
-          await options.publish?.(result.event, {
-            settlementScopeId: result.settlementScopeId,
-            actionScopeId: result.actionScopeId,
-          });
-        } catch (error) {
-          publishError = error;
-        }
-      }
-      return {
-        dispatch: await dispatch(result),
-        ...(publishError === undefined ? {} : { publishError }),
-      };
-    });
+    const pending = Promise.resolve().then(() =>
+      withoutCollectionPolicyInvocation(() =>
+        withoutOwnerCommandAuthorization(async () => {
+          let publishError: unknown;
+          if (!result.deduplicated) {
+            try {
+              await options.publish?.(result.event, {
+                settlementScopeId: result.settlementScopeId,
+                actionScopeId: result.actionScopeId,
+              });
+            } catch (error) {
+              publishError = error;
+            }
+          }
+          return {
+            dispatch: await dispatch(result),
+            ...(publishError === undefined ? {} : { publishError }),
+          };
+        })
+      )
+    );
     publications.set(result.event, pending);
     return pending;
   };
@@ -193,6 +200,7 @@ export function createEventCoordinator(
     );
     const committed = await options.store.commitMutation({
       draft: mutation.draft,
+      eventId: mutation.eventId,
       body: mutation.body,
       statement: mutation.statement,
       mutate: mutation.mutate,

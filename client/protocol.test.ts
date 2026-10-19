@@ -23,9 +23,9 @@ function wire(
       : frame.content;
     return [
       enc.encode(
-        `--test\r\nx-copilotz-frame: ${frame.kind}\r\nx-copilotz-cursor: checkpoint-${index}\r\ncontent-length: ${content.length}\r\n${
-          frame.headers ?? ""
-        }\r\n`,
+        `--test\r\nx-copilotz-frame: ${frame.kind}\r\nx-copilotz-cursor: checkpoint-${index}\r\nx-copilotz-position: ${
+          index + 1
+        }\r\ncontent-length: ${content.length}\r\n${frame.headers ?? ""}\r\n`,
       ),
       content,
       enc.encode("\r\n"),
@@ -53,7 +53,7 @@ function singleFrame(
 ): Response {
   const bytes = typeof content === "string" ? enc.encode(content) : content;
   const head = enc.encode(
-    `--test\r\ncontent-length: ${bytes.length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\n${headers}\r\n`,
+    `--test\r\ncontent-length: ${bytes.length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\nx-copilotz-position: 1\r\n${headers}\r\n`,
   );
   const tail = enc.encode("\r\n--test--\r\n");
   const body = new Uint8Array(head.length + bytes.length + tail.length);
@@ -67,7 +67,7 @@ function singleFrame(
 
 function headerOnlyFrame(kind: string, length: number): Response {
   const body = enc.encode(
-    `--test\r\ncontent-length: ${length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\n\r\n`,
+    `--test\r\ncontent-length: ${length}\r\nx-copilotz-frame: ${kind}\r\nx-copilotz-cursor: checkpoint-0\r\nx-copilotz-position: 1\r\n\r\n`,
   );
   return new Response(body, {
     headers: { "content-type": "multipart/mixed; boundary=test" },
@@ -516,4 +516,85 @@ Deno.test("multipart validates simplified outcomes, causes and byte availability
       "terminal",
     );
   }
+});
+
+Deno.test("a missing final frame is repaired at the heartbeat from the last applied checkpoint", async () => {
+  let calls = 0;
+  const applied: string[] = [];
+  const client = createCopilotzClient({
+    baseUrl: "https://example.test",
+    fetch: (async (_input, init) => {
+      calls++;
+      const request = JSON.parse(String(init?.body));
+      if (calls === 1) {
+        const response = wire([
+          { kind: "output", content: JSON.stringify({ type: "event.first" }) },
+          {
+            kind: "output",
+            content: JSON.stringify({
+              type: "observation.heartbeat",
+              headSeq: "2",
+              payloadPositions: [],
+              deliveredPayloadPositions: [],
+            }),
+          },
+        ]);
+        const bytes = await response.text();
+        // Frame two was committed and sent but lost. No later domain update is needed.
+        return new Response(
+          bytes.replace("x-copilotz-position: 2", "x-copilotz-position: 3"),
+          { headers: response.headers },
+        );
+      }
+      assertEquals(request.checkpoint, "checkpoint-0");
+      return wire([{
+        kind: "output",
+        content: JSON.stringify({ type: "event.final" }),
+      }]);
+    }) as typeof fetch,
+  });
+  await client.operations.observe({
+    operationIds: ["operation"],
+    onFrame(frame) {
+      if (frame.kind === "output") applied.push(frame.output.type);
+    },
+  });
+  assertEquals(calls, 2);
+  assertEquals(applied, ["event.first", "event.final"]);
+});
+
+Deno.test("heartbeat payload position catches a lost final chunk even when the owner sequence is unchanged", async () => {
+  const response = wire([
+    {
+      kind: "output",
+      content: JSON.stringify({ type: "stream.output", streamId: "lane" }),
+    },
+    {
+      kind: "stream-chunk",
+      content: new Uint8Array([1, 2]),
+      headers: "x-copilotz-stream-id: lane\r\nx-copilotz-offset: 0\r\n",
+    },
+    {
+      kind: "output",
+      content: JSON.stringify({
+        type: "observation.heartbeat",
+        headSeq: "1",
+        payloadPositions: [{ streamId: "lane", committedOffset: 4 }],
+        deliveredPayloadPositions: [{ streamId: "lane", committedOffset: 4 }],
+      }),
+    },
+  ]);
+  const applied: string[] = [];
+  await assertRejects(
+    async () => {
+      for await (const frame of decodeObservation(response)) {
+        applied.push(
+          frame.kind,
+        );
+      }
+    },
+    ProtocolError,
+    "stream push was lost",
+  );
+  assertEquals(applied, ["output", "stream-chunk"]);
 });

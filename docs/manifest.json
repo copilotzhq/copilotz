@@ -264,6 +264,11 @@
           "description": "Embedded processes or Gateways and Workers with shared persistence."
         },
         {
+          "title": "Trusted Host Commands",
+          "slug": "host-commands",
+          "description": "Fixed-scope host SQL, atomic receipts and explicit startup recovery."
+        },
+        {
           "title": "Runtimes and Host Capabilities",
           "slug": "runtime-adapters",
           "description": "Feature support per host and host-specific entrypoints."

@@ -44,6 +44,7 @@ type PartOptions = Readonly<{
   offset?: number;
   cursor?: string;
   maxJsonFrameBytes?: number;
+  position?: number;
 }>;
 
 class MultipartFrameCapacityError extends RangeError {
@@ -106,6 +107,7 @@ function part(
     ...(options.cursor
       ? [`${CURSOR_HEADER}: ${safeHeader(options.cursor, "Replay cursor")}`]
       : []),
+    `x-copilotz-position: ${options.position}`,
     "",
     "",
   ].join("\r\n");
@@ -190,7 +192,9 @@ export function applicationOutputsMultipartResponse(
       `renewAfterMs must be an integer between 1 and ${MAX_OBSERVATION_LIFETIME_MS}.`,
     );
   }
-  const partOptions = { maxJsonFrameBytes } as const;
+  const partOptions = { maxJsonFrameBytes, position: 0 };
+  let framePosition = 0;
+  const deliveredPayloadPositions = new Map<string, number>();
   const transport = new TransformStream<Uint8Array, Uint8Array>(undefined, {
     highWaterMark: 256 * 1024,
     size: (value) => value.byteLength,
@@ -279,8 +283,10 @@ export function applicationOutputsMultipartResponse(
     mutations: readonly OperationReplayCursorMutation[] = [],
   ): Promise<void> =>
     serializeFrame(async () => {
+      partOptions.position = framePosition + 1;
       const frame = build(cursorTracker.cursor(mutations));
       await write(frame);
+      framePosition++;
       cursorTracker.commit(mutations);
     });
   const pump = async (
@@ -307,6 +313,7 @@ export function applicationOutputsMultipartResponse(
       };
     };
     try {
+      deliveredPayloadPositions.set(output.streamId, offset);
       while (true) {
         const next = await reader.read();
         if (cancelled) return;
@@ -327,6 +334,7 @@ export function applicationOutputsMultipartResponse(
               cursor,
             }), [streamMutation("offset", toOffset)]);
           offset = toOffset;
+          deliveredPayloadPositions.set(output.streamId, offset);
         }
       }
       if (cancelled) return;
@@ -380,6 +388,7 @@ export function applicationOutputsMultipartResponse(
             : [],
         );
       }
+      deliveredPayloadPositions.delete(output.streamId);
     } catch (error) {
       // A failed read is an interrupted observation, not a durable stream outcome.
       // Closing the transport lets clients retry their last applied checkpoint.
@@ -430,7 +439,17 @@ export function applicationOutputsMultipartResponse(
         part(
           boundary,
           "output",
-          encoder.encode(JSON.stringify({ type: "observation.heartbeat" })),
+          encoder.encode(JSON.stringify({
+            type: "observation.heartbeat",
+            headSeq: source.heartbeat?.([...deliveredPayloadPositions.keys()])
+              .headSeq ?? "0",
+            payloadPositions:
+              source.heartbeat?.([...deliveredPayloadPositions.keys()])
+                .payloadPositions ?? [],
+            deliveredPayloadPositions: [...deliveredPayloadPositions].map((
+              [streamId, committedOffset],
+            ) => ({ streamId, committedOffset })),
+          })),
           { ...partOptions, cursor },
         )
       )

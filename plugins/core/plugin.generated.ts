@@ -29,7 +29,53 @@ import entry25 from "./resources/toolResults/default/index.ts";
 import entry26 from "./resources/tools/ask/index.ts";
 import entry27 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/core";
+  readonly version: "0.75.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly collections: {
+    readonly "message": typeof entry9;
+    readonly "participant": typeof entry10;
+    readonly "spaceAttachment": typeof entry11;
+    readonly "space": typeof entry12;
+    readonly "thread": typeof entry13;
+    readonly "toolPlanBranch": typeof entry14;
+    readonly "toolPlanStageResult": typeof entry15;
+    readonly "toolPlan": typeof entry16;
+  };
+  readonly actions: {
+    readonly "addThreadParticipant": typeof entry0;
+    readonly "ask": typeof entry1;
+    readonly "compactContext": typeof entry2;
+    readonly "createThreadMessage": typeof entry3;
+    readonly "createThread": typeof entry4;
+    readonly "deleteThreadMessages": typeof entry5;
+    readonly "readToolResult": typeof entry6;
+    readonly "reviseMessage": typeof entry7;
+    readonly "spaces": typeof entry8;
+  };
+  readonly processors: {
+    readonly "messageInput": typeof entry17;
+    readonly "messageRouter": typeof entry18;
+    readonly "projectAgentFailure": typeof entry19;
+    readonly "projectTextResult": typeof entry20;
+    readonly "projectToolResult": typeof entry21;
+    readonly "resumeCompactionRoute": typeof entry22;
+    readonly "toolPlanCoordinator": typeof entry23;
+  };
+  readonly resources: {
+    readonly "capabilities": {
+      readonly "default": typeof entry24;
+    };
+    readonly "toolResults": {
+      readonly "default": typeof entry25;
+    };
+    readonly "tools": {
+      readonly "ask": typeof entry26;
+      readonly "readToolResult": typeof entry27;
+    };
+  };
+} = {
   id: "@copilotz/core",
   version: "0.75.0",
   plugins: [dependency0],

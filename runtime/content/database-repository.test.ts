@@ -31,6 +31,7 @@ import {
   createMemoryBodyStore,
   type DatabaseAssetRepository,
   digestContent,
+  isPendingContentRef,
   maintainProgressiveBodies,
 } from "./index.ts";
 import { collectionAssetAdopterFor } from "./database-repository.ts";
@@ -51,8 +52,13 @@ async function createFixture(options: {
   maxDatabaseBytes?: number;
   storage?: Parameters<typeof createBodyStorageRuntime>[0];
 } = {}) {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const session = createSqlSession(db);
+  if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+    await session.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+  }
   await provisionCopilotzSchema(session, TEST_SCHEMA);
   const store = createEventStore({ session, schema: TEST_SCHEMA });
   const observed: string[] = [];
@@ -139,9 +145,12 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
       metadata: { origin: "test" },
     });
     assertEquals(first.id, "asset-a");
-    assertEquals(first.location.kind, "database");
     assertEquals(
-      first.location.kind === "database" ? first.location.key : "",
+      (await fixture.assets.catalog.read(first.bodyId))!.copy.backendKind,
+      "database",
+    );
+    assertEquals(
+      (await fixture.assets.catalog.read(first.bodyId))!.copy.key,
       "schemas/copilotz_database_assets/namespaces/tenant-a/origins/namespace/tenant-a/assets/asset-a",
     );
     assertEquals(first.state, "ready");
@@ -167,7 +176,7 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
       `SELECT count(*)::int AS n
          FROM "copilotz_database_assets"."content_bodies"
         WHERE body_id = $1`,
-      [first.location.kind === "database" ? first.location.key : ""],
+      [(await fixture.assets.catalog.read(first.bodyId))!.copy.key],
     );
     assertEquals(bodyRows.rows[0].n, 1);
     const refs = await fixture.session.query<{ n: number }>(
@@ -178,7 +187,7 @@ Deno.test("database assets publish immutable bodies, events, and deliveries with
           AND id = 'asset-a'
           AND data ->> 'state' = 'ready'
           AND data ->> 'bodyId' = $1`,
-      [first.location.kind === "database" ? first.location.key : ""],
+      [first.bodyId],
     );
     assertEquals(refs.rows[0].n, 1);
     assertEquals(
@@ -221,9 +230,9 @@ Deno.test("prepared bodies warm canonical reads after commit and remapping", asy
   const objectStore = {
     ...memory,
     kind: "object" as const,
-    async read(input: Parameters<typeof memory.read>[0]) {
+    async readRange(input: Parameters<typeof memory.readRange>[0]) {
       bodyReads += 1;
-      return await memory.read(input);
+      return await memory.readRange(input);
     },
   };
   const storage = {
@@ -235,7 +244,6 @@ Deno.test("prepared bodies warm canonical reads after commit and remapping", asy
         deployment: {
           durability: "ephemeral" as const,
           reach: "process" as const,
-          minimumProtectionMs: 0,
           readyGarbageCollection: false,
         },
       },
@@ -536,7 +544,6 @@ Deno.test("external bodies are prepared before Asset graph adoption", async () =
           deployment: {
             durability: "ephemeral",
             reach: "process",
-            minimumProtectionMs: 500,
             readyGarbageCollection: true,
           },
         },
@@ -559,7 +566,12 @@ Deno.test("external bodies are prepared before Asset graph adoption", async () =
     assertEquals(puts, 1);
     assertEquals(plan.adoptions.map((item) => item.kind), ["ready"]);
     assertEquals(plan.assets.length, 1);
-    assert(await memory.head({ bodyId: plan.assets[0].bodyId }));
+    assert(
+      await memory.head({
+        bodyId:
+          (await fixture.assets.catalog.read(plan.assets[0].bodyId))!.copy.key,
+      }),
+    );
     assertEquals(
       await fixture.assets.get("tenant-a", "asset-planned-object"),
       null,
@@ -582,7 +594,7 @@ Deno.test("external bodies are prepared before Asset graph adoption", async () =
   }
 });
 
-Deno.test("database bodies and Asset metadata are adopted in one transaction", async () => {
+Deno.test("database bytes are reserved before atomic Asset graph adoption", async () => {
   const fixture = await createFixture();
   try {
     const adopter = collectionAssetAdopterFor(fixture.assets);
@@ -596,7 +608,8 @@ Deno.test("database bodies and Asset metadata are adopted in one transaction", a
       namespace: "tenant-a",
       content: prepared,
     });
-    const bodyId = plan.assets[0].bodyId;
+    const bodyId =
+      (await fixture.assets.catalog.read(plan.assets[0].bodyId))!.copy.key;
     const bodyRows = async () =>
       (await fixture.session.query<{ n: number }>(
         `SELECT count(*)::int AS n
@@ -605,8 +618,8 @@ Deno.test("database bodies and Asset metadata are adopted in one transaction", a
         [bodyId],
       )).rows[0].n;
 
-    assertEquals(plan.adoptions.map((item) => item.kind), ["database"]);
-    assertEquals(await bodyRows(), 0);
+    assertEquals(plan.adoptions.map((item) => item.kind), ["ready"]);
+    assertEquals(await bodyRows(), 1);
     assertEquals(
       await fixture.assets.get("tenant-a", "asset-planned-database"),
       null,
@@ -637,7 +650,10 @@ Deno.test("database asset policy stores large durable content through BodyStore"
       mediaType: "application/octet-stream",
       body: new Uint8Array([1, 2, 3, 4]),
     });
-    assertEquals(asset.location.kind, "database");
+    assertEquals(
+      (await fixture.assets.catalog.read(asset.bodyId))!.copy.backendKind,
+      "database",
+    );
     assertEquals(
       (await fixture.assets.read("tenant-a", asset.id)).bytes,
       new Uint8Array([1, 2, 3, 4]),
@@ -671,7 +687,6 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
           deployment: {
             durability: "ephemeral",
             reach: "process",
-            minimumProtectionMs: 500,
             readyGarbageCollection: true,
           },
         },
@@ -690,16 +705,22 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
       },
     });
     assertEquals(asset.origin, { type: "thread", id: "thread-a" });
-    assertEquals(asset.location.kind, "object");
     assertEquals(
-      asset.location.kind === "object" ? asset.location.key : "",
+      (await fixture.assets.catalog.read(asset.bodyId))!.copy.backendKind,
+      "object",
+    );
+    assertEquals(
+      (await fixture.assets.catalog.read(asset.bodyId))!.copy.key,
       "copilotz/schemas/copilotz_database_assets/namespaces/tenant-a/origins/thread/thread-a/assets/asset-object",
     );
     const row = await fixture.session.query<{ data: unknown }>(
       `SELECT data FROM ${fixture.store.tables.nodes} WHERE id = 'asset-object'`,
     );
     assertEquals(Object.hasOwn(row.rows[0].data as object, "body"), false);
-    assertEquals(JSON.stringify(row.rows[0].data).includes("gcs:assets"), true);
+    assertEquals(
+      JSON.stringify(row.rows[0].data).includes("gcs:assets"),
+      false,
+    );
     assertEquals(JSON.stringify(row.rows[0].data).includes("secret"), false);
     const missingReader = createDatabaseAssetRepository({
       coordinator: fixture.coordinator,
@@ -717,7 +738,7 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
       "reading requires a configured object reader",
     );
     const mismatchedReader = createMemoryBodyStore({ backendId: "gcs:assets" });
-    const bodyId = asset.location.kind === "object" ? asset.location.key : "";
+    const bodyId = (await fixture.assets.catalog.read(asset.bodyId))!.copy.key;
     const wrongBytes = new TextEncoder().encode('{"ok":false}');
     await mismatchedReader.put({
       bodyId,
@@ -758,7 +779,6 @@ Deno.test("object-backed assets persist provenance paths and keep bodies outside
 Deno.test("asset maintenance retries body deletion and removes old orphan uploads", async () => {
   const memory = createMemoryBodyStore({
     backendId: "gcs:maintenance",
-    protectionMs: 500,
   });
   let rejectNextDelete = true;
   const objectStore = Object.freeze({
@@ -785,7 +805,6 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
           deployment: {
             durability: "ephemeral",
             reach: "process",
-            minimumProtectionMs: 500,
             readyGarbageCollection: true,
           },
         },
@@ -800,7 +819,7 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       mediaType: "text/plain",
       body,
     });
-    const key = asset.location.kind === "object" ? asset.location.key : "";
+    const key = (await fixture.assets.catalog.read(asset.bodyId))!.copy.key;
     await fixture.assets.markDeleted("tenant-a", asset.id);
     assert(await memory.head({ bodyId: key }));
     const pendingDeletion = await fixture.session.query<{ data: unknown }>(
@@ -815,7 +834,7 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       `SELECT COUNT(*) AS count FROM ${fixture.store.tables.nodes}
        WHERE type = 'asset' AND (data ->> 'state') = 'deleted'
          AND (data ->> 'bodyDeletedAt') IS NULL
-         AND (data -> 'location' ->> 'kind') <> 'database'`,
+         AND data->>'bodyId' IS NOT NULL`,
     );
     assertEquals(Number(pendingCount.rows[0].count), 1);
 
@@ -825,7 +844,7 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       mediaType: "text/plain",
       body: new TextEncoder().encode("keep me"),
     });
-    const keepKey = kept.location.kind === "object" ? kept.location.key : "";
+    const keepKey = (await fixture.assets.catalog.read(kept.bodyId))!.copy.key;
     assert(await memory.head({ bodyId: keepKey }));
 
     const orphanBytes = new TextEncoder().encode("orphan");
@@ -838,7 +857,15 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
       digest: await digestContent(orphanBytes),
       ifAbsent: true,
     });
-    await new Promise((resolve) => setTimeout(resolve, 550));
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.expire",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second'`,
+        );
+      },
+    );
 
     const maintained = await fixture.assets.maintainBodies({
       orphanAfterMs: 0,
@@ -866,7 +893,6 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
 Deno.test("asset maintenance collects orphan incomplete bodies but preserves catalog retention", async () => {
   const memory = createMemoryBodyStore({
     backendId: "memory:incomplete-maintenance",
-    protectionMs: 0,
   });
   const fixture = await createFixture({
     storage: {
@@ -881,9 +907,23 @@ Deno.test("asset maintenance collects orphan incomplete bodies but preserves cat
   const retainedId = `${prefix}/catalog-retained`;
   try {
     for (const bodyId of [orphanId, retainedId]) {
+      await fixture.assets.catalog.reserve({
+        bodyId,
+        writerId: bodyId,
+        generation: 1,
+        namespace: "tenant-a",
+        copy: {
+          key: bodyId,
+          backendKind: memory.kind,
+          backendId: memory.backendId,
+        },
+        protectForMs: 0,
+      });
       const writer = await memory.reserve({
         bodyId,
         mediaType: "text/plain",
+        reservationId: bodyId,
+        generation: 1,
       });
       await memory.append({
         writer,
@@ -892,7 +932,10 @@ Deno.test("asset maintenance collects orphan incomplete bodies but preserves cat
         bytes: new TextEncoder().encode("partial"),
       });
     }
-    const recovered = await maintainProgressiveBodies(memory);
+    const recovered = await maintainProgressiveBodies(
+      fixture.assets.catalog,
+      () => memory,
+    );
     assertEquals(recovered.terminated, 2);
 
     assertEquals(
@@ -941,5 +984,318 @@ Deno.test("A55 database content core remains factory-first and Web-standard", as
     assert(!/from\s+["']node:/.test(source), module);
     assert(!/\bclass\s+\w+/.test(source), module);
     assert(!/runtime\/cli|server\//.test(source), module);
+  }
+});
+
+Deno.test("retirement claim wins against later adoption without holding SQL across deletion", async () => {
+  const memory = createMemoryBodyStore({ backendId: "memory:retirement-race" });
+  let entered!: () => void, release!: () => void;
+  const deleting = new Promise<void>((resolve) => entered = resolve),
+    held = new Promise<void>((resolve) => release = resolve);
+  const store = {
+    ...memory,
+    maintenance: {
+      ...memory.maintenance,
+      async delete(input: BodyMaintenanceDeleteInput) {
+        entered();
+        await held;
+        return await memory.maintenance.delete(input);
+      },
+    },
+  };
+  const fixture = await createFixture({
+    storage: { storage: { type: "custom", config: { store } } },
+  });
+  try {
+    const prepared = await createContentPreparer({
+      createId: () => "race-asset",
+    }).prepare("original", { namespace: "tenant-a" });
+    const plan = await collectionAssetAdopterFor(fixture.assets)
+      .prepareMaterialization({ namespace: "tenant-a", content: prepared });
+    const logical = (await fixture.assets.catalog.read(plan.assets[0].bodyId))!;
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.expire",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second'`,
+        );
+      },
+    );
+    const head = (await memory.head({ bodyId: logical.copy.key }))!;
+    const retirement = fixture.assets.retireUnownedReadyBody({
+      store,
+      body: head,
+    });
+    await deleting;
+    await assertRejects(() =>
+      fixture.assets.materialize({ namespace: "tenant-a", content: prepared })
+    );
+    assertEquals(await fixture.assets.get("tenant-a", "race-asset"), null);
+    release();
+    assertEquals(await retirement, { status: "deleted" });
+    await assertRejects(() =>
+      fixture.assets.materialize({ namespace: "tenant-a", content: prepared })
+    );
+    assertEquals(
+      (await fixture.session.query(
+        `SELECT completed FROM ${fixture.store.tables.owner_body_retirements}`,
+      )).rows[0]?.completed,
+      true,
+    );
+  } finally {
+    release();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("pending adoption rolls back atomically, retries canonically, and rejects a different owner", async () => {
+  const fixture = await createFixture();
+  try {
+    const pending = await fixture.assets.capture({
+      namespace: "tenant-a",
+      operationKey: "generated-three-roles",
+      producer: "producer-a",
+      content: [{ type: "text", text: "answer", role: "body" }, {
+        type: "text",
+        text: "reason",
+        role: "reasoning",
+      }, { type: "text", text: "native", role: "native-reasoning" }],
+    });
+    const origin = { type: "message", id: "owner-a" },
+      adopter = collectionAssetAdopterFor(fixture.assets),
+      plan = await adopter.prepareMaterialization({
+        namespace: "tenant-a",
+        content: pending,
+        origin,
+      });
+    await assertRejects(() =>
+      fixture.coordinator.commitMutation({
+        draft: {
+          type: "example.created",
+          namespace: "tenant-a",
+          subject: { type: "message", id: "owner-a" },
+          payload: {},
+        },
+        mutate: async (context) => {
+          await adopter.adoptMaterialization(context, plan);
+          throw new Error("rollback owning mutation");
+        },
+      })
+    );
+    assertEquals(
+      (await fixture.session.query(
+        `SELECT 1 FROM ${fixture.store.tables.content_adoptions}`,
+      )).rows.length,
+      0,
+    );
+    assertEquals(
+      (await fixture.session.query(
+        `SELECT 1 FROM ${fixture.store.tables.nodes}`,
+      )).rows.length,
+      0,
+    );
+    const first = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: pending,
+      origin,
+    });
+    assertEquals(first.map((ref) => ref.role), [
+      "body",
+      "reasoning",
+      "native-reasoning",
+    ]);
+    assertEquals(
+      await fixture.assets.materialize({
+        namespace: "tenant-a",
+        content: pending,
+        origin,
+      }),
+      first,
+    );
+    await assertRejects(() =>
+      fixture.assets.materialize({
+        namespace: "tenant-a",
+        content: pending,
+        origin: { type: "message", id: "owner-b" },
+      })
+    );
+    assertEquals(
+      (await fixture.session.query(
+        `SELECT 1 FROM ${fixture.store.tables.content_adoptions}`,
+      )).rows.length,
+      3,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("conditional collection keeps pending and owned copies but retires superseded owned copies", async () => {
+  const memory = createMemoryBodyStore({ backendId: "memory:owned-copy" }),
+    target = createMemoryBodyStore({ backendId: "memory:replacement" });
+  const fixture = await createFixture({
+    storage: {
+      storage: { type: "custom", config: { store: memory } },
+      readers: [target],
+    },
+  });
+  try {
+    const pending = await fixture.assets.capture({
+      namespace: "tenant-a",
+      operationKey: "pending-keep",
+      producer: "producer-a",
+      content: "kept",
+    });
+    const descriptor = pending[0];
+    assert(isPendingContentRef(descriptor));
+    const logical =
+        (await fixture.assets.catalog.resolvePending("tenant-a", descriptor))
+          .body,
+      head = (await memory.head({ bodyId: logical.copy.key }))!;
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.expire",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second'`,
+        );
+      },
+    );
+    assertEquals(
+      await fixture.assets.retireUnownedReadyBody({
+        store: memory,
+        body: head,
+      }),
+      { status: "blocked" },
+    );
+    const refs = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: pending,
+      origin: { type: "message", id: "owner" },
+    });
+    assertEquals(
+      (await fixture.assets.retireUnownedReadyBody({
+        store: memory,
+        body: head,
+      })).status,
+      "owned",
+    );
+    const { promoteLogicalBody } = await import("./promoted-body-store.ts");
+    await promoteLogicalBody({
+      catalog: fixture.assets.catalog,
+      bodyId: logical.bodyId,
+      storeFor: fixture.assets.storeForCopy,
+      target,
+      targetKey: "replacement",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    assertEquals(
+      await fixture.assets.retireUnownedReadyBody({
+        store: memory,
+        body: head,
+      }),
+      { status: "deleted" },
+    );
+    assertEquals(
+      new TextDecoder().decode(
+        (await fixture.assets.read("tenant-a", refs[0].assetId)).bytes,
+      ),
+      "kept",
+    );
+    const unsupported = { ...target, conditionalDelete: false };
+    const replacement = (await target.head({ bodyId: "replacement" }))!;
+    assertEquals(
+      await fixture.assets.retireUnownedReadyBody({
+        store: unsupported,
+        body: replacement,
+      }),
+      { status: "blocked" },
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("asset reads and pending adoption re-resolve a copy retired during head preflight", async () => {
+  const memory = createMemoryBodyStore({
+      backendId: "memory:preflight-source",
+    }),
+    target = createMemoryBodyStore({ backendId: "memory:preflight-target" });
+  let switchCopy: (() => Promise<void>) | undefined;
+  const store = {
+    ...memory,
+    async head(input: { bodyId: string }) {
+      const switching = switchCopy;
+      switchCopy = undefined;
+      if (switching) await switching();
+      return await memory.head(input);
+    },
+  };
+  const fixture = await createFixture({
+    storage: {
+      storage: { type: "custom", config: { store } },
+      readers: [target],
+    },
+  });
+  try {
+    const { promoteLogicalBody } = await import("./promoted-body-store.ts");
+    const arm = async (bodyId: string, targetKey: string) => {
+      const body = (await fixture.assets.catalog.read(bodyId))!,
+        head = (await memory.head({ bodyId: body.copy.key }))!;
+      switchCopy = async () => {
+        await promoteLogicalBody({
+          catalog: fixture.assets.catalog,
+          bodyId,
+          storeFor: fixture.assets.storeForCopy,
+          target,
+          targetKey,
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        });
+        await memory.maintenance.delete({
+          bodyId: body.copy.key,
+          expectedState: "ready",
+          expectedVersionToken: head.versionToken,
+          idleForMs: 0,
+        });
+      };
+    };
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "read-race",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("preserved"),
+    });
+    await arm(asset.bodyId, "read-target");
+    assertEquals(
+      new TextDecoder().decode(
+        (await fixture.assets.read("tenant-a", asset.id)).bytes,
+      ),
+      "preserved",
+    );
+    const pending = await fixture.assets.capture({
+      namespace: "tenant-a",
+      operationKey: "adoption-race",
+      producer: "producer",
+      content: "captured",
+    });
+    assert(isPendingContentRef(pending[0]));
+    const body =
+      (await fixture.assets.catalog.resolvePending("tenant-a", pending[0]))
+        .body;
+    await arm(body.bodyId, "adoption-target");
+    const refs = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: pending,
+      origin: { type: "message", id: "owner" },
+    });
+    assertEquals(
+      new TextDecoder().decode(
+        (await fixture.assets.read("tenant-a", refs[0].assetId)).bytes,
+      ),
+      "captured",
+    );
+  } finally {
+    await closeFixture(fixture);
   }
 });

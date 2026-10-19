@@ -21,7 +21,6 @@ Deno.test({
       secretAccessKey: Deno.env.get("COPILOTZ_TEST_MINIO_SECRET_KEY") ??
         "minioadmin",
       pathStyle: true,
-      protectionMs: 0,
     });
     const bytes = new TextEncoder().encode("copilotz-minio-contract");
     try {
@@ -40,6 +39,7 @@ Deno.test({
           bodyId: key,
           expectedState: "ready",
           expectedMaintenanceVersion: head.maintenanceVersion,
+          expectedVersionToken: head.versionToken,
           idleForMs: 0,
         }).catch(() => false);
       }

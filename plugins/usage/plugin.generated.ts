@@ -3,7 +3,17 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/plugins";
 import entry0 from "./collections/usage/index.ts";
 import entry1 from "./processors/record-llm-usage/index.ts";
 import entry2 from "./processors/record-tool-usage/index.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/core-usage";
+  readonly version: "3.0.0";
+  readonly collections: {
+    readonly "usage": typeof entry0;
+  };
+  readonly processors: {
+    readonly "recordLlmUsage": typeof entry1;
+    readonly "recordToolUsage": typeof entry2;
+  };
+} = {
   id: "@copilotz/core-usage",
   version: "3.0.0",
   collections: {

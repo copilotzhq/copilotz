@@ -62,12 +62,11 @@ export async function loadGraphRelation(
   tables: Readonly<{ edges: string }>,
   namespace: string,
   id: string,
-  lock = false,
 ): Promise<CollectionGraphRelation | null> {
   const result = await executor.query<EdgeRow>(
     `SELECT * FROM ${tables.edges}
      WHERE namespace = $1 AND id = $2
-     LIMIT 1${lock ? " FOR UPDATE" : ""}`,
+     LIMIT 1`,
     [namespace, id],
   );
   return result.rows[0] ? mapEdge(result.rows[0]) : null;
@@ -181,7 +180,6 @@ export async function projectGraphRelation(
     context.tables,
     relation.namespace,
     relation.id,
-    true,
   );
   if (
     !existing || existing.source.id !== relation.source.id ||

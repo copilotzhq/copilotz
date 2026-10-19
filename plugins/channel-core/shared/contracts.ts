@@ -188,8 +188,9 @@ export type ChannelAdapter = Readonly<{
     context: ChannelReceiveContext,
   ): ChannelReceivedMessage | Promise<ChannelReceivedMessage>;
   /**
-   * External delivery is at-least-once. deliveryKey remains stable across
-   * retries and may be forwarded only where the provider supports idempotency.
+   * Called only after the channel delivery Action obtains a fresh effect permit.
+   * An ambiguous call is not repeated. deliveryKey is stable and may be forwarded
+   * as provider idempotency only where the provider explicitly supports it.
    */
   deliver?(
     input: ChannelDeliveryAttempt,

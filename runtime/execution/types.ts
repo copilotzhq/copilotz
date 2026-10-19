@@ -109,7 +109,8 @@ export type DeliveryDiagnostic = Readonly<{
     | "worker_handler_started"
     | "worker_handler_settled"
     | "gateway_event_frame_received"
-    | "recovery_selected";
+    | "recovery_selected"
+    | "owner_alarm_refused";
   timestampMs: number;
   eventId?: string;
   deliveryId?: string;
@@ -138,6 +139,8 @@ export type DeliveryDiagnosticSink = (
 ) => void | Promise<void>;
 
 export type CreateDeliveryWorkloadOptions = Readonly<{
+  /** Trusted placement selected by an owner-created executor. */
+  localExecution?: boolean;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
@@ -178,6 +181,12 @@ export type DeliveryRecoveryDispatch = Readonly<{
 }>;
 
 export type CreateDeliveryExecutorOptions = Readonly<{
+  /** Owner registration; never passed to a worker. */
+  createWorkerWorkloads?: import("./workload.ts").OwnerExecutionFactory;
+  /** Installs capability admission on an application-owned Hypervisor before attachment. */
+  bindOwnerCapabilities?: (
+    host: import("./owner-capabilities.ts").OwnerCapabilityHost,
+  ) => void;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   defaultDatabaseSchema?: string;
@@ -209,8 +218,6 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   capacity?: number;
   leaseMs?: number;
   heartbeatMs?: number;
-  /** Enables Gateway-owned continuous recovery after an unfiltered sweep. */
-  continuousRecovery?: boolean;
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
   /** Disabled by default; receives allowlisted process-local delivery timing. */

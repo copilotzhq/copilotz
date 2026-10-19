@@ -88,9 +88,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     type: "in-process",
     config: { topic: `copilotz.downstream.${crypto.randomUUID()}` },
   } as const;
-  const hypervisor = createHypervisor({
-    transports: [transport],
-  });
+  let hypervisor!: ReturnType<typeof createHypervisor>;
   const plugin = migratedApplicationPlugin();
   const workerId = "downstream-copilotz";
   const authoring = await createCopilotzApplication({
@@ -121,7 +119,17 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
     database,
     namespace: NAMESPACE,
     plugins: [storageFixture, plugin],
-    dispatcher: hypervisor,
+    dispatcher({ workerCalls, lifecycle }) {
+      hypervisor = createHypervisor({ transports: [transport], workerCalls }, {
+        ...lifecycle,
+        onReady(event) {
+          // The host also owns unrelated workloads on this same transport.
+          if (event.fence.identity.workerId === "downstream-probe") return;
+          return lifecycle.onReady?.(event);
+        },
+      });
+      return hypervisor;
+    },
     target: { workerId },
     engine: {
       retryBaseMs: 0,
@@ -130,7 +138,6 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
   });
   const worker = await createCopilotz({
     role: "worker",
-    database,
     namespace: NAMESPACE,
     plugins: [storageFixture, plugin],
     id: workerId,
@@ -146,6 +153,7 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       "close",
       "collections",
       "fetch",
+      "hostCommands",
       "listOperations",
       "maintenance",
       "observe",

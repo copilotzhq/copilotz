@@ -21,6 +21,20 @@ export type SqlNotificationSubscription = Readonly<{
   close(): Promise<void>;
 }>;
 
+/** Cleanup is confirmed only after the backend has released the exact resource. */
+export type SqlSnapshotCleanup = "confirmed" | "unknown";
+export type SqlReadSnapshot =
+  | Readonly<{ kind: "exclusive"; snapshot: SqlExecutor }>
+  | Readonly<
+    {
+      kind: "pooled";
+      snapshot: SqlExecutor;
+      current<T>(
+        operation: (transaction: SqlExecutor) => Promise<T>,
+      ): Promise<T>;
+    }
+  >;
+
 export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
@@ -31,6 +45,15 @@ export type SqlSession = SqlExecutor & {
    */
   readSnapshot?<T>(
     operation: (snapshot: SqlExecutor) => Promise<T>,
+  ): Promise<T>;
+  withReadSnapshot?<T>(
+    operation: (scope: SqlReadSnapshot) => Promise<T>,
+    options?: Readonly<
+      {
+        signal?: AbortSignal;
+        onCleanup?: (outcome: SqlSnapshotCleanup) => void;
+      }
+    >,
   ): Promise<T>;
   /** Optional PostgreSQL notification seam; absence enables bounded fallback. */
   listen?(
@@ -172,6 +195,7 @@ type DatabaseLike = SqlExecutor & {
     operation: (transaction: SqlExecutor) => Promise<T>,
   ) => Promise<T>;
   listen?: SqlSession["listen"];
+  withReadSnapshot?: SqlSession["withReadSnapshot"];
 };
 
 /** Adapts an Ominipg/Copilotz database into the narrow atomic-session seam. */
@@ -196,6 +220,9 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
 
   return {
     query,
+    ...(typeof database.withReadSnapshot === "function"
+      ? { withReadSnapshot: database.withReadSnapshot.bind(database) }
+      : {}),
     ...(typeof database.listen === "function"
       ? { listen: database.listen.bind(database) }
       : {}),

@@ -1,3 +1,5 @@
+import { externalEffect } from "@copilotz/copilotz/actions";
+import { capturePendingContentRef } from "@copilotz/copilotz/content";
 import {
   type CompositionContribution,
   contribution,
@@ -24,6 +26,7 @@ import {
   base64ToBytes,
   type ContentRef,
   parseDataUrl,
+  type PendingContentRef,
 } from "@copilotz/copilotz/content";
 import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
 import { parse as parseYaml } from "../../../../dependencies/yaml.ts";
@@ -716,35 +719,11 @@ async function consumeNdjsonToolResponse(
       state.settled = true;
       closed.push({ channel, prepared });
     }
+    const streams: Record<string, PendingContentRef> = {};
     for (const { channel, prepared } of closed) {
-      if (prepared.content.length !== 1) {
-        throw new TypeError(
-          `NDJSON channel '${channel}' must close with exactly one ContentRef.`,
-        );
-      }
+      streams[channel] = capturePendingContentRef(prepared);
     }
-    const combined = {
-      content: closed.map(({ prepared }) => prepared.content[0]),
-      assets: closed.flatMap(({ prepared }) => prepared.assets),
-    } as const;
-    const materialized = closed.length > 0
-      ? await context.content.materialize(combined)
-      : [];
-    if (materialized.length !== closed.length) {
-      throw new TypeError(
-        "NDJSON content materialization must return one ContentRef per channel.",
-      );
-    }
-    const streams: Record<string, ContentRef> = {};
-    closed.forEach(({ channel, prepared }, index) => {
-      const ref = materialized[index];
-      if (ref.assetId !== prepared.content[0].assetId) {
-        throw new TypeError(
-          `NDJSON channel '${channel}' materialized an unexpected ContentRef.`,
-        );
-      }
-      streams[channel] = ref;
-    });
+
     if (Object.keys(streams).length === 0) return terminal.value;
     const value = terminal.value;
     return value && typeof value === "object" && !Array.isArray(value)
@@ -1101,7 +1080,8 @@ function createApiExecutor(
       prepareRequest: capability?.prepareRequest,
     };
     const fetcher = capability?.fetch ?? fetch;
-    const tokenCache = capability?.tokenCache ?? new Map<string, CachedToken>();
+    const tokenCache = capability?.tokenCache ??
+      new Map<string, CachedToken>();
     const baseUrl = capability?.baseUrl ?? declaredBaseUrl;
     if (!baseUrl) {
       throw new TypeError(
@@ -1264,60 +1244,70 @@ function createApiExecutor(
       requestOptions.signal = controller.signal;
       if (context.signal.aborted) abort();
 
-      // Make the request
-      const response = await fetcher(url, requestOptions);
+      const dispatch = async () => {
+        // Make the request
+        const response = await fetcher(url, requestOptions);
 
-      // Parse response
-      const contentType = response.headers.get("content-type") || "";
-      let responseData;
+        // Parse response
+        const contentType = response.headers.get("content-type") || "";
+        let responseData;
 
-      if (
-        apiConfig.streamNdjson &&
-        contentType.toLowerCase().includes("application/x-ndjson")
-      ) {
-        responseData = await consumeNdjsonToolResponse(
-          response,
-          context,
-        );
-      } else if (contentType.includes("application/json")) {
-        responseData = await response.json();
-      } else {
-        responseData = await response.text();
-      }
-      responseData = sanitizeToolJsonValue(responseData);
+        if (
+          apiConfig.streamNdjson &&
+          contentType.toLowerCase().includes("application/x-ndjson")
+        ) {
+          responseData = await consumeNdjsonToolResponse(
+            response,
+            context,
+          );
+        } else if (contentType.includes("application/json")) {
+          responseData = await response.json();
+        } else {
+          responseData = await response.text();
+        }
+        responseData = sanitizeToolJsonValue(responseData);
 
-      if (!response.ok) {
-        throw new ToolExecutionError(
-          responseData,
-          response.status,
-        );
-      }
+        if (!response.ok) {
+          throw new ToolExecutionError(
+            responseData,
+            response.status,
+          );
+        }
 
-      const assetMapping = apiConfig.responseAssets?.[toolKey];
-      const result = assetMapping
-        ? await promoteResponseAssets(
-          responseData,
-          assetMapping,
-          context,
-          toolKey,
+        const assetMapping = apiConfig.responseAssets?.[toolKey];
+        const result = assetMapping
+          ? await promoteResponseAssets(
+            responseData,
+            assetMapping,
+            context,
+            toolKey,
+          )
+          : responseData;
+
+        if (apiConfig.includeResponseHeaders) {
+          return {
+            body: result,
+            headers: sanitizeToolJsonValue(
+              Object.fromEntries(response.headers.entries()),
+            ),
+          };
+        }
+
+        return result;
+      };
+      // Classification uses the final prepared method, never the schema alone.
+      return ["GET", "HEAD", "OPTIONS"].includes(
+          preparedRequest.method.toUpperCase(),
         )
-        : responseData;
-
-      if (apiConfig.includeResponseHeaders) {
-        return {
-          body: result,
-          headers: sanitizeToolJsonValue(
-            Object.fromEntries(response.headers.entries()),
-          ),
-        };
-      }
-
-      return result;
+        ? await dispatch()
+        : await externalEffect(context, "openapi.request", dispatch);
     } catch (error) {
       if (context.signal.aborted) throw actionAbortError(context.signal);
       if (error instanceof Error && error.name === "AbortError") {
         if (abortReason === "timeout") {
-          throw new Error(`Request timeout after ${apiConfig.timeout} seconds`);
+          throw new Error(
+            `Request timeout after ${apiConfig.timeout} seconds`,
+          );
         }
         throw error;
       }

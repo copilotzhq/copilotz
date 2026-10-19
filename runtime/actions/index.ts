@@ -26,11 +26,11 @@ export { createActionContext } from "./host.ts";
 export { resolveActionSourceData } from "./protected-context.ts";
 export {
   actionCallerDefinitionId,
-  actionTransactionIdentity,
   createActionCallers,
   isActionInputValidationError,
   isSettledActionError,
 } from "./invoker.ts";
+export { actionTransactionIdentity } from "./transaction-identity.ts";
 export { createActionLifecycleEmitter } from "./lifecycle.ts";
 export {
   isRegisteredActionLifecycleEventType,
@@ -61,6 +61,12 @@ export type {
   ActionContext,
   ActionContextOf,
   ActionDefinition,
+  ActionEffect,
+  ActionEffectBegin,
+  ActionEffectEvidence,
+  ActionEffectOptions,
+  ActionEffectOutcome,
+  ActionEffectState,
   ActionEventData,
   ActionFailedData,
   ActionInput,
@@ -77,6 +83,7 @@ export type {
   ActionPrepareFactory,
   ActionPrepareOptions,
   ActionProgressData,
+  ActionReconcileResult,
   ActionSchema,
   ActionStatus,
   ActionTransactionContext,
@@ -107,4 +114,28 @@ export type {
   VectorWrite,
 } from "../vectors/index.ts";
 
-export { upgradeActionLifecycle } from "./upgrade.ts";
+export {
+  prepareRetainedDataUpgrade,
+  type RetainedDataUpgradePlan,
+  type RetainedDataUpgradeStorage,
+  upgradeActionLifecycle,
+} from "./upgrade.ts";
+export {
+  assertRetainedDataDrained,
+  inspectRetainedDataDrain,
+  type RetainedDataDrainReport,
+} from "./drain.ts";
+
+export { externalEffect } from "./external-effect.ts";
+
+export type {
+  ProtectedActionAdoptionContext,
+  ProtectedActionCollection,
+  ProtectedActionCollections,
+  ProtectedActionDefinition,
+  ProtectedActionDefinitions,
+  ProtectedActionIngress,
+  ProtectedActionOwnerContext,
+  ProtectedActionSource,
+  ProtectedActionSourceEntry,
+} from "./protected-action-types.ts";

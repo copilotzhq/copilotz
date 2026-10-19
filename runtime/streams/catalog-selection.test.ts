@@ -1,14 +1,10 @@
+import { stageOwnerChange } from "../events/push.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import {
-  createEventStore,
-  provisionCopilotzSchema,
-  type SqlSession,
-} from "../events/index.ts";
+import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createOperationCatalog,
-  OPERATION_CHANGE_CHANNEL,
   provisionOperationCatalog,
   upgradeOperationCatalog,
   validateOperationCatalog,
@@ -223,75 +219,73 @@ Deno.test({
   fn: () => runSelectionFixture(POSTGRES_URL!),
 });
 
-Deno.test("operation hints never cross schema or explicitly scoped namespace", async () => {
-  const handlers: Array<(hint: { channel: string; payload?: string }) => void> =
-    [];
-  const session: SqlSession = {
-    query: () => Promise.resolve({ rows: [] }),
-    transaction: (fn) => fn(session),
-    listen: (_channel, handler) => {
-      handlers.push(handler);
-      return Promise.resolve({ close: () => Promise.resolve() });
-    },
-  };
+Deno.test("owner push never crosses schema or explicitly scoped namespace", async () => {
+  const session = await createTestDatabase({ url: ":memory:" });
+  for (const schema of ["schema_a", "schema_b"]) {
+    await provisionCopilotzSchema(session, schema);
+    await provisionOperationCatalog(session, schema);
+  }
   const first = createOperationCatalog(session, "schema_a");
   const second = createOperationCatalog(session, "schema_b");
   const received: string[] = [];
-  const removeA = await first.onChange(
-    (id, detail) =>
+  const removeA = await first.onChange((id, detail) => {
+    if (id) {
       received.push(
         `a:${detail.namespace}:${id}:${detail.selectionKeys.join()}:${detail.kind}`,
-      ),
-    { namespace: "tenant-a" },
-  );
-  const removeB = await second.onChange((id) => received.push(`b:${id}`), {
-    namespace: "tenant-a",
-  });
-  const watch = await first.watch("same-id", { namespace: "tenant-a" });
+      );
+    }
+  }, { namespace: "scope" });
+  const removeB = await second.onChange((id) => {
+    if (id) received.push(`b:${id}`);
+  }, { namespace: "scope" });
+  const watch = await first.watch("same-id", { namespace: "scope" });
   const deliver = (schema: string, namespace: string) =>
-    handlers.forEach((handler) =>
-      handler({
-        channel: OPERATION_CHANGE_CHANNEL,
-        payload: JSON.stringify({
-          schema,
+    createSchemaCommandRunner(session, schema)(
+      "test.push",
+      {},
+      (_input, { transaction }) => {
+        stageOwnerChange(transaction, schema, {
           namespace,
           operationId: "same-id",
           selectionKeys: ["opaque"],
           kind: "event",
-        }),
-      })
+          seq: "0",
+        });
+      },
     );
-  deliver("schema_a", "tenant-b");
-  deliver("schema_b", "tenant-a");
-  assertEquals(await watch.wait({ timeoutMs: 100 }), false);
-  deliver("schema_a", "tenant-a");
-  assertEquals(await watch.wait({ timeoutMs: 100 }), true);
-  assertEquals(received, ["b:same-id", "a:tenant-a:same-id:opaque:event"]);
-  handlers.forEach((handler) =>
-    handler({ channel: OPERATION_CHANGE_CHANNEL, payload: "same-id" })
-  );
-  for (
-    const invalidDetail of [{ kind: "invalid" }, { streamId: 1 }, {
-      committedOffset: -1,
-    }, { committedOffset: Number.MAX_SAFE_INTEGER + 1 }]
-  ) {
-    handlers.forEach((handler) =>
-      handler({
-        channel: OPERATION_CHANGE_CHANNEL,
-        payload: JSON.stringify({
-          schema: "schema_a",
-          namespace: "tenant-a",
-          operationId: "same-id",
-          selectionKeys: ["opaque"],
-          ...invalidDetail,
-        }),
-      })
+  try {
+    await deliver("schema_a", "other");
+    await deliver("schema_b", "scope");
+    assertEquals(await watch.wait({ timeoutMs: 100 }), false);
+    await deliver("schema_a", "scope");
+    assertEquals(await watch.wait({ timeoutMs: 100 }), true);
+    assertEquals(received, ["b:same-id", "a:scope:same-id:opaque:event"]);
+    await assertRejects(
+      () =>
+        createSchemaCommandRunner(session, "schema_a")(
+          "test.invalid",
+          {},
+          (_input, { transaction }) => {
+            stageOwnerChange(transaction, "schema_a", {
+              namespace: "scope",
+              operationId: "same-id",
+              selectionKeys: [],
+              kind: "stream-offset",
+              seq: "0",
+              streamId: "stream",
+              committedOffset: -1,
+            });
+          },
+        ),
+      TypeError,
     );
+    assertEquals(received.length, 2);
+  } finally {
+    removeA();
+    removeB();
+    watch.close();
+    await session.close();
   }
-  assertEquals(received.length, 2);
-  removeA();
-  removeB();
-  watch.close();
 });
 
 Deno.test("offline catalog upgrade backfills opaque domain keys and event ordinals", async () => {
@@ -581,7 +575,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "PostgreSQL sibling event indexing publishes scoped hints only after commit",
+    "PostgreSQL sibling event indexing pushes scoped changes only after outer commit",
   ignore: !POSTGRES_URL,
   fn: async () => {
     const db = await createTestDatabase({ url: POSTGRES_URL! });
@@ -596,10 +590,13 @@ Deno.test({
       const watchingCatalog = createOperationCatalog(observer, schema);
       const hints: string[] = [];
       const unsubscribe = await watchingCatalog.onChange(
-        (operationId, detail) =>
-          hints.push(
-            `${operationId}:${detail.namespace}:${detail.selectionKeys.join()}:${detail.kind}`,
-          ),
+        (operationId, detail) => {
+          if (operationId) {
+            hints.push(
+              `${operationId}:${detail.namespace}:${detail.selectionKeys.join()}:${detail.kind}`,
+            );
+          }
+        },
         { namespace: "tenant-a" },
       );
       const watch = await watchingCatalog.watch("root", {

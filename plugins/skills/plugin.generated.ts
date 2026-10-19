@@ -7,7 +7,27 @@ import entry3 from "./resources/tools/list-skills/index.ts";
 import entry4 from "./resources/tools/load-skill/index.ts";
 import entry5 from "./resources/tools/read-skill-resource/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
-const definition = {
+const definition: {
+  readonly id: "@copilotz/skills";
+  readonly version: "0.57.0";
+  readonly plugins: readonly [typeof dependency0];
+  readonly resources: {
+    readonly "capabilities": {
+      readonly "default": typeof entry0;
+    };
+    readonly "promptContext": {
+      readonly "skillsCatalog": typeof entry1;
+    };
+    readonly "promptInstructions": {
+      readonly "skillUsage": typeof entry2;
+    };
+    readonly "tools": {
+      readonly "list_skills": typeof entry3;
+      readonly "load_skill": typeof entry4;
+      readonly "read_skill_resource": typeof entry5;
+    };
+  };
+} = {
   id: "@copilotz/skills",
   version: "0.57.0",
   plugins: [dependency0],

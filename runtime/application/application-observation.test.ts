@@ -316,8 +316,11 @@ Deno.test("attachment final pass includes a stream committed during the terminal
     // Keep initial statusFor active; the race is injected only after attach's
     // topology read. A durable terminal transition remains authoritative.
     await db.query(`INSERT INTO "${schema}"."events" (
-      id,schema_version,type,namespace,payload,metadata,correlation_id
-    ) VALUES ('operation',5,'test.root','tenant','{}','{}','correlation')`);
+      seq,id,schema_version,type,namespace,payload,metadata,correlation_id
+    ) VALUES (1,'operation',5,'test.root','tenant','{}','{}','correlation')`);
+    await db.query(
+      `UPDATE "${schema}".owner_epochs SET last_seq=1 WHERE owner='schema'`,
+    );
     await db.query(`INSERT INTO "${schema}"."event_deliveries" (
       id,event_id,consumer_id,status,attempts,available_at,created_at,updated_at,settlement_scope_id
     ) VALUES ('pending','operation','consumer','pending',0,NOW(),NOW(),NOW(),'operation')`);

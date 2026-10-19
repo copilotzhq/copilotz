@@ -1,3 +1,4 @@
+import { readActionEffectInventory } from "./effect-commands.ts";
 import { createOperationCatalogTables } from "../streams/catalog.ts";
 import type {
   EventCoordinator,
@@ -49,7 +50,7 @@ export async function cancelScopeActions(
     createOperationCatalogTables(options.store.databaseSchema).operations;
   const children = await transaction.query<{ operation_id: string }>(
     `SELECT operation_id FROM ${operations} WHERE namespace = $1 AND parent_operation_id = $2
-      AND state IN ('accepted','running') ORDER BY operation_id FOR UPDATE`,
+      AND state IN ('accepted','running') ORDER BY operation_id`,
     [scope.namespace, scope.operationId],
   );
   const flushes: (() => Promise<void>)[] = [];
@@ -100,7 +101,7 @@ async function recoverActions(
         ? "action.namespace = $1 AND action.scope_id = $2"
         : "action.owner_delivery_id = $1"
     }
-    ORDER BY action.namespace, action.action_run_id FOR UPDATE OF action`,
+    ORDER BY action.namespace, action.action_run_id`,
     scope ? [scope.namespace, scope.operationId] : [delivery!.id],
   );
   const committed: Awaited<ReturnType<typeof coordinator.commitMutation>>[] =
@@ -145,19 +146,30 @@ async function recoverActions(
         ...(delivery ? { sourceDeliveryId: delivery.id } : {}),
       },
     });
+    const effects = await readActionEffectInventory(transaction, {
+      schema: store.databaseSchema,
+      namespace: row.namespace,
+      actionRunId: row.action_run_id,
+    });
+    const indeterminate = effects.some((effect) => effect.status === "begun");
     const cancelled = Boolean(scope) || delivery?.status === "cancelled";
     const abandoned = delivery?.status === "succeeded";
     await lifecycle.emit({
       ...invoked,
       status: cancelled ? "cancelled" : "failed",
       error: {
+        ...(indeterminate ? { code: "effect_indeterminate" } : {}),
         name: cancelled
           ? "AbortError"
+          : indeterminate
+          ? "ActionEffectError"
           : abandoned
           ? "ActionAbandoned"
           : "ActionDeliveryExhausted",
         message: cancelled
           ? "The owning delivery was cancelled."
+          : indeterminate
+          ? "An external effect has no confirmed outcome; the Action cannot be blindly replayed."
           : abandoned
           ? "The owning delivery finished without completing this Action."
           : "The owning delivery permanently failed before completing this Action.",

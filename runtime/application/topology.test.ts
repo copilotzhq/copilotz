@@ -62,7 +62,7 @@ function cascadingPlugin(): AnyCopilotzPlugin {
         threadId: coreEvent(event).threadId,
         senderId: "topology-agent",
         recipientIds: ["topology-user"],
-        content: persisted,
+        content: [persisted],
       }, {
         operationKey: "first-message",
         metadata: {
@@ -221,7 +221,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   });
   const worker = await createCopilotzWorker({
     namespace,
-    database,
     plugins: [storageFixture, plugin],
     id: workerId,
     transport,
@@ -340,7 +339,6 @@ Deno.test("Gateway automatically retries or terminalizes Worker delivery failure
   });
   const worker = await createCopilotzWorker({
     namespace,
-    database,
     plugins: [plugin],
     id: workerId,
     transport,
@@ -532,7 +530,6 @@ Deno.test({
     workerUrl.protocol = "ws:";
     const worker = await createCopilotzWorker({
       namespace,
-      database,
       plugins: [storageFixture, plugin],
       id: workerId,
       transport: {

@@ -17,7 +17,11 @@ import type {
   SnapshotCollection,
   TransactionCollection,
 } from "../collections/kernel.ts";
-import type { ContentStreamRuntime } from "../streams/index.ts";
+import type {
+  ContentStreamOpenInput,
+  ContentStreamRuntime,
+  ContentStreamWriter,
+} from "../streams/index.ts";
 import type {
   AssetOrigin,
   AssetRecord,
@@ -25,6 +29,7 @@ import type {
   ContentRef,
   ContentSequence,
   DurableContentInput,
+  GeneratedContentSequence,
   PreparedContent,
   PublishAssetInput,
   ResolvedContent,
@@ -83,6 +88,13 @@ export type RuntimeActionCallerMap = Readonly<
 /** Runtime-native durable content operations available to Actions. */
 export type RuntimeContent = Readonly<{
   authorize?(ref: ContentRef): Promise<void>;
+  openCapture(
+    input: ContentStreamOpenInput & { operationKey: string },
+  ): Promise<ContentStreamWriter>;
+  capture(
+    input: ContentInput | readonly ContentInput[] | PreparedContent,
+    options: { operationKey: string; origin?: AssetOrigin },
+  ): Promise<GeneratedContentSequence>;
   prepare(
     input: ContentInput | readonly ContentInput[],
     options: { operationKey: string; origin?: AssetOrigin },
@@ -122,6 +134,62 @@ export type RuntimeIdentity = Readonly<{
 
 /** Caller-owned, JSON-safe data carried by one Action invocation. */
 export type ActionInvocationMetadata = Readonly<Record<string, unknown>>;
+
+/** JSON effect data. Plain confirm accepts only secret-free outcomes;
+ * confirmOutput captures the complete registered protected Action output. */
+export type ActionEffectOutcome =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ActionEffectOutcome[]
+  | { readonly [key: string]: ActionEffectOutcome };
+/** Opaque evidence verified against current owner dispatch facts. */
+export type ActionEffectEvidence = Readonly<
+  { source: string; reference: string }
+>;
+export type ActionEffectOptions = Readonly<{ signal?: AbortSignal }>;
+export type ActionEffectState =
+  | Readonly<{ status: "none" }>
+  | Readonly<{ status: "indeterminate" }>
+  | Readonly<{ status: "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionEffectBegin =
+  | Readonly<{ status: "proceed" | "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionReconcileResult =
+  | Readonly<{ status: "confirmed"; outcome: ActionEffectOutcome }>
+  | Readonly<{ status: "not_started"; evidence: ActionEffectEvidence }>
+  | Readonly<{ status: "indeterminate" }>;
+/** Invocation-bound effect capability. Only a fresh begin's proceed permits one
+ * external dispatch. A closed step is never reopened; use a new deterministic
+ * step after owner-verified not_started when another dispatch is intended. */
+export type ActionEffect = Readonly<{
+  begin(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectBegin>;
+  inspect(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectState>;
+  confirm(
+    step: string,
+    outcome: ActionEffectOutcome,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+  /** Atomically retain this Action's complete declared protected output and confirm the step. */
+  confirmOutput(
+    step: string,
+    output: ActionEffectOutcome,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+  notStarted(
+    step: string,
+    evidence: ActionEffectEvidence,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+}>;
 
 export type ActionCallOptions = Readonly<{
   operationKey?: string;
@@ -222,6 +290,7 @@ export interface ActionContext<
     parentRunId?: string;
     metadata: ActionInvocationMetadata;
   }>;
+  readonly effect: ActionEffect;
   /** Persists one self-contained `<actionId>.progress` lifecycle Event. */
   progress(value: unknown): Promise<void>;
   /** Declare a durable continuation and release this execution slot. */
@@ -258,6 +327,7 @@ export type ActionDefinition<
   TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
 > = Readonly<{
   id: string;
+  ownerHooks?: Readonly<{ prepareInput?: true; acceptOutput?: true }>;
   content?: ActionContentDeclaration;
   inputSchema?: TInputSchema;
   outputSchema?: TOutputSchema;
@@ -265,6 +335,10 @@ export type ActionDefinition<
     input: TInput,
     context: TContext,
   ): TOutput | Promise<TOutput>;
+  reconcile?(
+    step: string,
+    context: TContext,
+  ): ActionReconcileResult | Promise<ActionReconcileResult>;
   resume?(
     handoff: unknown,
     outcome: OperationOutcome,
@@ -282,11 +356,15 @@ export type ActionDefinition<
 
 export type AnyActionDefinition = Readonly<{
   id: string;
+  ownerHooks?: Readonly<{ prepareInput?: true; acceptOutput?: true }>;
   content?: ActionContentDeclaration;
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;
   execute: (...args: never[]) => unknown;
   resume?: (...args: never[]) => unknown;
+  reconcile?: (
+    ...args: never[]
+  ) => ActionReconcileResult | Promise<ActionReconcileResult>;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: unknown;
     output: unknown;
@@ -365,7 +443,7 @@ type ActionEventBase<I> = Readonly<{
 
 export type ActionInvokedData<I = unknown> =
   & ActionEventBase<I>
-  & Readonly<{ status: "invoked" }>;
+  & Readonly<{ status: "invoked"; effectProtocol?: 1 }>;
 
 export type ActionAwaitingData<I = unknown> =
   & AwaitOperationInput

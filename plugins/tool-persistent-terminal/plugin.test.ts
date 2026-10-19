@@ -1,10 +1,16 @@
+import { createHash } from "node:crypto";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
   ActionContext,
   ActionDefinition,
 } from "@copilotz/copilotz/actions";
-import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
+import type {
+  ContentInput,
+  ContentRef,
+  PendingContentRef,
+  PreparedContent,
+} from "@copilotz/copilotz/content";
 import type { ToolResource } from "../core/authoring/define-tool/index.ts";
 
 import {
@@ -14,15 +20,30 @@ import {
 
 type ContentTracker = {
   prepares: number;
-  materializes: number;
-  materializedCounts: number[];
+  captures: number;
+  capturedCounts: number[];
 };
+
+function pendingExport(
+  index: number,
+  mediaType: string,
+  text: string,
+): PendingContentRef {
+  const bytes = new TextEncoder().encode(text);
+  return {
+    type: "content.pending",
+    pendingRef: `pending:terminal-export:${index}`,
+    mediaType,
+    byteLength: bytes.byteLength,
+    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  };
+}
 
 function fixtureContext(
   tracker: ContentTracker = {
     prepares: 0,
-    materializes: 0,
-    materializedCounts: [],
+    captures: 0,
+    capturedCounts: [],
   },
   terminal?: PersistentTerminalService,
 ): ActionContext {
@@ -51,7 +72,7 @@ function fixtureContext(
             byteLength: 5,
             digest: "sha256:fixture",
             state: "ready",
-            location: { kind: "database", encoding: "utf8" },
+            bodyId: "logical:asset-a",
             createdAt: "2026-08-06T00:00:00.000Z",
           }
           : null;
@@ -79,15 +100,39 @@ function fixtureContext(
             ? { disposition: candidate.disposition }
             : {}),
         };
-        return Promise.resolve({ content: [ref], assets: [] });
+        return Promise.resolve({
+          content: [ref],
+          assets: [{
+            id: ref.assetId,
+            namespace: "space",
+            mediaType: candidate.mediaType,
+            body: candidate.bytes,
+            byteLength: candidate.bytes.byteLength,
+            digest: `sha256:${
+              createHash("sha256").update(candidate.bytes).digest("hex")
+            }`,
+          }],
+        });
       },
-      materialize(input: { content: readonly ContentRef[] }) {
-        tracker.materializes += 1;
-        tracker.materializedCounts.push(input.content.length);
-        return Promise.resolve(input.content.map((ref, index) => ({
-          ...ref,
-          assetId: `asset-${String.fromCharCode("b".charCodeAt(0) + index)}`,
-        })));
+      capture(input: PreparedContent, options: { operationKey: string }) {
+        tracker.captures += 1;
+        tracker.capturedCounts.push(input.content.length);
+        assertEquals(
+          options.operationKey,
+          "terminal:action-run-a:result-capture",
+        );
+        return Promise.resolve(
+          input.assets.map((asset, index) =>
+            pendingExport(
+              index,
+              asset.mediaType,
+              new TextDecoder().decode(asset.body),
+            )
+          ),
+        );
+      },
+      materialize() {
+        throw new Error("Generated output must remain pending.");
       },
     },
   } as unknown as ActionContext;
@@ -97,8 +142,8 @@ Deno.test("persistent terminal tool delegates through an explicitly owned servic
   let shutdowns = 0;
   const tracker: ContentTracker = {
     prepares: 0,
-    materializes: 0,
-    materializedCounts: [],
+    captures: 0,
+    capturedCounts: [],
   };
   const service: PersistentTerminalService = Object.freeze({
     async execute(input, context) {
@@ -135,24 +180,24 @@ Deno.test("persistent terminal tool delegates through an explicitly owned servic
     await action.execute({ action: "run" }, fixtureContext(tracker, service)),
     {
       read: "asset://tenant-a/asset-a",
-      published: "asset://tenant-a/asset-b",
+      published: pendingExport(0, "text/plain", "hello"),
     },
   );
   assertEquals(tracker, {
     prepares: 1,
-    materializes: 1,
-    materializedCounts: [1],
+    captures: 1,
+    capturedCounts: [1],
   });
   assertEquals(shutdowns, 0);
   await service.shutdown();
   assertEquals(shutdowns, 1);
 });
 
-Deno.test("persistent terminal stages all publishes and remaps spread refs atomically", async () => {
+Deno.test("persistent terminal captures staged publishes and replaces spread refs with pending descriptors", async () => {
   const tracker: ContentTracker = {
     prepares: 0,
-    materializes: 0,
-    materializedCounts: [],
+    captures: 0,
+    capturedCounts: [],
   };
   const service: PersistentTerminalService = Object.freeze({
     async execute(_input, context) {
@@ -177,14 +222,14 @@ Deno.test("persistent terminal stages all publishes and remaps spread refs atomi
     ),
     {
       first: {
-        assetId: "asset-b",
-        assetRef: "asset://tenant-a/asset-b",
+        assetId: pendingExport(0, "text/plain", "one"),
+        assetRef: pendingExport(0, "text/plain", "one"),
         mediaType: "text/plain",
         byteLength: 3,
       },
       nested: [{
-        assetId: "asset-c",
-        assetRef: "asset://tenant-a/asset-c",
+        assetId: pendingExport(1, "application/octet-stream", "two"),
+        assetRef: pendingExport(1, "application/octet-stream", "two"),
         mediaType: "application/octet-stream",
         byteLength: 3,
       }],
@@ -192,14 +237,14 @@ Deno.test("persistent terminal stages all publishes and remaps spread refs atomi
   );
   assertEquals(tracker, {
     prepares: 2,
-    materializes: 1,
-    materializedCounts: [2],
+    captures: 1,
+    capturedCounts: [2],
   });
 
   const invalidTracker: ContentTracker = {
     prepares: 0,
-    materializes: 0,
-    materializedCounts: [],
+    captures: 0,
+    capturedCounts: [],
   };
   const invalid: PersistentTerminalService = Object.freeze({
     async execute(_input, context) {
@@ -222,8 +267,8 @@ Deno.test("persistent terminal stages all publishes and remaps spread refs atomi
   );
   assertEquals(invalidTracker, {
     prepares: 1,
-    materializes: 0,
-    materializedCounts: [],
+    captures: 0,
+    capturedCounts: [],
   });
 });
 

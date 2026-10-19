@@ -1,3 +1,7 @@
+import {
+  attachOwnedListenerSync,
+  ownedHypervisor,
+} from "../../application/hosting.ts";
 import { serve } from "../../../dependencies/oxian-deno.ts";
 import type {
   Hypervisor,
@@ -28,13 +32,17 @@ export function listen(
   gateway: FetchCapableHost,
   options: ListenCopilotzOptions = {},
 ): HypervisorListener {
-  if (gateway.hypervisor) {
-    return serve({
-      hypervisor: gateway.hypervisor,
-      hostname: options.hostname,
-      port: options.port,
-      signal: options.signal,
-    });
+  const hypervisor = ownedHypervisor(gateway) ?? gateway.hypervisor;
+  if (hypervisor) {
+    return attachOwnedListenerSync(
+      gateway,
+      serve({
+        hypervisor,
+        hostname: options.hostname,
+        port: options.port,
+        signal: options.signal,
+      }),
+    );
   }
   if (!gateway.fetch) {
     throw new TypeError("Copilotz listener requires a Fetch-capable host.");

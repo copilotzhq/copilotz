@@ -1,3 +1,8 @@
+import {
+  CONTENT_CHUNK_BYTES,
+  createContentCatalog,
+} from "../runtime/content/catalog.ts";
+import { digestCatalogPrefix } from "../runtime/content/prefix-digest.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
   ApplicationOperationAttachInput,
@@ -580,9 +585,12 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     async onChange(listener, input) {
       counts.subscriptions++;
       await delaySubscription;
-      const remove = options.suppressHints
-        ? () => undefined
-        : await rawCatalog.onChange(listener, input);
+      const remove = await rawCatalog.onChange((id, detail) => {
+        if (
+          !options.suppressHints || detail.kind === "heartbeat" ||
+          detail.kind === "checkpoint" || detail.kind === "reset"
+        ) listener(id, detail);
+      }, input);
       return () => {
         counts.removed++;
         remove();
@@ -777,15 +785,43 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     async stream(operationId: string, bytes: Uint8Array) {
       const streamId = `stream-${operationId}`;
       const bodyId = `body-${operationId}`;
+      const contentCatalog = createContentCatalog(db, schema);
+      const identity = {
+        bodyId,
+        writerId: `fixture:${operationId}`,
+        generation: 1,
+      };
+      await contentCatalog.reserve({
+        ...identity,
+        namespace: "tenant",
+        copy: {
+          key: bodyId,
+          backendKind: bodies.kind,
+          backendId: bodies.backendId,
+        },
+      });
       const writer = await bodies.reserve({
         bodyId,
         mediaType: "application/octet-stream",
+        reservationId: `fixture:${operationId}`,
+        generation: 1,
       });
-      await bodies.append({
-        writer,
+      for (
+        let offset = 0;
+        offset < bytes.byteLength;
+        offset += CONTENT_CHUNK_BYTES
+      ) {
+        await bodies.append({
+          writer,
+          expectedOffset: offset,
+          appendId: `initial:${offset}`,
+          bytes: bytes.slice(offset, offset + CONTENT_CHUNK_BYTES),
+        });
+      }
+      await contentCatalog.checkpoint({
+        ...identity,
         expectedOffset: 0,
-        appendId: "initial",
-        bytes,
+        offset: bytes.byteLength,
       });
       await operations.openStream({
         namespace: "tenant",
@@ -814,10 +850,18 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
         streamId,
         retention: "observation",
       });
+      const digest = await digestCatalogPrefix(bodies, bodyId, bytes.length);
+      await contentCatalog.sealIntent({
+        ...identity,
+        length: bytes.length,
+        digest,
+      });
       const body = await bodies.seal({
         writer,
         expectedByteLength: bytes.length,
+        expectedDigest: digest,
       });
+      await contentCatalog.sealAccepted({ ...identity, head: body });
       await operations.sealStream({
         namespace: "tenant",
         operationId,
@@ -1069,7 +1113,7 @@ Deno.test("120 completed operations paginate discovery and retire replay state w
   }
 });
 
-Deno.test("missed selection hints recover through the five-second safety head batch", async () => {
+Deno.test("a lost final selection push repairs from heartbeat head mismatch without later traffic", async () => {
   const f = await observationFixture({ suppressHints: true });
   try {
     await f.thread();
@@ -1085,7 +1129,7 @@ Deno.test("missed selection hints recover through the five-second safety head ba
         ),
       6000,
     );
-    assert(performance.now() - began < 5750);
+    assert(performance.now() - began < 2500);
     assert(f.counts.heads.some((batch) => batch.length === 1));
     await observation.cancel();
     await observation.done;
@@ -1206,8 +1250,11 @@ Deno.test("1000 distinct idle observations share batched selection heads and sco
       0,
       "idle selections must not re-read operation associations",
     );
-    assert(f.counts.heads.length >= 1 && f.counts.heads.length <= 2);
-    assert(f.counts.heads.every((batch) => batch.length === 1000));
+    assertEquals(
+      f.counts.heads.length,
+      0,
+      "matching heartbeat heads must not trigger safety scans",
+    );
     assert(f.counts.resources.length >= 18 && f.counts.resources.length <= 24);
     assert(f.counts.resources.every((batch) => batch.length === 1000));
     await Promise.all(views.map((view) => view.observation.cancel()));

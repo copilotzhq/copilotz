@@ -1,5 +1,8 @@
 import { encodeJsonValue } from "../json.ts";
-import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
+import {
+  createAsyncContextStorage,
+  runIndependentAsyncContext,
+} from "../../dependencies/async-hooks.ts";
 import {
   authorizeOwnerCommand,
   captureOwnerCommandAuthorization,
@@ -17,7 +20,7 @@ import {
 } from "../events/schema.ts";
 import {
   afterSqlCommit,
-  runSqlSavepoint,
+  runSqlCommandScope,
   runSqlTransaction,
   sqlCommitGate,
   type SqlExecutor,
@@ -76,7 +79,9 @@ function canonical(value: CommandJson): string {
 }
 
 type Pending = {
-  run(): Promise<void>;
+  bytes: number;
+  run(transaction: SqlExecutor, joined?: CommandContext): Promise<unknown>;
+  resolve(value: unknown): void;
   reject(error: unknown): void;
 };
 
@@ -116,6 +121,9 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   ownerId?: string;
   holderId?: string;
   maxQueue?: number;
+  maxGroupCount?: number;
+  /** Coalescing budget; an oversized or non-JSON local input runs alone. */
+  maxGroupBytes?: number;
   maxPublications?: number;
   now?: () => Date;
   alarmScheduler?: OwnerAlarmScheduler;
@@ -125,8 +133,13 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   const owner = options.ownerId ?? "schema";
   const holder = options.holderId ?? crypto.randomUUID();
   const capacity = options.maxQueue ?? 1024;
+  const groupCount = options.maxGroupCount ?? 32;
+  const groupBytes = options.maxGroupBytes ?? 1024 * 1024;
+  const activeCommand = createAsyncContextStorage<CommandContext>();
   const publicationCapacity = options.maxPublications ?? 1024;
   if (
+    !Number.isSafeInteger(groupCount) || groupCount < 1 ||
+    !Number.isSafeInteger(groupBytes) || groupBytes < 1 ||
     !Number.isSafeInteger(capacity) || capacity < 1 ||
     !Number.isSafeInteger(publicationCapacity) || publicationCapacity < 1
   ) {
@@ -137,6 +150,8 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   let epoch: number | undefined;
   let reason: unknown;
   let running = false;
+  let inFlight = 0;
+  let stagedPublications = 0;
   let publishing = false;
   let publicationCount = 0;
   const pending: Pending[] = [];
@@ -194,13 +209,112 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     }
     publishing = false;
   }
+  async function runGroup(group: Pending[]): Promise<void> {
+    if (state === "stopped") {
+      for (const item of group) item.reject(reason);
+      return;
+    }
+    let callbackFinished = false;
+    let rollbackConfirmed = false;
+    stagedPublications = 0;
+    try {
+      const outcomes = await runSqlTransaction(
+        options.session,
+        async (outer) => {
+          try {
+            // First statement, once per group: takeover waits on this row lock.
+            const fence = await outer.query(
+              `UPDATE ${tables.owner_epochs} SET holder=holder WHERE owner=$1 AND epoch=$2 AND holder=$3 RETURNING epoch`,
+              [owner, epoch, holder],
+            );
+            if (!fence.rows.length) {
+              const error = failure(
+                "ActionOwnershipLost",
+                "The owner epoch or holder is no longer current.",
+              );
+              stop(error);
+              throw error;
+            }
+            assertAcquired();
+            const outcomes = [];
+            for (const item of group) {
+              assertAcquired();
+              const before = stagedPublications;
+              const outcome = await runIndependentAsyncContext(() =>
+                runSqlCommandScope(
+                  outer,
+                  (tx) => item.run(tx),
+                  group.length > 1,
+                )
+              );
+              if (!outcome.ok) {
+                stagedPublications = before;
+              }
+              outcomes.push(outcome);
+            }
+            callbackFinished = true;
+            return outcomes;
+          } catch (error) {
+            // A05: the adapter may hide failed rollback cleanup behind the original
+            // error. Only this acknowledged ROLLBACK on the pinned executor proves
+            // the group had no effect. Failed cleanup still stops the owner.
+            // AND CHAIN retains the adapter's pinned lane for its own final
+            // cleanup; a plain ROLLBACK releases it too early on PostgreSQL.
+            // The replacement transaction is empty and receives no callbacks.
+            await outer.query("ROLLBACK AND CHAIN");
+            rollbackConfirmed = true;
+            throw error;
+          }
+        },
+      );
+      assertAcquired();
+      for (let i = 0; i < group.length; i++) {
+        const outcome = outcomes[i];
+        if (outcome.ok) group[i].resolve(outcome.value);
+        else group[i].reject(outcome.error);
+      }
+    } catch (error) {
+      if (rollbackConfirmed && !lifetime.signal.aborted) {
+        if (group.length > 1) {
+          // No speculative result or callback survives an outer rollback.
+          // Retry each command separately, in its original queue position.
+          for (const item of group) await runGroup([item]);
+        } else group[0].reject(error);
+      } else {
+        stop(
+          callbackFinished
+            ? failure(
+              "owner_commit_unknown",
+              "The command commit outcome is unknown.",
+              error,
+            )
+            : error,
+        );
+        for (const item of group) item.reject(reason);
+      }
+    } finally {
+      stagedPublications = 0;
+    }
+  }
+
   async function drain() {
     try {
       while (pending.length && state !== "stopped") {
-        const item = pending.shift()!;
-        await runIndependentAsyncContext(item.run);
+        let count = 1;
+        let bytes = pending[0].bytes;
+        while (
+          count < pending.length && count < groupCount &&
+          bytes + pending[count].bytes <= groupBytes
+        ) {
+          bytes += pending[count++].bytes;
+        }
+        const group = pending.splice(0, count);
+        inFlight = group.length;
+        await runIndependentAsyncContext(() => runGroup(group));
+        inFlight = 0;
       }
     } finally {
+      inFlight = 0;
       running = false;
     }
   }
@@ -264,9 +378,11 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     request: CommandRequest<Input>,
     handler: CommandDefinition<Input, Output>,
   ): Promise<Output> {
+    const joined = activeCommand.getStore();
     try {
       assertAcquired();
-      if (pending.length + Number(running) >= capacity) {
+      if (joined) sqlCommitGate(joined.transaction);
+      if (!joined && pending.length + inFlight >= capacity) {
         throw failure("owner_queue_full", "The owner command queue is full.");
       }
       if (caller.epoch !== epoch || !caller.principal) {
@@ -284,171 +400,138 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       intent: canonical(request.receipt.intent),
     };
     const binding = { ...caller };
-    pending.push({
+    const item: Pending = {
+      bytes: 0,
+      resolve: (value) => completion.resolve(value as Output),
       reject: completion.reject,
-      async run() {
-        let callbackFinished = false;
-        let handlerError: unknown;
-        let handlerFailed = false;
+      async run(tx, joined) {
         const callbacks: Array<() => void | Promise<void>> = [];
-        try {
-          const result = await runSqlTransaction(
-            options.session,
-            async (outer) => {
-              // This MUST be the first statement: takeover waits on this row lock.
-              const fence = await outer.query(
-                `UPDATE ${tables.owner_epochs} SET holder=holder WHERE owner=$1 AND epoch=$2 AND holder=$3 RETURNING epoch`,
-                [owner, epoch, holder],
-              );
-              if (!fence.rows.length) {
-                const error = failure(
-                  "ActionOwnershipLost",
-                  "The owner epoch or holder is no longer current.",
-                );
-                stop(error);
-                throw error;
-              }
-              assertAcquired();
-              const saved = await runSqlSavepoint(outer, async (tx) => {
-                const commandTime = (options.now?.() ?? new Date())
-                  .toISOString();
-                const context: CommandContext = {
-                  transaction: tx,
-                  authorizationGuards: new Set(),
-                  caller: binding,
-                  commandTime,
-                  signal: lifetime.signal,
-                  afterCommit(callback) {
-                    assertAcquired();
-                    sqlCommitGate(tx);
-                    if (
-                      publicationCount + callbacks.length >= publicationCapacity
-                    ) {
-                      throw failure(
-                        "owner_publication_queue_full",
-                        "The owner publication queue is full.",
-                      );
-                    }
-                    callbacks.push(callback);
-                  },
-                };
-                commandContexts.set(tx, {
-                  schema: options.schema,
-                  ownerId: owner,
-                  holderId: holder,
-                  context,
-                });
-                // Authority is checked even when returning a durable duplicate.
-                await handler.authorize(request.input, context);
-                assertAcquired();
-                if (receipt) {
-                  const existing = (await tx.query<{
-                    principal: string;
-                    kind: string;
-                    intent: CommandJson;
-                    result: CommandJson;
-                    readers: string[];
-                  }>(
-                    `SELECT principal,kind,intent,result,readers FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3`,
-                    [owner, receipt.identity.domain, receipt.identity.key],
-                  )).rows[0];
-                  if (existing) {
-                    if (
-                      existing.principal !== binding.principal ||
-                      existing.kind !== kind ||
-                      canonical(existing.intent) !== receipt.intent
-                    ) {
-                      throw failure(
-                        "owner_intent_conflict",
-                        "The command identity is bound to another principal, kind or intent.",
-                      );
-                    }
-
-                    await handler.authorizeResult?.(request.input, context);
-                    assertAcquired();
-                    // Recovery rights become durable with the same outer commit
-                    // as this currently authorized replay, never on admission.
-                    if (
-                      !existing.readers.includes(
-                        binding.receiptReader ?? binding.principal,
-                      )
-                    ) {
-                      await tx.query(
-                        `UPDATE ${tables.owner_receipts} SET readers=array_append(readers,$4) WHERE owner=$1 AND domain=$2 AND key=$3 AND NOT ($4=ANY(readers))`,
-                        [
-                          owner,
-                          receipt.identity.domain,
-                          receipt.identity.key,
-                          binding.receiptReader ?? binding.principal,
-                        ],
-                      );
-                    }
-                    return existing.result as Output;
-                  }
-                }
-                const output = await handler.execute(request.input, context);
-                await handler.authorizeResult?.(request.input, context);
-                assertAcquired();
-                const nextAlarm = await alarms.refresh(tx, commandTime);
-                if (receipt) {
-                  await tx.query(
-                    `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result,readers) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,ARRAY[$8]::text[])`,
-                    [
-                      owner,
-                      receipt.identity.domain,
-                      receipt.identity.key,
-                      binding.principal,
-                      kind,
-                      receipt.intent,
-                      canonical(output as CommandJson),
-                      binding.receiptReader ?? binding.principal,
-                    ],
-                  );
-                }
-
-                afterSqlCommit(tx, () => {
-                  alarms.committed(nextAlarm);
-                  publicationCount += callbacks.length;
-                  if (callbacks.length) publications.push(callbacks);
-                  if (!publishing && publications.length) {
-                    publishing = true;
-                    queueMicrotask(() => {
-                      void publish();
-                    });
-                  }
-                });
-                return output;
-              });
-              callbackFinished = true;
-              if (!saved.ok) {
-                handlerError = saved.error;
-                handlerFailed = true;
-                return undefined as Output;
-              }
-              return saved.value;
-            },
-          );
-          if (handlerFailed) completion.reject(handlerError);
-          else {
+        const commandTime = (options.now?.() ?? new Date())
+          .toISOString();
+        const context: CommandContext = {
+          transaction: tx,
+          authorizationGuards: joined?.authorizationGuards ?? new Set(),
+          caller: binding,
+          commandTime,
+          signal: lifetime.signal,
+          afterCommit(callback) {
+            if (joined) return joined.afterCommit(callback);
             assertAcquired();
-            completion.resolve(result);
-          }
-        } catch (error) {
-          // No adapter proof of rollback: even a pre-COMMIT connection failure
-          // revokes authority conservatively. Never guess an unknown outcome.
-          stop(
-            callbackFinished
-              ? failure(
-                "owner_commit_unknown",
-                "The command commit outcome is unknown.",
-                error,
-              )
-              : error,
-          );
-          completion.reject(reason);
+            sqlCommitGate(tx);
+            if (
+              publicationCount + stagedPublications >= publicationCapacity
+            ) {
+              throw failure(
+                "owner_publication_queue_full",
+                "The owner publication queue is full.",
+              );
+            }
+            callbacks.push(callback);
+            stagedPublications++;
+          },
+        };
+        if (!joined) {
+          commandContexts.set(tx, {
+            schema: options.schema,
+            ownerId: owner,
+            holderId: holder,
+            context,
+          });
         }
+        return await activeCommand.run(context, async () => {
+          // Authority is checked even when returning a durable duplicate.
+          await handler.authorize(request.input, context);
+          assertAcquired();
+          if (receipt) {
+            const existing = (await tx.query<{
+              principal: string;
+              kind: string;
+              intent: CommandJson;
+              result: CommandJson;
+              readers: string[];
+            }>(
+              `SELECT principal,kind,intent,result,readers FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3`,
+              [owner, receipt.identity.domain, receipt.identity.key],
+            )).rows[0];
+            if (existing) {
+              if (
+                existing.principal !== binding.principal ||
+                existing.kind !== kind ||
+                canonical(existing.intent) !== receipt.intent
+              ) {
+                throw failure(
+                  "owner_intent_conflict",
+                  "The command identity is bound to another principal, kind or intent.",
+                );
+              }
+
+              await handler.authorizeResult?.(request.input, context);
+              assertAcquired();
+              // Recovery rights become durable with the same outer commit
+              // as this currently authorized replay, never on admission.
+              if (
+                !existing.readers.includes(
+                  binding.receiptReader ?? binding.principal,
+                )
+              ) {
+                await tx.query(
+                  `UPDATE ${tables.owner_receipts} SET readers=array_append(readers,$4) WHERE owner=$1 AND domain=$2 AND key=$3 AND NOT ($4=ANY(readers))`,
+                  [
+                    owner,
+                    receipt.identity.domain,
+                    receipt.identity.key,
+                    binding.receiptReader ?? binding.principal,
+                  ],
+                );
+              }
+              return existing.result as Output;
+            }
+          }
+          const output = await handler.execute(request.input, context);
+          await handler.authorizeResult?.(request.input, context);
+          assertAcquired();
+          const nextAlarm = await alarms.refresh(tx, commandTime);
+          if (receipt) {
+            await tx.query(
+              `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result,readers) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,ARRAY[$8]::text[])`,
+              [
+                owner,
+                receipt.identity.domain,
+                receipt.identity.key,
+                binding.principal,
+                kind,
+                receipt.intent,
+                canonical(output as CommandJson),
+                binding.receiptReader ?? binding.principal,
+              ],
+            );
+          }
+
+          afterSqlCommit(tx, () => {
+            alarms.committed(nextAlarm);
+            publicationCount += callbacks.length;
+            if (callbacks.length) publications.push(callbacks);
+            if (!publishing && publications.length) {
+              publishing = true;
+              queueMicrotask(() => {
+                void publish();
+              });
+            }
+          });
+          return output;
+        });
       },
-    });
+    };
+    // Joined calls use the active command's revocable facade and output gate.
+    // They cannot wait on the queue whose current command is awaiting them.
+    if (joined) return item.run(joined.transaction, joined) as Promise<Output>;
+    try {
+      item.bytes = new TextEncoder().encode(JSON.stringify(request)).byteLength;
+    } catch {
+      // Local registrations can carry opaque inputs. Do not coalesce them.
+      item.bytes = groupBytes;
+    }
+    pending.push(item);
     if (!running) {
       running = true;
       queueMicrotask(() => {

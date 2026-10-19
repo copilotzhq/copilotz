@@ -100,10 +100,11 @@ export async function runSqlTransaction<T>(
   }
 }
 
-/** A savepoint has its own output gate; rollback discards its cache observers. */
-export async function runSqlSavepoint<T>(
+/** A command has a revocable facade and output gate. Only groups need savepoints. */
+export async function runSqlCommandScope<T>(
   parent: SqlExecutor,
   operation: (transaction: SqlExecutor) => Promise<T>,
+  savepoint: boolean,
 ): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
   const gate = sqlCommitGate(parent);
   const completion: TransactionCompletion = {
@@ -112,9 +113,14 @@ export async function runSqlSavepoint<T>(
     active: true,
   };
   let active = true;
+  let queryFailed = false;
+  let queryError: unknown;
   const transaction: SqlExecutor = {
-    query(sql, params) {
-      if (!active) return Promise.reject(new Error("SQL savepoint is closed."));
+    query<TRow extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) {
+      if (!active) return Promise.reject(new Error("SQL command is closed."));
       if (
         /^\s*(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION)\b/i
           .test(sql)
@@ -123,17 +129,26 @@ export async function runSqlSavepoint<T>(
           new Error("Command handlers cannot control transactions."),
         );
       }
-      return parent.query(sql, params);
+      return parent.query<TRow>(sql, params).catch((error) => {
+        // Catching a SQL exception in the handler does not clear PostgreSQL's
+        // aborted transaction. COMMIT would otherwise report a silent rollback
+        // for a singleton without a receipt or another statement to detect it.
+        if (!queryFailed) queryError = error;
+        queryFailed = true;
+        throw error;
+      });
     },
   };
   completions.set(transaction, completion);
-  await parent.query("SAVEPOINT owner_command");
+  if (savepoint) await parent.query("SAVEPOINT owner_command");
   let value: T;
   try {
     value = await operation(transaction);
+    if (queryFailed) throw queryError;
   } catch (error) {
     completion.state = "failed";
     completion.callbacks.length = 0;
+    if (!savepoint) throw error;
     await parent.query("ROLLBACK TO SAVEPOINT owner_command");
     await parent.query("RELEASE SAVEPOINT owner_command");
     return { ok: false, error };
@@ -141,7 +156,7 @@ export async function runSqlSavepoint<T>(
     active = false;
     completion.active = false;
   }
-  await parent.query("RELEASE SAVEPOINT owner_command");
+  if (savepoint) await parent.query("RELEASE SAVEPOINT owner_command");
   afterSqlCommit(parent, () => {
     gate();
     completion.state = "committed";

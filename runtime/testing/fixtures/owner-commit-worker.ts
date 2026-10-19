@@ -28,12 +28,14 @@ export function commitFixtureOwner(
   schema: string,
   holder: string,
   notice: (message: FixtureNotice) => void,
+  maxGroupCount = 4,
 ) {
   const tables = createCoreTableNames(schema);
   return createOwnerCommands({
     session,
     schema,
     holderId: holder,
+    maxGroupCount,
     handlers: {
       write: {
         authorize() {},
@@ -93,7 +95,7 @@ export function commitFixtureOwner(
 }
 
 if (import.meta.main) {
-  const [url, schema] = Deno.args;
+  const [url, schema, mode] = Deno.args;
   const db = await createTestDatabase({
     url: localPostgresUrl(url, `${schema}_old`),
     pgPoolMax: 1,
@@ -105,7 +107,13 @@ if (import.meta.main) {
       seedPublished.resolve();
     }
   };
-  const owner = commitFixtureOwner(db, schema, "predecessor", send);
+  const owner = commitFixtureOwner(
+    db,
+    schema,
+    "predecessor",
+    send,
+    mode === "group" ? 4 : 1,
+  );
   try {
     const caller = {
       principal: "fixture-worker",
@@ -137,16 +145,32 @@ if (import.meta.main) {
           await db.close();
           Deno.exit(0);
         }
-        if (command !== "commit") {
+        if (command !== "commit" && command !== "group") {
           throw new Error(`Unexpected fixture command ${command}`);
         }
+        const requests = command === "group"
+          ? [
+            fixtureRequest("existing"),
+            {
+              ...fixtureRequest("existing"),
+              receipt: {
+                ...fixtureRequest("existing").receipt,
+                intent: { changed: true },
+              },
+            },
+            fixtureRequest("new"),
+            fixtureRequest("failed", true),
+            fixtureRequest("queued"),
+          ]
+          : [fixtureRequest("new"), fixtureRequest("queued")];
         const results = await Promise.allSettled(
-          ["new", "queued"].map(async (id) => {
+          requests.map(async (request) => {
+            const id = request.input.id;
             try {
               const result = await owner.execute(
                 "write",
                 caller,
-                fixtureRequest(id),
+                request,
               );
               send({ type: "result", id, status: "fulfilled", result });
               return result;

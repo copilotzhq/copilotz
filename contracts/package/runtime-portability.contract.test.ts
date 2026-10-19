@@ -7,6 +7,8 @@ import {
 } from "@std/assert";
 
 const repositoryRoot = new URL("../../", import.meta.url);
+const retiredPackageReference =
+  /@copilotz\/copilotz\/(?:domain|attachments|migration\/(?:v1|content-v2|memory-v4))\b/;
 
 async function source(path: string): Promise<string> {
   return await Deno.readTextFile(new URL(path, repositoryRoot));
@@ -20,6 +22,38 @@ Deno.test("every declared package export resolves to a source file", async () =>
     const stat = await Deno.stat(new URL(target, repositoryRoot));
     assert(stat.isFile, `${subpath} -> ${target}`);
   }
+});
+
+Deno.test("the Node host adapter has a public source export", async () => {
+  const configuration = JSON.parse(await source("deno.json")) as {
+    exports: Record<string, string>;
+    imports: Record<string, string>;
+  };
+  const target = "./runtime/adapters/node/index.ts";
+  assertEquals(configuration.exports["./adapters/node"], target);
+  assertEquals(
+    configuration.imports["@copilotz/copilotz/adapters/node"],
+    target,
+  );
+  assertStringIncludes(
+    await source(target),
+    'export { listen } from "./listen.ts";',
+  );
+});
+
+Deno.test("retired package references still reject removed surfaces", () => {
+  for (
+    const subpath of [
+      "domain",
+      "attachments",
+      "migration/v1",
+      "migration/content-v2",
+      "migration/memory-v4",
+    ]
+  ) {
+    assert(retiredPackageReference.test(`@copilotz/copilotz/${subpath}`));
+  }
+  assert(!retiredPackageReference.test("@copilotz/copilotz/adapters/node"));
 });
 
 Deno.test("published documentation matches the final version", async () => {
@@ -54,12 +88,7 @@ Deno.test("published documentation matches the final version", async () => {
         .map((entry) => source(`docs/${entry.name}`)),
     ),
   ].join("\n");
-  assert(
-    !/@copilotz\/copilotz\/(?:domain|attachments|adapters\/node|migration\/(?:v1|content-v2|memory-v4))\b/
-      .test(
-        publishedDocs,
-      ),
-  );
+  assert(!retiredPackageReference.test(publishedDocs));
   for (
     const deleted of [
       "docs/application-resilience-plan.md",
@@ -146,7 +175,7 @@ Deno.test("external dependency versions are centralized in deno.json imports", a
   );
   assertEquals(
     configuration.imports["@oxian/oxian-js"],
-    "jsr:@oxian/oxian-js@0.22.0-next.b171c9b",
+    "jsr:@oxian/oxian-js@0.22.0-next.25b4943",
   );
   assertEquals(
     configuration.imports["@modelcontextprotocol/sdk"],

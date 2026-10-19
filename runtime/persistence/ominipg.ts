@@ -1,5 +1,9 @@
 import { Ominipg } from "../../dependencies/ominipg.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
+import {
+  bindSnapshotSession,
+  retireSnapshotDatabase,
+} from "./snapshot-admission.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
 import { createSqlSession, type SqlSession } from "../events/index.ts";
 import type {
@@ -59,7 +63,9 @@ export type ManagedOminipgDatabase = Readonly<{
 export function createOminipgSqlSession(
   database: OminipgDatabaseLike,
 ): SqlSession {
-  return (createSqlSession(database));
+  const session = createSqlSession(database);
+  bindSnapshotSession(session, database);
+  return session;
 }
 
 /** Opens an application-owned Ominipg database and its private SQL adapter. */
@@ -106,7 +112,9 @@ export async function openManagedOminipgDatabase(
     database: adapted,
     session,
     close() {
-      closeTask ??= database.close();
+      closeTask ??= retireSnapshotDatabase(adapted).then(() =>
+        database.close()
+      );
       return closeTask;
     },
   } as const);

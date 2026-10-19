@@ -1,3 +1,4 @@
+import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
 import type { OwnerIngressProof } from "./ingress/authority.ts";
 import { createHostCommands, hostDatabaseScopes } from "./host-commands.ts";
 import { createHostServices } from "./host.ts";
@@ -117,7 +118,8 @@ function lazyStreamFollower(
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let opening: Promise<ReadableStreamDefaultReader<Uint8Array>> | undefined;
   const getReader = () =>
-    opening ??= open().then((stream) => {
+    // Acquisition belongs to this observer even when a later consumer starts it.
+    opening ??= runIndependentAsyncContext(open).then((stream) => {
       reader = stream.getReader();
       return reader;
     });
@@ -302,8 +304,12 @@ function createApplicationOutputHub(
           filter.correlationId !== output.correlationId
         ) continue;
         try {
+          // Published observation outlives the producer capability call. Its
+          // follower and terminal wait must not borrow that call's authority.
           const projected = isStreamOutputDescriptor(output)
-            ? await projectStream(output, databaseSchema)
+            ? await runIndependentAsyncContext(() =>
+              projectStream(output, databaseSchema)
+            )
             : output;
           subscription.controller?.enqueue(projected);
         } catch (error) {

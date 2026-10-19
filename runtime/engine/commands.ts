@@ -1,3 +1,4 @@
+import { captureSnapshotAncestry } from "../persistence/snapshot-admission.ts";
 import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
 import {
   currentCollectionReadBudget,
@@ -360,11 +361,14 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     const binding = { ...caller };
     const readBudget = currentCollectionReadBudget();
     const runWithReadView = readViews.capture();
+    const runWithSnapshotAncestry = captureSnapshotAncestry();
     pending.push({
       reject: completion.reject,
       withReadContext: (execute) =>
-        runWithReadView(() =>
-          withCollectionReadBudgetBinding(readBudget, execute)
+        runWithSnapshotAncestry(() =>
+          runWithReadView(() =>
+            withCollectionReadBudgetBinding(readBudget, execute)
+          )
         ),
       async run() {
         let callbackFinished = false;

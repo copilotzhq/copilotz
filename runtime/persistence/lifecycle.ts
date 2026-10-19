@@ -1,4 +1,11 @@
 import {
+  closeSnapshotSession,
+  isSnapshotQuarantined,
+  markSnapshotDelegate,
+  retireSnapshotDatabase,
+  withSnapshotAdmission,
+} from "./snapshot-admission.ts";
+import {
   type CopilotzOminipgOptions,
   type OminipgDatabaseLike,
   openManagedOminipgDatabase,
@@ -386,11 +393,14 @@ async function openRecoverablePersistence(
   ): Promise<void> => {
     value.retired = true;
     value.lifetime.abort(reason);
+    const snapshots = retireSnapshotDatabase(value.database, reason);
     if (!value.closeTask) {
       value.closeTask = new Promise<void>((resolve) => {
         value.startClose = () => {
           value.startClose = undefined;
-          void value.database.close().catch(() => undefined).then(() => {
+          void snapshots.then(() => value.database.close()).catch(() =>
+            undefined
+          ).then(() => {
             generations.delete(value);
             resolve();
           });
@@ -596,6 +606,7 @@ async function openRecoverablePersistence(
       database: CopilotzDatabase,
       assertSelected: () => void,
       lifetime: AbortSignal,
+      generation: DatabaseGeneration,
     ) => Promise<T>,
     localSignal?: AbortSignal,
     onNotStarted?: () => void,
@@ -621,6 +632,7 @@ async function openRecoverablePersistence(
         selected.database,
         assertSelected,
         selected.lifetime.signal,
+        selected,
       );
       localSignal?.throwIfAborted();
       assertSelected();
@@ -674,8 +686,14 @@ async function openRecoverablePersistence(
         report("confirmed");
         throw error;
       }
+      let quarantined: DatabaseGeneration | undefined;
       return execute(
-        async (selected, assertSelected, generationSignal) => {
+        async (
+          selected,
+          assertSelected,
+          generationSignal,
+          selectedGeneration,
+        ) => {
           let cleanup: SqlSnapshotCleanup = "confirmed";
           let observations = 0;
           try {
@@ -720,61 +738,82 @@ async function openRecoverablePersistence(
               if (generationSignal.aborted || signal?.aborted) abort();
               // Once invoked, only the backend can confirm this scope's release.
               cleanup = "unknown";
-              return await capability(async (scope) => {
-                assertSelected();
-                lifetime.signal.throwIfAborted();
-                const snapshot = reader(scope.snapshot);
-                const current = scope.kind === "pooled"
-                  ? scope.current.bind(scope)
-                  : undefined;
-                const wrapped: SqlReadSnapshot = scope.kind === "exclusive"
-                  ? { kind: "exclusive", snapshot }
-                  : scope.kind === "pooled"
-                  ? {
-                    kind: "pooled",
-                    snapshot,
-                    current: async (callback) => {
-                      assertSelected();
-                      lifetime.signal.throwIfAborted();
-                      const result = await current!(async (transaction) => {
-                        assertSelected();
-                        const value = await callback(reader(transaction));
+              return await withSnapshotAdmission(
+                selected,
+                capability,
+                async (scope) => {
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  const snapshot = reader(scope.snapshot);
+                  const current = scope.kind === "pooled"
+                    ? scope.current.bind(scope)
+                    : undefined;
+                  const wrapped: SqlReadSnapshot = scope.kind === "exclusive"
+                    ? { kind: "exclusive", snapshot }
+                    : scope.kind === "pooled"
+                    ? {
+                      kind: "pooled",
+                      snapshot,
+                      current: async (callback) => {
                         assertSelected();
                         lifetime.signal.throwIfAborted();
-                        return value;
-                      });
-                      assertSelected();
-                      lifetime.signal.throwIfAborted();
-                      return result;
-                    },
-                  }
-                  : (() => {
-                    throw new Error("Unsupported database snapshot scope.");
-                  })();
-                return await operation(Object.freeze(wrapped));
-              }, {
-                signal: lifetime.signal,
-                onCleanup(outcome) {
-                  observations++;
-                  cleanup = observations === 1 && outcome === "confirmed"
-                    ? "confirmed"
-                    : "unknown";
+                        const result = await current!(async (transaction) => {
+                          assertSelected();
+                          const value = await callback(reader(transaction));
+                          assertSelected();
+                          lifetime.signal.throwIfAborted();
+                          return value;
+                        });
+                        assertSelected();
+                        lifetime.signal.throwIfAborted();
+                        return result;
+                      },
+                    }
+                    : (() => {
+                      throw new Error("Unsupported database snapshot scope.");
+                    })();
+                  return await operation(Object.freeze(wrapped));
                 },
-              });
+                {
+                  signal: lifetime.signal,
+                  onCleanup(outcome) {
+                    observations++;
+                    cleanup = observations === 1 && outcome === "confirmed"
+                      ? "confirmed"
+                      : "unknown";
+                  },
+                },
+              );
             } finally {
               generationSignal.removeEventListener("abort", abort);
               signal?.removeEventListener("abort", abort);
             }
           } finally {
+            if (isSnapshotQuarantined(selected)) {
+              quarantined = selectedGeneration;
+            }
             report(cleanup);
           }
         },
         signal,
         () => report("confirmed"),
-      );
+      ).finally(() => {
+        if (quarantined) {
+          markUnavailable(
+            persistenceError(
+              "persistence_unavailable",
+              quarantined.id,
+              retryAfterSeconds,
+            ),
+            quarantined,
+          );
+        }
+      });
     },
     close: () => close(),
   } as const;
+
+  markSnapshotDelegate(database);
 
   const close = (): Promise<void> => {
     if (closeTask) return closeTask;
@@ -820,22 +859,24 @@ export async function openCopilotzPersistence(
         "Shared persistence cannot be combined with database or database lifecycle options.",
       );
     }
+    const session = createOminipgSqlSession(options.persistence.database);
     return ({
       database: options.persistence.database,
-      session: createOminipgSqlSession(options.persistence.database),
+      session,
       ownership: "injected" as const,
       ...(options.persistence.recovery
         ? { recovery: options.persistence.recovery }
         : {}),
-      close: () => Promise.resolve(),
+      close: () => closeSnapshotSession(session),
     } as const);
   }
   if (options.database && isDatabase(options.database)) {
+    const session = createOminipgSqlSession(options.database);
     return ({
       database: options.database,
-      session: createOminipgSqlSession(options.database),
+      session,
       ownership: "injected" as const,
-      close: () => Promise.resolve(),
+      close: () => closeSnapshotSession(session),
     } as const);
   }
   const connector = isConnector(options.database)

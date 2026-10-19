@@ -231,7 +231,7 @@ Deno.test("captured local cancellation does not reconnect based on its error wor
     database: {
       connect: ({ generation: id }) => {
         connects++;
-        return generation(id, events);
+        return generation(id, events, { cleanupOutcome: "confirmed" });
       },
     },
   });
@@ -421,28 +421,33 @@ Deno.test("caller cancellation after backend settlement suppresses final snapsho
   }
 });
 
-Deno.test("final caller signal preflight cannot retire generation after the last witness", async () => {
+Deno.test("final generation witness refuses disclosure after confirmed cleanup closes persistence", async () => {
   const controller = new AbortController();
   const persistence = await openCopilotzPersistence({
-    database: { connect: ({ generation: id }) => generation(id, []) },
-  });
-  let checks = 0;
-  let closing: Promise<void> | undefined;
-  Object.defineProperty(controller.signal, "throwIfAborted", {
-    value() {
-      checks++;
-      if (checks === 2) closing = persistence.close();
+    database: {
+      connect: ({ generation: id }) =>
+        generation(id, [], { cleanupOutcome: "confirmed" }),
     },
   });
+  const reports: SqlSnapshotCleanup[] = [];
+  let closing: Promise<void> | undefined;
   try {
     const error = await assertRejects(() =>
       persistence.session.withReadSnapshot!(
         () => Promise.resolve(42),
-        { signal: controller.signal },
+        {
+          signal: controller.signal,
+          onCleanup(outcome) {
+            reports.push(outcome);
+            closing = persistence.close();
+          },
+        },
       )
     );
     assertEquals(isCopilotzPersistenceError(error), true);
-    assertEquals(checks, 2);
+    assertEquals((error as { code: string }).code, "persistence_indeterminate");
+    assertEquals(reports, ["confirmed"]);
+    assertEquals(controller.signal.aborted, false);
   } finally {
     await closing;
     await persistence.close();

@@ -5,6 +5,7 @@ import {
 import {
   assertSchemaCommandTransaction,
   createSchemaCommandRunner,
+  schemaCommandContext,
 } from "../engine/commands.ts";
 import { stageOwnerChange } from "./push.ts";
 import { afterSqlCommit, sqlCommitGate } from "./session.ts";
@@ -114,10 +115,12 @@ export type CommitEventMutationOptions<T> = {
   body?: Readonly<{ id: string; json: unknown }>;
   /**
    * Writes and checks composed into the event insert, inside its transaction.
+   * The context supplies the command clock captured after the owner fence.
    */
   statement?(
     param: (value: unknown) => string,
     tables: EventMutationContext["tables"],
+    context: Readonly<{ commandTime: string }>,
   ): EventStatement<T>;
   /**
    * Additional writes that share the event's transaction.
@@ -747,9 +750,11 @@ export function createEventStore(
     // transaction. An existing body is verified before that transaction can
     // commit, and a duplicate event returns its original durable result.
     const insertEvent = async (executor: SqlExecutor) => {
+      const { commandTime } = schemaCommandContext(executor, databaseSchema);
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
-      const statement = mutation.statement?.(param, tables);
+      const commandTimeSql = `${param(commandTime)}::timestamptz`;
+      const statement = mutation.statement?.(param, tables, { commandTime });
       const admission = options.admitOperationEventSql?.({
         namespace: draft.namespace,
         operationId: settlementScopeId,
@@ -801,7 +806,7 @@ export function createEventStore(
           WHERE id = ${param(lease.deliveryId)} AND status = 'leased'
             AND lease_owner = ${
             param(lease.owner)
-          } AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
+          } AND (lease_expires_at IS NULL OR lease_expires_at > ${commandTimeSql}) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
             AND EXISTS (SELECT 1 FROM event_operation_admission)
         )`]
           : []),
@@ -840,7 +845,7 @@ export function createEventStore(
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
                   delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' ELSE 'pending' END, 0, ${
           param(maxAttempts)
-        }, NOW(), NOW(), NOW(), CASE WHEN ${cancelled} THEN NOW() ELSE NULL END
+        }, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
              ${param(deliveryRows.map((row) => row.consumerId))}::text[],
@@ -1092,15 +1097,15 @@ export function createEventStore(
           `UPDATE ${tables.event_deliveries}
        SET status = 'leased', attempts = attempts + 1, owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'),
            lease_owner = $2,
-           lease_expires_at = CASE WHEN $3::bigint IS NULL THEN NULL ELSE NOW() + ($3 * INTERVAL '1 millisecond') END,
-           updated_at = NOW(), settled_at = NULL
+           lease_expires_at = CASE WHEN $3::bigint IS NULL THEN NULL ELSE $4::timestamptz + ($3 * INTERVAL '1 millisecond') END,
+           updated_at = $4::timestamptz, settled_at = NULL
        WHERE id = $1 AND attempts < max_attempts
          AND (
-           (status IN ('pending', 'retry_wait') AND available_at <= NOW())
-           OR (status = 'leased' AND (lease_expires_at <= NOW() OR owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')))
+           (status IN ('pending', 'retry_wait') AND available_at <= $4::timestamptz)
+           OR (status = 'leased' AND (lease_expires_at <= $4::timestamptz OR owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')))
          )
        RETURNING *`,
-          params,
+          [...params, context.commandTime],
         ),
     );
     return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
@@ -1173,11 +1178,15 @@ export function createEventStore(
       async (_input, transaction, settle) => {
         const current = await getDelivery(id, transaction);
         if (!current) return null;
-        const params: unknown[] = [id, status];
+        const { commandTime } = schemaCommandContext(
+          transaction,
+          databaseSchema,
+        );
+        const params: unknown[] = [id, status, commandTime];
         const ownerFilter = owner
           ? `AND lease_owner = $${
             params.push(owner)
-          } AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
+          } AND (lease_expires_at IS NULL OR lease_expires_at > $3::timestamptz) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
           : "";
         const allowed = status === "succeeded"
           ? "status = 'leased'"
@@ -1186,7 +1195,7 @@ export function createEventStore(
           const result = await transaction.query<DeliveryRow>(
             `UPDATE ${tables.event_deliveries}
          SET status = $2, lease_owner = NULL, lease_expires_at = NULL,
-             updated_at = NOW(), settled_at = NOW()
+             updated_at = $3::timestamptz, settled_at = $3::timestamptz
          WHERE id = $1 AND ${allowed} ${ownerFilter} RETURNING *`,
             params,
           );
@@ -1198,6 +1207,7 @@ export function createEventStore(
     );
   };
 
+  // Candidate reads are hints; claim commands recheck their captured clock.
   const listRecoverable = async (
     listOptions: {
       namespace?: string;
@@ -1240,28 +1250,28 @@ export function createEventStore(
     leaseMs?: number;
   }): Promise<EventDelivery | null> => {
     const leaseMs = boundedInteger(claim.leaseMs, defaultLeaseMs, 0);
-    const params: unknown[] = [claim.owner, leaseMs];
-    const conditions = [
-      `((d.status IN ('pending', 'retry_wait') AND d.available_at <= NOW())
-        OR (d.status = 'leased' AND (d.lease_expires_at <= NOW() OR d.owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'))))`,
-      "d.attempts < d.max_attempts",
-    ];
-    if (claim.namespace) {
-      params.push(claim.namespace);
-      conditions.push(`e.namespace = $${params.length}`);
-    }
-    const consumerFilter = filtersForConsumers(
-      "d",
-      claim.consumerIds,
-      params,
-    );
-    if (consumerFilter) conditions.push(consumerFilter);
-
     const result = await runCommand(
       "delivery.claimNext",
       claim,
-      (_input, context) =>
-        context.transaction.query<DeliveryRow>(
+      (_input, context) => {
+        const params: unknown[] = [claim.owner, leaseMs, context.commandTime];
+        const conditions = [
+          `((d.status IN ('pending', 'retry_wait') AND d.available_at <= $3::timestamptz)
+        OR (d.status = 'leased' AND (d.lease_expires_at <= $3::timestamptz OR d.owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'))))`,
+          "d.attempts < d.max_attempts",
+        ];
+        if (claim.namespace) {
+          params.push(claim.namespace);
+          conditions.push(`e.namespace = $${params.length}`);
+        }
+        const consumerFilter = filtersForConsumers(
+          "d",
+          claim.consumerIds,
+          params,
+        );
+        if (consumerFilter) conditions.push(consumerFilter);
+
+        return context.transaction.query<DeliveryRow>(
           `WITH candidate AS (
         SELECT d.id FROM ${tables.event_deliveries} d
         JOIN ${tables.events} e ON e.id = d.event_id
@@ -1272,13 +1282,14 @@ export function createEventStore(
       UPDATE ${tables.event_deliveries} AS d
       SET status = 'leased', attempts = d.attempts + 1, owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'),
           lease_owner = $1,
-          lease_expires_at = NOW() + ($2 * INTERVAL '1 millisecond'),
-          updated_at = NOW(), settled_at = NULL
+          lease_expires_at = $3::timestamptz + ($2 * INTERVAL '1 millisecond'),
+          updated_at = $3::timestamptz, settled_at = NULL
       FROM candidate
       WHERE d.id = candidate.id
       RETURNING d.*`,
           params,
-        ),
+        );
+      },
     );
     return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
@@ -1406,12 +1417,12 @@ export function createEventStore(
         (_input, context) =>
           context.transaction.query<{ id: string }>(
             `UPDATE ${tables.event_deliveries}
-         SET lease_expires_at = NOW() + ($3 * INTERVAL '1 millisecond'),
-             updated_at = NOW()
+         SET lease_expires_at = $4::timestamptz + ($3 * INTERVAL '1 millisecond'),
+             updated_at = $4::timestamptz
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-           AND lease_expires_at > NOW() AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
+           AND lease_expires_at > $4::timestamptz AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
          RETURNING id`,
-            [heartbeat.id, heartbeat.owner, leaseMs],
+            [heartbeat.id, heartbeat.owner, leaseMs, context.commandTime],
           ),
       );
       return result.rows.length === 1;
@@ -1427,6 +1438,10 @@ export function createEventStore(
         "delivery.fail",
         failure,
         async (failure, transaction, settle) => {
+          const { commandTime } = schemaCommandContext(
+            transaction,
+            databaseSchema,
+          );
           const current = await getDelivery(failure.id, transaction);
           if (
             !current || current.status !== "leased" ||
@@ -1451,13 +1466,13 @@ export function createEventStore(
                            THEN 'dead_letter' ELSE 'retry_wait' END,
              available_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
                THEN available_at
-               ELSE NOW() + ($3 * INTERVAL '1 millisecond') END,
+               ELSE $6::timestamptz + ($3 * INTERVAL '1 millisecond') END,
              lease_owner = NULL, lease_expires_at = NULL,
-             last_error = $4::jsonb, updated_at = NOW(),
+             last_error = $4::jsonb, updated_at = $6::timestamptz,
              settled_at = CASE WHEN $5 = FALSE OR attempts >= max_attempts
-               THEN NOW() ELSE NULL END
+               THEN $6::timestamptz ELSE NULL END
          WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-           AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
+           AND (lease_expires_at IS NULL OR lease_expires_at > $6::timestamptz) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
          RETURNING *`,
               [
                 failure.id,
@@ -1465,6 +1480,7 @@ export function createEventStore(
                 backoffMs,
                 JSON.stringify(serializeError(failure.error, retryable)),
                 retryable,
+                commandTime,
               ],
             );
             return result.rows[0]
@@ -1476,6 +1492,7 @@ export function createEventStore(
     },
     listRecoverable,
     async recoverExpiredDeliveries(recovery = {}) {
+      // This read is advisory; every exhaustion write rechecks inside its command.
       const candidates = await session.query<DeliveryRow>(
         `SELECT d.* FROM ${tables.event_deliveries} AS d
          JOIN ${tables.events} AS e ON e.id = d.event_id
@@ -1490,14 +1507,18 @@ export function createEventStore(
         const delivery = await deliveryCommand("delivery.exhaust", {
           id: row.id,
         }, async (input, transaction, settle) => {
+          const { commandTime } = schemaCommandContext(
+            transaction,
+            databaseSchema,
+          );
           const current = await getDelivery(input.id, transaction);
           if (!current) return null;
           return await settle(async (transaction) => {
             const result = await transaction.query<DeliveryRow>(
               `UPDATE ${tables.event_deliveries}
              SET status = 'dead_letter', lease_owner = NULL, lease_expires_at = NULL,
-               last_error = $2::jsonb, updated_at = NOW(), settled_at = NOW()
-             WHERE id = $1 AND status = 'leased' AND (lease_expires_at <= NOW() OR owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'))
+               last_error = $2::jsonb, updated_at = $3::timestamptz, settled_at = $3::timestamptz
+             WHERE id = $1 AND status = 'leased' AND (lease_expires_at <= $3::timestamptz OR owner_epoch <> (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'))
                AND attempts >= max_attempts RETURNING *`,
               [
                 row.id,
@@ -1506,6 +1527,7 @@ export function createEventStore(
                   message:
                     "The delivery lease expired after its final attempt.",
                 }),
+                commandTime,
               ],
             );
             return result.rows[0]
@@ -1612,11 +1634,11 @@ export function createEventStore(
       const result = await runCommand(
         "delivery.cancelScope",
         { namespace, settlementScopeId, reason },
-        async (_input, { transaction }) => {
+        async (_input, { transaction, commandTime }) => {
           const cancelled = await transaction.query<{ id: string }>(
             `UPDATE ${tables.event_deliveries} AS delivery
            SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
-             last_error = $3::jsonb, updated_at = NOW(), settled_at = NOW()
+             last_error = $3::jsonb, updated_at = $4::timestamptz, settled_at = $4::timestamptz
            FROM ${tables.events} AS event
            WHERE delivery.event_id = event.id AND event.namespace = $1
              AND delivery.settlement_scope_id = $2 AND delivery.status IN ('pending','leased','retry_wait')
@@ -1625,6 +1647,7 @@ export function createEventStore(
               namespace,
               settlementScopeId,
               JSON.stringify({ reason: reason ?? "cancelled" }),
+              commandTime,
             ],
           );
           await syncDeliveryAlarms(

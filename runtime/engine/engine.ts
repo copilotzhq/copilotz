@@ -338,6 +338,7 @@ export async function createCopilotzEngine(
         actions: (execution?.registry ?? options.registry).actions,
         store: scopedStore,
         coordinator: scopedCoordinator,
+        operationCatalog: scopedOperationCatalog,
         collections: {
           runtime: scopedCapabilities.collections,
           definitions: (execution?.registry ?? options.registry).collections,
@@ -543,7 +544,8 @@ export async function createCopilotzEngine(
             const committed = await createSchemaCommandRunner(
               scopedStore.session,
               base.databaseSchema,
-            )("actions.start", input, async (_input, { transaction }) => {
+            )("actions.start", input, async (_input, command) => {
+              const { transaction, commandTime } = command;
               if (base.settlementScopeId) {
                 const source = await transaction.query(
                   `SELECT operation_id
@@ -564,8 +566,8 @@ export async function createCopilotzEngine(
               if (base.source?.kind === "delivery") {
                 const lease = await transaction.query(
                   `SELECT id FROM ${scopedStore.tables.event_deliveries}
-                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch=(SELECT epoch FROM ${scopedStore.tables.owner_epochs} WHERE owner='schema')`,
-                  [base.source.id, base.executionIncarnationId],
+                WHERE id = $1 AND status = 'leased' AND lease_owner = $2 AND (lease_expires_at IS NULL OR lease_expires_at > $3::timestamptz) AND owner_epoch=(SELECT epoch FROM ${scopedStore.tables.owner_epochs} WHERE owner='schema')`,
+                  [base.source.id, base.executionIncarnationId, commandTime],
                 );
                 if (!lease.rows.length) {
                   throw new Error(

@@ -21,6 +21,7 @@ export function actionOwnershipStatement(
   writer: ActionWriter | undefined,
   tables: Readonly<Record<CoreTableName, string>>,
   param: (value: unknown) => string,
+  commandTime: string,
 ): EventStatement<void> {
   const { data, draft } = input;
   if (data.status === "awaiting" && writer?.kind !== "delivery") {
@@ -56,7 +57,9 @@ export function actionOwnershipStatement(
       writer.kind === "delivery"
         ? `status = 'leased' AND lease_owner = ${
           param(writer.leaseOwner)
-        } AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
+        } AND (lease_expires_at IS NULL OR lease_expires_at > ${
+          param(commandTime)
+        }::timestamptz) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
         : "status IN ('dead_letter', 'cancelled', 'succeeded')"
     }
     )`);

@@ -7,7 +7,8 @@ import type { OperationCatalog } from "../streams/catalog.ts";
 export type OwnerInvocationLiveness = Readonly<{
   databaseSchema: string;
   namespace: string;
-  operationCatalog: Pick<OperationCatalog, "admitEventSql">;
+  /** Required when the invocation is bound to an operation. */
+  operationCatalog?: Pick<OperationCatalog, "admitEventSql">;
   operationId?: string;
   eventId?: string;
   writer?: Readonly<{ deliveryId: string; leaseOwner: string }>;
@@ -25,6 +26,11 @@ export async function assertOwnerInvocationLive(
   const ctes: string[] = [];
   const gates: string[] = [];
   if (binding.operationId) {
+    if (!binding.operationCatalog) {
+      throw new TypeError(
+        "Invocation operation authority requires its catalog.",
+      );
+    }
     const admitted = binding.operationCatalog.admitEventSql({
       namespace: binding.namespace,
       operationId: binding.operationId,
@@ -34,12 +40,14 @@ export async function assertOwnerInvocationLive(
   }
   if (binding.writer) {
     const delivery = param(binding.writer.deliveryId);
-    gates.push(`EXISTS (SELECT 1 FROM ${tables.event_deliveries}
+    gates.push(`EXISTS (SELECT 1 FROM ${tables.event_deliveries} AS delivery
       WHERE id=${delivery} AND lease_owner=${param(binding.writer.leaseOwner)}
       AND status='leased' AND (lease_expires_at IS NULL OR lease_expires_at > ${
       param(read.commandTime)
     }::timestamptz)
       AND owner_epoch=(SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
+      AND EXISTS (SELECT 1 FROM ${tables.events}
+        WHERE id=delivery.event_id AND namespace=${param(binding.namespace)})
       ${binding.eventId ? `AND event_id=${param(binding.eventId)}` : ""}
       ${
       binding.operationId

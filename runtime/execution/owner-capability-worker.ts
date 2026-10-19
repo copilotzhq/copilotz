@@ -253,7 +253,11 @@ function workerContext(options: {
     transactionOptions: RecordValue = {},
   ): Promise<T> => {
     check();
-    const transactionSignal = signalFrom([transactionOptions]);
+    const callSignal = signalFrom([transactionOptions]);
+    const transactionSignal = callSignal
+      ? AbortSignal.any([signal, callSignal])
+      : signal;
+    transactionSignal.throwIfAborted();
     transactionOptions = decodeCapability(
       encodeCapability(cleanArgs([transactionOptions])[0]),
     ) as RecordValue;
@@ -268,6 +272,7 @@ function workerContext(options: {
       const task = (async () => {
         check();
         if (!active) throw capabilityError("owner_plan_closed");
+        transactionSignal.throwIfAborted();
         if (plan.length >= 100) throw capabilityError("owner_plan_limit");
         const index = plan.length;
         // Snapshot synchronously so mutation after scheduling cannot change intent.
@@ -347,6 +352,7 @@ function workerContext(options: {
     }
     if (failure) throw failure;
     check();
+    transactionSignal.throwIfAborted();
     const wireOptions = transactionOptions;
     const ownerOptions = { ...wireOptions, operationKey: key };
     const receipt = {
@@ -371,12 +377,11 @@ function workerContext(options: {
           options: ownerOptions,
           receipt,
         },
-        transactionSignal instanceof AbortSignal
-          ? AbortSignal.any([signal, transactionSignal])
-          : signal,
+        transactionSignal,
       )
     );
     check();
+    transactionSignal.throwIfAborted();
     return value;
   };
   const readSnapshot = async <T>(

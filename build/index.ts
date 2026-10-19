@@ -356,22 +356,25 @@ if (import.meta.main) {
     const entries = args.filter((arg) => !arg.startsWith("--"));
     const role = args.find((arg) => arg.startsWith("--role="))?.slice(7);
     const output = args.find((arg) => arg.startsWith("--output="))?.slice(9);
+    const config = args.find((arg) => arg.startsWith("--config="))?.slice(9);
     const platform = args.find((arg) =>
       arg.startsWith("--platform=")
     )?.slice(11) ?? "browser";
     if (
-      entries.length !== 1 || role !== "worker" || !output ||
+      entries.length !== 1 || role !== "worker" || !output || config === "" ||
       !["browser", "deno"].includes(platform) || args.some((arg) =>
-        arg.startsWith("--") && !/^(--role=|--output=|--platform=)/.test(arg)
+        arg.startsWith("--") &&
+        !/^(--role=|--output=|--platform=|--config=)/.test(arg)
       )
     ) {
       throw new TypeError(
-        "Usage: copilotz bundle entry --role=worker --output=path [--platform=browser|deno]",
+        "Usage: copilotz bundle entry --role=worker --output=path [--platform=browser|deno] [--config=path]",
       );
     }
     await buildWorkerRole(entries[0], {
       output,
       platform: platform as "browser" | "deno",
+      config,
     });
   } else {
     if (command !== "build") {

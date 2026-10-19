@@ -192,12 +192,13 @@ export function createActionLifecycleAppender(
         body: { id: payload.dataRef.eventBodyId, json: prepared.body },
         ...(tables
           ? {
-            statement: (param: (value: unknown) => string) =>
+            statement: (param, _tables, { commandTime }) =>
               actionOwnershipStatement(
                 { draft, data },
                 options.writer,
                 tables,
                 param,
+                commandTime,
               ),
           }
           : {}),

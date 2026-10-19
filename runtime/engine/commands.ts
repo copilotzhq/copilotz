@@ -888,6 +888,7 @@ export function schemaCommandContext(
   transaction: SqlExecutor,
   schema: string,
 ): CommandContext {
+  transaction = commandSource(transaction);
   assertSchemaCommandTransaction(transaction, schema);
   return commandContexts.get(transaction)!.context;
 }

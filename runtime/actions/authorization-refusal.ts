@@ -109,13 +109,14 @@ export async function settleActionAuthorizationRefusal(
         async (_, command) => {
           const tx = command.transaction;
           const lease = await tx.query(
-            `SELECT delivery.id FROM ${store.tables.event_deliveries} delivery JOIN ${store.tables.events} event ON event.id=delivery.event_id WHERE delivery.id=$1 AND delivery.event_id=$2 AND event.namespace=$3 AND delivery.status='leased' AND delivery.lease_owner=$4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>NOW()) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema') AND ($5::text IS NULL OR delivery.settlement_scope_id=$5)`,
+            `SELECT delivery.id FROM ${store.tables.event_deliveries} delivery JOIN ${store.tables.events} event ON event.id=delivery.event_id WHERE delivery.id=$1 AND delivery.event_id=$2 AND event.namespace=$3 AND delivery.status='leased' AND delivery.lease_owner=$4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>$6::timestamptz) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema') AND ($5::text IS NULL OR delivery.settlement_scope_id=$5)`,
             [
               writer.deliveryId,
               source.eventId,
               namespace,
               writer.leaseOwner,
               source.operationId ?? null,
+              command.commandTime,
             ],
           );
           if (lease.rows.length !== 1) {

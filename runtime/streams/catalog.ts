@@ -2240,7 +2240,7 @@ export function createOperationCatalog(
       return await runCommand(
         "catalog.openStream",
         input,
-        async (input, { transaction }) => {
+        async (input, { transaction, commandTime }) => {
           const inTransaction: SqlSession["transaction"] = (run) =>
             Promise.resolve(run(transaction));
 
@@ -2290,11 +2290,15 @@ export function createOperationCatalog(
                   quoteEventIdentifier(databaseSchema)
                 }."event_deliveries"
              WHERE id = $1 AND status = 'leased' AND lease_owner = $2
-               AND (lease_expires_at IS NULL OR lease_expires_at > NOW())
+               AND (lease_expires_at IS NULL OR lease_expires_at > $3::timestamptz)
                AND owner_epoch = (SELECT epoch FROM ${
                   quoteEventIdentifier(databaseSchema)
                 }."owner_epochs" WHERE owner='schema')`,
-                [input.deliveryLease.deliveryId, input.deliveryLease.owner],
+                [
+                  input.deliveryLease.deliveryId,
+                  input.deliveryLease.owner,
+                  commandTime,
+                ],
               );
               if (!owner.rows.length) return undefined;
             }

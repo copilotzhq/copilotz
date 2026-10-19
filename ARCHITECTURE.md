@@ -36,7 +36,7 @@ start with [Architecture](docs/architecture.md); documentation changes follow
 [DOCUMENTATION.md](DOCUMENTATION.md).
 
 The runtime is extended through **plugins**. A plugin is a package of
-capabilities that contributes some combination of five primitives:
+capabilities that contributes some combination of six primitives:
 
 - **Collections** represent state and provide the operations for mutating and
   querying that state.
@@ -45,6 +45,9 @@ capabilities that contributes some combination of five primitives:
   events as they execute.
 - **Processors** react to events and implement orchestration and business logic
   by deciding which actions or mutations should happen next.
+- **Views** present authorized data for a selected mode and renderer. Hosts bind
+  read-only Collection access to the viewer; live hosts observe those
+  Collections, while the built-in text renderer is pure and one-shot.
 - **Resources** are named, immutable process-local semantic definitions consumed
   by the runtime and its plugins, such as agents, tools, models, prompts, or
   routing policies. A Resource may carry a typed policy hook when that hook is
@@ -55,10 +58,15 @@ capabilities that contributes some combination of five primitives:
 
 These primitives deliberately operate at different levels of abstraction.
 **Collections describe what is**, **actions describe what the system can do**,
-and **processors decide when those capabilities should be used**. Resources
-provide the configuration that influences those decisions, while adapters
-isolate the parts of an implementation that may vary depending on the external
-system being used.
+and **processors decide when those capabilities should be used**. **Views
+describe how authorized data is presented**. Resources provide the configuration
+that influences those decisions, while adapters isolate the parts of an
+implementation that may vary depending on the external system being used. View
+definitions, resolution, and the pure text renderer are exported from
+`@copilotz/copilotz/views`; owner-backed read-only Collection observations are
+exposed through `client.collections.observe` from `@copilotz/copilotz/client`.
+The package does not include a React renderer or browser component scheduler.
+See [Views](docs/views.md).
 
 Events connect these components without requiring them to know about one another
 directly. A collection mutation can emit lifecycle events such as created,
@@ -429,10 +437,10 @@ the core to any one of them.
 The core conceptual model is:
 
 **Events describe what happened. Collections describe what is. Processors decide
-what happens next. Actions implement what can be done. Resources describe how
-the system should be configured. Adapters determine how interchangeable external
-boundaries are implemented. Plugins compose these pieces into higher-level
-behavior.**
+what happens next. Actions implement what can be done. Views present authorized
+data. Resources describe how the system should be configured. Adapters determine
+how interchangeable external boundaries are implemented. Plugins compose these
+pieces into higher-level behavior.**
 
 Resource declarations can contribute ordinary plugin dependencies. These resolve
 synchronously before owner registration; shared plugin objects register once,

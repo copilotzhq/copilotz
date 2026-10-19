@@ -1,3 +1,5 @@
+import { dataProperties, walkDataOnly } from "./data-only-json.ts";
+
 /** Structural JSON validation with explicit boundary policies; never invokes getters. */
 export function assertJsonValue(
   value: unknown,
@@ -11,50 +13,56 @@ export function assertJsonValue(
   } = {},
 ): void {
   const label = options.label ?? "Value";
-  const ancestors = new WeakSet<object>();
-  let nodes = 0;
   function fail(reason: string): never {
     throw new TypeError(`${label} ${reason}`);
   }
-  const visit = (item: unknown, depth: number): void => {
-    if (++nodes > (options.maxNodes ?? Infinity)) {
-      fail("exceeds maximum JSON node count.");
-    }
-    if (depth > (options.maxDepth ?? Infinity)) {
-      fail("exceeds maximum JSON depth.");
-    }
-    if (
-      item === null || typeof item === "string" || typeof item === "boolean"
-    ) return;
-    if (typeof item === "number") {
+  walkDataOnly(value, {
+    value(item, depth, nodes) {
+      if (nodes > (options.maxNodes ?? Infinity)) {
+        fail("exceeds maximum JSON node count.");
+      }
+      if (depth > (options.maxDepth ?? Infinity)) {
+        fail("exceeds maximum JSON depth.");
+      }
       if (
-        !Number.isFinite(item) ||
-        (options.rejectNegativeZero && Object.is(item, -0))
-      ) fail("must contain lossless JSON numbers.");
-      return;
-    }
-    if (!item || typeof item !== "object") {
-      fail("must contain lossless JSON values.");
-    }
-    if (options.allowBytes && item instanceof Uint8Array) return;
-    if (ancestors.has(item)) fail("cannot be cyclic.");
-    const array = Array.isArray(item);
-    if (
-      !array && Object.getPrototypeOf(item) !== Object.prototype &&
-      Object.getPrototypeOf(item) !== null
-    ) fail("must contain plain JSON objects.");
-    const keys = Reflect.ownKeys(item);
-    if (
-      array && (keys.length !== item.length + 1 || !keys.includes("length"))
-    ) fail("arrays must be dense and contain no extra properties.");
-    ancestors.add(item);
-    try {
+        item === null || typeof item === "string" || typeof item === "boolean"
+      ) {
+        return item;
+      }
+      if (typeof item === "number") {
+        if (
+          !Number.isFinite(item) ||
+          (options.rejectNegativeZero && Object.is(item, -0))
+        ) fail("must contain lossless JSON numbers.");
+        return item;
+      }
+      if (!item || typeof item !== "object") {
+        fail("must contain lossless JSON values.");
+      }
+      if (options.allowBytes && item instanceof Uint8Array) return item;
+      return dataProperties;
+    },
+    cycle: () => fail("cannot be cyclic."),
+    properties(item, array, visit) {
+      if (
+        !array && Object.getPrototypeOf(item) !== Object.prototype &&
+        Object.getPrototypeOf(item) !== null
+      ) fail("must contain plain JSON objects.");
+      const keys = Reflect.ownKeys(item);
+      const input = item as unknown[];
+      if (
+        array && (keys.length !== input.length + 1 || !keys.includes("length"))
+      ) {
+        fail("arrays must be dense and contain no extra properties.");
+      }
       for (const key of keys) {
         if (array && key === "length") continue;
         if (typeof key !== "string") fail("cannot contain symbol keys.");
         if (
-          array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= item.length)
-        ) fail("arrays must be dense and contain no extra properties.");
+          array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= input.length)
+        ) {
+          fail("arrays must be dense and contain no extra properties.");
+        }
         const descriptor = Object.getOwnPropertyDescriptor(item, key)!;
         if (!descriptor.enumerable || !("value" in descriptor)) {
           fail("must contain enumerable data properties only.");
@@ -63,11 +71,8 @@ export function assertJsonValue(
           !array && descriptor.value === undefined &&
           options.omitUndefinedProperties
         ) continue;
-        visit(descriptor.value, depth + 1);
+        visit(key, descriptor.value);
       }
-    } finally {
-      ancestors.delete(item);
-    }
-  };
-  visit(value, 0);
+    },
+  }, false);
 }

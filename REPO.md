@@ -18,6 +18,7 @@ entrypoints:
   - runtime/persistence/index.ts
   - runtime/actions/index.ts
   - runtime/collections/index.ts
+  - runtime/views/index.ts
   - runtime/plugins/index.ts
   - runtime/events/index.ts
   - plugins/core/index.ts
@@ -30,8 +31,8 @@ status: active
 ## Purpose
 
 Copilotz is a generic event-driven runtime. Plugins compose Collections,
-Actions, Processors, Resources, and Adapters into applications, including AI
-harnesses. Ominipg supplies graph-native persistence, which is the durable
+Actions, Processors, Views, Resources, and Adapters into applications, including
+AI harnesses. Ominipg supplies graph-native persistence, which is the durable
 authority for recovery. Oxian supplies execution placement and transport;
 neither defines plugin business semantics.
 
@@ -64,6 +65,11 @@ This map describes the current implementation.
   durable ingress: `runtime/application/ingress/`
 - Action definition, lifecycle, and invocation: `runtime/actions/`
 - Canonical graph Collections and mutation planning: `runtime/collections/`
+- View definitions, resolution, and pure one-shot text rendering:
+  `runtime/views/` (`@copilotz/copilotz/views`); owner-backed read-only
+  Collection observations: `server/collection-observation.ts` and
+  `client/collection-observation.ts`. Live/React hosts consume these seams; the
+  package does not ship a React renderer or component scheduler.
 - Canonical content/assets: `runtime/content/`
 - Conversation Collections: `plugins/core/collections/`; mutation Actions:
   `plugins/core/actions/`; projections and contracts: `plugins/core/shared/`;
@@ -104,7 +110,11 @@ This map describes the current implementation.
 - The runtime owns generic lifecycle, composition, persistence, and execution
   mechanics; it never owns plugin business meaning.
 - Runtime production code never imports a concrete plugin.
-- Plugins compose Collections, Actions, Processors, Resources, and Adapters.
+- Plugins compose six primitives: Collections, Actions, Processors, Views,
+  Resources, and Adapters.
+- Views receive authorized projections and read-only Collection capabilities;
+  the pure one-shot text renderer has no mutation or live-subscription
+  capability.
 - Resources and Adapters remain separate composition/context roots and use
   direct property access, not locators or runtime dependency declarations.
 - Actions and Processors declare their expected context as ordinary TypeScript

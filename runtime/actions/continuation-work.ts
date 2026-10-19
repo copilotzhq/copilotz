@@ -1,4 +1,7 @@
-import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
+  createSchemaCommandRunner,
+  schemaCommandContext,
+} from "../engine/commands.ts";
 import type { OperationStart } from "./continuation.ts";
 import {
   prepareProtectedEventBody,
@@ -193,9 +196,15 @@ export async function startAwaitedOperation(
     `SELECT action.action_run_id FROM ${store.tables.open_actions} AS action
      JOIN ${store.tables.event_deliveries} AS delivery ON delivery.id = $3
      WHERE action.namespace = $1 AND action.action_run_id = $2 AND action.state = 'awaiting'
-       AND delivery.status = 'leased' AND delivery.lease_owner = $4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at > NOW()) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema')
+       AND delivery.status = 'leased' AND delivery.lease_owner = $4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at > $5::timestamptz) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema')
     `,
-    [namespace, data.actionRunId, writer.deliveryId, writer.leaseOwner],
+    [
+      namespace,
+      data.actionRunId,
+      writer.deliveryId,
+      writer.leaseOwner,
+      schemaCommandContext(tx, store.databaseSchema).commandTime,
+    ],
   );
   if (!authority.rows.length) throw new ActionOwnershipLost(data.actionRunId);
   let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;

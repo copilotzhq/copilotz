@@ -1,3 +1,5 @@
+import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
+import type { OperationCatalog } from "../streams/catalog.ts";
 import { assetBodySchemaPrefix } from "../content/body-store.ts";
 import {
   assertProtectedParentCapture,
@@ -70,6 +72,7 @@ export function createProtectedActions(
     actions: Readonly<Record<string, AnyActionDefinition>>;
     store: EventStore;
     coordinator: EventCoordinator;
+    operationCatalog?: Pick<OperationCatalog, "admitEventSql">;
     namespace: string;
     source?: ProtectedActionSourceBinding;
     writer?: ActionWriter;
@@ -93,24 +96,25 @@ export function createProtectedActions(
     publicRevisionFields: definition(action.id)?.publicRevisionFields ?? [],
   });
   const authority = async (
-    tx: SqlExecutor,
+    command: CommandContext,
     frame: Pick<ActionInvocationFrame, "actionRunId" | "actionId" | "signal">,
   ) => {
     options.signal.throwIfAborted();
     frame.signal.throwIfAborted();
     if (options.writer?.kind === "delivery") {
-      const owned = await tx.query(
-        `SELECT id FROM ${store.tables.event_deliveries} WHERE id=$1 AND lease_owner=$2 AND status='leased' AND (lease_expires_at IS NULL OR lease_expires_at > NOW()) AND owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema') AND event_id=$3 AND ($4::text IS NULL OR settlement_scope_id=$4)`,
-        [
-          options.writer.deliveryId,
-          options.writer.leaseOwner,
-          options.source?.eventId ?? null,
-          options.source?.operationId ?? null,
-        ],
-      );
-      if (!owned.rows.length) {
-        throw new Error("Protected Action execution authority is unavailable.");
+      if (!options.source) {
+        throw new Error("Protected Action execution source is unavailable.");
       }
+      // Input capture precedes the open Action obligation, and a completed
+      // child may be replayed by its still-live parent delivery.
+      await assertOwnerInvocationLive(command, {
+        databaseSchema,
+        namespace,
+        operationCatalog: options.operationCatalog,
+        operationId: options.source.operationId,
+        eventId: options.source.eventId,
+        writer: options.writer,
+      });
     } else if (options.writer) {
       throw new Error("Protected Action hooks require an active execution.");
     }
@@ -337,7 +341,7 @@ export function createProtectedActions(
     input: unknown,
     source: ProtectedActionSourceBinding,
   ) => {
-    await authority(command.transaction, frame);
+    await authority(command, frame);
     const hook = definition(frame.actionId)!;
     await withOwnerAuthorizationPhase(() =>
       phase(
@@ -352,7 +356,7 @@ export function createProtectedActions(
           ),
       )
     );
-    await authority(command.transaction, frame);
+    await authority(command, frame);
   };
   const prepareInput = (
     frame: ActionInvocationFrame,
@@ -379,7 +383,7 @@ export function createProtectedActions(
         "actions.prepareProtectedInput",
         { actionRunId: frame.actionRunId },
         async (_input, command) => {
-          await authority(command.transaction, frame);
+          await authority(command, frame);
           const prior = await read(command.transaction, frame.actionRunId);
           const existing = await invoked(
             command.transaction,
@@ -455,7 +459,7 @@ export function createProtectedActions(
             prepared,
             options.lifecycleMetadata ?? {},
           );
-          await authority(command.transaction, frame);
+          await authority(command, frame);
           const lifecycle = createActionLifecycleEmitter({
             namespace,
             metadata: options.lifecycleMetadata,
@@ -544,6 +548,7 @@ export function createProtectedActions(
       },
       accept: hook.acceptOutput
         ? async (value: unknown, tx: SqlExecutor) => {
+          await authority(schemaCommandContext(tx, databaseSchema), frame);
           const capturedInput = await captured(tx);
           if (hook.acceptOutput) {
             const adoptionChecks: Array<
@@ -614,7 +619,7 @@ export function createProtectedActions(
               await check(command.transaction);
             }
           }
-          await authority(tx, frame);
+          await authority(schemaCommandContext(tx, databaseSchema), frame);
         }
         : undefined,
     };

@@ -35,7 +35,13 @@ for (const backend of ["memory", "postgres"] as const) {
         });
         assertExists(claim);
         assertEquals(claim.leaseExpiresAt, undefined);
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(
+          (await db.query(
+            `SELECT key FROM ${store.tables.owner_deadlines} WHERE source='deliveries' AND key=$1`,
+            [id],
+          )).rows,
+          [],
+        );
         assertEquals(await store.listRecoverable(), []);
         assertEquals(
           await store.heartbeatDelivery({ id, owner: "local-attempt" }),
@@ -91,7 +97,6 @@ for (const backend of ["memory", "postgres"] as const) {
         const successor = createEventStore({ session, schema });
         const authority = await successor.executionAuthority();
         assertEquals(authority.epoch, previous.epoch! + 1);
-        assertEquals(await successor.nextRecoveryDelayMs(), 0);
         assertEquals(
           (await successor.listRecoverable()).map((d) => d.id).sort(),
           [local.id, remote.id].sort(),

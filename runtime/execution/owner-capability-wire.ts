@@ -1,3 +1,4 @@
+import { chargeJsonString } from "../data-only-json.ts";
 import {
   awaitOperation,
   isActionContinuation,
@@ -76,28 +77,7 @@ export function encodeCapability(value: unknown): Uint8Array {
     remaining -= bytes;
     if (remaining < 0) throw capabilityError("owner_data_limit");
   };
-  // Count JSON-escaped UTF-8 before JSON.stringify/TextEncoder can allocate.
-  // A UTF-16 code unit always contributes at least one output byte.
-  const string = (value: string) => {
-    if (value.length > remaining) throw capabilityError("owner_data_limit");
-    charge(2);
-    for (let index = 0; index < value.length; index++) {
-      const code = value.charCodeAt(index);
-      if (code === 34 || code === 92) charge(2);
-      else if (code < 32) charge([8, 9, 10, 12, 13].includes(code) ? 2 : 6);
-      else if (code < 128) charge(1);
-      else if (code < 2048) charge(2);
-      else if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(index + 1);
-        if (next >= 0xdc00 && next <= 0xdfff) {
-          charge(4);
-          index++;
-        } else charge(6);
-      } else if (code >= 0xdc00 && code <= 0xdfff) charge(6);
-      else charge(3);
-    }
-    return value;
-  };
+  const string = (value: string) => chargeJsonString(value, remaining, charge);
   const ancestors = new Set<object>();
   const visit = (
     value: unknown,

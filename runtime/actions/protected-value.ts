@@ -34,6 +34,7 @@ import {
   secretEnvelope,
 } from "./secret-adapter.ts";
 import { durableActionValue, sameActionValue } from "./value.ts";
+import { protectedValueReadCheck } from "./protected-value-read.ts";
 
 export const PROTECTED_VALUE_REF_SCHEMA =
   "copilotz.action.protected-value.v1" as const;
@@ -295,8 +296,20 @@ export function createProtectedValueRuntime(
     namespace: string,
     backendId: string,
     transaction?: SqlExecutor,
+    checkRead?: () => Promise<void>,
   ): Pick<BodyStore, "readRange"> =>
-    databaseBodyStoreReader(physicalStore(namespace, backendId), transaction);
+    databaseBodyStoreReader(
+      physicalStore(namespace, backendId),
+      transaction,
+      checkRead
+        ? (schema) => {
+          if (schema !== databaseSchema) {
+            throw new Error("Protected body reader belongs to another scope.");
+          }
+          return checkRead();
+        }
+        : undefined,
+    );
   const scheduled = new WeakMap<SqlExecutor, Set<string>>();
   const promote = (
     namespace: string,
@@ -433,17 +446,21 @@ export function createProtectedValueRuntime(
       } as const);
     },
     async open(coordinates, rawRef, transaction) {
-      if (transaction) {
+      const namespace = requiredText(
+        coordinates.namespace,
+        "Protected namespace",
+      );
+      const checkRead = transaction
+        ? protectedValueReadCheck(transaction, { databaseSchema, namespace })
+        : undefined;
+      if (checkRead) await checkRead();
+      else if (transaction) {
         assertSchemaCommandTransaction(transaction, databaseSchema);
       }
       const readCatalog = transaction
         ? createContentCatalog(transaction, databaseSchema)
         : catalog;
       const ref = reference(rawRef);
-      const namespace = requiredText(
-        coordinates.namespace,
-        "Protected namespace",
-      );
       const logical = await readCatalog.read(ref.bodyId);
       if (
         !logical || logical.namespace !== namespace ||
@@ -454,7 +471,7 @@ export function createProtectedValueRuntime(
       const stream = await openLogicalBody(
         readCatalog,
         ref.bodyId,
-        (copy) => readerFor(namespace, copy.backendId, transaction),
+        (copy) => readerFor(namespace, copy.backendId, transaction, checkRead),
         ref.byteLength,
       );
       const ciphertext = new Uint8Array(
@@ -479,10 +496,13 @@ export function createProtectedValueRuntime(
       if (!(plaintext instanceof Uint8Array)) {
         throw new Error("Secret recovery failed.");
       }
-      if (transaction) {
+      if (checkRead) await checkRead();
+      else if (transaction) {
         assertSchemaCommandTransaction(transaction, databaseSchema);
       }
-      await promote(namespace, ref.bodyId, transaction);
+      // Policy snapshots only read. Capture and ordinary owner reads retain the
+      // existing durable promotion path; policy evaluation never schedules writes.
+      if (!checkRead) await promote(namespace, ref.bodyId, transaction);
       try {
         return durableActionValue(
           JSON.parse(new TextDecoder().decode(plaintext)),

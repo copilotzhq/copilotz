@@ -1,4 +1,5 @@
 import { ActionError } from "../actions/errors.ts";
+import { withProtectedValueRead } from "../actions/protected-value-read.ts";
 import { withCollectionReadBudget } from "./read-budget.ts";
 import { markOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
@@ -156,8 +157,23 @@ async function authorizeCollectionPolicy(
           invocation: authority.invocation,
           resolveSource() {
             assertActive();
+            const source = Object.freeze({ query });
             return track(
-              infrastructure(() => authority.resolveSource({ query })),
+              infrastructure(() =>
+                withProtectedValueRead(
+                  source,
+                  authority.scope,
+                  authority.signal,
+                  async () => {
+                    assertActive();
+                    authority.check();
+                    await authority.assertCurrent?.(read, authority.invocation);
+                    assertActive();
+                    authority.check();
+                  },
+                  () => authority.resolveSource(source),
+                )
+              ),
             );
           },
         }),

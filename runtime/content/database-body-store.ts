@@ -85,14 +85,18 @@ export function databaseBodyStoreWriter(
 }
 const readers = new WeakMap<
   BodyStore["readRange"],
-  (transaction?: SqlExecutor) => Pick<BodyStore, "readRange">
+  (
+    transaction?: SqlExecutor,
+    readAuthority?: (databaseSchema: string) => Promise<void>,
+  ) => Pick<BodyStore, "readRange">
 >();
 /** Owner-internal read view: never provisions or submits a nested command. */
 export function databaseBodyStoreReader(
   store: BodyStore,
   transaction?: SqlExecutor,
+  readAuthority?: (databaseSchema: string) => Promise<void>,
 ): Pick<BodyStore, "readRange"> {
-  return readers.get(store.readRange)?.(transaction) ??
+  return readers.get(store.readRange)?.(transaction, readAuthority) ??
     { readRange: store.readRange };
 }
 export async function provisionDatabaseBodyStore(
@@ -271,7 +275,7 @@ export function createDatabaseBodyStore(
   });
   readers.set(
     store.readRange,
-    (transaction) => {
+    (transaction, readAuthority) => {
       const reader = createDatabaseBodyStore({
         ...options,
         session: transaction ?? session,
@@ -279,11 +283,13 @@ export function createDatabaseBodyStore(
       });
       return {
         async readRange(input) {
-          if (transaction) {
+          if (readAuthority) await readAuthority(schemaName);
+          else if (transaction) {
             assertSchemaCommandTransaction(transaction, schemaName);
           }
           const result = await reader.readRange(input);
-          if (transaction) {
+          if (readAuthority) await readAuthority(schemaName);
+          else if (transaction) {
             assertSchemaCommandTransaction(transaction, schemaName);
           }
           return result;

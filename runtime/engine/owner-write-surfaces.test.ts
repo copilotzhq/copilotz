@@ -1,3 +1,4 @@
+import { claimFirst, heartbeat } from "../testing/owner-helpers.ts";
 import { createContentCatalog } from "../content/catalog.ts";
 import { digestCatalogPrefix } from "../content/prefix-digest.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
@@ -127,7 +128,7 @@ Deno.test("public storage mutations use the schema owner fence", async (test) =>
       );
       const [a, b, c, d] = root.deliveries;
       assertExists(await store.claimDelivery({ id: a.id, owner: "attempt" }));
-      assert(await store.heartbeatDelivery({ id: a.id, owner: "attempt" }));
+      assert(await heartbeat(store, { id: a.id, owner: "attempt" }));
       assertEquals(
         (await store.failDelivery({
           id: a.id,
@@ -142,7 +143,7 @@ Deno.test("public storage mutations use the schema owner fence", async (test) =>
         (await store.succeedDelivery(a.id, "retry"))?.status,
         "succeeded",
       );
-      await store.claimNext({ owner: "other", consumerIds: [b.consumerId] });
+      await claimFirst(store, { owner: "other", consumerIds: [b.consumerId] });
       await store.cancelDelivery(b.id, "other");
       await store.claimDelivery({ id: c.id, owner: "failed" });
       await store.failDelivery({

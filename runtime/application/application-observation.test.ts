@@ -8,14 +8,13 @@ import {
   encodeOperationReplayCursor,
   type StreamOutput,
 } from "../streams/index.ts";
-import type { SqlExecutor, SqlNotification } from "../events/index.ts";
+import type { SqlExecutor } from "../events/index.ts";
 
-Deno.test("attachment pages consumed lanes once and coalesces byte notifications", async () => {
+Deno.test("attachment pages consumed lanes once and repairs progress without notifications", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const schema = "observation_incremental";
   const namespace = "tenant";
   const operationId = "operation";
-  const notifications = new Set<(notice: SqlNotification) => void>();
   const listings: Array<{ at: number; after?: string; rows: number }> = [];
   const query: SqlExecutor["query"] = async (sql, params) => {
     const at = performance.now();
@@ -34,15 +33,6 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
       query,
       transaction: db.transaction,
       close: db.close,
-      listen(_channel, handler) {
-        notifications.add(handler);
-        return Promise.resolve({
-          close() {
-            notifications.delete(handler);
-            return Promise.resolve();
-          },
-        });
-      },
     },
     databaseSchema: schema,
     namespace,
@@ -100,23 +90,7 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     assertEquals(first.value?.type, "stream.output");
     assertEquals((first.value as StreamOutput).streamOrdinal, "1002");
     const started = performance.now();
-    for (let index = 0; index < 100; index++) {
-      for (const notify of notifications) {
-        notify({
-          channel: "copilotz_operations",
-          payload: JSON.stringify({
-            databaseSchema: schema,
-            namespace,
-            operationId,
-            selectionKeys: [],
-            kind: "stream-offset",
-            streamId: "lane-1002",
-            committedOffset: 0,
-          }),
-        });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+
     await new Promise((resolve) => setTimeout(resolve, 300));
     const elapsed = performance.now() - started;
     await attachment.detach("test_complete");
@@ -146,7 +120,7 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     assert(iterations.length <= Math.ceil(elapsed / 250) + 1);
     console.log(
       JSON.stringify({
-        notifications: 100,
+        injectedNotifications: 0,
         iterations: iterations.length,
         streamListingQueries: listings.length,
         streamListingRows: 1002,

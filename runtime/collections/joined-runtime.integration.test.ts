@@ -22,7 +22,6 @@ import {
 import { createContentPreparer } from "../content/preparer.ts";
 import { attachOwnerPush, type OwnerPushSubscription } from "../events/push.ts";
 import type { SqlExecutor } from "../events/session.ts";
-import { assertEventCommitted } from "../events/store.ts";
 import { bounded, until } from "../testing/effect-commit-proxy.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "./definition.ts";
@@ -65,22 +64,25 @@ async function fixture(options: { failPublication?: string } = {}) {
   const store = createEventStore({ session: db, schema });
   const publications: string[] = [];
   const publicationError = new Error("publication unavailable");
+  const publicationErrors: unknown[] = [];
   const coordinator: EventCoordinator = {
     async commitMutation(input) {
       return {
-        ...await store.commitMutation({ ...input, consumers: [] }),
+        ...await store.commitMutation({
+          ...input,
+          consumers: [],
+          onCommitted(result) {
+            if (!result.deduplicated) {
+              publications.push(`event:${result.event.subject?.id}`);
+            }
+            if (result.event.subject?.id === options.failPublication) {
+              publicationErrors.push(publicationError);
+              throw publicationError;
+            }
+          },
+        }),
         dispatch: { handles: [], failures: [] },
       };
-    },
-    flushCommitted(result) {
-      assertEventCommitted(result.event);
-      if (!result.deduplicated) {
-        publications.push(`event:${result.event.subject?.id}`);
-      }
-      if (result.event.subject?.id === options.failPublication) {
-        throw publicationError;
-      }
-      return Promise.resolve({ handles: [], failures: [] });
     },
     append() {
       throw new Error("unused");
@@ -139,6 +141,7 @@ async function fixture(options: { failPublication?: string } = {}) {
     db,
     assets,
     publicationError,
+    publicationErrors,
     schema,
     owner,
     store,
@@ -153,6 +156,7 @@ async function fixture(options: { failPublication?: string } = {}) {
         await jobs.create({ id, name: "before" });
       }
       publications.length = 0;
+      publicationErrors.length = 0;
     },
     async close() {
       releaseDatabaseOwner(owner);
@@ -268,29 +272,17 @@ Deno.test({
   ignore: !url,
   async fn() {
     const f = await fixture();
-    let reservations = 0;
     try {
       await f.seed();
       await f.run("fixture.publication", {}, async (_input, command) => {
-        await f.update({
-          ...command,
-          afterCommit(callback) {
-            reservations++;
-            command.afterCommit(callback);
-          },
-        });
+        await f.update(command);
         assertEquals(f.publications, []);
       });
-      assertEquals(
-        reservations,
-        3,
-        "assets and each event retain owner-budget admission",
-      );
       await until(
         () => f.publications.length === 3 ? true : undefined,
         "ordered publication",
       );
-      assertEquals(f.publications, ["assets", "event:first", "event:second"]);
+      assertEquals(f.publications, ["event:first", "event:second", "assets"]);
     } finally {
       await f.close();
     }
@@ -344,8 +336,8 @@ Deno.test({
       );
       assertEquals((await f.jobs.list({ limit: 1_000 })).length, 511);
       assertEquals(f.publications, [
-        "assets",
         ...Array.from({ length: 511 }, (_, i) => `event:accepted-${i}`),
+        "assets",
       ]);
       assertEquals(
         (await f.db.query<{ seq: string }>(
@@ -366,23 +358,11 @@ Deno.test({
   ignore: !url,
   async fn() {
     const f = await fixture({ failPublication: "first" });
-    const errors: unknown[] = [];
+    const errors = f.publicationErrors;
     try {
       await f.seed();
       await f.run("fixture.failure", {}, async (_input, command) => {
-        await f.update({
-          ...command,
-          afterCommit(callback) {
-            command.afterCommit(async () => {
-              try {
-                await callback();
-              } catch (error) {
-                errors.push(error);
-                throw error;
-              }
-            });
-          },
-        });
+        await f.update(command);
         command.afterCommit(() => {
           f.publications.push("terminal");
         });
@@ -392,9 +372,9 @@ Deno.test({
         "failure-isolated publication",
       );
       assertEquals(f.publications, [
-        "assets",
         "event:first",
         "event:second",
+        "assets",
         "terminal",
       ]);
       assertEquals(errors.length, 1);
@@ -496,9 +476,11 @@ Deno.test({
               },
             );
             expectedPublications.push(
-              ...Array.from({ length: 32 }, (_, i) => `push:${batch}:${i}`),
+              ...Array.from(
+                { length: 32 },
+                (_, i) => [`event:${batch}:${i}`, `push:${batch}:${i}`],
+              ).flat(),
               "assets",
-              ...Array.from({ length: 32 }, (_, i) => `event:${batch}:${i}`),
               `barrier:${batch}`,
             );
             command.afterCommit(() => {
@@ -627,7 +609,7 @@ Deno.test({
           () => f.publications.at(-1) === "terminal" ? true : undefined,
           "single-write publication",
         );
-        assertEquals(f.publications, ["assets", "event:first", "terminal"]);
+        assertEquals(f.publications, ["event:first", "assets", "terminal"]);
         await f.run("fixture.single", {}, async (_input, command) => {
           await write(command, "single", "after");
           command.afterCommit(() => {

@@ -5,7 +5,11 @@ import {
 } from "../events/index.ts";
 import type { SqlSession } from "../events/session.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { bounded, localPostgresUrl } from "../testing/effect-commit-proxy.ts";
+import {
+  bounded,
+  localPostgresUrl,
+  until,
+} from "../testing/effect-commit-proxy.ts";
 import { createOwnerCommands } from "./commands.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
@@ -133,12 +137,19 @@ Deno.test({
         published.promise,
         "reentrant publication and failure observer",
       );
+      await until(
+        () =>
+          errors.length === 1 && order.includes("nested-committed")
+            ? true
+            : undefined,
+        "publication completion",
+      );
       assertEquals(callbackRuns, 1);
       assertEquals(order, [
         "callback-start",
-        "nested-committed",
         "callback-failure",
         "later-publication",
+        "nested-committed",
       ]);
       assertEquals(errors.length, 1);
       assertStrictEquals(errors[0], publicationError);

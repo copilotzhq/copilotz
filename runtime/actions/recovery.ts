@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import { readActionEffectInventory } from "./effect-commands.ts";
 import { createOperationCatalogTables } from "../streams/catalog.ts";
 import type {
@@ -189,6 +190,6 @@ async function recoverActions(
     });
   }
   return async () => {
-    for (const result of committed) await coordinator.flushCommitted(result);
+    for (const result of committed) await awaitEventPublication(result);
   };
 }

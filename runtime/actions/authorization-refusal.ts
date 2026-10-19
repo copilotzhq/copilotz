@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
 import { createOperationCatalogTables } from "../streams/catalog.ts";
 /** Owner-only terminal settlement after a trusted current-policy refusal. */
@@ -261,8 +262,10 @@ export async function settleActionAuthorizationRefusal(
             correlationId: event.correlation_id,
           });
           command.afterCommit(async () => {
-            await options.coordinator.flushCommitted(
-              result as Parameters<EventCoordinator["flushCommitted"]>[0],
+            await awaitEventPublication(
+              result as import("../events/store.ts").CommitEventMutationResult<
+                unknown
+              >,
             );
           });
           return { error: refusal, settled: true };

@@ -333,7 +333,10 @@ for (const mode of ["in-process", "websocket"] as const) {
         bodies: await rows("event_bodies", "namespace,event_body_id"),
         receipts: await rows("owner_receipts", "owner,domain,key"),
         nodes: await rows("nodes", "namespace,id"),
-        sequence: await rows("owner_event_sequences", "sequence"),
+        sequence: (await rows("events", "seq")).map(({ id, seq }) => ({
+          event_id: id,
+          sequence: seq,
+        })),
       });
       const epoch = async () =>
         Number(
@@ -545,7 +548,6 @@ for (const mode of ["in-process", "websocket"] as const) {
           state: { cancellation_requested_at: null, state: "completed" },
         });
         assertEquals(recovered.sequence.at(-1), {
-          owner: "schema",
           event_id: completion.id,
           sequence: completion.seq,
         });

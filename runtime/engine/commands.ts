@@ -4,13 +4,10 @@ import {
   currentCollectionReadBudget,
   withCollectionReadBudgetBinding,
 } from "../collections/read-budget.ts";
-import { readViews } from "../collections/read-view.ts";
-import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
 import {
   authorizeOwnerCommand,
   captureOwnerCommandAuthorization,
   type OwnerCommandAuthorization,
-  withoutOwnerCommandAuthorization,
   withOwnerCommandAuthorization,
 } from "./command-authorization.ts";
 import {
@@ -53,6 +50,7 @@ export type CommandCaller = Readonly<{
 }>;
 export type CommandContext = Readonly<{
   transaction: SqlExecutor;
+  authorizationGuards: Set<OwnerCommandAuthorization>;
   caller: CommandCaller;
   commandTime: string;
   signal: AbortSignal;
@@ -125,12 +123,6 @@ export type OwnerCommands<T extends CommandTypes> = Readonly<{
     kind: string,
     handler: CommandDefinition<Input, Output>,
   ): (caller: CommandCaller, request: CommandRequest<Input>) => Promise<Output>;
-  readReceipt(
-    caller: CommandCaller,
-    identity: CommandIdentity,
-  ): Promise<
-    { kind: string; intent: CommandJson; result: CommandJson } | undefined
-  >;
   registerAlarmSource(source: OwnerAlarmSource): () => void;
   rearmAlarms(): Promise<void>;
   wakeAlarms(): Promise<void>;
@@ -188,13 +180,6 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     stopped: () => state === "stopped",
     fail: (error) => stop(error),
     scheduler: options.alarmScheduler,
-    refreshAfterWake: () =>
-      submit("owner.alarm.refresh", { principal: "runtime", epoch: epoch! }, {
-        input: {},
-      }, {
-        authorize() {},
-        execute() {},
-      }),
   });
 
   function stop(
@@ -217,40 +202,27 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
         failure("owner_not_acquired", "The database owner is not acquired.");
     }
   }
-  async function publish() {
-    try {
-      while (publications.length) {
-        for (const callback of publications.shift()!) {
+  function publish() {
+    // Invoke in commit order, but do not serialize their completion: a callback
+    // may await another owner command's publication. In-flight work stays charged.
+    for (const batch of publications.splice(0)) {
+      for (const callback of batch) {
+        void runIndependentAsyncContext(callback).catch((error) => {
           try {
-            await runIndependentAsyncContext(() =>
-              withoutCollectionPolicyInvocation(() =>
-                withoutOwnerCommandAuthorization(callback)
-              )
-            );
-          } catch (error) {
-            try {
-              options.onPublicationError?.(error);
-            } catch { /* observer only */ }
-          } finally {
-            publicationCount--;
-          }
-        }
+            options.onPublicationError?.(error);
+          } catch { /* observer only */ }
+        }).finally(() => {
+          publicationCount--;
+        });
       }
-    } finally {
-      publishing = false;
     }
+    publishing = false;
   }
   async function drain() {
     try {
       while (pending.length && state !== "stopped") {
         const item = pending.shift()!;
-        await runIndependentAsyncContext(() =>
-          withoutCollectionPolicyInvocation(() =>
-            withoutOwnerCommandAuthorization(() =>
-              item.withReadContext(item.run)
-            )
-          )
-        );
+        await runIndependentAsyncContext(() => item.withReadContext(item.run));
       }
     } finally {
       running = false;
@@ -275,29 +247,6 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
           `INSERT INTO ${tables.owner_epochs} (owner,epoch,holder) VALUES ($1,0,'') ON CONFLICT DO NOTHING`,
           [owner],
         );
-        // Hold the predecessor fence before checking retained authority. A
-        // refused startup must not advance epochs until future evidence looks old.
-        const current = await tx.query(
-          `SELECT epoch FROM ${tables.owner_epochs} WHERE owner=$1 AND epoch=$2 FOR UPDATE`,
-          [owner, expectedEpoch],
-        );
-        if (!current.rows.length) {
-          throw failure(
-            "owner_acquisition_conflict",
-            "Another owner acquired this database schema.",
-          );
-        }
-        const future = await tx.query(
-          `SELECT id FROM ${tables.event_deliveries}
-           WHERE status IN ('pending','retry_wait','leased') AND owner_epoch > $1::bigint LIMIT 1`,
-          [expectedEpoch],
-        );
-        if (future.rows.length) {
-          throw failure(
-            "delivery_future_epoch",
-            "Retained delivery authority is ahead of the current owner epoch.",
-          );
-        }
         const result = await tx.query<{ epoch: string | number }>(
           `UPDATE ${tables.owner_epochs} SET epoch=epoch+1, holder=$3 WHERE owner=$1 AND epoch=$2 RETURNING epoch`,
           [owner, expectedEpoch, holder],
@@ -356,19 +305,16 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     const completion = Promise.withResolvers<Output>();
     const receipt = request.receipt && {
       identity: { ...request.receipt.identity },
-      intent: JSON.parse(canonical(request.receipt.intent)) as CommandJson,
+      intent: canonical(request.receipt.intent),
     };
     const binding = { ...caller };
     const readBudget = currentCollectionReadBudget();
-    const runWithReadView = readViews.capture();
     const runWithSnapshotAncestry = captureSnapshotAncestry();
     pending.push({
       reject: completion.reject,
       withReadContext: (execute) =>
         runWithSnapshotAncestry(() =>
-          runWithReadView(() =>
-            withCollectionReadBudgetBinding(readBudget, execute)
-          )
+          withCollectionReadBudgetBinding(readBudget, execute)
         ),
       async run() {
         let callbackFinished = false;
@@ -398,6 +344,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                   .toISOString();
                 const context: CommandContext = {
                   transaction: tx,
+                  authorizationGuards: new Set(),
                   caller: binding,
                   commandTime,
                   signal: lifetime.signal,
@@ -430,15 +377,16 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                     kind: string;
                     intent: CommandJson;
                     result: CommandJson;
+                    readers: string[];
                   }>(
-                    `SELECT principal,kind,intent,result FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3`,
+                    `SELECT principal,kind,intent,result,readers FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3`,
                     [owner, receipt.identity.domain, receipt.identity.key],
                   )).rows[0];
                   if (existing) {
                     if (
                       existing.principal !== binding.principal ||
                       existing.kind !== kind ||
-                      canonical(existing.intent) !== canonical(receipt.intent)
+                      canonical(existing.intent) !== receipt.intent
                     ) {
                       throw failure(
                         "owner_intent_conflict",
@@ -450,22 +398,28 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                     assertAcquired();
                     // Recovery rights become durable with the same outer commit
                     // as this currently authorized replay, never on admission.
-                    await tx.query(
-                      `UPDATE ${tables.owner_receipts} SET readers=array_append(readers,$4) WHERE owner=$1 AND domain=$2 AND key=$3 AND NOT ($4=ANY(readers))`,
-                      [
-                        owner,
-                        receipt.identity.domain,
-                        receipt.identity.key,
+                    if (
+                      !existing.readers.includes(
                         binding.receiptReader ?? binding.principal,
-                      ],
-                    );
+                      )
+                    ) {
+                      await tx.query(
+                        `UPDATE ${tables.owner_receipts} SET readers=array_append(readers,$4) WHERE owner=$1 AND domain=$2 AND key=$3 AND NOT ($4=ANY(readers))`,
+                        [
+                          owner,
+                          receipt.identity.domain,
+                          receipt.identity.key,
+                          binding.receiptReader ?? binding.principal,
+                        ],
+                      );
+                    }
                     return existing.result as Output;
                   }
                 }
                 const output = await handler.execute(request.input, context);
                 await handler.authorizeResult?.(request.input, context);
                 assertAcquired();
-                await alarms.refresh(tx, commandTime);
+                const nextAlarm = await alarms.refresh(tx, commandTime);
                 if (receipt) {
                   await tx.query(
                     `INSERT INTO ${tables.owner_receipts} (owner,domain,key,principal,kind,intent,result,readers) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,ARRAY[$8]::text[])`,
@@ -475,7 +429,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                       receipt.identity.key,
                       binding.principal,
                       kind,
-                      canonical(receipt.intent),
+                      receipt.intent,
                       canonical(output as CommandJson),
                       binding.receiptReader ?? binding.principal,
                     ],
@@ -483,7 +437,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                 }
 
                 afterSqlCommit(tx, () => {
-                  void alarms.rearm().catch(stop);
+                  alarms.committed(nextAlarm);
                   publicationCount += callbacks.length;
                   if (callbacks.length) publications.push(callbacks);
                   if (!publishing && publications.length) {
@@ -567,19 +521,6 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       return (caller: CommandCaller, request: CommandRequest<Input>) =>
         submit(kind, caller, request, handler);
     },
-    /** Caller identity is authenticated by the host, independently of its epoch. */
-    async readReceipt(caller: CommandCaller, identity: CommandIdentity) {
-      if (!caller.principal || !identity.key) {
-        throw new TypeError("Receipt principal and key are required.");
-      }
-      const result = await options.session.query<
-        { kind: string; intent: CommandJson; result: CommandJson }
-      >(
-        `SELECT kind,intent,result FROM ${tables.owner_receipts} WHERE owner=$1 AND domain=$2 AND key=$3 AND principal=$4`,
-        [owner, identity.domain, identity.key, caller.principal],
-      );
-      return result.rows[0];
-    },
     registerAlarmSource(source: OwnerAlarmSource) {
       return alarms.register(source);
     },
@@ -599,8 +540,20 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
 }
 
 export type DatabaseOwner = OwnerCommands<Record<never, never>>;
-const localOwners = new Map<string, WeakRef<DatabaseOwner>>();
-const ownerReferences = new WeakMap<DatabaseOwner, number>();
+type OwnerEntry = {
+  owner: DatabaseOwner;
+  references: number;
+  activation?: Promise<void>;
+};
+const localOwners = new Map<string, WeakRef<OwnerEntry>>();
+function ownerEntry(owner: DatabaseOwner): OwnerEntry {
+  let entry = localOwners.get(owner.holderId)?.deref();
+  if (!entry) {
+    entry = { owner, references: 1 };
+    localOwners.set(owner.holderId, new WeakRef(entry));
+  }
+  return entry;
+}
 
 /** The durable holder row identifies a database/schema across connection objects. */
 export async function openDatabaseOwner(
@@ -616,12 +569,12 @@ export async function openDatabaseOwner(
     ["schema"],
   );
   const row = observed.rows[0];
-  const existing = row && localOwners.get(row.holder)?.deref();
+  const existing = row && localOwners.get(row.holder)?.deref()?.owner;
   if (
     existing && existing.state !== "stopped" &&
     existing.epoch === Number(row.epoch)
   ) {
-    ownerReferences.set(existing, (ownerReferences.get(existing) ?? 0) + 1);
+    ownerEntry(existing).references++;
     bindOwner(session, schema, existing);
     return existing;
   }
@@ -632,124 +585,71 @@ export async function openDatabaseOwner(
     ...clock,
   });
   await owner.acquire(Number(row?.epoch ?? 0));
-  localOwners.set(owner.holderId, new WeakRef(owner));
-  ownerReferences.set(owner, 1);
+  ownerEntry(owner);
   bindOwner(session, schema, owner);
   return owner;
 }
 
 /** A shared owner keeps the remaining runtime's alarm handlers alive. */
 export function pauseFinalDatabaseOwnerAlarms(owner: DatabaseOwner): void {
-  if ((ownerReferences.get(owner) ?? 1) <= 1) owner.pauseAlarms();
+  if (ownerEntry(owner).references <= 1) owner.pauseAlarms();
 }
 
 /** Scope shutdown releases its attachment; the last attachment stops admission. */
 export function releaseDatabaseOwner(owner: DatabaseOwner): void {
-  const remaining = (ownerReferences.get(owner) ?? 1) - 1;
-  ownerReferences.set(owner, remaining);
+  const remaining = ownerEntry(owner).references - 1;
+  ownerEntry(owner).references = remaining;
   if (remaining <= 0) {
     owner.stop();
     localOwners.delete(owner.holderId);
-    for (const { session, schema, slot } of ownerSlots.get(owner) ?? []) {
-      if (schemaOwners.get(session)?.get(schema) === slot) {
-        schemaOwners.get(session)!.delete(schema);
-      }
-    }
-    ownerSlots.delete(owner);
   }
 }
 
-type SchemaOwnerSlot = { acquired?: Promise<DatabaseOwner> };
-const schemaOwners = new WeakMap<SqlSession, Map<string, SchemaOwnerSlot>>();
-const ownerSlots = new WeakMap<
-  DatabaseOwner,
-  Array<{ session: SqlSession; schema: string; slot: SchemaOwnerSlot }>
+const schemaOwners = new WeakMap<
+  SqlSession,
+  Map<string, OwnerEntry | Promise<DatabaseOwner>>
 >();
 const commandContexts = new WeakMap<SqlExecutor, {
   schema: string;
   ownerId: string;
   holderId: string;
   context: CommandContext;
+  source?: SqlExecutor;
+  assertActive?(): void;
 }>();
 
-function ownerSlot(session: SqlSession, schema: string): SchemaOwnerSlot {
-  let scopes = schemaOwners.get(session);
-  if (!scopes) {
-    scopes = new Map();
-    schemaOwners.set(session, scopes);
-  }
-  let slot = scopes.get(schema);
-  if (!slot) {
-    slot = {};
-    scopes.set(schema, slot);
-  }
-  return slot;
+/** Repositories retain the owner selected at construction or first admission. */
+export function bindSchemaOwner(session: SqlSession, schema: string) {
+  let owners = schemaOwners.get(session);
+  if (!owners) schemaOwners.set(session, owners = new Map());
+  const selected = () => {
+    const entry = owners!.get(schema);
+    if (entry instanceof Promise) return entry;
+    const owner = entry?.owner;
+    return owner && owner.state !== "stopped"
+      ? Promise.resolve(owner)
+      : undefined;
+  };
+  let acquired = selected();
+  return () =>
+    acquired ??= selected() ?? (() => {
+      const opening = (async () => {
+        await provisionCopilotzSchema(session, schema);
+        return await openDatabaseOwner(session, schema);
+      })();
+      owners!.set(schema, opening);
+      return opening;
+    })();
 }
 
-/** Registers a data command at a trusted repository's construction boundary. */
-function registerCommandOnSlot<Input, Output>(
-  session: SqlSession,
-  schema: string,
-  slot: SchemaOwnerSlot,
-  kind: string,
-  execute: (input: Input, context: CommandContext) => Output | Promise<Output>,
-  authorization?: OwnerCommandAuthorization,
+/** Capture once: an old repository never retargets authority to a successor. */
+export function createSchemaExecutionAuthority(
+  acquire: () => Promise<DatabaseOwner>,
 ) {
-  let registered: ReturnType<DatabaseOwner["register"]> | undefined;
-  return async (
-    input: Input,
-    transaction?: SqlExecutor,
-    binding?: Readonly<
-      {
-        principal: string;
-        receiptReader?: string;
-        receipt: NonNullable<CommandRequest<Input>["receipt"]>;
-        signal: AbortSignal;
-      }
-    >,
-  ): Promise<Output> => {
-    binding?.signal.throwIfAborted();
-    slot.acquired ??= (async () => {
-      await provisionCopilotzSchema(session, schema);
-      return await openDatabaseOwner(session, schema);
-    })();
-    const owner = await slot.acquired;
-    if (transaction) {
-      const joined = commandContexts.get(transaction);
-      if (
-        !joined || joined.schema !== schema ||
-        joined.holderId !== owner.holderId || joined.ownerId !== owner.ownerId
-      ) {
-        throw failure(
-          "owner_transaction_required",
-          "A transaction from this database owner is required.",
-        );
-      }
-      await authorizeOwnerCommand(authorization, joined.context, "mutation");
-      const result = await execute(input, joined.context);
-      return result;
-    }
-    registered ??= owner.register(kind, {
-      authorize: (_input, context) =>
-        authorizeOwnerCommand(authorization, context, "mutation"),
-      authorizeResult: (_input, context) =>
-        authorizeOwnerCommand(authorization, context, "result"),
-      execute: (input, context) =>
-        authorization
-          ? withOwnerCommandAuthorization(
-            authorization,
-            () => execute(input as Input, context),
-          )
-          : execute(input as Input, context),
-    });
-    return await registered({
-      principal: binding?.principal ?? "runtime",
-      receiptReader: binding?.receiptReader,
-      epoch: owner.epoch!,
-    }, {
-      input,
-      ...(binding ? { receipt: binding.receipt } : {}),
-    }) as Output;
+  return async () => {
+    const owner = await acquire();
+    owner.signal.throwIfAborted();
+    return { epoch: owner.epoch!, signal: owner.signal };
   };
 }
 
@@ -758,18 +658,10 @@ function bindOwner(
   schema: string,
   owner: DatabaseOwner,
 ): void {
-  ownerSlot(session, schema);
-  const slot = { acquired: Promise.resolve(owner) };
-  schemaOwners.get(session)!.set(schema, slot);
-  const slots = ownerSlots.get(owner) ?? [];
-  slots.push({ session, schema, slot });
-  ownerSlots.set(owner, slots);
+  let owners = schemaOwners.get(session);
+  if (!owners) schemaOwners.set(session, owners = new Map());
+  owners.set(schema, ownerEntry(owner));
 }
-
-const commandExecutorAliases = new WeakMap<SqlExecutor, {
-  transaction: SqlExecutor;
-  assertActive(): void;
-}>();
 
 /** Package-only query handle association; never grants session acquisition. */
 export function bindCommandExecutorAlias(
@@ -778,24 +670,30 @@ export function bindCommandExecutorAlias(
   assertActive: () => void,
 ): void {
   assertCommandTransaction(transaction);
-  commandExecutorAliases.set(executor, { transaction, assertActive });
+  const source = commandSource(transaction);
+  commandContexts.set(executor, {
+    ...commandContexts.get(source)!,
+    source,
+    assertActive,
+  });
 }
 
 function commandSource(executor: SqlExecutor): SqlExecutor {
-  const alias = commandExecutorAliases.get(executor);
-  alias?.assertActive();
-  return alias?.transaction ?? executor;
+  const command = commandContexts.get(executor);
+  command?.assertActive?.();
+  return command?.source ?? executor;
 }
 
 /** Captures repository authority before any commands are submitted. */
 export function createSchemaCommandRunner(
   session: SqlExecutor,
   schema: string,
+  owner?: () => Promise<DatabaseOwner>,
 ) {
   const source = commandSource(session);
   const joined = commandContexts.get(source);
   const sql = session as SqlSession;
-  const slot = joined ? undefined : ownerSlot(sql, schema);
+  const acquire = joined ? undefined : owner ?? bindSchemaOwner(sql, schema);
   return <Input, Output>(
     kind: string,
     input: Input,
@@ -839,18 +737,28 @@ export function createSchemaCommandRunner(
         ),
       );
     }
-    return registerCommandOnSlot(
-      sql,
-      schema,
-      slot!,
-      kind,
-      execute,
-      authorization,
-    )(
-      input,
-      undefined,
-      binding,
-    );
+    return (async () => {
+      binding?.signal.throwIfAborted();
+      const owner = await acquire!();
+      const registered = owner.register(kind, {
+        authorize: (_input, context) =>
+          authorizeOwnerCommand(authorization, context, "mutation"),
+        authorizeResult: (_input, context) =>
+          authorizeOwnerCommand(authorization, context, "result"),
+        execute: (input: Input, context) =>
+          authorization
+            ? withOwnerCommandAuthorization(
+              authorization,
+              () => execute(input, context),
+            )
+            : execute(input, context),
+      });
+      return await registered({
+        principal: binding?.principal ?? "runtime",
+        receiptReader: binding?.receiptReader,
+        epoch: owner.epoch!,
+      }, { input, ...(binding ? { receipt: binding.receipt } : {}) });
+    })();
   };
 }
 
@@ -881,14 +789,14 @@ export function assertSchemaCommandTransaction(
   sqlCommitGate(transaction);
 }
 
-const activations = new WeakMap<DatabaseOwner, Promise<void>>();
 /** One activation per epoch, shared by every context attached to that owner. */
 export function activateDatabaseOwner(
   owner: DatabaseOwner,
   recover: () => Promise<void>,
 ): Promise<void> {
   if (owner.state === "ready") return Promise.resolve();
-  let activation = activations.get(owner);
+  const entry = ownerEntry(owner);
+  let activation = entry.activation;
   if (!activation) {
     activation = (async () => {
       try {
@@ -899,7 +807,7 @@ export function activateDatabaseOwner(
         throw error;
       }
     })();
-    activations.set(owner, activation);
+    entry.activation = activation;
   }
   return activation;
 }

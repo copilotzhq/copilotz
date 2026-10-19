@@ -8,7 +8,7 @@ import {
 import { readLogicalHead } from "../content/catalog.ts";
 import { registerDeliveryAlarms } from "../execution/alarms.ts";
 import { registerCollectionAlarms } from "../collections/alarms.ts";
-import { completeOwnerDeadline } from "./alarms.ts";
+import { completeOwnerDeadline, invalidateOwnerAlarm } from "./alarms.ts";
 import {
   attachOwnerPush,
   type OwnerPushSubscription,
@@ -199,6 +199,7 @@ export function createDatabaseScope(
     store,
     registry: options.registry,
     executor: options.executor,
+    deferPublication: (publish) => deferPublication(publish)(),
     async publish(event, context) {
       const dispatched = await options.publishLive(
         event,
@@ -357,13 +358,7 @@ export function createDatabaseScope(
           `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
         );
       }
-      return coordinator.append({
-        ...draft,
-        payload: canonicalizeContentRefs(draft.payload),
-        ...(draft.delta === undefined
-          ? {}
-          : { delta: canonicalizeContentRefs(draft.delta) }),
-      }, appendOptions);
+      return coordinator.append(draft, appendOptions);
     },
     async appendProtected(draft, schema, ownerId, ingress) {
       if (
@@ -886,7 +881,15 @@ export function createDatabaseScope(
     name: "content",
     nextDeadline: (transaction) => assets.catalog.nextDeadline(transaction),
     wake: async () => {
-      await maintenance({ limit: 100 });
+      await recoverCatalog({ limit: 100 });
+      await assets.maintainBodies({
+        limit: 100,
+        isBodyRetained: (bodyId) =>
+          options.operationCatalog.hasStreamBody(bodyId),
+      });
+      await runAlarmCommand("alarm.content.refresh", {}, (_input, context) => {
+        invalidateOwnerAlarm(context.transaction, databaseSchema, "content");
+      });
     },
   });
   const runAlarmCommand = createSchemaCommandRunner(
@@ -972,19 +975,7 @@ export function createDatabaseScope(
           "owner.invalidateAttempts",
           {},
           async (_input, { transaction, caller }) => {
-            const future = await transaction.query(
-              `SELECT id FROM ${store.tables.event_deliveries}
-          WHERE status IN ('pending','retry_wait','leased') AND owner_epoch > $1::bigint LIMIT 1`,
-              [caller.epoch],
-            );
-            if (future.rows.length) {
-              throw Object.assign(
-                new Error(
-                  "Retained delivery authority is ahead of the current owner epoch.",
-                ),
-                { code: "delivery_future_epoch" },
-              );
-            }
+            invalidateOwnerAlarm(transaction, databaseSchema, "content");
             await transaction.query(
               `UPDATE ${store.tables.event_deliveries}
           SET lease_expires_at=NOW(), updated_at=NOW()
@@ -1003,7 +994,8 @@ export function createDatabaseScope(
             );
           },
         );
-        // Seed only after retained authority passed the fenced integrity check.
+        // Retained declarations still need a cutover/declaration seed. The
+        // migration API does not yet attest that this seed completed.
         await collectionAlarms.seed();
         while (
           (await store.recoverExpiredDeliveries({ limit: 1000 })).length ===

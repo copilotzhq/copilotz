@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "./coordinator.ts";
 import {
   createOwnerCommands,
   createSchemaCommandRunner,
@@ -317,16 +318,11 @@ Deno.test("joined events publish only after confirmed outer commit", async () =>
         transaction,
       });
       assertEquals(published, []);
-      await assertRejects(
-        () => coordinator.flushCommitted(result),
-        Error,
-        "has not confirmed commit",
-      );
       return result;
     });
     await Promise.all([
-      coordinator.flushCommitted(committed),
-      coordinator.flushCommitted(committed),
+      awaitEventPublication(committed),
+      awaitEventPublication(committed),
     ]);
     assertEquals(published, [committed.event.id]);
 
@@ -343,11 +339,6 @@ Deno.test("joined events publish only after confirmed outer commit", async () =>
           throw new Error("rollback");
         },
       )
-    );
-    await assertRejects(
-      () => coordinator.flushCommitted(rolledBack),
-      Error,
-      "has not confirmed commit",
     );
     assertEquals(published, [committed.event.id]);
     assertEquals(await fixture.store.getEvent(rolledBack.event.id), null);
@@ -393,11 +384,6 @@ Deno.test("joined events publish only after confirmed outer commit", async () =>
       }, { input: {} })
     );
     assertEquals(uncertainOwner.state, "stopped");
-    await assertRejects(
-      () => coordinator.flushCommitted(uncertain),
-      Error,
-      "has not confirmed commit",
-    );
     assertEquals(published, [committed.event.id]);
     assertEquals(
       fixture.store.recentEventBody?.(uncertain.event.id, "uncertain-body"),

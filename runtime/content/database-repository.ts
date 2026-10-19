@@ -1,3 +1,5 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import {
   promoteConfiguredLogicalBody,
   promotedReadyStore,
@@ -1446,7 +1448,7 @@ export function createDatabaseAssetRepository(
             },
           });
           retainPreparedBody(result.value!, adoption.candidate);
-          await options.coordinator.flushCommitted(result);
+          await awaitEventPublication(result);
           return result;
         } catch (error) {
           if (!(error as { [adoptionTaken]?: true })[adoptionTaken]) {
@@ -1469,7 +1471,7 @@ export function createDatabaseAssetRepository(
         },
       );
       retainPreparedBody(result.value!, adoption.candidate);
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
       return result;
     }
     return await options.coordinator.commitMutation({
@@ -1509,7 +1511,7 @@ export function createDatabaseAssetRepository(
     });
     publishMaterializations([plan]);
     for (const result of pending) {
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
     }
   };
 
@@ -1683,6 +1685,7 @@ export function createDatabaseAssetRepository(
       "content.retireClaim",
       request,
       async (request, { transaction, commandTime }) => {
+        invalidateOwnerAlarm(transaction, options.databaseSchema, "content");
         if (
           "lastModified" in input.body && input.body.lastModified &&
           Date.parse(input.body.lastModified) >
@@ -1788,6 +1791,7 @@ export function createDatabaseAssetRepository(
       ...request,
       token: claim.token,
     }, async (request, { transaction }) => {
+      invalidateOwnerAlarm(transaction, options.databaseSchema, "content");
       await transaction.query(
         `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND backend_kind=$1 AND backend_id=$2 AND body_id=$3 AND token=$4`,
         [request.backendKind, request.backendId, request.bodyId, request.token],
@@ -2179,6 +2183,11 @@ export function createDatabaseAssetRepository(
             await runCommand("content.confirmAbsentRetirement", {
               copyKey: copy.copy_key,
             }, async (input, { transaction }) => {
+              invalidateOwnerAlarm(
+                transaction,
+                options.databaseSchema,
+                "content",
+              );
               const claimed = await transaction.query(
                 `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
                 [

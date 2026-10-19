@@ -59,7 +59,7 @@ Deno.test({
           dispatch: { handles: [], failures: [] },
         };
       },
-      flushCommitted: () => Promise.resolve({ handles: [], failures: [] }),
+
       append() {
         throw new Error("unused");
       },

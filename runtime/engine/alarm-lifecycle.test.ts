@@ -24,7 +24,6 @@ function fixture(
     ready: () => true,
     stopped: () => false,
     fail() {},
-    refreshAfterWake: () => Promise.resolve(),
     scheduler: {
       schedule(callback) {
         const id = ++next;
@@ -159,7 +158,7 @@ Deno.test("owner alarm cancellation failure still disables stale callbacks", asy
   assertEquals(timers.size, 0);
 });
 
-Deno.test("shared owner drain is bounded to admitted work while surviving attachments rearm", async () => {
+Deno.test("shared owner drain is bounded while surviving attachments commit new deadlines", async () => {
   const first = Promise.withResolvers<unknown[]>();
   const survivor = Promise.withResolvers<unknown[]>();
   let reads = 0;
@@ -179,9 +178,10 @@ Deno.test("shared owner drain is bounded to admitted work while surviving attach
     assertEquals(await isPending(drained), false);
     assertEquals(await isPending(later), true);
   } finally {
-    survivor.resolve([{ due_at: new Date(1000) }]);
+    survivor.resolve([]);
     await later;
     await drained;
+    driver.committed(new Date(1000).toISOString());
   }
   assertEquals(timers.size, 1);
   driver.pause();

@@ -13,9 +13,9 @@ export type OwnerPushPosition = Readonly<{
   committedOffset: number;
 }>;
 export type OwnerChange = Readonly<{
+  selectionKeys: readonly string[];
   namespace: string;
   operationId: string;
-  selectionKeys: readonly string[];
   kind: "event" | "operation" | "stream" | "stream-offset" | "retirement";
   seq: string;
   streamId?: string;
@@ -109,6 +109,13 @@ function detach(hub: Hub, listener: Listener): void {
     hub.positions.clear();
   }
 }
+function immutable<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) immutable(child);
+    Object.freeze(value);
+  }
+  return value;
+}
 function deliver(hub: Hub, listener: Listener, frame: OwnerPushFrame): void {
   try {
     if (listener.bodyId !== undefined && frame.kind === "change") return;
@@ -124,7 +131,7 @@ function deliver(hub: Hub, listener: Listener, frame: OwnerPushFrame): void {
         headSeq: frame.headSeq,
         sequenced: !!frame.change.event,
       });
-    } else listener.send(structuredClone(frame));
+    } else listener.send(immutable(frame));
   } catch {
     detach(hub, listener);
     try {
@@ -221,7 +228,7 @@ export function stageOwnerChange(
   ) throw new TypeError("Invalid owner push change.");
   const context = schemaCommandContext(transaction, schema);
   const hub = hubFor(context.signal);
-  const captured = structuredClone(change);
+  const captured = immutable(structuredClone(change));
   let revision = 0;
   afterSqlCommit(transaction, () => {
     revision = ++hub.revision;
@@ -255,14 +262,7 @@ export function stageOwnerChange(
         hub.positions.clear();
         return;
       }
-      hub.positions.set(
-        JSON.stringify([
-          position.namespace,
-          position.operationId,
-          position.streamId,
-        ]),
-        position,
-      );
+      hub.positions.set(positionKey, position);
     }
     if (captured.kind === "retirement") {
       for (const [key, value] of hub.positions) {

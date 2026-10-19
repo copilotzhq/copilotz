@@ -1,3 +1,4 @@
+import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 /** One owner-authoritative lifecycle for logical bodies and their physical copies. */
 import { createCoreTableNames } from "../events/schema.ts";
 import {
@@ -7,10 +8,7 @@ import {
   watchOwnerPush,
 } from "../events/push.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
-import {
-  assertSchemaCommandTransaction,
-  createSchemaCommandRunner,
-} from "../engine/commands.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type {
   BodyStore,
   MutableBodyHead,
@@ -226,6 +224,9 @@ export function createContentCatalog(
   const tables = createCoreTableNames(schema);
   const runner = createSchemaCommandRunner(session, schema);
   let ownerSignal: AbortSignal | undefined;
+  let deadlineTables:
+    | Promise<{ present: boolean; streams_present: boolean }>
+    | undefined;
   const command: ReturnType<typeof createSchemaCommandRunner> = (
     kind,
     input,
@@ -234,6 +235,9 @@ export function createContentCatalog(
     runner(kind, input, async (value, context) => {
       ownerSignal = context.signal;
       const result = await execute(value, context);
+      if (kind !== "content.checkpoint") {
+        invalidateOwnerAlarm(context.transaction, schema, "content");
+      }
       const id = (value as { bodyId?: string })?.bodyId;
       if (id && kind !== "content.renew" && kind !== "content.deferRecovery") {
         stageOwnerBodyChange(context.transaction, schema, id);
@@ -348,18 +352,17 @@ export function createContentCatalog(
       executor: SqlExecutor = session,
     ): Promise<string | null> {
       const operations = `"${schema}"."copilotz_operations"`;
-      const present = (await executor.query<{ present: boolean }>(
-        "SELECT to_regclass($1) IS NOT NULL AS present",
-        [operations],
-      )).rows[0]?.present;
+      const streams = `"${schema}"."copilotz_operation_streams"`;
+      deadlineTables ??= executor.query<
+        { present: boolean; streams_present: boolean }
+      >(
+        "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS streams_present",
+        [operations, streams],
+      ).then((result) => result.rows[0]);
+      const { present, streams_present: streamsPresent } = await deadlineTables;
       const pendingGuard = present
         ? `AND NOT EXISTS(SELECT 1 FROM ${operations} o WHERE o.namespace=p.namespace AND o.operation_id=p.producer AND o.state IN ('accepted','running'))`
         : "";
-      const streams = `"${schema}"."copilotz_operation_streams"`;
-      const streamsPresent = (await executor.query<{ present: boolean }>(
-        "SELECT to_regclass($1) IS NOT NULL AS present",
-        [streams],
-      )).rows[0]?.present;
       const streamGuard = streamsPresent
         ? `AND NOT EXISTS(SELECT 1 FROM ${streams} s WHERE s.body_id=b.body_id AND s.availability='retained' AND s.cleanup_state IS NULL)`
         : "";
@@ -903,7 +906,7 @@ export function createContentCatalog(
         assetId: string;
       },
     ) {
-      assertSchemaCommandTransaction(transaction, schema);
+      invalidateOwnerAlarm(transaction, schema, "content");
       const pending = (await transaction.query<{ body_id: string }>(
         `SELECT body_id FROM ${tables.pending_content} WHERE namespace=$1 AND pending_ref=$2`,
         [input.namespace, input.pendingRef],

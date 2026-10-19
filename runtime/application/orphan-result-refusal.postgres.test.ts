@@ -95,7 +95,10 @@ async function fixture(
     bodies: await rows("event_bodies", "namespace,event_body_id"),
     receipts: await rows("owner_receipts", "owner,domain,key"),
     nodes: await rows("nodes", "namespace,id"),
-    sequence: await rows("owner_event_sequences", "sequence"),
+    sequence: (await rows("events", "seq")).map(({ id, seq }) => ({
+      event_id: id,
+      sequence: seq,
+    })),
     effects: await rows("action_effects", "namespace,action_run_id,step"),
   });
   const counts = {
@@ -652,7 +655,6 @@ Deno.test({
         state: { cancellation_requested_at: null, state: "completed" },
       });
       assertEquals(after.sequence.at(-1), {
-        owner: "schema",
         event_id: completion.id,
         sequence: completion.seq,
       });

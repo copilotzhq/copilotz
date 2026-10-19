@@ -26,7 +26,6 @@ import { createProtectedValueRuntime } from "./protected-value.ts";
 import { createProtectedActions } from "./protected-actions.ts";
 import { createOwnerEffectClient } from "./effect-commands.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
-import { assertEventCommitted } from "../events/store.ts";
 import { defineAction } from "./define.ts";
 import { secret } from "./secret.ts";
 import type { ActionInvocationFrame } from "./invoker.ts";
@@ -106,14 +105,15 @@ async function fixture(db?: TestDatabase, schema?: string) {
   const coordinator: EventCoordinator = {
     async commitMutation(input) {
       return {
-        ...await store.commitMutation({ ...input, consumers: [] }),
+        ...await store.commitMutation({
+          ...input,
+          consumers: [],
+          onCommitted() {
+            publications++;
+          },
+        }),
         dispatch: { handles: [], failures: [] },
       };
-    },
-    flushCommitted(result) {
-      assertEventCommitted(result.event);
-      publications++;
-      return Promise.resolve({ handles: [], failures: [] });
     },
     append() {
       throw new Error("unused");

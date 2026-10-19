@@ -272,3 +272,58 @@ Deno.test("reconciliation identity preserves namespace nulls and escaping", () =
   }
   assert(keys.every((key) => key.length > 0));
 });
+
+Deno.test("unrelated commands neither refresh deadline sources nor read or rewrite alarms", async () => {
+  const db = await createTestDatabase();
+  const schema = "alarm_incremental";
+  const sql: string[] = [];
+  await provisionCopilotzSchema(db, schema);
+  const owner = createOwnerCommands({
+    schema,
+    handlers: {},
+    session: {
+      query: db.query,
+      transaction: (run) =>
+        db.transaction((tx) =>
+          run({
+            query(statement, params) {
+              sql.push(statement);
+              return tx.query(statement, params);
+            },
+          })
+        ),
+    },
+  });
+  let refreshed = 0;
+  owner.registerAlarmSource({
+    name: "content",
+    nextDeadline() {
+      refreshed++;
+      return Promise.resolve(null);
+    },
+    wake() {
+      return Promise.resolve();
+    },
+  });
+  try {
+    await owner.acquire(0);
+    const noop = owner.register("test.read", {
+      authorize() {},
+      execute() {
+        return 1;
+      },
+    });
+    sql.length = 0;
+    assertEquals(
+      await noop({ principal: "test", epoch: owner.epoch! }, { input: {} }),
+      1,
+    );
+    assertEquals(refreshed, 0);
+    assert(
+      !sql.some((statement) => /owner_alarms|owner_deadlines/.test(statement)),
+    );
+  } finally {
+    owner.stop();
+    await db.close();
+  }
+});

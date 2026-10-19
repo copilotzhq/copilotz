@@ -14,7 +14,6 @@ export type CoreTableName =
   | "owner_alarms"
   | "owner_deadlines"
   | "owner_body_retirements"
-  | "owner_event_sequences"
   | "nodes"
   | "edges"
   | "events"
@@ -51,7 +50,6 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     owner_alarms: table("owner_alarms"),
     owner_deadlines: table("owner_deadlines"),
     owner_body_retirements: table("owner_body_retirements"),
-    owner_event_sequences: table("owner_event_sequences"),
     nodes: table("nodes"),
     edges: table("edges"),
     events: table("events"),
@@ -94,7 +92,6 @@ const CORE_SCHEMA_COLUMNS = {
     "payload",
     "revision",
   ],
-  owner_event_sequences: ["owner", "sequence", "event_id"],
   owner_body_retirements: [
     "owner",
     "backend_kind",
@@ -207,7 +204,7 @@ export async function validateCopilotzSchema(
         AND table_name IN (
           'action_effects',
           'content_logical_bodies', 'content_copies', 'pending_content', 'content_adoptions',
-          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements', 'owner_event_sequences',
+          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements',
           'nodes',
           'edges',
           'events',
@@ -328,17 +325,6 @@ export async function provisionCopilotzSchema(
   }
   if (classification === "incompatible") throw incompatibleSchema(schema);
   return await session.transaction(async (transaction) => {
-    // Bootstrap exclusion is required before the singleton epoch row exists.
-    // Once installed, provisioning work uses the fenced owner command queue.
-    await transaction.query(
-      "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-      [schema, "copilotz-schema-provision"],
-    );
-    const current = await classifySchema(transaction, schema);
-    if (current === "current") {
-      return await validateCopilotzSchema(transaction, schema);
-    }
-    if (current === "incompatible") throw incompatibleSchema(schema);
     for (const statement of createCoreSchemaStatements(schema)) {
       await transaction.query(statement);
     }
@@ -412,12 +398,6 @@ export function createOwnerSchemaStatements(
     )`,
     `INSERT INTO ${tables.owner_epochs} (owner,epoch,holder) VALUES ('schema',0,'') ON CONFLICT DO NOTHING`,
     `ALTER TABLE ${tables.event_deliveries} ADD COLUMN IF NOT EXISTS owner_epoch BIGINT NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)`,
-    `CREATE TABLE IF NOT EXISTS ${tables.owner_event_sequences} (
-      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
-      sequence BIGINT NOT NULL CHECK (sequence > 0),
-      event_id TEXT NOT NULL UNIQUE REFERENCES ${tables.events}(id),
-      PRIMARY KEY (owner, sequence)
-    )`,
   ];
 }
 
@@ -667,8 +647,6 @@ export function createOwnerSequenceStatements(
     `ALTER TABLE ${tables.events} ENABLE TRIGGER copilotz_events_immutable`,
     `ALTER TABLE ${tables.events} ALTER COLUMN seq SET NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS events_owner_seq_idx ON ${tables.events} (seq)`,
-    `DELETE FROM ${tables.owner_event_sequences}`,
-    `INSERT INTO ${tables.owner_event_sequences} (owner,sequence,event_id) SELECT 'schema',seq,id FROM ${tables.events}`,
     `UPDATE ${tables.owner_epochs} SET last_seq=COALESCE((SELECT MAX(seq) FROM ${tables.events}),0) WHERE owner='schema'`,
   ];
 }

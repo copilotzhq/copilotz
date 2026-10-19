@@ -34,7 +34,6 @@ function recording(db: Awaited<ReturnType<typeof createTestDatabase>>) {
         transactions++;
         return db.transaction((transaction) => operation(wrap(transaction)));
       },
-      ...(db.listen ? { listen: db.listen } : {}),
       close: db.close,
     },
   } as const;

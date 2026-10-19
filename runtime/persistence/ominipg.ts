@@ -6,10 +6,6 @@ import {
 } from "./snapshot-admission.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
 import { createSqlSession, type SqlSession } from "../events/index.ts";
-import type {
-  SqlNotification,
-  SqlNotificationSubscription,
-} from "../events/index.ts";
 
 type QueryResult<TRow extends Record<string, unknown>> = Readonly<{
   rows: TRow[];
@@ -26,10 +22,6 @@ export type OminipgDatabaseLike = Readonly<{
   transaction<T>(
     operation: (transaction: Readonly<{ query: Query }>) => T | Promise<T>,
   ): Promise<T>;
-  listen?(
-    channel: string,
-    handler: (notification: SqlNotification) => void,
-  ): Promise<SqlNotificationSubscription>;
   withReadSnapshot?: SqlSession["withReadSnapshot"];
   close(): Promise<void>;
 }>;

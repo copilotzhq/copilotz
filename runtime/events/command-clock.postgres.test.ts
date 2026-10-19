@@ -1,3 +1,4 @@
+import { heartbeat } from "../testing/owner-helpers.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { openDatabaseOwner, releaseDatabaseOwner } from "../engine/commands.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -76,7 +77,7 @@ Deno.test({
             assertEquals(claimed.updatedAt, iso(0));
             f.at(start + 500);
             assertEquals(
-              await f.store.heartbeatDelivery({
+              await heartbeat(f.store, {
                 id: f.id,
                 owner: "attempt",
                 leaseMs: 1000,
@@ -102,18 +103,13 @@ Deno.test({
               null,
             );
             assertEquals(
-              await f.store.claimNext({
-                owner: "too-early",
-                namespace: "space",
-                consumerIds: ["processor"],
-              }),
+              await f.store.claimDelivery({ id: f.id, owner: "too-early" }),
               null,
             );
             f.at(start + 2500);
-            const next = await f.store.claimNext({
+            const next = await f.store.claimDelivery({
+              id: f.id,
               owner: "next",
-              namespace: "space",
-              consumerIds: ["processor"],
               leaseMs: 1000,
             });
             assertEquals(next?.id, f.id);
@@ -146,7 +142,7 @@ Deno.test({
           f.at(deadline + offset);
           await f.lease(deadline);
           assertEquals(
-            await f.store.heartbeatDelivery({ id: f.id, owner: "attempt" }),
+            await heartbeat(f.store, { id: f.id, owner: "attempt" }),
             live,
           );
           await f.lease(deadline);
@@ -184,7 +180,7 @@ Deno.test({
       await f.lease(null);
       f.at(Date.UTC(2100, 0, 1));
       assertEquals(
-        await f.store.heartbeatDelivery({ id: f.id, owner: "attempt" }),
+        await heartbeat(f.store, { id: f.id, owner: "attempt" }),
         false,
       );
       assertEquals(
@@ -238,7 +234,7 @@ Deno.test({
         await release.promise;
       });
       await locked.promise;
-      renewing = f.store.heartbeatDelivery({
+      renewing = heartbeat(f.store, {
         id: f.id,
         owner: "attempt",
         leaseMs: 60_000,

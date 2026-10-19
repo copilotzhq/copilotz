@@ -1,3 +1,4 @@
+import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import {
   CONTENT_REPLAY_RETENTION_MS,
   type ContentCatalog,
@@ -503,6 +504,9 @@ export async function publishOperationChange(
     [namespace, operationId],
   )).rows.map((row) => row.selection_key);
   const kind = change.kind ?? "operation";
+  if (kind !== "stream-offset" && kind !== "event") {
+    invalidateOwnerAlarm(executor, schema, "content");
+  }
   if (["heartbeat", "checkpoint", "reset"].includes(kind)) {
     throw new TypeError("Control frames are not catalog mutations.");
   }
@@ -566,8 +570,7 @@ export async function publishOperationChange(
     >(
       `WITH allocated AS (UPDATE ${core.owner_epochs} SET last_seq=last_seq+1 WHERE owner='schema' RETURNING last_seq),
        inserted AS (INSERT INTO ${core.events} (seq,id,schema_version,type,namespace,payload,metadata,correlation_id,deduplication_id)
-         SELECT last_seq,$1,$2,'operation.catalog.changed',$3,$4::jsonb,'{}'::jsonb,$5,$6 FROM allocated RETURNING seq,id,position,created_at),
-       indexed AS (INSERT INTO ${core.owner_event_sequences} (owner,sequence,event_id) SELECT 'schema',seq,id FROM inserted)
+         SELECT last_seq,$1,$2,'operation.catalog.changed',$3,$4::jsonb,'{}'::jsonb,$5,$6 FROM allocated RETURNING seq,id,position,created_at)
        SELECT seq,position,created_at FROM inserted`,
       [
         id,

@@ -1,3 +1,4 @@
+import { receipt } from "../testing/owner-helpers.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
 import { provisionCopilotzSchema } from "../events/schema.ts";
@@ -242,7 +243,7 @@ Deno.test("replacement receipt readership requires exact current authorized repl
       [{ readers: ["worker:original", "worker:replacement"] }],
     );
     assertEquals(
-      await owner.readReceipt({
+      await receipt(db, schema, {
         ...caller,
         epoch: nextEpoch,
         principal: "host:other",

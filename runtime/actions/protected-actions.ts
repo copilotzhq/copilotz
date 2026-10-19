@@ -1,3 +1,4 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
 import { assetBodySchemaPrefix } from "../content/body-store.ts";
@@ -496,14 +497,14 @@ export function createProtectedActions(
           if (transaction && committed) {
             const captured = committed;
             command.afterCommit(async () => {
-              await options.coordinator.flushCommitted(captured);
+              await awaitEventPublication(captured);
             });
           }
           return { input: prepared, claimed: true };
         },
       );
       if (committed && !transaction) {
-        await options.coordinator.flushCommitted(committed);
+        await awaitEventPublication(committed);
       }
       return result;
     })();

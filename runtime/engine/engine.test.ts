@@ -254,7 +254,6 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       "owner_body_retirements",
       "owner_deadlines",
       "owner_epochs",
-      "owner_event_sequences",
       "owner_receipts",
       "pending_content",
     ]);
@@ -312,6 +311,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
       namespace,
       messageEvent.id,
       "retry_wait",
+      15_000,
     );
     assertEquals(first.status, "retry_wait");
     assertEquals(first.attempts, 1);

@@ -1,3 +1,4 @@
+import { receipt } from "../testing/owner-helpers.ts";
 import { bounded } from "../testing/effect-commit-proxy.ts";
 import { upgradeActionLifecycle } from "../actions/upgrade.ts";
 import { provisionOperationCatalog } from "../streams/catalog.ts";
@@ -98,14 +99,18 @@ Deno.test("owner commands fence, serialize, replay receipts and isolate failed s
       "active SQL transaction",
     );
     assertEquals(
-      (await owner.readReceipt(
+      (await receipt(
+        db,
+        schema,
         { ...caller, epoch: 0 },
         request.receipt.identity,
       ))?.result,
       { id: "one" },
     );
     assertEquals(
-      await owner.readReceipt(
+      await receipt(
+        db,
+        schema,
         { ...caller, principal: "another" },
         request.receipt.identity,
       ),
@@ -285,7 +290,7 @@ Deno.test("versioned owner upgrade preserves an existing event and Action baseli
       `INSERT INTO ${tables.events} (seq,id,schema_version,type,namespace,payload,correlation_id) VALUES (1,'existing',1,'test.event','space','{}','existing')`,
     );
     await db.query(
-      `DROP TABLE ${tables.owner_event_sequences}, ${tables.owner_body_retirements}, ${tables.owner_deadlines}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
+      `DROP TABLE ${tables.owner_body_retirements}, ${tables.owner_deadlines}, ${tables.owner_alarms}, ${tables.owner_receipts}, ${tables.owner_epochs}`,
     );
     await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=8`);
     await upgradeActionLifecycle(db, schema);

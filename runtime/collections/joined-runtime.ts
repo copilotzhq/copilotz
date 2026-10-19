@@ -115,13 +115,6 @@ export function joinCollectionRuntime(
           dispatch: false,
         });
       },
-      flushCommitted(result) {
-        check();
-        command.afterCommit(async () => {
-          await source.coordinator.flushCommitted(result);
-        });
-        return Promise.resolve({ handles: [], failures: [] });
-      },
     },
     ...(source.assets
       ? {

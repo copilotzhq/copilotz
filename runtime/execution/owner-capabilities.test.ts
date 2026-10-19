@@ -56,6 +56,7 @@ async function setup(
   const action = defineAction({ id: "test.host", execute: () => undefined });
   const registry = createPluginRegistry({ actions: { run: action } });
   const hostOptions = {
+    localExecution: true,
     ...limits,
     registry,
     async resolveAuthority() {
@@ -271,7 +272,7 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
     await f.close();
   }
 });
-Deno.test("writer resource capacity is checked before opening and idle expiry aborts actual writers", async () => {
+Deno.test("writer capacity is bounded while quiet live writers outlast generic handle limits", async () => {
   let opened = 0, aborted = 0;
   const f = await setup("confirmed", {
     streams: {
@@ -287,7 +288,7 @@ Deno.test("writer resource capacity is checked before opening and idle expiry ab
         };
       },
     },
-  }, { resourceIdleMs: 100, resourceLifetimeMs: 500 });
+  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
   try {
     for (let index = 0; index < 32; index++) {
       await f.call({
@@ -310,15 +311,91 @@ Deno.test("writer resource capacity is checked before opening and idle expiry ab
     );
     assertEquals(opened, 32);
     await new Promise((resolve) => setTimeout(resolve, 220));
+    assertEquals(aborted, 0);
+    assertEquals(f.host.snapshot().resources, 32);
+    await f.call({ kind: "complete", id: f.id, value: "quiet live writers" });
+    assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
     assertEquals(aborted, 32);
     assertEquals(f.host.snapshot().resources, 0);
+  } finally {
+    await f.close();
+  }
+});
+Deno.test("active writers outlast generic lifetime and still close on cancellation", async () => {
+  let appended = 0, aborted = 0;
+  const f = await setup("confirmed", {
+    streams: {
+      open: () => ({
+        id: "active",
+        offset: () => 0,
+        append() {
+          appended++;
+        },
+        abort() {
+          aborted++;
+        },
+      }),
+    },
+  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
+  try {
+    const writer = await f.call({
+      kind: "call",
+      context: f.id,
+      path: ["streams", "open"],
+      args: [{}],
+    }) as { handle: string };
+    for (let index = 0; index < 8; index++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await f.call({
+        kind: "call",
+        context: f.id,
+        id: writer.handle,
+        path: ["append"],
+        args: [{}],
+      });
+    }
+    assertEquals(appended, 8);
+    assertEquals(aborted, 0);
+    assertEquals(f.host.snapshot().resources, 1);
+    f.abortContext(new Error("invocation cancelled"));
+    await f.close();
+    assertEquals(aborted, 1);
+    assertEquals(f.host.snapshot().resources, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("idle reader handles retain bounded expiry while writers use invocation lifetime", async () => {
+  let cancelled = 0;
+  const f = await setup("confirmed", {
+    content: {
+      open: () =>
+        new ReadableStream({
+          cancel() {
+            cancelled++;
+          },
+        }),
+    },
+  }, { resourceIdleMs: 20, resourceLifetimeMs: 100 });
+  try {
+    await f.call({
+      kind: "call",
+      context: f.id,
+      path: ["content", "open"],
+      args: [{}],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assertEquals(cancelled, 1);
+    assertEquals(f.host.snapshot().resources, 0);
     await assertRejects(() =>
-      f.call({ kind: "complete", id: f.id, value: "swallowed expiry" })
+      f.call({ kind: "complete", id: f.id, value: "expired reader" })
     );
   } finally {
     await f.close();
   }
 });
+
 Deno.test("effect outcome data is not mistaken for authority options", async () => {
   let outcome: unknown;
   const f = await setup("confirmed", {
@@ -390,6 +467,7 @@ Deno.test("concurrent Open reserves one parent before deferred authority and cle
     entered = Promise.withResolvers<void>();
   let started = 0;
   const host = createOwnerCapabilityHost({
+    localExecution: true,
     registry: createPluginRegistry({}),
     async resolveAuthority() {
       entered.resolve();
@@ -441,6 +519,7 @@ Deno.test("deferred concurrent Open admissions cannot exceed assignment capacity
     entered = Promise.withResolvers<void>();
   let admissions = 0, started = 0;
   const host = createOwnerCapabilityHost({
+    localExecution: true,
     registry: createPluginRegistry({}),
     async resolveAuthority() {
       if (++admissions === 256) entered.resolve();

@@ -121,9 +121,7 @@ for (const begunEffect of [false, true]) {
         assertEquals(
           terminal.rows.every((row) =>
             row.body.error?.code ===
-              (begunEffect
-                ? "effect_indeterminate"
-                : "action_authorization_refused")
+              (begunEffect ? "effect_indeterminate" : "forbidden")
           ),
           true,
           JSON.stringify(terminal.rows),

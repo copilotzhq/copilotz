@@ -276,19 +276,11 @@ Deno.test("a filtered recovery never dispatches another namespace", async () => 
   }, [consumer]);
   const deliveryA = tenantA.deliveries[0];
   const deliveryB = tenantB.deliveries[0];
-  const callbacks: Array<() => void> = [];
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
     createContext: fixture.createContext,
     workerId: "copilotz-filtered-recovery-test",
-    scheduler: {
-      schedule(callback) {
-        callbacks.push(callback);
-        return callback;
-      },
-      cancel() {},
-    },
   });
   try {
     for (const delivery of [deliveryA, deliveryB]) {
@@ -307,7 +299,6 @@ Deno.test("a filtered recovery never dispatches another namespace", async () => 
     // Filtered recovery is an ordinary targeted operation, not a Gateway
     // recovery-owner activation. It therefore cannot later sweep tenant B.
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assertEquals(callbacks, []);
     assertEquals((await fixture.store.getDelivery(deliveryA.id))?.attempts, 1);
     assertEquals((await fixture.store.getDelivery(deliveryB.id))?.attempts, 1);
     assertEquals(
@@ -538,6 +529,7 @@ Deno.test("cancelled execution never invokes terminal Processor recovery", async
     const { event, deliveries } = await appendMessage(fixture);
     const delivery = deliveries[0];
     const workload = createDeliveryWorkload({
+      localExecution: true,
       store: fixture.store,
       registry: fixture.registry,
       createContext: fixture.createContext,
@@ -695,21 +687,26 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     type: "in-process",
     config: { topic: `copilotz.remote.${crypto.randomUUID()}` },
   } as const;
-  const ownerHost = createOwnerCapabilityHost({
+  const hypervisor = createHypervisor({
+    transports: [transport],
+    workerCalls: { admit: (binding) => ownerHost.workerCalls.admit(binding) },
+  }, {
+    onDisconnect: (event) => ownerHost.lifecycle?.onDisconnect?.(event),
+    onComplete: (event) => ownerHost.lifecycle?.onComplete?.(event),
+  });
+  const ownerHost: OwnerCapabilityHost = createOwnerCapabilityHost({
+    sessions: hypervisor.sessions,
     registry: fixture.registry,
     resolveAuthority: () => fixture.store.executionAuthority(),
-    createWorkloads: ({ registry }) => ({
+    createWorkloads: ({ registry, trackAttempt }) => ({
       "copilotz.delivery.v1": createDeliveryWorkload({
+        trackAttempt,
         store: fixture.store,
         registry,
         createContext: fixture.createContext,
       }),
     }),
   });
-  const hypervisor = createHypervisor({
-    transports: [transport],
-    workerCalls: ownerHost.workerCalls,
-  }, ownerHost.lifecycle);
   const worker = createWorker({
     id: "external-copilotz",
     transport,
@@ -1150,6 +1147,7 @@ Deno.test("a stale owner dispatch cannot claim a delivery under the new epoch", 
     const { event, deliveries: [delivery] } = await appendMessage(fixture);
     const authority = await fixture.store.executionAuthority();
     const workload = createDeliveryWorkload({
+      localExecution: true,
       store: fixture.store,
       registry: fixture.registry,
       createContext: fixture.createContext,

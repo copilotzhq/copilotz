@@ -9,15 +9,25 @@ import {
   withOwnerAuthorizationPhase,
 } from "../engine/command-authorization.ts";
 import type { SqlExecutor } from "../events/session.ts";
+import type { CommandContext } from "../engine/commands.ts";
 import type { CollectionRecord } from "./types.ts";
 import type { CollectionPolicyIntent } from "./policy-types.ts";
 import type { CollectionPolicyRegistration } from "./policy-registration.ts";
 import {
+  captureCollectionCommandInvocation,
   captureCollectionInvocation,
   type CollectionInvocationAuthority,
 } from "./policy-invocation.ts";
 
 type ReadScope = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
+type CommandPolicy = Readonly<{
+  check(): void;
+  authorize(
+    read: ReadScope,
+    phase: CollectionPolicyIntent["phase"],
+    result?: unknown,
+  ): Promise<void>;
+}>;
 export type CollectionPolicyOperation = Readonly<{
   registration: CollectionPolicyRegistration;
   namespace: string;
@@ -74,9 +84,10 @@ export function captureCollectionPolicy(
     read: ReadScope,
     phase: CollectionPolicyIntent["phase"],
     result: unknown = operation.result,
+    policyAuthority = authority,
   ) => {
-    authority.check();
-    await authority.assertCurrent?.(read, authority.invocation);
+    policyAuthority.check();
+    await policyAuthority.assertCurrent?.(read, policyAuthority.invocation);
     let current: CollectionRecord | null | undefined;
     try {
       current = operation.current
@@ -85,7 +96,7 @@ export function captureCollectionPolicy(
         )
         : undefined;
     } catch {
-      authority.check();
+      policyAuthority.check();
       collectionPolicyUnavailable();
     }
     let fixed: CollectionPolicyIntent;
@@ -97,23 +108,46 @@ export function captureCollectionPolicy(
         ...(current !== undefined ? { current } : {}),
       }) as CollectionPolicyIntent;
     } catch {
-      authority.check();
+      policyAuthority.check();
       collectionPolicyRefused();
     }
-    await authority.authorizeIntent?.(fixed, read);
+    await policyAuthority.authorizeIntent?.(fixed, read);
     await authorizeCollectionPolicy(
       operation.registration,
-      authority,
+      policyAuthority,
       fixed,
       read,
     );
   };
+  const forCommand = (command: CommandContext): CommandPolicy => {
+    const invocation = captureCollectionCommandInvocation(authority, command);
+    return {
+      check: () => invocation.check(),
+      authorize(read, phase, result = operation.result) {
+        invocation.check(read);
+        return authorize(read, phase, result, invocation);
+      },
+    };
+  };
+  const admitted = new WeakMap<SqlExecutor, CommandPolicy>();
+  const guard: OwnerCommandAuthorization = (command, purpose) => {
+    if (purpose === "mutation") {
+      admitted.set(command.transaction, forCommand(command));
+      return authorize(command, purpose);
+    }
+    const policy = admitted.get(command.transaction);
+    if (!policy) throw new Error("Collection command policy was not admitted.");
+    return policy.authorize(command, purpose);
+  };
   return {
     check: () => authority.check(),
-    authorize,
-    guard:
-      ((command, purpose) =>
-        authorize(command, purpose)) as OwnerCommandAuthorization,
+    authorize: (
+      read: ReadScope,
+      phase: CollectionPolicyIntent["phase"],
+      result?: unknown,
+    ) => authorize(read, phase, result),
+    forCommand,
+    guard,
   };
 }
 async function authorizeCollectionPolicy(

@@ -4,7 +4,7 @@
  * @module
  */
 
-import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
+import { defineProcessor, type Processor } from "@copilotz/copilotz/authoring";
 import { SCHEDULED_JOB_RUN_NOW_INPUT_EVENT } from "../../authoring/inputs/index.ts";
 import type { ScheduledJobRunNowInput } from "../../shared/contracts.ts";
 import type { SchedulesProcessorContext } from "../../shared/context.ts";

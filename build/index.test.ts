@@ -37,6 +37,8 @@ Deno.test("discovery is deterministic and never executes source", async () => {
   }, async (root) => {
     const first = await generate(root);
     assertEquals(first, await generate(root));
+    assert(first.includes('from "@copilotz/copilotz/authoring";'));
+    assert(!first.includes('from "@copilotz/copilotz/plugins";'));
     assert(first.includes('"zebra": entry0'));
     assert(!first.includes("helper"));
     await build(root, { sourceOnly: true });
@@ -150,6 +152,8 @@ Deno.test("build forwards a consumer's Deno configuration to its child commands"
       imports: {
         "fixture-dependency": "./shared/base.ts",
         "@copilotz/copilotz/plugins": plugins,
+        "@copilotz/copilotz/authoring":
+          new URL("../authoring.ts", import.meta.url).href,
       },
       // This fixture stands in for a consumer's config. The test checks that
       // the config is forwarded, not Deno's wait for newly published

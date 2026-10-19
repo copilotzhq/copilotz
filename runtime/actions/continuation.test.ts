@@ -346,7 +346,7 @@ Deno.test("an exhausted resumption emits one failure terminal and fences late co
     database: db,
     namespace: "test",
     databaseSchema: "continuation_failure",
-    engine: { maxAttempts: 1, execution: { capacity: 2, heartbeatMs: 60000 } },
+    engine: { maxAttempts: 1, execution: { capacity: 2 } },
     plugins: [
       definePlugin({
         id: "test.failure",

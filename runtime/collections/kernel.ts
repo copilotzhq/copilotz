@@ -4,6 +4,7 @@ import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts"
 import { snapshotViewData } from "../views/renderer.ts";
 import {
   collectionRuntimeCommitPending,
+  invalidateCollectionReadViews,
   registerCollectionRuntimeSource,
   requiresCapturedCollectionContent,
 } from "./joined-runtime.ts";
@@ -37,7 +38,10 @@ import { collectionCommandReceipt } from "./command-receipt.ts";
 import { withSnapshotControl } from "./snapshot-control.ts";
 import { isPendingContentRef } from "../content/schema.ts";
 import { syncCollectionAlarm } from "./alarms.ts";
-import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
+  type CommandContext,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
 import {
   projectVector,
   searchVectors,
@@ -2121,7 +2125,8 @@ export function createCollectionKernel(
           : execute());
       } finally {
         // Also when refused: a compare-and-set retry must read the row again.
-        readViews.invalidate(
+        invalidateCollectionReadViews(
+          options,
           rowKey(planned.writeOptions.namespace.trim(), planned.id),
         );
       }
@@ -2766,7 +2771,8 @@ export function createCollectionKernel(
       recordId: string,
     ): Promise<CollectionRecord | null> => {
       const memo =
-        options.policies?.has(name) || activeSnapshot() || activeScope()
+        options.policies?.has(name) || activeSnapshot() || activeScope() ||
+          collectionRuntimeCommitPending(options)
           ? undefined
           : readViews.memo();
       if (!memo) return await loadBatched(executor(), ns, recordId);
@@ -3677,6 +3683,15 @@ export function createCollectionKernel(
       return {
         check: () => checks.forEach((check) => check.check()),
         authorize,
+        forCommand(command: CommandContext) {
+          const policies = checks.map((check) => check.forCommand(command));
+          return {
+            check: () => policies.forEach((policy) => policy.check()),
+            async authorize(...args: Parameters<typeof authorize>) {
+              for (const policy of policies) await policy.authorize(...args);
+            },
+          };
+        },
         guard,
       };
     };
@@ -4017,11 +4032,12 @@ export function createCollectionKernel(
       }
     };
     for (const plan of orderedPlans) assertProtection(plan);
-    // A lone collection write commits atomically on its own.
+    // Only an independent lone write may publish through its own commit path.
     const [only] = orderedPlans;
     const commandReceipt = collectionCommandReceipt();
     if (
-      !commandReceipt && orderedPlans.length === 1 && only.commitAlone &&
+      !commandReceipt && !collectionRuntimeCommitPending(options) &&
+      orderedPlans.length === 1 && only.commitAlone &&
       !only.policy
     ) {
       const write = await only.commitAlone();
@@ -4039,17 +4055,32 @@ export function createCollectionKernel(
       plan.policy ? [plan.policy] : []
     );
     let executed = false;
+    const admitted = new WeakMap<
+      SqlExecutor,
+      Array<ReturnType<typeof policies[number]["forCommand"]>>
+    >();
     const batchGuard: OwnerCommandAuthorization = async (command, purpose) => {
-      for (const policy of policies) policy.check();
+      if (purpose === "mutation") {
+        admitted.set(
+          command.transaction,
+          policies.map((policy) => policy.forCommand(command)),
+        );
+        return;
+      }
+      const current = admitted.get(command.transaction);
+      if (!current) {
+        throw new Error("Collection command policy was not admitted.");
+      }
+      for (const policy of current) policy.check();
       if (purpose === "result") {
         // A retained receipt did not run the ordered mutation loop. Reauthorize
         // the original operations against current committed state before replay.
         if (!executed) {
-          for (const policy of policies) {
+          for (const policy of current) {
             await policy.authorize(command, "mutation");
           }
         }
-        for (const policy of policies) {
+        for (const policy of current) {
           await policy.authorize(command, "result");
         }
       }
@@ -4085,8 +4116,8 @@ export function createCollectionKernel(
       throw error;
     }
 
-    // The writes became visible together, after their statements returned.
-    readViews.invalidateAll();
+    // Joined writes become visible only when the borrowed owner command commits.
+    invalidateCollectionReadViews(options);
     if (options.assets) {
       options.assets.publishMaterializations(
         orderedPlans.flatMap((plan) =>

@@ -10,6 +10,7 @@ const workerEntry = new URL("../worker.ts", import.meta.url).href;
 const runtimeModules = new Set([
   "authoring.ts",
   "dependencies/ajv.ts",
+  "dependencies/croner.ts",
   "dependencies/oxian-work.ts",
   "dependencies/oxian-worker.ts",
   "runtime/actions/content.ts",
@@ -440,7 +441,7 @@ async function publishPair(artifact: string, output: string, evidence: string) {
 
 /** Builds a real worker-role entry, not a declaration-only fixture. Every emitted
  * Core edge is audited before any tree shaking. Unsupported dependencies fail
- * closed, even when unused. npm validation packages are explicit runtime seams:
+ * closed, even when unused. Reviewed npm packages are explicit runtime seams:
  * their entire transitive package bytes are copied and hashed before bundling.
  * This is an executable-dependency audit for trusted plugin source, not a JS
  * sandbox. Dynamic import/require and direct Worker/SharedWorker/importScripts
@@ -572,7 +573,11 @@ export async function buildWorkerRole(
       }
       if (mod.kind === "npm") {
         const pkg = graph.npmPackages[mod.npmPackage!];
-        if (!pkg || !["ajv", "ajv-formats"].includes(pkg.name)) {
+        // Only the reviewed Cron ESM root is admitted, not its other versions
+        // or package subpaths. Its source snapshot uses the same audit below.
+        const cron = pkg?.name === "croner" && pkg.version === "9.0.0" &&
+          source === "npm:/croner@9.0.0";
+        if (!pkg || !["ajv", "ajv-formats"].includes(pkg.name) && !cron) {
           throw new Error(`Unsupported worker npm entry: ${source}`);
         }
         const prefix = `npm:/${pkg.name}@${pkg.version}`;
@@ -629,7 +634,10 @@ export async function buildWorkerRole(
       const id = packageQueue.pop()!;
       const pkg = graph.npmPackages[id];
       if (
-        !pkg || !npmNames.has(pkg.name) ||
+        !pkg ||
+        !(npmNames.has(pkg.name) ||
+          pkg.name === "croner" && pkg.version === "9.0.0" &&
+            pkg.dependencies.length === 0) ||
         pkg.registryUrl !== "https://registry.npmjs.org/"
       ) throw new Error(`Unsupported transitive worker npm package: ${id}`);
       if (installed.has(pkg.name)) {

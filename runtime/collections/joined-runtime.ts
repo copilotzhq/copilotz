@@ -2,9 +2,15 @@
 import {
   bindCommandExecutorAlias,
   type CommandContext,
+  schemaCommandContext,
 } from "../engine/commands.ts";
 import { readEventByDeduplicationIdOn } from "../events/store.ts";
-import type { SqlSession } from "../events/session.ts";
+import {
+  afterSqlCommit,
+  type SqlExecutor,
+  type SqlSession,
+} from "../events/session.ts";
+import { readViews } from "./read-view.ts";
 import {
   type CollectionRuntime,
   createCollectionRuntime,
@@ -16,7 +22,11 @@ const sources = new WeakMap<
   CollectionRuntime,
   CreateCollectionRuntimeOptions
 >();
-const capturedContentOnly = new WeakSet<CreateCollectionRuntimeOptions>();
+const borrowedTransactions = new WeakMap<
+  CreateCollectionRuntimeOptions,
+  SqlExecutor
+>();
+const pendingInvalidations = new WeakSet<SqlExecutor>();
 export function registerCollectionRuntimeSource(
   runtime: CollectionRuntime,
   options: CreateCollectionRuntimeOptions,
@@ -26,12 +36,30 @@ export function registerCollectionRuntimeSource(
 export function collectionRuntimeCommitPending(
   options: CreateCollectionRuntimeOptions,
 ): boolean {
-  return capturedContentOnly.has(options);
+  return borrowedTransactions.has(options);
 }
 export function requiresCapturedCollectionContent(
   options: CreateCollectionRuntimeOptions,
 ): boolean {
-  return capturedContentOnly.has(options);
+  return borrowedTransactions.has(options);
+}
+
+/** Borrowed writes refresh committed hop views only at the outer SQL gate. */
+export function invalidateCollectionReadViews(
+  options: CreateCollectionRuntimeOptions,
+  key?: string,
+): void {
+  const transaction = borrowedTransactions.get(options);
+  if (transaction) {
+    if (!pendingInvalidations.has(transaction)) {
+      afterSqlCommit(transaction, () => readViews.invalidateAll());
+      pendingInvalidations.add(transaction);
+    }
+  } else if (key === undefined) {
+    readViews.invalidateAll();
+  } else {
+    readViews.invalidate(key);
+  }
 }
 
 /** Reuses the same kernel; no connection, transaction, publication, or scope is created. */
@@ -116,7 +144,11 @@ export function joinCollectionRuntime(
       }
       : {}),
   };
-  capturedContentOnly.add(options);
+  borrowedTransactions.set(
+    options,
+    schemaCommandContext(command.transaction, source.eventStore.databaseSchema)
+      .transaction,
+  );
   const joined = createCollectionRuntime(options);
   for (const definition of Object.values(definitions)) {
     const registered = runtime.get(definition.name);

@@ -247,6 +247,7 @@ for (
           dispatcher: (binding) => {
             ownerBinding = binding;
             return {
+              sessions: hypervisor.sessions,
               dispatch: async (input) => {
                 if (
                   boundary === "cancel-after-disconnect" &&

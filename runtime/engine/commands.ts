@@ -779,7 +779,8 @@ export function createSchemaCommandRunner(
         },
       };
       return (async () => {
-        await authorizeOwnerCommand(authorization, context, "mutation");
+        // Admission and the outer result gate share one transaction identity.
+        await authorizeOwnerCommand(authorization, joined.context, "mutation");
         const result = await execute(input, context);
         return result;
       })();

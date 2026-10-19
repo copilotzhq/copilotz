@@ -220,6 +220,7 @@ for (const mode of ["processor", "action"] as const) {
           dispatcher: (binding) => {
             ownerBinding = binding;
             return {
+              sessions: hypervisor.sessions,
               dispatch: (input) =>
                 hypervisor.dispatch({
                   ...input,

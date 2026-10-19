@@ -1,3 +1,10 @@
+import { ActionOwnershipLost } from "../actions/ownership.ts";
+import { withOwnerCommandAuthorization } from "../engine/command-authorization.ts";
+import type {
+  DeliveryAttemptRegistration,
+  OwnerSessionAuthority,
+  OwnerSessionSource,
+} from "./types.ts";
 import { ownerExecutionInterrupted } from "./owner-interruption.ts";
 import { collectionReceiptInvocation } from "../collections/policy-invocation.ts";
 import { withCollectionReadBudget } from "../collections/read-budget.ts";
@@ -85,6 +92,8 @@ type Assignment = {
   snapshotAuthority?: Promise<() => Promise<void>>;
   interruption?: Error;
   semanticRetirement?: boolean;
+  heartbeatSequence: number;
+  attempt?: DeliveryAttemptRegistration;
 };
 
 function own(value: unknown, key: string): unknown {
@@ -184,6 +193,36 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
   return path.length === 1 && ["progress", "protectedEvent"].includes(root);
 }
 
+/** Capture the actual accepted-state observer before remote admission. */
+export function captureOwnerSessionAuthority(
+  source: OwnerSessionSource | undefined,
+): OwnerSessionAuthority {
+  const methods = ["subscribe", "assertCurrent"] as const;
+  const captured = methods.map((name) =>
+    source && Object.getOwnPropertyDescriptor(source, name)?.value
+  );
+  if (captured.some((method) => typeof method !== "function")) {
+    throw new TypeError(
+      "Remote dispatcher requires its accepted session authority (subscribe and assertCurrent).",
+    );
+  }
+  return Object.freeze({
+    subscribe: captured[0].bind(source),
+    assertCurrent: captured[1].bind(source),
+  });
+}
+
+function sameSession(
+  left: WorkerCallContext["fence"],
+  right: WorkerCallContext["fence"],
+): boolean {
+  return left.connectionId === right.connectionId &&
+    left.sessionGeneration === right.sessionGeneration &&
+    left.identity.workerId === right.identity.workerId &&
+    left.identity.attemptId === right.identity.attemptId &&
+    left.identity.epoch === right.identity.epoch;
+}
+
 export type OwnerCapabilityHost = Readonly<{
   workerCalls: WorkerCallOptions;
   lifecycle: HypervisorLifecycleCallbacks;
@@ -196,6 +235,7 @@ export function createOwnerCapabilityHost(
     registry: PluginRegistry;
     createWorkloads: OwnerExecutionFactory;
     localExecution?: boolean;
+    sessions?: OwnerSessionSource;
     resolveAuthority(
       schema: string,
     ): Promise<Readonly<{ epoch: number; signal: AbortSignal }>>;
@@ -221,7 +261,19 @@ export function createOwnerCapabilityHost(
   options = Object.freeze(
     Object.defineProperties({}, descriptors),
   ) as typeof options;
+  const sessions = options.localExecution
+    ? undefined
+    : captureOwnerSessionAuthority(options.sessions);
   const assignments = new Map<string, Assignment>();
+  const pendingHeartbeats = new Map<
+    Assignment,
+    {
+      sequence: number;
+      attempt: DeliveryAttemptRegistration;
+      retried?: boolean;
+    }
+  >();
+  let renewing: Promise<void> | undefined;
   let closed = false;
   const idleMs = options.resourceIdleMs ?? RESOURCE_IDLE_MS;
   const lifetimeMs = options.resourceLifetimeMs ?? RESOURCE_LIFETIME_MS;
@@ -268,6 +320,7 @@ export function createOwnerCapabilityHost(
     }
   };
   const abortAssignment = (assignment: Assignment, reason: unknown) => {
+    pendingHeartbeats.delete(assignment);
     if (!assignment.abort.signal.aborted) assignment.abort.abort(reason);
     for (const invocation of assignment.contexts.values()) {
       invocation.result.reject(reason);
@@ -279,6 +332,7 @@ export function createOwnerCapabilityHost(
   };
   const check = async (assignment: Assignment) => {
     assignment.abort.signal.throwIfAborted();
+    sessions?.assertCurrent(assignment.binding.fence);
     if (assignment.snapshotAuthority) {
       await (await assignment.snapshotAuthority)();
       return;
@@ -297,12 +351,150 @@ export function createOwnerCapabilityHost(
       throw error;
     }
   };
+  const drainHeartbeats = async () => {
+    while (!closed && pendingHeartbeats.size) {
+      const batch = [...pendingHeartbeats];
+      pendingHeartbeats.clear();
+      const groups = new Map<
+        DeliveryAttemptRegistration["store"],
+        typeof batch
+      >();
+      for (const entry of batch) {
+        const [assignment, evidence] = entry;
+        if (
+          assignment.attempt !== evidence.attempt ||
+          assignment.abort.signal.aborted || evidence.attempt.signal.aborted ||
+          assignment.terminal
+        ) continue;
+        const group = groups.get(evidence.attempt.store) ?? [];
+        group.push(entry);
+        groups.set(evidence.attempt.store, group);
+      }
+      for (const [store, group] of groups) {
+        const invalid = new Map<DeliveryAttemptRegistration, Error>();
+        try {
+          const renewed = await withOwnerCommandAuthorization(
+            (command) => {
+              for (const [assignment, evidence] of group) {
+                try {
+                  if (closed) throw capabilityError("owner_closed");
+                  const current = sessions!.assertCurrent(
+                    assignment.binding.fence,
+                  );
+                  if (
+                    assignments.get(assignment.key) !== assignment ||
+                    assignment.attempt !== evidence.attempt ||
+                    assignment.terminal ||
+                    current.nextHeartbeatSequence < evidence.sequence ||
+                    command.caller.epoch !==
+                      evidence.attempt.heartbeat.ownerEpoch
+                  ) {
+                    throw new ActionOwnershipLost(
+                      evidence.attempt.heartbeat.id,
+                    );
+                  }
+                  assignment.abort.signal.throwIfAborted();
+                  evidence.attempt.signal.throwIfAborted();
+                } catch (error) {
+                  invalid.set(
+                    evidence.attempt,
+                    error instanceof Error ? error : new Error(String(error)),
+                  );
+                }
+              }
+              if (invalid.size) throw invalid.values().next().value;
+            },
+            () =>
+              store.heartbeatDeliveries(
+                group.map(([, evidence]) => evidence.attempt.heartbeat),
+              ),
+          );
+          const accepted = new Set(
+            renewed.map(({ id, owner }) => JSON.stringify([id, owner])),
+          );
+          for (const [, evidence] of group) {
+            if (
+              !accepted.has(
+                JSON.stringify([
+                  evidence.attempt.heartbeat.id,
+                  evidence.attempt.heartbeat.owner,
+                ]),
+              )
+            ) {
+              evidence.attempt.revoke(
+                new ActionOwnershipLost(evidence.attempt.heartbeat.id),
+              );
+            }
+          }
+        } catch (error) {
+          for (const [assignment, evidence] of group) {
+            if (
+              invalid.size && !invalid.has(evidence.attempt) &&
+              !evidence.retried
+            ) {
+              // An identified stale member rolled the command back. Keep the
+              // remaining accepted evidence, without replacing a newer pulse.
+              if (!pendingHeartbeats.has(assignment)) {
+                pendingHeartbeats.set(assignment, {
+                  ...evidence,
+                  retried: true,
+                });
+              }
+            } else {
+              evidence.attempt.revoke(
+                invalid.get(evidence.attempt) ??
+                  (error instanceof Error ? error : new Error(String(error))),
+              );
+            }
+          }
+        }
+      }
+    }
+  };
+  const scheduleHeartbeats = () => {
+    if (closed || renewing || !pendingHeartbeats.size) return;
+    renewing = Promise.resolve().then(drainHeartbeats).catch((error) => {
+      for (const assignment of assignments.values()) {
+        abortAssignment(assignment, error);
+      }
+    }).finally(() => {
+      renewing = undefined;
+      scheduleHeartbeats();
+    });
+  };
+  // Registry observers run only after sequence acceptance. They must neither
+  // mutate the registry nor await I/O inside its synchronous notification.
+  const unsubscribe = sessions?.subscribe((session) => {
+    if (closed || !["ready", "draining"].includes(session.phase)) return;
+    for (const assignment of assignments.values()) {
+      if (
+        !sameSession(session, assignment.binding.fence) ||
+        session.nextHeartbeatSequence <= assignment.heartbeatSequence
+      ) continue;
+      assignment.heartbeatSequence = session.nextHeartbeatSequence;
+      if (
+        assignment.attempt && !assignment.abort.signal.aborted &&
+        !assignment.attempt.signal.aborted && !assignment.terminal
+      ) {
+        pendingHeartbeats.set(assignment, {
+          sequence: session.nextHeartbeatSequence,
+          attempt: assignment.attempt,
+        });
+      }
+    }
+    scheduleHeartbeats();
+  });
+  if (sessions && typeof unsubscribe !== "function") {
+    throw new TypeError(
+      "Session subscription must return an unsubscribe function.",
+    );
+  }
   const timer = setInterval(() => {
     const now = Date.now();
     for (const assignment of assignments.values()) {
       for (const resource of assignment.resources.values()) {
         if (
-          !resource.closed &&
+          resource.kind !== "writer" && !resource.closed &&
           (now - resource.used >= idleMs ||
             now - resource.created >= lifetimeMs)
         ) {
@@ -765,6 +957,8 @@ export function createOwnerCapabilityHost(
         queue: [],
         task: Promise.resolve(),
         calls: 0,
+        heartbeatSequence:
+          sessions?.assertCurrent(binding.fence).nextHeartbeatSequence ?? 0,
       };
       const active = assignment;
       assignments.set(key, active);
@@ -775,6 +969,22 @@ export function createOwnerCapabilityHost(
           registry: rehost(active),
           workerId: binding.fence.identity.workerId,
           localExecution: options.localExecution,
+          trackAttempt: options.localExecution ? undefined : (attempt) => {
+            if (active.attempt) {
+              throw capabilityError("owner_assignment_started");
+            }
+            sessions!.assertCurrent(active.binding.fence);
+            active.abort.signal.throwIfAborted();
+            attempt.signal.throwIfAborted();
+            active.attempt = attempt;
+            const remove = () => {
+              if (active.attempt === attempt) active.attempt = undefined;
+              pendingHeartbeats.delete(active);
+              attempt.signal.removeEventListener("abort", remove);
+            };
+            attempt.signal.addEventListener("abort", remove, { once: true });
+            return remove;
+          },
           onDiagnostic: (diagnostic) => notify(active, { diagnostic }),
         });
         const workload = workloads[binding.parent.workload];
@@ -1218,7 +1428,18 @@ export function createOwnerCapabilityHost(
     async close(reason = "owner_closed") {
       closed = true;
       clearInterval(timer);
-      await retire(() => true, capabilityError(reason));
+      pendingHeartbeats.clear();
+      let failure: unknown;
+      try {
+        unsubscribe?.();
+      } catch (error) {
+        failure = error;
+      }
+      await Promise.all([
+        retire(() => true, capabilityError(reason)),
+        renewing,
+      ]);
+      if (failure) throw failure;
     },
     snapshot() {
       return {

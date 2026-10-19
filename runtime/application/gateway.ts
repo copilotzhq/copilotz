@@ -1,5 +1,6 @@
 import { hostDatabaseScopes } from "./host-commands.ts";
 import {
+  captureOwnerSessionAuthority,
   createOwnerCapabilityHost,
   type OwnerCapabilityHost,
 } from "../execution/owner-capabilities.ts";
@@ -51,7 +52,19 @@ export type CreateCopilotzGatewayOptions =
         workerCalls: NonNullable<HypervisorOptions["workerCalls"]>;
         lifecycle: NonNullable<HypervisorLifecycleCallbacks>;
       }>,
-    ) => DeliveryDispatcher | Promise<DeliveryDispatcher>;
+    ) =>
+      | (
+        & DeliveryDispatcher
+        & Readonly<
+          { sessions: import("../execution/types.ts").OwnerSessionSource }
+        >
+      )
+      | Promise<
+        & DeliveryDispatcher
+        & Readonly<
+          { sessions: import("../execution/types.ts").OwnerSessionSource }
+        >
+      >;
     target?: ExecutionWorkTarget;
     workloadTargets?: Readonly<Record<string, ExecutionWorkTarget>>;
     admit?: HypervisorOptions["admit"];
@@ -225,6 +238,7 @@ export async function createCopilotzGateway(
         "dispatcher callback must return a delivery dispatcher.",
       );
     }
+    const sessions = captureOwnerSessionAuthority(dispatcher.sessions);
     application = await createCopilotzApplication(
       {
         namespace: options.namespace,
@@ -257,6 +271,7 @@ export async function createCopilotzGateway(
       (engine) => {
         ownerCapabilities = createOwnerCapabilityHost({
           registry: engine.plugins,
+          sessions,
           createWorkloads: engine.execution.createWorkerWorkloads,
           resolveAuthority: engine.execution.resolveAuthority,
           lookupReceipt: engine.execution.lookupReceipt,

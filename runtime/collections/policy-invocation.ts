@@ -1,5 +1,10 @@
 /** Owner-created invocation bindings. No binding can be selected over a worker call. */
 import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
+import { captureHostCommandJson } from "../application/host-command-json.ts";
+import {
+  type CommandContext,
+  schemaCommandContext,
+} from "../engine/commands.ts";
 import type { ProtectedActionSource } from "../actions/protected-action-types.ts";
 import type { ActionInvocationFrame } from "../actions/invoker.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -33,6 +38,10 @@ type Binding = CollectionInvocationAuthority & { root: object; close(): void };
 type CallScope = { authority: Binding; active: boolean };
 const calls = createAsyncContextStorage<CallScope | undefined>();
 const contexts = new WeakMap<object, Binding>();
+const commandAuthorities = new WeakMap<
+  CollectionInvocationAuthority,
+  CollectionInvocationAuthority
+>();
 const trustedReads = createAsyncContextStorage<
   { active: boolean } | undefined
 >();
@@ -53,6 +62,40 @@ export function captureCollectionInvocation():
 export const withoutCollectionPolicyInvocation = <T>(
   run: () => T | Promise<T>,
 ): Promise<T> => calls.run(undefined, () => trustedReads.run(undefined, run));
+
+/** A live call may contribute read-only policy to this exact owner command. */
+export function captureCollectionCommandInvocation(
+  authority: CollectionInvocationAuthority,
+  command: CommandContext,
+) {
+  authority.check();
+  const owner = commandAuthorities.get(authority) ?? authority;
+  const scope = Object.freeze({ ...owner.scope });
+  const invocation = captureHostCommandJson(
+    owner.invocation,
+  ) as CollectionPolicyInvocation;
+  const canonical = schemaCommandContext(
+    command.transaction,
+    scope.databaseSchema,
+  );
+  return Object.freeze({
+    ...owner,
+    scope,
+    invocation,
+    check(
+      read: Readonly<{ transaction: SqlExecutor; commandTime: string }> =
+        canonical,
+    ) {
+      if (
+        schemaCommandContext(read.transaction, scope.databaseSchema) !==
+          canonical || read.commandTime !== canonical.commandTime
+      ) closed();
+      canonical.signal.throwIfAborted();
+      owner.signal.throwIfAborted();
+      owner.check();
+    },
+  });
+}
 
 function bind<T extends object>(context: T, binding: Binding): T {
   const cache = new WeakMap<object, object>();
@@ -158,18 +201,25 @@ export async function withOwnerCollectionInvocation<T>(
   run: () => T | Promise<T>,
 ): Promise<T> {
   let active = true;
-  const original = authority.check;
-  const bound: Binding = {
+  const owner = Object.freeze({
     ...authority,
+    scope: Object.freeze({ ...authority.scope }),
+    invocation: captureHostCommandJson(
+      authority.invocation,
+    ) as CollectionPolicyInvocation,
+  });
+  const bound: Binding = {
+    ...owner,
     root: {},
     check() {
-      original();
+      owner.check();
       if (!active) closed();
     },
     close() {
       active = false;
     },
   };
+  commandAuthorities.set(bound, owner);
   const scope: CallScope = { authority: bound, active: true };
   try {
     return await calls.run(scope, () => {

@@ -1,3 +1,5 @@
+import { ActionOwnershipLost } from "../actions/ownership.ts";
+import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import {
   reconciliationAlarmKey,
   writeOwnerDeadline,
@@ -34,6 +36,17 @@ import type {
   EventDelivery,
   EventSubject,
 } from "./types.ts";
+
+/** Claimed attempt identity, supplied only by owner execution registration. */
+export type DeliveryAttemptHeartbeat = Readonly<{
+  id: string;
+  owner: string;
+  ownerEpoch: number;
+  namespace: string;
+  eventId: string;
+  operationId: string;
+  leaseMs: number;
+}>;
 
 type EventRow = Record<string, unknown> & {
   id: string;
@@ -271,6 +284,10 @@ export type EventStore = {
     owner: string;
     leaseMs?: number;
   }): Promise<boolean>;
+  /** Bounded accepted-session batch; caller binds current transport authority. */
+  heartbeatDeliveries(
+    attempts: readonly DeliveryAttemptHeartbeat[],
+  ): Promise<readonly Pick<DeliveryAttemptHeartbeat, "id" | "owner">[]>;
   /** Settles a leased delivery and returns the row it settled into. */
   succeedDelivery(id: string, owner: string): Promise<EventDelivery | null>;
   cancelDelivery(id: string, owner?: string): Promise<EventDelivery | null>;
@@ -1426,6 +1443,60 @@ export function createEventStore(
           ),
       );
       return result.rows.length === 1;
+    },
+    async heartbeatDeliveries(attempts) {
+      if (!attempts.length || attempts.length > 256) {
+        throw new RangeError("Heartbeat batch must contain 1 to 256 attempts.");
+      }
+      const captured = attempts.map((attempt) => ({
+        ...attempt,
+        leaseMs: boundedInteger(attempt.leaseMs, defaultLeaseMs, 1),
+      }));
+      if (
+        new Set(captured.map(({ id, owner }) => JSON.stringify([id, owner])))
+          .size !== captured.length
+      ) throw new TypeError("Heartbeat batch repeats an attempt.");
+      const result = await runCommand(
+        "delivery.heartbeatBatch",
+        captured,
+        async (attempts, context) => {
+          const live: DeliveryAttemptHeartbeat[] = [];
+          for (const attempt of attempts) {
+            if (attempt.ownerEpoch !== context.caller.epoch) continue;
+            try {
+              await assertOwnerInvocationLive(context, {
+                databaseSchema,
+                namespace: attempt.namespace,
+                operationCatalog: options.admitOperationEventSql
+                  ? { admitEventSql: options.admitOperationEventSql }
+                  : undefined,
+                operationId: attempt.operationId,
+                eventId: attempt.eventId,
+                writer: { deliveryId: attempt.id, leaseOwner: attempt.owner },
+              });
+              live.push(attempt);
+            } catch (error) {
+              if (!(error instanceof ActionOwnershipLost)) throw error;
+            }
+          }
+          return await context.transaction.query<{ id: string; owner: string }>(
+            `UPDATE ${tables.event_deliveries} AS delivery
+           SET lease_expires_at=$4::timestamptz + requested.lease_ms * INTERVAL '1 millisecond', updated_at=$4::timestamptz
+           FROM unnest($1::text[],$2::text[],$3::bigint[]) AS requested(id,owner,lease_ms)
+           WHERE delivery.id=requested.id AND delivery.lease_owner=requested.owner
+             AND delivery.status='leased' AND delivery.lease_expires_at > $4::timestamptz
+             AND delivery.owner_epoch=(SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
+           RETURNING delivery.id,delivery.lease_owner AS owner`,
+            [
+              live.map((a) => a.id),
+              live.map((a) => a.owner),
+              live.map((a) => a.leaseMs),
+              context.commandTime,
+            ],
+          );
+        },
+      );
+      return result.rows;
     },
     succeedDelivery(id, owner) {
       return settleDelivery(id, "succeeded", owner);

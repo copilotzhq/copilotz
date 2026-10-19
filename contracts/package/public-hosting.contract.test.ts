@@ -211,6 +211,7 @@ Deno.test({
     const controller = new AbortController();
     const cause = new Error("aborted while constructing owner");
     const schema = `hosting_abort_${crypto.randomUUID().replaceAll("-", "")}`;
+    let dispatcher: ReturnType<typeof createHypervisor> | undefined;
     let armed = false;
     let triggered = false;
     const wrapped = {
@@ -234,13 +235,16 @@ Deno.test({
             database: wrapped,
             databaseSchema: schema,
             signal: controller.signal,
-            dispatcher() {
+            dispatcher({ workerCalls, lifecycle }) {
               armed = true;
-              return {
-                dispatch() {
-                  throw new Error("No work expected");
-                },
-              };
+              dispatcher = createHypervisor({
+                transports: [{
+                  type: "in-process",
+                  config: { topic: crypto.randomUUID() },
+                }],
+                workerCalls,
+              }, lifecycle);
+              return dispatcher;
             },
           }),
         Error,
@@ -257,6 +261,7 @@ Deno.test({
       });
       await restarted.close();
     } finally {
+      await dispatcher?.shutdown();
       await database.close();
     }
   },

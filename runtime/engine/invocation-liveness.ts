@@ -8,7 +8,12 @@ export type OwnerInvocationLiveness = Readonly<{
   databaseSchema: string;
   namespace: string;
   /** Required when the invocation is bound to an operation. */
-  operationCatalog?: Pick<OperationCatalog, "admitEventSql">;
+  operationCatalog?: Readonly<{
+    admitEventSql(...args: Parameters<OperationCatalog["admitEventSql"]>): Pick<
+      ReturnType<OperationCatalog["admitEventSql"]>,
+      "ctes" | "gate"
+    >;
+  }>;
   operationId?: string;
   eventId?: string;
   writer?: Readonly<{ deliveryId: string; leaseOwner: string }>;

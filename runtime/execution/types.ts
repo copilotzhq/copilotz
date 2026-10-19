@@ -31,6 +31,23 @@ export type DeliveryDispatchMetadata = Readonly<{
   idempotencyKey: string;
 }>;
 
+/** Accepted transport state only; no registry mutation capability. */
+export type OwnerSessionSource = Readonly<
+  Pick<Hypervisor["sessions"], "subscribe" | "assertCurrent">
+>;
+export type OwnerSessionAuthority = Readonly<{
+  subscribe: NonNullable<OwnerSessionSource["subscribe"]>;
+  assertCurrent: OwnerSessionSource["assertCurrent"];
+}>;
+export type DeliveryAttemptRegistration = Readonly<{
+  store: Pick<EventStore, "heartbeatDeliveries">;
+  heartbeat: import("../events/store.ts").DeliveryAttemptHeartbeat;
+  signal: AbortSignal;
+  revoke(reason: Error): void;
+}>;
+export type DeliveryAttemptTracker = (
+  attempt: DeliveryAttemptRegistration,
+) => () => void;
 export type DeliveryDispatcher = Dispatcher;
 export type DeliveryHypervisor = Hypervisor;
 export type DeliveryInProcessTransport = Extract<
@@ -79,11 +96,6 @@ export type CreateDeliveryMutationIdentity = (
 export type DeliveryContextFactory = (
   base: DeliveryContextBase,
 ) => ProcessorContext | Promise<ProcessorContext>;
-
-export type DeliveryWorkloadScheduler = Readonly<{
-  schedule(callback: () => void, delayMs: number): unknown;
-  cancel(handle: unknown): void;
-}>;
 
 /**
  * Why a delivery's handler failed, safe to log: the error's name and a message
@@ -141,6 +153,8 @@ export type DeliveryDiagnosticSink = (
 export type CreateDeliveryWorkloadOptions = Readonly<{
   /** Trusted placement selected by an owner-created executor. */
   localExecution?: boolean;
+  /** Owner-only registration with the accepted transport heartbeat producer. */
+  trackAttempt?: DeliveryAttemptTracker;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
@@ -148,8 +162,6 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   /** Internal runtime consumer, independent of plugin registration. */
   executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   leaseMs?: number;
-  heartbeatMs?: number;
-  scheduler?: DeliveryWorkloadScheduler;
   workerId?: string;
   onDiagnostic?: DeliveryDiagnosticSink;
 }>;
@@ -217,8 +229,6 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   workerId?: string;
   capacity?: number;
   leaseMs?: number;
-  heartbeatMs?: number;
-  scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
   /** Disabled by default; receives allowlisted process-local delivery timing. */
   onDiagnostic?: DeliveryDiagnosticSink;

@@ -5,6 +5,7 @@ import type { WorkerWorkHandler } from "../../dependencies/oxian-worker.ts";
 import { isHostCallError } from "../../dependencies/oxian-work.ts";
 import type { PluginRegistry } from "../plugins/registry.ts";
 import { awaitOperation } from "../actions/continuation.ts";
+import { recordActionCaller } from "../actions/caller-identity.ts";
 import { withProtectedEventResolver } from "../actions/protected-context.ts";
 import { deriveWorkflowId } from "../events/workflow-id.ts";
 import {
@@ -404,29 +405,31 @@ function workerContext(options: {
     return value;
   };
   const actions = Object.fromEntries(
-    Object.keys(registry.actions).map((
-      alias,
-    ) => [
-      alias,
-      Object.assign((...args: unknown[]) => rpc(["actions", alias], args), {
-        async prepare(factory: () => unknown, prepareOptions: RecordValue) {
-          check();
-          if (typeof factory !== "function") {
-            throw new TypeError("Action prepare requires a factory.");
-          }
-          const token = crypto.randomUUID();
-          options.factories.set(token, factory);
-          try {
-            return await rpc(["actions", alias, "prepare"], [
-              token,
-              prepareOptions,
-            ]);
-          } finally {
-            options.factories.delete(token);
-          }
+    Object.entries(registry.actions).map(([alias, definition]) => {
+      const caller = Object.assign(
+        (...args: unknown[]) => rpc(["actions", alias], args),
+        {
+          async prepare(factory: () => unknown, prepareOptions: RecordValue) {
+            check();
+            if (typeof factory !== "function") {
+              throw new TypeError("Action prepare requires a factory.");
+            }
+            const token = crypto.randomUUID();
+            options.factories.set(token, factory);
+            try {
+              return await rpc(["actions", alias, "prepare"], [
+                token,
+                prepareOptions,
+              ]);
+            } finally {
+              options.factories.delete(token);
+            }
+          },
         },
-      }),
-    ]),
+      );
+      recordActionCaller(caller, definition.id);
+      return [alias, caller];
+    }),
   );
   const context = withProtectedEventResolver({
     ...invocation.scope,

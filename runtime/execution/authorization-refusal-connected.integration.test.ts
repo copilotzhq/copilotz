@@ -201,7 +201,7 @@ for (const transport of ["in-process", "websocket"] as const) {
         assertEquals(
           terminals.rows.every((row) =>
             row.body.status === "failed" &&
-            row.body.error?.code === "action_authorization_refused"
+            row.body.error?.code === "forbidden"
           ),
           true,
         );

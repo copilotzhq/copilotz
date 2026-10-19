@@ -173,14 +173,6 @@ async function createFixture(): Promise<Fixture> {
     now: () => new Date("2026-08-09T00:00:00.000Z"),
     random: () => 0,
     retryBaseMs: 0,
-    execution: {
-      scheduler: {
-        schedule(callback) {
-          return callback;
-        },
-        cancel() {},
-      },
-    },
     publish(output) {
       if (isStreamOutputDescriptor(output)) {
         streamOutputs.push(Object.freeze({

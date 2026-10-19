@@ -277,6 +277,26 @@ Hypervisor after the application. Serve a caller-owned Hypervisor through
 `listen({ hypervisor })`; the host also supplies its HTTP fallback. The bindings
 carry capability admission and lifecycle only, never persistence.
 
+The returned dispatcher must expose its actual accepted session authority as
+`sessions`, with `assertCurrent` and `subscribe`. A pinned Oxian Hypervisor can
+be returned directly. Copilotz captures these methods before activation and
+rejects missing subscriptions at startup. It renews remote delivery attempts
+only after Oxian accepts a strictly advancing heartbeat sequence for their
+current worker identity, connection and session generation. Each bounded batch
+rechecks session and durable invocation authority after the owner fence; an
+expired attempt cannot be revived. The preaccept `onHeartbeat` callback is not
+renewal evidence. Caller-owned dispatchers must forward their actual session
+authority rather than creating a second registry.
+
+The former execution `heartbeatMs` and `scheduler` options and exported
+`DeliveryWorkloadScheduler` type have been removed. Remove these options from
+advanced executor/workload configuration. Remote delivery renewal now follows
+the transport's accepted heartbeats, without a per-delivery owner timer.
+Embedded execution continues to use local attempts without lease deadlines or
+remote session requirements. Quiet stream writers remain valid for their
+invocation lifetime; bounded reader and snapshot timeouts still apply. Session
+liveness does not impose an execution-progress timeout.
+
 The registration and resume protocol belongs to Oxian; see the
 [`@oxian/oxian-js` package documentation](https://jsr.io/@oxian/oxian-js).
 

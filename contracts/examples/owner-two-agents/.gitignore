@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.package-proof.json
+package-lock.json
+candidate.tgz
+.npmrc

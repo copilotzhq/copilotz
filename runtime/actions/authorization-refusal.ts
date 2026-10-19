@@ -126,9 +126,10 @@ export async function settleActionAuthorizationRefusal(
             {
               id: string;
               payload: unknown;
+              correlation_id: string;
             }
           >(
-            `SELECT event.id,event.payload FROM ${store.tables.events} event WHERE event.namespace=$1 AND event.deduplication_id=$2`,
+            `SELECT event.id,event.payload,event.correlation_id FROM ${store.tables.events} event WHERE event.namespace=$1 AND event.deduplication_id=$2`,
             [namespace, `${binding.actionRunId}:action:invoked`],
           )).rows[0];
           if (!event) {
@@ -239,14 +240,25 @@ export async function settleActionAuthorizationRefusal(
             metadata: data.metadata,
             status: "failed",
             error: {
-              name: refusal.name,
-              message: refusal.message,
-              code: (refusal as Error & { code: string }).code,
+              ...(indeterminate
+                ? {
+                  name: refusal.name,
+                  message: refusal.message,
+                  code: (refusal as Error & { code: string }).code,
+                }
+                : {
+                  name: "ActionError",
+                  message: "Forbidden",
+                  code: "forbidden",
+                  status: 403,
+                  callerSafe: true,
+                }),
             },
             deduplicationId: `${data.actionRunId}:action:terminal`,
             settlementScopeId: obligation.scope_id,
             actionScopeId: obligation.action_scope_id ?? undefined,
             causationId: source.eventId,
+            correlationId: event.correlation_id,
           });
           command.afterCommit(async () => {
             await options.coordinator.flushCommitted(

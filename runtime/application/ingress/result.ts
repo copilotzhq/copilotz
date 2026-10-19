@@ -1,3 +1,4 @@
+import { parseActionLifecycleEvent } from "../../actions/event.ts";
 import { standardActionError } from "../../actions/errors.ts";
 /** Restores admitted outcomes from lifecycle Events and retained mutation failures. @module */
 import type { DurableEvent } from "../../events/index.ts";
@@ -39,30 +40,44 @@ type ServerInvokeTerminal =
       status: "completed";
     }>
     | Readonly<{
-      status: "failed";
+      status: "failed" | "cancelled";
       error: SerializedActionError;
     }>
   );
 function actionTerminal(
   output: unknown,
+  requestEvent: DurableEvent,
   requestId: string,
+  actionAlias: string,
   targetActionId: string,
 ): ServerInvokeTerminal | undefined {
-  if (!output || typeof output !== "object") {
-    return undefined;
-  }
-  const event = output as Record<string, unknown>;
-  if (event.type !== `${SERVER_INVOKE_ACTION_ID}.completed`) {
-    return undefined;
-  }
-  const data = record(event.data) as Partial<ActionEventData>;
-  if (data.status !== "completed") {
-    return undefined;
-  }
+  if (!output || typeof output !== "object") return undefined;
+  const event = output as DurableEvent & { data?: unknown };
+  const data = parseActionLifecycleEvent(event, {
+    actionId: SERVER_INVOKE_ACTION_ID,
+    statuses: ["completed", "failed", "cancelled"],
+    requireRoot: true,
+  });
+  if (
+    !data || event.namespace !== requestEvent.namespace ||
+    event.correlationId !== requestEvent.correlationId ||
+    event.metadata.sourceEventId !== requestEvent.id ||
+    event.causationId !== requestEvent.id
+  ) return undefined;
   const input = record(data.input);
-  if (input.requestId !== requestId) {
-    return undefined;
+  if (
+    Object.keys(input).length !== 2 || input.requestId !== requestId ||
+    input.actionAlias !== actionAlias
+  ) return undefined;
+  if (data.status === "failed" || data.status === "cancelled") {
+    return {
+      status: data.status,
+      wrapperActionRunId: data.actionRunId,
+      targetActionRunId: `${data.actionRunId}/action:${targetActionId}:target`,
+      error: data.error,
+    };
   }
+  if (data.status !== "completed") return undefined;
   const result = record(data.output);
   if (result.status === "completed") {
     const targetActionRunId = text(result.targetActionRunId);
@@ -109,6 +124,7 @@ async function recoverActionTerminal(
   context: ApplicationScope,
   requestEvent: DurableEvent,
   requestId: string,
+  actionAlias: string,
   targetActionId: string,
 ): Promise<ServerInvokeTerminal | undefined> {
   const namespace = context.namespace ?? application.config.namespace;
@@ -125,20 +141,20 @@ async function recoverActionTerminal(
     const events = await scope.events.list({
       namespace,
       correlationId: requestEvent.correlationId,
-      metadata: {
-        actionId: SERVER_INVOKE_ACTION_ID,
-        actionStatus: "completed",
-      },
+      metadata: { actionId: SERVER_INVOKE_ACTION_ID },
       ...(afterPosition ? { afterPosition } : {}),
       limit: 1000,
     });
     for (const event of events) {
-      if (event.type !== `${SERVER_INVOKE_ACTION_ID}.completed`) {
-        continue;
-      }
       const resolved = await scope.events.resolve(namespace, event.id);
       const terminal = resolved &&
-        actionTerminal(resolved, requestId, targetActionId);
+        actionTerminal(
+          resolved,
+          requestEvent,
+          requestId,
+          actionAlias,
+          targetActionId,
+        );
       if (terminal) {
         return terminal;
       }
@@ -382,6 +398,7 @@ export async function recordedOperationResult(
     context,
     event,
     request.requestId,
+    String(request.actionAlias),
     action.id,
   );
   if (!terminal) {
@@ -400,7 +417,7 @@ export async function recordedOperationResult(
   if (target?.status === "failed" || target?.status === "cancelled") {
     throw actionFailure(target.error, audience);
   }
-  if (terminal.status === "failed") {
+  if (terminal.status !== "completed") {
     // The current invocation bridge can fail admission before a target lifecycle
     // exists; its retained standard failure is the authoritative result.
     throw actionFailure(terminal.error, audience);

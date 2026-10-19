@@ -8,7 +8,6 @@ import type {
   DeliveryContextBase,
   DeliveryDispatchMetadata,
   DeliveryWorkload,
-  DeliveryWorkloadScheduler,
 } from "./types.ts";
 import {
   reportDeliveryDiagnostic,
@@ -16,7 +15,6 @@ import {
 } from "./diagnostics.ts";
 
 const DEFAULT_LEASE_MS = 120_000;
-const DEFAULT_HEARTBEAT_MS = 30_000;
 
 function boundedPositive(
   value: number | undefined,
@@ -28,17 +26,6 @@ function boundedPositive(
     throw new TypeError(`${name} must be a positive safe integer.`);
   }
   return resolved;
-}
-
-function createDefaultScheduler(): DeliveryWorkloadScheduler {
-  return ({
-    schedule(callback, delayMs) {
-      return setTimeout(callback, delayMs);
-    },
-    cancel(handle) {
-      clearTimeout(handle as ReturnType<typeof setTimeout>);
-    },
-  } as const);
 }
 
 function requiredMetadataString(
@@ -120,16 +107,6 @@ export function createDeliveryWorkload(
     throw new TypeError("Delivery workload requires a store continuation.");
   }
   const leaseMs = boundedPositive(options.leaseMs, DEFAULT_LEASE_MS, "leaseMs");
-  const heartbeatMs = boundedPositive(
-    options.heartbeatMs,
-    DEFAULT_HEARTBEAT_MS,
-    "heartbeatMs",
-  );
-  if (heartbeatMs >= leaseMs) {
-    throw new TypeError("heartbeatMs must be less than leaseMs.");
-  }
-  const scheduler = options.scheduler ?? createDefaultScheduler();
-
   const deliver: DeliveryWorkload = async (
     { metadata: rawMetadata, signal: rawDispatchSignal },
   ) => {
@@ -196,28 +173,7 @@ export function createDeliveryWorkload(
       dispatchSignal.addEventListener("abort", relayAbort, { once: true });
     }
 
-    let heartbeatHandle: unknown;
-    let heartbeatStopped = false;
-    const stopHeartbeat = () => {
-      heartbeatStopped = true;
-      if (heartbeatHandle !== undefined) scheduler.cancel(heartbeatHandle);
-    };
-    const heartbeat = () => {
-      heartbeatHandle = scheduler.schedule(() => {
-        void store.heartbeatDelivery({
-          id: delivery.id,
-          owner: metadata.dispatchAttemptId,
-          leaseMs,
-        }).then((renewed) => {
-          if (!renewed) {
-            abort.abort(new Error(`Delivery '${delivery.id}' lost its lease.`));
-            return;
-          }
-          if (!heartbeatStopped) heartbeat();
-        }).catch((error) => abort.abort(error));
-      }, heartbeatMs);
-    };
-    if (!options.localExecution) heartbeat();
+    let untrackAttempt: (() => void) | undefined;
 
     try {
       const mismatch = deliveryMismatch(delivery, metadata);
@@ -228,6 +184,27 @@ export function createDeliveryWorkload(
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
+      }
+      if (!options.localExecution) {
+        if (!options.trackAttempt) {
+          throw new TypeError(
+            "Remote delivery requires accepted session liveness.",
+          );
+        }
+        untrackAttempt = options.trackAttempt({
+          store,
+          heartbeat: {
+            id: delivery.id,
+            owner: metadata.dispatchAttemptId,
+            ownerEpoch: metadata.ownerEpoch,
+            namespace: event.namespace,
+            eventId: event.id,
+            operationId: delivery.settlementScopeId,
+            leaseMs,
+          },
+          signal: abort.signal,
+          revoke: (reason) => abort.abort(reason),
+        });
       }
       const continuation = delivery.consumerId === ACTION_CONTINUATION_CONSUMER
         ? options.executeContinuation
@@ -385,7 +362,7 @@ export function createDeliveryWorkload(
       if (!abort.signal.aborted) {
         abort.abort(new Error(`Delivery '${delivery.id}' execution ended.`));
       }
-      stopHeartbeat();
+      untrackAttempt?.();
       dispatchSignal.removeEventListener("abort", relayAbort);
     }
   };
@@ -398,6 +375,7 @@ export type OwnerExecutionOptions = Readonly<{
   registry: import("../plugins/index.ts").PluginRegistry;
   /** Trusted owner placement; never supplied by a worker. */
   localExecution?: boolean;
+  trackAttempt?: import("./types.ts").DeliveryAttemptTracker;
   publish?: import("../engine/types.ts").RuntimeOutputPublisher;
   workerId: string;
   onDiagnostic?:

@@ -796,6 +796,7 @@ export async function createCopilotzEngine(
               registry: execution.registry,
               workerId: execution.workerId,
               localExecution: execution.localExecution,
+              trackAttempt: execution.trackAttempt,
               onDiagnostic: execution.onDiagnostic,
               resolveStore: async (schema) =>
                 schema === databaseSchema

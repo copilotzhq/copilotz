@@ -433,7 +433,7 @@ for (const transport of ["in-process", "websocket"] as const) {
           assertEquals(terminal.rows[0].body.status, "failed");
           assertEquals(
             terminal.rows[0].body.error?.code,
-            "action_authorization_refused",
+            "forbidden",
           );
           await until(() =>
             f.worker.snapshot().occupiedExecutions === 0 &&

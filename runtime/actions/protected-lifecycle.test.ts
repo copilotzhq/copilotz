@@ -192,7 +192,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     database: db,
     namespace: NAMESPACE,
     databaseSchema: schema,
-    engine: { maxAttempts: 1, execution: { heartbeatMs: 60_000 } },
+    engine: { maxAttempts: 1 },
     adapters: {
       secrets: {
         default: createSecretAdapter({

@@ -41,7 +41,6 @@ export type {
   DeliveryMutationIdentity,
   DeliveryRecoveryDispatch,
   DeliveryWorkload,
-  DeliveryWorkloadScheduler,
   ExecutionWorkHandle,
   ExecutionWorkInput,
   ExecutionWorkTarget,

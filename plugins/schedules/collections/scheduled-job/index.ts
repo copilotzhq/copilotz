@@ -8,7 +8,7 @@ import {
   type CollectionDefinition,
   defineCollection,
   relation,
-} from "@copilotz/copilotz/collections";
+} from "@copilotz/copilotz/authoring";
 import { getNextScheduledRunAt } from "../../shared/model.ts";
 import type { ScheduledJobSchedule } from "../../shared/contracts.ts";
 

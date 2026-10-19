@@ -492,6 +492,22 @@ entry, such as an Action exposed over HTTP by `serverPlugin`, whose route
 validates input against the Action's schema, rather than through generic Events
 or a custom route that forwards them to `app.send`.
 
+### Application secrets in records
+
+For secrets your application keeps in its own records, such as a connected
+account's tokens, use `createOwnerSecrets({ session, master })` from
+`copilotz/actions`, with the same master Secret Adapter.
+`seal(schema, value,
+binding)` returns an opaque string to store in the record,
+and `open` returns the value. Both use the schema owner's data key.
+
+`binding` is your context, for example `{ record: id, field: "accessToken" }`.
+It is authenticated together with the schema, so a sealed value opens only under
+the same schema and binding. Sealing provisions a missing owner key through an
+owner command; opening never creates one. Exporting an owner re-wraps its key
+and leaves every sealed value unchanged, so the secrets move with the owner's
+data.
+
 ## What this unlocks
 
 - One validated, inspectable operation shared by Processors, other Actions,

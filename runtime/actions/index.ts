@@ -15,6 +15,8 @@ export { defineAction, isActionDefinition } from "./define.ts";
 export { secret } from "./secret.ts";
 export { ActionError } from "./errors.ts";
 export { createSecretAdapter } from "./secret-adapter.ts";
+export { createOwnerSecrets } from "./owner-secrets.ts";
+export type { OwnerSecretBinding, OwnerSecrets } from "./owner-secrets.ts";
 export type {
   SecretAdapter,
   SecretAdapterOpenInput,

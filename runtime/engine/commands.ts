@@ -1,3 +1,9 @@
+import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
+import {
+  currentCollectionReadBudget,
+  withCollectionReadBudgetBinding,
+} from "../collections/read-budget.ts";
+import { readViews } from "../collections/read-view.ts";
 import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
 import {
   authorizeOwnerCommand,
@@ -94,6 +100,7 @@ function canonical(value: CommandJson): string {
 }
 
 type Pending = {
+  withReadContext(execute: () => Promise<void>): Promise<void>;
   run(): Promise<void>;
   reject(error: unknown): void;
 };
@@ -214,8 +221,10 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       while (publications.length) {
         for (const callback of publications.shift()!) {
           try {
-            await withoutCollectionPolicyInvocation(() =>
-              withoutOwnerCommandAuthorization(callback)
+            await runIndependentAsyncContext(() =>
+              withoutCollectionPolicyInvocation(() =>
+                withoutOwnerCommandAuthorization(callback)
+              )
             );
           } catch (error) {
             try {
@@ -233,8 +242,13 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   async function drain() {
     try {
       while (pending.length && state !== "stopped") {
-        await withoutCollectionPolicyInvocation(() =>
-          withoutOwnerCommandAuthorization(() => pending.shift()!.run())
+        const item = pending.shift()!;
+        await runIndependentAsyncContext(() =>
+          withoutCollectionPolicyInvocation(() =>
+            withoutOwnerCommandAuthorization(() =>
+              item.withReadContext(item.run)
+            )
+          )
         );
       }
     } finally {
@@ -344,8 +358,14 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       intent: JSON.parse(canonical(request.receipt.intent)) as CommandJson,
     };
     const binding = { ...caller };
+    const readBudget = currentCollectionReadBudget();
+    const runWithReadView = readViews.capture();
     pending.push({
       reject: completion.reject,
+      withReadContext: (execute) =>
+        runWithReadView(() =>
+          withCollectionReadBudgetBinding(readBudget, execute)
+        ),
       async run() {
         let callbackFinished = false;
         let handlerError: unknown;

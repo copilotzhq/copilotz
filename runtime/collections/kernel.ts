@@ -1082,17 +1082,20 @@ export function createCollectionKernel(
         "collections.read",
         {},
         async (_input, command) => {
+          // This read's captured aggregation belongs to its own queued command.
+          if (!disclosure.active) collectionPolicyRefused();
           const read = { ...command, authority, active: true };
-          return await policyReads.run(read, async () => {
-            try {
-              await policy?.authorize(command, "read");
-              const value = await load();
-              await disclose(command, value);
-              return value;
-            } finally {
-              read.active = false;
-            }
-          });
+          return await policyDisclosures.run(disclosure, () =>
+            policyReads.run(read, async () => {
+              try {
+                await policy?.authorize(command, "read");
+                const value = await load();
+                await disclose(command, value);
+                return value;
+              } finally {
+                read.active = false;
+              }
+            }));
         },
       )
     );

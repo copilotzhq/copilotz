@@ -3,6 +3,9 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "./engine.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
+import { createContentCatalog } from "../content/catalog.ts";
+import { createDatabaseBodyStore } from "../content/database-body-store.ts";
+import { digestContent } from "../content/digest.ts";
 import {
   createEventStore,
   provisionCopilotzSchema,
@@ -51,6 +54,44 @@ Deno.test("engine admission waits for epoch invalidation and catalog recovery", 
         metadata: {},
       }),
   );
+  // This is a valid accepted logical body whose physical bytes are later lost,
+  // not an operation stream referring to an absent logical catalog entry.
+  const content = createContentCatalog(db, schema);
+  const bodyStore = createDatabaseBodyStore({ session: db, schema });
+  const identity = {
+    bodyId: "missing-body",
+    writerId: "completed-writer",
+    generation: 1,
+  };
+  const bytes = new TextEncoder().encode("completed content");
+  const digest = await digestContent(bytes);
+  await content.reserve({
+    ...identity,
+    namespace: "space",
+    copy: {
+      key: "lost-physical-copy",
+      backendKind: bodyStore.kind,
+      backendId: bodyStore.backendId,
+    },
+  });
+  const head = await bodyStore.put({
+    bodyId: "lost-physical-copy",
+    bytes,
+    mediaType: "text/plain",
+    digest,
+  });
+  await content.checkpoint({
+    ...identity,
+    expectedOffset: 0,
+    offset: bytes.length,
+  });
+  await content.sealIntent({ ...identity, length: bytes.length, digest });
+  const terminal = await content.sealAccepted({ ...identity, head });
+  assertEquals(terminal, {
+    outcome: "completed",
+    length: bytes.length,
+    digest,
+  });
   await catalog.openStream({
     namespace: "space",
     operationId: event.event.id,
@@ -65,6 +106,18 @@ Deno.test("engine admission waits for epoch invalidation and catalog recovery", 
       metadata: {},
     }, { namespace: "space" }),
   });
+  assertEquals(
+    await bodyStore.maintenance.delete({
+      bodyId: head.bodyId,
+      expectedState: "ready",
+      expectedVersionToken: head.versionToken,
+      expectedMaintenanceVersion: head.maintenanceVersion,
+      idleForMs: 0,
+    }),
+    true,
+  );
+  assertEquals(await bodyStore.head({ bodyId: head.bodyId }), null);
+  assertEquals((await content.read(identity.bodyId))?.terminal, terminal);
   owner.stop();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -109,6 +162,9 @@ Deno.test("engine admission waits for epoch invalidation and catalog recovery", 
       assertEquals(streams.length, 1);
       assertEquals(streams[0].availability, "purged");
       assertEquals(streams[0].state, "terminal");
+      assertEquals(streams[0].outcome, "completed");
+      assertEquals(streams[0].availabilityReason, "missing");
+      assertEquals((await content.read(identity.bodyId))?.terminal, terminal);
     } finally {
       await engine.shutdown();
     }

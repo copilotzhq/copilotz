@@ -35,6 +35,8 @@ export interface ReadViews {
   run<T>(operation: () => Promise<T>): Promise<T>;
   /** The current hop's view, or undefined outside a hop. */
   memo(): ReadMemo | undefined;
+  /** Capture this hop for its own queued command, without exposing its entries. */
+  capture(): <T>(operation: () => T | Promise<T>) => Promise<T>;
   /** This process changed the row; hops must read it again. */
   invalidate(key: string): void;
   /** This process changed rows it cannot enumerate; hops must read again. */
@@ -46,7 +48,7 @@ export function createReadViews(
 ): ReadViews {
   const ttlMs = options.ttlMs ?? READ_VIEW_TTL_MS;
   const now = options.now ?? (() => performance.now());
-  const storage = createAsyncContextStorage<View>();
+  const storage = createAsyncContextStorage<View | undefined>();
   const versions = new Map<string, number>();
   let floor = 0;
   let sequence = 0;
@@ -94,6 +96,10 @@ export function createReadViews(
   return {
     run: (operation) => storage.run(new Map(), operation),
     memo,
+    capture() {
+      const view = storage.getStore();
+      return (operation) => storage.run(view, operation);
+    },
     invalidate(key) {
       versions.set(key, ++sequence);
       if (versions.size > MAX_TRACKED_KEYS) invalidateAll();

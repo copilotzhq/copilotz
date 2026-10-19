@@ -95,7 +95,7 @@ export async function queryCollectionRows<Row extends Record<string, unknown>>(
   return values;
 }
 
-const budgets = createAsyncContextStorage<CollectionReadBudget>();
+const budgets = createAsyncContextStorage<CollectionReadBudget | undefined>();
 export function currentCollectionReadBudget() {
   return budgets.getStore();
 }
@@ -106,4 +106,12 @@ export function withCollectionReadBudget<T>(
     { maxRowBytes: 256 * 1024, maxResultBytes: 512 * 1024 },
     execute,
   );
+}
+
+/** Rebind this command's exact remaining allowance; never replenish on enqueue. */
+export function withCollectionReadBudgetBinding<T>(
+  budget: CollectionReadBudget | undefined,
+  execute: () => T | Promise<T>,
+): Promise<T> {
+  return budgets.run(budget, execute);
 }

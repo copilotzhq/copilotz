@@ -98,10 +98,12 @@ export function createEventCoordinator(
 
   const dispatch = async (
     result: CommitEventMutationResult<unknown>,
+    remotePreclaim = false,
   ): Promise<EventDispatchReport> => {
     const actionable = result.deliveries.filter((delivery) =>
       delivery.status === "pending" ||
-      (delivery.status === "leased" && !delivery.leaseExpiresAt)
+      (delivery.status === "leased" && (!delivery.leaseExpiresAt ||
+        (remotePreclaim && !result.deduplicated)))
     );
     // A processor may commit another event while occupying the only embedded
     // worker slot. Placement must not be awaited in that call stack: the
@@ -182,7 +184,9 @@ export function createEventCoordinator(
             }
           }
           try {
-            publication.resolve(await dispatch(result));
+            publication.resolve(
+              await dispatch(result, !!mutation.initialRemoteClaim),
+            );
           } catch (error) {
             publication.reject(error);
           }
@@ -195,6 +199,7 @@ export function createEventCoordinator(
       eventId: mutation.eventId,
       ingress: mutation.ingress,
       initialLocalClaim: mutation.initialLocalClaim,
+      initialRemoteClaim: mutation.initialRemoteClaim,
       body: mutation.body,
       statement: mutation.statement,
       mutate: mutation.mutate,

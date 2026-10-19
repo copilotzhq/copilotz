@@ -1,3 +1,4 @@
+import { remoteClaimSession, remoteSessionKey } from "./remote-admission.ts";
 import { ACTION_CONTINUATION_CONSUMER } from "../actions/continuation-work.ts";
 import type { EventDelivery } from "../events/index.ts";
 import { isNonRetryableError } from "../failure.ts";
@@ -134,12 +135,26 @@ export function createDeliveryWorkload(
         true,
       )
       : null;
-    const delivery = localClaim ?? await store.claimDelivery({
-      id: metadata.deliveryId,
-      owner: metadata.dispatchAttemptId,
-      leaseMs,
-      ...(options.localExecution ? { localExecution: true } : {}),
-    });
+    const remoteFence = remoteClaimSession(metadata.dispatchAttemptId);
+    if (
+      remoteFence && (!options.remoteSession ||
+        remoteSessionKey(remoteFence) !==
+          remoteSessionKey(options.remoteSession))
+    ) {
+      throw new Error("Delivery preclaim belongs to another worker session.");
+    }
+    const delivery = remoteFence
+      ? await store.readRemoteClaim(
+        metadata.deliveryId,
+        metadata.dispatchAttemptId,
+        true,
+      )
+      : localClaim ?? await store.claimDelivery({
+        id: metadata.deliveryId,
+        owner: metadata.dispatchAttemptId,
+        leaseMs,
+        ...(options.localExecution ? { localExecution: true } : {}),
+      });
     if (!delivery) {
       const current = await store.getDelivery(metadata.deliveryId);
       reportDeliveryDiagnostic(options.onDiagnostic, {
@@ -398,6 +413,7 @@ export type OwnerExecutionOptions = Readonly<{
   registry: import("../plugins/index.ts").PluginRegistry;
   /** Trusted owner placement; never supplied by a worker. */
   localExecution?: boolean;
+  remoteSession?: import("./remote-admission.ts").RemoteFence;
   trackAttempt?: import("./types.ts").DeliveryAttemptTracker;
   publish?: import("../engine/types.ts").RuntimeOutputPublisher;
   workerId: string;

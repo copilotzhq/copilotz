@@ -1,3 +1,4 @@
+import { remoteClaimSession } from "./remote-admission.ts";
 import { localDispatcher } from "./local.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
@@ -405,10 +406,22 @@ export function createDeliveryExecutor(
       if (!options.dispatcher) {
         resolvedEvents.set(`${delivery.databaseSchema}\0${delivery.id}`, event);
       }
-      const localClaim = !options.dispatcher && delivery.leaseOwner
-        ? await store.readLocalClaim(delivery.id, delivery.leaseOwner)
+      const remoteSession = options.dispatcher && delivery.leaseOwner
+        ? remoteClaimSession(delivery.leaseOwner)
+        : undefined;
+      // The remote workload consumes and verifies the durable preclaim before
+      // execution. Routing this immutable admission result needs no extra read.
+      const preclaim = delivery.leaseOwner
+        ? remoteSession
+          ? delivery.status === "leased" &&
+              Date.parse(delivery.leaseExpiresAt ?? "") > Date.now()
+            ? delivery
+            : null
+          : !options.dispatcher
+          ? await store.readLocalClaim(delivery.id, delivery.leaseOwner)
+          : null
         : null;
-      const attemptId = localClaim?.leaseOwner ?? createAttemptId();
+      const attemptId = preclaim?.leaseOwner ?? createAttemptId();
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
       }
@@ -448,7 +461,11 @@ export function createDeliveryExecutor(
       try {
         dispatched = await dispatcher.dispatch({
           workload,
-          ...(target ? { target } : {}),
+          ...(remoteSession && preclaim
+            ? { target: { workerId: remoteSession.identity.workerId } }
+            : target
+            ? { target }
+            : {}),
           metadata,
         });
       } catch (error) {

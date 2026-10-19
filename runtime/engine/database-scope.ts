@@ -1,3 +1,4 @@
+import { prepareRemoteAdmission } from "../execution/remote-admission.ts";
 import { admitInlineAction } from "../application/ingress/inline-action.ts";
 import { completeHostCollection } from "../application/ingress/inline-collection.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
@@ -376,11 +377,19 @@ export function createDatabaseScope(
         } as const,
       } as const;
       const eventId = crypto.randomUUID();
+      const remoteClaim = inlineAction && engine.execution?.dispatcher
+        ? prepareRemoteAdmission(
+          engine.execution.dispatcher,
+          engine.execution.workload ?? "copilotz.delivery.v1",
+          engine.execution.target?.workerId,
+        )
+        : undefined;
       const commit = (
         transaction?: import("../events/session.ts").SqlExecutor,
       ) =>
         coordinator.commitMutation({
           transaction,
+          ...(remoteClaim ? { initialRemoteClaim: remoteClaim } : {}),
           ...(inlineAction && !engine.execution?.dispatcher
             ? {
               initialLocalClaim: {
@@ -433,7 +442,7 @@ export function createDatabaseScope(
             }
           },
         });
-      if (inlineAction && !engine.execution?.dispatcher) {
+      if (inlineAction && (!engine.execution?.dispatcher || remoteClaim)) {
         return await admitInlineAction(
           {
             store,

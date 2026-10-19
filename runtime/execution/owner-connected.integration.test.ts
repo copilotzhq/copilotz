@@ -1086,7 +1086,7 @@ Deno.test("WebSocket lost append revokes an open writer and drains an uncertain 
   }
 });
 
-Deno.test("websocket: bound placement retired before Open leaves delivery unclaimed and preserves receipt recovery", async () => {
+Deno.test("websocket: bound placement retired before Open never executes its admission claim and preserves receipt recovery", async () => {
   const entered = Promise.withResolvers<void>(),
     release = Promise.withResolvers<void>(),
     retired = Promise.withResolvers<void>(),
@@ -1165,19 +1165,22 @@ Deno.test("websocket: bound placement retired before Open leaves delivery unclai
         "SELECT status,attempts,lease_owner FROM public.event_deliveries WHERE id=$1",
         [deliveryId],
       )).rows;
-    assertEquals(await state(), [{
-      status: "pending",
-      attempts: 0,
-      lease_owner: null,
-    }]);
+    const admitted = await state();
+    assertEquals(admitted[0].status, "leased");
+    assertEquals(admitted[0].attempts, 1);
+    assertEquals(
+      admitted[0].lease_owner,
+      binding!.parent!.metadata.dispatchAttemptId,
+    );
     assertEquals(executions, 1);
     release.resolve();
     await Promise.race([retired.promise, deadline]);
-    assertEquals(await state(), [{
-      status: "pending",
-      attempts: 0,
-      lease_owner: null,
-    }]);
+    // Admission owns the attempt now. A failed transport placement releases it
+    // through ordinary retry bookkeeping without executing any worker code.
+    const failed = await state();
+    assertEquals(failed[0].attempts, 1);
+    assertEquals(executions, 1);
+    assert(["leased", "retry_wait"].includes(String(failed[0].status)));
     assertEquals(
       (await f.database.query(
         "SELECT * FROM public.owner_receipts WHERE kind='collections.commit' ORDER BY key",

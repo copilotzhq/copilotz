@@ -964,6 +964,7 @@ export function createOwnerCapabilityHost(
           registry: rehost(active),
           workerId: binding.fence.identity.workerId,
           localExecution: options.localExecution,
+          remoteSession: options.localExecution ? undefined : binding.fence,
           trackAttempt: options.localExecution ? undefined : (attempt) => {
             if (active.attempt) {
               throw capabilityError("owner_assignment_started");

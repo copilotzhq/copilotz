@@ -135,6 +135,15 @@ export type CommitEventMutationOptions<T> = {
   ingress?: OwnerIngressProof;
   /** Owner-local admission can claim its own delivery before publishing it. */
   initialLocalClaim?: Readonly<{ consumerId: string; owner: string }>;
+  /** Trusted remote admission, bound to an accepted worker session. */
+  initialRemoteClaim?: Readonly<
+    {
+      consumerId: string;
+      owner: string;
+      leaseMs: number;
+      assertCurrent(): void;
+    }
+  >;
   draft: DurableEventDraft;
   /** Stable runtime-owned root event identity. */
   eventId?: string;
@@ -300,6 +309,11 @@ export type EventStore = {
     attempts: readonly DeliveryAttemptHeartbeat[],
     accept?: (attempt: DeliveryAttemptHeartbeat, epoch: number) => boolean,
   ): Promise<readonly Pick<DeliveryAttemptHeartbeat, "id" | "owner">[]>;
+  readRemoteClaim(
+    id: string,
+    owner: string,
+    consume?: boolean,
+  ): Promise<EventDelivery | null>;
   readLocalClaim(
     id: string,
     owner: string,
@@ -646,8 +660,8 @@ export function createEventStore(
   const tables = createCoreTableNames(databaseSchema);
   const acquireOwner = bindSchemaOwner(session, databaseSchema);
   const localInstance = crypto.randomUUID();
-  const unstartedLocalClaims = new Set<string>();
-  let observingLocalClaims = false;
+  const unstartedClaims = new Map<string, string>();
+  let observingClaims = false;
   const command = createSchemaCommandRunner(
     session,
     databaseSchema,
@@ -659,6 +673,9 @@ export function createEventStore(
   ) => {
     if (!ids.length) return;
     invalidateOwnerAlarm(transaction, databaseSchema);
+    afterSqlCommit(transaction, () => {
+      for (const id of ids) unstartedClaims.delete(id);
+    });
     await transaction.query(
       `WITH due AS (
         SELECT d.id,e.namespace,
@@ -753,6 +770,8 @@ export function createEventStore(
       1,
     );
     const normalized = { ...mutation, draft };
+    const initialClaim = mutation.initialLocalClaim ??
+      mutation.initialRemoteClaim;
 
     const body = mutation.body
       ? { id: mutation.body.id, ...await encodeEventBody(mutation.body.json) }
@@ -764,14 +783,13 @@ export function createEventStore(
     let insertedSelectionKeys: string[] | undefined;
     const insertEvent = async (executor: SqlExecutor) => {
       const { commandTime } = schemaCommandContext(executor, databaseSchema);
-      const authority = mutation.initialLocalClaim
-        ? await acquireOwner()
-        : undefined;
-      const localClaimOwner = authority
+      const authority = initialClaim ? await acquireOwner() : undefined;
+      const initialClaimOwner = authority
         ? `${authority.holderId}:${authority.epoch}:${localInstance}:${
-          mutation.initialLocalClaim!.owner
+          initialClaim!.owner
         }`
         : null;
+      mutation.initialRemoteClaim?.assertCurrent();
       const params: unknown[] = [];
       const param = (value: unknown) => `$${params.push(value)}`;
       const commandTimeSql = `${param(commandTime)}::timestamptz`;
@@ -859,21 +877,25 @@ export function createEventStore(
         `inserted_deliveries AS (
            INSERT INTO ${tables.event_deliveries} (
              id, event_id, consumer_id, settlement_scope_id, action_scope_id,
-             status, attempts, max_attempts, owner_epoch, lease_owner,
+             status, attempts, max_attempts, owner_epoch, lease_owner, lease_expires_at,
              available_at, created_at, updated_at, settled_at
            )
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
                   delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' WHEN delivery.consumer_id=${
-          param(mutation.initialLocalClaim?.consumerId ?? null)
+          param(initialClaim?.consumerId ?? null)
         } THEN 'leased' ELSE 'pending' END, CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
-          param(mutation.initialLocalClaim?.consumerId ?? null)
+          param(initialClaim?.consumerId ?? null)
         } THEN 1 ELSE 0 END, ${
           param(maxAttempts)
         }, (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'), CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
-          param(mutation.initialLocalClaim?.consumerId ?? null)
+          param(initialClaim?.consumerId ?? null)
         } THEN ${
-          param(localClaimOwner)
-        } ELSE NULL END, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
+          param(initialClaimOwner)
+        } ELSE NULL END, CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
+          param(mutation.initialRemoteClaim?.consumerId ?? null)
+        } THEN ${commandTimeSql} + ${
+          param(mutation.initialRemoteClaim?.leaseMs ?? 0)
+        } * INTERVAL '1 millisecond' ELSE NULL END, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
              ${param(deliveryRows.map((row) => row.consumerId))}::text[],
@@ -885,9 +907,11 @@ export function createEventStore(
       ];
       ctes.push(`inserted_delivery_deadlines AS (
         INSERT INTO ${tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
-        SELECT 'schema','deliveries',id,${param(draft.namespace)},available_at,
+        SELECT 'schema','deliveries',id,${
+        param(draft.namespace)
+      },COALESCE(lease_expires_at,available_at),
           jsonb_build_object('deliveryId',id)
-        FROM inserted_deliveries WHERE status='pending' AND attempts<max_attempts
+        FROM inserted_deliveries WHERE (status='pending' AND attempts<max_attempts) OR (status='leased' AND lease_expires_at IS NOT NULL)
       )`);
       if (body) {
         ctes.push(`inserted_body AS (
@@ -1075,25 +1099,26 @@ export function createEventStore(
       if (
         !result.deduplicated &&
         result.deliveries.some((delivery) =>
-          delivery.status === "pending" &&
-          delivery.attempts < delivery.maxAttempts
+          (delivery.status === "pending" &&
+            delivery.attempts < delivery.maxAttempts) ||
+          (delivery.status === "leased" && !!delivery.leaseExpiresAt)
         )
       ) {
         invalidateOwnerAlarm(transaction, databaseSchema);
       }
-      if (!result.deduplicated && mutation.initialLocalClaim) {
+      if (!result.deduplicated && initialClaim) {
         const authority = await acquireOwner();
         for (const delivery of result.deliveries) {
           if (delivery.status !== "leased" || !delivery.leaseOwner) continue;
           const attempt = delivery.leaseOwner;
           afterSqlCommit(transaction, () => {
             if (authority.signal.aborted) return;
-            unstartedLocalClaims.add(attempt);
-            if (!observingLocalClaims) {
-              observingLocalClaims = true;
+            unstartedClaims.set(delivery.id, attempt);
+            if (!observingClaims) {
+              observingClaims = true;
               authority.signal.addEventListener(
                 "abort",
-                () => unstartedLocalClaims.clear(),
+                () => unstartedClaims.clear(),
                 { once: true },
               );
             }
@@ -1182,6 +1207,38 @@ export function createEventStore(
       `SELECT * FROM ${tables.event_deliveries} WHERE id = $1 LIMIT 1`,
       [id],
     );
+    return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
+  };
+
+  const readAdmissionClaim = async (
+    id: string,
+    owner: string,
+    remote: boolean,
+    consume: boolean,
+  ): Promise<EventDelivery | null> => {
+    if (owner.includes(":remote:") !== remote) return null;
+    const authority = await acquireOwner();
+    authority.signal.throwIfAborted();
+    if (
+      !owner.startsWith(
+        `${authority.holderId}:${authority.epoch}:${localInstance}:`,
+      )
+    ) return null;
+    // Only the admitting store can consume a committed preclaim, once. Reserve
+    // synchronously before the read so concurrent dispatches cannot start twice.
+    if (consume) {
+      if (unstartedClaims.get(id) !== owner) return null;
+      unstartedClaims.delete(id);
+    }
+    const result = await session.query<DeliveryRow>(
+      `SELECT * FROM ${tables.event_deliveries} WHERE id=$1 AND status='leased' AND lease_owner=$2 AND ${
+        remote
+          ? "lease_expires_at > clock_timestamp()"
+          : "lease_expires_at IS NULL"
+      } AND owner_epoch=$3 AND EXISTS (SELECT 1 FROM ${tables.owner_epochs} WHERE owner='schema' AND epoch=$3 AND holder=$4)`,
+      [id, owner, authority.epoch, authority.holderId],
+    );
+    authority.signal.throwIfAborted();
     return result.rows[0] ? mapDelivery(result.rows[0], databaseSchema) : null;
   };
 
@@ -1540,26 +1597,10 @@ export function createEventStore(
       );
       return result.rows;
     },
-    async readLocalClaim(id, owner, consume = false) {
-      const authority = await acquireOwner();
-      authority.signal.throwIfAborted();
-      if (
-        !owner.startsWith(
-          `${authority.holderId}:${authority.epoch}:${localInstance}:`,
-        )
-      ) return null;
-      // Only the admitting store can consume this committed preclaim, once.
-      // Reserve synchronously before the read so concurrent dispatches cannot start it twice.
-      if (consume && !unstartedLocalClaims.delete(owner)) return null;
-      const result = await session.query<DeliveryRow>(
-        `SELECT * FROM ${tables.event_deliveries} WHERE id=$1 AND status='leased' AND lease_owner=$2 AND lease_expires_at IS NULL AND owner_epoch=$3 AND EXISTS (SELECT 1 FROM ${tables.owner_epochs} WHERE owner='schema' AND epoch=$3 AND holder=$4)`,
-        [id, owner, authority.epoch, authority.holderId],
-      );
-      authority.signal.throwIfAborted();
-      return result.rows[0]
-        ? mapDelivery(result.rows[0], databaseSchema)
-        : null;
-    },
+    readRemoteClaim: (id, owner, consume = false) =>
+      readAdmissionClaim(id, owner, true, consume),
+    readLocalClaim: (id, owner, consume = false) =>
+      readAdmissionClaim(id, owner, false, consume),
     succeedDelivery(id, owner, transaction) {
       return settleDelivery(id, "succeeded", owner, transaction);
     },

@@ -1,3 +1,7 @@
+import type { CollectionProjectionRegistrations } from "./projection-registration.ts";
+import { withOwnerReadQueryContext } from "../engine/owner-query-context.ts";
+import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
+import { snapshotViewData } from "../views/renderer.ts";
 import {
   collectionRuntimeCommitPending,
   registerCollectionRuntimeSource,
@@ -21,7 +25,10 @@ import {
 } from "./policy-invocation.ts";
 import type { CollectionPolicyRegistrations } from "./policy-registration.ts";
 import type { CollectionPolicyIntent } from "./policy-types.ts";
-import { withCollectionReadBudget } from "./read-budget.ts";
+import {
+  queryCollectionRows,
+  withCollectionReadBudget,
+} from "./read-budget.ts";
 import {
   type OwnerCommandAuthorization,
   withOwnerCommandAuthorization,
@@ -130,6 +137,7 @@ import {
 export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
   policies?: CollectionPolicyRegistrations;
+  projections?: CollectionProjectionRegistrations;
   session: SqlSession;
   eventStore: EventStore;
   assets?: CollectionAssetAdopter;
@@ -2855,7 +2863,15 @@ export function createCollectionKernel(
           scope: CollectionScope = { namespace },
           readOptions?: Pick<ScopedCollectionReadOptions, "signal">,
         ) => {
-          input = structuredClone(input);
+          input = spec.ownerProjection
+            ? captureHostCommandJson(
+              JSON.parse(JSON.stringify(snapshotViewData(input, {
+                maxDepth: 16,
+                maxNodes: 512,
+                maxBytes: 16384,
+              }))),
+            ) as Record<string, unknown>
+            : structuredClone(input);
           return await readPolicy(name, namespace, "query", {
             name: queryName,
             input,
@@ -2870,7 +2886,65 @@ export function createCollectionKernel(
               );
             }
             let output: readonly TSelect[];
-            if (spec.select) {
+            if (spec.ownerProjection) {
+              const authority = captureCollectionInvocation();
+              const snapshot = activeSnapshot();
+              const projection = options.projections?.get(name)?.get(queryName);
+              if (
+                !authority || authority.invocation.kind !== "viewer" ||
+                !projection || !snapshot || snapshot.state !== "open"
+              ) {
+                collectionPolicyRefused();
+              }
+              authority.check();
+              const viewer = captureHostCommandJson(
+                authority.invocation,
+              ) as typeof authority.invocation;
+              const value = await withOwnerAuthorizationPhase(() =>
+                withOwnerReadQueryContext(
+                  (context) =>
+                    projection.select(
+                      captureHostCommandJson(queryInput) as Readonly<
+                        Record<string, unknown>
+                      >,
+                      context,
+                    ),
+                  {
+                    transaction: {
+                      async query<Row extends Record<string, unknown>>(
+                        sql: string,
+                        params?: unknown[],
+                      ) {
+                        const rows = await queryCollectionRows<Row>(
+                          snapshot.executor,
+                          sql,
+                          params ?? [],
+                        );
+                        return { rows: [...rows], rowCount: rows.length };
+                      },
+                    },
+                    commandTime: snapshot.commandTime,
+                  },
+                  authority.signal,
+                  () => ({
+                    scope: Object.freeze({ ...authority.scope }),
+                    viewer,
+                  }),
+                )
+              );
+              authority.check();
+              output = captureHostCommandJson(
+                JSON.parse(JSON.stringify(snapshotViewData(value, {
+                  maxBytes: 1024 * 1024,
+                  maxNodes: 40000,
+                }))),
+              ) as readonly TSelect[];
+              if (!Array.isArray(output)) {
+                throw new TypeError(
+                  "Owner projection must return a record array.",
+                );
+              }
+            } else if (spec.select) {
               const target = (name: string) => {
                 const collection = operations.get(name);
                 if (!collection) {
@@ -4172,7 +4246,7 @@ export function createCollectionKernel(
           return await execute(
             withSnapshotControl(
               { collections } as const,
-              options.session.withReadSnapshot ? control : undefined,
+              control,
             ),
           );
         } finally {

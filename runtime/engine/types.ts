@@ -111,10 +111,11 @@ export type EffectNoStartVerifier = (
   options: Readonly<{ signal: AbortSignal }>,
 ) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
-  /** Owner-only named source/View preparation and current original-reference policy. */
-  preparations?: import("../actions/preparation.ts").ActionPreparations;
   collectionPolicies?:
     import("../collections/policy-types.ts").CollectionPolicies;
+  /** Owner-only read projections for explicitly declared named queries. */
+  collectionProjections?:
+    import("../collections/projection-types.ts").CollectionProjections;
   protectedActions?:
     import("../actions/protected-action-types.ts").ProtectedActionDefinitions;
   verifyEffectNotStarted?: EffectNoStartVerifier;
@@ -382,9 +383,8 @@ export type CreateProcessorContextOptions = Readonly<{
     import("../actions/invoker.ts").CreateActionCallersOptions[
       "createEffectClient"
     ];
-  namedPreparations?: import("../actions/preparation.ts").NamedPreparationHooks;
   authorizeAction?:
-    import("../actions/preparation.ts").NamedPreparationHooks["authorize"];
+    import("../actions/invoker.ts").CreateActionCallersOptions["authorize"];
   refuseActionAuthorization?:
     import("../actions/invoker.ts").CreateActionCallersOptions[
       "refuseAuthorization"

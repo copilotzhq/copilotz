@@ -1,8 +1,4 @@
 import type {
-  ActionNamedPreparation,
-  ActionPrepareNamedOptions,
-} from "../execution/preparation-call.ts";
-import type {
   ActionContinuation,
   AwaitingAction,
   AwaitOperationInput,
@@ -76,10 +72,6 @@ export type RuntimeActionCallers = Readonly<
     string,
     & ((input: unknown, options?: ActionCallOptions) => Promise<unknown>)
     & Readonly<{
-      prepareNamed(
-        request: ActionNamedPreparation,
-        options: ActionPrepareNamedOptions,
-      ): Promise<unknown>;
       prepare(
         factory: ActionPrepareFactory,
         options: ActionPrepareOptions,
@@ -413,10 +405,6 @@ export type BoundActionCaller<A extends AnyActionDefinition> =
      * Captures dynamic input and metadata once under `operationKey`. Existing
      * Action receipts are restored before the factory is evaluated.
      */
-    prepareNamed(
-      request: ActionNamedPreparation,
-      options: ActionPrepareNamedOptions,
-    ): Promise<ActionOutput<A>>;
     prepare(
       factory: ActionPrepareFactory<ActionInput<A>>,
       options: ActionPrepareOptions,

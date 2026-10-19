@@ -10,12 +10,6 @@ import {
 } from "../engine/authorization-refusal.ts";
 import { callerDefinition, recordActionCaller } from "./caller-identity.ts";
 import { withOwnerCommandAuthorization } from "../engine/command-authorization.ts";
-import {
-  type ActionNamedPreparation,
-  type ActionPrepareNamedOptions,
-  normalizeActionNamedPreparation,
-} from "../execution/preparation-call.ts";
-import type { NamedPreparationHooks } from "./preparation.ts";
 import { authorizeActionCapabilities } from "./capability-authorization.ts";
 import { createActionEffectController } from "./effects.ts";
 import {
@@ -127,8 +121,12 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
-  namedPreparations?: NamedPreparationHooks;
-  authorize?: NamedPreparationHooks["authorize"];
+  /** Current owner policy for input, mutations and result disclosure. */
+  authorize?(
+    frame: ActionInvocationFrame,
+    purpose: "input" | "mutation" | "result",
+    transaction?: import("../events/session.ts").SqlExecutor,
+  ): Promise<void>;
   /** Private owner-only cleanup; never accepts worker error/status/output. */
   refuseAuthorization?(
     frame: ActionInvocationFrame,
@@ -299,18 +297,11 @@ function createFrame(
   parent: ActionInvocationFrame | undefined,
   invoker: CreateActionCallersOptions,
   prepared = false,
-  named = false,
 ): ActionInvocationFrame {
   const resumption =
     !parent && invoker.resumption?.receipt.actionId === action.id
       ? invoker.resumption
       : undefined;
-  if (
-    !named && !resumption && options.metadata &&
-    Object.keys(options.metadata).some((key) =>
-      key.startsWith("__copilotzPreparation")
-    )
-  ) throw new TypeError("Named preparation metadata is owner-reserved.");
   const metadata = durableActionMetadata(
     resumption?.receipt.metadata ?? options.metadata ?? {},
   );
@@ -481,7 +472,7 @@ function actionCaller(
   invoker: CreateActionCallersOptions,
   parent?: ActionInvocationFrame,
 ): BoundActionCaller<AnyActionDefinition> {
-  const authorize = invoker.authorize ?? invoker.namedPreparations?.authorize;
+  const authorize = invoker.authorize;
   type Invocation = {
     frame: ActionInvocationFrame;
     refusal?: unknown;
@@ -492,7 +483,6 @@ function actionCaller(
     options: ActionCallOptions = {},
     captureRace = false,
     prepared = false,
-    namedPrepared = false,
     invocation: Invocation,
   ): Promise<unknown> => {
     const frame = invocation.frame;
@@ -508,14 +498,7 @@ function actionCaller(
           )) as ActionLifecycleEmitter["emit"],
       }
       : invoker.actionLifecycle;
-    const preparation = namedPrepared
-      ? undefined
-      : invoker.prepareInput?.(frame, input);
-    const ownerPrepared = namedPrepared
-      ? { input, claimed: false }
-      : preparation
-      ? await preparation
-      : undefined;
+    const ownerPrepared = await invoker.prepareInput?.(frame, input);
     if (ownerPrepared) input = ownerPrepared.input;
     await authorize?.(frame, "input");
 
@@ -978,7 +961,6 @@ function actionCaller(
     options: ActionCallOptions = {},
     captureRace = false,
     prepared = false,
-    namedPrepared = false,
   ): Promise<unknown> => {
     const cancellation = new AbortController();
     const frame = createFrame(
@@ -993,7 +975,6 @@ function actionCaller(
       parent,
       invoker,
       prepared,
-      namedPrepared,
     );
     const invocation: Invocation = {
       frame,
@@ -1010,7 +991,6 @@ function actionCaller(
         options,
         captureRace,
         prepared,
-        namedPrepared,
         invocation,
       );
     } catch (caught) {
@@ -1035,37 +1015,6 @@ function actionCaller(
     }
     return invoke(args[0], args[1]);
   }, {
-    async prepareNamed(
-      request: ActionNamedPreparation,
-      options: ActionPrepareNamedOptions,
-    ): Promise<unknown> {
-      const normalized = normalizeActionNamedPreparation(request, options);
-      if (!invoker.namedPreparations) {
-        throw new TypeError("Named Action preparation is unavailable.");
-      }
-      const callOptions = {
-        operationKey: `prepare:${normalized.operationKey}`,
-        ...(normalized.signal ? { signal: normalized.signal } : {}),
-      };
-      const frame = createFrame(action, callOptions, parent, invoker, true);
-      const prepared = await invoker.namedPreparations.prepare(
-        frame,
-        normalized.request,
-        normalized.operationKey,
-      );
-      const result = await invoke(
-        prepared.input,
-        { ...callOptions, metadata: prepared.metadata },
-        false,
-        true,
-        true,
-      );
-      await invoker.namedPreparations.authorize({
-        ...frame,
-        metadata: prepared.metadata,
-      }, "result");
-      return result;
-    },
     async prepare(
       factory: ActionPrepareFactory<unknown>,
       options: ActionPrepareOptions,

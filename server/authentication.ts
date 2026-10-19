@@ -1,3 +1,4 @@
+import { withAuthenticatedViewer } from "./viewer-authority.ts";
 import { withTrustedCollectionPolicyRead } from "../runtime/collections/policy-invocation.ts";
 import {
   authenticatedServerIngressProof,
@@ -164,7 +165,7 @@ export async function authenticateHttpRequest(
     match.endpoint,
     facade.maxAssetUploadBytes,
   );
-  return withFacadeIngress(
+  const result = withFacadeIngress(
     {
       ...(scope.context ?? {}),
       serverScope: scope,
@@ -195,4 +196,7 @@ export async function authenticateHttpRequest(
         : undefined
       : undefined,
   );
+  return facade.authenticate && facade.authorize && authenticated && authorized
+    ? withAuthenticatedViewer(result)
+    : result;
 }

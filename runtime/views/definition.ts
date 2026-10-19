@@ -19,11 +19,15 @@ export type ViewCollections = Readonly<
     Readonly<{
       get(input: unknown): Promise<ViewRead>;
       list(input: unknown): Promise<ViewRead>;
+      query?(
+        name: string,
+        input: Readonly<Record<string, unknown>>,
+      ): Promise<ViewRead>;
     }>
   >
 >;
 export type ViewActions = Readonly<Record<string, (input: unknown) => unknown>>;
-export interface ViewContext {
+export interface ViewContext<Shown = string> {
   readonly collections: ViewCollections;
   readonly actions: ViewActions;
   readonly resources: Readonly<
@@ -32,17 +36,25 @@ export interface ViewContext {
   readonly scope: unknown;
   readonly signal: AbortSignal;
   readonly hints: Readonly<{ mode: string; renderer: string }>;
-  show(reference: ViewReference, hints?: ViewHints): Promise<string>;
+  show(reference: ViewReference, hints?: ViewHints): Promise<Shown>;
 }
-export interface ViewDefinition<T = unknown, R = unknown> {
+export interface ViewDefinition<
+  T = unknown,
+  R = unknown,
+  Context extends ViewContext<unknown> = ViewContext,
+> {
   readonly id: string;
   readonly shows: ViewShows;
   readonly renderer: string;
   readonly modes: readonly string[];
-  render(item: T, context: ViewContext): R | Promise<R>;
+  render(item: T, context: Context): R | Promise<R>;
 }
 // Method bivariance retains concrete item/result inference in heterogeneous maps.
-export type AnyViewDefinition = ViewDefinition<never, unknown>;
+export type AnyViewDefinition = ViewDefinition<
+  never,
+  unknown,
+  ViewContext<unknown>
+>;
 export type ViewMap = Readonly<Record<string, AnyViewDefinition>>;
 const keys = new Set(["id", "shows", "renderer", "modes", "render"]);
 export function viewText(value: unknown, label: string): string {
@@ -101,9 +113,13 @@ export function isViewDefinition(value: unknown): value is AnyViewDefinition {
     return false;
   }
 }
-export function defineView<T = unknown, R = unknown>(
-  definition: ViewDefinition<T, R>,
-): ViewDefinition<T, R> {
+export function defineView<
+  T = unknown,
+  R = unknown,
+  Context extends ViewContext<unknown> = ViewContext,
+>(
+  definition: ViewDefinition<T, R, Context>,
+): ViewDefinition<T, R, Context> {
   if (!isViewDefinition(definition)) {
     throw new TypeError("Invalid View definition.");
   }

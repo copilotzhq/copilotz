@@ -157,6 +157,10 @@ export function compileServerRoutes(
     const schema = cloneSchema(collection.schema);
     add("GET", "list", "", undefined, schema);
     add("GET", "get", "/:id", undefined, schema);
+    // A long-lived disclosure requires explicit exposure, even on read-only facades.
+    if (collection.ownerPolicy === "required") {
+      add("POST", "observe", "/observe", undefined, undefined, undefined, true);
+    }
     for (const [name, query] of Object.entries(collection.queries ?? {})) {
       const queryOutput = cloneSchema(query.outputSchema) ??
         (schema ? ({ type: "array", items: schema }) : undefined);

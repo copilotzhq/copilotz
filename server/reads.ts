@@ -1,6 +1,9 @@
 /** Scoped, bounded read capabilities; policy predicates reach SQL before pagination. */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
+import type { SnapshotCollections } from "../runtime/collections/kernel.ts";
+import type { FacadeContext } from "./context.ts";
+import { withServerViewerRead } from "./viewer-authority.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
 import { observationReadPolicy, watchReadAccess } from "./read-watch.ts";
 import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
@@ -34,12 +37,15 @@ export async function createHttpReads(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
   constraints: ServerConstraints = {},
+  host: Readonly<
+    { viewer?: FacadeContext; collections?: SnapshotCollections }
+  > = {},
 ): Promise<HttpReadServices> {
   const runtime = scope.databaseSchema &&
       scope.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(scope.databaseSchema)
     : application;
-  const collections = runtime.collections.withScope({
+  const collections = host.collections ?? runtime.collections.withScope({
     namespace: scope.namespace ?? application.config.namespace!,
   });
   const definition = (name: string) => {
@@ -85,29 +91,65 @@ export async function createHttpReads(
           code: "invalid_query",
         });
       }
-      return await collection.list(
-        {
-          ...query,
-          limit: query.limit ?? 100,
-          all: [...(query.all ?? []), ...(policy ? [policy] : [])],
-        } as CollectionQuery,
-        options,
-      );
+      return await withServerViewerRead(host.viewer, () =>
+        collection.list(
+          {
+            ...query,
+            limit: query.limit ?? 100,
+            all: [...(query.all ?? []), ...(policy ? [policy] : [])],
+          } as CollectionQuery,
+          options,
+        ));
     },
     async aggregate(name, query, options) {
       const { collection, policy } = definition(name);
-      return await collection.aggregate({
-        ...query,
-        all: [...(query.all ?? []), ...(policy ? [policy] : [])],
-      }, options);
+      return await withServerViewerRead(
+        host.viewer,
+        () =>
+          collection.aggregate({
+            ...query,
+            all: [...(query.all ?? []), ...(policy ? [policy] : [])],
+          }, options),
+      );
     },
     async query(name, queryName, input) {
-      const spec = definition(name).schema.queries?.[queryName];
+      const selected = definition(name);
+      const spec = selected.schema.queries?.[queryName];
       if (!spec) {
         throw Object.assign(new Error("Query was not found."), {
           status: 404,
           code: "query_not_found",
         });
+      }
+      if (spec.ownerProjection) {
+        // These callbacks receive query-only authority solely inside the
+        // existing repeatable READ ONLY snapshot, never an owner write command.
+        if (!host.collections) {
+          return await withServerViewerRead(
+            host.viewer,
+            () =>
+              runtime.collections.readSnapshot(
+                { namespace: scope.namespace ?? application.config.namespace! },
+                async (snapshot) =>
+                  (await createHttpReads(application, scope, constraints, {
+                    viewer: host.viewer,
+                    collections: snapshot.collections,
+                  })).query(name, queryName, input),
+              ),
+          );
+        }
+        if (selected.policy && Object.keys(selected.policy).length) {
+          throw Object.assign(
+            new Error(
+              "Owner projections require their explicit query policy; generic row filters cannot authorize projected objects.",
+            ),
+            { status: 403, code: "forbidden" },
+          );
+        }
+        return await withServerViewerRead(
+          host.viewer,
+          () => selected.collection.queries[queryName](input),
+        );
       }
       if (spec.inputSchema) {
         try {
@@ -155,13 +197,17 @@ export async function createHttpReads(
       policy: predicate,
       failed,
       async query(ids) {
-        const rows = await collection.aggregate({
-          filter: { field: "id", in: ids },
-          all: predicate ? [predicate] : [],
-          groupBy: ["id"],
-          metrics: { count: { op: "count" } },
-          limit: ids.length,
-        });
+        const rows = await withServerViewerRead(
+          host.viewer,
+          () =>
+            collection.aggregate({
+              filter: { field: "id", in: ids },
+              all: predicate ? [predicate] : [],
+              groupBy: ["id"],
+              metrics: { count: { op: "count" } },
+              limit: ids.length,
+            }),
+        );
         return new Set(rows.map((row) => String(row.id)));
       },
     });

@@ -1,13 +1,9 @@
+import { validateCollectionProjections } from "../collections/projection-registration.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/policy-receipt.ts";
 import { resolveProtectedActionSource } from "../actions/protected-action-source.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
 import { settleActionAuthorizationRefusal } from "../actions/authorization-refusal.ts";
-import { validateNamedPreparationHistory } from "../actions/preparation-history.ts";
-import {
-  compileActionPreparations,
-  createNamedPreparations,
-} from "../actions/preparation.ts";
 import { createProtectedActions } from "../actions/protected-actions.ts";
 import { validateProtectedActions } from "../actions/protected-action-policy.ts";
 import { createOwnerEffectClient } from "../actions/effect-commands.ts";
@@ -125,10 +121,11 @@ export async function createCopilotzEngine(
     beforeRecovery?(engine: CopilotzEngine): void | Promise<void>;
   }> = {},
 ): Promise<CopilotzEngine> {
-  const compiledPreparations = options.preparations
-    ? compileActionPreparations(options.registry, options.preparations)
-    : undefined;
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
+  const collectionProjectionRegistrations = validateCollectionProjections(
+    options.collectionProjections,
+    options.registry.collections,
+  );
   const collectionPolicyRegistrations = validateCollectionPolicies(
     options.collectionPolicies,
     options.registry.collections,
@@ -169,17 +166,6 @@ export async function createCopilotzEngine(
     } else {
       await provisionOperationCatalog(options.session, databaseSchema);
     }
-    await createSchemaCommandRunner(options.session, databaseSchema)(
-      "actions.validatePreparationHistory",
-      {},
-      async (_input, command) =>
-        await validateNamedPreparationHistory(
-          command.transaction,
-          databaseSchema,
-          options.registry,
-          compiledPreparations,
-        ),
-    );
     const definitions = Object.values(options.registry.collections);
     if (options.provisionDefaultDatabaseSchema === false) {
       await validateCollectionIndexes(
@@ -390,62 +376,6 @@ export async function createCopilotzEngine(
             : {}),
         },
       });
-      const namedPreparations = compiledPreparations && base.event.durable
-        ? createNamedPreparations({
-          compiled: compiledPreparations,
-          operationCatalog: scopedOperationCatalog,
-          collectionPolicies: validateCollectionPolicies(
-            options.collectionPolicies,
-            (execution?.registry ?? options.registry).collections,
-          ),
-          prepareProtectedInput: protectedActions.prepareInput,
-          authorizeProtected: (frame, transaction) =>
-            protectedActions.output(frame).authorize?.(transaction) ??
-              Promise.resolve(),
-          registry: execution?.registry ?? options.registry,
-          store: scopedStore,
-          coordinator: scopedCoordinator,
-          namespace: base.event.namespace,
-          source: {
-            eventId: base.event.id,
-            ...(base.settlementScopeId
-              ? { operationId: base.settlementScopeId }
-              : {}),
-          },
-          content: scopedResolver,
-          inputContent: {
-            getMany: (ids) =>
-              scopedCapabilities.assets.getMany(base.event.namespace, ids),
-            resolveMany: (refs) =>
-              scopedResolver.getMany(refs, {
-                namespace: base.event.namespace,
-                signal: base.signal,
-              }),
-            authorize: (ref) =>
-              scopedResolver.authorize(ref, {
-                namespace: base.event.namespace,
-                signal: base.signal,
-              }),
-          },
-          signal: base.signal,
-          protectedValues: scopedCapabilities.protectedValues,
-          ...(base.source?.kind === "delivery" && base.executionIncarnationId
-            ? {
-              writer: {
-                kind: "delivery" as const,
-                deliveryId: base.source.id,
-                leaseOwner: base.executionIncarnationId,
-              },
-            }
-            : {}),
-          lifecycleMetadata: {
-            sourceEventId: base.event.id,
-            ...(base.source?.kind === "delivery"
-              ? { sourceDeliveryId: base.source.id }
-              : {}),
-          },
-        })
-        : undefined;
       return createProcessorContext({
         collectionInvocation: {
           owner: {
@@ -500,21 +430,21 @@ export async function createCopilotzEngine(
             runId: base.executionIncarnationId ?? base.idempotencyKey,
           },
         },
-        namedPreparations,
-        authorizeAction: namedPreparations?.authorize ??
-          (async (frame, _purpose, transaction) => {
-            const authorize = protectedActions.output(frame).authorize;
-            if (!authorize) return;
-            if (transaction) await authorize(transaction);
-            else {await createSchemaCommandRunner(
-                scopedStore.session,
-                scopedStore.databaseSchema,
-              )(
-                "actions.authorizeInput",
-                { actionRunId: frame.actionRunId },
-                async (_input, command) => await authorize(command.transaction),
-              );}
-          }),
+        authorizeAction: async (frame, _purpose, transaction) => {
+          const authorize = protectedActions.output(frame).authorize;
+          if (!authorize) return;
+          if (transaction) await authorize(transaction);
+          else {
+            await createSchemaCommandRunner(
+              scopedStore.session,
+              scopedStore.databaseSchema,
+            )(
+              "actions.authorizeInput",
+              { actionRunId: frame.actionRunId },
+              async (_input, command) => await authorize(command.transaction),
+            );
+          }
+        },
         prepareActionInput: protectedActions.prepareInput,
         refuseActionAuthorization: base.event.durable
           ? (frame) =>
@@ -1086,6 +1016,7 @@ export async function createCopilotzEngine(
         databaseSchema,
         store,
         engine: engineOptions,
+        collectionProjections: collectionProjectionRegistrations,
         registry: options.registry,
         executor,
         preparer,
@@ -1127,17 +1058,6 @@ export async function createCopilotzEngine(
               { now: options.now, alarmScheduler: options.alarmScheduler },
             );
             construction.ownerAcquired?.(normalized, scopedOwner);
-            await createSchemaCommandRunner(options.session, normalized)(
-              "actions.validatePreparationHistory",
-              {},
-              async (_input, command) =>
-                await validateNamedPreparationHistory(
-                  command.transaction,
-                  normalized,
-                  options.registry,
-                  compiledPreparations,
-                ),
-            );
             const scopedOperationCatalog = createOperationCatalog(
               options.session,
               normalized,
@@ -1178,6 +1098,7 @@ export async function createCopilotzEngine(
               owner: scopedOwner,
               databaseSchema: normalized,
               engine: engineOptions,
+              collectionProjections: collectionProjectionRegistrations,
               registry: options.registry,
               executor,
               preparer,

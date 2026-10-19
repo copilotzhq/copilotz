@@ -145,7 +145,7 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
   if (snapshot) return false;
   if (root === "actions") {
     return path.length === 2 ||
-      path.length === 3 && ["prepare", "prepareNamed"].includes(leaf);
+      path.length === 3 && leaf === "prepare";
   }
   if (root === "vectors") return path.length === 2 && method === "search";
   if (root === "operations") return path.length === 2 && method === "start";

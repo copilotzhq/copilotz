@@ -56,3 +56,9 @@ export type {
   CollectionPredicate,
   CollectionPredicateValue,
 } from "./predicate.ts";
+
+export type {
+  CollectionProjection,
+  CollectionProjectionContext,
+  CollectionProjections,
+} from "./projection-types.ts";

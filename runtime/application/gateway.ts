@@ -1,4 +1,3 @@
-import { captureActionPreparationOptions } from "../actions/preparation.ts";
 import { hostDatabaseScopes } from "./host-commands.ts";
 import {
   createOwnerCapabilityHost,
@@ -143,7 +142,6 @@ export async function createCopilotzGateway(
     );
   }
 
-  options = captureActionPreparationOptions(options);
   hostDatabaseScopes(
     options.databaseSchema ?? "public",
     options.databaseScopes,
@@ -235,6 +233,7 @@ export async function createCopilotzGateway(
         hostCommands: options.hostCommands,
         protectedActions: options.protectedActions,
         collectionPolicies: options.collectionPolicies,
+        collectionProjections: options.collectionProjections,
         plugins: options.plugins,
         collections: options.collections,
         actions: options.actions,

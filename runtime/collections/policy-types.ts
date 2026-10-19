@@ -30,6 +30,20 @@ export type CollectionPolicyIntent = Readonly<{
   next?: CollectionRecord | null;
 }>;
 export type CollectionPolicyInvocation =
+  | Readonly<{
+    /** Owner-minted after configured server authentication and authorization. */
+    kind: "viewer";
+    id: string;
+    runId: string;
+    actor: Readonly<{
+      id: string;
+      externalId?: string;
+      name?: string;
+      email?: string;
+    }>;
+    /** Only the host's bounded context.viewer projection, never request claims. */
+    claims: Readonly<Record<string, unknown>>;
+  }>
   | Readonly<
     {
       kind: "action" | "processor";
@@ -54,7 +68,7 @@ export type CollectionPolicyContext = Readonly<{
   invocation: CollectionPolicyInvocation;
   commandTime: string;
   signal: AbortSignal;
-  /** Retained original source with verified evidence. Owner alarms have no Action source and reject this call. */
+  /** Retained original source with verified evidence. Alarms and viewers have no Action source and reject this call. */
   resolveSource(): Promise<ProtectedActionSource>;
 }>;
 export type CollectionPolicy = Readonly<{

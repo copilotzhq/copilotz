@@ -27,9 +27,6 @@ Shared behaviour needs one owner with a contract that holds for every caller:
   instead of doing the work twice;
 - sensitive input is kept out of the public record of the call.
 
-For owner-authorized record, resource and View capture, see
-[named Action preparation](action-preparation.md).
-
 ## The solution
 
 `defineAction` declares a named operation. An Action never subscribes to Events

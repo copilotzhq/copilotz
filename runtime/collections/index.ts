@@ -95,3 +95,9 @@ export type {
   CollectionPolicyIntent,
   CollectionPolicyInvocation,
 } from "./policy-types.ts";
+
+export type {
+  CollectionProjection,
+  CollectionProjectionContext,
+  CollectionProjections,
+} from "./projection-types.ts";

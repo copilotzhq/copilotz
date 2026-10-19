@@ -516,7 +516,6 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
-    namedPreparations: options.namedPreparations,
     authorize: options.authorizeAction,
     prepareInput: options.prepareActionInput,
     refuseAuthorization: options.refuseActionAuthorization,

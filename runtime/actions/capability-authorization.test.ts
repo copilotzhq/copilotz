@@ -4,10 +4,9 @@ import { actionCallerDefinitionId } from "./invoker.ts";
 import { recordActionCaller } from "./caller-identity.ts";
 import type { ActionContext } from "./types.ts";
 import { captureOwnerCommandAuthorization } from "../engine/command-authorization.ts";
-Deno.test("authorized Action capabilities preserve caller identity, named methods, stream APIs and revocation", async () => {
+Deno.test("authorized Action capabilities preserve caller identity, input preparation, stream APIs and revocation", async () => {
   let active = true;
   const child = Object.assign((value: string) => value, {
-    prepareNamed: (value: string) => `named:${value}`,
     prepare: (factory: () => string) => factory(),
   });
   recordActionCaller(child, "fixture.child");
@@ -39,10 +38,6 @@ Deno.test("authorized Action capabilities preserve caller identity, named method
   );
   assertEquals(await context.actions.child("value"), "value");
   assertEquals(
-    await context.actions.child.prepareNamed("request" as never, {} as never),
-    "named:request",
-  );
-  assertEquals(
     await context.actions.child.prepare(() => "factory" as never, {} as never),
     "factory",
   );
@@ -66,7 +61,9 @@ Deno.test("frozen capability facades preserve synchronous stream branches and re
       },
     });
   const child = Object.freeze(
-    Object.assign(() => "ok", { prepareNamed: () => "named" }),
+    Object.assign(() => "ok", {
+      prepare: (factory: () => string) => factory(),
+    }),
   );
   recordActionCaller(child, "fixture.frozen");
   const ctx = authorizeActionCapabilities(

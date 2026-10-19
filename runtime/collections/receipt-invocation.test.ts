@@ -59,3 +59,25 @@ Deno.test("receipt identity comes only from the immutable owner binding and surv
     "authority has ended",
   );
 });
+
+Deno.test("read-only viewer authority cannot mint a logical mutation receipt principal", () => {
+  const viewer = bindOwnerCollectionInvocation({}, {
+    scope: { databaseSchema: "public", namespace: "space" },
+    logicalRunId: "must-not-be-used",
+    signal: new AbortController().signal,
+    resolveSource() {
+      throw new Error("viewer has no Action source");
+    },
+  }, {
+    kind: "viewer",
+    id: "collection:observe",
+    runId: "request",
+    actor: { id: "member" },
+    claims: { kind: "session" },
+  });
+  assertEquals(collectionReceiptInvocation(viewer), undefined);
+  assertEquals(
+    collectionReceiptInvocation(preserveCollectionInvocation({}, viewer)),
+    undefined,
+  );
+});

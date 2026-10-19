@@ -235,7 +235,11 @@ export function collectionReceiptInvocation(context: object):
   }>
   | undefined {
   const authority = contexts.get(context);
-  if (!authority || authority.invocation.kind === "alarm") return undefined;
+  if (
+    !authority ||
+    (authority.invocation.kind !== "action" &&
+      authority.invocation.kind !== "processor")
+  ) return undefined;
   authority.check();
   const { kind, id } = authority.invocation;
   const runId = kind === "action"

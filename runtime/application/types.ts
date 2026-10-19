@@ -54,6 +54,9 @@ export type CreateCopilotzApplicationOptions =
     /** Trusted owner-only Collection authorization callbacks. */
     collectionPolicies?:
       import("../collections/policy-types.ts").CollectionPolicies;
+    /** Owner-only read projections for explicitly declared named queries. */
+    collectionProjections?:
+      import("../collections/projection-types.ts").CollectionProjections;
     protectedActions?: ProtectedActionDefinitions;
     /** Explicit pre-provisioned schemas to activate before factory readiness. */
     databaseScopes?: readonly string[];

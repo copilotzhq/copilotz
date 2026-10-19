@@ -365,6 +365,14 @@ export function createTextRenderer(
               ([name, collection]) => [name, {
                 get: (input: unknown) => read(() => collection.get(input)),
                 list: (input: unknown) => read(() => collection.list(input)),
+                ...(collection.query
+                  ? {
+                    query: (
+                      name: string,
+                      input: Readonly<Record<string, unknown>>,
+                    ) => read(() => collection.query!(name, input)),
+                  }
+                  : {}),
               }],
             ),
           ) as ViewCollections;

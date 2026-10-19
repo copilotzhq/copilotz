@@ -1,8 +1,10 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext } from "../actions/types.ts";
-import type { ActionPreparations } from "../actions/preparation.ts";
-import { defineCollection } from "../collections/definition.ts";
+import { ActionError } from "../actions/errors.ts";
+import { secret } from "../actions/secret.ts";
+import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
+import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { createCopilotz } from "../application/copilotz.ts";
 import { createCopilotzGateway } from "../application/gateway.ts";
 import { createCopilotzWorker } from "../application/worker.ts";
@@ -11,25 +13,14 @@ import { listen } from "../adapters/deno/listen.ts";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 
 const namespace = "cleanup-connected";
-const records = defineCollection({
-  name: "cleanup_record",
-  schema: {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      namespace: { type: "string" },
-      text: { type: "string" },
-    },
-    required: ["id", "namespace", "text"],
-  } as const,
-});
 
 async function fixture(
   transport: "in-process" | "websocket",
   actions: Record<string, ReturnType<typeof defineAction>>,
-  preparations: ActionPreparations,
+  protectedActions: ProtectedActionDefinitions,
 ) {
   const database = await createOwnerTestDatabase();
+  const adapters = { secrets: { default: await testSecretAdapter() } };
   const seed = defineAction({
     id: "cleanup.seed",
     execute: (_input: unknown, ctx: ActionContext) =>
@@ -46,8 +37,9 @@ async function fixture(
     namespace,
     database,
     actions,
-    collections: { records },
-    engine: { preparations, retryBaseMs: 0, random: () => 0 },
+    adapters,
+    protectedActions,
+    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await seeder.actions.seed({}, { idempotencyKey: "seed" });
@@ -118,13 +110,14 @@ async function fixture(
     namespace,
     database,
     actions,
-    collections: { records },
     dispatcher: (binding) => {
       ownerBinding = binding;
       return hypervisor;
     },
     target: { workerId },
-    engine: { preparations, retryBaseMs: 0, random: () => 0 },
+    adapters,
+    protectedActions,
+    engine: { retryBaseMs: 0, random: () => 0 },
   });
   const listener = transport === "websocket"
     ? listen({ hypervisor }, { hostname: "127.0.0.1", port: 0 })
@@ -134,7 +127,6 @@ async function fixture(
   const worker = await createCopilotzWorker({
     namespace,
     actions,
-    collections: { records },
     id: workerId,
     capacity: 1,
     transport: transport === "in-process"
@@ -226,6 +218,12 @@ for (const transport of ["in-process", "websocket"] as const) {
         let workerReturned = false;
         const child = defineAction({
           id: "cleanup.child",
+          ownerHooks: { prepareInput: true },
+          inputSchema: {
+            type: "object",
+            properties: { credential: secret({ type: "string" }) },
+            additionalProperties: false,
+          } as const,
           async execute(_input: unknown, ctx: ActionContext) {
             armRead = true;
             const opened = ctx.content.open({
@@ -246,11 +244,7 @@ for (const transport of ["in-process", "websocket"] as const) {
         const run = defineAction({
           id: "cleanup.parent",
           execute: (_input: unknown, ctx: ActionContext) =>
-            ctx.actions.child.prepareNamed({
-              preparation: "note",
-              recordId: "original",
-              mode: "context",
-            }, { operationKey: "prepared" }),
+            ctx.actions.child({}, { operationKey: "child" }),
         });
         const successor = defineAction({
           id: "cleanup.successor",
@@ -259,32 +253,23 @@ for (const transport of ["in-process", "websocket"] as const) {
             return "after cleanup";
           },
         });
-        const preparations: ActionPreparations = {
-          registrations: {
-            note: {
-              source: "records",
-              actionAlias: "child",
-              shows: "note",
-              modes: ["context"],
-              mapInput: (text) => ({ text }),
+        const protectedActions: ProtectedActionDefinitions = {
+          [child.id]: {
+            authorize() {
+              if (!allowed) {
+                throw new ActionError("Content access revoked", {
+                  code: "forbidden",
+                  status: 403,
+                });
+              }
             },
+            prepareInput: () => ({ credential: "owner-only-credential" }),
           },
-          source: {
-            sources: {
-              records: { collectionAlias: "records", fields: ["/text"] },
-            },
-            authorize: () => ({ namespace, audience: "member" }),
-            projectRecord: (record) => record,
-            authorizeOriginal: () => allowed,
-          },
-          projectResource: () => null,
-          authorizeResource: () => true,
-          authorizeView: () => true,
         };
         const f = await fixture(
           transport,
           { run, child, successor },
-          preparations,
+          protectedActions,
         );
         const cancel = ReadableStream.prototype.cancel;
         const arrayBuffer = Response.prototype.arrayBuffer;
@@ -327,10 +312,6 @@ for (const transport of ["in-process", "websocket"] as const) {
         let first: Promise<unknown> | undefined;
         let next: Promise<unknown> | undefined;
         try {
-          await f.gateway.collections.records.create({
-            id: "original",
-            text: "first",
-          });
           await until(() =>
             f.worker.snapshot().occupiedExecutions === 0 &&
               f.completionSnapshot().completing === 0
@@ -397,8 +378,12 @@ for (const transport of ["in-process", "websocket"] as const) {
               f.completion(deliveryId) !== "done",
               "owner assignment released before physical cleanup settled",
             );
+            // Owner offer creation precedes delivery over WebSocket. Wait for
+            // the worker to reserve that offer as well: the original worker
+            // handler has returned before its owner completion is pending.
             return f.hypervisor.snapshot().work.offered === 1 &&
-                f.completion(deliveryId) === "pending"
+                f.completion(deliveryId) === "pending" &&
+                f.worker.snapshot().occupiedExecutions === 1
               ? true
               : undefined;
           });
@@ -423,8 +408,8 @@ for (const transport of ["in-process", "websocket"] as const) {
           assertEquals(
             (await f.database.query<{ n: number }>(
               `SELECT count(*)::int AS n FROM public.event_bodies
-             WHERE body->>'actionId'='cleanup.child'
-             AND body->>'status' IN ('completed','failed','cancelled')`,
+             WHERE COALESCE(body->'data',body)->>'actionId'='cleanup.child'
+             AND COALESCE(body->'data',body)->>'status' IN ('completed','failed','cancelled')`,
             )).rows[0].n,
             0,
           );
@@ -441,8 +426,8 @@ for (const transport of ["in-process", "websocket"] as const) {
           const terminal = await f.database.query<
             { body: { status: string; error?: { code: string } } }
           >(
-            `SELECT body FROM public.event_bodies WHERE body->>'actionId'='cleanup.child'
-           AND body->>'status' IN ('completed','failed','cancelled')`,
+            `SELECT COALESCE(body->'data',body) AS body FROM public.event_bodies WHERE COALESCE(body->'data',body)->>'actionId'='cleanup.child'
+           AND COALESCE(body->'data',body)->>'status' IN ('completed','failed','cancelled')`,
           );
           assertEquals(terminal.rows.length, 1);
           assertEquals(terminal.rows[0].body.status, "failed");

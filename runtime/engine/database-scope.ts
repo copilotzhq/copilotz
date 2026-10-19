@@ -1,8 +1,5 @@
+import type { CollectionProjectionRegistrations } from "../collections/projection-registration.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
-import {
-  compileActionPreparations,
-  createNamedPreparations,
-} from "../actions/preparation.ts";
 import { createProtectedActions } from "../actions/protected-actions.ts";
 import {
   assertOwnerIngressReplay,
@@ -136,6 +133,7 @@ export type DatabaseScopeRuntime = Readonly<{
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
+  collectionProjections?: CollectionProjectionRegistrations;
   owner: DatabaseOwner;
   databaseSchema: string;
   engine: CreateCopilotzEngineOptions;
@@ -305,6 +303,7 @@ export function createDatabaseScope(
     databaseSchema,
   });
   const collections = createCollectionRuntime({
+    projections: options.collectionProjections,
     policies: validateCollectionPolicies(
       engine.collectionPolicies,
       options.registry.collections,
@@ -523,8 +522,7 @@ export function createDatabaseScope(
           protectedValues,
           transaction,
         });
-      const data = options.engine.preparations ||
-          options.engine.protectedActions?.[parsed.actionId]
+      const data = options.engine.protectedActions?.[parsed.actionId]
         ? await createSchemaCommandRunner(
           store.session,
           options.databaseSchema,
@@ -552,62 +550,6 @@ export function createDatabaseScope(
               signal: command.signal,
             });
             await guard.authorize?.(command.transaction);
-            if (options.engine.preparations) {
-              const scopes = await command.transaction.query<
-                { operation_id: string }
-              >(
-                `SELECT operation_id FROM ${
-                  createOperationCatalogTables(options.databaseSchema)
-                    .operationEvents
-                } WHERE namespace=$1 AND event_id=$2`,
-                [namespace, event.id],
-              );
-              if (scopes.rows.length > 1) {
-                throw new Error(
-                  "Action result has ambiguous operation provenance.",
-                );
-              }
-              const named = createNamedPreparations({
-                compiled: compileActionPreparations(
-                  options.registry,
-                  options.engine.preparations,
-                ),
-                registry: options.registry,
-                collectionPolicies: validateCollectionPolicies(
-                  options.engine.collectionPolicies,
-                  options.registry.collections,
-                ),
-                store,
-                coordinator,
-                namespace,
-                content: resolver,
-                protectedValues,
-                signal: command.signal,
-                authorizeOperationResult: true,
-                source: {
-                  eventId: event.causationId ?? event.id,
-                  ...(scopes.rows[0]
-                    ? { operationId: scopes.rows[0].operation_id }
-                    : {}),
-                },
-              });
-              await named.authorize(
-                {
-                  actionId: parsed.actionId,
-                  actionRunId: parsed.actionRunId,
-                  parentActionRunId: parsed.parentActionRunId,
-                  rootKey: parsed.actionRunId,
-                  operationKey: parsed.actionRunId,
-                  metadata: parsed.metadata,
-                  signal: command.signal,
-                  nextActionIndex: () => {
-                    throw new Error("Result readers cannot invoke Actions.");
-                  },
-                },
-                "result",
-                command.transaction,
-              );
-            }
             return await restore(command.transaction);
           },
         )

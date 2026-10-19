@@ -1,4 +1,3 @@
-import type { CollectionProjectionRegistrations } from "../collections/projection-registration.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
 import { createProtectedActions } from "../actions/protected-actions.ts";
 import {
@@ -138,7 +137,6 @@ export type DatabaseScopeRuntime = Readonly<{
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
-  collectionProjections?: CollectionProjectionRegistrations;
   owner: DatabaseOwner;
   databaseSchema: string;
   engine: CreateCopilotzEngineOptions;
@@ -308,7 +306,6 @@ export function createDatabaseScope(
     databaseSchema,
   });
   const collections = createCollectionRuntime({
-    projections: options.collectionProjections,
     policies: validateCollectionPolicies(
       engine.collectionPolicies,
       options.registry.collections,
@@ -563,7 +560,6 @@ export function createDatabaseScope(
           async (_, command) => {
             const guard = createProtectedActions({
               definitions: options.engine.protectedActions ?? {},
-              streamBodyPrefix,
               collections: {
                 runtime: collections,
                 definitions: options.registry.collections,

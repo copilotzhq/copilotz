@@ -43,7 +43,6 @@ export type {
   ProtectedActionDefinitions,
   ProtectedActionIngress,
   ProtectedActionOwnerContext,
-  ProtectedActionParentCapture,
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "../actions/protected-action-types.ts";

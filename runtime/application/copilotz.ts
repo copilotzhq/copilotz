@@ -93,7 +93,6 @@ export async function createCopilotz(
       hostCommands: options.hostCommands,
       protectedActions: options.protectedActions,
       collectionPolicies: options.collectionPolicies,
-      collectionProjections: options.collectionProjections,
       plugins: options.plugins,
       collections: options.collections,
       actions: options.actions,

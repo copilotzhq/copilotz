@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert";
 import { ActionError } from "../actions/errors.ts";
-import { validateCollectionProjections } from "../collections/projection-registration.ts";
 import { defineCollection } from "../collections/definition.ts";
 import { joinCollectionRuntime } from "../collections/joined-runtime.ts";
 import { createCollectionRuntime } from "../collections/kernel.ts";
@@ -530,120 +529,6 @@ for (const denyFinal of [false, true]) {
     },
   });
 }
-
-Deno.test({
-  name:
-    "snapshot owner projection retains row and cumulative SQL read budgets and revoked query lifetime",
-  ignore: !url,
-  async fn() {
-    const f = await fixture();
-    const projected = defineCollection({
-      name: "boundary_projection",
-      ownerPolicy: "required",
-      schema: {
-        type: "object",
-        properties: { id: { type: "string" } },
-        required: ["id"],
-      } as const,
-      queries: {
-        bounded: {
-          ownerProjection: true,
-          inputSchema: {
-            type: "object",
-            properties: { mode: { type: "string" } },
-            required: ["mode"],
-          },
-          outputSchema: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { id: { type: "string" } },
-              required: ["id"],
-            },
-          },
-        },
-      },
-    });
-    let retained!: () => Promise<unknown>;
-    let transferred = 0;
-    const runtime = createCollectionRuntime({
-      session: f.db,
-      eventStore: f.store,
-      coordinator: f.coordinator,
-      policies: validateCollectionPolicies({ projected: { authorize() {} } }, {
-        projected,
-      }),
-      projections: validateCollectionProjections({
-        projected: {
-          bounded: {
-            async select(input, context) {
-              retained = () => context.query("SELECT 1");
-              const bytes = input.mode === "oversized"
-                ? 300000
-                : input.mode === "cumulative"
-                ? 200000
-                : 100000;
-              for (let index = 0; index < 3; index++) {
-                const rows = await context.query<{ value: string }>(
-                  "SELECT repeat('x', $1::integer) AS value",
-                  [bytes],
-                );
-                transferred += rows.rows[0].value.length;
-              }
-              return [{ id: "safe" }];
-            },
-          },
-        },
-      }, { projected }),
-    });
-    runtime.bind(projected);
-    const authority = {
-      scope: { databaseSchema: f.schema, namespace: "space" },
-      invocation: {
-        kind: "viewer" as const,
-        id: "viewer",
-        runId: "read",
-        actor: { id: "viewer" },
-        claims: {},
-      },
-      signal: new AbortController().signal,
-      check() {},
-      resolveSource(): Promise<never> {
-        throw new Error("unused");
-      },
-    };
-    const read = (mode: string) =>
-      withOwnerCollectionInvocation(
-        authority,
-        () =>
-          runtime.readSnapshot({ namespace: "space" }, ({ collections }) =>
-            collections.boundary_projection.queries.bounded({ mode })),
-      );
-    try {
-      assertEquals<unknown>(await read("small"), [{ id: "safe" }]);
-      assertEquals(transferred, 300000);
-      await assertRejects(retained, Error, "closed");
-      transferred = 0;
-      await assertRejects(
-        () => read("oversized"),
-        RangeError,
-        "transfer budget",
-      );
-      assertEquals(transferred, 0);
-      await assertRejects(retained, Error, "closed");
-      transferred = 0;
-      await assertRejects(
-        () => read("cumulative"),
-        RangeError,
-        "transfer budget",
-      );
-      assertEquals(transferred, 400000);
-      await assertRejects(retained, Error, "closed");
-    } finally {
-      await f.close();
-    }
-  },
-});
 
 Deno.test({
   name:

@@ -4,15 +4,9 @@ import { ProtocolError } from "./protocol.ts";
 import { snapshotViewData } from "../runtime/views/renderer.ts";
 
 export type CollectionObserveSelection = Readonly<
-  { id: string; query?: never; queryName?: never } | {
+  { id: string; query?: never } | {
     id?: never;
     query: Readonly<Record<string, unknown>>;
-    queryName?: never;
-  } | {
-    id?: never;
-    query?: never;
-    queryName: string;
-    input: Readonly<Record<string, unknown>>;
   }
 >;
 export type CollectionSnapshot = Readonly<{

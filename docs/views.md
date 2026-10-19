@@ -167,7 +167,6 @@ A selection is exactly one of:
 
 - `{id}` for a record
 - `{query}` for a bounded list window (default 100, maximum 1000 records)
-- `{queryName, input}` for a declared owner projection
 
 The HTTP route is `POST /collections/:name/observe` through the existing
 multipart protocol. It must be explicitly enabled in the Collection exposure
@@ -203,29 +202,3 @@ is limited to 16 KiB, 512 nodes and 16 levels; output to 1 MiB and 40,000 nodes.
 List cursors and relation includes are not accepted by this live-window API. Use
 a declared summary projection and explicit UI pagination for large
 records/lists.
-
-## Host-only named projections
-
-A Collection may declare a named query with `ownerProjection:true`, required
-`inputSchema` and `outputSchema`, and no local `select`, `query` or `filter`. It
-must use `ownerPolicy:"required"`. The owner supplies the matching callback
-through
-`collectionProjections[collectionAlias][queryName].select(input, context)` on
-the application/engine options. Missing or undeclared registrations fail before
-activation; worker composition rejects these host-only callbacks.
-
-This is the existing Collection named-query primitive. It still enters its
-ordinary `query` read/result policy. The context contains an immutable current
-`viewer`, fixed `scope`, `commandTime`, `signal`, and a revocable query-only SQL
-capability. Browser callers provide only a declared name and validated domain
-arguments, never a role or principal to trust. The callback runs only inside the
-existing database READ ONLY snapshot and cannot submit owner commands. Its SQL
-results use the existing bounded Collection transfer budget; its sanitized
-output is bounded, copied, frozen and validated before disclosure. Retained
-query handles reject calls after the callback ends.
-
-Projection callbacks must perform no mutations or external side effects and must
-return only explicitly whitelisted public fields. A generic raw-row HTTP
-constraint cannot authorize a projected aggregate/object; nonempty such filters
-fail closed for owner projections. Their explicit current-viewer query policy
-and callback must enforce the full projection's authorization instead.

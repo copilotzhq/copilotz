@@ -5,11 +5,7 @@ import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import { sanitizedAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
-import type {
-  EventCoordinator,
-  EventStore,
-  SqlExecutor,
-} from "../events/index.ts";
+import type { EventCoordinator, EventStore } from "../events/index.ts";
 import type { ActionInvocationFrame } from "./invoker.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
@@ -20,61 +16,6 @@ import { ActionOwnershipLost } from "./ownership.ts";
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import { sameActionValue } from "./value.ts";
-/** Follow only the retained wait target and its operation children. Overflow
- * cannot prove no external work, so preserve indeterminacy rather than guessing. */
-async function waitedEffectIndeterminate(
-  tx: SqlExecutor,
-  store: EventStore,
-  namespace: string,
-  operationId: string,
-): Promise<boolean> {
-  const catalog = createOperationCatalogTables(store.databaseSchema);
-  const queue = [operationId], seen = new Set(queue);
-  let examined = 0;
-  for (let index = 0; index < queue.length; index++) {
-    const ids = (await tx.query<{ event_id: string }>(
-      `SELECT event_id FROM ${catalog.operationEvents} WHERE namespace=$1 AND operation_id=$2 ORDER BY event_ordinal LIMIT $3`,
-      [namespace, queue[index], 65 - examined],
-    )).rows;
-    if (ids.length + examined > 64) return true;
-    examined += ids.length;
-    for (const { event_id } of ids) {
-      const event = (await tx.query<{ type: string; payload: unknown }>(
-        `SELECT type,payload FROM ${store.tables.events} WHERE namespace=$1 AND id=$2`,
-        [namespace, event_id],
-      )).rows[0];
-      if (!event) return true;
-      if (!event.type.endsWith(".invoked")) continue;
-      const data = publicActionLifecycleData(
-        await readEventBody(
-          { transaction: tx, tables: store.tables },
-          namespace,
-          eventDataRef(event.payload),
-        ),
-      ) as ActionEventData;
-      if (data.status !== "invoked" || typeof data.actionRunId !== "string") {
-        return true;
-      }
-      if (
-        (await readActionEffectInventory(tx, {
-          schema: store.databaseSchema,
-          namespace,
-          actionRunId: data.actionRunId,
-        })).some((row) => row.status === "begun")
-      ) return true;
-    }
-    const children = (await tx.query<{ operation_id: string }>(
-      `SELECT operation_id FROM ${catalog.operations} WHERE namespace=$1 AND parent_operation_id=$2 LIMIT $3`,
-      [namespace, queue[index], 65 - seen.size],
-    )).rows;
-    for (const child of children) {
-      if (seen.size >= 64 || seen.has(child.operation_id)) return true;
-      seen.add(child.operation_id);
-      queue.push(child.operation_id);
-    }
-  }
-  return false;
-}
 export async function settleActionAuthorizationRefusal(
   options: Readonly<{
     store: EventStore;
@@ -127,10 +68,19 @@ export async function settleActionAuthorizationRefusal(
               id: string;
               payload: unknown;
               correlation_id: string;
+              invoked_event_id: string | null;
+              owner_delivery_id: string | null;
+              scope_id: string;
+              action_scope_id: string | null;
+              child_operation_id: string | null;
             }
           >(
-            `SELECT event.id,event.payload,event.correlation_id FROM ${store.tables.events} event WHERE event.namespace=$1 AND event.deduplication_id=$2`,
-            [namespace, `${binding.actionRunId}:action:invoked`],
+            `SELECT event.id,event.payload,event.correlation_id,obligation.invoked_event_id,obligation.owner_delivery_id,obligation.scope_id,obligation.action_scope_id,obligation.child_operation_id FROM ${store.tables.events} event LEFT JOIN ${store.tables.open_actions} obligation ON obligation.namespace=event.namespace AND obligation.action_run_id=$3 WHERE event.namespace=$1 AND event.deduplication_id=$2`,
+            [
+              namespace,
+              `${binding.actionRunId}:action:invoked`,
+              binding.actionRunId,
+            ],
           )).rows[0];
           if (!event) {
             return { error: sanitizedAuthorizationRefusal(), settled: false }; // The refused claim never became an obligation.
@@ -149,18 +99,7 @@ export async function settleActionAuthorizationRefusal(
             data.parentActionRunId !== binding.parentActionRunId ||
             !sameActionValue(data.metadata, binding.metadata)
           ) throw new ActionOwnershipLost(binding.actionRunId);
-          const obligation = (await tx.query<
-            {
-              invoked_event_id: string;
-              owner_delivery_id: string | null;
-              scope_id: string;
-              action_scope_id: string | null;
-              child_operation_id: string | null;
-            }
-          >(
-            `SELECT invoked_event_id,owner_delivery_id,scope_id,action_scope_id,child_operation_id FROM ${store.tables.open_actions} WHERE namespace=$1 AND action_run_id=$2`,
-            [namespace, binding.actionRunId],
-          )).rows[0];
+          const obligation = event.invoked_event_id ? event : undefined;
           if (source.operationId) {
             const member = await tx.query(
               `SELECT event_id FROM ${
@@ -173,20 +112,14 @@ export async function settleActionAuthorizationRefusal(
               throw new ActionOwnershipLost(binding.actionRunId);
             }
           }
-          const indeterminate = (await readActionEffectInventory(tx, {
-            schema: store.databaseSchema,
-            namespace,
-            actionRunId: binding.actionRunId,
-          })).some((entry) => entry.status === "begun") ||
-            Boolean(
-              obligation?.child_operation_id &&
-                await waitedEffectIndeterminate(
-                  tx,
-                  store,
-                  namespace,
-                  obligation.child_operation_id,
-                ),
-            );
+          // A retained wait may contain unresolved external work. Refusal does
+          // not need to classify its descendants; leave their effect rows intact.
+          const indeterminate = Boolean(obligation?.child_operation_id) ||
+            (await readActionEffectInventory(tx, {
+              schema: store.databaseSchema,
+              namespace,
+              actionRunId: binding.actionRunId,
+            })).some((entry) => entry.status === "begun");
           const refusal = sanitizedAuthorizationRefusal(indeterminate);
           if (!obligation) {
             const terminal = (await tx.query<{ payload: unknown }>(

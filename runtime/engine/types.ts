@@ -113,9 +113,7 @@ export type EffectNoStartVerifier = (
 export type CreateCopilotzEngineOptions = Readonly<{
   collectionPolicies?:
     import("../collections/policy-types.ts").CollectionPolicies;
-  /** Owner-only read projections for explicitly declared named queries. */
-  collectionProjections?:
-    import("../collections/projection-types.ts").CollectionProjections;
+
   protectedActions?:
     import("../actions/protected-action-types.ts").ProtectedActionDefinitions;
   verifyEffectNotStarted?: EffectNoStartVerifier;

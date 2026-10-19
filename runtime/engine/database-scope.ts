@@ -592,6 +592,7 @@ export function createDatabaseScope(
             registry: options.registry,
             protectedValues,
             authorization: engine.authorization,
+            operationCatalog: options.operationCatalog,
             owner: options.owner,
           },
           draft,

@@ -1,5 +1,9 @@
 import { encodeJsonValue } from "../json.ts";
 import {
+  isOwnerAuthorizationRefusal,
+  markOwnerAuthorizationRefusal,
+} from "./authorization-refusal.ts";
+import {
   createAsyncContextStorage,
   runIndependentAsyncContext,
 } from "../../dependencies/async-hooks.ts";
@@ -78,6 +82,38 @@ function canonical(value: CommandJson): string {
   return encodeJsonValue(value, { label: "Command receipts" });
 }
 
+/** Detach command data while retaining local publication promises/capabilities. */
+function captureCommandData<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(captureCommandData) as T;
+  if (value instanceof Uint8Array) return value.slice() as T;
+  if (value instanceof Date) return new Date(value) as T;
+  if (value instanceof Error) {
+    const captured = Object.assign(
+      structuredClone(value),
+      captureCommandData({ ...value }),
+    );
+    // Owner classifications are private identity, never inferred from fields.
+    return isOwnerAuthorizationRefusal(value)
+      ? markOwnerAuthorizationRefusal(captured)
+      : captured;
+  }
+  if (value && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === Object.prototype || prototype === null) {
+      // Spread defines data properties (including __proto__) without setters.
+      const captured = { ...value } as Record<string, unknown>;
+      for (const key of Object.keys(captured)) {
+        captured[key] = captureCommandData(captured[key]);
+      }
+      return captured as T;
+    }
+  }
+  return value;
+}
+
+// Schema runners capture synchronously, before awaiting owner acquisition.
+const capturedInput = Symbol("captured-command-input");
+
 type Pending = {
   bytes: number;
   run(transaction: SqlExecutor, joined?: CommandContext): Promise<unknown>;
@@ -122,7 +158,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   holderId?: string;
   maxQueue?: number;
   maxGroupCount?: number;
-  /** Coalescing budget; an oversized or non-JSON local input runs alone. */
+  /** Coalescing budget; an oversized input runs alone. */
   maxGroupBytes?: number;
   maxPublications?: number;
   now?: () => Date;
@@ -375,7 +411,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   function submit<Input, Output>(
     kind: string,
     caller: CommandCaller,
-    request: CommandRequest<Input>,
+    request: CommandRequest<Input> & { [capturedInput]?: true },
     handler: CommandDefinition<Input, Output>,
   ): Promise<Output> {
     const joined = activeCommand.getStore();
@@ -399,6 +435,14 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       identity: { ...request.receipt.identity },
       intent: canonical(request.receipt.intent),
     };
+    // Receipt intent is not generally the input. Reuse its canonical capture
+    // when it is; otherwise detach data, including local byte-buffer commands.
+    const admittedInput: Input = request[capturedInput]
+      ? request.input
+      : receipt && request.receipt!.intent === request.input
+      ? JSON.parse(receipt.intent)
+      : captureCommandData(request.input);
+    const inputView = (): Input => captureCommandData(admittedInput);
     const binding = { ...caller };
     const item: Pending = {
       bytes: 0,
@@ -406,6 +450,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       reject: completion.reject,
       async run(tx, joined) {
         const callbacks: Array<() => void | Promise<void>> = [];
+        const finalizers: Array<() => Promise<void>> = [];
         const commandTime = joined?.commandTime ??
           (options.now?.() ?? new Date())
             .toISOString();
@@ -437,11 +482,12 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
             ownerId: owner,
             holderId: holder,
             context,
+            finalizers,
           });
         }
         return await activeCommand.run(context, async () => {
           // Authority is checked even when returning a durable duplicate.
-          await handler.authorize(request.input, context);
+          await handler.authorize(inputView(), context);
           assertAcquired();
           if (receipt) {
             const existing = (await tx.query<{
@@ -466,7 +512,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                 );
               }
 
-              await handler.authorizeResult?.(request.input, context);
+              await handler.authorizeResult?.(inputView(), context);
               assertAcquired();
               // Recovery rights become durable with the same outer commit
               // as this currently authorized replay, never on admission.
@@ -488,9 +534,16 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
               return existing.result as Output;
             }
           }
-          const output = await handler.execute(request.input, context);
-          await handler.authorizeResult?.(request.input, context);
+          const produced = await handler.execute(inputView(), context);
+          const outputText = receipt
+            ? canonical(produced as CommandJson)
+            : undefined;
+          const output: Output = outputText === undefined
+            ? captureCommandData(produced)
+            : JSON.parse(outputText);
+          await handler.authorizeResult?.(inputView(), context);
           assertAcquired();
+          for (const finalize of finalizers) await finalize();
           const nextAlarm = await alarms.refresh(tx, commandTime);
           if (receipt) {
             await tx.query(
@@ -502,7 +555,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
                 binding.principal,
                 kind,
                 receipt.intent,
-                canonical(output as CommandJson),
+                outputText,
                 binding.receiptReader ?? binding.principal,
               ],
             );
@@ -668,9 +721,19 @@ const commandContexts = new WeakMap<SqlExecutor, {
   ownerId: string;
   holderId: string;
   context: CommandContext;
+  finalizers: Array<() => Promise<void>>;
   source?: SqlExecutor;
   assertActive?(): void;
 }>();
+
+/** Settle an authorized terminal after result guards, in the same command. */
+export function afterCommandAuthorization(
+  transaction: SqlExecutor,
+  finalize: () => Promise<void>,
+): void {
+  assertCommandTransaction(transaction);
+  commandContexts.get(commandSource(transaction))!.finalizers.push(finalize);
+}
 
 /** Repositories retain the owner selected at construction or first admission. */
 export function bindSchemaOwner(session: SqlSession, schema: string) {
@@ -765,6 +828,7 @@ export function createSchemaCommandRunner(
     >,
   ): Promise<Output> => {
     const authorization = captureOwnerCommandAuthorization();
+    const admittedInput = captureCommandData(input);
     if (joined) {
       assertSchemaCommandTransaction(session, schema);
       // Borrowed helpers keep using the revocable query facade, including if
@@ -780,7 +844,7 @@ export function createSchemaCommandRunner(
       return (async () => {
         // Admission and the outer result gate share one transaction identity.
         await authorizeOwnerCommand(authorization, joined.context, "mutation");
-        const result = await execute(input, context);
+        const result = await execute(admittedInput, context);
         return result;
       })();
     }
@@ -811,7 +875,11 @@ export function createSchemaCommandRunner(
         principal: binding?.principal ?? "runtime",
         receiptReader: binding?.receiptReader,
         epoch: owner.epoch!,
-      }, { input, ...(binding ? { receipt: binding.receipt } : {}) });
+      }, {
+        input: admittedInput,
+        [capturedInput]: true,
+        ...(binding ? { receipt: binding.receipt } : {}),
+      } as CommandRequest<Input>);
     })();
   };
 }

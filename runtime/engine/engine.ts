@@ -3,6 +3,7 @@ import {
   collectionAuthorizations,
 } from "../authorization/evaluator.ts";
 import { sameActionValue } from "../actions/value.ts";
+import { durableActionContentInput } from "../actions/content.ts";
 import { SERVER_ACTION_REQUEST_EVENT_TYPE } from "../application/ingress/contracts.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
@@ -473,7 +474,6 @@ export async function createCopilotzEngine(
             options.registry.actions,
             frame.actionId,
           );
-          if (action.content) return;
           const invoked = await createActionLifecycleLoader({
             store: scopedStore,
             actions: options.registry.actions,
@@ -483,7 +483,12 @@ export async function createCopilotzEngine(
           if (
             invoked.status !== "invoked" || invoked.parentActionRunId ||
             invoked.actionId !== frame.actionId ||
-            !sameActionValue(invoked.input, input) ||
+            !sameActionValue(
+              invoked.input,
+              action.content
+                ? durableActionContentInput(input, action.content)
+                : input,
+            ) ||
             !sameActionValue(invoked.metadata, frame.metadata)
           ) throw new TypeError("Admitted Action differs from its invocation.");
           return { input, claimed: claim.attempts === 1 };

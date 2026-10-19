@@ -1666,7 +1666,7 @@ export function createOperationCatalog(
        SET state='terminal',outcome=$4,reason=$5,availability='retained',
          asset_id=CASE WHEN state='terminal' THEN asset_id END,
          asset_retention=CASE WHEN state='terminal' THEN asset_retention ELSE 'observation' END,
-         terminal_at=COALESCE(terminal_at,NOW()),updated_at=NOW()
+         terminal_at=COALESCE(terminal_at,$7::timestamptz),updated_at=$7::timestamptz
        WHERE namespace=$1 AND operation_id=$2 AND stream_id=$3 AND body_id=$6
          AND availability='retained' AND cleanup_state IS NULL
          AND (state='open' OR (state='terminating' AND ($4<>'completed' OR outcome='completed'))
@@ -1678,6 +1678,7 @@ export function createOperationCatalog(
         input.terminal.outcome,
         input.terminal.reason ?? null,
         input.bodyId,
+        commandTime,
       ],
     );
     if (!result.rows.length) return false;
@@ -2295,17 +2296,18 @@ export function createOperationCatalog(
     },
     async requestCancellation(transaction, namespace, operationId, reason) {
       assertSchemaCommandTransaction(transaction, databaseSchema);
+      const { commandTime } = schemaCommandContext(transaction, databaseSchema);
       await transaction.query(
-        `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, NOW()),
-          cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = NOW()
+        `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, $4::timestamptz),
+          cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = $4::timestamptz
          WHERE namespace = $1 AND operation_id = $2 AND state IN ('accepted','running')`,
-        [namespace, operationId, reason],
+        [namespace, operationId, reason, commandTime],
       );
       const changed = await transaction.query<{ stream_id: string }>(
         `UPDATE ${tables.operationStreams}
-         SET state = 'terminating', outcome = 'cancelled', reason = $3, updated_at = NOW()
+         SET state = 'terminating', outcome = 'cancelled', reason = $3, updated_at = $4::timestamptz
          WHERE namespace = $1 AND operation_id = $2 AND state = 'open' RETURNING stream_id`,
-        [namespace, operationId, reason.trim() || "cancelled"],
+        [namespace, operationId, reason.trim() || "cancelled", commandTime],
       );
       await publishOperationChange(
         session,
@@ -2866,7 +2868,7 @@ export function createOperationCatalog(
                END,
                availability = 'purged', availability_reason = $6, cleanup_state = NULL,
                asset_retention = COALESCE(asset_retention, 'observation'),
-               terminal_at = COALESCE(terminal_at, NOW()), updated_at = NOW()
+               terminal_at = COALESCE(terminal_at, $7::timestamptz), updated_at = $7::timestamptz
          WHERE namespace = $1 AND operation_id = $2 AND stream_id = $3
            AND availability = 'retained'
          RETURNING stream_id`,
@@ -2880,6 +2882,7 @@ export function createOperationCatalog(
                 input.availabilityReason,
                 "Stream availability reason",
               ),
+              commandTime,
             ],
           );
           if (result.rows.length > 0) {

@@ -865,7 +865,8 @@ function actionCaller(
         }
         throw error;
       }
-      await authorize?.(frame, "result");
+      // The terminal command already passed its result authorization gate.
+      // Its atomic settlement may have retired this delivery's write authority.
       return structuredClone(durableOutput);
     } catch (caught) {
       if (isOwnerAuthorizationRefusal(caught) || invocation.refusal) {

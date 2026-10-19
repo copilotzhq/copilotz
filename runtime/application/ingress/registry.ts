@@ -3,21 +3,19 @@ import {
   createPluginRegistry,
   type PluginRegistry,
 } from "../../plugins/index.ts";
-import { serverInvokeAction } from "./invoke-action.ts";
 import { serverActionRequestProcessor } from "./action-request.ts";
 import { serverCollectionMutationRequestProcessor } from "./collection-mutation-request.ts";
 
 export function withApplicationIngress(
   registry: PluginRegistry,
 ): PluginRegistry {
-  const actions = { serverInvoke: serverInvokeAction };
   const processors = {
     serverActionRequest: serverActionRequestProcessor,
     serverCollectionMutationRequest: serverCollectionMutationRequestProcessor,
   };
   // Server declarations register these same definitions. Keep their existing
   // registration and durable consumer IDs instead of installing a second path.
-  for (const [kind, defaults] of Object.entries({ actions, processors })) {
+  for (const [kind, defaults] of Object.entries({ processors })) {
     const registered = registry[kind as "actions" | "processors"];
     for (const [alias, definition] of Object.entries(defaults)) {
       if (registered[alias] && registered[alias].id !== definition.id) {
@@ -28,9 +26,6 @@ export function withApplicationIngress(
     }
   }
   const ingress = createPluginRegistry({
-    actions: Object.fromEntries(
-      Object.entries(actions).filter(([alias]) => !registry.actions[alias]),
-    ),
     processors: Object.fromEntries(
       Object.entries(processors).filter(([alias]) =>
         !registry.processors[alias]
@@ -39,7 +34,6 @@ export function withApplicationIngress(
   });
   return {
     ...registry,
-    actions: { ...ingress.actions, ...registry.actions },
     processors: { ...ingress.processors, ...registry.processors },
     matchDurable: (
       draft,

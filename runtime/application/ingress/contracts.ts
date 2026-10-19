@@ -36,11 +36,6 @@ export type ServerCollectionMutationRequest = Readonly<{
   }>;
 }>;
 
-export type ServerInvokeRequest = Readonly<{
-  requestId: string;
-  actionAlias: string;
-}>;
-
 export function serverActionRequestSchema(
   inputSchema: ActionSchema | undefined,
 ): ActionSchema {
@@ -185,4 +180,27 @@ export function parseServerCollectionMutationRequest(
       }
       : {}),
   } as const);
+}
+
+/** Same named root identity used by Processor Action callers. */
+export function serverActionRunId(
+  deliveryId: string,
+  actionId: string,
+  requestId: string,
+): string {
+  return `${encodeURIComponent(deliveryId)}:action:named:${
+    encodeURIComponent(actionId)
+  }:server:${requestId}:invoke`;
+}
+export function serverActionInvocationMetadata(
+  request: ServerActionRequest,
+): ActionInvocationMetadata {
+  return {
+    ...request.actionMetadata,
+    copilotzServer: {
+      schema: SERVER_ACTION_METADATA_SCHEMA,
+      requestId: request.requestId,
+      actionAlias: request.actionAlias,
+    },
+  };
 }

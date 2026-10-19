@@ -174,5 +174,4 @@ export {
 export type {
   ServerActionRequest,
   ServerCollectionMutationRequest,
-  ServerInvokeRequest,
 } from "@copilotz/copilotz/engine";

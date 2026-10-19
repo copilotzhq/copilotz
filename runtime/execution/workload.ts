@@ -126,7 +126,14 @@ export function createDeliveryWorkload(
       authority.signal,
     ]);
     dispatchSignal.throwIfAborted();
-    const delivery = await store.claimDelivery({
+    const localClaim = options.localExecution &&
+        metadata.consumerId === "processor:copilotz.server.action-request"
+      ? await store.readLocalClaim(
+        metadata.deliveryId,
+        metadata.dispatchAttemptId,
+      )
+      : null;
+    const delivery = localClaim ?? await store.claimDelivery({
       id: metadata.deliveryId,
       owner: metadata.dispatchAttemptId,
       leaseMs,
@@ -305,10 +312,16 @@ export function createDeliveryWorkload(
         }
       }
       abort.signal.throwIfAborted();
-      const settled = await store.succeedDelivery(
-        delivery.id,
-        metadata.dispatchAttemptId,
-      );
+      const current =
+        delivery.consumerId === "processor:copilotz.server.action-request"
+          ? await store.getDelivery(delivery.id)
+          : null;
+      const settled = current?.status === "succeeded"
+        ? current
+        : await store.succeedDelivery(
+          delivery.id,
+          metadata.dispatchAttemptId,
+        );
       if (!settled) {
         throw new Error(`Delivery '${delivery.id}' could not be settled.`);
       }

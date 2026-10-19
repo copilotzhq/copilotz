@@ -100,7 +100,8 @@ export function createEventCoordinator(
     result: CommitEventMutationResult<unknown>,
   ): Promise<EventDispatchReport> => {
     const actionable = result.deliveries.filter((delivery) =>
-      delivery.status === "pending"
+      delivery.status === "pending" ||
+      (delivery.status === "leased" && !delivery.leaseExpiresAt)
     );
     // A processor may commit another event while occupying the only embedded
     // worker slot. Placement must not be awaited in that call stack: the
@@ -193,6 +194,7 @@ export function createEventCoordinator(
       draft: mutation.draft,
       eventId: mutation.eventId,
       ingress: mutation.ingress,
+      initialLocalClaim: mutation.initialLocalClaim,
       body: mutation.body,
       statement: mutation.statement,
       mutate: mutation.mutate,

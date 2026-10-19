@@ -1,3 +1,5 @@
+import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
+import { ActionError, standardActionError } from "../actions/errors.ts";
 import {
   ownerIngressEvidence,
   type OwnerIngressProof,
@@ -129,6 +131,8 @@ export type CommitEventMutationOptions<T> = {
   onCommitted?(result: CommitEventMutationResult<T>): void | Promise<void>;
   /** Private admission facts; never accepted from an Event draft. */
   ingress?: OwnerIngressProof;
+  /** Owner-local admission can claim its own delivery before publishing it. */
+  initialLocalClaim?: Readonly<{ consumerId: string; owner: string }>;
   draft: DurableEventDraft;
   /** Stable runtime-owned root event identity. */
   eventId?: string;
@@ -293,8 +297,13 @@ export type EventStore = {
     attempts: readonly DeliveryAttemptHeartbeat[],
     accept?: (attempt: DeliveryAttemptHeartbeat, epoch: number) => boolean,
   ): Promise<readonly Pick<DeliveryAttemptHeartbeat, "id" | "owner">[]>;
+  readLocalClaim(id: string, owner: string): Promise<EventDelivery | null>;
   /** Settles a leased delivery and returns the row it settled into. */
-  succeedDelivery(id: string, owner: string): Promise<EventDelivery | null>;
+  succeedDelivery(
+    id: string,
+    owner: string,
+    transaction?: SqlExecutor,
+  ): Promise<EventDelivery | null>;
   cancelDelivery(id: string, owner?: string): Promise<EventDelivery | null>;
   failDelivery(options: {
     id: string;
@@ -577,11 +586,26 @@ function serializeError(
 ): Record<string, unknown> {
   if (error instanceof Error) {
     const code = (error as Error & { code?: unknown }).code;
+    const safe = error instanceof ActionError
+      ? standardActionError(error)
+      : isOwnerAuthorizationRefusal(error) &&
+          code === "action_authorization_refused"
+      ? standardActionError({ code: "forbidden", status: 403 })
+      : undefined;
     return {
       name: error.name,
       message: error.message,
       ...(typeof code === "string" && code.trim() ? { code } : {}),
       ...(error.stack ? { stack: error.stack } : {}),
+      ...(safe
+        ? {
+          callerSafe: true,
+          code: safe.code,
+          name: safe.name,
+          status: safe.status,
+          message: safe.message,
+        }
+        : {}),
       ...(retryable === undefined ? {} : { retryable }),
     };
   }
@@ -813,13 +837,21 @@ export function createEventStore(
         `inserted_deliveries AS (
            INSERT INTO ${tables.event_deliveries} (
              id, event_id, consumer_id, settlement_scope_id, action_scope_id,
-             status, attempts, max_attempts,
+             status, attempts, max_attempts, owner_epoch, lease_owner,
              available_at, created_at, updated_at, settled_at
            )
            SELECT delivery.id, inserted_event.id, delivery.consumer_id,
-                  delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' ELSE 'pending' END, 0, ${
+                  delivery.scope_id, delivery.action_scope_id, CASE WHEN ${cancelled} THEN 'cancelled' WHEN delivery.consumer_id=${
+          param(mutation.initialLocalClaim?.consumerId ?? null)
+        } THEN 'leased' ELSE 'pending' END, CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
+          param(mutation.initialLocalClaim?.consumerId ?? null)
+        } THEN 1 ELSE 0 END, ${
           param(maxAttempts)
-        }, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
+        }, (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'), CASE WHEN NOT ${cancelled} AND delivery.consumer_id=${
+          param(mutation.initialLocalClaim?.consumerId ?? null)
+        } THEN ${
+          param(mutation.initialLocalClaim?.owner ?? null)
+        } ELSE NULL END, ${commandTimeSql}, ${commandTimeSql}, ${commandTimeSql}, CASE WHEN ${cancelled} THEN ${commandTimeSql} ELSE NULL END
            FROM inserted_event, unnest(
              ${param(deliveryRows.map((row) => row.id))}::text[],
              ${param(deliveryRows.map((row) => row.consumerId))}::text[],
@@ -923,6 +955,41 @@ export function createEventStore(
     const runOn = async (
       executor: SqlExecutor,
     ): Promise<CommitEventMutationResult<T>> => {
+      const operationMetadata = draft.metadata?.operationMetadata as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        (indexOperationEvent || indexOperationEventSql) &&
+        typeof operationMetadata?.httpAdmissionKey === "string"
+      ) {
+        // The HTTP preflight is only a hint. The owner serializes the cap with
+        // root admission, including inline completions and compatible replay.
+        const group = {
+          operationMetadata: {
+            httpAdmissionKey: operationMetadata.httpAdmissionKey,
+            ...(operationMetadata.actorId !== undefined
+              ? { actorId: operationMetadata.actorId }
+              : {}),
+          },
+        };
+        const capacity = await executor.query<{ allowed: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM ${tables.events} WHERE namespace=$1 AND deduplication_id=$3)
+            OR EXISTS (SELECT 1 FROM "${databaseSchema}"."copilotz_operations" WHERE namespace=$1 AND operation_id=$4)
+            OR (SELECT count(*) FROM "${databaseSchema}"."copilotz_operations" WHERE namespace=$1 AND metadata @> $2::jsonb AND state IN ('accepted','running')) < 32 AS allowed`,
+          [
+            draft.namespace,
+            JSON.stringify(group),
+            draft.deduplicationId ?? null,
+            settlementScopeId,
+          ],
+        );
+        if (!capacity.rows[0]?.allowed) {
+          throw Object.assign(
+            new Error("Conversation has 32 active operations."),
+            { status: 409, code: "operation_replay_capacity_exceeded" },
+          );
+        }
+      }
       const { inserted, outcome } = await insertEvent(executor);
       if (!inserted) {
         const existing = draft.deduplicationId
@@ -1104,50 +1171,64 @@ export function createEventStore(
       transaction: SqlExecutor,
       settle: SettleDelivery,
     ) => Promise<Output>,
+    transaction?: SqlExecutor,
   ): Promise<Output> => {
     const publications: Array<() => Promise<void>> = [];
-    const result = await runCommand(
-      kind,
-      input,
-      (command, context) =>
-        handler(command, context.transaction, async (update) => {
-          const settled = await update(context.transaction);
-          if (settled) {
-            await syncDeliveryAlarms(context.transaction, [settled.id]);
-          }
-          if (
-            settled &&
-            ["succeeded", "cancelled", "dead_letter"].includes(settled.status)
-          ) {
-            const publish = await options.settleActionOwners?.(
-              context.transaction,
-              settled,
-            );
-            if (publish) publications.push(publish);
-            if (options.settleActionOwners) {
-              const event = await context.transaction.query<
-                { namespace: string }
-              >(`SELECT namespace FROM ${tables.events} WHERE id=$1`, [
-                settled.eventId,
-              ]);
-              const namespace = event.rows[0]?.namespace ?? null;
-              await writeOwnerDeadline(context.transaction, databaseSchema, {
-                source: "reconciliation",
-                key: reconciliationAlarmKey("schema", {
-                  kind: "operation",
-                  namespace,
-                  id: settled.settlementScopeId,
-                }),
-                namespace,
-                dueAt: context.commandTime,
-                payload: { operationId: settled.settlementScopeId },
-              });
-            }
-          }
-          return settled;
-        }),
-    );
-    for (const publish of publications) await publish();
+    const result =
+      await (transaction
+        ? createSchemaCommandRunner(transaction, databaseSchema)
+        : runCommand)(
+          kind,
+          input,
+          (command, context) =>
+            handler(command, context.transaction, async (update) => {
+              const settled = await update(context.transaction);
+              if (settled) {
+                await syncDeliveryAlarms(context.transaction, [settled.id]);
+              }
+              if (
+                settled &&
+                ["succeeded", "cancelled", "dead_letter"].includes(
+                  settled.status,
+                )
+              ) {
+                const publish = await options.settleActionOwners?.(
+                  context.transaction,
+                  settled,
+                );
+                if (publish) publications.push(publish);
+                if (options.settleActionOwners) {
+                  const event = await context.transaction.query<
+                    { namespace: string }
+                  >(`SELECT namespace FROM ${tables.events} WHERE id=$1`, [
+                    settled.eventId,
+                  ]);
+                  const namespace = event.rows[0]?.namespace ?? null;
+                  await writeOwnerDeadline(
+                    context.transaction,
+                    databaseSchema,
+                    {
+                      source: "reconciliation",
+                      key: reconciliationAlarmKey("schema", {
+                        kind: "operation",
+                        namespace,
+                        id: settled.settlementScopeId,
+                      }),
+                      namespace,
+                      dueAt: context.commandTime,
+                      payload: { operationId: settled.settlementScopeId },
+                    },
+                  );
+                }
+              }
+              return settled;
+            }),
+        );
+    for (const publish of publications) {
+      if (transaction) {
+        schemaCommandContext(transaction, databaseSchema).afterCommit(publish);
+      } else await publish();
+    }
     return result;
   };
 
@@ -1155,6 +1236,7 @@ export function createEventStore(
     id: string,
     status: Extract<DeliveryStatus, "succeeded" | "cancelled">,
     owner?: string,
+    transaction?: SqlExecutor,
   ): Promise<EventDelivery | null> => {
     return await deliveryCommand(
       "delivery.settle",
@@ -1186,6 +1268,7 @@ export function createEventStore(
             : null;
         });
       },
+      transaction,
     );
   };
 
@@ -1391,8 +1474,19 @@ export function createEventStore(
       );
       return result.rows;
     },
-    succeedDelivery(id, owner) {
-      return settleDelivery(id, "succeeded", owner);
+    async readLocalClaim(id, owner) {
+      const authority = await acquireOwner();
+      const result = await session.query<DeliveryRow>(
+        `SELECT * FROM ${tables.event_deliveries} WHERE id=$1 AND status='leased' AND lease_owner=$2 AND lease_expires_at IS NULL AND owner_epoch=$3`,
+        [id, owner, authority.epoch],
+      );
+      authority.signal.throwIfAborted();
+      return result.rows[0]
+        ? mapDelivery(result.rows[0], databaseSchema)
+        : null;
+    },
+    succeedDelivery(id, owner, transaction) {
+      return settleDelivery(id, "succeeded", owner, transaction);
     },
     cancelDelivery(id, owner) {
       return settleDelivery(id, "cancelled", owner);

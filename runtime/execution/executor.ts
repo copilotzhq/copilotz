@@ -405,7 +405,10 @@ export function createDeliveryExecutor(
       if (!options.dispatcher) {
         resolvedEvents.set(`${delivery.databaseSchema}\0${delivery.id}`, event);
       }
-      const attemptId = createAttemptId();
+      const localClaim = !options.dispatcher && delivery.leaseOwner
+        ? await store.readLocalClaim(delivery.id, delivery.leaseOwner)
+        : null;
+      const attemptId = localClaim?.leaseOwner ?? createAttemptId();
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
       }

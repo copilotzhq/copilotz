@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { recordedOperationResult } from "./result.ts";
-import { SERVER_INVOKE_ACTION_ID } from "./invoke-action.ts";
+const SERVER_INVOKE_ACTION_ID = "copilotz.server.internal.invoke";
 import {
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
@@ -84,6 +84,7 @@ function fixture(events: ReturnType<typeof lifecycle>[]) {
     operationStatus() {
       return Promise.resolve({ state: "completed", namespace });
     },
+    deliveries: { list: () => Promise.resolve([]) },
     events: {
       list(options: { metadata: { actionId: string } }) {
         return Promise.resolve(

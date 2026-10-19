@@ -489,7 +489,14 @@ export async function createCopilotzApplication(
   const sendWithProtection = async (
     input: ApplicationSendInput,
     protection?: Readonly<
-      { schema: ActionSchema; ownerId: string; ingress?: OwnerIngressProof }
+      {
+        schema: ActionSchema;
+        ownerId: string;
+        ingress?: OwnerIngressProof;
+        completion?:
+          import("./ingress/inline-collection.ts").InlineCollectionCompletion;
+        inline?: boolean;
+      }
     >,
   ): Promise<ApplicationSendHandle> => {
     if (protection) input = structuredClone(input);
@@ -533,11 +540,28 @@ export async function createCopilotzApplication(
           protection.schema,
           protection.ownerId,
           protection.ingress,
+          protection.completion,
+          protection.inline,
         )
         : await scopedEngine.events.append(draft);
     } catch (error) {
       subscription.error(error);
       throw error;
+    }
+    if (protection?.completion && !protection.completion.deferred) {
+      subscription.close();
+      return {
+        operationId: committed.event.id,
+        eventId: committed.event.id,
+        correlationId,
+        replayCursor: encodeOperationReplayCursor({
+          eventPosition: committed.event.position,
+        }),
+        outputs: subscription.outputs,
+        done: Promise.resolve(),
+        detach: () => Promise.resolve(),
+        cancel: () => Promise.resolve(),
+      };
     }
     const abort = new AbortController();
     const settlementScopeId = committed.settlementScopeId;
@@ -554,12 +578,28 @@ export async function createCopilotzApplication(
         operationId: settlementScopeId,
       });
     }
-    const done = waitForApplicationScope(
-      eventScope,
-      inputNamespace,
-      settlementScopeId,
-      abort.signal,
-    ).finally(() => {
+    const done = (async () => {
+      if (protection?.inline && committed.dispatch.handles.length) {
+        await Promise.all(
+          committed.dispatch.handles.map((handle) => handle.done),
+        );
+        await eventScope.operations.reconcile({
+          namespace: inputNamespace,
+          operationId: settlementScopeId,
+        });
+        const operation = await eventScope.operations.get(
+          inputNamespace,
+          settlementScopeId,
+        );
+        if (operation?.state === "completed") return;
+      }
+      await waitForApplicationScope(
+        eventScope,
+        inputNamespace,
+        settlementScopeId,
+        abort.signal,
+      );
+    })().finally(() => {
       subscription.close();
       activeSends.delete(sendHandle);
     });
@@ -804,8 +844,14 @@ export async function createCopilotzApplication(
         throw error;
       }
     },
-    sendProtected(input, schema, ownerId, ingress) {
-      return sendWithProtection(input, { schema, ownerId, ingress });
+    sendProtected(input, schema, ownerId, ingress, completion, inline) {
+      return sendWithProtection(input, {
+        schema,
+        ownerId,
+        ingress,
+        completion,
+        inline,
+      });
     },
     async databaseScope(requestedDatabaseSchema) {
       await persistence.recovery?.admit();

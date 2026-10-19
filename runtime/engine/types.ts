@@ -265,6 +265,9 @@ export type CopilotzEngine = Readonly<{
       schema: ActionSchema,
       ownerId: string,
       ingress?: OwnerIngressProof,
+      completion?:
+        import("../application/ingress/inline-collection.ts").InlineCollectionCompletion,
+      inlineAction?: boolean,
     ): Promise<CoordinatedMutationResult<void>>;
     emit(input: EphemeralEventInput): Promise<EphemeralEvent>;
     subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;

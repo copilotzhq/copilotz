@@ -52,11 +52,12 @@ const record = defineCollection({
   },
   queries: { visible: { query: () => ({ limit: 1 }) } },
 });
-async function fixture(denyCommittedResult = false) {
+async function fixture(denyCommittedResult = false, vector = false) {
   let resultChecks = 0;
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
     pgPoolMax: 4,
+    ...(vector ? { pgliteExtensions: ["vector"] } : {}),
   });
   const schema = `authority_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
@@ -603,24 +604,40 @@ Deno.test("F4 historical snapshots use current authority and authorize the actua
         `INSERT INTO "${f.schema}".nodes(id,namespace,type,name,data) VALUES('historic','main','entry','historic','{"owner":"other","title":"private"}')`,
       );
     });
+    const move = () =>
+      f.run("fixture.move", {}, async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE "${f.schema}".nodes SET data='{"owner":"key","title":"public"}' WHERE id='historic'`,
+        );
+      });
+    const pooled = !!Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
     await f.bound(() =>
-      f.runtime.readSnapshot({ namespace: "main" }, async ({ collections }) => {
-        // Pin the historical data snapshot, then change the current row's scope.
-        assertEquals(await collections.entry.list(), []);
-        await f.run("fixture.move", {}, async (_, { transaction }) => {
-          await transaction.query(
-            `UPDATE "${f.schema}".nodes SET data='{"owner":"key","title":"public"}' WHERE id='historic'`,
-          );
-        });
-        await assertRejects(() => collections.entry.get({ id: "historic" }));
-      })
+      f.runtime.readSnapshot(
+        { namespace: "main" },
+        ({ collections }) =>
+          f.bound(async () => {
+            // Pin the historical data snapshot, then change the current row's scope.
+            assertEquals(await collections.entry.list(), []);
+            // PostgreSQL can commit another owner command while the historical
+            // snapshot stays pinned. PGlite serializes both on one transaction.
+            if (pooled) await move();
+            await assertRejects(() =>
+              collections.entry.get({ id: "historic" })
+            );
+          }),
+      )
     );
+    if (!pooled) await move();
     await f.bound(() =>
-      f.runtime.readSnapshot({ namespace: "main" }, async ({ collections }) => {
-        assertEquals((await collections.entry.list()).length, 1);
-        await f.setMember(false);
-        await assertRejects(() => collections.entry.list());
-      })
+      f.runtime.readSnapshot(
+        { namespace: "main" },
+        ({ collections }) =>
+          f.bound(async () => {
+            assertEquals((await collections.entry.list()).length, 1);
+            await f.setMember(false);
+            await assertRejects(() => collections.entry.list());
+          }),
+      )
     );
   } finally {
     await f.close();
@@ -631,7 +648,7 @@ Deno.test("F4 vector policy filters candidates before top-K and rechecks current
   const { provisionVectorStorage, projectVector } = await import(
     "../vectors/index.ts"
   );
-  const f = await fixture();
+  const f = await fixture(false, true);
   const profile = {
     model: "fixture",
     revision: "1",

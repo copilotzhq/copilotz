@@ -8,50 +8,70 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Current owner schema: v11
+## Current owner schema: v13
 
 Each physical database schema has one fenced owner shared by its namespaces.
-Fresh, absent-only provisioning installs schema **v11** and the operation
-catalog fingerprint **`stream-taxonomy-content-v1`**. Startup validates the
-complete current shape; it does not upgrade an existing or partially provisioned
-schema. `provisionCopilotzSchema` is not a retained-data migration command.
+Fresh, absent-only provisioning installs **v13** and the operation catalog
+fingerprint **`stream-taxonomy-content-v1`**. Startup validates the complete
+current shape; it never upgrades an existing schema.
 
-Existing supported v5–v10 schemas use the single explicit offline retained-data
-conversion. Rehearse on a disposable restored backup first, then stop admission,
-schedules, workers and every other writer. Do not run old and new runtimes
-against the same schema during conversion.
+There is one offline chain: **v5–v10 → v11 → owner keys v12 → authority v13**.
+Rehearse on a restored disposable backup. Stop admission, schedules, workers,
+owners and every physical writer, and keep them stopped through v13. Existing
+v11 or v12 schemas enter at their next step; never relabel a schema or skip a
+step.
 
-1. Run `inspectRetainedDataDrain(session, schema)` from
-   `@copilotz/copilotz/actions`. Deliveries, obligations, operations, streams,
-   begun effects and physical writers must have confirmed terminal states;
-   requesting cancellation alone is insufficient. The application must also
-   account for its own external-work journals.
-2. Call `prepareRetainedDataUpgrade(session, schema)`. Preparation commits the
-   physical/catalog conversion and records a unique source/target identity with
-   reserved schema version `0`. Both runtime generations refuse that marker.
-   Keep the returned plan privately with the backup; repeat preparation after
-   interruption to recover the same identity and physical versions.
-3. Review the exact plan fingerprint, content copies and ownership decisions.
-   Use explicit storage backend mappings for external stores. Missing bytes,
-   ambiguous ownership or mixed inventory fail closed.
-4. Finalize with
+1. Run `inspectRetainedDataDrain(session, schema)` (or the CLI `drain`).
+   Deliveries, obligations, operations, streams, begun effects and physical
+   writers must have confirmed terminal states. Cancellation requests are
+   insufficient; also drain application-owned external-work journals.
+2. For v5–v10, call `prepareRetainedDataUpgrade(session, schema)` and retain its
+   plan privately. Preparation records the source, **target v11**, and unique
+   identity under reserved marker `0`. Review the exact fingerprint, physical
+   copies and explicit ownership decisions. Repeat preparation to recover the
+   same identity after interruption. External stores require explicit mappings.
+3. Call
    `upgradeActionLifecycle(session, schema, { plan,
-   reviewedFingerprint: plan.fingerprint, contentDecisions })`.
-   The owner revalidates physical evidence and exact intent, installs the
-   complete v11 shape, removes execution retention pins, migrates logical
-   content, backfills sequence and restores immutable-history protection in one
-   transaction. Only successful final validation publishes the ready marker.
+   reviewedFingerprint: plan.fingerprint, contentDecisions, ownerKeys })`.
+   The retained-data transaction rechecks drain, bytes and accepted intent,
+   installs v11, converts logical content and sequence, and preserves immutable
+   history. The v11 → v12 transaction then reencrypts retained protected values
+   under an owner data key wrapped by the application's master adapter.
+   `ownerKeys` supplies `sourceAdapter`, `masterAdapter`, and, if needed,
+   original protected `bindings` and `readExternalBody`. When starting at v11,
+   omit the retained plan. The standalone `migrateOwnerKeys` API also performs
+   exactly this step and stops at v12.
+4. At v12, run `inspectAuthorityUpgrade(session, schema)` (CLI
+   `authority-inventory`). Review the resulting invocations and ingress events
+   against application policy. Build an explicit `AuthorityUpgradeManifest`
+   containing policy revisions, exact invocation/event digests, authority
+   bindings, and any required original Action schemas or ingress provenance.
+   Inspect after key conversion because reencrypting captures can change their
+   digests. Even an empty inventory requires an explicit empty manifest.
+5. Call `upgradeActionLifecycle(session, schema, { authority })` to commit v12 →
+   v13. This validates every binding, writes the accepted manifest receipt,
+   invalidates old transport attachments, and fences the old owner epoch.
+   Validate the schema and catalog, then start the application.
 
-A lost commit reply is an unknown outcome. Inspect durable state or retry the
-same reviewed plan and decisions; never infer rollback or change the marker by
-hand. Finalization persists both accepted commitments, so changed-intent retries
-are rejected even after completion. Historical sequence preserves canonical
-position order and existing cursors; it does not reconstruct concurrent commit
-chronology that was never recorded. New owner writes follow commit order.
+When all reviewed inputs are already available,
+`upgradeActionLifecycle(session, schema, { plan, reviewedFingerprint,
+contentDecisions, ownerKeys, authority })`
+runs the entire chain in order. Missing inputs stop at the last committed
+checkpoint with `UpgradeStepRequiredError`:
+`copilotz_upgrade_owner_keys_required` at v11 or
+`copilotz_upgrade_authority_required` at v12. Its `fromVersion` and `toVersion`
+identify the next step. These checkpoints are not ready for this runtime.
 
-The repository's [offline guide](../scripts/upgrade-retained-data.md) documents
-the `drain`, `prepare` and `apply` CLI, backend selection, failure recovery and
-retained-data rehearsal. None of these steps runs automatically in production.
+Each step rechecks drain inside its exclusive transaction. Failed transactions
+roll back that step. After a lost commit reply, inspect the marker or retry the
+same inputs. Retained plan/decision fingerprints, the key-migration receipt, and
+the authority-manifest fingerprint make retries resumable and idempotent.
+Changed reviewed plans, decisions or authority manifests are rejected on replay.
+Historical sequence follows canonical position order and preserves cursors; new
+owner writes follow commit order.
+
+The repository's [offline guide](../scripts/upgrade-retained-data.md) gives the
+exact CLI commands and adapter-module contract. No step runs at startup.
 
 ### Receipt authority limitations
 
@@ -86,7 +106,7 @@ history.
 Copilotz stores three independent things, and each one evolves differently:
 
 1. **Physical schema.** The SQL tables for Events, Collections and Bodies are
-   validated against Event schema v7. Startup provisions fresh Core tables and
+   validated against Event schema v13. Startup provisions fresh Core tables and
    validates existing ones; incompatible Core schemas are rejected. Declared
    Collection indexes are provisioned separately as described below. Stored
    records are never reset or rewritten.
@@ -198,11 +218,11 @@ layers; check each optional feature you enable for its own provisioning needs.
 
 ### Upgrade layers
 
-| Layer              | Current state                        | How it is applied                                                                                          |
-| ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Event/owner schema | v11, complete converted owner layout | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
-| Operation catalog  | `stream-taxonomy-content-v1`         | Installed by fresh provisioning or the same retained-data conversion                                       |
-| Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
+| Layer              | Current state                 | How it is applied                                                                                          |
+| ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Event/owner schema | v13, owner keys and authority | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
+| Operation catalog  | `stream-taxonomy-content-v1`  | Installed by fresh provisioning or the same retained-data conversion                                       |
+| Core history index | Optional since 0.85.1         | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

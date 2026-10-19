@@ -1,3 +1,4 @@
+import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
@@ -61,7 +62,14 @@ async function fixture(active = false) {
   await db.query(
     `UPDATE ${store.tables.copilotz_schema_metadata} SET version = 5`,
   );
-  return { db, schema, store, root, catalogTables };
+  return {
+    db,
+    schema,
+    store,
+    root,
+    catalogTables,
+    options: await testUpgradeOptions(db, schema),
+  };
 }
 
 Deno.test("offline lifecycle upgrade preserves immutable history and is repeatable", async () => {
@@ -70,8 +78,8 @@ Deno.test("offline lifecycle upgrade preserves immutable history and is repeatab
     const before = await f.db.query(
       `SELECT * FROM ${f.store.tables.events} ORDER BY position`,
     );
-    await upgradeActionLifecycle(f.db, f.schema);
-    await upgradeActionLifecycle(f.db, f.schema);
+    await upgradeActionLifecycle(f.db, f.schema, f.options);
+    await upgradeActionLifecycle(f.db, f.schema, f.options);
     await validateCopilotzSchema(f.db, f.schema);
     await validateOperationCatalog(f.db, f.schema);
     assertEquals(
@@ -94,7 +102,7 @@ Deno.test("offline lifecycle upgrade refuses in-flight old work without partial 
   const f = await fixture(true);
   try {
     await assertRejects(
-      () => upgradeActionLifecycle(f.db, f.schema),
+      () => upgradeActionLifecycle(f.db, f.schema, f.options),
       Error,
       "Drain existing",
     );
@@ -135,7 +143,7 @@ Deno.test("failed finalization keeps the prepared non-ready marker and resumes",
   };
   try {
     await assertRejects(
-      () => upgradeActionLifecycle(failing, f.schema),
+      () => upgradeActionLifecycle(failing, f.schema, f.options),
       Error,
       "injected upgrade failure",
     );
@@ -157,7 +165,7 @@ Deno.test("failed finalization keeps the prepared non-ready marker and resumes",
       )).rows,
       [],
     );
-    await upgradeActionLifecycle(f.db, f.schema);
+    await upgradeActionLifecycle(f.db, f.schema, f.options);
   } finally {
     await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
     await f.db.close();
@@ -209,7 +217,11 @@ Deno.test("offline owner upgrade refuses active obligations without changing his
     );
     await db.query(`DELETE FROM ${tables.open_actions}`);
     await db.query(`UPDATE ${tables.event_deliveries} SET status='cancelled'`);
-    await upgradeActionLifecycle(db, schema);
+    await upgradeActionLifecycle(
+      db,
+      schema,
+      await testUpgradeOptions(db, schema),
+    );
     assertEquals(
       (await validateCopilotzSchema(db, schema)).version,
       EVENT_SCHEMA_VERSION,
@@ -253,7 +265,11 @@ for (const baseline of [6, 7]) {
         [baseline],
       );
       const history = (await db.query(`SELECT * FROM ${tables.events}`)).rows;
-      await upgradeActionLifecycle(db, schema);
+      await upgradeActionLifecycle(
+        db,
+        schema,
+        await testUpgradeOptions(db, schema),
+      );
       assertEquals(
         (await validateCopilotzSchema(db, schema)).version,
         EVENT_SCHEMA_VERSION,
@@ -269,7 +285,7 @@ for (const baseline of [6, 7]) {
   });
 }
 
-for (const baseline of [8, 9]) {
+for (const baseline of [8, 9, 10]) {
   Deno.test(`retained owner v${baseline} requires offline upgrade and preserves durable owner state`, async () => {
     const db = await createTestDatabase({
       url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
@@ -295,7 +311,7 @@ for (const baseline of [8, 9]) {
          VALUES('schema','database','database:default','retained-retirement','retained-token',TRUE)`,
       );
       const receipts = (await db.query(
-        `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts}`,
+        `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts} WHERE key NOT IN ('owner-keys-upgrade:12','authorization-upgrade:13')`,
       )).rows;
       const retirements =
         (await db.query(`SELECT * FROM ${tables.owner_body_retirements}`)).rows;
@@ -341,7 +357,11 @@ for (const baseline of [8, 9]) {
           .rows,
         history,
       );
-      await upgradeActionLifecycle(db, schema);
+      await upgradeActionLifecycle(
+        db,
+        schema,
+        await testUpgradeOptions(db, schema),
+      );
       await upgradeActionLifecycle(db, schema);
       await provisionCopilotzSchema(db, schema);
       assertEquals(
@@ -355,7 +375,7 @@ for (const baseline of [8, 9]) {
       );
       assertEquals(
         (await db.query(
-          `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts}`,
+          `SELECT owner,domain,key,principal,kind,intent,result FROM ${tables.owner_receipts} WHERE key NOT IN ('owner-keys-upgrade:12','authorization-upgrade:13')`,
         )).rows,
         receipts,
       );
@@ -410,6 +430,188 @@ for (const baseline of [8, 9]) {
     } finally {
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
+    }
+  });
+}
+
+Deno.test("linear chain stops at each missing input and resumes the exact reviewed plan", async () => {
+  const f = await fixture();
+  try {
+    for (
+      const table of [
+        "owner_data_keys",
+        "authorization_sessions",
+        "authorization_channels",
+        "authorization_invocations",
+      ] as const
+    ) {
+      await f.db.query(`DROP TABLE ${f.store.tables[table]}`);
+    }
+    const { prepareRetainedDataUpgrade } = await import("./upgrade.ts");
+    const { UpgradeStepRequiredError } = await import("./upgrade-errors.ts");
+    const plan = (await prepareRetainedDataUpgrade(f.db, f.schema))!;
+    assertEquals(plan.targetVersion, 11);
+    const reviewed = { plan, reviewedFingerprint: plan.fingerprint };
+    const version = async () =>
+      Number(
+        (await f.db.query<{ version: number }>(
+          `SELECT version FROM ${f.store.tables.copilotz_schema_metadata}`,
+        )).rows[0].version,
+      );
+    const keyError = await assertRejects(
+      () => upgradeActionLifecycle(f.db, f.schema, reviewed),
+      UpgradeStepRequiredError,
+    );
+    assertEquals(keyError.code, "copilotz_upgrade_owner_keys_required");
+    assertEquals([keyError.fromVersion, keyError.toVersion], [11, 12]);
+    assertEquals(await version(), 11);
+    assertEquals(
+      (await f.db.query(
+        `SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND (table_name='owner_data_keys' OR table_name LIKE 'authorization_%')`,
+        [f.schema],
+      )).rows,
+      [],
+    );
+    await assertRejects(
+      () =>
+        upgradeActionLifecycle(f.db, f.schema, {
+          ...reviewed,
+          authority: f.options.authority,
+        }),
+      UpgradeStepRequiredError,
+    );
+    assertEquals(await version(), 11);
+    const keys = { ...reviewed, ownerKeys: f.options.ownerKeys };
+    const authorityError = await assertRejects(
+      () => upgradeActionLifecycle(f.db, f.schema, keys),
+      UpgradeStepRequiredError,
+    );
+    assertEquals(authorityError.code, "copilotz_upgrade_authority_required");
+    assertEquals([authorityError.fromVersion, authorityError.toVersion], [
+      12,
+      13,
+    ]);
+    assertEquals(await version(), 12);
+    const key =
+      (await f.db.query(`SELECT * FROM ${f.store.tables.owner_data_keys}`))
+        .rows;
+    assertEquals(key.length, 1);
+    await assertRejects(
+      () => prepareRetainedDataUpgrade(f.db, f.schema),
+      UpgradeStepRequiredError,
+    );
+    await assertRejects(
+      () =>
+        upgradeActionLifecycle(f.db, f.schema, {
+          ...keys,
+          contentDecisions: [{
+            namespace: "space",
+            assetId: "changed",
+            ownerId: null,
+          }],
+        }),
+      Error,
+      "accepted plan or ownership decisions",
+    );
+    await upgradeActionLifecycle(f.db, f.schema, {
+      ...keys,
+      authority: f.options.authority,
+    });
+    await upgradeActionLifecycle(f.db, f.schema, {
+      ...keys,
+      authority: f.options.authority,
+    });
+    assertEquals(await version(), 13);
+    assertEquals(
+      (await f.db.query(`SELECT * FROM ${f.store.tables.owner_data_keys}`))
+        .rows,
+      key,
+    );
+    await assertRejects(
+      () =>
+        upgradeActionLifecycle(f.db, f.schema, {
+          authority: {
+            ...f.options.authority,
+            policies: [{ id: "changed", revision: "1" }],
+          },
+        }),
+      Error,
+      "accepted manifest",
+    );
+  } finally {
+    await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
+    await f.db.close();
+  }
+});
+
+for (const step of [11, 12]) {
+  Deno.test(`v${step} checkpoint refuses live work, rolls back failure and resumes a lost commit`, async () => {
+    const f = await fixture();
+    try {
+      await assertRejects(() => upgradeActionLifecycle(f.db, f.schema));
+      if (step === 12) {
+        await assertRejects(() =>
+          upgradeActionLifecycle(f.db, f.schema, {
+            ownerKeys: f.options.ownerKeys,
+          })
+        );
+      }
+      const version = async () =>
+        Number(
+          (await f.db.query<{ version: number }>(
+            `SELECT version FROM ${f.store.tables.copilotz_schema_metadata}`,
+          )).rows[0].version,
+        );
+      assertEquals(await version(), step);
+      await f.db.query(
+        `INSERT INTO ${f.store.tables.open_actions}(namespace,action_run_id,action_id,scope_id,invoked_event_id,state) VALUES('space','pending','fixture','scope',$1,'invoked')`,
+        [f.root.event.id],
+      );
+      await assertRejects(
+        () => upgradeActionLifecycle(f.db, f.schema, f.options),
+        Error,
+        "Drain existing",
+      );
+      assertEquals(await version(), step);
+      await f.db.query(`DELETE FROM ${f.store.tables.open_actions}`);
+      const sqlMarker = step === 11 ? "SET version=12" : "SET version=13";
+      const failure = (lost: boolean): SqlSession => ({
+        query: f.db.query,
+        async transaction(run) {
+          let applied = false;
+          const result = await f.db.transaction((tx) =>
+            run({
+              query(sql, params) {
+                if (sql.includes(sqlMarker)) {
+                  if (!lost) throw new Error("injected step failure");
+                  applied = true;
+                }
+                return tx.query(sql, params);
+              },
+            })
+          );
+          if (applied) throw new Error("commit acknowledgement lost");
+          return result;
+        },
+      });
+      await assertRejects(
+        () => upgradeActionLifecycle(failure(false), f.schema, f.options),
+        Error,
+        "injected step failure",
+      );
+      assertEquals(await version(), step);
+      await assertRejects(
+        () => upgradeActionLifecycle(failure(true), f.schema, f.options),
+        Error,
+        "commit acknowledgement lost",
+      );
+      assertEquals(await version(), step + 1);
+      await upgradeActionLifecycle(f.db, f.schema, f.options);
+      await upgradeActionLifecycle(f.db, f.schema, f.options);
+      assertEquals(await version(), 13);
+    } finally {
+      await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
+      await f.db.close();
     }
   });
 }

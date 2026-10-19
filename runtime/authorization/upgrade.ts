@@ -1,5 +1,10 @@
+import { authorityRequired } from "../actions/upgrade-errors.ts";
+import {
+  assertRetainedDataDrained,
+  inspectRetainedDataDrain,
+} from "../actions/drain.ts";
 import { protectedActionPublicInput } from "../actions/capture-input.ts";
-/** Offline v11 -> v12 upgrade. Producers must be stopped; every binding is explicit. */
+/** Offline v12 -> v13 upgrade. Producers must be stopped; every binding is explicit. */
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
 import {
   createCoreTableNames,
@@ -70,7 +75,7 @@ export async function inspectAuthorityUpgrade(
   }>(
     `SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
     FROM ${tables.events} e LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
-    WHERE COALESCE(b.body->'data',b.body)->>'status'='invoked' OR e.owner_ingress IS NOT NULL OR e.type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') OR EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.event_id=e.id AND d.status IN ('pending','leased','retry_wait'))
+    WHERE COALESCE(b.body->'data',b.body)->>'status'='invoked' OR NULLIF(e.owner_ingress,'null'::jsonb) IS NOT NULL OR e.type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') OR EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.event_id=e.id AND d.status IN ('pending','leased','retry_wait'))
     ORDER BY e.namespace,e.id`,
   )).rows;
   const receipts =
@@ -140,15 +145,12 @@ export async function inspectAuthorityUpgrade(
   }
   return { invocations, events };
 }
-export async function applyAuthorityUpgrade(
+async function applyAuthorityUpgrade(
   transaction: SqlExecutor,
   schema: string,
-  supplied?: AuthorityUpgradeManifest,
+  manifest: AuthorityUpgradeManifest,
 ): Promise<void> {
   const inventory = await inspectAuthorityUpgrade(transaction, schema);
-  const manifest = supplied
-    ? captureHostCommandJson(supplied) as AuthorityUpgradeManifest
-    : { policies: [], invocations: [], events: [] };
   const plan = await planAuthorityMigration(
     inventory.invocations,
     manifest.invocations,
@@ -243,7 +245,7 @@ export async function applyAuthorityUpgrade(
       }
     }
     await transaction.query(
-      `UPDATE ${tables.events} SET owner_ingress=COALESCE(owner_ingress, $4::jsonb) || jsonb_build_object('authority',$3::jsonb) WHERE namespace=$1 AND id=$2`,
+      `UPDATE ${tables.events} SET owner_ingress=COALESCE(NULLIF(owner_ingress,'null'::jsonb), $4::jsonb) || jsonb_build_object('authority',$3::jsonb) WHERE namespace=$1 AND id=$2`,
       [
         event.namespace,
         event.eventId,
@@ -328,14 +330,11 @@ export async function upgradeAuthoritySchema(
   schemaName: string,
   supplied?: AuthorityUpgradeManifest,
 ): Promise<void> {
+  if (!supplied) throw authorityRequired();
   const schema = validateEventSchemaName(schemaName);
   const tables = createCoreTableNames(schema);
-  const manifest = supplied
-    ? captureHostCommandJson(supplied) as AuthorityUpgradeManifest
-    : undefined;
-  const fingerprint = await digest(
-    manifest ?? { policies: [], invocations: [], events: [] },
-  );
+  const manifest = captureHostCommandJson(supplied) as AuthorityUpgradeManifest;
+  const fingerprint = await digest(manifest);
   await session.transaction(async (transaction) => {
     const names = (await transaction.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name",
@@ -372,6 +371,9 @@ export async function upgradeAuthoritySchema(
     if (version !== 12) {
       throw new Error("Authority upgrade requires schema version 12.");
     }
+    assertRetainedDataDrained(
+      await inspectRetainedDataDrain(transaction, schema),
+    );
     await applyAuthorityUpgrade(transaction, schema, manifest);
     await transaction.query(
       `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical','authorization-upgrade:13','offline-upgrade','authorization.upgrade',$1::jsonb,'null')`,

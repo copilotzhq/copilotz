@@ -1,3 +1,5 @@
+import { upgradeActionLifecycle } from "../runtime/actions/upgrade.ts";
+import { testAuthorityManifest } from "../runtime/testing/upgrade.ts";
 import type { SqlSession } from "../runtime/events/session.ts";
 import { prepareRetainedDataUpgrade } from "../runtime/actions/upgrade.ts";
 import {
@@ -245,6 +247,27 @@ for (const objectStore of [false, true]) {
         }),
         { protectedValues: 1, bodies: 1 },
       );
+      assertEquals(
+        Number(
+          (await db.query<{ version: number }>(
+            `SELECT version FROM ${tables.copilotz_schema_metadata}`,
+          )).rows[0].version,
+        ),
+        12,
+      );
+      // Key migration stops at v12; normal activation requires the next step.
+      await assertRejects(() => validateCopilotzSchema(db, schema));
+      const migrated = await migrateOwnerKeys({
+        session: db,
+        schema,
+        sourceAdapter: source,
+        masterAdapter: master,
+        readExternalBody,
+      });
+      assertEquals(migrated, { protectedValues: 1, bodies: 1 });
+      await upgradeActionLifecycle(db, schema, {
+        authority: await testAuthorityManifest(db, schema),
+      });
       await validateCopilotzSchema(db, schema);
       const row = (await db.query<{ body: typeof history; digest: string }>(
         `SELECT body,digest FROM ${tables.event_bodies}`,
@@ -301,16 +324,19 @@ for (const objectStore of [false, true]) {
         `SELECT current_copy FROM ${tables.content_logical_bodies}`,
       )).rows[0].current_copy;
       assert(current.startsWith(`schemas/${schema}/`));
-      await assertRejects(
-        () =>
-          migrateOwnerKeys({
-            session: db,
-            schema,
-            sourceAdapter: source,
-            masterAdapter: master,
-          }),
-        Error,
-        "v11",
+      assertEquals(
+        await migrateOwnerKeys({
+          session: db,
+          schema,
+          sourceAdapter: source,
+          masterAdapter: master,
+        }),
+        { protectedValues: 1, bodies: 1 },
+      );
+      assertEquals(
+        (await db.query(`SELECT body,digest FROM ${tables.event_bodies}`))
+          .rows[0],
+        row,
       );
     } finally {
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);

@@ -353,11 +353,14 @@ export async function provisionCopilotzSchema(
 /** Additive owner upgrade: semantic events and open obligations remain untouched. */
 export function createOwnerSchemaStatements(
   schemaName: string,
+  options: { version?: 11 | 13 } = {},
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [
-    ...createOwnerDataKeyStatements(schemaName),
-    ...authorizationSchemaStatements(schemaName),
+    ...(options.version === 11 ? [] : createOwnerDataKeyStatements(schemaName)),
+    ...(options.version === 11
+      ? []
+      : authorizationSchemaStatements(schemaName)),
     ...createEffectSchemaStatements(schemaName),
     ...contentCatalogStatements(validateEventSchemaName(schemaName)),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (
@@ -450,7 +453,7 @@ export function createActionObligationStatements(
 /** Fresh runtime tables. Only atomic provisioning writes the ready marker. */
 export function createCoreSchemaStatements(
   schemaName = "public",
-  options: Readonly<{ marker?: boolean }> = {},
+  options: Readonly<{ marker?: boolean; ownerVersion?: 11 | 13 }> = {},
 ): readonly string[] {
   const schemaId = validateEventSchemaName(schemaName);
   const schema = quoteEventIdentifier(schemaId);
@@ -604,7 +607,7 @@ export function createCoreSchemaStatements(
     `ALTER TABLE ${tables.event_deliveries}
       ALTER COLUMN settlement_scope_id SET NOT NULL`,
     ...createActionObligationStatements(schemaId),
-    ...createOwnerSchemaStatements(schemaId),
+    ...createOwnerSchemaStatements(schemaId, { version: options.ownerVersion }),
     `CREATE INDEX IF NOT EXISTS "deliveries_available_idx"
       ON ${tables.event_deliveries}
         (status, available_at, priority DESC, created_at, id)

@@ -1,3 +1,7 @@
+import { bindTestActions } from "../testing/authority.ts";
+import { testAuthorityManifest } from "../testing/upgrade.ts";
+import { testSecretAdapter } from "../testing/secret-adapter.ts";
+import { UpgradeStepRequiredError } from "./upgrade-errors.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { restoreRetainedFixture } from "../../scripts/fixtures/retained-upgrade/load.ts";
@@ -20,8 +24,38 @@ import { inspectRetainedDataDrain } from "./drain.ts";
 import {
   prepareRetainedDataUpgrade,
   type RetainedDataUpgradePlan,
-  upgradeActionLifecycle,
+  upgradeActionLifecycle as upgradeChain,
 } from "./upgrade.ts";
+
+const inputs = new Map<string, Parameters<typeof upgradeChain>[2]>();
+async function upgradeActionLifecycle(
+  db: SqlSession,
+  schema: string,
+  options: Parameters<typeof upgradeChain>[2] = {},
+) {
+  let supplied = inputs.get(schema);
+  if (!supplied) {
+    const adapter = await testSecretAdapter();
+    supplied = {
+      ownerKeys: { sourceAdapter: adapter, masterAdapter: adapter },
+    };
+    inputs.set(schema, supplied);
+  }
+  try {
+    await upgradeChain(db, schema, { ...supplied, ...options });
+  } catch (error) {
+    if (
+      !(error instanceof UpgradeStepRequiredError) ||
+      error.code !== "copilotz_upgrade_authority_required"
+    ) throw error;
+    supplied = {
+      ...supplied,
+      authority: await testAuthorityManifest(db, schema),
+    };
+    inputs.set(schema, supplied);
+    await upgradeChain(db, schema, { ...supplied, ...options });
+  }
+}
 
 async function fixture() {
   const db = await createTestDatabase({
@@ -170,7 +204,24 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
       upgraded.map(({ seq: _seq, owner_ingress: _ingress, ...event }) => event),
       history,
     );
-    assert(upgraded.every((event) => event.owner_ingress === null));
+    const manifest = inputs.get(f.schema)!.authority!;
+    for (const event of upgraded) {
+      const binding = manifest.events.find((entry) =>
+        entry.eventId === event.id
+      );
+      assertEquals(
+        event.owner_ingress,
+        binding ? { kind: "host", authority: binding.authority } : null,
+      );
+    }
+    assertEquals(
+      Number(
+        (await f.db.query<{ count: number }>(
+          `SELECT COUNT(*)::integer AS count FROM ${f.tables.authorization_invocations}`,
+        )).rows[0].count,
+      ),
+      manifest.invocations.length,
+    );
     assertEquals(
       upgraded.map((event) => Number(event.seq)),
       history.map((_, index) => index + 1),
@@ -197,7 +248,9 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
       [],
     );
     assertEquals(
-      (await f.db.query(`SELECT * FROM ${f.tables.owner_receipts}`)).rows,
+      (await f.db.query(
+        `SELECT * FROM ${f.tables.owner_receipts} WHERE kind NOT IN ('owner-keys.upgrade','authorization.upgrade','action.protected-input')`,
+      )).rows,
       [],
     );
     assertEquals(
@@ -279,6 +332,20 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
       database: { ...f.db, close: () => Promise.resolve() },
       databaseSchema: f.schema,
       namespace: "archive",
+      authorization: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate: () => ({ actions: { prepareParent: {}, fresh: {} } }),
+          },
+        },
+        actions: {
+          prepareParent: { id: "fixture", revision: "1" },
+          fresh: { id: "fixture", revision: "1" },
+        },
+        collections: {},
+      },
       plugins: [definePlugin({
         id: "upgrade.fixture",
         version: "1",
@@ -297,16 +364,23 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
         },
       })],
     });
+    const source = upgraded.find((event) =>
+      event.deduplication_id === "host:retained-preparation"
+    )!;
+    const authority = manifest.events.find((entry) =>
+      entry.eventId === source.id
+    )!.authority;
+    const actions = bindTestActions(app.actions, authority);
     try {
       assertEquals(
-        await app.actions.prepareParent({}, {
+        await actions.prepareParent({}, {
           idempotencyKey: "retained-preparation",
         }),
         { value: "original captured input" },
       );
       assertEquals(executed, 0);
       assertEquals(
-        await app.actions.fresh({ ready: true }, {
+        await actions.fresh({ ready: true }, {
           idempotencyKey: "new-owner-request",
         }),
         { ready: true },
@@ -588,8 +662,8 @@ Deno.test("lost prepare and final commit acknowledgements recover from durable u
       Error,
       "commit acknowledgement lost",
     );
-    assertEquals(await marker(f.db, f.schema), EVENT_SCHEMA_VERSION);
-    const history =
+    assertEquals(await marker(f.db, f.schema), 11);
+    const retainedHistory =
       (await f.db.query(`SELECT * FROM ${f.tables.events} ORDER BY position`))
         .rows;
     const accepted = (await f.db.query(
@@ -601,6 +675,13 @@ Deno.test("lost prepare and final commit acknowledgements recover from durable u
       await digestContent(new TextEncoder().encode(JSON.stringify(decisions))),
     );
     await apply(f.db);
+    const history =
+      (await f.db.query(`SELECT * FROM ${f.tables.events} ORDER BY position`))
+        .rows;
+    assertEquals(
+      history.map(({ owner_ingress: _ingress, ...event }) => event),
+      retainedHistory.map(({ owner_ingress: _ingress, ...event }) => event),
+    );
     // Canonical decision property order does not change the accepted intent.
     await upgradeActionLifecycle(f.db, f.schema, {
       plan,

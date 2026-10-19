@@ -1,3 +1,4 @@
+import { resolve, toFileUrl } from "@std/path";
 import {
   type AuthorityUpgradeManifest,
   inspectAuthorityUpgrade,
@@ -6,6 +7,7 @@ import {
 import { openManagedOminipgDatabase } from "../runtime/persistence/ominipg.ts";
 import { inspectRetainedDataDrain } from "../runtime/actions/drain.ts";
 import {
+  type OwnerKeyUpgradeOptions,
   prepareRetainedDataUpgrade,
   type RetainedDataUpgradePlan,
   upgradeActionLifecycle,
@@ -20,13 +22,12 @@ if (
   !schema ||
   !["drain", "prepare", "apply", "authority-inventory"].includes(command) ||
   args.some((arg) =>
-    !["schema", "plan", "reviewed", "decisions", "authority"].some((name) =>
-      arg.startsWith(`--${name}=`)
-    )
+    !["schema", "plan", "reviewed", "decisions", "authority", "owner-keys"]
+      .some((name) => arg.startsWith(`--${name}=`))
   )
 ) {
   throw new Error(
-    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json]",
+    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --owner-keys=MODULE.ts --authority=FILE.json]",
   );
 }
 const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
@@ -75,32 +76,35 @@ try {
         await Deno.readTextFile(authorityPath),
       ) as AuthorityUpgradeManifest
       : undefined;
-    if (authority && !path) {
-      await upgradeActionLifecycle(database.session, schema, { authority });
-      console.log(JSON.stringify({ state: "complete", version: 13 }));
-    } else {
-      if (!path || !reviewedFingerprint) {
-        throw new Error(
-          "Finalization requires --plan=FILE.json and --reviewed=FINGERPRINT.",
-        );
-      }
-      const plan = JSON.parse(
-        await Deno.readTextFile(path),
-      ) as RetainedDataUpgradePlan;
-      const decisionsPath = get("decisions");
-      const contentDecisions = decisionsPath
-        ? JSON.parse(
-          await Deno.readTextFile(decisionsPath),
-        ) as ContentMigrationDecision[]
-        : undefined;
-      await upgradeActionLifecycle(database.session, schema, {
-        plan,
-        reviewedFingerprint,
-        contentDecisions,
-        authority,
-      });
-      console.log(JSON.stringify({ state: "complete", upgradeId: plan.id }));
+    const keysPath = get("owner-keys");
+    const ownerKeys = keysPath
+      ? (await import(toFileUrl(resolve(keysPath)).href))
+        .default as OwnerKeyUpgradeOptions
+      : undefined;
+    if (keysPath && (!ownerKeys?.sourceAdapter || !ownerKeys?.masterAdapter)) {
+      throw new TypeError(
+        "--owner-keys module must default-export sourceAdapter and masterAdapter.",
+      );
     }
+    const plan = path
+      ? JSON.parse(await Deno.readTextFile(path)) as RetainedDataUpgradePlan
+      : undefined;
+    const decisionsPath = get("decisions");
+    const contentDecisions = decisionsPath
+      ? JSON.parse(
+        await Deno.readTextFile(decisionsPath),
+      ) as ContentMigrationDecision[]
+      : undefined;
+    await upgradeActionLifecycle(database.session, schema, {
+      plan,
+      reviewedFingerprint,
+      contentDecisions,
+      ownerKeys,
+      authority,
+    });
+    console.log(
+      JSON.stringify({ state: "complete", version: 13, upgradeId: plan?.id }),
+    );
   }
 } finally {
   await database.close();

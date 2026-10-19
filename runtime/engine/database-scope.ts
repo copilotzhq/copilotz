@@ -508,7 +508,14 @@ export function createDatabaseScope(
               if (constraints.observationKeys) {
                 metadata.observationKeys = [...constraints.observationKeys];
               }
-              metadata.operationMetadata = operationMetadata;
+              // Empty policy output must preserve an older admission's exact
+              // metadata so its immutable deduplication identity still replays.
+              if (
+                Object.keys(operationMetadata).length ||
+                Object.hasOwn(metadata, "operationMetadata")
+              ) {
+                metadata.operationMetadata = operationMetadata;
+              }
               accepted = { ...draft, metadata };
             }
             return await coordinator.commitMutation({

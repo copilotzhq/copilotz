@@ -114,7 +114,9 @@ export type {
   VectorWrite,
 } from "../vectors/index.ts";
 
+export { UpgradeStepRequiredError } from "./upgrade-errors.ts";
 export {
+  type OwnerKeyUpgradeOptions,
   prepareRetainedDataUpgrade,
   type RetainedDataUpgradePlan,
   type RetainedDataUpgradeStorage,

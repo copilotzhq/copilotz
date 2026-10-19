@@ -1,5 +1,6 @@
+import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
+import { authorityRequired, ownerKeysRequired } from "./upgrade-errors.ts";
 import {
-  applyAuthorityUpgrade,
   type AuthorityUpgradeManifest,
   upgradeAuthoritySchema,
 } from "../authorization/upgrade.ts";
@@ -61,6 +62,13 @@ export type RetainedDataUpgradePlan = Readonly<{
   ownership: ContentMigrationReport;
   fingerprint: string;
 }>;
+const RETAINED_TARGET_VERSION = 11;
+
+export type OwnerKeyUpgradeOptions = Omit<
+  Parameters<typeof migrateOwnerKeys>[0],
+  "session" | "schema"
+>;
+
 type Marker = {
   version: number | string;
   upgrade_from?: number | string | null;
@@ -108,8 +116,8 @@ function assertInterrupted(value: Marker) {
     Number(value.version) !== 0 || !value.upgrade_id ||
     !Number.isInteger(Number(value.upgrade_from)) ||
     Number(value.upgrade_from) < 5 ||
-    Number(value.upgrade_from) >= EVENT_SCHEMA_VERSION ||
-    Number(value.upgrade_to) !== EVENT_SCHEMA_VERSION ||
+    Number(value.upgrade_from) >= RETAINED_TARGET_VERSION ||
+    Number(value.upgrade_to) !== RETAINED_TARGET_VERSION ||
     value.upgrade_reviewed_fingerprint != null ||
     value.upgrade_decisions_fingerprint != null
   ) {
@@ -208,36 +216,9 @@ export async function prepareRetainedDataUpgrade(
       await validateOperationCatalog(joined(transaction), schema);
       return undefined;
     }
-    if (Number(current.version) > 0) {
-      const tables = createCoreTableNames(schema);
-      const protectedHistory = (await transaction.query(
-        `SELECT 1 FROM ${tables.event_bodies} WHERE body::text LIKE '%copilotz.action.protected-value.v1%'
-         UNION ALL SELECT 1 FROM ${tables.nodes} WHERE data::text LIKE '%copilotz.action.protected-value.v1%' LIMIT 1`,
-      )).rows;
-      const present = new Set((await transaction.query<{ table_name: string }>(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema=$1",
-        [schema],
-      )).rows.map((row) => row.table_name));
-      const protectedBytes = present.has("content_bodies")
-        ? (await transaction.query(
-          `SELECT 1 FROM ${
-            quoteEventIdentifier(schema)
-          }.content_bodies WHERE media_type='application/vnd.copilotz.action-protected-value+json' LIMIT 1`,
-        )).rows
-        : [];
-      const externalCopies = present.has("content_copies")
-        ? (await transaction.query(
-          `SELECT 1 FROM ${tables.content_copies} WHERE backend_kind<>'database' AND state='current' LIMIT 1`,
-        )).rows
-        : [];
-      if (
-        protectedHistory.length || protectedBytes.length ||
-        externalCopies.length
-      ) {
-        throw new Error(
-          "Retained protected values or object copies require the offline owner-key migration from v11; upgrade earlier schemas to v11 with the prior release first.",
-        );
-      }
+    if (Number(current.version) === 11) throw ownerKeysRequired();
+    if (Number(current.version) === 12) {
+      throw authorityRequired();
     }
     if (Number(current.version) === 0) {
       assertInterrupted(current);
@@ -250,7 +231,7 @@ export async function prepareRetainedDataUpgrade(
     if (
       !Number.isInteger(Number(current.version)) ||
       Number(current.version) < 5 ||
-      Number(current.version) >= EVENT_SCHEMA_VERSION
+      Number(current.version) >= RETAINED_TARGET_VERSION
     ) {
       throw new Error(
         "Retained-data upgrade requires a supported pre-conversion or owner schema baseline.",
@@ -268,7 +249,7 @@ export async function prepareRetainedDataUpgrade(
     const id = crypto.randomUUID();
     const updated = await transaction.query<Marker>(
       `UPDATE ${metadata} SET version=0,upgrade_from=$1,upgrade_to=$2,upgrade_id=$3,upgrade_reviewed_fingerprint=NULL,upgrade_decisions_fingerprint=NULL WHERE singleton AND version=$1 RETURNING *`,
-      [Number(current.version), EVENT_SCHEMA_VERSION, id],
+      [Number(current.version), RETAINED_TARGET_VERSION, id],
     );
     if (updated.rows.length !== 1) {
       throw new Error("Upgrade source marker changed.");
@@ -297,7 +278,7 @@ export async function prepareRetainedDataUpgrade(
  * Calling without a plan remains convenient only for schemas with no content to
  * review. Populated schemas must use prepareRetainedDataUpgrade first.
  */
-export async function upgradeActionLifecycle(
+async function finalizeRetainedDataUpgrade(
   session: SqlSession,
   schemaName = "public",
   options:
@@ -306,6 +287,7 @@ export async function upgradeActionLifecycle(
       plan?: RetainedDataUpgradePlan;
       reviewedFingerprint?: string;
       contentDecisions?: readonly ContentMigrationDecision[];
+      ownerKeys?: OwnerKeyUpgradeOptions;
       authority?: AuthorityUpgradeManifest;
     }> = {},
 ): Promise<void> {
@@ -316,16 +298,18 @@ export async function upgradeActionLifecycle(
       `SELECT version FROM ${core.copilotz_schema_metadata} WHERE singleton`,
     )).rows[0]?.version,
   );
-  if (currentVersion === 11) {
-    throw Object.assign(
-      new Error(
-        "Schema version 11 needs the owner data-key migration (scripts/migrate-owner-keys.ts) before the authority upgrade.",
-      ),
-      { code: "copilotz_upgrade_owner_keys_required" },
-    );
-  }
-  if (currentVersion === 12 || (currentVersion === 13 && options.authority)) {
-    await upgradeAuthoritySchema(session, schema, options.authority);
+  if (
+    currentVersion >= 11 && currentVersion <= EVENT_SCHEMA_VERSION &&
+    !options.plan
+  ) {
+    if (
+      options.reviewedFingerprint !== undefined ||
+      options.contentDecisions !== undefined
+    ) {
+      throw new Error(
+        "Reviewed upgrade options require the original retained-data plan.",
+      );
+    }
     return;
   }
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
@@ -359,7 +343,7 @@ export async function upgradeActionLifecycle(
     );
   }
   if (
-    plan.schema !== schema || plan.targetVersion !== EVENT_SCHEMA_VERSION ||
+    plan.schema !== schema || plan.targetVersion !== RETAINED_TARGET_VERSION ||
     await fingerprint(plan) !== plan.fingerprint
   ) {
     throw new Error(
@@ -379,7 +363,10 @@ export async function upgradeActionLifecycle(
         "Retained-data upgrade identity does not match its prepared source.",
       );
     }
-    if (Number(current.version) === EVENT_SCHEMA_VERSION) {
+    if (
+      Number(current.version) >= 11 &&
+      Number(current.version) <= EVENT_SCHEMA_VERSION
+    ) {
       if (
         current.upgrade_reviewed_fingerprint !== reviewed.fingerprint ||
         current.upgrade_decisions_fingerprint !== decisionsFingerprint
@@ -388,7 +375,6 @@ export async function upgradeActionLifecycle(
           "Completed upgrade replay differs from the accepted plan or ownership decisions.",
         );
       }
-      await validateCopilotzSchema(transaction, schema);
       await validateOperationCatalog(joined(transaction), schema);
       await validateBodyStoreSchema(transaction, schema);
       return;
@@ -422,9 +408,9 @@ export async function upgradeActionLifecycle(
     }
     for (
       const statement of [
-        ...createOwnerSchemaStatements(schema),
+        ...createOwnerSchemaStatements(schema, { version: 11 }),
         ...createOwnerSequenceStatements(schema),
-        ...createCoreSchemaStatements(schema),
+        ...createCoreSchemaStatements(schema, { ownerVersion: 11 }),
       ]
     ) {
       await transaction.query(statement);
@@ -434,7 +420,6 @@ export async function upgradeActionLifecycle(
       `ALTER TABLE ${core.events} ADD COLUMN IF NOT EXISTS owner_ingress JSONB`,
     );
     await upgradeReceiptReaders(transaction, schema);
-    await applyAuthorityUpgrade(transaction, schema, options.authority);
     await migrateActionContent(session, schema, {
       apply: true,
       decisions,
@@ -451,7 +436,7 @@ export async function upgradeActionLifecycle(
     const updated = await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1,upgrade_reviewed_fingerprint=$4,upgrade_decisions_fingerprint=$5 WHERE singleton AND version=0 AND upgrade_id=$2 AND upgrade_from=$3 AND upgrade_to=$1 AND upgrade_reviewed_fingerprint IS NULL AND upgrade_decisions_fingerprint IS NULL RETURNING version`,
       [
-        EVENT_SCHEMA_VERSION,
+        RETAINED_TARGET_VERSION,
         reviewed.id,
         reviewed.sourceVersion,
         reviewed.fingerprint,
@@ -461,8 +446,45 @@ export async function upgradeActionLifecycle(
     if (updated.rows.length !== 1) {
       throw new Error("Upgrade final marker changed.");
     }
-    await validateCopilotzSchema(transaction, schema);
     await validateOperationCatalog(session, schema);
     await validateBodyStoreSchema(transaction, schema);
   });
+}
+
+/** Run only the next step: retained data -> v11 -> owner keys v12 -> authority v13.
+ * Each committed checkpoint can be resumed after missing input or a lost response.
+ */
+export async function upgradeActionLifecycle(
+  session: SqlSession,
+  schemaName = "public",
+  options: Parameters<typeof finalizeRetainedDataUpgrade>[2] = {},
+): Promise<void> {
+  // Preserve the reviewed intent across every asynchronous checkpoint.
+  options = {
+    ...options,
+    ...(options.plan ? { plan: structuredClone(options.plan) } : {}),
+    ...(options.contentDecisions
+      ? { contentDecisions: structuredClone(options.contentDecisions) }
+      : {}),
+    ...(options.authority
+      ? { authority: structuredClone(options.authority) }
+      : {}),
+    ...(options.ownerKeys ? { ownerKeys: { ...options.ownerKeys } } : {}),
+  };
+  const schema = validateEventSchemaName(schemaName);
+  await finalizeRetainedDataUpgrade(session, schema, options);
+  const version = Number((await marker(session, schema)).version);
+  if (version === 11) {
+    if (
+      !options.ownerKeys?.sourceAdapter || !options.ownerKeys?.masterAdapter
+    ) {
+      throw ownerKeysRequired();
+    }
+    await migrateOwnerKeys({ ...options.ownerKeys, session, schema });
+  }
+  if (version === 11 || version === 12 || options.authority) {
+    await upgradeAuthoritySchema(session, schema, options.authority);
+  }
+  await validateCopilotzSchema(session, schema);
+  await validateOperationCatalog(session, schema);
 }

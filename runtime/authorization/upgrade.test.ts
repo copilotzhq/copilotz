@@ -1,3 +1,4 @@
+import { provisionOperationCatalog } from "../streams/catalog.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
@@ -21,6 +22,7 @@ Deno.test("F4 version 13 offline upgrade validates every retained binding and pr
   });
   const schema = `authority_upgrade_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
+  await provisionOperationCatalog(db, schema);
   const store = createEventStore({ session: db, schema });
   const source = await store.commitMutation({
     draft: {

@@ -529,3 +529,42 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name:
+    "owner bundle export refuses a pg_dump older than the server before taking locks",
+  ignore: !pgUrl,
+  fn: async () => {
+    const temp = await Deno.makeTempDir({ prefix: "owner-bundle-pgdump-" });
+    const path = Deno.env.get("PATH") ?? "";
+    await Deno.writeTextFile(
+      `${temp}/pg_dump`,
+      "#!/bin/sh\necho 'pg_dump (PostgreSQL) 9.6'\n",
+      { mode: 0o755 },
+    );
+    Deno.env.set("PATH", `${temp}:${path}`);
+    try {
+      const adapter = await testSecretAdapter();
+      const error = await assertRejects(() =>
+        exportOwnerBundle({
+          url: pgUrl!,
+          schema: unique("owner_export"),
+          directory: `${temp}/bundle`,
+          config: { sourceAdapter: adapter, destinationAdapter: adapter },
+        })
+      );
+      assertEquals(
+        (error as { code?: string; client?: number }).code,
+        "copilotz_owner_bundle_pg_dump_version",
+      );
+      assertEquals((error as { client?: number }).client, 9);
+      await assertRejects(
+        () => Deno.stat(`${temp}/bundle`),
+        Deno.errors.NotFound,
+      );
+    } finally {
+      Deno.env.set("PATH", path);
+      await Deno.remove(temp, { recursive: true });
+    }
+  },
+});

@@ -57,6 +57,38 @@ async function pg(command: "pg_dump" | "pg_restore", args: string[]) {
     );
   }
 }
+/** pg_dump refuses servers newer than its own major version; say so before any lock. */
+async function assertPgDumpSupportsServer(
+  session: import("../runtime/events/session.ts").SqlExecutor,
+) {
+  const server = Math.floor(
+    Number(
+      (await session.query<{ server_version_num: string }>(
+        "SHOW server_version_num",
+      )).rows[0].server_version_num,
+    ) / 10000,
+  );
+  const probe = await new Deno.Command("pg_dump", {
+    args: ["--version"],
+    stdout: "piped",
+    stderr: "null",
+  }).output().catch(() => undefined);
+  const client = Number(
+    /\(PostgreSQL\)\s+(\d+)/.exec(
+      new TextDecoder().decode(probe?.stdout ?? new Uint8Array()),
+    )?.[1],
+  );
+  if (!probe?.success || !(client >= server)) {
+    throw Object.assign(
+      new Error(
+        `pg_dump ${
+          client || "is unavailable and"
+        } cannot export a PostgreSQL ${server} server; put pg_dump ${server} or newer on PATH.`,
+      ),
+      { code: "copilotz_owner_bundle_pg_dump_version", client, server },
+    );
+  }
+}
 /** The schema name is preserved: it is part of protected-value authenticated data. */
 export async function exportOwnerBundle(input: {
   url: string;
@@ -66,9 +98,10 @@ export async function exportOwnerBundle(input: {
 }): Promise<void> {
   const schema = validateEventSchemaName(input.schema),
     directory = resolve(input.directory);
-  await Deno.mkdir(directory, { mode: 0o700 });
   const db = await openManagedOminipgDatabase({ url: input.url });
   try {
+    await assertPgDumpSupportsServer(db.session);
+    await Deno.mkdir(directory, { mode: 0o700 });
     await db.session.transaction(async (tx) => {
       await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       await lockOwnerTables(tx, schema, "SHARE");

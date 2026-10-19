@@ -45,9 +45,12 @@ function recording(base: SqlSession, recorder: Recorder): SqlSession {
     ...recorded(base),
     transaction: (operation) =>
       base.transaction((transaction) => operation(recorded(transaction))),
-    readSnapshot: (operation) => {
+    withReadSnapshot: (operation, options) => {
       recorder.readSnapshots++;
-      return base.readSnapshot!((snapshot) => operation(recorded(snapshot)));
+      return base.withReadSnapshot!(
+        (scope) => operation({ ...scope, snapshot: recorded(scope.snapshot) }),
+        options,
+      );
     },
   };
 }
@@ -147,6 +150,12 @@ async function readScenarios(url: string) {
       )
     );
     assertEquals(recorder.readSnapshots, 1);
+    assertEquals(
+      recorder.statements.filter((sql) => sql.includes("CURRENT_TIMESTAMP"))
+        .length,
+      0,
+      "ordinary snapshots do not acquire an unused policy timestamp",
+    );
     assertEquals(
       recordReads(recorder).length,
       3,

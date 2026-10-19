@@ -1,16 +1,11 @@
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert";
-import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import type { SqlExecutor, SqlSnapshotCleanup } from "../events/session.ts";
-import { bounded } from "../testing/effect-commit-proxy.ts";
 import { openCopilotzPersistence } from "./lifecycle.ts";
 import {
   createOminipgSqlSession,
   type OminipgDatabaseLike,
 } from "./ominipg.ts";
-import {
-  captureSnapshotAncestry,
-  retireSnapshotDatabase,
-} from "./snapshot-admission.ts";
+import { retireSnapshotDatabase } from "./snapshot-admission.ts";
 
 const latch = () => Promise.withResolvers<void>();
 const tick = async () => {
@@ -84,164 +79,25 @@ function unavailable(error: unknown) {
   );
 }
 
-Deno.test("physical FIFO spans wrappers and resumes each submitter's own native context", async () => {
+Deno.test("one physical session refuses concurrent and nested calls across attachments", async () => {
   const db = fake(), other = fake();
   const first = snapshot(db.database), second = snapshot(db.database);
-  const store = createAsyncContextStorage<string>();
-  const entered = latch(), release = latch();
-  const order: string[] = [];
-  const a = store.run("A", () =>
-    first(async () => {
-      assertEquals(store.getStore(), "A");
-      entered.resolve();
-      await release.promise;
-      order.push("A");
-      return 1;
-    }));
-  await entered.promise;
-  const b = store.run("B", () =>
-    second(async () => {
-      await Promise.resolve();
-      assertEquals(store.getStore(), "B");
-      order.push("B");
-      return 2;
-    }));
-  const c = store.run("C", () =>
-    first(async () => {
-      await Promise.resolve();
-      assertEquals(store.getStore(), "C");
-      order.push("C");
-      return 3;
-    }));
-  assertEquals(
-    await snapshot(other.database)(async () =>
-      await Promise.resolve("independent")
-    ),
-    "independent",
-  );
-  await tick();
-  assertEquals(db.opens, 1);
-  release.resolve();
-  assertEquals(await Promise.all([a, b, c]), [1, 2, 3]);
-  assertEquals(order, ["A", "B", "C"]);
-});
-
-Deno.test("active ancestry refuses same physical nesting and expires with the callback", async () => {
-  const db = fake(), other = fake();
-  const read = snapshot(db.database);
-  let captured: ReturnType<typeof captureSnapshotAncestry> | undefined;
-  await read(async () => {
-    captured = captureSnapshotAncestry();
-    unavailable(
-      await assertRejects(() =>
-        bounded(read(async () => await Promise.resolve(2)), "nested refusal")
-      ),
-    );
-    assertEquals(
-      await snapshot(other.database)(async () => await Promise.resolve(3)),
-      3,
-    );
+  await first(async () => {
+    unavailable(await assertRejects(() => second(() => Promise.resolve(2))));
+    assertEquals(await snapshot(other.database)(() => Promise.resolve(3)), 3);
   });
-  assertEquals(
-    await captured!(() => read(async () => await Promise.resolve(4))),
-    4,
-  );
+  assertEquals(await second(() => Promise.resolve(4)), 4);
   assertEquals(db.opens, 2);
-});
-
-Deno.test("one active plus 128 FIFO waiters; overflow and pre-abort never invoke backend", async () => {
-  const db = fake();
-  const read = snapshot(db.database);
-  const entered = latch(), release = latch();
-  const a = read(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  const order: number[] = [];
-  const pending = Array.from({ length: 128 }, (_, i) =>
-    read(async () => {
-      await Promise.resolve();
-      order.push(i);
-      return i;
-    }));
-  const reports: SqlSnapshotCleanup[] = [];
-  unavailable(
-    await assertRejects(() =>
-      read(async () => await Promise.resolve(999), {
-        onCleanup: (value) => reports.push(value),
-      })
-    ),
-  );
-  assertEquals(reports, ["confirmed"]);
-  assertEquals(db.opens, 1);
   const reason = new Error("already cancelled");
-  const aborted = AbortSignal.abort(reason);
   assertStrictEquals(
     await assertRejects(() =>
-      read(async () => await Promise.resolve(999), { signal: aborted })
+      first(() => Promise.resolve(0), {
+        signal: AbortSignal.abort(reason),
+      })
     ),
     reason,
   );
-  release.resolve();
-  await Promise.all([a, ...pending]);
-  assertEquals(order, Array.from({ length: 128 }, (_, i) => i));
-  assertEquals(db.opens, 129);
-});
-
-Deno.test("fixed 30s admission expiry and caller cancellation remove only their waiter", async () => {
-  const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
-  const timers = new Map<number, () => void>();
-  let serial = 1_000_000;
-  globalThis.setTimeout = ((
-    callback: (...args: unknown[]) => void,
-    delay?: number,
-    ...args: unknown[]
-  ) => {
-    assertEquals(delay, 30_000);
-    const id = serial++;
-    timers.set(id, () => {
-      if (typeof callback === "function") callback(...args);
-    });
-    return id;
-  }) as unknown as typeof set;
-  globalThis.clearTimeout = ((id?: number) => {
-    timers.delete(id!);
-  }) as typeof clear;
-  const db = fake();
-  const read = snapshot(db.database);
-  const entered = latch(), release = latch();
-  const a = read(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  try {
-    const expire = read(async () => await Promise.resolve(1));
-    const expired = assertRejects(() => expire);
-    const controller = new AbortController();
-    const reason = new Error("caller deadline");
-    const cancel = read(async () => await Promise.resolve(2), {
-      signal: controller.signal,
-    });
-    const cancelled = assertRejects(() => cancel);
-    const next = read(async () => await Promise.resolve(3));
-    assertEquals(timers.size, 3);
-    [...timers.values()][0]();
-    controller.abort(reason);
-    unavailable(await expired);
-    assertStrictEquals(await cancelled, reason);
-    assertEquals(timers.size, 1);
-    assertEquals(db.opens, 1);
-    release.resolve();
-    await a;
-    assertEquals(await next, 3);
-    assertEquals(timers.size, 0);
-  } finally {
-    release.resolve();
-    globalThis.setTimeout = set;
-    globalThis.clearTimeout = clear;
-  }
+  assertEquals(db.opens, 2);
 });
 
 Deno.test("cancellation retains physical capacity through late open and held raw cleanup", async () => {
@@ -266,11 +122,7 @@ Deno.test("cancellation retains physical capacity through late open and held raw
   }, { signal: controller.signal, onCleanup: (value) => reports.push(value) });
   const rejected = assertRejects(() => a);
   await opened.promise;
-  const b = read(async () => {
-    await Promise.resolve();
-    callbacks++;
-    return 2;
-  });
+  unavailable(await assertRejects(() => read(() => Promise.resolve(2))));
   controller.abort(reason);
   await tick();
   assertEquals(db.opens, 1);
@@ -283,7 +135,13 @@ Deno.test("cancellation retains physical capacity through late open and held raw
   assertEquals(reports, []);
   cleanup.resolve();
   assertStrictEquals(await rejected, reason);
-  assertEquals(await b, 2);
+  assertEquals(
+    await read(() => {
+      callbacks++;
+      return Promise.resolve(2);
+    }),
+    2,
+  );
   assertEquals(reports, ["confirmed"]);
   assertEquals(callbacks, 1);
 });
@@ -339,7 +197,7 @@ Deno.test("quarantine preserves the operation's original error and ignores obser
   );
 });
 
-Deno.test("borrowed attachment close cancels only its own active and queued calls, drains raw cleanup, and preserves database", async () => {
+Deno.test("borrowed attachment close cancels only its own active calls, drains raw cleanup, and preserves database", async () => {
   const cleanup = latch(),
     cleaning = latch(),
     entered = latch(),
@@ -355,8 +213,10 @@ Deno.test("borrowed attachment close cancels only its own active and queued call
   await entered.promise;
   const own = a.session.withReadSnapshot!(async () => await Promise.resolve(1));
   const ownFailed = assertRejects(() => own);
-  const other = b.session.withReadSnapshot!(async () =>
-    await Promise.resolve(2)
+  unavailable(
+    await assertRejects(() =>
+      b.session.withReadSnapshot!(() => Promise.resolve(2))
+    ),
   );
   let closed = false;
   const closing = a.close();
@@ -376,7 +236,7 @@ Deno.test("borrowed attachment close cancels only its own active and queued call
   cleanup.resolve();
   unavailable(await failed);
   await closing;
-  assertEquals(await other, 2);
+  assertEquals(await b.session.withReadSnapshot!(() => Promise.resolve(2)), 2);
   unavailable(
     await assertRejects(() =>
       a.session.withReadSnapshot!(async () => await Promise.resolve(3))
@@ -387,7 +247,7 @@ Deno.test("borrowed attachment close cancels only its own active and queued call
   assertEquals(db.closes, 0);
 });
 
-Deno.test("owned retirement rejects waiters/new calls and waits the raw backend settlement", async () => {
+Deno.test("owned retirement rejects new calls and waits the raw backend settlement", async () => {
   const cleanup = latch(), entered = latch(), release = latch();
   const db = fake({ cleanup: cleanup.promise });
   const read = snapshot(db.database);
@@ -524,11 +384,12 @@ Deno.test("a cleanup confirmation never grants the next permit before the backen
   const read = snapshot(physical);
   const first = read(() => Promise.resolve(1));
   await proof.promise;
-  const second = read(() => Promise.resolve(2));
+  unavailable(await assertRejects(() => read(() => Promise.resolve(2))));
   await tick();
   assertEquals(calls, 1);
   settle.resolve();
-  assertEquals(await Promise.all([first, second]), [1, 2]);
+  assertEquals(await first, 1);
+  assertEquals(await read(() => Promise.resolve(2)), 2);
 });
 
 Deno.test("logical generation delegates share the raw physical gate and borrowed logical close stays local", async () => {
@@ -550,14 +411,16 @@ Deno.test("logical generation delegates share the raw physical gate and borrowed
     Promise.resolve(0)
   );
   const refused = assertRejects(() => cancelled);
-  const next = other.session.withReadSnapshot!(() => {
-    order.push(2);
-    return Promise.resolve(2);
-  });
-  const direct = p.database.withReadSnapshot!(() => {
-    order.push(3);
-    return Promise.resolve(3);
-  });
+  unavailable(
+    await assertRejects(() =>
+      other.session.withReadSnapshot!(() => Promise.resolve(2))
+    ),
+  );
+  unavailable(
+    await assertRejects(() =>
+      p.database.withReadSnapshot!(() => Promise.resolve(3))
+    ),
+  );
   try {
     await borrowed.close();
     unavailable(await refused);
@@ -565,13 +428,19 @@ Deno.test("logical generation delegates share the raw physical gate and borrowed
     assertEquals(db.closes, 0);
     release.resolve();
     await first;
-    assertEquals(await next, 2);
-    assertEquals(await direct, 3);
-    assertEquals(order, [1, 2, 3]);
+    assertEquals(
+      await other.session.withReadSnapshot!(() => Promise.resolve(2)),
+      2,
+    );
+    assertEquals(
+      await p.database.withReadSnapshot!(() => Promise.resolve(3)),
+      3,
+    );
+    assertEquals(order, [1]);
     assertEquals(p.recovery!.snapshot().generation, 1);
   } finally {
     release.resolve();
-    await Promise.allSettled([first, next, direct]);
+    await Promise.allSettled([first]);
     await other.close();
     await p.close();
   }

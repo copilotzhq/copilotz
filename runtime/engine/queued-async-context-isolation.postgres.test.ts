@@ -1,16 +1,12 @@
-import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { ActionError } from "../actions/errors.ts";
 import { validateCollectionProjections } from "../collections/projection-registration.ts";
 import { defineCollection } from "../collections/definition.ts";
-import { joinCollectionRuntime } from "../collections/joined-runtime.ts";
+
 import { createCollectionRuntime } from "../collections/kernel.ts";
 import { withOwnerCollectionInvocation } from "../collections/policy-invocation.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
-import {
-  currentCollectionReadBudget,
-  queryCollectionRows,
-  withCollectionReadBudget,
-} from "../collections/read-budget.ts";
+import { queryCollectionRows } from "../collections/read-rows.ts";
 import { readViews } from "../collections/read-view.ts";
 import {
   createEventStore,
@@ -19,11 +15,7 @@ import {
 } from "../events/index.ts";
 import { bounded, localPostgresUrl } from "../testing/effect-commit-proxy.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import {
-  createSchemaCommandRunner,
-  openDatabaseOwner,
-  releaseDatabaseOwner,
-} from "./commands.ts";
+import { openDatabaseOwner, releaseDatabaseOwner } from "./commands.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 const record = defineCollection({
@@ -82,22 +74,13 @@ async function fixture() {
 }
 
 Deno.test({
-  name:
-    "queued B preserves its own mutable cumulative read budget and hop view; publication starts clean",
+  name: "queued reads retain their own hop view; publication starts clean",
   ignore: !url,
   async fn() {
     const f = await fixture();
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const admitted = Promise.withResolvers<void>();
-    const ended = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>();
     const published = Promise.withResolvers<void>();
-    let aBudget: ReturnType<typeof currentCollectionReadBudget>;
-    let bBudget: ReturnType<typeof currentCollectionReadBudget>;
-    const value = "1234567890";
-    const rows = [{ value }];
-    const bytes = new TextEncoder().encode(JSON.stringify(rows)).length;
-    const sql = "SELECT '1234567890'::text AS value";
     const held = f.owner.register("boundary.a", {
       authorize() {},
       async execute() {
@@ -107,53 +90,11 @@ Deno.test({
     });
     const next = f.owner.register("boundary.b", {
       authorize() {},
-      async execute(_input: unknown, command) {
-        await ended.promise;
-        assertStrictEquals(currentCollectionReadBudget(), bBudget);
-        assertEquals(bBudget!.maxResultBytes, 100 - bytes);
+      execute(_input: unknown, command) {
         assertEquals(readViews.memo()?.recall("same-key"), { value: "B" });
-        assertEquals(
-          await queryCollectionRows(command.transaction, sql, []),
-          rows,
-        );
-        const joined = createSchemaCommandRunner(command.transaction, f.schema);
-        await joined("boundary.nested", {}, async () => {
-          assertStrictEquals(currentCollectionReadBudget(), bBudget);
-          assertEquals(readViews.memo()?.recall("same-key"), { value: "B" });
-          assertEquals(
-            await queryCollectionRows(command.transaction, sql, []),
-            rows,
-          );
-          assertEquals(
-            await queryCollectionRows(command.transaction, sql, []),
-            rows,
-          );
-          await assertRejects(
-            () => queryCollectionRows(command.transaction, sql, []),
-            RangeError,
-            "transfer budget",
-          );
-          // Explicit child budgets retain their existing independent limits.
-          await withCollectionReadBudget(async () => {
-            assertEquals(currentCollectionReadBudget() === bBudget, false);
-            assertEquals(
-              await queryCollectionRows(command.transaction, sql, []),
-              rows,
-            );
-          });
-          assertStrictEquals(currentCollectionReadBudget(), bBudget);
-        });
-        assertEquals(bBudget!.maxResultBytes, 100 - 4 * bytes);
-        assertEquals(aBudget!.maxResultBytes, 1);
-        command.afterCommit(async () => {
+        command.afterCommit(() => {
           try {
-            assertEquals(currentCollectionReadBudget(), undefined);
             assertEquals(readViews.memo(), undefined);
-            await withCollectionReadBudget(async () => {
-              const callbackBudget = currentCollectionReadBudget();
-              assertEquals(await queryCollectionRows(f.db, sql, []), rows);
-              assertStrictEquals(currentCollectionReadBudget(), callbackBudget);
-            });
             published.resolve();
           } catch (error) {
             published.reject(error);
@@ -161,55 +102,30 @@ Deno.test({
         });
       },
     });
-    let first: Promise<void> | undefined;
-    let second: Promise<void> | undefined;
+    let first: Promise<void> | undefined, second: Promise<void> | undefined;
     try {
-      first = readViews.run(() =>
-        withCollectionReadBudget(async () => {
-          aBudget = currentCollectionReadBudget();
-          (aBudget as { maxResultBytes: number }).maxResultBytes = 1;
-          readViews.memo()!.begin(["same-key"]).remember("same-key", "A");
-          await held(f.caller, { input: {} });
-        })
-      ).then(() => ended.resolve());
-      await bounded(entered.promise, "A holds queue with exhausted read state");
-      second = readViews.run(() =>
-        withCollectionReadBudget(async () => {
-          bBudget = currentCollectionReadBudget();
-          Object.assign(bBudget!, { maxRowBytes: 100, maxResultBytes: 100 });
-          readViews.memo()!.begin(["same-key"]).remember("same-key", "B");
-          assertEquals(await queryCollectionRows(f.db, sql, []), rows);
-          const pending = next(f.caller, { input: {} });
-          admitted.resolve();
-          await pending;
-        })
-      );
-      void second.catch(() => undefined);
-      await bounded(
-        admitted.promise,
-        "B captured its partially consumed budget",
-      );
+      first = readViews.run(async () => {
+        readViews.memo()!.begin(["same-key"]).remember("same-key", "A");
+        await held(f.caller, { input: {} });
+      });
+      await entered.promise;
+      second = readViews.run(async () => {
+        readViews.memo()!.begin(["same-key"]).remember("same-key", "B");
+        await next(f.caller, { input: {} });
+      });
       release.resolve();
-      await bounded(
-        Promise.all([first, second]),
-        "B keeps its own cumulative scope",
-      );
-      await bounded(
-        published.promise,
-        "independent publication drops old scope",
-      );
+      await Promise.all([first, second]);
+      await bounded(published.promise, "publication drops hop view");
     } finally {
       release.resolve();
-      ended.resolve();
-      await first?.catch(() => undefined);
-      await second?.catch(() => undefined);
+      await Promise.allSettled([first, second]);
       await f.close();
     }
   },
 });
 
 Deno.test({
-  name: "queued unscoped B does not inherit A's exhausted read budget or memo",
+  name: "queued unscoped B does not inherit A's memo",
   ignore: !url,
   async fn() {
     const f = await fixture();
@@ -225,7 +141,6 @@ Deno.test({
     const next = f.owner.register("boundary.unscoped-b", {
       authorize() {},
       async execute(_input: unknown, command) {
-        assertEquals(currentCollectionReadBudget(), undefined);
         assertEquals(readViews.memo(), undefined);
         assertEquals(
           await queryCollectionRows(
@@ -240,13 +155,10 @@ Deno.test({
     let first: Promise<void> | undefined;
     let second: Promise<void> | undefined;
     try {
-      first = readViews.run(() =>
-        withCollectionReadBudget(async () => {
-          Object.assign(currentCollectionReadBudget()!, { maxResultBytes: 1 });
-          readViews.memo()!.begin(["only-a"]).remember("only-a", "A");
-          await held(f.caller, { input: {} });
-        })
-      );
+      first = readViews.run(async () => {
+        readViews.memo()!.begin(["only-a"]).remember("only-a", "A");
+        await held(f.caller, { input: {} });
+      });
       await bounded(entered.promise, "scoped A holds owner");
       second = next(f.caller, { input: {} });
       release.resolve();
@@ -392,22 +304,14 @@ Deno.test({
           Error,
           "Read snapshot access has already closed",
         );
-        const joined = joinCollectionRuntime(
-          f.runtime,
-          { records: record },
-          command,
-        );
-        try {
-          await joined.runtime.transaction({
-            namespace: "space",
-            operationKey: "fresh-joined",
-            async execute({ collections }) {
-              await collections.boundary_record.create({ id: "b" });
-            },
-          });
-        } finally {
-          joined.close();
-        }
+
+        await f.runtime.transaction({
+          namespace: "space",
+          operationKey: "fresh-joined",
+          async execute({ collections }) {
+            await collections.boundary_record.create({ id: "b" });
+          },
+        }, command);
       },
     });
     let first: Promise<void> | undefined;
@@ -532,8 +436,7 @@ for (const denyFinal of [false, true]) {
 }
 
 Deno.test({
-  name:
-    "snapshot owner projection retains row and cumulative SQL read budgets and revoked query lifetime",
+  name: "snapshot owner projection retains revoked query lifetime",
   ignore: !url,
   async fn() {
     const f = await fixture();
@@ -622,22 +525,6 @@ Deno.test({
     try {
       assertEquals<unknown>(await read("small"), [{ id: "safe" }]);
       assertEquals(transferred, 300000);
-      await assertRejects(retained, Error, "closed");
-      transferred = 0;
-      await assertRejects(
-        () => read("oversized"),
-        RangeError,
-        "transfer budget",
-      );
-      assertEquals(transferred, 0);
-      await assertRejects(retained, Error, "closed");
-      transferred = 0;
-      await assertRejects(
-        () => read("cumulative"),
-        RangeError,
-        "transfer budget",
-      );
-      assertEquals(transferred, 400000);
       await assertRejects(retained, Error, "closed");
     } finally {
       await f.close();

@@ -1,3 +1,4 @@
+import { orderedJson as ordered } from "../data-only-json.ts";
 import { assertJsonValue } from "../json.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import type { ActionInvocationMetadata } from "./types.ts";
@@ -39,19 +40,6 @@ export function durableActionValue(value: unknown): unknown {
       cause,
     });
   }
-}
-
-function ordered(value: unknown): unknown {
-  if (Object.is(value, -0)) return 0;
-  if (Array.isArray(value)) return value.map(ordered);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([key, child]) => [key, ordered(child)]),
-    );
-  }
-  return value;
 }
 
 export function sameActionValue(left: unknown, right: unknown): boolean {

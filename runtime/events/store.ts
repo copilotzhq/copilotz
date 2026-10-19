@@ -1,3 +1,4 @@
+import { canonicalJson as encodeCanonicalJson } from "../data-only-json.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import {
@@ -375,20 +376,8 @@ function encodeJson(value: unknown, field: string): EncodedJson {
   }
 }
 
-function canonicalJson(value: unknown): string {
-  const normalize = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (candidate && typeof candidate === "object") {
-      return Object.fromEntries(
-        Object.entries(candidate as Record<string, unknown>)
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, child]) => [key, normalize(child)]),
-      );
-    }
-    return candidate;
-  };
-  return JSON.stringify(normalize(value));
-}
+const canonicalJson = (value: unknown): string =>
+  encodeCanonicalJson(value, { order: "locale", objectOrder: true });
 
 function mapEvent(row: EventRow): DurableEvent {
   const event: DurableEvent = {

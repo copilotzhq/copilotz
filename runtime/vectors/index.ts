@@ -1,4 +1,4 @@
-import { queryCollectionRows } from "../collections/read-budget.ts";
+import { queryCollectionRows } from "../collections/read-rows.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 /** Optional pgvector storage for collection-owned vector projections. @module */
 import {

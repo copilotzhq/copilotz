@@ -1,4 +1,4 @@
-import { queryCollectionRows } from "./read-budget.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import { createCollectionValidationError } from "./errors.ts";
 import { getPath } from "./content-path.ts";
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";

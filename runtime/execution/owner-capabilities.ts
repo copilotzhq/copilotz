@@ -11,7 +11,6 @@ import type {
 } from "./types.ts";
 import { ownerExecutionInterrupted } from "./owner-interruption.ts";
 import { collectionReceiptInvocation } from "../collections/policy-invocation.ts";
-import { withCollectionReadBudget } from "../collections/read-budget.ts";
 import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,
@@ -920,9 +919,7 @@ export function createOwnerCapabilityHost(
         try {
           await check(assignment);
           job.result.resolve(
-            await withCollectionReadBudget(async () =>
-              await callPath(scope, job.path, job.args)
-            ),
+            await callPath(scope, job.path, job.args),
           );
         } catch (error) {
           job.result.reject(error);
@@ -1392,17 +1389,11 @@ export function createOwnerCapabilityHost(
             args[1],
           ]
           : args;
-        const read = path[0] === "vectors" ||
-          path[0] === "collections" &&
-            ["get", "list", "aggregate", "search", "queries", "relations"]
-              .includes(path[2]);
         const executeCall = async () =>
           await callPath(invocation.context, path, callArgs);
         try {
           const value = path[0] === "protectedEvent"
             ? await protectedEventResolverFrom(invocation.context)?.()
-            : read
-            ? await withCollectionReadBudget(executeCall)
             : await executeCall();
           // Adopt the physical result into its reserved cleanup slot before any
           // asynchronous output gate can reject it after takeover/cancellation.

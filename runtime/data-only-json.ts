@@ -19,22 +19,30 @@ type DataOnlyPolicy = {
 export function walkDataOnly(
   value: unknown,
   policy: DataOnlyPolicy,
-  capture: boolean,
+  capture: boolean | "json",
 ): unknown {
   const ancestors = new Set<object>();
   let nodes = 0;
   const visit = (value: unknown, depth: number): unknown => {
     const scalar = policy.value(value, depth, ++nodes);
-    if (scalar !== dataProperties) return scalar;
+    if (scalar !== dataProperties) {
+      return capture === "json" ? JSON.stringify(scalar) : scalar;
+    }
     const object = value as object;
     if (ancestors.has(object)) policy.cycle();
     const array = Array.isArray(object);
-    const result = capture ? (array ? [] : {}) : undefined;
+    const result = capture
+      ? (array || capture === "json" ? [] : {})
+      : undefined;
     ancestors.add(object);
     try {
       policy.properties(object, array, (key, child) => {
         const captured = visit(child, depth + 1);
-        if (array && result) (result as unknown[]).push(captured);
+        if (capture === "json") {
+          (result as string[]).push(
+            array ? captured as string : `${JSON.stringify(key)}:${captured}`,
+          );
+        } else if (array && result) (result as unknown[]).push(captured);
         else if (result) {
           Object.defineProperty(result, key, {
             value: captured,
@@ -42,7 +50,13 @@ export function walkDataOnly(
           });
         }
       });
-      return result ? Object.freeze(result) : undefined;
+      return capture === "json"
+        ? `${array ? "[" : "{"}${(result as string[]).join(",")}${
+          array ? "]" : "}"
+        }`
+        : result
+        ? Object.freeze(result)
+        : undefined;
     } finally {
       ancestors.delete(object);
     }
@@ -75,4 +89,75 @@ export function chargeJsonString(
     else charge(3);
   }
   return value;
+}
+
+/** Ordering policies preserve the bytes of existing receipt and digest formats. */
+type JsonOrder = "code-unit" | "locale";
+type CanonicalOptions = {
+  order?: JsonOrder;
+  /** Object reconstruction follows JSON.stringify's integer-key ordering. */
+  objectOrder?: boolean;
+  undefinedValue?: "null" | "undefined";
+  transform?: (value: unknown) => unknown;
+};
+
+function orderedValue(
+  input: unknown,
+  options: CanonicalOptions,
+  text: boolean,
+): unknown {
+  const value = options.transform ? options.transform(input) : input;
+  if (!value || typeof value !== "object") {
+    const type = typeof value;
+    if (type === "function" || type === "symbol" || type === "bigint") {
+      throw new TypeError("JSON requires data values.");
+    }
+    const normalized = Object.is(value, -0) ? 0 : value;
+    return text
+      ? JSON.stringify(normalized) ?? options.undefinedValue
+      : normalized;
+  }
+  if (Array.isArray(value)) {
+    const items = Array.from({ length: value.length }, (_, index) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor) return undefined;
+      if (!("value" in descriptor)) {
+        throw new TypeError("JSON requires data properties.");
+      }
+      return orderedValue(descriptor.value, options, text);
+    });
+    return text ? `[${items.join(",")}]` : items;
+  }
+  const keys = Object.keys(value).sort(
+    options.order === "locale" ? (a, b) => a.localeCompare(b) : undefined,
+  );
+  const entries = keys.map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!("value" in descriptor)) {
+      throw new TypeError("JSON requires data properties.");
+    }
+    const child = orderedValue(descriptor.value, options, text);
+    return text ? `${JSON.stringify(key)}:${child}` : [key, child] as const;
+  });
+  return text
+    ? `{${entries.join(",")}}`
+    : Object.fromEntries(entries as Array<readonly [string, unknown]>);
+}
+
+/** Shared textual encoding; callers retain their boundary validation policy. */
+export function canonicalJson(
+  value: unknown,
+  options: CanonicalOptions = {},
+): string {
+  return options.objectOrder
+    ? JSON.stringify(orderedValue(value, options, false))
+    : orderedValue(value, options, true) as string;
+}
+
+/** Detached ordered JSON for boundaries that retain a value instead of text. */
+export function orderedJson(
+  value: unknown,
+  order: JsonOrder = "code-unit",
+): unknown {
+  return orderedValue(value, { order }, false);
 }

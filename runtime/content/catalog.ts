@@ -1,3 +1,4 @@
+import { canonicalJson as canonical } from "../data-only-json.ts";
 /** One owner-authoritative lifecycle for logical bodies and their physical copies. */
 import { createCoreTableNames } from "../events/schema.ts";
 import {
@@ -103,19 +104,7 @@ const text = (value: string): string => {
 };
 const json = <T>(value: T | string): T =>
   typeof value === "string" ? JSON.parse(value) : value;
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${
-      Object.keys(value).sort().map((key) =>
-        `${JSON.stringify(key)}:${
-          canonical((value as Record<string, unknown>)[key])
-        }`
-      ).join(",")
-    }}`;
-  }
-  return JSON.stringify(value);
-}
+
 function map(row: BodyRow): LogicalBody {
   return {
     bodyId: row.body_id,

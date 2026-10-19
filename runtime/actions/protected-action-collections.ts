@@ -6,7 +6,7 @@ import type {
   CollectionRuntime,
   CollectionTransactionCollections,
 } from "../collections/kernel.ts";
-import { joinCollectionRuntime } from "../collections/joined-runtime.ts";
+
 import { withOwnerCollectionInvocation } from "../collections/policy-invocation.ts";
 import type { CommandContext } from "../engine/commands.ts";
 import type { ProtectedActionSourceBinding } from "./protected-action-source.ts";
@@ -30,11 +30,6 @@ export function withProtectedActionCollections<T>(
   },
   execute: (collections: CollectionTransactionCollections) => Promise<T>,
 ): Promise<T> {
-  const joined = joinCollectionRuntime(
-    registered.runtime,
-    registered.definitions,
-    command,
-  );
   return withOwnerCollectionInvocation({
     ...owner,
     invocation: { kind: "action", ...owner.action },
@@ -42,26 +37,22 @@ export function withProtectedActionCollections<T>(
       owner.signal.throwIfAborted();
     },
   }, async () => {
-    try {
-      const result = await joined.runtime.transaction({
-        namespace: owner.scope.namespace,
-        operationKey: JSON.stringify([
-          "action.accept-output",
-          owner.action.runId,
-        ]),
-        identity: {
-          actionScopeId: owner.action.runId,
-          causationId: owner.source.eventId,
-          ...(owner.source.operationId
-            ? { settlementScopeId: owner.source.operationId }
-            : {}),
-        },
-        execute: ({ collections }) => execute(collections),
-      });
-      return result.value;
-    } finally {
-      joined.close();
-    }
+    const result = await registered.runtime.transaction({
+      namespace: owner.scope.namespace,
+      operationKey: JSON.stringify([
+        "action.accept-output",
+        owner.action.runId,
+      ]),
+      identity: {
+        actionScopeId: owner.action.runId,
+        causationId: owner.source.eventId,
+        ...(owner.source.operationId
+          ? { settlementScopeId: owner.source.operationId }
+          : {}),
+      },
+      execute: ({ collections }) => execute(collections),
+    }, command);
+    return result.value;
   });
 }
 export function protectedActionCollectionFacade(

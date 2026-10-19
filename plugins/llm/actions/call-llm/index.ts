@@ -1,3 +1,4 @@
+import { captureJsonValue } from "@copilotz/copilotz/content/codec";
 /** Provider-neutral durable LLM Action. @module */
 
 import {
@@ -257,52 +258,8 @@ function exactKeys(
   }
 }
 
-function canonicalJson(
-  value: unknown,
-  path: string,
-  active = new WeakSet<object>(),
-): unknown {
-  if (
-    value === null || typeof value === "string" ||
-    typeof value === "boolean"
-  ) return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${path} must contain only finite numbers.`);
-    }
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (!value || typeof value !== "object") {
-    throw new TypeError(`${path} must contain only JSON-safe values.`);
-  }
-  if (active.has(value)) {
-    throw new TypeError(`${path} must not contain cycles.`);
-  }
-  active.add(value);
-  try {
-    if (Array.isArray(value)) {
-      if (
-        Object.keys(value).length !== value.length ||
-        Object.keys(value).some((key, index) => key !== String(index))
-      ) throw new TypeError(`${path} must be a dense JSON array.`);
-      return (value.map((child, index) =>
-        canonicalJson(child, `${path}[${index}]`, active)
-      ));
-    }
-    const record = plainRecord(value, path);
-    const result: Record<string, unknown> = {};
-    for (const key of Object.getOwnPropertyNames(record).sort()) {
-      const descriptor = Object.getOwnPropertyDescriptor(record, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) {
-        throw new TypeError(`${path}.${key} must be an enumerable data field.`);
-      }
-      result[key] = canonicalJson(descriptor.value, `${path}.${key}`, active);
-    }
-    return result;
-  } finally {
-    active.delete(value);
-  }
-}
+const canonicalJson = (value: unknown, path: string) =>
+  captureJsonValue(value, { label: path, normalizeNegativeZero: true });
 
 function jsonObject(value: unknown, path: string): LlmJsonObject {
   const result = canonicalJson(value, path);

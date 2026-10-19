@@ -15,7 +15,7 @@ const tick = async () => {
 for (const backend of ["pglite", "postgres"] as const) {
   Deno.test({
     name:
-      `${backend} native admission preserves repeatable snapshot and mixed-write FIFO progress`,
+      `${backend} native admission preserves repeatable snapshot and mixed-write progress with capacity refusal`,
     ignore: backend === "postgres" && !url,
     async fn() {
       if (backend === "postgres") {
@@ -61,11 +61,9 @@ for (const backend of ["pglite", "postgres"] as const) {
         }).then(() => {
           events.push("write committed");
         });
-        second = b.withReadSnapshot!(async (scope) => {
-          events.push("B");
-          return (await scope.snapshot.query(`SELECT value FROM "${table}"`))
-            .rows;
-        });
+        await assertRejects(() =>
+          b.withReadSnapshot!(() => Promise.resolve(0))
+        );
         if (backend === "postgres") {
           await bounded(write, "pooled write commits while A stays held");
         } else {
@@ -75,6 +73,11 @@ for (const backend of ["pglite", "postgres"] as const) {
         release.resolve();
         await bounded(first, "native A cleans up");
         await bounded(write, "ordinary write commits");
+        second = b.withReadSnapshot!(async (scope) => {
+          events.push("B");
+          return (await scope.snapshot.query(`SELECT value FROM "${table}"`))
+            .rows;
+        });
         assertEquals(await bounded(second, "native B opens"), [{ value: 42 }]);
         assertEquals(
           events.indexOf("write committed") < events.indexOf("B"),
@@ -163,115 +166,7 @@ Deno.test({
 });
 Deno.test({
   name:
-    "unrelated queued owner B does not inherit active snapshot A from the drain initiator",
-  ignore: !url,
-  async fn() {
-    const f = await fixture();
-    const commandEntered = latch(),
-      releaseCommand = latch(),
-      releaseSnapshot = latch(),
-      bEntered = latch();
-    let bSnapshot = false;
-    const hold = f.owner.register("snapshot.hold", {
-      authorize() {},
-      async execute() {
-        commandEntered.resolve();
-        await releaseCommand.promise;
-      },
-    });
-    const other = f.owner.register("snapshot.other", {
-      authorize() {},
-      async execute() {
-        bEntered.resolve();
-        return await f.session.withReadSnapshot!(async () => {
-          await Promise.resolve();
-          bSnapshot = true;
-          return "B";
-        });
-      },
-    });
-    let a: Promise<unknown> | undefined, b: Promise<unknown> | undefined;
-    try {
-      a = f.session.withReadSnapshot!(async () => {
-        await hold(f.caller, { input: {} });
-        await releaseSnapshot.promise;
-        return "A";
-      });
-      await bounded(commandEntered.promise, "A child owns drain");
-      b = other(f.caller, { input: {} });
-      releaseCommand.resolve();
-      await bounded(bEntered.promise, "unrelated B reaches snapshot admission");
-      await tick();
-      assertEquals(bSnapshot, false);
-      releaseSnapshot.resolve();
-      assertEquals(await bounded(a, "A releases physical snapshot"), "A");
-      assertEquals(await bounded(b, "B waits then progresses"), "B");
-    } finally {
-      releaseCommand.resolve();
-      releaseSnapshot.resolve();
-      await Promise.allSettled([a, b]);
-      await f.close();
-    }
-  },
-});
-Deno.test({
-  name:
-    "post-commit publication starts clean and waits independently for a live snapshot",
-  ignore: !url,
-  async fn() {
-    const f = await fixture();
-    const requested = latch(),
-      published = Promise.withResolvers<string>(),
-      release = latch();
-    let callback = false;
-    let a: Promise<unknown> | undefined;
-    const command = f.owner.register("snapshot.publish", {
-      authorize() {},
-      execute(_input: unknown, context) {
-        context.afterCommit(async () => {
-          requested.resolve();
-          try {
-            published.resolve(
-              await f.session.withReadSnapshot!(async () => {
-                await Promise.resolve();
-                callback = true;
-                return "publication";
-              }),
-            );
-          } catch (error) {
-            published.reject(error);
-          }
-        });
-        return "command";
-      },
-    });
-    try {
-      a = f.session.withReadSnapshot!(async () => {
-        assertEquals(await command(f.caller, { input: {} }), "command");
-        await release.promise;
-      });
-      await bounded(
-        requested.promise,
-        "publication starts under fresh execution",
-      );
-      await tick();
-      assertEquals(callback, false);
-      release.resolve();
-      await bounded(a, "A releases");
-      assertEquals(
-        await bounded(published.promise, "publication snapshot advances"),
-        "publication",
-      );
-    } finally {
-      release.resolve();
-      await a?.catch(() => {});
-      await f.close();
-    }
-  },
-});
-Deno.test({
-  name:
-    "captured snapshot ancestry is inactive when queued owner work runs after callback completion",
+    "queued owner work can open a snapshot after the previous session closes",
   ignore: !url,
   async fn() {
     const f = await fixture();

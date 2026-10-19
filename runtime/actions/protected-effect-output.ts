@@ -1,3 +1,4 @@
+import { orderedJson } from "../data-only-json.ts";
 /** Owner-only capture of the complete registered Action output. */
 import { validateAgainstJsonSchema } from "../collections/validate.ts";
 import { assertSchemaCommandTransaction } from "../engine/commands.ts";
@@ -75,18 +76,8 @@ function coordinates(binding: ActionOutputBinding) {
   } as const;
 }
 /** Canonicalize only this new output capture format, preserving old lifecycle commitments. */
-function canonicalOutput(value: ActionEffectOutcome): ActionEffectOutcome {
-  if (Array.isArray(value)) return value.map(canonicalOutput);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) =>
-        left < right ? -1 : left > right ? 1 : 0
-      )
-        .map(([key, child]) => [key, canonicalOutput(child)]),
-    );
-  }
-  return value;
-}
+const canonicalOutput = (value: ActionEffectOutcome): ActionEffectOutcome =>
+  orderedJson(value) as ActionEffectOutcome;
 export function captureActionOutput(
   binding: ActionOutputBinding,
   value: ActionEffectOutcome,

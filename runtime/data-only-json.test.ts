@@ -1,5 +1,9 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { chargeJsonString } from "./data-only-json.ts";
+import {
+  canonicalJson,
+  chargeJsonString,
+  orderedJson,
+} from "./data-only-json.ts";
 
 Deno.test("JSON string charges match escaped UTF-8 for every UTF-16 code unit", () => {
   const encoder = new TextEncoder();
@@ -47,4 +51,64 @@ Deno.test("JSON string charges preserve exact inclusive limits and stop on overf
     })
   );
   assertEquals(calls, 1);
+});
+
+Deno.test("canonical JSON preserves historical textual and object ordering formats", () => {
+  const value = { "2": "two", "10": "ten", z: -0, a: [null, true] };
+  assertEquals(
+    canonicalJson(value),
+    '{"10":"ten","2":"two","a":[null,true],"z":0}',
+  );
+  assertEquals(
+    canonicalJson(value, { objectOrder: true }),
+    '{"2":"two","10":"ten","a":[null,true],"z":0}',
+  );
+  assertEquals(
+    canonicalJson({ Z: 1, a: 2, "é": 3 }, {
+      order: "locale",
+      objectOrder: true,
+    }),
+    '{"a":2,"é":3,"Z":1}',
+  );
+  assertEquals(
+    canonicalJson({ a: undefined }, { undefinedValue: "undefined" }),
+    '{"a":undefined}',
+  );
+  assertEquals(
+    canonicalJson({ a: undefined }, { undefinedValue: "null" }),
+    '{"a":null}',
+  );
+  assertEquals(canonicalJson({ a: undefined }, { objectOrder: true }), "{}");
+  assertEquals(
+    JSON.stringify(orderedJson(JSON.parse('{"__proto__":{"safe":true}}'))),
+    '{"__proto__":{"safe":true}}',
+  );
+});
+
+Deno.test("shared canonical encoding never invokes object or array accessors or toJSON", () => {
+  let calls = 0;
+  const getter = {
+    get value() {
+      calls++;
+      return 1;
+    },
+  };
+  const array = Object.defineProperty([], "0", {
+    get() {
+      calls++;
+      return 1;
+    },
+    enumerable: true,
+  });
+  const hooks = {
+    toJSON() {
+      calls++;
+      return {};
+    },
+  };
+  for (const value of [getter, array, hooks]) {
+    assertThrows(() => canonicalJson(value), TypeError);
+    assertThrows(() => canonicalJson(value, { objectOrder: true }), TypeError);
+  }
+  assertEquals(calls, 0);
 });

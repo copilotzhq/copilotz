@@ -1,22 +1,51 @@
 import { dataProperties, walkDataOnly } from "./data-only-json.ts";
 
+type JsonOptions = {
+  label?: string;
+  omitUndefinedProperties?: boolean;
+  rejectNegativeZero?: boolean;
+  normalizeNegativeZero?: boolean;
+  rejectPrototypeKey?: boolean;
+  plainArrays?: boolean;
+  allowBytes?: boolean;
+  maxDepth?: number;
+  maxNodes?: number;
+};
+
 /** Structural JSON validation with explicit boundary policies; never invokes getters. */
 export function assertJsonValue(
   value: unknown,
-  options: {
-    label?: string;
-    omitUndefinedProperties?: boolean;
-    rejectNegativeZero?: boolean;
-    allowBytes?: boolean;
-    maxDepth?: number;
-    maxNodes?: number;
-  } = {},
+  options: JsonOptions = {},
 ): void {
+  jsonValue(value, options, false);
+}
+
+/** Ordered detached data using the same descriptor checks as validation. */
+export function captureJsonValue(
+  value: unknown,
+  options: JsonOptions = {},
+): unknown {
+  return jsonValue(value, options, true);
+}
+
+/** Validate and encode finite JSON in one descriptor-aware traversal. */
+export function encodeJsonValue(
+  value: unknown,
+  options: JsonOptions = {},
+): string {
+  return jsonValue(value, options, "json") as string;
+}
+
+function jsonValue(
+  value: unknown,
+  options: JsonOptions,
+  capture: boolean | "json",
+): unknown {
   const label = options.label ?? "Value";
   function fail(reason: string): never {
     throw new TypeError(`${label} ${reason}`);
   }
-  walkDataOnly(value, {
+  return walkDataOnly(value, {
     value(item, depth, nodes) {
       if (nodes > (options.maxNodes ?? Infinity)) {
         fail("exceeds maximum JSON node count.");
@@ -34,7 +63,7 @@ export function assertJsonValue(
           !Number.isFinite(item) ||
           (options.rejectNegativeZero && Object.is(item, -0))
         ) fail("must contain lossless JSON numbers.");
-        return item;
+        return options.normalizeNegativeZero && Object.is(item, -0) ? 0 : item;
       }
       if (!item || typeof item !== "object") {
         fail("must contain lossless JSON values.");
@@ -48,7 +77,16 @@ export function assertJsonValue(
         !array && Object.getPrototypeOf(item) !== Object.prototype &&
         Object.getPrototypeOf(item) !== null
       ) fail("must contain plain JSON objects.");
+      if (
+        array && options.plainArrays &&
+        Object.getPrototypeOf(item) !== Array.prototype
+      ) {
+        fail("must contain plain JSON arrays.");
+      }
       const keys = Reflect.ownKeys(item);
+      if (capture && !array && keys.every((key) => typeof key === "string")) {
+        keys.sort();
+      }
       const input = item as unknown[];
       if (
         array && (keys.length !== input.length + 1 || !keys.includes("length"))
@@ -63,6 +101,9 @@ export function assertJsonValue(
         ) {
           fail("arrays must be dense and contain no extra properties.");
         }
+        if (options.rejectPrototypeKey && key === "__proto__") {
+          fail("cannot contain '__proto__'.");
+        }
         const descriptor = Object.getOwnPropertyDescriptor(item, key)!;
         if (!descriptor.enumerable || !("value" in descriptor)) {
           fail("must contain enumerable data properties only.");
@@ -74,5 +115,5 @@ export function assertJsonValue(
         visit(key, descriptor.value);
       }
     },
-  }, false);
+  }, capture);
 }

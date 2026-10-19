@@ -1,3 +1,4 @@
+import { canonicalJson as encodeJson } from "../data-only-json.ts";
 import type {
   ContentRef,
   ContentSequence,
@@ -12,20 +13,8 @@ export type RoleContentInput = Readonly<{
   cardinality?: "one" | "many";
 }>;
 
-function canonicalJson(value: unknown): string {
-  const normalize = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (candidate && typeof candidate === "object") {
-      return Object.fromEntries(
-        Object.entries(candidate as Record<string, unknown>)
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, child]) => [key, normalize(child)]),
-      );
-    }
-    return candidate;
-  };
-  return JSON.stringify(normalize(value));
-}
+const canonicalJson = (value: unknown): string =>
+  encodeJson(value, { order: "locale", objectOrder: true });
 
 function isSequence(
   value: ContentSequence | PreparedContent,

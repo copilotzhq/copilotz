@@ -2,12 +2,9 @@ import type { CollectionProjectionRegistrations } from "./projection-registratio
 import { withOwnerReadQueryContext } from "../engine/owner-query-context.ts";
 import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
 import { snapshotViewData } from "../views/renderer.ts";
-import {
-  collectionRuntimeCommitPending,
-  invalidateCollectionReadViews,
-  registerCollectionRuntimeSource,
-  requiresCapturedCollectionContent,
-} from "./joined-runtime.ts";
+import { afterSqlCommit } from "../events/session.ts";
+import { readEventByDeduplicationIdOn } from "../events/store.ts";
+import { schemaCommandContext } from "../engine/commands.ts";
 import {
   assertScheduledAlarmReplay,
   captureScheduledAlarmAdmission,
@@ -26,10 +23,7 @@ import {
 } from "./policy-invocation.ts";
 import type { CollectionPolicyRegistrations } from "./policy-registration.ts";
 import type { CollectionPolicyIntent } from "./policy-types.ts";
-import {
-  queryCollectionRows,
-  withCollectionReadBudget,
-} from "./read-budget.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import {
   type OwnerCommandAuthorization,
   withOwnerCommandAuthorization,
@@ -455,6 +449,7 @@ export type CollectionKernel = Readonly<{
   operations(name: string): CollectionOperations | undefined;
   transaction<T>(
     options: CollectionTransactionOptions<T>,
+    command?: CommandContext,
   ): Promise<CollectionTransactionResult<T>>;
   withScope(scope: CollectionScope): ScopedCollections;
   readSnapshot<T>(
@@ -504,194 +499,206 @@ function assertLosslessJson(value: unknown, label: string): void {
   assertJsonValue(value, { label, rejectNegativeZero: true });
 }
 
-async function canonicalIntentValue(
+function canonicalIntentValue(
   value: unknown,
   preparedContentPaths: ReadonlySet<string> = new Set(),
   path: readonly string[] = ([] as const),
   ancestors = new WeakSet<object>(),
-): Promise<unknown> {
-  if (value === null) return (["null"] as const);
-  if (typeof value === "string") return (["string", value] as const);
-  if (typeof value === "boolean") {
-    return (["boolean", value] as const);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError("Collection mutation intent numbers must be finite.");
+): unknown | Promise<unknown> {
+  const hashes: Promise<void>[] = [];
+  function visit(
+    value: unknown,
+    preparedContentPaths: ReadonlySet<string> = new Set(),
+    path: readonly string[] = ([] as const),
+    ancestors = new WeakSet<object>(),
+  ): unknown {
+    if (value === null) return (["null"] as const);
+    if (typeof value === "string") return (["string", value] as const);
+    if (typeof value === "boolean") {
+      return (["boolean", value] as const);
     }
-    return ([
-      "number",
-      Object.is(value, -0) ? "-0" : String(value),
-    ] as const);
-  }
-  if (value === undefined) {
-    throw new TypeError("Collection mutation intent cannot contain undefined.");
-  }
-  if (value instanceof ArrayBuffer) {
-    const bytes = new Uint8Array(value);
-    return ([
-      "bytes",
-      await digestContent(bytes),
-      bytes.byteLength,
-    ] as const);
-  }
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(
-      value.buffer,
-      value.byteOffset,
-      value.byteLength,
-    );
-    return ([
-      "bytes",
-      await digestContent(bytes),
-      bytes.byteLength,
-    ] as const);
-  }
-  if (typeof value !== "object") {
-    throw new TypeError("Collection mutation intent must be JSON-safe.");
-  }
-  if (ancestors.has(value)) {
-    throw new TypeError("Collection mutation intent cannot be cyclic.");
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const items: unknown[] = [];
-      for (let index = 0; index < value.length; index += 1) {
-        if (!(index in value)) {
-          throw new TypeError(
-            "Collection mutation intent arrays cannot be sparse.",
-          );
-        }
-        items.push(
-          await canonicalIntentValue(
-            value[index],
-            preparedContentPaths,
-            [...path, String(index)] as const,
-            ancestors,
-          ),
-        );
-      }
-      return (["array", items] as const);
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(
-        "Collection mutation intent objects must be plain JSON objects.",
-      );
-    }
-    const source = value as Record<string, unknown>;
-    const ownKeys = Reflect.ownKeys(source);
-    if (ownKeys.some((key) => typeof key !== "string")) {
-      throw new TypeError(
-        "Collection mutation intent objects cannot contain symbol keys.",
-      );
-    }
-    for (const key of ownKeys as string[]) {
-      const descriptor = Object.getOwnPropertyDescriptor(source, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
         throw new TypeError(
-          "Collection mutation intent objects must contain enumerable data properties only.",
+          "Collection mutation intent numbers must be finite.",
         );
       }
-    }
-    const isPreparedContent = preparedContentPaths.has(JSON.stringify(path)) &&
-      ownKeys.every((key) => key === "content" || key === "assets") &&
-      Array.isArray(source.content) && Array.isArray(source.assets) &&
-      source.content.every((item) =>
-        item && typeof item === "object" && !Array.isArray(item) &&
-        typeof (item as Record<string, unknown>).assetId === "string" &&
-        typeof (item as Record<string, unknown>).kind === "string" &&
-        typeof (item as Record<string, unknown>).role === "string" &&
-        typeof (item as Record<string, unknown>).mediaType === "string"
-      ) &&
-      source.assets.every((item) =>
-        item && typeof item === "object" && !Array.isArray(item) &&
-        typeof (item as Record<string, unknown>).id === "string" &&
-        typeof (item as Record<string, unknown>).namespace === "string" &&
-        typeof (item as Record<string, unknown>).mediaType === "string" &&
-        typeof (item as Record<string, unknown>).digest === "string" &&
-        typeof (item as Record<string, unknown>).byteLength === "number" &&
-        (item as Record<string, unknown>).body instanceof Uint8Array
-      );
-    if (isPreparedContent) {
-      const assets = source.assets as readonly PreparedAsset[];
-      const preparedRefs = source.content as readonly Record<string, unknown>[];
-      const identities = new Map<string, readonly unknown[]>();
-      for (const asset of assets) {
-        const identity = asset.idempotencyKey?.trim()
-          ? (["key", asset.idempotencyKey.trim()] as const)
-          : ([
-            "digest",
-            asset.digest,
-            asset.mediaType,
-            asset.byteLength,
-          ] as const);
-        identities.set(asset.id, identity);
-      }
-      const refs: unknown[] = [];
-      for (const ref of preparedRefs) {
-        const stableId = identities.get(String(ref.assetId));
-        refs.push(
-          await canonicalIntentValue(
-            {
-              ...ref,
-              ...(stableId ? { assetId: ["prepared", stableId] as const } : {}),
-            },
-            new Set(),
-            [] as const,
-            ancestors,
-          ),
-        );
-      }
-      const normalizedAssets: unknown[] = [];
-      for (const asset of assets) {
-        const {
-          id: _id,
-          body: _body,
-          readyBody: _readyBody,
-          location: _location,
-          ...fields
-        } = asset;
-        normalizedAssets.push(
-          await canonicalIntentValue(
-            {
-              identity: identities.get(asset.id),
-              ...fields,
-            },
-            new Set(),
-            [] as const,
-            ancestors,
-          ),
-        );
-      }
-      normalizedAssets.sort((left, right) =>
-        JSON.stringify(left).localeCompare(JSON.stringify(right))
-      );
       return ([
-        "prepared-content",
-        refs,
-        normalizedAssets,
+        "number",
+        Object.is(value, -0) ? "-0" : String(value),
       ] as const);
     }
-    const entries: unknown[] = [];
-    for (const key of Object.keys(source).sort()) {
-      entries.push(
-        [
-          key,
-          await canonicalIntentValue(
-            source[key],
-            preparedContentPaths,
-            [...path, key] as const,
-            ancestors,
-          ),
-        ] as const,
+    if (value === undefined) {
+      throw new TypeError(
+        "Collection mutation intent cannot contain undefined.",
       );
     }
-    return (["object", entries] as const);
-  } finally {
-    ancestors.delete(value);
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      const bytes = value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      const tagged: unknown[] = ["bytes", undefined, bytes.byteLength];
+      hashes.push(
+        digestContent(bytes).then((digest) => {
+          tagged[1] = digest;
+        }),
+      );
+      return tagged;
+    }
+    if (typeof value !== "object") {
+      throw new TypeError("Collection mutation intent must be JSON-safe.");
+    }
+    if (ancestors.has(value)) {
+      throw new TypeError("Collection mutation intent cannot be cyclic.");
+    }
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        const items: unknown[] = [];
+        for (let index = 0; index < value.length; index += 1) {
+          if (!(index in value)) {
+            throw new TypeError(
+              "Collection mutation intent arrays cannot be sparse.",
+            );
+          }
+          items.push(
+            visit(
+              value[index],
+              preparedContentPaths,
+              [...path, String(index)] as const,
+              ancestors,
+            ),
+          );
+        }
+        return (["array", items] as const);
+      }
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(
+          "Collection mutation intent objects must be plain JSON objects.",
+        );
+      }
+      const source = value as Record<string, unknown>;
+      const ownKeys = Reflect.ownKeys(source);
+      if (ownKeys.some((key) => typeof key !== "string")) {
+        throw new TypeError(
+          "Collection mutation intent objects cannot contain symbol keys.",
+        );
+      }
+      for (const key of ownKeys as string[]) {
+        const descriptor = Object.getOwnPropertyDescriptor(source, key);
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          throw new TypeError(
+            "Collection mutation intent objects must contain enumerable data properties only.",
+          );
+        }
+      }
+      const isPreparedContent =
+        preparedContentPaths.has(JSON.stringify(path)) &&
+        ownKeys.every((key) => key === "content" || key === "assets") &&
+        Array.isArray(source.content) && Array.isArray(source.assets) &&
+        source.content.every((item) =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).assetId === "string" &&
+          typeof (item as Record<string, unknown>).kind === "string" &&
+          typeof (item as Record<string, unknown>).role === "string" &&
+          typeof (item as Record<string, unknown>).mediaType === "string"
+        ) &&
+        source.assets.every((item) =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).id === "string" &&
+          typeof (item as Record<string, unknown>).namespace === "string" &&
+          typeof (item as Record<string, unknown>).mediaType === "string" &&
+          typeof (item as Record<string, unknown>).digest === "string" &&
+          typeof (item as Record<string, unknown>).byteLength === "number" &&
+          (item as Record<string, unknown>).body instanceof Uint8Array
+        );
+      if (isPreparedContent) {
+        const assets = source.assets as readonly PreparedAsset[];
+        const preparedRefs = source.content as readonly Record<
+          string,
+          unknown
+        >[];
+        const identities = new Map<string, readonly unknown[]>();
+        for (const asset of assets) {
+          const identity = asset.idempotencyKey?.trim()
+            ? (["key", asset.idempotencyKey.trim()] as const)
+            : ([
+              "digest",
+              asset.digest,
+              asset.mediaType,
+              asset.byteLength,
+            ] as const);
+          identities.set(asset.id, identity);
+        }
+        const refs: unknown[] = [];
+        for (const ref of preparedRefs) {
+          const stableId = identities.get(String(ref.assetId));
+          refs.push(
+            visit(
+              {
+                ...ref,
+                ...(stableId
+                  ? { assetId: ["prepared", stableId] as const }
+                  : {}),
+              },
+              new Set(),
+              [] as const,
+              ancestors,
+            ),
+          );
+        }
+        const normalizedAssets: unknown[] = [];
+        for (const asset of assets) {
+          const {
+            id: _id,
+            body: _body,
+            readyBody: _readyBody,
+            location: _location,
+            ...fields
+          } = asset;
+          normalizedAssets.push(
+            visit(
+              {
+                identity: identities.get(asset.id),
+                ...fields,
+              },
+              new Set(),
+              [] as const,
+              ancestors,
+            ),
+          );
+        }
+        normalizedAssets.sort((left, right) =>
+          JSON.stringify(left).localeCompare(JSON.stringify(right))
+        );
+        return ([
+          "prepared-content",
+          refs,
+          normalizedAssets,
+        ] as const);
+      }
+      const entries: unknown[] = [];
+      for (const key of Object.keys(source).sort()) {
+        entries.push(
+          [
+            key,
+            visit(
+              source[key],
+              preparedContentPaths,
+              [...path, key] as const,
+              ancestors,
+            ),
+          ] as const,
+        );
+      }
+      return (["object", entries] as const);
+    } finally {
+      ancestors.delete(value);
+    }
   }
+  const result = visit(value, preparedContentPaths, path, ancestors);
+  return hashes.length ? Promise.all(hashes).then(() => result) : result;
 }
 
 function applyPatch(
@@ -836,10 +843,79 @@ export function createCollectionKernel(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
-  const runCommand = createSchemaCommandRunner(
+  const commands = createAsyncContextStorage<
+    { context: CommandContext; active: boolean; invalidated?: boolean }
+  >();
+  const currentCommand = () => {
+    const selected = commands.getStore();
+    if (!selected) return undefined;
+    selected.context.signal.throwIfAborted();
+    if (!selected.active) {
+      throw new Error("Owner Collection adoption has ended.");
+    }
+    schemaCommandContext(
+      selected.context.transaction,
+      options.eventStore.databaseSchema,
+    );
+    return selected.context;
+  };
+  const committedRunner = createSchemaCommandRunner(
     options.session,
     options.eventStore.databaseSchema,
   );
+  const runCommand: typeof committedRunner = (
+    kind,
+    input,
+    execute,
+    binding,
+  ) => {
+    const command = currentCommand();
+    return command
+      ? createSchemaCommandRunner(
+        command.transaction,
+        options.eventStore.databaseSchema,
+      )(
+        kind,
+        input,
+        (input) => execute(input, command),
+        binding,
+      )
+      : committedRunner(kind, input, execute, binding);
+  };
+  const sql = () => currentCommand()?.transaction ?? options.session;
+  const replayEvent = (namespace: string, id: string) =>
+    readEventByDeduplicationIdOn(sql(), tables, namespace, id);
+  const prepareMaterialization:
+    CollectionAssetAdopter["prepareMaterialization"] = (input) =>
+      options.assets!.prepareMaterialization(
+        input,
+        currentCommand()?.transaction,
+      );
+  const publishAssets = (plans: readonly AssetMaterializationPlan[]) => {
+    const publish = () => options.assets!.publishMaterializations(plans);
+    const command = currentCommand();
+    if (command) command.afterCommit(publish);
+    else publish();
+  };
+  const flushCommitted: EventCoordinator["flushCommitted"] = (result) => {
+    const command = currentCommand();
+    if (!command) return options.coordinator.flushCommitted(result);
+    command.afterCommit(async () => {
+      await options.coordinator.flushCommitted(result);
+    });
+    return Promise.resolve({ handles: [], failures: [] });
+  };
+  const invalidateReads = (key?: string) => {
+    const command = currentCommand();
+    if (command) {
+      const selected = commands.getStore()!;
+      if (!selected.invalidated) {
+        afterSqlCommit(command.transaction, () => readViews.invalidateAll());
+        selected.invalidated = true;
+      }
+    } else if (key === undefined) readViews.invalidateAll();
+    else readViews.invalidate(key);
+  };
   const bound = new Map<string, BoundCollection>();
   const operations = new Map<string, CollectionOperations>();
   type TransactionBinding = Readonly<{
@@ -921,8 +997,12 @@ export function createCollectionKernel(
     /** A repeatable-read snapshot answers the same question the same way. */
     reads: Map<string, Promise<unknown>>;
     control: import("../events/session.ts").SqlReadSnapshot;
-    commandTime: string;
+    commandTime?: Promise<string>;
   };
+  const snapshotTime = (scope: SnapshotScope): Promise<string> =>
+    scope.commandTime ??= scope.executor.query<{ now: string }>(
+      "SELECT CURRENT_TIMESTAMP::text AS now",
+    ).then((result) => result.rows[0].now);
   const snapshots = createAsyncContextStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
   const activeSnapshot = () => snapshots.getStore();
@@ -1045,7 +1125,7 @@ export function createCollectionKernel(
       if (snapshot.state !== "open") {
         throw new Error("Read snapshot access has already closed.");
       }
-      const authorize = (phase: "read" | "result", value?: unknown) =>
+      const authorize = async (phase: "read" | "result", value?: unknown) =>
         snapshot.control.kind === "pooled"
           ? snapshot.control.current(async (transaction) => {
             const commandTime = (await transaction.query<{ now: string }>(
@@ -1061,31 +1141,32 @@ export function createCollectionKernel(
           ? disclosureRoot
             ? discloseAll({
               transaction: snapshot.executor,
-              commandTime: snapshot.commandTime,
+              commandTime: await snapshotTime(snapshot),
             })
             : disclose({
               transaction: snapshot.executor,
-              commandTime: snapshot.commandTime,
+              commandTime: await snapshotTime(snapshot),
             }, value)
           : policy?.authorize({
             transaction: snapshot.executor,
-            commandTime: snapshot.commandTime,
+            commandTime: await snapshotTime(snapshot),
           }, phase);
       await authorize("read");
-      const result = await withCollectionReadBudget(load);
+      const result = await load();
       disclosure.checks.push((read) => disclose(read, result));
       await authorize("result", result);
       return result;
     }
-    const result = await withCollectionReadBudget(() =>
-      runCommand(
-        "collections.read",
-        {},
-        async (_input, command) => {
-          // This read's captured aggregation belongs to its own queued command.
-          if (!disclosure.active) collectionPolicyRefused();
-          const read = { ...command, authority, active: true };
-          return await policyDisclosures.run(disclosure, () =>
+    const result = await runCommand(
+      "collections.read",
+      {},
+      async (_input, command) => {
+        // This read's captured aggregation belongs to its own queued command.
+        if (!disclosure.active) collectionPolicyRefused();
+        const read = { ...command, authority, active: true };
+        return await policyDisclosures.run(
+          disclosure,
+          () =>
             policyReads.run(read, async () => {
               try {
                 await policy?.authorize(command, "read");
@@ -1095,9 +1176,9 @@ export function createCollectionKernel(
               } finally {
                 read.active = false;
               }
-            }));
-        },
-      )
+            }),
+        );
+      },
     );
     disclosure.checks.push((read) => disclose(read, result));
     // Hydrated endpoints and named-query reads share the root's final fresh gate.
@@ -1182,7 +1263,7 @@ export function createCollectionKernel(
     const read = policyReads.getStore();
     if (read) return read.transaction;
     const snapshot = activeSnapshot();
-    if (!snapshot) return options.session;
+    if (!snapshot) return sql();
     if (snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
     }
@@ -1334,7 +1415,7 @@ export function createCollectionKernel(
             },
           );
         } catch (error) {
-          if (value.event && !collectionRuntimeCommitPending(options)) {
+          if (value.event && !currentCommand()) {
             collectionCommittedResultRefused();
           }
           throw error;
@@ -1505,7 +1586,7 @@ export function createCollectionKernel(
         let value = getPath(record, field);
         if (value === undefined) continue;
         if (
-          requiresCapturedCollectionContent(options) &&
+          Boolean(currentCommand()) &&
           !(Array.isArray(value) &&
             value.every((item) =>
               item && typeof item === "object" &&
@@ -1536,7 +1617,7 @@ export function createCollectionKernel(
           }
           : undefined;
         if (Array.isArray(value) && value.some(isPendingContentRef)) {
-          const prepared = await options.assets.prepareMaterialization({
+          const prepared = await prepareMaterialization({
             namespace,
             content: value as DurableContentInput,
             origin: { type: name, id: write.record.id },
@@ -1624,7 +1705,7 @@ export function createCollectionKernel(
             );
           }
           if (pendingRefs.length > 0) {
-            const pending = await options.assets.prepareMaterialization({
+            const pending = await prepareMaterialization({
               namespace,
               content: preparedValue.sequenceOnly ? pendingRefs : ({
                 content: pendingRefs,
@@ -1660,7 +1741,7 @@ export function createCollectionKernel(
           content: value as DurableContentInput,
           origin: { type: name, id: write.record.id },
         } as const;
-        const prepared = await options.assets.prepareMaterialization(input);
+        const prepared = await prepareMaterialization(input);
         content.push(prepared);
         assets.push(...prepared.assets);
         setPath(record, field, prepared.content);
@@ -1782,7 +1863,7 @@ export function createCollectionKernel(
             execution,
             true,
           );
-          if (!execution) options.assets!.publishMaterializations(plan.content);
+          if (!execution) publishAssets(plan.content);
           return result;
         } catch (error) {
           if (!(error as { [staleAdoption]?: true })[staleAdoption]) {
@@ -1816,10 +1897,10 @@ export function createCollectionKernel(
             );
           },
         );
-        options.assets.publishMaterializations(resolvedPlan!.content);
+        publishAssets(resolvedPlan!.content);
         const reports = [];
         for (const item of pending) {
-          reports.push(await options.coordinator.flushCommitted(item));
+          reports.push(await flushCommitted(item));
         }
         return ({
           ...result,
@@ -2058,7 +2139,7 @@ export function createCollectionKernel(
       );
       const deduplicationId = scoped.identity?.deduplicationId?.trim();
       if (!deduplicationId) return null;
-      const event = await options.eventStore.getEventByDeduplicationId(
+      const event = await replayEvent(
         scoped.namespace,
         deduplicationId,
       );
@@ -2072,7 +2153,7 @@ export function createCollectionKernel(
         );
       }
       const body = await readEventBody<CollectionEventBody<CollectionRecord>>(
-        { transaction: options.session, tables },
+        { transaction: sql(), tables },
         scoped.namespace,
         eventDataRef(event.payload),
       );
@@ -2128,8 +2209,7 @@ export function createCollectionKernel(
           : execute());
       } finally {
         // Also when refused: a compare-and-set retry must read the row again.
-        invalidateCollectionReadViews(
-          options,
+        invalidateReads(
           rowKey(planned.writeOptions.namespace.trim(), planned.id),
         );
       }
@@ -2231,15 +2311,13 @@ export function createCollectionKernel(
       const key = recordKey(id);
       if (scope?.records.has(key)) return scope.records.get(key) ?? null;
       const record = await loadCollectionRecord(
-        options.session,
+        sql(),
         tables,
         namespace,
         name,
         id,
       );
-      const snapshot = record
-        ? (structuredClone(record)) as CollectionRecord
-        : null;
+      const snapshot = record;
       scope?.records.set(key, snapshot);
       return snapshot;
     };
@@ -2775,7 +2853,7 @@ export function createCollectionKernel(
     ): Promise<CollectionRecord | null> => {
       const memo =
         options.policies?.has(name) || activeSnapshot() || activeScope() ||
-          collectionRuntimeCommitPending(options)
+          Boolean(currentCommand())
           ? undefined
           : readViews.memo();
       if (!memo) return await loadBatched(executor(), ns, recordId);
@@ -2829,7 +2907,6 @@ export function createCollectionKernel(
           definition,
           ns,
           query,
-          undefined,
           undefined,
           (target, id) => {
             actualDefinition(target);
@@ -2909,7 +2986,7 @@ export function createCollectionKernel(
               const viewer = captureHostCommandJson(
                 authority.invocation,
               ) as typeof authority.invocation;
-              const value = await withOwnerAuthorizationPhase(() =>
+              const value = await withOwnerAuthorizationPhase(async () =>
                 withOwnerReadQueryContext(
                   (context) =>
                     projection.select(
@@ -2932,7 +3009,7 @@ export function createCollectionKernel(
                         return { rows: [...rows], rowCount: rows.length };
                       },
                     },
-                    commandTime: snapshot.commandTime,
+                    commandTime: await snapshotTime(snapshot),
                   },
                   authority.signal,
                   () => ({
@@ -3250,7 +3327,7 @@ export function createCollectionKernel(
     return collection;
   };
 
-  const transaction = async <T>(
+  const transact = async <T>(
     input: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>> => {
     if (activeSnapshot()) {
@@ -3764,7 +3841,7 @@ export function createCollectionKernel(
               const identity = writeOptions.identity!;
               const deduplicationId = identity.deduplicationId!;
               const bodyId = `event-body:${namespace}:${deduplicationId}`;
-              const replay = await options.eventStore.getEventByDeduplicationId(
+              const replay = await replayEvent(
                 namespace,
                 deduplicationId,
               );
@@ -3781,7 +3858,7 @@ export function createCollectionKernel(
                   );
                 }
                 body = await readEventBody<GraphRelationEventBody>(
-                  { transaction: options.session, tables },
+                  { transaction: sql(), tables },
                   namespace,
                   eventDataRef(replay.payload),
                 );
@@ -3814,7 +3891,7 @@ export function createCollectionKernel(
                   : endpointWasInvalidated
                   ? null
                   : await loadGraphRelation(
-                    options.session,
+                    sql(),
                     tables,
                     namespace,
                     relationId,
@@ -4039,7 +4116,7 @@ export function createCollectionKernel(
     const [only] = orderedPlans;
     const commandReceipt = collectionCommandReceipt();
     if (
-      !commandReceipt && !collectionRuntimeCommitPending(options) &&
+      !commandReceipt && !currentCommand() &&
       orderedPlans.length === 1 && only.commitAlone &&
       !only.policy
     ) {
@@ -4120,9 +4197,9 @@ export function createCollectionKernel(
     }
 
     // Joined writes become visible only when the borrowed owner command commits.
-    invalidateCollectionReadViews(options);
+    invalidateReads();
     if (options.assets) {
-      options.assets.publishMaterializations(
+      publishAssets(
         orderedPlans.flatMap((plan) =>
           plan.materializations?.(replacements) ?? []
         ),
@@ -4131,7 +4208,7 @@ export function createCollectionKernel(
 
     const reports: EventDispatchReport[] = [];
     for (const committed of pending) {
-      reports.push(await options.coordinator.flushCommitted(committed));
+      reports.push(await flushCommitted(committed));
     }
     if (policies.length) {
       try {
@@ -4145,7 +4222,7 @@ export function createCollectionKernel(
           },
         );
       } catch (error) {
-        if (collectionRuntimeCommitPending(options)) throw error;
+        if (currentCommand()) throw error;
         collectionCommittedResultRefused();
       }
     }
@@ -4162,6 +4239,24 @@ export function createCollectionKernel(
         failures: reports.flatMap((item) => [...item.failures]),
       } as const,
     } as const);
+  };
+
+  const transaction = async <T>(
+    input: CollectionTransactionOptions<T>,
+    command?: CommandContext,
+  ): Promise<CollectionTransactionResult<T>> => {
+    if (!command) return await transact(input);
+    // The executor belongs to this owner; afterCommit remains its outer gate.
+    schemaCommandContext(
+      command.transaction,
+      options.eventStore.databaseSchema,
+    );
+    const selected = { context: command, active: true };
+    try {
+      return await commands.run(selected, () => transact(input));
+    } finally {
+      selected.active = false;
+    }
   };
 
   const withScope = (scope: CollectionScope): ScopedCollections => {
@@ -4182,7 +4277,7 @@ export function createCollectionKernel(
     if (activeSnapshot()) {
       throw new Error("Nested read snapshots are not supported.");
     }
-    if (!options.session.readSnapshot) {
+    if (!options.session.withReadSnapshot) {
       throw new Error(
         "The configured SQL session does not support repeatable read snapshots.",
       );
@@ -4190,35 +4285,14 @@ export function createCollectionKernel(
     const cleanup = Promise.withResolvers<
       import("../events/session.ts").SqlSnapshotCleanup
     >();
-    const run = options.session.withReadSnapshot
-      ? (
-        execute: (
-          scope: import("../events/session.ts").SqlReadSnapshot,
-        ) => Promise<T>,
-      ) =>
-        options.session.withReadSnapshot!(
-          (scope) =>
-            execute(Object.assign({}, scope, { cleanup: cleanup.promise })),
-          { onCleanup: cleanup.resolve },
-        )
-      : (
-        execute: (
-          scope: import("../events/session.ts").SqlReadSnapshot,
-        ) => Promise<T>,
-      ) =>
-        options.session.readSnapshot!((executor) =>
-          execute({ kind: "exclusive", snapshot: executor })
-        );
-    return await run(async (control) => {
+    return await options.session.withReadSnapshot(async (session) => {
+      const control = { ...session, cleanup: cleanup.promise };
       const executor = control.snapshot;
       const snapshot: SnapshotScope = {
         executor,
         state: "open",
         reads: new Map(),
         control,
-        commandTime: (await executor.query<{ now: string }>(
-          "SELECT CURRENT_TIMESTAMP::text AS now",
-        )).rows[0].now,
       };
       return await snapshots.run(snapshot, async () => {
         const closed = () =>
@@ -4287,7 +4361,7 @@ export function createCollectionKernel(
           snapshot.state = "closed";
         }
       });
-    });
+    }, { onCleanup: cleanup.resolve });
   };
 
   const runtime: CollectionKernel = {
@@ -4366,6 +4440,5 @@ export function createCollectionRuntime(
     readSnapshot: kernel.readSnapshot,
     transaction: kernel.transaction,
   } as const) as CollectionRuntime;
-  registerCollectionRuntimeSource(runtime, options);
   return runtime;
 }

@@ -1,6 +1,5 @@
 import { ActionError, standardActionError } from "../actions/errors.ts";
 import { withProtectedValueRead } from "../actions/protected-value-read.ts";
-import { withCollectionReadBudget } from "./read-budget.ts";
 import { markOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import { withOwnerReadQueryContext } from "../engine/owner-query-context.ts";
@@ -90,9 +89,7 @@ export function captureCollectionPolicy(
     let current: CollectionRecord | null | undefined;
     try {
       current = operation.current
-        ? await withCollectionReadBudget(() =>
-          operation.current!(read.transaction)
-        )
+        ? await operation.current!(read.transaction)
         : undefined;
     } catch {
       policyAuthority.check();

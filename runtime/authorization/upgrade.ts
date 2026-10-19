@@ -38,6 +38,11 @@ export type AuthorityUpgradeManifest = Readonly<{
   invocations: readonly AuthorityMigrationEntry[];
   events: readonly (RetainedAuthorityEvent & {
     authority: AuthenticatedAuthority;
+    /** Reviewed attribution, distinct from the session or credential principal. */
+    actorBinding?: Extract<
+      import("../actions/protected-action-types.ts").ProtectedActionIngress,
+      { kind: "authenticated-server" }
+    >["actor"];
     ingress?:
       import("../actions/protected-action-types.ts").ProtectedActionIngress;
   })[];
@@ -224,8 +229,7 @@ async function applyAuthorityUpgrade(
         required.some((key) =>
           key === "actor"
             ? !ingress.actor || typeof ingress.actor !== "object" ||
-              typeof (ingress.actor as { id?: unknown }).id !== "string" ||
-              (ingress.actor as { id: string }).id !== authority.principal.id
+              typeof (ingress.actor as { id?: unknown }).id !== "string"
             : typeof ingress[key] !== "string" ||
               !(ingress[key] as string).trim()
         )
@@ -243,6 +247,30 @@ async function applyAuthorityUpgrade(
           "Migrated ingress does not match its authority provenance.",
         );
       }
+    }
+    const provenance = entry.ingress ??
+      (await transaction.query<{ owner_ingress: Record<string, unknown> }>(
+        `SELECT owner_ingress FROM ${tables.events} WHERE namespace=$1 AND id=$2`,
+        [event.namespace, event.eventId],
+      )).rows[0]?.owner_ingress;
+    if (provenance?.kind === "authenticated-server") {
+      const actor = provenance.actor as Record<string, unknown> | undefined;
+      if (
+        !actor || Array.isArray(actor) ||
+        typeof actor.id !== "string" || !actor.id.trim() ||
+        Object.entries(actor).some(([key, value]) =>
+          !["id", "externalId", "name", "email"].includes(key) ||
+          typeof value !== "string"
+        ) || !entry.actorBinding ||
+        stableStringify(actor) !== stableStringify(entry.actorBinding) ||
+        authority.provenance.ingress !== "http"
+      ) {
+        throw new Error(
+          "Authenticated ingress requires an exact reviewed actor binding.",
+        );
+      }
+    } else if (entry.actorBinding !== undefined) {
+      throw new Error("Actor binding requires authenticated ingress.");
     }
     await transaction.query(
       `UPDATE ${tables.events} SET owner_ingress=COALESCE(NULLIF(owner_ingress,'null'::jsonb), $4::jsonb) || jsonb_build_object('authority',$3::jsonb) WHERE namespace=$1 AND id=$2`,

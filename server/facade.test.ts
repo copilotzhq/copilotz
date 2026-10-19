@@ -1,3 +1,4 @@
+import type { AuthorizationIntent } from "../runtime/authorization/evaluator.ts";
 import { testAuthority } from "../runtime/testing/authority.ts";
 import { createHttpReads } from "./reads.ts";
 import {
@@ -850,6 +851,7 @@ Deno.test("the embedded application serves the composed facade", async () => {
 });
 
 Deno.test("collection mutations are opt-in, policy-bound, and durably replayable", async () => {
+  const collectionIntents: AuthorizationIntent[] = [];
   const application = await createCopilotzApplication({
     namespace: "tenant-a",
     databaseSchema: "server_collection_mutation_test",
@@ -870,7 +872,10 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
                 actions: false,
                 channels: false,
               },
-              evaluate() {
+              evaluate(_request, { intent }) {
+                if (intent.kind === "collection") {
+                  collectionIntents.push(intent);
+                }
                 return {
                   operations: { metadata: { threadId: "thread-1" } },
                   collectionMutations: {
@@ -948,6 +953,12 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
         ),
       CopilotzHttpError,
       "Idempotency key was reused with different input.",
+    );
+    // A client's HTTP mutation is a direct call, never an executing Processor.
+    assert(collectionIntents.length > 0);
+    assertEquals(
+      collectionIntents.filter((intent) => intent.invocation !== undefined),
+      [],
     );
   } finally {
     await application.close();

@@ -13,7 +13,10 @@ import { createPluginRegistry } from "../plugins/registry.ts";
 import { createCopilotzApplication } from "../application/application.ts";
 import { createCopilotz } from "../../create-copilotz.ts";
 import { bindTestActions, testAuthority } from "./authority.ts";
-import type { OwnerAuthorization } from "../authorization/evaluator.ts";
+import type {
+  AuthorizationIntent,
+  OwnerAuthorization,
+} from "../authorization/evaluator.ts";
 import type { HttpReadServices } from "../../plugins/server/authoring/http-adapter/index.ts";
 
 type FixturePolicy = (
@@ -22,6 +25,7 @@ type FixturePolicy = (
     scope: ServerAuthorizedScope;
     endpoint: ServerEndpointDescriptor;
     read: HttpReadServices;
+    intent: AuthorizationIntent;
   },
 ) => ServerConstraints | Response | Promise<ServerConstraints | Response>;
 const policies = new WeakMap<ServerFacadeResource, FixturePolicy>();
@@ -113,7 +117,7 @@ function fixtureOptions<
       fixture: {
         revision: "1",
         sources: Object.keys(registry.collections),
-        async evaluate({ authority, read }) {
+        async evaluate({ authority, read, intent }) {
           if (authority.principal.id === "fixture-host") {
             return {
               actions,
@@ -142,6 +146,7 @@ function fixtureOptions<
                   ...(facts.actor ? { actor: facts.actor } : {}),
                 },
                 endpoint: facts.endpoint,
+                intent,
                 read: {
                   get: read.get,
                   list: read.list,

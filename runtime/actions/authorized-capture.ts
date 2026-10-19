@@ -1,23 +1,20 @@
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
-import { standardActionError } from "./errors.ts";
-import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
+
 import {
-  isOwnerAuthorizationRefusal,
-  markOwnerAuthorizationRefusal,
-  withOwnerPolicyRefusal,
-} from "../engine/authorization-refusal.ts";
+  authorizationRefused,
+  createOwnerEvaluator,
+} from "../authorization/evaluator.ts";
 
 /** Owner-local Action policy and first input capture on the existing owner queue. */
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import {
-  bindCommandExecutorAlias,
   type CommandContext,
   createSchemaCommandRunner,
   schemaCommandContext,
 } from "../engine/commands.ts";
-import { withOwnerQueryContext } from "../engine/owner-query-context.ts";
+
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import type {
   EventCoordinator,
@@ -31,29 +28,31 @@ import {
   actionDefinitionById,
   hydrateActionLifecycleBody,
 } from "./protected-lifecycle.ts";
-import { withProtectedEventResolver } from "./protected-context.ts";
+
 import {
-  assertProtectedActionMetadata,
   capturePreparedActionInput,
   protectedActionPublicInput,
-} from "./protected-action-policy.ts";
+} from "./capture-input.ts";
 import {
   assertProtectedActionSourceReplay,
   type ProtectedActionSourceBinding,
   resolveProtectedActionSource,
 } from "./protected-action-source.ts";
-import type {
-  ProtectedActionDefinitions,
-  ProtectedActionOwnerContext,
-} from "./protected-action-types.ts";
+
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
-import { sameActionValue } from "./value.ts";
+import { durableActionValue, sameActionValue } from "./value.ts";
 import type { ActionWriter } from "./ownership.ts";
 
-export function createProtectedActions(
+export function createAuthorizedActions(
   options: Readonly<{
-    definitions: ProtectedActionDefinitions;
+    authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
+    collections: Readonly<
+      Record<
+        string,
+        import("../collections/definition.ts").CollectionDefinition
+      >
+    >;
     actions: Readonly<Record<string, AnyActionDefinition>>;
     store: EventStore;
     coordinator: EventCoordinator;
@@ -70,14 +69,32 @@ export function createProtectedActions(
   const databaseSchema = store.databaseSchema;
   const key = (runId: string) =>
     JSON.stringify(["action.protected-input", namespace, runId]);
-  const definition = (id: string) => options.definitions[id];
+  const alias = (id: string) =>
+    Object.entries(options.actions).find(([, action]) => action.id === id)?.[0];
+  const definition = (id: string) =>
+    options.authorization?.actions[alias(id) ?? ""];
+  const evaluate = options.authorization &&
+    createOwnerEvaluator({
+      registration: options.authorization,
+      collections: options.collections,
+      databaseSchema,
+    });
   const binding = (action: AnyActionDefinition) => ({
     databaseSchema,
     namespace,
     actionId: action.id,
     inputSchema: action.inputSchema ?? null,
-    publicRevisionFields: definition(action.id)?.publicRevisionFields ?? [],
+    publicRevisionFields: [],
   });
+  const matchesCapture = (intent: unknown, action: AnyActionDefinition) => {
+    if (!intent || typeof intent !== "object" || Array.isArray(intent)) {
+      return false;
+    }
+    return sameActionValue(
+      { ...intent, publicRevisionFields: [] },
+      binding(action),
+    );
+  };
   const authority = async (
     command: CommandContext,
     frame: Pick<ActionInvocationFrame, "actionRunId" | "actionId" | "signal">,
@@ -140,93 +157,6 @@ export function createProtectedActions(
     ) throw new Error("Protected Action input capture is invalid.");
     return data;
   };
-  const phase = <T>(
-    command: CommandContext,
-    frame: Pick<
-      ActionInvocationFrame,
-      "actionId" | "actionRunId" | "parentActionRunId" | "signal"
-    >,
-    input: unknown,
-    source: ProtectedActionSourceBinding,
-    run: (context: ProtectedActionOwnerContext) => T | Promise<T>,
-  ) => {
-    const signal = AbortSignal.any([
-      options.signal,
-      frame.signal,
-      command.signal,
-    ]);
-    let infrastructureFailed = false;
-    const watch = <V>(promise: Promise<V>): Promise<V> =>
-      promise.catch((error) => {
-        infrastructureFailed = true;
-        throw error;
-      });
-    return withOwnerQueryContext(
-      run,
-      command,
-      signal,
-      (assertActive, query, track) => {
-        const watchedQuery: typeof query = (sql, params) => {
-          try {
-            return watch(query(sql, params));
-          } catch (error) {
-            infrastructureFailed = true;
-            throw error;
-          }
-        };
-        const transaction = { query: watchedQuery };
-        bindCommandExecutorAlias(
-          transaction,
-          command.transaction,
-          assertActive,
-        );
-        const resolveSource = () => {
-          try {
-            assertActive();
-          } catch (error) {
-            return Promise.reject(error);
-          }
-          return track(
-            watch(resolveProtectedActionSource({
-              transaction,
-              databaseSchema,
-              namespace,
-              source,
-              protectedValues: options.protectedValues,
-            })).then((value) => {
-              assertActive();
-              return value;
-            }),
-          );
-        };
-        return withProtectedEventResolver({
-          query: watchedQuery,
-          scope: Object.freeze({ databaseSchema, namespace }),
-          action: Object.freeze({
-            id: frame.actionId,
-            runId: frame.actionRunId,
-            ...(frame.parentActionRunId
-              ? { parentRunId: frame.parentActionRunId }
-              : {}),
-          }),
-          input: captureHostCommandJson(input),
-          resolveSource,
-        }, async () => (await resolveSource()).data);
-      },
-    ).catch((caught) => {
-      if (signal.aborted) {
-        throw new DOMException(
-          "Protected Action owner phase was cancelled.",
-          "AbortError",
-        );
-      }
-      const error = standardActionError(caught) ??
-        new Error("Protected Action owner phase failed.");
-      throw !infrastructureFailed && isOwnerAuthorizationRefusal(caught)
-        ? markOwnerAuthorizationRefusal(error)
-        : error;
-    });
-  };
   const authorize = async (
     command: CommandContext,
     frame: Pick<
@@ -235,37 +165,102 @@ export function createProtectedActions(
     >,
     input: unknown,
     source: ProtectedActionSourceBinding,
+    firstCapture = false,
   ) => {
     await authority(command, frame);
-    const hook = definition(frame.actionId)!;
-    await withOwnerAuthorizationPhase(() =>
-      phase(
-        command,
-        frame,
-        input,
-        source,
-        (context) =>
-          withOwnerPolicyRefusal(
-            () => hook.authorize(input, context),
-            context.signal,
-          ),
-      )
-    );
+    if (!evaluate) authorizationRefused();
+    const resolved = await resolveProtectedActionSource({
+      transaction: command.transaction,
+      databaseSchema,
+      namespace,
+      source,
+      protectedValues: options.protectedValues,
+    });
+    const retained = (await command.transaction.query<
+      {
+        authority:
+          import("../authorization/authority.ts").AuthenticatedAuthority;
+      }
+    >(
+      `SELECT authority FROM ${store.tables.authorization_invocations} WHERE namespace=$1 AND run_id=$2`,
+      [namespace, frame.actionRunId],
+    )).rows[0];
+    const binding = retained?.authority ??
+      (firstCapture
+        ? resolved.ingress?.authority ??
+          resolved.ancestors.find((entry) => entry.ingress?.authority)?.ingress
+            ?.authority
+        : undefined);
+    if (!binding) authorizationRefused();
+    const decision = await evaluate(binding, {
+      kind: "action",
+      resource: alias(frame.actionId)!,
+      operation: firstCapture ? "capture" : "authorize",
+      input,
+    }, command);
+    const policy = decision.constraints.actions?.[alias(frame.actionId)!] ??
+      decision.constraints.actions?.[frame.actionId];
+    if (!policy) authorizationRefused();
     await authority(command, frame);
+    const metadata = captureHostCommandJson({
+      ...("metadata" in frame ? frame.metadata as Record<string, unknown> : {}),
+      ...decision.constraints.actionMetadata,
+    });
+    if (!firstCapture) {
+      return { input: captureHostCommandJson(input), metadata };
+    }
+    await command.transaction.query(
+      `INSERT INTO ${store.tables.authorization_invocations}(namespace,run_id,source_event_id,authority) VALUES($1,$2,$3,$4::jsonb)`,
+      [
+        namespace,
+        frame.actionRunId,
+        source.eventId,
+        JSON.stringify({
+          ...decision.authority,
+          dependencies: decision.dependencies,
+        }),
+      ],
+    );
+    if (!policy.input) {
+      return { input: captureHostCommandJson(input), metadata };
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      authorizationRefused();
+    }
+    const candidate =
+      input && typeof input === "object" && !Array.isArray(input)
+        ? input as Record<string, unknown>
+        : {};
+    for (const [key, value] of Object.entries(policy.input ?? {})) {
+      if (
+        Object.hasOwn(candidate, key) && !sameActionValue(candidate[key], value)
+      ) authorizationRefused();
+    }
+    return {
+      input: captureHostCommandJson({ ...candidate, ...policy.input }),
+      metadata,
+    };
   };
   const prepareInput = (
     frame: ActionInvocationFrame,
     raw: unknown,
     transaction?: SqlExecutor,
-  ): Promise<{ input: unknown; claimed: boolean }> | undefined => {
-    const hook = definition(frame.actionId);
-    if (!hook) return;
-    const input = captureHostCommandJson(raw);
+  ):
+    | Promise<
+      {
+        input: unknown;
+        claimed: boolean;
+        metadata: import("./types.ts").ActionInvocationMetadata;
+      }
+    >
+    | undefined => {
+    if (!definition(frame.actionId)) return;
+    const input = captureHostCommandJson(durableActionValue(raw));
     const action = actionDefinitionById(options.actions, frame.actionId);
     const request = protectedActionPublicInput(
       action,
       input,
-      hook.publicRevisionFields,
+      [],
     );
     return (async () => {
       let committed:
@@ -287,8 +282,16 @@ export function createProtectedActions(
           );
           if (prior) {
             if (
-              !existing || !sameActionValue(prior.intent, binding(action)) ||
-              !sameActionValue(prior.result.request, request) ||
+              !existing || !matchesCapture(prior.intent, action) ||
+              !sameActionValue(
+                prior.result.request,
+                protectedActionPublicInput(
+                  action,
+                  input,
+                  (prior.intent as { publicRevisionFields: readonly string[] })
+                    .publicRevisionFields,
+                ),
+              ) ||
               existing.parentActionRunId !== frame.parentActionRunId
             ) {
               throw new Error(
@@ -304,7 +307,11 @@ export function createProtectedActions(
             });
             const captured = captureHostCommandJson(existing.input);
             await authorize(command, frame, captured, prior.result.source);
-            return { input: captured, claimed: false };
+            return {
+              input: captured,
+              claimed: false,
+              metadata: existing.metadata ?? {},
+            };
           }
           if (existing) {
             throw new Error(
@@ -317,43 +324,11 @@ export function createProtectedActions(
             );
           }
           const source = options.source;
-          await authorize(command, frame, input, source);
-          const prepared = hook.prepareInput
-            ? await withOwnerAuthorizationPhase(() =>
-              phase(command, frame, input, source, (context) => {
-                const value = withOwnerPolicyRefusal(
-                  () => hook.prepareInput!(input, context),
-                  context.signal,
-                );
-                return value instanceof Promise
-                  ? value.then((value) =>
-                    capturePreparedActionInput(
-                      action,
-                      input,
-                      value,
-                      hook.publicRevisionFields,
-                    )
-                  )
-                  : capturePreparedActionInput(
-                    action,
-                    input,
-                    value,
-                    hook.publicRevisionFields,
-                  );
-              })
-            )
-            : capturePreparedActionInput(
-              action,
-              input,
-              input,
-              hook.publicRevisionFields,
-            );
-          assertProtectedActionMetadata(action, prepared, frame.metadata);
-          assertProtectedActionMetadata(
-            action,
-            prepared,
-            options.lifecycleMetadata ?? {},
-          );
+          const decision = await authorize(command, frame, input, source, true);
+          const prepared = decision.input;
+          const metadata = decision
+            .metadata as import("./types.ts").ActionInvocationMetadata;
+          capturePreparedActionInput(action, prepared, prepared);
           await authority(command, frame);
           const lifecycle = createActionLifecycleEmitter({
             namespace,
@@ -373,7 +348,7 @@ export function createProtectedActions(
             ...(frame.parentActionRunId
               ? { parentActionRunId: frame.parentActionRunId }
               : {}),
-            metadata: frame.metadata,
+            metadata,
             input: prepared,
             ...frame.identity,
             status: "invoked",
@@ -394,7 +369,7 @@ export function createProtectedActions(
               await awaitEventPublication(captured);
             });
           }
-          return { input: prepared, claimed: true };
+          return { input: prepared, claimed: true, metadata };
         },
       );
       if (committed && !transaction) {
@@ -409,14 +384,13 @@ export function createProtectedActions(
       "actionId" | "actionRunId" | "parentActionRunId" | "signal"
     >,
   ) => {
-    const hook = definition(frame.actionId);
-    if (!hook) return {};
+    if (!definition(frame.actionId)) return {};
     const action = actionDefinitionById(options.actions, frame.actionId);
     const captured = async (tx: SqlExecutor) => {
       const prior = await read(tx, frame.actionRunId);
       const input = await invoked(tx, action, frame.actionRunId);
       if (
-        !prior || !input || !sameActionValue(prior.intent, binding(action)) ||
+        !prior || !input || !matchesCapture(prior.intent, action) ||
         input.parentActionRunId !== frame.parentActionRunId
       ) throw new Error("Protected Action owner capture is unavailable.");
       await assertProtectedActionSourceReplay({

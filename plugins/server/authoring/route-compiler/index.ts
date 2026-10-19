@@ -349,25 +349,11 @@ export function compileServerRoutes(
     keys.add(collisionKey);
     return ({ endpoint: value, segments } as const);
   });
-  if (facade.protectedBootstrapRoutes?.length) {
-    if (
-      !facade.authenticate || !facade.authorize ||
-      facade.protectedBootstrapRoutes.some((id) =>
-        !routes.some((route) =>
-          route.endpoint.kind === "http" && route.endpoint.id === id
-        )
-      )
-    ) {
-      throw new TypeError(
-        "Protected bootstrap routes must resolve to custom HTTP routes with both server policy hooks.",
-      );
-    }
-  }
-  const document = openApi(facade.basePath, routes);
+
   return ({
     basePath: facade.basePath,
     routes,
-    openApi: document,
+    openApi: openApi(facade.basePath, routes),
     match(method, pathname) {
       const normalizedMethod = method.toUpperCase();
       const normalizedPath = pathname.replace(/\/+$/, "") || "/";

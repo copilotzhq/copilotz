@@ -37,6 +37,7 @@ export const HTTP_OBSERVATION = "copilotz.output-stream";
 /** Framework-neutral request-bound channel output. */
 export type HttpObservation = Readonly<{
   type: typeof HTTP_OBSERVATION;
+  authorizePublication?(publish: () => Promise<void>): Promise<void>;
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
   operationId?: string;

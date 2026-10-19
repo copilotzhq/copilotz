@@ -1,22 +1,21 @@
+import { sameValue } from "../collections/equal.ts";
+import { constrainCollection } from "./collection-constraints.ts";
+import { authorizationRefused } from "./evaluator.ts";
 import { ActionError, standardActionError } from "../actions/errors.ts";
-import { withProtectedValueRead } from "../actions/protected-value-read.ts";
 import { markOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
-import { withOwnerReadQueryContext } from "../engine/owner-query-context.ts";
-import {
-  type OwnerCommandAuthorization,
-  withOwnerAuthorizationPhase,
+import type {
+  OwnerCommandAuthorization,
 } from "../engine/command-authorization.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import type { CommandContext } from "../engine/commands.ts";
-import type { CollectionRecord } from "./types.ts";
-import type { CollectionPolicyIntent } from "./policy-types.ts";
-import type { CollectionPolicyRegistration } from "./policy-registration.ts";
+import type { CollectionRecord } from "../collections/types.ts";
+import type { CollectionPolicyIntent } from "./intent.ts";
+import type { CollectionPolicyRegistration } from "./resources.ts";
 import {
   captureCollectionCommandInvocation,
   captureCollectionInvocation,
-  type CollectionInvocationAuthority,
-} from "./policy-invocation.ts";
+} from "./invocation.ts";
 
 type ReadScope = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
 type CommandPolicy = Readonly<{
@@ -33,6 +32,7 @@ export type CollectionPolicyOperation = Readonly<{
   databaseSchema: string;
   method: CollectionPolicyIntent["method"];
   args: unknown;
+  expectedArgs?: unknown;
   current?(transaction: SqlExecutor): Promise<CollectionRecord | null>;
   next?: CollectionRecord | null;
   result?: unknown;
@@ -78,6 +78,7 @@ export function captureCollectionPolicy(
     args: operation.args,
     ...(operation.next !== undefined ? { next: operation.next } : {}),
   }) as Omit<CollectionPolicyIntent, "phase" | "current">;
+  let authorizedArgs: unknown = intent.args;
   const authorize = async (
     read: ReadScope,
     phase: CollectionPolicyIntent["phase"],
@@ -108,12 +109,25 @@ export function captureCollectionPolicy(
       collectionPolicyRefused();
     }
     await policyAuthority.authorizeIntent?.(fixed, read);
-    await authorizeCollectionPolicy(
-      operation.registration,
-      policyAuthority,
-      fixed,
-      read,
-    );
+    let binding = policyAuthority.authority;
+    if (!binding) {
+      const source = await policyAuthority.resolveSource(read.transaction);
+      binding = source.ingress?.authority ??
+        source.ancestors.find((entry) => entry.ingress?.authority)?.ingress
+          ?.authority;
+    }
+    if (!binding) authorizationRefused();
+    const decision = await operation.registration.evaluate(binding, {
+      kind: "collection",
+      resource: operation.registration.alias,
+      operation: operation.method,
+      input: fixed,
+    }, { ...read, signal: policyAuthority.signal });
+    authorizedArgs = constrainCollection(fixed, decision.constraints);
+    if (
+      operation.expectedArgs !== undefined &&
+      !sameValue(authorizedArgs, operation.expectedArgs)
+    ) authorizationRefused();
   };
   const forCommand = (command: CommandContext): CommandPolicy => {
     const invocation = captureCollectionCommandInvocation(authority, command);
@@ -137,6 +151,7 @@ export function captureCollectionPolicy(
   };
   return {
     check: () => authority.check(),
+    args: () => authorizedArgs,
     authorize: (
       read: ReadScope,
       phase: CollectionPolicyIntent["phase"],
@@ -145,77 +160,4 @@ export function captureCollectionPolicy(
     forCommand,
     guard,
   };
-}
-async function authorizeCollectionPolicy(
-  registration: CollectionPolicyRegistration,
-  authority: CollectionInvocationAuthority,
-  intent: CollectionPolicyIntent,
-  read: ReadScope,
-): Promise<void> {
-  // A failed owner query/source remains an infrastructure failure even if the
-  // callback catches it and throws a policy-shaped error instead.
-  let infrastructureFailed = false;
-  const infrastructure = <T>(run: () => Promise<T>): Promise<T> => {
-    try {
-      return run().catch((error) => {
-        infrastructureFailed = true;
-        throw error;
-      });
-    } catch (error) {
-      infrastructureFailed = true;
-      return Promise.reject(error);
-    }
-  };
-  const transaction: SqlExecutor = {
-    query: (sql, params) =>
-      infrastructure(() => read.transaction.query(sql, params)),
-  };
-  try {
-    await withOwnerAuthorizationPhase(() =>
-      withOwnerReadQueryContext<
-        void,
-        Pick<
-          import("./policy-types.ts").CollectionPolicyContext,
-          "scope" | "invocation" | "resolveSource"
-        >
-      >(
-        (context) => registration.policy.authorize(intent, context),
-        { ...read, transaction },
-        authority.signal,
-        (assertActive, query, track) => ({
-          scope: authority.scope,
-          invocation: authority.invocation,
-          resolveSource() {
-            assertActive();
-            const source = Object.freeze({ query });
-            return track(
-              infrastructure(() =>
-                withProtectedValueRead(
-                  source,
-                  authority.scope,
-                  authority.signal,
-                  async () => {
-                    assertActive();
-                    authority.check();
-                    await authority.assertCurrent?.(read, authority.invocation);
-                    assertActive();
-                    authority.check();
-                  },
-                  () => authority.resolveSource(source),
-                )
-              ),
-            );
-          },
-        }),
-      )
-    );
-  } catch (error) {
-    authority.check();
-    if (
-      !infrastructureFailed && error instanceof ActionError &&
-      error.code === "forbidden" && error.status === 403
-    ) collectionPolicyRefused();
-    collectionPolicyUnavailable();
-  }
-  authority.check();
 }

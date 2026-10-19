@@ -1,7 +1,12 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { createTestDatabase } from "../runtime/testing/ominipg.ts";
+import {
+  createTestApplication as createCopilotzApplication,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
+
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
+
 import {
   type ChannelAdapter,
   channelsPlugin,
@@ -117,6 +122,11 @@ Deno.test("Channel receipts precede settlement and detaching observers does not 
   }
 });
 Deno.test("Channel receipt observation includes delayed Core model output before completion", async () => {
+  const database = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    pgPoolMax: 4,
+  });
+  const delayedSchema = `${SCHEMA}_${crypto.randomUUID().replaceAll("-", "")}`;
   let release!: () => void;
   const response = new Promise<LlmAdapterResult>((resolve) => {
     release = () =>
@@ -190,7 +200,8 @@ Deno.test("Channel receipt observation includes delayed Core model output before
   });
   const application = await createCopilotzApplication({
     namespace: NAMESPACE,
-    databaseSchema: `${SCHEMA}_delayed_llm`,
+    databaseSchema: delayedSchema,
+    database,
     plugins: [corePlugin, channelProvider, configuration, server()],
     engine: { retryBaseMs: 0, random: () => 0 },
   });
@@ -200,7 +211,23 @@ Deno.test("Channel receipt observation includes delayed Core model output before
       externalThreadId: "delayed-thread",
       content: "Hello",
     }, { idempotencyKey: "delayed" });
-    await calledPromise;
+    const bounded = async <T>(work: Promise<T>, label: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          work,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`Timed out: ${label}`)),
+              10000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    await bounded(calledPromise, "model dispatch");
     const outputs: string[] = [];
     let text = "";
     let settled = false;
@@ -218,9 +245,10 @@ Deno.test("Channel receipt observation includes delayed Core model output before
     await new Promise((resolve) => setTimeout(resolve, 10));
     assertEquals(settled, false);
     release();
-    await observing;
+    await bounded(observing, "observation completion");
     assertEquals(text, "Hello from Support");
     assertEquals(outputs.includes("llm.call.completed"), true);
+
     assertEquals(
       outputs.filter((type) => type === "message.created").length,
       2,
@@ -229,6 +257,8 @@ Deno.test("Channel receipt observation includes delayed Core model output before
   } finally {
     release();
     await application.close();
+    await database.query(`DROP SCHEMA "${delayedSchema}" CASCADE`);
+    await database.close();
   }
 });
 Deno.test("Channel host validates every occurrence before persistence and cleans up rejected accepts", async () => {

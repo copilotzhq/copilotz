@@ -359,6 +359,11 @@ export async function createCopilotzApplication(
   }));
   const configuredPublish = options.engine?.publish;
 
+  if (
+    ["collectionPolicies", "protectedActions"].some((key) =>
+      Object.hasOwn(options, key)
+    )
+  ) throw new TypeError("Removed authorization registrations are forbidden.");
   let engine: CopilotzEngine;
   const owners = new Map<string, DatabaseOwner>();
   const retiredEngines = new Set<Promise<void>>();
@@ -403,8 +408,7 @@ export async function createCopilotzApplication(
         }
         : {}),
       session: persistence.session,
-      protectedActions: options.protectedActions,
-      collectionPolicies: options.collectionPolicies,
+      authorization: options.authorization,
       registry,
       defaultDatabaseSchema: databaseSchema,
       assets: options.assets,

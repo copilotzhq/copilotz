@@ -1,8 +1,6 @@
 import { facadeIngress } from "./context.ts";
 import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
-import { admitHttpOperation } from "./admission.ts";
 /** Durable Action ingress and authorized result recovery. @module */
-import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import {
   SERVER_ACTION_REQUEST_EVENT_TYPE,
@@ -35,17 +33,6 @@ export async function actionResponse(
   context: FacadeContext,
 ): Promise<HttpResponse> {
   const input = request.body === undefined ? {} : request.body;
-  if (endpoint.inputSchema) {
-    try {
-      validateAgainstJsonSchema(endpoint.inputSchema, input, "Action input");
-    } catch {
-      throw appError(
-        400,
-        "invalid_input",
-        "Request does not match the Action schema.",
-      );
-    }
-  }
   const requestId = header(request.headers, "idempotency-key");
   if (!requestId) {
     throw appError(
@@ -54,13 +41,10 @@ export async function actionResponse(
       "Idempotency-Key is required.",
     );
   }
-  context = await admitHttpOperation(application, context, requestId);
   const correlationId = context.serverIdentity.correlationId ??
     header(request.headers, "x-copilotz-correlation-id") ??
     `server:${requestId}`;
-  const observationThreadId =
-    context.serverConstraints.operations?.metadata?.threadId ??
-      context.operationMetadata.threadId;
+  const observationThreadId = context.operationMetadata.threadId;
   const handle = await admitActionRequest(
     application,
     {
@@ -131,6 +115,14 @@ export async function operationResult(
   const result = await recordedOperationResult(
     application,
     context,
+    operationId,
+  );
+  const runtime = context.databaseSchema &&
+      context.databaseSchema !== application.config.databaseSchema
+    ? await application.databaseScope(context.databaseSchema)
+    : application;
+  await runtime.authorization.operation(
+    context.serverScope.authority!,
     operationId,
   );
   return {

@@ -1,9 +1,13 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import {
+  createTestApplication as createCopilotzApplication,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
+
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals } from "@std/assert";
 import { type ActionContext, defineAction } from "../runtime/actions/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
+
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../plugins/server/plugin.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";

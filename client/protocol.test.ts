@@ -334,55 +334,57 @@ Deno.test("a disconnected multipart response resumes only after the successfully
   assertEquals(applied, ["first", "second"]);
 });
 
-Deno.test("planned renewal resumes internally without calling domain handlers even with unfinished lanes", async () => {
-  const checkpoints: unknown[] = [];
-  let calls = 0;
-  const client = createCopilotzClient({
-    baseUrl: "/api",
-    fetch: ((_url, init) => {
-      checkpoints.push(JSON.parse(String(init?.body)).checkpoint);
-      return Promise.resolve(
-        calls++ === 0
-          ? wire([
-            {
-              kind: "output",
-              content: '{"type":"stream.output","streamId":"s"}',
-            },
-            {
-              kind: "stream-chunk",
-              content: new Uint8Array([1, 2, 3]),
-              headers: "x-copilotz-stream-id: s\r\nx-copilotz-offset: 0\r\n",
-            },
-            {
-              kind: "observation-renew",
-              content: '{"type":"observation.renew","reason":"capacity"}',
-            },
-          ])
-          : wire([{ kind: "output", content: '{"type":"done"}' }]),
-      );
-    }) as typeof fetch,
+for (const reason of ["capacity", "lifetime"]) {
+  Deno.test(`${reason} renewal resumes internally without calling domain handlers even with unfinished lanes`, async () => {
+    const checkpoints: unknown[] = [];
+    let calls = 0;
+    const client = createCopilotzClient({
+      baseUrl: "/api",
+      fetch: ((_url, init) => {
+        checkpoints.push(JSON.parse(String(init?.body)).checkpoint);
+        return Promise.resolve(
+          calls++ === 0
+            ? wire([
+              {
+                kind: "output",
+                content: '{"type":"stream.output","streamId":"s"}',
+              },
+              {
+                kind: "stream-chunk",
+                content: new Uint8Array([1, 2, 3]),
+                headers: "x-copilotz-stream-id: s\r\nx-copilotz-offset: 0\r\n",
+              },
+              {
+                kind: "observation-renew",
+                content: JSON.stringify({ type: "observation.renew", reason }),
+              },
+            ])
+            : wire([{ kind: "output", content: '{"type":"done"}' }]),
+        );
+      }) as typeof fetch,
+    });
+    const kinds: string[] = [];
+    await client.operations.observe({
+      operationIds: ["op"],
+      onFrame: (frame) => {
+        if (
+          !["output", "stream-chunk", "stream-end", "stream-error"].includes(
+            frame.kind,
+          )
+        ) {
+          throw new Error("Transport control reached the domain handler.");
+        }
+        kinds.push(frame.kind);
+      },
+    });
+    assertEquals(checkpoints, [undefined, "checkpoint-2"]);
+    assertEquals(kinds, [
+      "output",
+      "stream-chunk",
+      "output",
+    ]);
   });
-  const kinds: string[] = [];
-  await client.operations.observe({
-    operationIds: ["op"],
-    onFrame: (frame) => {
-      if (
-        !["output", "stream-chunk", "stream-end", "stream-error"].includes(
-          frame.kind,
-        )
-      ) {
-        throw new Error("Transport control reached the domain handler.");
-      }
-      kinds.push(frame.kind);
-    },
-  });
-  assertEquals(checkpoints, [undefined, "checkpoint-2"]);
-  assertEquals(kinds, [
-    "output",
-    "stream-chunk",
-    "output",
-  ]);
-});
+}
 
 Deno.test("invalid JSON, renewal and clean unfinished-lane closures never retry", async () => {
   const cases = [

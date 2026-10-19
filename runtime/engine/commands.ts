@@ -406,8 +406,9 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       reject: completion.reject,
       async run(tx, joined) {
         const callbacks: Array<() => void | Promise<void>> = [];
-        const commandTime = (options.now?.() ?? new Date())
-          .toISOString();
+        const commandTime = joined?.commandTime ??
+          (options.now?.() ?? new Date())
+            .toISOString();
         const context: CommandContext = {
           transaction: tx,
           authorizationGuards: joined?.authorizationGuards ?? new Set(),

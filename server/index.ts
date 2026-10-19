@@ -16,7 +16,6 @@ export type {
   DefineServerFacadeInput,
   ServerAuthenticate,
   ServerAuthenticationContext,
-  ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
   ServerCollectionMutationConstraints,

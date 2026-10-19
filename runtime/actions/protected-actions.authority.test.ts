@@ -1,3 +1,6 @@
+import { credentialValidity } from "../authorization/authority.ts";
+import { testAuthority } from "../testing/authority.ts";
+import { authorityIngressProof } from "../application/ingress/authority.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   createSchemaCommandRunner,
@@ -24,7 +27,7 @@ import {
   createActionLifecycleAppender,
   createActionLifecycleLoader,
 } from "./persistence.ts";
-import { createProtectedActions } from "./protected-actions.ts";
+import { createAuthorizedActions } from "./authorized-capture.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 
@@ -69,7 +72,6 @@ Deno.test({
     };
     const action = defineAction({
       id: "test.protected",
-      ownerHooks: { prepareInput: true },
       inputSchema: { type: "number" } as const,
       outputSchema: { type: "number" } as const,
       execute: (value) => value,
@@ -88,6 +90,10 @@ Deno.test({
           },
         },
         body: { id: "source", json: { principal: "member" } },
+        ingress: authorityIngressProof({
+          ...testAuthority(schema),
+          validity: credentialValidity(new Date(time)),
+        }),
         consumers: [{ consumerId: "processor", settlement: "inherit" }],
       });
       const id = root.deliveries[0].id;
@@ -113,22 +119,32 @@ Deno.test({
       };
       let allowed = true, authorized = 0, prepared = 0;
       const make = (binding = source, attempt = writer) =>
-        createProtectedActions({
-          definitions: {
-            [action.id]: {
-              async authorize(_input, context) {
-                authorized++;
-                assertEquals((await context.resolveSource()).data, {
-                  principal: "member",
-                });
-                if (!allowed) throw new Error("permission revoked");
-              },
-              prepareInput(input) {
-                prepared++;
-                return input;
+        createAuthorizedActions({
+          authorization: {
+            policies: {
+              fixture: {
+                revision: "1",
+                sources: [],
+                evaluate(context) {
+                  authorized++;
+                  if (!allowed) {
+                    throw new Error(
+                      "Owner authorization could not be completed",
+                    );
+                  }
+                  assertEquals(
+                    context.commandTime,
+                    new Date(time).toISOString(),
+                  );
+                  if (context.intent.operation === "capture") prepared++;
+                  return { actions: { action: {} } };
+                },
               },
             },
+            collections: {},
+            actions: { action: { id: "fixture", revision: "1" } },
           },
+          collections: {},
           actions: { action },
           store,
           coordinator,
@@ -163,6 +179,7 @@ Deno.test({
           assertEquals(await hooks.prepareInput(frame, 7), {
             input: 7,
             claimed: true,
+            metadata: {},
           });
           assertEquals(prepared, 1);
           await authorize();
@@ -297,6 +314,7 @@ Deno.test({
           assertEquals(await hooks.prepareInput(frame, 7), {
             input: 7,
             claimed: false,
+            metadata: {},
           });
           const purposes: string[] = [];
           const callers = createActionCallers({ action }, {
@@ -403,7 +421,7 @@ Deno.test({
           await assertRejects(
             () => authorize(),
             Error,
-            "owner phase failed",
+            "Owner authorization could not be completed",
           );
         },
       );

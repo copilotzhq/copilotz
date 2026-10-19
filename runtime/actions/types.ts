@@ -320,7 +320,6 @@ export type ActionDefinition<
   TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
 > = Readonly<{
   id: string;
-  ownerHooks?: Readonly<{ prepareInput?: true }>;
   content?: ActionContentDeclaration;
   inputSchema?: TInputSchema;
   outputSchema?: TOutputSchema;
@@ -349,7 +348,6 @@ export type ActionDefinition<
 
 export type AnyActionDefinition = Readonly<{
   id: string;
-  ownerHooks?: Readonly<{ prepareInput?: true }>;
   content?: ActionContentDeclaration;
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;

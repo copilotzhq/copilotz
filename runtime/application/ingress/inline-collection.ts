@@ -1,4 +1,4 @@
-import { withOwnerCollectionInvocation } from "../../collections/policy-invocation.ts";
+import { withOwnerCollectionInvocation } from "../../authorization/invocation.ts";
 import { resolveProtectedActionSource } from "../../actions/protected-action-source.ts";
 /** Inline completion of the same protected admission used by durable ingress. */
 import {

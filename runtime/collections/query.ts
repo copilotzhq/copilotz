@@ -5,6 +5,7 @@ import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
 import { queryCollectionRows } from "./read-rows.ts";
 import type {
+  CollectionFilter,
   CollectionGraphRelation,
   CollectionQuery,
   CollectionRecord,
@@ -261,42 +262,9 @@ export async function queryCollectionRecords(
 ): Promise<readonly CollectionRecord[]> {
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
-  for (const predicate of [query, ...(query.all ?? [])]) {
-    if (predicate.filter !== undefined) {
-      filters.push(compileCollectionPredicate(predicate.filter, params));
-    }
-    for (const [field, values] of Object.entries(predicate.containsAny ?? {})) {
-      const path = field.split(".").map(sqlLiteral).join(",");
-      filters.push(
-        `(${
-          values.map((value) =>
-            `(data #> '{${path}}') @> $${
-              params.push(JSON.stringify([value]))
-            }::jsonb`
-          ).join(" OR ") || "FALSE"
-        })`,
-      );
-    }
-    for (const [field, value] of Object.entries(predicate.where ?? {})) {
-      // Equality uses JSON text, so drivers must receive text for scalar
-      // booleans/numbers too. PGlite does not coerce them for a text parameter.
-      const index = params.push(
-        typeof value === "boolean" || typeof value === "number"
-          ? String(value)
-          : value,
-      );
-      if (field === "id") filters.push(`id = $${index}`);
-      else filters.push(`${jsonTextPath(field)} = $${index}::text`);
-    }
-    for (const [field, value] of Object.entries(predicate.contains ?? {})) {
-      const path = field.split(".").map(sqlLiteral).join(",");
-      filters.push(
-        `(data #> '{${path}}') @> $${
-          params.push(JSON.stringify(value))
-        }::jsonb`,
-      );
-    }
-  }
+  filters.push(
+    ...compileCollectionFilters([query, ...(query.all ?? [])], params),
+  );
   if (query.text?.trim() && definition.search?.enabled) {
     const index = params.push(`%${query.text.trim()}%`);
     filters.push(`content ILIKE $${index}`);
@@ -403,4 +371,49 @@ export async function queryCollectionRecords(
     hydrated.push({ ...value, ...extra } as const);
   }
   return hydrated;
+}
+
+/** Shared SQL predicates for bounded Collection and vector candidate reads. */
+export function compileCollectionFilters(
+  predicates: readonly CollectionFilter[],
+  params: unknown[],
+): string[] {
+  const filters: string[] = [];
+  for (const predicate of predicates) {
+    if (predicate.filter !== undefined) {
+      filters.push(compileCollectionPredicate(predicate.filter, params));
+    }
+    for (const [field, values] of Object.entries(predicate.containsAny ?? {})) {
+      const path = field.split(".").map(sqlLiteral).join(",");
+      filters.push(
+        `(${
+          values.map((value) =>
+            `(data #> '{${path}}') @> $${
+              params.push(JSON.stringify([value]))
+            }::jsonb`
+          ).join(" OR ") || "FALSE"
+        })`,
+      );
+    }
+    for (const [field, value] of Object.entries(predicate.where ?? {})) {
+      // Equality uses JSON text, so drivers must receive text for scalar
+      // booleans/numbers too. PGlite does not coerce them for a text parameter.
+      const index = params.push(
+        typeof value === "boolean" || typeof value === "number"
+          ? String(value)
+          : value,
+      );
+      if (field === "id") filters.push(`id = $${index}`);
+      else filters.push(`${jsonTextPath(field)} = $${index}::text`);
+    }
+    for (const [field, value] of Object.entries(predicate.contains ?? {})) {
+      const path = field.split(".").map(sqlLiteral).join(",");
+      filters.push(
+        `(data #> '{${path}}') @> $${
+          params.push(JSON.stringify(value))
+        }::jsonb`,
+      );
+    }
+  }
+  return filters;
 }

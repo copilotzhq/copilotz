@@ -548,85 +548,22 @@ For MCP, declare host-reviewed tool names in `readOnlyTools`; provider
 annotations alone do not establish read-only safety. Do not classify a mutating
 operation as read-only merely because its provider supports idempotency.
 
-### Owner-local protected preparation
+### Owner authorization and first capture
 
-For declared secret Actions, an embedded host or Gateway may register local
-`protectedActions` keyed by the stable Action ID. Declare required phases on the
-Action as `ownerHooks: { prepareInput: true }`; startup refuses missing
-registrations or phases. Ordinary secret Actions need no hooks. Worker
-configuration refuses callbacks, and Workers have no hook RPC.
+Register protected Action aliases in `authorization.actions`, referencing the
+same owner policy registry used by Collections and observations. An owner policy
+returns an explicit `actions` allowlist and may supply trusted `input` fields
+and `actionMetadata`. Conflicting client fields are refused. The owner validates
+and captures the completed input once, atomically with its retained authority
+and lifecycle receipt. Replay preserves that capture and rechecks current policy
+without preparing the input again.
 
-Each registration supplies:
+Workers cannot configure policy or mint authority from metadata. The retained
+binding contains principal, owner and tenant scope, validity, policy revision,
+request facts, provenance, dependencies and authority basis. Delegated authority
+is attempt-bound. Mutation and result guards retain attempt fencing; an explicit
+revocation refuses new protected work while settlement of begun effects remains
+available. Secret metadata checks run at the lifecycle persistence boundary.
 
-- `authorize(input, context)`: required, read-only current-domain authorization
-  on preparation, replay, effect commands, completion and protected result
-  recovery.
-- `prepareInput(input, context)`: required first-capture preparation. Return the
-  complete input. Only declared secret slots and explicit `publicRevisionFields`
-  may change; all other public fields must remain identical.
-  `publicRevisionFields` contains exact, non-overlapping JSON Pointers to
-  explicit public string/number/null revision properties, such as
-  `/credentialRevision`. Ownership and identity coordinates cannot be selected.
-  Keep owner-filled fields optional in the admitted input schema; the completed
-  prepared input is fully validated. Retries authorize again and reuse the exact
-  first input capture.
-
-A sealed object may contain public coordinates alongside credentials. Mark each
-explicit public scalar property with `"x-copilotz-secret": false` for metadata
-leak analysis only. The enclosing secret object remains fully encrypted and
-redacted; this does not permit preparation to change other public input fields.
-Object and array containers cannot opt out. Only unambiguous typed object
-properties, including properties in homogeneous arrays of typed objects, support
-this annotation. Nullable properties use a `type` array; references, unions,
-conditionals, pattern properties and tuple paths are refused. A validated scalar
-marker outside a secret aggregate is a no-op, allowing schema reuse. Undeclared
-leaves stay confidential, and a token remains protected even when its bytes
-equal a separately annotated public coordinate.
-
-The `ProtectedActionOwnerContext<Input>` type is exported from `/actions`,
-`/application`, and the package root. It exposes only a revocable `query`
-handle, fixed `scope.databaseSchema` and `scope.namespace`, the current
-validated `action.id`, `action.runId` and optional `action.parentRunId`,
-immutable captured `input`, `commandTime`, and `signal`. `resolveSource()`
-resolves the retained original event/body and root-first operation ancestry,
-including protected source data. It accepts no caller-selected event, record,
-schema, run or capture reference. All handles expire when the callback finishes,
-throws or is cancelled, including before a synchronous callback's queued
-microtask can use them.
-
-Source `ingress` is owner-created evidence bound atomically to the exact
-retained event/body, never a metadata flag:
-
-- `host` proves in-process host admission, not an end-user identity.
-- `authenticated-server` includes the server-owned actor after configured
-  authentication and authorization hooks both succeed.
-- `server-route` includes an exact custom HTTP `routeId`, only for an explicitly
-  configured `defineServerFacade({ protectedBootstrapRoutes: [...] })` route
-  with both policy hooks. It proves the selected bootstrap route, not a user.
-  Unmatched IDs, generic Action endpoints and missing policy hooks are rejected
-  at facade setup; ordinary anonymous HTTP has no authenticated provenance.
-
-The first admission classification is immutable. An exact retry of an
-unclassified event remains unclassified even from a trusted host; it cannot
-create or upgrade provenance. Classified retries must retain their original
-class, actor and route. Changed payloads or metadata conflict. Protected policy
-still refuses an unclassified original when its required authority is absent.
-
-Policy must validate the original root Action and purpose, re-resolve current
-membership and domain state, and refuse unsupported ancestry. Worker metadata,
-account selections and identifiers remain claims. Bootstrap policy must verify
-its own purpose-bound signed state or ticket before granting domain authority.
-
-Callbacks are local policy/storage phases, never external-network effect phases.
-Use the Action's effect protocol for provider work. Unknown COMMIT outcomes
-require durable receipt recovery; they never imply rollback. Hook failures
-preserve only vetted standardized error codes and fixed public messages;
-arbitrary exception details are scrubbed. Secret values stay out of public
-Events, effect records and receipt payloads.
-
-Transactional protected captures use durable database staging. For configured
-external storage, the existing logical-body promotion protocol uploads only
-after confirmed commit and retains the logical identity and database read
-fallback. Failed uploads remain tracked by the content catalog. A replay after
-an unknown commit can recover the staged value and resume promotion without
-repeating the owner preparation.
+`ownerHooks`, `protectedActions` and bootstrap route hooks have been removed.
+See [owner authorization and migration](authorization.md).

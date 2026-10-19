@@ -87,11 +87,3 @@ export type {
   CollectionPredicate,
   CollectionPredicateValue,
 } from "./predicate.ts";
-
-export type {
-  CollectionPolicies,
-  CollectionPolicy,
-  CollectionPolicyContext,
-  CollectionPolicyIntent,
-  CollectionPolicyInvocation,
-} from "./policy-types.ts";

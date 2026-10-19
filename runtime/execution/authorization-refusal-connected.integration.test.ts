@@ -1,6 +1,7 @@
 import { ActionError } from "../actions/errors.ts";
 import { secret } from "../actions/secret.ts";
-import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
+import type { OwnerAuthorization } from "../authorization/evaluator.ts";
+import { bindTestActions, testAuthority } from "../testing/authority.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "../actions/define.ts";
@@ -14,7 +15,7 @@ import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 const namespace = "connected";
 type FixtureOptions = {
   actions: Record<string, ReturnType<typeof defineAction>>;
-  protectedActions: ProtectedActionDefinitions;
+  authorization: OwnerAuthorization;
 };
 async function fixture(
   kind: "in-process" | "websocket",
@@ -74,7 +75,7 @@ async function fixture(
     database,
     actions: options.actions,
     adapters: { secrets: { default: await testSecretAdapter() } },
-    protectedActions: options.protectedActions,
+    authorization: options.authorization,
     dispatcher: (binding) => {
       ownerBinding = binding;
       return hypervisor;
@@ -117,7 +118,13 @@ async function fixture(
   });
   await worker.ready;
   return {
-    gateway,
+    gateway: {
+      ...gateway,
+      actions: bindTestActions(
+        gateway.actions,
+        testAuthority("public", namespace),
+      ),
+    },
     database,
     worker,
     async close() {
@@ -139,7 +146,6 @@ for (const transport of ["in-process", "websocket"] as const) {
       let allowed = true;
       const child = defineAction({
         id: "refused.child",
-        ownerHooks: { prepareInput: true },
         inputSchema: {
           type: "object",
           properties: { credential: secret({ type: "string" }) },
@@ -173,22 +179,40 @@ for (const transport of ["in-process", "websocket"] as const) {
           );
         },
       });
-      const protectedActions: ProtectedActionDefinitions = Object.fromEntries(
-        [child].map((action) => [action.id, {
-          authorize() {
-            if (!allowed) {
-              throw new ActionError("Action access revoked", {
-                code: "forbidden",
-                status: 403,
-              });
-            }
+      const authorization: OwnerAuthorization = {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate({ intent }) {
+              if (!allowed && intent.resource === "child") {
+                throw new ActionError("Action access revoked", {
+                  code: "forbidden",
+                  status: 403,
+                });
+              }
+              return {
+                actions: {
+                  run: {},
+                  forged: {},
+                  child: intent.operation === "capture"
+                    ? { input: { credential: "owner-only-credential" } }
+                    : {},
+                },
+              };
+            },
           },
-          prepareInput: () => ({ credential: "owner-only-credential" }),
-        }]),
-      );
+        },
+        collections: {},
+        actions: {
+          run: { id: "fixture", revision: "1" },
+          child: { id: "fixture", revision: "1" },
+          forged: { id: "fixture", revision: "1" },
+        },
+      };
       const f = await fixture(transport, {
         actions: { run, child, forged },
-        protectedActions,
+        authorization,
       });
       try {
         await assertRejects(() =>

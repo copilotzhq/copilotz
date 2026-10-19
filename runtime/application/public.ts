@@ -27,10 +27,7 @@ export type {
 } from "../execution/index.ts";
 
 export type {
-  ProtectedActionDefinition,
-  ProtectedActionDefinitions,
   ProtectedActionIngress,
-  ProtectedActionOwnerContext,
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "../actions/protected-action-types.ts";

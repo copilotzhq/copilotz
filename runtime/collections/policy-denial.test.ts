@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { ActionError, standardActionError } from "../actions/errors.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
-import { collectionPolicyRefused } from "./policy-authorization.ts";
+import { collectionPolicyRefused } from "../authorization/collection.ts";
 
 Deno.test("Collection planning and policy refusal share presentation, not cleanup authority", () => {
   const planning = assertThrows(

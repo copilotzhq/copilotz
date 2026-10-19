@@ -1,3 +1,4 @@
+import { captureCollectionInvocation } from "../../authorization/invocation.ts";
 /** Package-private admission evidence. No wire value can create this authority. */
 import { captureHostCommandJson } from "../host-command-json.ts";
 import { sameActionValue } from "../../actions/value.ts";
@@ -13,8 +14,10 @@ function proof(ingress: ProtectedActionIngress): OwnerIngressProof {
     [provenance]: captureHostCommandJson(ingress) as ProtectedActionIngress,
   };
 }
-export const hostIngressProof = (): OwnerIngressProof =>
-  proof({ kind: "host" });
+export const hostIngressProof = (): OwnerIngressProof => {
+  const authority = captureCollectionInvocation()?.authority;
+  return proof({ kind: "host", ...(authority ? { authority } : {}) });
+};
 export const authenticatedServerIngressProof = (
   actor: Extract<
     ProtectedActionIngress,
@@ -71,10 +74,35 @@ export async function assertOwnerIngressReplay(
   // The first admission is immutable. A stronger retry cannot upgrade an
   // originally unclassified event; duplicate body and metadata checks still apply.
   if (actual === undefined) return;
-  if (!sameActionValue(expected ?? null, actual)) {
+  const identity = (value: ProtectedActionIngress | undefined) => {
+    if (!value?.authority) return value ?? null;
+    const { validity, dependencies: _dependencies, ...authority } =
+      value.authority;
+    // Renewal changes only admission time and tracked dependencies. First capture
+    // remains immutable; attempt/occurrence identities must still match exactly.
+    return {
+      ...value,
+      authority: {
+        ...authority,
+        validity: validity.kind === "credential"
+          ? { kind: "credential" }
+          : validity,
+      },
+    };
+  };
+  if (!sameActionValue(identity(expected), identity(actual))) {
     throw Object.assign(
       new Error("Owner ingress admission differs from its first capture."),
       { code: "event_deduplication_conflict" },
     );
   }
 }
+
+export const authorityIngressProof = (
+  authority: import("../../authorization/authority.ts").AuthenticatedAuthority,
+): OwnerIngressProof =>
+  proof({
+    kind: "authenticated-server",
+    actor: { id: authority.principal.id },
+    authority,
+  });

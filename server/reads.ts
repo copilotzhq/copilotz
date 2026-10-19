@@ -2,41 +2,17 @@
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
 import type { FacadeContext } from "./context.ts";
-import { withServerViewerRead } from "./viewer-authority.ts";
+import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
-import { observationReadPolicy, watchReadAccess } from "./read-watch.ts";
 import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import type {
   ServerAuthorizedScope,
-  ServerConstraints,
 } from "../plugins/server/shared/contracts.ts";
-
-type ReadWatcher = (
-  name: string,
-  id: string,
-  failed: (error: unknown) => void,
-) => () => void;
-const watchers = new WeakMap<HttpReadServices, ReadWatcher>();
-
-/** Resource checks retain the read service's enforced policy and database scope. */
-export function watchHttpRead(
-  read: HttpReadServices,
-  name: string,
-  id: string,
-  failed: (error: unknown) => void,
-): () => void {
-  const watch = watchers.get(read);
-  if (!watch) {
-    throw new Error("Observation requires a scoped HTTP read service.");
-  }
-  return watch(name, id, failed);
-}
 
 export async function createHttpReads(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
-  constraints: ServerConstraints = {},
-  host: Readonly<{ viewer?: FacadeContext }> = {},
+  host: Readonly<{ context?: FacadeContext }> = {},
 ): Promise<HttpReadServices> {
   const runtime = scope.databaseSchema &&
       scope.databaseSchema !== application.config.databaseSchema
@@ -45,6 +21,14 @@ export async function createHttpReads(
   const collections = runtime.collections.withScope({
     namespace: scope.namespace ?? application.config.namespace!,
   });
+  const bound = <T>(run: () => T | Promise<T>): Promise<T> =>
+    scope.authority
+      ? withRetainedAuthority(
+        scope.authority,
+        host.context?.serverSignal ?? new AbortController().signal,
+        run,
+      )
+      : Promise.resolve().then(run);
   const definition = (name: string) => {
     const entry = Object.entries(application.plugins.collections).find((
       [alias, def],
@@ -55,15 +39,7 @@ export async function createHttpReads(
         code: "collection_not_found",
       });
     }
-    const policy = constraints.collections?.[entry[1].name] ??
-      constraints.collections?.[entry[0]];
-    if (constraints.collections && !policy) {
-      throw Object.assign(new Error("Collection access denied."), {
-        status: 403,
-        code: "forbidden",
-      });
-    }
-    return { collection: collections[entry[1].name], schema: entry[1], policy };
+    return { collection: collections[entry[1].name], schema: entry[1] };
   };
   const read: HttpReadServices = {
     async get(name, id, options) {
@@ -71,7 +47,7 @@ export async function createHttpReads(
         null;
     },
     async list(name, query = {}, options) {
-      const { collection, policy } = definition(name);
+      const { collection } = definition(name);
       if (query.include?.length) {
         throw Object.assign(
           new Error("Unscoped relation includes are unavailable."),
@@ -88,24 +64,24 @@ export async function createHttpReads(
           code: "invalid_query",
         });
       }
-      return await withServerViewerRead(host.viewer, () =>
+      return await bound(() =>
         collection.list(
           {
             ...query,
             limit: query.limit ?? 100,
-            all: [...(query.all ?? []), ...(policy ? [policy] : [])],
+            all: query.all ?? [],
           } as CollectionQuery,
           options,
-        ));
+        )
+      );
     },
     async aggregate(name, query, options) {
-      const { collection, policy } = definition(name);
-      return await withServerViewerRead(
-        host.viewer,
+      const { collection } = definition(name);
+      return await bound(
         () =>
           collection.aggregate({
             ...query,
-            all: [...(query.all ?? []), ...(policy ? [policy] : [])],
+            all: query.all ?? [],
           }, options),
       );
     },
@@ -135,14 +111,9 @@ export async function createHttpReads(
           );
         }
       }
-      const value = spec.select
-        ? await spec.select({ input, read })
-        : await read.list(
-          name,
-          spec.query
-            ? spec.query({ input })
-            : { where: spec.filter?.({ input }) },
-        );
+      const value = await bound(() =>
+        selected.collection.queries[queryName](input as Record<string, unknown>)
+      );
       if (spec.outputSchema) {
         validateAgainstJsonSchema(
           spec.outputSchema,
@@ -153,31 +124,5 @@ export async function createHttpReads(
       return value;
     },
   } as const;
-  watchers.set(read, (name, id, failed) => {
-    const { collection, schema, policy } = definition(name);
-    const predicate = observationReadPolicy(policy, id);
-    return watchReadAccess({
-      runtime,
-      namespace: scope.namespace ?? application.config.namespace!,
-      collection: schema.name,
-      id,
-      policy: predicate,
-      failed,
-      async query(ids) {
-        const rows = await withServerViewerRead(
-          host.viewer,
-          () =>
-            collection.aggregate({
-              filter: { field: "id", in: ids },
-              all: predicate ? [predicate] : [],
-              groupBy: ["id"],
-              metrics: { count: { op: "count" } },
-              limit: ids.length,
-            }),
-        );
-        return new Set(rows.map((row) => String(row.id)));
-      },
-    });
-  });
   return read;
 }

@@ -1,3 +1,7 @@
+import {
+  type AuthorityUpgradeManifest,
+  inspectAuthorityUpgrade,
+} from "../runtime/authorization/upgrade.ts";
 /** Explicit offline retained-data upgrade; never called by ordinary activation. */
 import { openManagedOminipgDatabase } from "../runtime/persistence/ominipg.ts";
 import { inspectRetainedDataDrain } from "../runtime/actions/drain.ts";
@@ -13,9 +17,10 @@ const get = (name: string) =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
 const schema = get("schema");
 if (
-  !schema || !["drain", "prepare", "apply"].includes(command) ||
+  !schema ||
+  !["drain", "prepare", "apply", "authority-inventory"].includes(command) ||
   args.some((arg) =>
-    !["schema", "plan", "reviewed", "decisions"].some((name) =>
+    !["schema", "plan", "reviewed", "decisions", "authority"].some((name) =>
       arg.startsWith(`--${name}=`)
     )
   )
@@ -28,7 +33,15 @@ const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
 if (!url) throw new Error("COPILOTZ_MIGRATION_DATABASE_URL is required.");
 const database = await openManagedOminipgDatabase({ url });
 try {
-  if (command === "drain") {
+  if (command === "authority-inventory") {
+    console.log(
+      JSON.stringify(
+        await inspectAuthorityUpgrade(database.session, schema),
+        null,
+        2,
+      ),
+    );
+  } else if (command === "drain") {
     const report = await inspectRetainedDataDrain(database.session, schema);
     console.log(JSON.stringify(report, null, 2));
     if (!report.drained) Deno.exitCode = 2;
@@ -56,26 +69,38 @@ try {
     } else console.log(JSON.stringify({ state: "complete" }));
   } else {
     const path = get("plan"), reviewedFingerprint = get("reviewed");
-    if (!path || !reviewedFingerprint) {
-      throw new Error(
-        "Finalization requires --plan=FILE.json and --reviewed=FINGERPRINT.",
-      );
-    }
-    const plan = JSON.parse(
-      await Deno.readTextFile(path),
-    ) as RetainedDataUpgradePlan;
-    const decisionsPath = get("decisions");
-    const contentDecisions = decisionsPath
+    const authorityPath = get("authority");
+    const authority = authorityPath
       ? JSON.parse(
-        await Deno.readTextFile(decisionsPath),
-      ) as ContentMigrationDecision[]
+        await Deno.readTextFile(authorityPath),
+      ) as AuthorityUpgradeManifest
       : undefined;
-    await upgradeActionLifecycle(database.session, schema, {
-      plan,
-      reviewedFingerprint,
-      contentDecisions,
-    });
-    console.log(JSON.stringify({ state: "complete", upgradeId: plan.id }));
+    if (authority && !path) {
+      await upgradeActionLifecycle(database.session, schema, { authority });
+      console.log(JSON.stringify({ state: "complete", version: 13 }));
+    } else {
+      if (!path || !reviewedFingerprint) {
+        throw new Error(
+          "Finalization requires --plan=FILE.json and --reviewed=FINGERPRINT.",
+        );
+      }
+      const plan = JSON.parse(
+        await Deno.readTextFile(path),
+      ) as RetainedDataUpgradePlan;
+      const decisionsPath = get("decisions");
+      const contentDecisions = decisionsPath
+        ? JSON.parse(
+          await Deno.readTextFile(decisionsPath),
+        ) as ContentMigrationDecision[]
+        : undefined;
+      await upgradeActionLifecycle(database.session, schema, {
+        plan,
+        reviewedFingerprint,
+        contentDecisions,
+        authority,
+      });
+      console.log(JSON.stringify({ state: "complete", upgradeId: plan.id }));
+    }
   }
 } finally {
   await database.close();

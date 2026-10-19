@@ -1,5 +1,5 @@
 import { createOwnerContentStreamRuntime } from "../streams/stream.ts";
-import { bindProcessorCollectionInvocation } from "../collections/policy-invocation.ts";
+import { bindProcessorCollectionInvocation } from "../authorization/invocation.ts";
 import {
   snapshotControl,
   withSnapshotControl,

@@ -1,7 +1,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { defineAction } from "./define.ts";
-import { assertProtectedActionMetadata } from "./protected-action-policy.ts";
 import {
+  assertMetadataIsSecretFree,
   protectedActionStrings,
   secret,
   splitSecretActionValue,
@@ -36,11 +36,6 @@ const input = {
     token: "actual-token",
   },
 };
-const action = defineAction({
-  id: "fixture.public-coordinates",
-  inputSchema: schema,
-  execute: (value: unknown) => value,
-});
 
 Deno.test("public scalar annotations leave aggregate storage sealed and permit exact public coordinates", () => {
   assertEquals(splitSecretActionValue(schema, input), {
@@ -51,26 +46,42 @@ Deno.test("public scalar annotations leave aggregate storage sealed and permit e
     "nested-secret",
     "actual-token",
   ]);
-  assertProtectedActionMetadata(action, input, {
+  assertMetadataIsSecretFree({
     namespace: "public",
     route: "fixture.google-start",
-  });
+  }, protectedActionStrings(schema, input));
 });
 Deno.test("public scalar annotations never whitelist equal token bytes or undeclared nested leaves", () => {
   for (const value of ["actual-token", "nested-secret"]) {
     assertThrows(
-      () => assertProtectedActionMetadata(action, input, { value }),
+      () =>
+        assertMetadataIsSecretFree(
+          { value },
+          protectedActionStrings(schema, input),
+        ),
       TypeError,
     );
   }
-  assertThrows(() =>
-    assertProtectedActionMetadata(action, {
-      credential: { ...input.credential, token: "public" },
-    }, { namespace: "public" }), TypeError);
-  assertThrows(() =>
-    assertProtectedActionMetadata(action, {
-      credential: { ...input.credential, unknown: "hidden-field" },
-    }, { value: "prefix-hidden-field-suffix" }), TypeError);
+  assertThrows(
+    () =>
+      assertMetadataIsSecretFree(
+        { namespace: "public" },
+        protectedActionStrings(schema, {
+          credential: { ...input.credential, token: "public" },
+        }),
+      ),
+    TypeError,
+  );
+  assertThrows(
+    () =>
+      assertMetadataIsSecretFree(
+        { value: "prefix-hidden-field-suffix" },
+        protectedActionStrings(schema, {
+          credential: { ...input.credential, unknown: "hidden-field" },
+        }),
+      ),
+    TypeError,
+  );
   assertEquals(protectedActionStrings(schema, { credential: null }), []);
 });
 Deno.test("public scalar annotations refuse parent, array, missing type, refs and ambiguous paths", () => {

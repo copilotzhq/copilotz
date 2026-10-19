@@ -3,8 +3,10 @@ import { ActionError } from "../actions/errors.ts";
 import { defineCollection } from "../collections/definition.ts";
 
 import { createCollectionRuntime } from "../collections/kernel.ts";
-import { withOwnerCollectionInvocation } from "../collections/policy-invocation.ts";
-import { validateCollectionPolicies } from "../collections/policy-registration.ts";
+import { withOwnerCollectionInvocation } from "../authorization/invocation.ts";
+import { testCollectionAuthorizations } from "../testing/collection-authorization.ts";
+import { testAuthority } from "../testing/authority.ts";
+import type { CollectionPolicyIntent } from "../authorization/intent.ts";
 import { queryCollectionRows } from "../collections/read-rows.ts";
 import { readViews } from "../collections/read-view.ts";
 import {
@@ -34,6 +36,7 @@ async function fixture() {
   const schema = `async_boundary_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   const owner = await openDatabaseOwner(db, schema);
+  owner.activate();
   const store = createEventStore({ session: db, schema });
   const coordinator: EventCoordinator = {
     async commitMutation(input) {
@@ -195,20 +198,23 @@ Deno.test({
       session: f.db,
       eventStore: f.store,
       coordinator: f.coordinator,
-      policies: validateCollectionPolicies({
-        guarded: {
-          async authorize(intent, context) {
-            seen.push(`${context.invocation.id}:${intent.phase}`);
-            if (context.invocation.id === "a" && intent.phase === "read") {
-              entered.resolve();
-              await release.promise;
-            }
-          },
+      policies: testCollectionAuthorizations(
+        { guarded },
+        f.schema,
+        async ({ authority, intent }) => {
+          const phase = (intent.input as CollectionPolicyIntent).phase;
+          seen.push(`${authority.principal.id}:${phase}`);
+          if (authority.principal.id === "a" && phase === "read") {
+            entered.resolve();
+            await release.promise;
+          }
+          return { collections: { guarded: {} } };
         },
-      }, { guarded }),
+      ),
     });
     runtime.bind(guarded);
     const authority = (id: string) => ({
+      authority: testAuthority(f.schema, "space", id),
       scope: { databaseSchema: f.schema, namespace: "space" },
       invocation: { kind: "processor" as const, id, runId: id },
       signal: new AbortController().signal,
@@ -385,23 +391,25 @@ for (const denyFinal of [false, true]) {
         session: f.db,
         eventStore: f.store,
         coordinator: f.coordinator,
-        policies: validateCollectionPolicies({
-          child: {
-            authorize(intent) {
-              phases.push(intent.phase);
-              if (!allowed) {
-                throw new ActionError("Nested current policy refused.", {
-                  code: "forbidden",
-                  status: 403,
-                });
-              }
-            },
+        policies: testCollectionAuthorizations(
+          { child },
+          f.schema,
+          ({ intent }) => {
+            phases.push((intent.input as CollectionPolicyIntent).phase);
+            if (!allowed) {
+              throw new ActionError("Nested current policy refused.", {
+                code: "forbidden",
+                status: 403,
+              });
+            }
+            return { collections: { child: {} } };
           },
-        }, { child, root }),
+        ),
       });
       runtime.bind(child);
       runtime.bind(root);
       const authority = {
+        authority: testAuthority(f.schema, "space", "nested-reader"),
         scope: { databaseSchema: f.schema, namespace: "space" },
         invocation: {
           kind: "processor" as const,

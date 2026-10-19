@@ -1,6 +1,4 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { captureCollectionPolicy } from "../collections/policy-authorization.ts";
-import type { CollectionPolicyContext } from "../collections/policy-types.ts";
 import { createBodyStorageRuntime } from "../content/storage.ts";
 import { provisionCopilotzSchema } from "../events/schema.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -142,79 +140,6 @@ Deno.test("protected owner policy opens a real read snapshot without granting wr
       Error,
       "current transaction from this database owner",
     );
-    // Exercise the actual Collection policy facade, not just its private marker.
-    let savedContext: CollectionPolicyContext | undefined;
-    let policyReads = 0;
-    let currentChecks = 0;
-    const policy = captureCollectionPolicy({
-      registration: {
-        alias: "records",
-        name: "record",
-        policy: {
-          async authorize(_intent, context) {
-            savedContext = context;
-            const original = await context.resolveSource();
-            assertEquals(original.data, { credential: "synthetic-secret" });
-            policyReads++;
-          },
-        },
-      },
-      databaseSchema: schema,
-      namespace: "space",
-      method: "get",
-      args: { id: "record" },
-    }, {
-      scope,
-      signal: controller.signal,
-      invocation: { kind: "action", id: "record.read", runId: "read-run" },
-      check() {
-        controller.signal.throwIfAborted();
-      },
-      assertCurrent() {
-        currentChecks++;
-        if (!current) throw new Error("Invocation retired.");
-        return Promise.resolve();
-      },
-      async resolveSource(transaction) {
-        assertEquals(
-          typeof protectedValueReadCheck(transaction, scope),
-          "function",
-        );
-        return {
-          event: {
-            id: "root",
-            type: "action.invoked",
-            namespace: "space",
-            metadata: {},
-          },
-          data: await runtime.open(coordinates, prepared.ref, transaction),
-          ancestors: [],
-        };
-      },
-    });
-    await db.readSnapshot!(async (transaction) => {
-      const read = { transaction, commandTime: new Date().toISOString() };
-      await policy.authorize(read, "read");
-      await policy.authorize(read, "result", { id: "record" });
-    });
-    assertEquals(policyReads, 2);
-    assertEquals(currentChecks > 4, true);
-    assertThrows(() => savedContext!.resolveSource(), Error, "closed");
-    current = false;
-    await assertRejects(
-      () =>
-        db.readSnapshot!((transaction) =>
-          policy.authorize(
-            { transaction, commandTime: new Date().toISOString() },
-            "result",
-            { id: "record" },
-          )
-        ),
-      Error,
-      "Invocation retired",
-    );
-    assertEquals(policyReads, 2);
-    current = true;
     retireAfterDecrypt = true;
     await assertRejects(
       () =>

@@ -111,11 +111,7 @@ export type EffectNoStartVerifier = (
   options: Readonly<{ signal: AbortSignal }>,
 ) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
-  collectionPolicies?:
-    import("../collections/policy-types.ts").CollectionPolicies;
-
-  protectedActions?:
-    import("../actions/protected-action-types.ts").ProtectedActionDefinitions;
+  authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
   verifyEffectNotStarted?: EffectNoStartVerifier;
   session: SqlSession;
   registry: PluginRegistry;
@@ -175,6 +171,7 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
 }>;
 
 export type CopilotzEngineDatabaseScope = Readonly<{
+  authorization: import("../authorization/owner.ts").AuthorizationOwner;
   databaseSchema: string;
   content: Readonly<{
     assets: DatabaseAssetRepository;
@@ -212,6 +209,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
 }>;
 
 export type CopilotzEngine = Readonly<{
+  authorization: import("../authorization/owner.ts").AuthorizationOwner;
   databaseSchema: string;
   operations: OperationCatalog;
   databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;
@@ -358,10 +356,9 @@ export type CopilotzEngine = Readonly<{
 export type CreateProcessorContextOptions = Readonly<{
   collectionInvocation?: Readonly<{
     owner: Parameters<
-      typeof import("../collections/policy-invocation.ts").bindProcessorCollectionInvocation
+      typeof import("../authorization/invocation.ts").bindProcessorCollectionInvocation
     >[1];
-    invocation:
-      import("../collections/policy-types.ts").CollectionPolicyInvocation;
+    invocation: import("../authorization/intent.ts").CollectionPolicyInvocation;
   }>;
   operations: import("../actions/types.ts").RuntimeOperations;
   base: EngineContextSeed;

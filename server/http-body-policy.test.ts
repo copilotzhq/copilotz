@@ -1,11 +1,11 @@
-import { assertEquals } from "@std/assert";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
-import { definePlugin } from "@copilotz/copilotz/plugins";
 import {
-  createHttpAdapter,
-  defineServerFacade,
-  serverPlugin,
-} from "../plugins/server/index.ts";
+  createTestApplication as createCopilotzApplication,
+  defineTestServerFacade as defineServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
+import { assertEquals } from "@std/assert";
+
+import { definePlugin } from "@copilotz/copilotz/plugins";
+import { createHttpAdapter, serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 
 Deno.test("custom HTTP body policy is bounded, raw when requested, authorized and route-local", async () => {

@@ -2,7 +2,7 @@ import { assert, assertRejects } from "@std/assert";
 import { createCopilotzWorker } from "../application/worker.ts";
 import { buildWorkerRole } from "../../build/role-bundle.ts";
 import { createCopilotz } from "../../create-copilotz.ts";
-import type { ProtectedActionOwnerContext } from "./index.ts";
+import type { OwnerPolicy } from "../authorization/evaluator.ts";
 
 Deno.test("workers reject protected owner registrations before transport activation", async () => {
   await assertRejects(
@@ -13,7 +13,7 @@ Deno.test("workers reject protected owner registrations before transport activat
           config: { topic: "protected-contract" },
         },
         // @ts-expect-error Owner callbacks cannot be configured on a Worker.
-        protectedActions: {},
+        authorization: {},
       }),
     TypeError,
     "Workers accept",
@@ -30,7 +30,7 @@ Deno.test("worker artifact excludes protected owner hooks admission evidence and
     const graph = await buildWorkerRole(entry, { output: `${root}/worker.js` });
     for (const module of graph.modules) {
       assert(
-        !/\/actions\/protected-actions\.ts$/.test(module.source),
+        !/\/actions\/authorized-capture\.ts$/.test(module.source),
         module.source,
       );
       assert(
@@ -46,24 +46,27 @@ Deno.test("worker artifact excludes protected owner hooks admission evidence and
     await Deno.remove(root, { recursive: true });
   }
 });
-function publicContract(context: ProtectedActionOwnerContext) {
+function publicContract(context: Parameters<OwnerPolicy["evaluate"]>[0]) {
   void createCopilotz({
-    protectedActions: {
-      fixture: {
-        authorize(_input, owner) {
-          void owner.resolveSource();
-        },
-        prepareInput(input) {
-          return input;
+    authorization: {
+      policies: {
+        fixture: {
+          revision: "1",
+          sources: [],
+          evaluate() {
+            return {};
+          },
         },
       },
+      collections: {},
+      actions: {},
     },
   });
-  // @ts-expect-error No caller-selected source reference.
-  void context.resolveSource("event-id");
-  // @ts-expect-error No session authority.
+  // @ts-expect-error Policies have no raw session authority.
   void context.session;
-  // @ts-expect-error No transaction authority.
+  // @ts-expect-error Policies have no transaction authority.
   void context.transaction;
+  // @ts-expect-error Policies cannot bypass declared sources with SQL.
+  void context.query;
 }
 void publicContract;

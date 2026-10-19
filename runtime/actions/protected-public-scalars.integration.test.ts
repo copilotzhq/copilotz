@@ -1,3 +1,4 @@
+import { bindTestActions, testAuthority } from "../testing/authority.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzApplication } from "../application/application.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -15,7 +16,6 @@ Deno.test({
     let executed = 0;
     const action = defineAction({
       id: "fixture.public-scalars",
-      ownerHooks: { prepareInput: true },
       inputSchema: {
         type: "object",
         properties: {
@@ -44,27 +44,43 @@ Deno.test({
       namespace: "public",
       actions: { use: action },
       adapters: { secrets: { default: await testSecretAdapter() } },
-      protectedActions: {
-        [action.id]: {
-          authorize() {},
-          prepareInput(input) {
-            return {
-              ...(input as object),
-              credential: {
-                ownerId: "public",
-                kind: "start",
-                token: (input as { equal?: boolean }).equal
-                  ? "public"
-                  : "synthetic-private-token",
-              },
-            };
+      authorization: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate({ intent }) {
+              return {
+                actions: {
+                  use: intent.operation === "capture"
+                    ? {
+                      input: {
+                        credential: {
+                          ownerId: "public",
+                          kind: "start",
+                          token: (intent.input as { equal?: boolean }).equal
+                            ? "public"
+                            : "synthetic-private-token",
+                        },
+                      },
+                    }
+                    : {},
+                },
+              };
+            },
           },
         },
+        actions: { use: { id: "fixture", revision: "1" } },
+        collections: {},
       },
     });
+    const actions = bindTestActions(
+      app.host.actions,
+      testAuthority(schema, "public"),
+    );
     try {
       assertEquals(
-        await app.host.actions.use({}, {
+        await actions.use({}, {
           idempotencyKey: "allowed",
           actionMetadata: {
             namespace: "public",
@@ -74,13 +90,13 @@ Deno.test({
         true,
       );
       await assertRejects(() =>
-        app.host.actions.use({}, {
+        actions.use({}, {
           idempotencyKey: "token-leak",
           actionMetadata: { stolen: "synthetic-private-token" },
         })
       );
       await assertRejects(() =>
-        app.host.actions.use({ equal: true }, {
+        actions.use({ equal: true }, {
           idempotencyKey: "equal-leak",
           actionMetadata: { namespace: "public" },
         })

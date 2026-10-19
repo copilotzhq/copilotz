@@ -1,3 +1,4 @@
+import { collectionAuthorizationInput } from "../authorization/collection-input.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { afterSqlCommit } from "../events/session.ts";
 import { readEventByDeduplicationIdOn } from "../events/store.ts";
@@ -9,18 +10,19 @@ import {
   scheduledAlarmAdmission,
   scheduledIngressProof,
 } from "../application/ingress/scheduled.ts";
-import { captureHostCommandJson } from "../application/host-command-json.ts";
 import {
   captureCollectionPolicy,
   collectionCommittedResultRefused,
   collectionPolicyRefused,
-} from "./policy-authorization.ts";
+} from "../authorization/collection.ts";
 import {
   captureCollectionInvocation,
   hasTrustedCollectionPolicyRead,
-} from "./policy-invocation.ts";
-import type { CollectionPolicyRegistrations } from "./policy-registration.ts";
-import type { CollectionPolicyIntent } from "./policy-types.ts";
+  withOwnerCollectionInvocation,
+  withTrustedCollectionPolicyRead,
+} from "../authorization/invocation.ts";
+import type { CollectionPolicyRegistrations } from "../authorization/resources.ts";
+import type { CollectionPolicyIntent } from "../authorization/intent.ts";
 import {
   type OwnerCommandAuthorization,
   withOwnerCommandAuthorization,
@@ -994,15 +996,12 @@ export function createCollectionKernel(
     control: import("../events/session.ts").SqlReadSnapshot;
     commandTime?: Promise<string>;
   };
-  const snapshotTime = (scope: SnapshotScope): Promise<string> =>
-    scope.commandTime ??= scope.executor.query<{ now: string }>(
-      "SELECT CURRENT_TIMESTAMP::text AS now",
-    ).then((result) => result.rows[0].now);
   const snapshots = createAsyncContextStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
   const activeSnapshot = () => snapshots.getStore();
   type PolicyRead = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
   type ActivePolicyRead = PolicyRead & {
+    snapshot?: SnapshotScope;
     active: boolean;
     authority: ReturnType<typeof captureCollectionInvocation>;
   };
@@ -1022,16 +1021,26 @@ export function createCollectionKernel(
     namespace: string,
     method: CollectionPolicyIntent["method"],
     args: unknown,
-    load: () => Promise<T>,
+    load: (authorizedArgs?: unknown) => Promise<T>,
     id?: string,
     disclosureRoot = false,
   ): Promise<T> => {
     const registration = options.policies?.get(name);
     const trusted = hasTrustedCollectionPolicyRead();
     if (trusted) {
-      const result = await load();
-      if (!hasTrustedCollectionPolicyRead()) collectionPolicyRefused();
-      return result;
+      if (policyReads.getStore()) return await load();
+      const authority = captureCollectionInvocation();
+      return await runCommand(
+        "collections.authenticate",
+        {},
+        (_input, command) =>
+          withTrustedCollectionPolicyRead(() =>
+            policyReads.run(
+              { ...command, authority, active: true },
+              load,
+            )
+          ),
+      );
     }
     const relatedRead = method === "query" || method === "relations.list" ||
       (method === "list" &&
@@ -1110,47 +1119,14 @@ export function createCollectionKernel(
     const nested = policyReads.getStore();
     if (nested) {
       await policy?.authorize(nested, "read");
-      const result = await load();
+      const result = await load(policy?.args());
       await disclose(nested, result);
       disclosure.checks.push((read) => disclose(read, result));
       return result;
     }
     const snapshot = activeSnapshot();
-    if (snapshot) {
-      if (snapshot.state !== "open") {
-        throw new Error("Read snapshot access has already closed.");
-      }
-      const authorize = async (phase: "read" | "result", value?: unknown) =>
-        snapshot.control.kind === "pooled"
-          ? snapshot.control.current(async (transaction) => {
-            const commandTime = (await transaction.query<{ now: string }>(
-              "SELECT CURRENT_TIMESTAMP::text AS now",
-            )).rows[0].now;
-            await (phase === "result"
-              ? disclosureRoot
-                ? discloseAll({ transaction, commandTime })
-                : disclose({ transaction, commandTime }, value)
-              : policy?.authorize({ transaction, commandTime }, phase));
-          })
-          : phase === "result"
-          ? disclosureRoot
-            ? discloseAll({
-              transaction: snapshot.executor,
-              commandTime: await snapshotTime(snapshot),
-            })
-            : disclose({
-              transaction: snapshot.executor,
-              commandTime: await snapshotTime(snapshot),
-            }, value)
-          : policy?.authorize({
-            transaction: snapshot.executor,
-            commandTime: await snapshotTime(snapshot),
-          }, phase);
-      await authorize("read");
-      const result = await load();
-      disclosure.checks.push((read) => disclose(read, result));
-      await authorize("result", result);
-      return result;
+    if (snapshot && snapshot.state !== "open") {
+      throw new Error("Read snapshot access has already closed.");
     }
     const result = await runCommand(
       "collections.read",
@@ -1158,15 +1134,18 @@ export function createCollectionKernel(
       async (_input, command) => {
         // This read's captured aggregation belongs to its own queued command.
         if (!disclosure.active) collectionPolicyRefused();
-        const read = { ...command, authority, active: true };
+        const read = { ...command, authority, active: true, snapshot };
         return await policyDisclosures.run(
           disclosure,
           () =>
             policyReads.run(read, async () => {
               try {
                 await policy?.authorize(command, "read");
-                const value = await load();
+                const value = await load(policy?.args());
                 await disclose(command, value);
+                if (snapshot && snapshot.state !== "open") {
+                  throw new Error("Read snapshot access has already closed.");
+                }
                 return value;
               } finally {
                 read.active = false;
@@ -1256,7 +1235,12 @@ export function createCollectionKernel(
 
   const executor = (): SqlExecutor => {
     const read = policyReads.getStore();
-    if (read) return read.transaction;
+    if (read) {
+      if (read.snapshot?.state === "closed") {
+        throw new Error("Read snapshot access has already closed.");
+      }
+      return read.snapshot?.executor ?? read.transaction;
+    }
     const snapshot = activeSnapshot();
     if (!snapshot) return sql();
     if (snapshot.state !== "open") {
@@ -1318,6 +1302,7 @@ export function createCollectionKernel(
         method: CollectionPolicyIntent["method"];
         args: unknown;
         committing: boolean;
+        prepared?: unknown;
       }
     >();
     const mutationPolicy = (
@@ -1336,6 +1321,7 @@ export function createCollectionKernel(
         namespace,
         method: call.method,
         args: call.args,
+        expectedArgs: call.prepared,
         current: (tx) =>
           loadCollectionRecord(tx, tables, namespace, name, planned.id),
         next: planned.operation === "delete" ? null : planned.plan.write.record,
@@ -1350,28 +1336,83 @@ export function createCollectionKernel(
       method: CollectionPolicyIntent["method"],
       args: unknown,
       namespace: string,
-      execute: () => Promise<T>,
+      execute: (args: Record<string, unknown>) => Promise<T>,
     ): Promise<T> => {
       const registration = options.policies?.get(name);
-      if (!registration) return await execute();
+      if (!registration) return await execute(args as Record<string, unknown>);
+      const selectedInput = collectionAuthorizationInput(
+        method,
+        args,
+        definition.content?.fields,
+      );
       const initial = captureCollectionPolicy({
         databaseSchema: options.eventStore.databaseSchema,
         registration,
         namespace,
         method,
-        args,
+        args: selectedInput.input,
+        ...(method !== "create" &&
+            typeof (args as { id?: unknown }).id === "string"
+          ? {
+            current: (tx: SqlExecutor) =>
+              loadCollectionRecord(
+                tx,
+                tables,
+                namespace,
+                name,
+                (args as { id: string }).id,
+              ),
+          }
+          : {}),
       });
-      const captured = captureHostCommandJson(args);
-      const call = { method, args: captured, committing: false };
+      const authority = captureCollectionInvocation()!;
+      const captured = selectedInput.input;
+      const call: {
+        method: typeof method;
+        args: typeof captured;
+        committing: boolean;
+        prepared?: unknown;
+      } = { method, args: captured, committing: false };
       return await mutationCalls.run(call, async () => {
+        if (activeScope()) {
+          await runCommand(
+            "collections.planAuthorized",
+            {},
+            async (_, command) => {
+              await initial.authorize(command, "mutation");
+              call.prepared = initial.args();
+            },
+          );
+          return await execute(selectedInput.materialize(initial.args()));
+        }
         let result: T;
         try {
-          result = await execute();
+          result = await runCommand(
+            "collections.authorize",
+            {},
+            async (_input, command) => {
+              await initial.authorize(command, "mutation");
+              call.prepared = initial.args();
+              const selected = { context: command, active: true };
+              try {
+                return await withOwnerCollectionInvocation(
+                  authority,
+                  () =>
+                    mutationCalls.run(
+                      call,
+                      () =>
+                        commands.run(selected, () =>
+                          execute(selectedInput.materialize(initial.args()))),
+                    ),
+                );
+              } finally {
+                selected.active = false;
+              }
+            },
+          );
         } catch (error) {
-          // Planning failures must not become an existence oracle before policy.
           initial.check();
-          if (call.committing) throw error;
-          collectionPolicyRefused(false);
+          throw error;
         }
         if (activeScope()) return result;
         const value = result as {
@@ -2196,6 +2237,11 @@ export function createCollectionKernel(
     ) => {
       try {
         const policy = mutationPolicy(planned);
+        const adopted = !execution && policy ? currentCommand() : undefined;
+        const joinedExecution = execution ??
+          (adopted
+            ? { transaction: adopted.transaction, pending: [] }
+            : undefined);
         const call = mutationCalls.getStore();
         if (call) call.committing = true;
         const execute = () =>
@@ -2206,10 +2252,19 @@ export function createCollectionKernel(
             planned.writeOptions,
             planned.plan,
             planned.matchData,
-            execution,
+            joinedExecution,
           );
         return await (policy && !execution
-          ? withOwnerCommandAuthorization(policy.guard, execute)
+          ? withOwnerCommandAuthorization(
+            policy.guard,
+            () =>
+              adopted
+                ? createSchemaCommandRunner(
+                  adopted.transaction,
+                  options.eventStore.databaseSchema,
+                )("collections.commitAuthorized", {}, execute)
+                : execute(),
+          )
           : execute());
       } finally {
         // Also when refused: a compare-and-set retry must read the row again.
@@ -2904,13 +2959,13 @@ export function createCollectionKernel(
       } catch {
         key = undefined;
       }
-      const load = () =>
+      const load = (authorizedQuery = query) =>
         queryCollectionRecords(
           executor(),
           tables,
           definition,
           ns,
-          query,
+          authorizedQuery,
           undefined,
           (target, id) => {
             actualDefinition(target);
@@ -2922,7 +2977,12 @@ export function createCollectionKernel(
         ns,
         "list",
         query ?? {},
-        () => key === undefined ? load() : inSnapshot(key, load),
+        (authorizedArgs) =>
+          authorizedArgs
+            ? load(authorizedArgs as CollectionQuery)
+            : key === undefined
+            ? load()
+            : inSnapshot(key, load),
       );
     };
 
@@ -2933,13 +2993,13 @@ export function createCollectionKernel(
         namespace,
         "aggregate",
         query,
-        () =>
+        (authorizedArgs) =>
           aggregateCollectionRecords(
             executor(),
             tables,
             definition,
             requireText(namespace, "Namespace"),
-            query,
+            (authorizedArgs ?? query) as CollectionAggregateQuery,
           ),
       );
     };
@@ -3034,7 +3094,7 @@ export function createCollectionKernel(
           "create",
           { input },
           options.namespace,
-          () => create(input, options),
+          (args) => create(args.input as TInsert, options),
         ),
       update: (
         id: string,
@@ -3045,7 +3105,14 @@ export function createCollectionKernel(
           "update",
           { id, set: patch.set ?? {}, unset: patch.unset ?? [] },
           options.namespace,
-          () => update(id, patch, options),
+          (args) =>
+            update(
+              id,
+              { set: args.set, unset: args.unset } as CollectionUpdatePatch<
+                TSelect
+              >,
+              options,
+            ),
         ),
       delete: (id: string, options: CollectionWriteOptions) =>
         policyWrite(
@@ -3064,7 +3131,7 @@ export function createCollectionKernel(
           "command",
           { id, name: command, ...(input !== undefined ? { input } : {}) },
           options.namespace,
-          () => mutate(id, command, input, options),
+          (args) => mutate(id, command, args.input, options),
         ),
       get: read,
       list,
@@ -3189,14 +3256,27 @@ export function createCollectionKernel(
           "create",
           { input },
           options.namespace,
-          () => transactional.create(input, options, order),
+          (args) =>
+            transactional.create(
+              args.input as Record<string, unknown>,
+              options,
+              order,
+            ),
         ),
       update: (id, patch, options, order) =>
         policyWrite(
           "update",
           { id, set: patch.set ?? {}, unset: patch.unset ?? [] },
           options.namespace,
-          () => transactional.update(id, patch, options, order),
+          (args) =>
+            transactional.update(
+              id,
+              { set: args.set, unset: args.unset } as CollectionUpdatePatch<
+                CollectionRecord
+              >,
+              options,
+              order,
+            ),
         ),
       delete: (id, options, order) =>
         policyWrite(
@@ -3210,7 +3290,8 @@ export function createCollectionKernel(
           "command",
           { id, name: command, ...(input !== undefined ? { input } : {}) },
           options.namespace,
-          () => transactional.mutate(id, command, input, options, order),
+          (args) =>
+            transactional.mutate(id, command, args.input, options, order),
         ),
     });
     bound.set(definition.name, collection as BoundCollection);
@@ -3268,6 +3349,8 @@ export function createCollectionKernel(
   const transact = async <T>(
     input: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>> => {
+    const receipt = collectionCommandReceipt();
+    const commandReceipt = receipt ? { ...receipt } : undefined;
     if (activeSnapshot()) {
       throw new Error(
         "Collection transactions are not allowed inside a read snapshot.",
@@ -3703,6 +3786,7 @@ export function createCollectionKernel(
       };
       return {
         check: () => checks.forEach((check) => check.check()),
+        args: () => args,
         authorize,
         forCommand(command: CommandContext) {
           const policies = checks.map((check) => check.forCommand(command));
@@ -4055,7 +4139,7 @@ export function createCollectionKernel(
     for (const plan of orderedPlans) assertProtection(plan);
     // Only an independent lone write may publish through its own commit path.
     const [only] = orderedPlans;
-    const commandReceipt = collectionCommandReceipt();
+
     if (
       !commandReceipt && !currentCommand() &&
       orderedPlans.length === 1 && only.commitAlone &&
@@ -4226,8 +4310,9 @@ export function createCollectionKernel(
     const cleanup = Promise.withResolvers<
       import("../events/session.ts").SqlSnapshotCleanup
     >();
-    return await options.session.withReadSnapshot(async (session) => {
-      const control = { ...session, cleanup: cleanup.promise };
+    const select = async (
+      control: import("./snapshot-control.ts").SnapshotControl,
+    ): Promise<T> => {
       const executor = control.snapshot;
       const snapshot: SnapshotScope = {
         executor,
@@ -4302,7 +4387,43 @@ export function createCollectionKernel(
           snapshot.state = "closed";
         }
       });
+    };
+    let exclusive = false;
+    const value = await options.session.withReadSnapshot(async (session) => {
+      if (session.kind === "exclusive" && options.policies?.size) {
+        exclusive = true;
+        return undefined;
+      }
+      return await select({ ...session, cleanup: cleanup.promise });
     }, { onCleanup: cleanup.resolve });
+    if (!exclusive) return value as T;
+    // An exclusive backend cannot open a second owner command while its
+    // snapshot holds the connection. The acquired owner command itself provides
+    // the consistent read scope and evaluates policy in that same transaction.
+    const released = Promise.withResolvers<
+      import("../events/session.ts").SqlSnapshotCleanup
+    >();
+    try {
+      return await runCommand(
+        "collections.snapshot",
+        {},
+        async (_, command) => {
+          const selected = { context: command, active: true };
+          try {
+            return await commands.run(selected, () =>
+              select({
+                kind: "exclusive",
+                snapshot: command.transaction,
+                cleanup: released.promise,
+              }));
+          } finally {
+            selected.active = false;
+          }
+        },
+      );
+    } finally {
+      released.resolve("confirmed");
+    }
   };
 
   const runtime: CollectionKernel = {
@@ -4315,12 +4436,12 @@ export function createCollectionKernel(
           namespace,
           "vectors.search",
           input,
-          () =>
+          (authorizedArgs) =>
             searchVectors(
               executor(),
               options.eventStore.databaseSchema,
               namespace,
-              input,
+              (authorizedArgs ?? input) as typeof input,
             ),
         );
       },

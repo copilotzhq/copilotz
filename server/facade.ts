@@ -1,3 +1,4 @@
+import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
 /** Compiled Fetch facade over composed Copilotz primitives. @module */
@@ -23,7 +24,6 @@ import {
   type ServerFacadeResource,
 } from "../plugins/server/shared/contracts.ts";
 import type { HttpApplication } from "./http-types.ts";
-import { admitHttpOperation } from "./admission.ts";
 import { createHttpFetchHandler, type HttpFetchHandler } from "./fetch.ts";
 import { assetUploadResponse } from "./assets.ts";
 import { actionResponse, operationResult } from "./actions.ts";
@@ -84,17 +84,29 @@ export function createServerFacadeFetchHandler(
   options: CreateServerFacadeFetchHandlerOptions = {},
 ): ServerFacadeFetchHandler {
   const configuredFacade = facadeResource(application, options.facade);
-  const facade = Object.freeze({
-    ...configuredFacade,
-    ...(configuredFacade.protectedBootstrapRoutes
-      ? {
-        protectedBootstrapRoutes: Object.freeze([
-          ...configuredFacade.protectedBootstrapRoutes,
-        ]),
-      }
-      : {}),
-  });
+  const facade = Object.freeze({ ...configuredFacade });
+  if (typeof facade.authenticate !== "function") {
+    throw new TypeError(
+      "Server authentication and retained authority are required.",
+    );
+  }
   const routes = compileServerRoutes(application.plugins, facade);
+  application.authorization.assertResources({
+    collections: [
+      ...new Set(
+        routes.routes.flatMap(({ endpoint }) =>
+          endpoint.collectionAlias ? [endpoint.collectionAlias] : []
+        ),
+      ),
+    ],
+    actions: [
+      ...new Set(
+        routes.routes.flatMap(({ endpoint }) =>
+          endpoint.actionAlias ? [endpoint.actionAlias] : []
+        ),
+      ),
+    ],
+  });
   const httpRoutes = new Map(
     Object.values(application.plugins.adapters.http ?? {})
       .flatMap((adapter) => (adapter as HttpAdapter).routes)
@@ -120,13 +132,11 @@ export function createServerFacadeFetchHandler(
       const read = await createHttpReads(
         application,
         context.serverScope,
-        context.serverConstraints,
-        { viewer: context },
+        { context },
       );
       const operations = await createHttpOperations(
         application,
         context.serverScope,
-        context.serverConstraints,
         read,
       );
       if (endpoint.kind === "http") {
@@ -199,7 +209,28 @@ export function createServerFacadeFetchHandler(
           params: context.serverParams,
           input: request.body,
           scope: context.serverScope,
-          constraints: context.serverConstraints,
+          sessions: {
+            async create(input) {
+              const runtime = context.databaseSchema
+                ? await application.databaseScope(context.databaseSchema)
+                : application;
+              await runtime.authorization.createSession(
+                context.serverScope.authority!,
+                input,
+              );
+            },
+            async revoke(
+              id = context.serverScope.authority!.authorityBasis.id,
+            ) {
+              const runtime = context.databaseSchema
+                ? await application.databaseScope(context.databaseSchema)
+                : application;
+              await runtime.authorization.revokeSession(
+                context.serverScope.authority!,
+                id,
+              );
+            },
+          },
           read,
           async invoke(id, input, options) {
             const receipt = await submit(id, input, {
@@ -239,8 +270,16 @@ export function createServerFacadeFetchHandler(
                 context.databaseSchema !== application.config.databaseSchema
                   ? await application.databaseScope(context.databaseSchema!)
                   : application;
+              await runtime.authorization.asset(
+                context.serverScope.authority!,
+                id,
+              );
               const content = await runtime.content.assets.read(
                 context.namespace!,
+                id,
+              );
+              await runtime.authorization.asset(
+                context.serverScope.authority!,
                 id,
               );
               return new Response(content.bytes.slice(), {
@@ -401,11 +440,16 @@ export function createServerFacadeFetchHandler(
         }
         return {
           status: 200,
-          data: await application.cancelOperation({
-            operationId: context.serverParams.id,
-            namespace: context.namespace,
-            databaseSchema: context.databaseSchema,
-          }),
+          data: await withRetainedAuthority(
+            context.serverScope.authority!,
+            context.serverSignal,
+            () =>
+              application.cancelOperation({
+                operationId: context.serverParams.id,
+                namespace: context.namespace,
+                databaseSchema: context.databaseSchema,
+              }),
+          ),
         };
       }
       if (endpoint.kind === "asset" && endpoint.operation === "upload") {
@@ -430,19 +474,29 @@ export function createServerFacadeFetchHandler(
             databaseSchema: context.databaseSchema!,
           },
         } as const;
-        const admitted = await admitHttpOperation(
-          application,
-          context,
-          request.headers?.["idempotency-key"] ?? "",
+        const admitted = context;
+
+        return await withRetainedAuthority(
+          context.serverScope.authority!,
+          context.serverSignal,
+          () =>
+            handleChannel(scoped, context.namespace!, {
+              ...request,
+              context: { ...admitted, actor: context.serverScope.actor },
+            }, [endpoint.id]),
         );
-        return await handleChannel(scoped, context.namespace!, {
-          ...request,
-          context: { ...admitted, actor: context.serverScope.actor },
-        }, [endpoint.id]);
       }
       if (endpoint.kind === "asset") {
+        await physical.authorization.asset(
+          context.serverScope.authority!,
+          context.serverParams.id,
+        );
         const content = await physical.content.assets.read(
           context.namespace!,
+          context.serverParams.id,
+        );
+        await physical.authorization.asset(
+          context.serverScope.authority!,
           context.serverParams.id,
         );
         return {

@@ -1,3 +1,7 @@
+import {
+  assertMetadataIsSecretFree,
+  protectedActionStrings,
+} from "./secret.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import {
@@ -134,6 +138,15 @@ export function createActionLifecycleAppender(
     }
     if (action && actionDefinitionHasSecrets(action) && !options.store) {
       throw new Error("Protected Action lifecycle requires an Event Store.");
+    }
+    if (action && data.status === "invoked" && actionInputHasSecrets(action)) {
+      const secrets = protectedActionStrings(action.inputSchema, data.input);
+      assertMetadataIsSecretFree(data.metadata, secrets);
+      // Runtime-generated action coordinates are not caller metadata. The
+      // inherited origin is checked before the first capture can commit.
+      const { actionId: _id, actionStatus: _status, ...origin } =
+        draft.metadata ?? {};
+      assertMetadataIsSecretFree(origin, secrets);
     }
     const outputHooks = options.protectedActionOutput?.(data);
     const prepared = action

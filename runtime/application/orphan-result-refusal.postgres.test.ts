@@ -1,4 +1,8 @@
-import { createCopilotz } from "../../create-copilotz.ts";
+import {
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as defineServerFacade,
+} from "../testing/server-authorization.test.ts";
+
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type ActionCallers,
@@ -11,7 +15,7 @@ import {
 } from "../../index.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../../client/index.ts";
 import { serverPlugin } from "../../plugins/server/plugin.ts";
-import { defineServerFacade } from "../../server/index.ts";
+
 import { listen } from "../adapters/deno/listen.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createEventStore } from "../events/store.ts";
@@ -320,7 +324,7 @@ async function fixture(
                     actor: { id: "integrity-reader" },
                     namespace: request.headers.get("x-namespace") ?? namespace,
                   },
-              authorize: (request) =>
+              evaluate: (request) =>
                 request.headers.has("x-refuse-authorization")
                   ? new Response(null, { status: 403 })
                   : request.headers.has("x-hide-operation")

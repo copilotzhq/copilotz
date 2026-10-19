@@ -3,7 +3,8 @@ import { defineAction } from "../actions/define.ts";
 import type { ActionContext } from "../actions/types.ts";
 import { ActionError } from "../actions/errors.ts";
 import { secret } from "../actions/secret.ts";
-import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
+import type { OwnerAuthorization } from "../authorization/evaluator.ts";
+import { bindTestActions, testAuthority } from "../testing/authority.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { createCopilotz } from "../application/copilotz.ts";
 import { createCopilotzGateway } from "../application/gateway.ts";
@@ -17,7 +18,7 @@ const namespace = "cleanup-connected";
 async function fixture(
   transport: "in-process" | "websocket",
   actions: Record<string, ReturnType<typeof defineAction>>,
-  protectedActions: ProtectedActionDefinitions,
+  authorization: OwnerAuthorization,
 ) {
   const database = await createOwnerTestDatabase();
   const adapters = { secrets: { default: await testSecretAdapter() } };
@@ -38,11 +39,12 @@ async function fixture(
     database,
     actions,
     adapters,
-    protectedActions,
+    authorization,
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
-    await seeder.actions.seed({}, { idempotencyKey: "seed" });
+    await bindTestActions(seeder.actions, testAuthority("public", namespace))
+      .seed({}, { idempotencyKey: "seed" });
   } finally {
     await seeder.close();
   }
@@ -116,7 +118,7 @@ async function fixture(
     },
     target: { workerId },
     adapters,
-    protectedActions,
+    authorization,
     engine: { retryBaseMs: 0, random: () => 0 },
   });
   const listener = transport === "websocket"
@@ -151,7 +153,13 @@ async function fixture(
   });
   await worker.ready;
   return {
-    gateway,
+    gateway: {
+      ...gateway,
+      actions: bindTestActions(
+        gateway.actions,
+        testAuthority("public", namespace),
+      ),
+    },
     database,
     worker,
     hypervisor,
@@ -218,7 +226,6 @@ for (const transport of ["in-process", "websocket"] as const) {
         let workerReturned = false;
         const child = defineAction({
           id: "cleanup.child",
-          ownerHooks: { prepareInput: true },
           inputSchema: {
             type: "object",
             properties: { credential: secret({ type: "string" }) },
@@ -253,23 +260,43 @@ for (const transport of ["in-process", "websocket"] as const) {
             return "after cleanup";
           },
         });
-        const protectedActions: ProtectedActionDefinitions = {
-          [child.id]: {
-            authorize() {
-              if (!allowed) {
-                throw new ActionError("Content access revoked", {
-                  code: "forbidden",
-                  status: 403,
-                });
-              }
+        const authorization: OwnerAuthorization = {
+          policies: {
+            fixture: {
+              revision: "1",
+              sources: [],
+              evaluate({ intent }) {
+                if (!allowed && intent.resource === "child") {
+                  throw new ActionError("Action access revoked", {
+                    code: "forbidden",
+                    status: 403,
+                  });
+                }
+                return {
+                  actions: {
+                    run: {},
+                    successor: {},
+                    seed: {},
+                    child: intent.operation === "capture"
+                      ? { input: { credential: "owner-only-credential" } }
+                      : {},
+                  },
+                };
+              },
             },
-            prepareInput: () => ({ credential: "owner-only-credential" }),
+          },
+          collections: {},
+          actions: {
+            run: { id: "fixture", revision: "1" },
+            child: { id: "fixture", revision: "1" },
+            successor: { id: "fixture", revision: "1" },
+            seed: { id: "fixture", revision: "1" },
           },
         };
         const f = await fixture(
           transport,
           { run, child, successor },
-          protectedActions,
+          authorization,
         );
         const cancel = ReadableStream.prototype.cancel;
         const arrayBuffer = Response.prototype.arrayBuffer;

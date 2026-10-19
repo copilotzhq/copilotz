@@ -1,9 +1,10 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { createTestApplication as createCopilotzApplication } from "../runtime/testing/server-authorization.test.ts";
+import { defineTestServerFacade as fixtureServerFacade } from "../runtime/testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
+
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../plugins/server/index.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
@@ -37,7 +38,7 @@ Deno.test("concurrent HTTP admission enforces the atomic cap and recovers identi
           server: {
             default: fixtureServerFacade({
               authenticate: () => ({ actor: { id: "owner" } }),
-              authorize: () => ({ admission: { key: "conversation" } }),
+              evaluate: () => ({ admission: { key: "conversation" } }),
               expose: { collections: false, channels: false },
             }),
           },

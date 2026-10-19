@@ -11,9 +11,10 @@ import type { SqlExecutor } from "../events/session.ts";
 import type {
   CollectionPolicyIntent,
   CollectionPolicyInvocation,
-} from "./policy-types.ts";
+} from "./intent.ts";
 
 type OwnerBinding = Readonly<{
+  authority?: import("./authority.ts").AuthenticatedAuthority;
   /** Owner-resolved logical Processor run, independent of its current attempt. */
   logicalRunId?: string;
   scope: Readonly<{ databaseSchema: string; namespace: string }>;

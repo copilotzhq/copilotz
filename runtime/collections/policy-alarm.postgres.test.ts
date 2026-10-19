@@ -13,14 +13,16 @@ import {
   writeOwnerDeadline,
 } from "../engine/alarms.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
-import { captureCollectionPolicy } from "./policy-authorization.ts";
-import { captureCollectionInvocation } from "./policy-invocation.ts";
+import { captureCollectionPolicy } from "../authorization/collection.ts";
+import { captureCollectionInvocation } from "../authorization/invocation.ts";
 import {
   isCollectionAlarmPolicyStale,
   withCollectionAlarmPolicy,
-} from "./policy-alarm.ts";
+} from "./alarm-authority.ts";
 import { defineCollection } from "./definition.ts";
-import type { CollectionPolicyContext } from "./policy-types.ts";
+import { testCollectionAuthorizations } from "../testing/collection-authorization.ts";
+import { testAuthority } from "../testing/authority.ts";
+import type { OwnerPolicy } from "../authorization/evaluator.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 Deno.test({
@@ -64,11 +66,14 @@ Deno.test({
     let deadline = await schedule();
     let retained: ReturnType<typeof captureCollectionInvocation>;
     const check = (
-      authorize: (context: CollectionPolicyContext) => void | Promise<void>,
+      authorize: (
+        context: Parameters<OwnerPolicy["evaluate"]>[0],
+      ) => void | Promise<void>,
       id = "one",
       selectedDeadline = deadline,
     ) =>
       withCollectionAlarmPolicy({
+        authority: testAuthority(schema),
         definition,
         deadline: selectedDeadline,
         databaseSchema: schema,
@@ -78,11 +83,14 @@ Deno.test({
       }, () => {
         retained = captureCollectionInvocation();
         const policy = captureCollectionPolicy({
-          registration: {
-            alias: "entry",
-            name: definition.name,
-            policy: { authorize: (_intent, context) => authorize(context) },
-          },
+          registration: testCollectionAuthorizations(
+            { entry: definition },
+            schema,
+            async (context) => {
+              await authorize(context);
+              return { collections: { entry: {} } };
+            },
+          ).get(definition.name)!,
           databaseSchema: schema,
           namespace: "space",
           method: "get",
@@ -108,8 +116,8 @@ Deno.test({
       )).rows[0].count;
     try {
       await check(async (context) => {
-        assertEquals(context.invocation.kind, "alarm");
-        await context.query("SELECT 1");
+        assertEquals(context.authority.scope.databaseSchema, schema);
+        await context.read.get("entry", "one");
         await assertRejects(
           async () => await run("recursive", {}, () => {}),
           Error,
@@ -118,36 +126,11 @@ Deno.test({
       });
       const ended = retained!;
       assertThrows(() => ended.check(), Error, "ended");
-      for (
-        const query of [
-          "SELECT 1 / 0",
-          `SELECT * FROM "${schema}".missing_private_table`,
-        ]
-      ) {
-        const failure = await assertRejects(
-          () =>
-            check(async (context) => {
-              try {
-                await context.query(query);
-              } catch {
-                denied();
-              }
-            }),
-          Error,
-          "authorization could not be completed",
-        );
-        assertEquals(isOwnerAuthorizationRefusal(failure), false);
-        assertEquals(await count(), 1);
-        // A failed transaction has not stopped the real schema owner.
-        await run("still-operational", {}, async (_input, command) => {
-          await command.transaction.query("SELECT 1");
-        });
-      }
       const sourceFailure = await assertRejects(
         () =>
           check(async (context) => {
             try {
-              await context.resolveSource();
+              await context.read.get("undeclared", "one");
             } catch {
               denied();
             }
@@ -156,6 +139,7 @@ Deno.test({
         "authorization could not be completed",
       );
       assertEquals(isOwnerAuthorizationRefusal(sourceFailure), false);
+      assertEquals(await count(), 1);
       const unknown = await assertRejects(() =>
         check(() => {
           throw new Error("private internal failure");

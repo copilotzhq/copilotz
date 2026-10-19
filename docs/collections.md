@@ -54,104 +54,30 @@ code can select a scope through the application methods below.
 Command and query names cannot reuse method names such as `create`, `list` or
 `query`.
 
-### Owner collection policies
+### Owner authorization
 
-A Collection that carries authority or sensitive state can require an
-owner-local policy. Mark its definition `ownerPolicy: "required"`, then provide
-the host-only `collectionPolicies` option under its registered alias:
+Protected Collections declare `ownerPolicy: "required"`. Register their aliases
+in `authorization.collections`, referencing a policy ID and revision in
+`authorization.policies`. Startup rejects incomplete registrations. The same
+owner evaluator protects Collection reads, named queries, mutations, Actions and
+operation observations.
 
-```ts
-const note = defineCollection({
-  name: "note",
-  ownerPolicy: "required",
-  schema: noteSchema,
-});
+Policies declare Collection aliases in `sources`. Their `evaluate` callback
+receives immutable retained authority, the actual command intent, command time,
+cancellation signal and bounded `read.get` / `read.list` capabilities. Reads
+must use declared sources. Missing records and empty queries are dependencies;
+committed changes re-authorize dependent observations. Reads cannot escape the
+callback, submit commands or access raw SQL.
 
-const app = await createCopilotz({
-  collections: { note },
-  collectionPolicies: {
-    note: { authorize: authorizeNote },
-  },
-});
-```
+Return `ServerConstraints`: `collections` predicates are intersected before
+pagination and aggregation. Mutations require explicit `collectionMutations`
+permissions with optional field allowlists, trusted input and current/resulting
+record predicates. Conflicting trusted fields and immutable updates fail.
+Nonempty relation includes are refused. Decisions and effects share an owner
+transaction; joined work keeps its attempt fences through the outer commit.
 
-`CollectionPolicies`, `CollectionPolicyIntent` and `CollectionPolicyContext` are
-exported from `@copilotz/copilotz/collections`. `authorize(intent, context)` is
-a trusted, read-only host callback. It returns `void` or `Promise<void>` to
-allow an operation. Throw
-`new ActionError(message, { code: "forbidden", status: 403 })` from
-`@copilotz/copilotz/actions` for an explicit refusal. The runtime replaces the
-message with `Collection access denied.`. Other exceptions deny access without
-being classified as a permanent permission refusal. Database or
-source-resolution failures remain infrastructure failures even if the callback
-catches and wraps one in an explicit refusal.
-
-A required registration is checked before owner activation. Missing callbacks,
-unknown aliases and multiple aliases for the same protected definition are
-rejected. Workers cannot configure policies. A generic protected Collection call
-without a current owner-bound invocation is refused, including a direct host or
-HTTP Collection call. Configured server authentication and authorization lookups
-retain their existing bounded owner-only read scope; retaining a lookup does not
-retain that authority.
-
-The immutable intent contains the resolved Collection alias and definition name,
-actual method and arguments, and `phase`:
-
-- `read` checks the query before loading data
-- `mutation` checks the actual proposed change in the serialized owner
-  transaction
-- `result` checks the exact bounded value before disclosure
-
-`current` is the fresh stored record when the operation identifies one, or
-`null` when absent. `next` is the proposed record after declared Collection
-hooks, or `null` for deletion. `result` is separate: it is the value being
-returned, which can differ from fresh `current`, particularly for snapshots and
-receipt replay. Lists are checked one returned row at a time and released only
-after every check passes. Empty lists, aggregates and relation edges also have
-result checks. Relation endpoints and included records pass the target
-Collection's policy. Delete returns `{ id, deleted: true }`; transaction
-mutation references return `{ id }`. Policies authorize or refuse; they do not
-redact or filter results.
-
-The context fixes `scope.databaseSchema`, `scope.namespace`, `commandTime`,
-`signal`, and the current Action or Processor invocation identifier and run.
-`resolveSource()` resolves the original owner-retained source and ingress
-evidence; worker input, metadata or a claimed caller never establishes identity.
-Generic host ingress does not represent an authenticated end user. Owner alarm
-invocations have a distinct `kind: "alarm"` with an exact registered Collection,
-record and selected deadline revision. They have no Action source, so
-`resolveSource()` rejects. An alarm policy must check current record authority
-and allow only the selected read or declared due transition.
-
-Use the revocable `context.query` executor only for bounded current-state reads.
-The callback cannot submit owner commands or perform authorization writes. Query
-and source handles close when the callback returns, synchronously for a
-synchronous callback, and cannot be reused after cancellation. Policies are
-trusted host code, not a sandbox for arbitrary SQL or other same-process code.
-
-Each live capability also checks the current operation cancellation state and
-its exact delivery lease and epoch inside the authorization transaction. A live
-Action must still own its open obligation. Completed Action result replay uses
-its own result authorization boundary rather than pretending the completed
-Action is still executing.
-
-Mutation and receipt-replay checks run inside the same owner transaction before
-commit. Ordered batch mutations can depend on earlier rows in that batch, and a
-refusal rolls back the batch. A fresh disclosure check also runs after commit.
-If that check refuses a committed mutation, the fixed error code is
-`collection_result_denied_after_commit` with status `403`; it must not be
-treated as permission to repeat the side effect. Committed event and content
-publication continues even when no protected result is returned. Parentless
-lost-response receipt recovery cannot disclose a protected result without its
-original live authority; an uncertain outcome remains uncertain.
-
-A pooled read snapshot retains repeatable data while authorization uses fresh
-current transactions. An exclusive snapshot blocks concurrent owner writes for
-its lifetime, checks against that held view, and releases the owner before a
-queued revocation can commit. Keep both kinds short and bounded. Collection
-policies do not track data through arbitrary Action outputs: Actions that return
-sensitive stored or derived results also need current owner authorization on
-result replay.
+See [owner authorization and migration](authorization.md) for configuration,
+sessions, lifetimes and the version 12 offline upgrade.
 
 ### Read and write from a host
 

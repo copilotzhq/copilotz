@@ -3,7 +3,7 @@ import { isOwnerExecutionInterrupted } from "../execution/owner-interruption.ts"
 import {
   closeCollectionPolicyInvocation,
   preserveCollectionInvocation,
-} from "../collections/policy-invocation.ts";
+} from "../authorization/invocation.ts";
 import {
   isOwnerAuthorizationRefusal,
   sanitizedAuthorizationRefusal,
@@ -52,7 +52,11 @@ import type {
   RuntimeIdentity,
 } from "./types.ts";
 import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
-import { protectedActionStrings, splitSecretActionValue } from "./secret.ts";
+import {
+  assertMetadataIsSecretFree,
+  protectedActionStrings,
+  splitSecretActionValue,
+} from "./secret.ts";
 import type {
   ActionAwaitingData,
   ActionEventData,
@@ -134,7 +138,16 @@ export type CreateActionCallersOptions = Readonly<{
   prepareInput?(
     frame: ActionInvocationFrame,
     input: unknown,
-  ): Promise<{ input: unknown; claimed: boolean } | undefined> | undefined;
+  ):
+    | Promise<
+      | {
+        input: unknown;
+        claimed: boolean;
+        metadata?: ActionInvocationMetadata;
+      }
+      | undefined
+    >
+    | undefined;
   /** Runtime-only resumption delivery; never exposed through ActionCallOptions. */
   resumption?: Readonly<
     {
@@ -238,18 +251,6 @@ function protectedActionError(
       ? "Action execution was cancelled."
       : "Action execution failed.",
   } as const);
-}
-
-function assertMetadataIsSecretFree(
-  metadata: ActionInvocationMetadata,
-  secrets: readonly string[],
-): void {
-  const encoded = JSON.stringify(metadata);
-  if (secrets.some((secret) => secret && encoded.includes(secret))) {
-    throw new TypeError(
-      "Action invocation metadata cannot contain schema-marked secret values.",
-    );
-  }
 }
 
 function restoredActionError(
@@ -495,7 +496,12 @@ function actionCaller(
       }
       : invoker.actionLifecycle;
     const ownerPrepared = await invoker.prepareInput?.(frame, input);
-    if (ownerPrepared) input = ownerPrepared.input;
+    if (ownerPrepared) {
+      input = ownerPrepared.input;
+      if (ownerPrepared.metadata) {
+        Object.assign(frame, { metadata: ownerPrepared.metadata });
+      }
+    }
     await authorize?.(frame, "input");
 
     // Execution receives the canonical value; lifecycle persistence applies

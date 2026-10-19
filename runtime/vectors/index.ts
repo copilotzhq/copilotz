@@ -1,3 +1,4 @@
+import { compileCollectionFilters } from "../collections/query.ts";
 import { queryCollectionRows } from "../collections/read-rows.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 /** Optional pgvector storage for collection-owned vector projections. @module */
@@ -12,7 +13,10 @@ import {
   compileCollectionPredicate,
 } from "../collections/predicate.ts";
 import { mapNode, type NodeRow } from "../collections/reducer.ts";
-import type { CollectionRecord } from "../collections/types.ts";
+import type {
+  CollectionFilter,
+  CollectionRecord,
+} from "../collections/types.ts";
 
 export type VectorProfile = Readonly<
   {
@@ -174,7 +178,7 @@ export async function searchVectors(
   executor: SqlExecutor,
   schema: string,
   namespace: string,
-  input: VectorSearch,
+  input: VectorSearch & { authorizationFilter?: CollectionFilter },
 ): Promise<readonly VectorMatch[]> {
   const value = validateVector(input.profile, input.values);
   field(input.field);
@@ -191,7 +195,13 @@ export async function searchVectors(
     vectorProfileKey(input.profile),
     value,
   ];
-  const predicate = compileCollectionPredicate(input.filter, params);
+  const predicate = [
+    compileCollectionPredicate(input.filter, params),
+    ...compileCollectionFilters(
+      input.authorizationFilter ? [input.authorizationFilter] : [],
+      params,
+    ),
+  ].join(" AND ");
   const limitParameter = params.push(limit);
   // The subquery applies the same bounded predicates as Collection reads. No candidate cap precedes authorization.
   const result = await queryCollectionRows<NodeRow & { distance: number }>(

@@ -7,7 +7,8 @@ import { defineCollection } from "../collections/definition.ts";
 import { ActionError } from "./errors.ts";
 import { secret } from "./secret.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
-import type { ProtectedActionDefinitions } from "./protected-action-types.ts";
+import type { OwnerAuthorization } from "../authorization/evaluator.ts";
+import { bindTestActions, testAuthority } from "../testing/authority.ts";
 for (const begunEffect of [false, true]) {
   Deno.test({
     name:
@@ -29,7 +30,6 @@ for (const begunEffect of [false, true]) {
       });
       const leaf = defineAction({
         id: "resume.leaf",
-        ownerHooks: { prepareInput: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -54,7 +54,6 @@ for (const begunEffect of [false, true]) {
       });
       const child = defineAction({
         id: "resume.child",
-        ownerHooks: { prepareInput: true },
         inputSchema: {
           type: "object",
           properties: {
@@ -76,35 +75,55 @@ for (const begunEffect of [false, true]) {
           return handoff;
         },
       });
-      const protectedActions: ProtectedActionDefinitions = Object.fromEntries(
-        [child, leaf].map((action) => [action.id, {
-          authorize() {
-            if (!allowed) {
-              throw new ActionError("Action access revoked", {
-                code: "forbidden",
-                status: 403,
-              });
-            }
+      const authorization: OwnerAuthorization = {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate({ intent }) {
+              if (!allowed) {
+                throw new ActionError("Action access revoked", {
+                  code: "forbidden",
+                  status: 403,
+                });
+              }
+              if (intent.operation === "capture") preparations++;
+              return {
+                actions: {
+                  child: intent.operation === "capture"
+                    ? { input: { credential: "owner-only-credential" } }
+                    : {},
+                  leaf: intent.operation === "capture"
+                    ? { input: { credential: "owner-only-credential" } }
+                    : {},
+                },
+              };
+            },
           },
-          prepareInput(input: unknown) {
-            preparations++;
-            return { ...input as object, credential: "owner-only-credential" };
-          },
-        }]),
-      );
+        },
+        collections: {},
+        actions: {
+          child: { id: "fixture", revision: "1" },
+          leaf: { id: "fixture", revision: "1" },
+        },
+      };
       const app = await createCopilotz({
         namespace: "resume",
         database,
         actions: { child, leaf },
         collections: { records },
         adapters: { secrets: { default: await testSecretAdapter() } },
-        protectedActions,
+        authorization,
         engine: { retryBaseMs: 0 },
       });
+      const actions = bindTestActions(
+        app.actions,
+        testAuthority("public", "resume"),
+      );
       try {
         await app.collections.records.create({ id: "record", text: "first" });
         await assertRejects(() =>
-          app.actions.child({ text: "first" }, {
+          actions.child({ text: "first" }, {
             idempotencyKey: "protected-refusal",
           })
         );

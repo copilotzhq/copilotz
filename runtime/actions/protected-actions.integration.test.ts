@@ -1,7 +1,7 @@
 import { createMemoryBodyStore } from "../content/body-store.ts";
 import { createContentCatalog } from "../content/catalog.ts";
 import type { BodyStorageRuntime } from "../content/body-store.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
   createEventStore,
@@ -14,17 +14,15 @@ import { createBodyStorageRuntime } from "../content/storage.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { defineAction } from "./define.ts";
 import { secret } from "./secret.ts";
-import { createProtectedActions } from "./protected-actions.ts";
-import { validateProtectedActions } from "./protected-action-policy.ts";
-import type {
-  ProtectedActionDefinition,
-  ProtectedActionOwnerContext,
-} from "./protected-action-types.ts";
+import { createAuthorizedActions } from "./authorized-capture.ts";
+import { defineCollection } from "../collections/definition.ts";
+import { testAuthority } from "../testing/authority.ts";
+import { authorityIngressProof } from "../application/ingress/authority.ts";
+import type { OwnerPolicy } from "../authorization/evaluator.ts";
 import type { ActionInvocationFrame } from "./invoker.ts";
 import { createActionLifecycleAppender } from "./persistence.ts";
 import { createOwnerEffectClient } from "./effect-commands.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
-import { resolveActionSourceData } from "./protected-context.ts";
 import {
   bounded,
   commitProxy,
@@ -38,7 +36,6 @@ const output = { ok: true, token: candidate };
 const protectedAction = (publicOutput = false) =>
   defineAction({
     id: "fixture.protected",
-    ownerHooks: { prepareInput: true },
     inputSchema: {
       type: "object",
       required: ["account"],
@@ -107,6 +104,7 @@ async function fixture(
       json: { account: "account-a", principal: "member" },
     },
     consumers: [],
+    ingress: authorityIngressProof(testAuthority(schema)),
   });
   await createSchemaCommandRunner(db, schema)(
     "fixture.member",
@@ -153,46 +151,37 @@ async function fixture(
     },
   });
   const action = protectedAction(publicOutput);
-  let leaked: ProtectedActionOwnerContext | undefined;
-  const definition: ProtectedActionDefinition = {
-    publicRevisionFields: ["/credentialRevision"],
-    async authorize(input, context) {
+  const member = defineCollection({
+    name: "member",
+    schema: { type: "object", properties: { id: { type: "string" } } },
+  });
+  let leaked: Parameters<OwnerPolicy["evaluate"]>[0] | undefined;
+  const definition: OwnerPolicy = {
+    revision: "1",
+    sources: ["member"],
+    async evaluate(context) {
       authorized++;
       leaked = context;
-      const source = await context.resolveSource();
-      assertEquals(await resolveActionSourceData(context), source.data);
-      assertEquals(source.event.type, "fixture.request");
-      assertEquals((source.data as { principal: string }).principal, "member");
-      assertEquals(source.event.metadata.principal, "member");
-      assertEquals(context.scope, {
-        databaseSchema: schema,
-        namespace: "space",
-      });
-      assertEquals(context.action.id, action.id);
-      const membership = await context.query(
-        `SELECT id FROM "${schema}".nodes WHERE id=$1 AND namespace=$2 AND type='member'`,
-        [
-          (source.data as { principal: string }).principal,
-          context.scope.namespace,
-        ],
-      );
-      if (!membership.rows.length) throw new Error("permission revoked");
+      assertEquals(context.authority.principal.id, "member");
+      if (!await context.read.get("member", "member")) {
+        throw new Error("Owner authorization could not be completed");
+      }
       if (
-        (input as { account: string }).account !==
-          (source.data as { account: string }).account
-      ) throw new Error("account forged");
-    },
-    prepareInput(input) {
-      prepared++;
-      return {
-        ...input as object,
-        credential: token,
-        credentialRevision: "r1",
-      };
+        (context.intent.input as { account: string }).account !== "account-a"
+      ) throw new Error("Owner authorization could not be completed");
+      if (context.intent.operation === "capture") {
+        prepared++;
+        return {
+          actions: {
+            action: { input: { credential: token, credentialRevision: "r1" } },
+          },
+        };
+      }
+      return { actions: { action: {} } };
     },
   };
   const build = (
-    override: Partial<ProtectedActionDefinition> = {},
+    override: Partial<OwnerPolicy> = {},
     session: SqlSession = db,
     currentProtectedValues = protectedValues,
   ) => {
@@ -208,10 +197,13 @@ async function fixture(
         };
       },
     } as EventCoordinator;
-    return createProtectedActions({
-      definitions: validateProtectedActions({
-        [action.id]: { ...definition, ...override },
-      }, { action }),
+    return createAuthorizedActions({
+      authorization: {
+        policies: { fixture: { ...definition, ...override } },
+        actions: { action: { id: "fixture", revision: "1" } },
+        collections: {},
+      },
+      collections: { member },
       actions: { action },
       store: currentStore,
       coordinator: currentCoordinator,
@@ -306,7 +298,7 @@ Deno.test("protected input preparation captures once, refuses forged account, re
     await assertRejects(
       () => f.hooks.prepareInput(frame("forged"), { account: "other" })!,
       Error,
-      "owner phase failed",
+      "Owner authorization could not be completed",
     );
     const raw = { account: "account-a" };
     const pending = f.hooks.prepareInput(frame(), raw)!;
@@ -319,24 +311,23 @@ Deno.test("protected input preparation captures once, refuses forged account, re
         credentialRevision: "r1",
       },
       claimed: true,
+      metadata: { actor: "forged", sourceEventId: "forged" },
     });
     assertEquals(
       (await f.hooks.prepareInput(frame(), {
         account: "account-a",
         credential: "ignored",
-        credentialRevision: "changed",
       })!).input,
       first.input,
     );
     assertEquals(f.stats().prepared, 1);
     assertEquals(f.stats().seals, 1);
-    await assertRejects(() => f.leaked().query("SELECT 1"), Error, "closed");
-    await assertRejects(() => f.leaked().resolveSource(), Error, "closed");
+    assertThrows(() => f.leaked().read.get("member", "member"), Error, "ended");
     await f.revoke();
     await assertRejects(
       () => f.hooks.prepareInput(frame(), { account: "account-a" })!,
       Error,
-      "owner phase failed",
+      "Owner authorization could not be completed",
     );
     assertEquals(f.stats().prepared, 1);
   } finally {
@@ -349,18 +340,26 @@ Deno.test("synchronous protected callbacks lose query authority before their sch
     let late: Promise<unknown> | undefined;
     let rejected = false;
     const hooks = f.build({
-      prepareInput(input, context) {
+      evaluate(context) {
         queueMicrotask(() => {
-          late = context.query("SELECT 1");
-          void late.catch(() => {
-            rejected = true;
-          });
+          try {
+            late = context.read.get("member", "member");
+          } catch (error) {
+            late = Promise.reject(error);
+          }
+          void late?.catch(() => undefined);
         });
-        return { ...input as object, credential: token };
+        return {
+          actions: {
+            action: { input: { credential: token, credentialRevision: "r1" } },
+          },
+        };
       },
     });
     await hooks.prepareInput(frame(), { account: "account-a" });
-    await late?.catch(() => {});
+    await late?.catch(() => {
+      rejected = true;
+    });
     assertEquals(rejected, true);
   } finally {
     await f.db.close();
@@ -432,14 +431,19 @@ Deno.test({
     let preparations = 0;
     try {
       const hooks = f.build({
-        prepareInput(input) {
-          preparations++;
-          proxy.arm();
-          return {
-            ...input as object,
-            credential: token,
-            credentialRevision: "r1",
-          };
+        evaluate(context) {
+          if (context.intent.operation === "capture") {
+            preparations++;
+            proxy.arm();
+            return {
+              actions: {
+                action: {
+                  input: { credential: token, credentialRevision: "r1" },
+                },
+              },
+            };
+          }
+          return { actions: { action: {} } };
         },
       });
       const pending = hooks.prepareInput(frame(), { account: "account-a" })!;
@@ -471,11 +475,11 @@ Deno.test({
         {
           account: "account-a",
           credential: "changed",
-          credentialRevision: "r2",
         },
       );
       assertEquals(replay, {
         claimed: false,
+        metadata: { actor: "forged", sourceEventId: "forged" },
         input: {
           account: "account-a",
           credential: token,
@@ -611,15 +615,16 @@ Deno.test("protected policy cannot turn a query infrastructure failure into perm
   const f = await fixture();
   try {
     const hooks = f.build({
-      async authorize(_input, context) {
+      async evaluate(context) {
         try {
-          await context.query("SELECT * FROM missing_policy_infrastructure");
+          await context.read.get("undeclared", "missing");
         } catch {
           throw new ActionError("wrapped denial", {
             code: "forbidden",
             status: 403,
           });
         }
+        return { actions: { action: {} } };
       },
     });
     const error = await assertRejects(() =>

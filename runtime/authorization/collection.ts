@@ -69,6 +69,8 @@ export function captureCollectionPolicy(
     scope.namespace !== operation.namespace ||
     scope.databaseSchema !== operation.databaseSchema
   ) collectionPolicyRefused();
+  // Optional call fields such as `{ after: undefined }` are absent. The policy
+  // judges, and the kernel executes, exactly these captured arguments.
   const intent = captureHostCommandJson({
     collection: {
       alias: operation.registration.alias,
@@ -77,7 +79,10 @@ export function captureCollectionPolicy(
     method: operation.method,
     args: operation.args,
     ...(operation.next !== undefined ? { next: operation.next } : {}),
-  }) as Omit<CollectionPolicyIntent, "phase" | "current">;
+  }, { omitUndefinedProperties: true }) as Omit<
+    CollectionPolicyIntent,
+    "phase" | "current"
+  >;
   let authorizedArgs: unknown = intent.args;
   const authorize = async (
     read: ReadScope,

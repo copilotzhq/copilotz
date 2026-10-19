@@ -84,6 +84,18 @@ Deno.test("data-only boundaries retain their distinct array, prototype and numer
   assert(Object.is(stream(-0).value, -0));
   assertThrows(() => encodeCapability(-0), Error, "owner_data_invalid");
   assertJsonValue({ omitted: undefined }, { omitUndefinedProperties: true });
+  // Caller arguments may omit undefined fields; everything else still refuses them.
+  assertThrows(() => captureHostCommandJson({ omitted: undefined }));
+  assertEquals(
+    captureHostCommandJson(
+      { kept: 1, omitted: undefined, nested: { gone: undefined } },
+      { omitUndefinedProperties: true },
+    ),
+    { kept: 1, nested: {} },
+  );
+  assertThrows(() =>
+    captureHostCommandJson([undefined], { omitUndefinedProperties: true })
+  );
   assertThrows(() =>
     assertJsonValue([undefined], { omitUndefinedProperties: true })
   );

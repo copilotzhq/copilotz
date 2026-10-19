@@ -5,8 +5,15 @@ import {
 } from "../data-only-json.ts";
 import type { HostCommandJson } from "./host-command-types.ts";
 
-/** Copy data properties only; bound work before serialization or admission awaits. */
-export function captureHostCommandJson(value: unknown): HostCommandJson {
+/**
+ * Copy data properties only; bound work before serialization or admission awaits.
+ * `omitUndefinedProperties` is for caller arguments only, never for policy
+ * output, where a dropped field would widen authority.
+ */
+export function captureHostCommandJson(
+  value: unknown,
+  options: { omitUndefinedProperties?: boolean } = {},
+): HostCommandJson {
   let remaining = 1024 * 1024;
   const charge = (bytes: number) => {
     remaining -= bytes;
@@ -67,6 +74,9 @@ export function captureHostCommandJson(value: unknown): HostCommandJson {
           throw new TypeError(
             "Host commands require enumerable data properties.",
           );
+        }
+        if (property.value === undefined && options.omitUndefinedProperties) {
+          continue;
         }
         string(key);
         charge(2);

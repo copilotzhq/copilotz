@@ -156,6 +156,15 @@ Deno.test("trusted host calls preserve narrower caller authority and retained ho
     }
     assertEquals(f.calls(), 1);
     assertEquals((await app.collections.notes.list()).length, 1);
+    // Idiomatic optional fields are absent, not refused.
+    assertEquals(
+      (await app.collections.notes.list({
+        after: undefined,
+        limit: 10,
+        where: undefined,
+      })).length,
+      1,
+    );
   } finally {
     await app.close();
   }

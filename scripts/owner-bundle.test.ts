@@ -262,11 +262,13 @@ for (const objectStore of [false, true]) {
         { intent: { ref: moved }, result: { ref: moved } },
       );
       assertEquals(
-        (await db.query<{ count: string }>(
-          `SELECT count(*) AS count FROM "${schema}".content_bodies WHERE digest=$1`,
-          [ref.digest],
-        )).rows[0].count,
-        "0",
+        Number(
+          (await db.query<{ count: string | number }>(
+            `SELECT count(*) AS count FROM "${schema}".content_bodies WHERE digest=$1`,
+            [ref.digest],
+          )).rows[0].count,
+        ),
+        0,
       );
       assert(moved.digest !== ref.digest);
       assertEquals(moved.bodyId, ref.bodyId);

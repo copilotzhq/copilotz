@@ -4,11 +4,12 @@ import {
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 11;
+export const EVENT_SCHEMA_VERSION = 12;
 
 export type CoreTableName =
   | "action_effects"
   | keyof typeof CONTENT_CATALOG_COLUMNS
+  | "owner_data_keys"
   | "owner_epochs"
   | "owner_receipts"
   | "owner_alarms"
@@ -45,6 +46,7 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     content_copies: table("content_copies"),
     pending_content: table("pending_content"),
     content_adoptions: table("content_adoptions"),
+    owner_data_keys: table("owner_data_keys"),
     owner_epochs: table("owner_epochs"),
     owner_receipts: table("owner_receipts"),
     owner_alarms: table("owner_alarms"),
@@ -70,6 +72,7 @@ const CORE_SCHEMA_COLUMNS = {
     "evidence",
   ],
   ...CONTENT_CATALOG_COLUMNS,
+  owner_data_keys: ["singleton", "key_id", "wrapped_key", "envelope"],
   owner_epochs: ["owner", "epoch", "holder", "last_seq"],
   owner_receipts: [
     "owner",
@@ -204,7 +207,7 @@ export async function validateCopilotzSchema(
         AND table_name IN (
           'action_effects',
           'content_logical_bodies', 'content_copies', 'pending_content', 'content_adoptions',
-          'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements',
+          'owner_data_keys', 'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements',
           'nodes',
           'edges',
           'events',
@@ -344,6 +347,7 @@ export function createOwnerSchemaStatements(
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [
+    ...createOwnerDataKeyStatements(schemaName),
     ...createEffectSchemaStatements(schemaName),
     ...contentCatalogStatements(validateEventSchemaName(schemaName)),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (
@@ -648,5 +652,19 @@ export function createOwnerSequenceStatements(
     `ALTER TABLE ${tables.events} ALTER COLUMN seq SET NOT NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS events_owner_seq_idx ON ${tables.events} (seq)`,
     `UPDATE ${tables.owner_epochs} SET last_seq=COALESCE((SELECT MAX(seq) FROM ${tables.events}),0) WHERE owner='schema'`,
+  ];
+}
+
+/** Wrapped owner key; plaintext key material never enters SQL. */
+export function createOwnerDataKeyStatements(
+  schemaName: string,
+): readonly string[] {
+  return [
+    `CREATE TABLE IF NOT EXISTS ${
+      createCoreTableNames(schemaName).owner_data_keys
+    } (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
+    key_id TEXT NOT NULL UNIQUE, wrapped_key TEXT NOT NULL, envelope JSONB NOT NULL
+  )`,
   ];
 }

@@ -1,4 +1,10 @@
 import {
+  ensureOwnerDataKey,
+  ownerDataCipher,
+  readOwnerDataKey,
+} from "./owner-data-key.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
   createPromotedBodyStore,
   promoteConfiguredLogicalBody,
   promotedReadyStore,
@@ -120,7 +126,7 @@ function bodyKey(
   ].filter(Boolean).join("/");
 }
 
-function additionalAuthenticatedData(
+export function additionalAuthenticatedData(
   databaseSchema: string,
   coordinates: ProtectedValueCoordinates,
 ): Uint8Array {
@@ -252,6 +258,25 @@ export function createProtectedValueRuntime(
     "Protected database schema",
   );
   const adapter = createSecretAdapter(options.adapter);
+  const keyCommand = createSchemaCommandRunner(options.session, databaseSchema);
+  const dataCipher = async (transaction?: SqlExecutor, create = false) => {
+    const executor = transaction ?? options.session;
+    let key = await readOwnerDataKey(executor, databaseSchema);
+    if (!key && create) {
+      key = transaction
+        ? await ensureOwnerDataKey(transaction, databaseSchema, adapter)
+        : await keyCommand(
+          "protected.key",
+          {},
+          (_input, command) =>
+            ensureOwnerDataKey(command.transaction, databaseSchema, adapter),
+        );
+    }
+    if (!key) {
+      throw new Error("Owner data key is missing; run the offline migration.");
+    }
+    return await ownerDataCipher(databaseSchema, key, adapter);
+  };
   const createId = options.createId ?? (() => crypto.randomUUID());
   const databaseStore = createDatabaseBodyStore({
     session: options.session,
@@ -359,7 +384,7 @@ export function createProtectedValueRuntime(
       const aad = additionalAuthenticatedData(databaseSchema, coordinates);
       let sealed;
       try {
-        sealed = await adapter.seal({
+        sealed = await (await dataCipher(transaction, true)).seal({
           plaintext: plaintext.slice(),
           additionalAuthenticatedData: aad.slice(),
         });
@@ -482,7 +507,7 @@ export function createProtectedValueRuntime(
       }
       let plaintext: Uint8Array;
       try {
-        plaintext = await adapter.open({
+        plaintext = await (await dataCipher(transaction)).open({
           ciphertext: ciphertext.slice(),
           additionalAuthenticatedData: additionalAuthenticatedData(
             databaseSchema,

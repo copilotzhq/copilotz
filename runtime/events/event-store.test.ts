@@ -160,6 +160,7 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
         "open_actions",
         "owner_alarms",
         "owner_body_retirements",
+        "owner_data_keys",
         "owner_deadlines",
         "owner_epochs",
         "owner_receipts",

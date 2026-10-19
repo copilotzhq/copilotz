@@ -171,6 +171,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
   const tables = createCoreTableNames(schema);
   const adapter = await testSecretAdapter();
   let seals = 0;
+  let opens = 0;
   let release!: () => void;
   let started!: () => void;
   const blocked = new Promise<void>((resolve) => {
@@ -200,8 +201,9 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
             seals++;
             return adapter.seal(input);
           },
-          open() {
-            throw new Error("Recovery must not decrypt input.");
+          open(input) {
+            opens++;
+            return adapter.open(input);
           },
         }),
       },
@@ -229,6 +231,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     const done = sent.done.then(() => "completed", () => "failed");
     await sent.outputs.cancel();
     await entered;
+    const capturedOpens = opens;
     assertEquals(seals, 1);
     await db.query(
       `UPDATE ${tables.event_deliveries} SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE settlement_scope_id = $1 AND status = 'leased'`,
@@ -236,7 +239,8 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     );
     await app.maintenance();
     assertEquals(await done, "failed");
-    assertEquals(seals, 1, "recovery did not reseal redacted input");
+    assertEquals(seals, 1, "recovery did not rewrap the owner key");
+    assertEquals(opens, capturedOpens, "recovery did not open the owner key");
     const receipts = (await db.query<{ body: unknown }>(
       `SELECT body FROM ${tables.event_bodies} WHERE body ->> 'schema' = 'copilotz.action.lifecycle.protected.v1'`,
     )).rows.map((row) => protectedActionLifecycleBody(row.body)!);

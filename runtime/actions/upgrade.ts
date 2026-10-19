@@ -203,6 +203,37 @@ export async function prepareRetainedDataUpgrade(
       await validateOperationCatalog(joined(transaction), schema);
       return undefined;
     }
+    if (Number(current.version) > 0) {
+      const tables = createCoreTableNames(schema);
+      const protectedHistory = (await transaction.query(
+        `SELECT 1 FROM ${tables.event_bodies} WHERE body::text LIKE '%copilotz.action.protected-value.v1%'
+         UNION ALL SELECT 1 FROM ${tables.nodes} WHERE data::text LIKE '%copilotz.action.protected-value.v1%' LIMIT 1`,
+      )).rows;
+      const present = new Set((await transaction.query<{ table_name: string }>(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema=$1",
+        [schema],
+      )).rows.map((row) => row.table_name));
+      const protectedBytes = present.has("content_bodies")
+        ? (await transaction.query(
+          `SELECT 1 FROM ${
+            quoteEventIdentifier(schema)
+          }.content_bodies WHERE media_type='application/vnd.copilotz.action-protected-value+json' LIMIT 1`,
+        )).rows
+        : [];
+      const externalCopies = present.has("content_copies")
+        ? (await transaction.query(
+          `SELECT 1 FROM ${tables.content_copies} WHERE backend_kind<>'database' AND state='current' LIMIT 1`,
+        )).rows
+        : [];
+      if (
+        protectedHistory.length || protectedBytes.length ||
+        externalCopies.length
+      ) {
+        throw new Error(
+          "Retained protected values or object copies require the offline owner-key migration from v11; upgrade earlier schemas to v11 with the prior release first.",
+        );
+      }
+    }
     if (Number(current.version) === 0) {
       assertInterrupted(current);
       assertRetainedDataDrained(

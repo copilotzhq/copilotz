@@ -250,8 +250,8 @@ transactional rollback. Keep occurrence IDs stable across retries.
 | Reply text for a viewer          | `projectCoreReply` with a trusted scope                      |
 | Domain Events, no threads        | plain `app.send`, no Channel plugin                          |
 
-Release notes for 0.80.0 channel changes are in
-[Upgrading](upgrading.md#release-history).
+For version alignment and retained-data conversion, see
+[Upgrading](upgrading.md).
 
 ## What this unlocks
 

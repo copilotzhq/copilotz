@@ -304,7 +304,7 @@ Deno.test("offline catalog upgrade backfills opaque domain keys and event ordina
       namespace: "tenant-a",
       type: "generic.work",
       payload: {},
-      metadata: { accountId: "legacy", ignored: "x".repeat(2 * 1024 * 1024) },
+      metadata: { accountId: "legacy" },
     });
     const child = await events.append({
       namespace: "tenant-a",
@@ -312,6 +312,25 @@ Deno.test("offline catalog upgrade backfills opaque domain keys and event ordina
       payload: {},
       settlementScopeId: root.event.id,
       metadata: { accountId: "other" },
+    });
+    // Reconstruct historical metadata offline; current admission is bounded.
+    await db.transaction(async (transaction) => {
+      await transaction.query(
+        `ALTER TABLE "${schema}".events DISABLE TRIGGER copilotz_events_immutable`,
+      );
+      await transaction.query(
+        `UPDATE "${schema}".events SET metadata=$2::jsonb WHERE id=$1`,
+        [
+          root.event.id,
+          JSON.stringify({
+            accountId: "legacy",
+            ignored: "x".repeat(2 * 1024 * 1024),
+          }),
+        ],
+      );
+      await transaction.query(
+        `ALTER TABLE "${schema}".events ENABLE TRIGGER copilotz_events_immutable`,
+      );
     });
     await db.query(
       `DROP TABLE ${tables.selectionOperations}, ${tables.selectionHeads}`,

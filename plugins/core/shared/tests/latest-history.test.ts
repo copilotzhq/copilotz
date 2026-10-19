@@ -107,6 +107,7 @@ async function fixture(
     ],
   });
   return {
+    db,
     application,
     domain,
     inputs,
@@ -120,16 +121,47 @@ async function fixture(
 Deno.test("real Core route selects latest public history across more than one page", async () => {
   const test = await fixture();
   try {
-    // These durable messages do not target the Agent, so only the final send
-    // invokes LLM while its route must page the complete thread history.
-    for (let index = 0; index < 1_005; index++) {
+    // Seed a realistic graph from ordinary writes, then clone only the middle
+    // history. The integration under test is paging and visibility on the final
+    // route; mutation atomicity is covered by the Action/Collection suites.
+    for (
+      const [id, content] of [["old-0", "old-0"], ["old-1", "middle-history"]]
+    ) {
       await test.domain.actions.createThreadMessage({
-        id: `old-${index}`,
+        id,
         threadId: "thread",
         sender: { id: "user", externalId: "user", participantType: "human" },
-        content: `old-${index}`,
+        content,
       });
     }
+    await test.db.transaction(async (transaction) => {
+      await transaction.query(
+        `INSERT INTO "latest_history".nodes
+        (id,namespace,type,name,data,created_at,updated_at)
+        SELECT 'old-' || i, namespace,type,name,data,
+          created_at, updated_at
+        FROM "latest_history".nodes CROSS JOIN generate_series(2,1003) i
+        WHERE id='old-1' AND namespace=$1`,
+        [namespace],
+      );
+      await transaction.query(
+        `INSERT INTO "latest_history".edges
+        (id,namespace,source_node_id,target_node_id,type,data,weight)
+        SELECT 'history-seed:' || i || ':' || id, namespace,
+          CASE WHEN source_node_id='old-1' THEN 'old-' || i ELSE source_node_id END,
+          CASE WHEN target_node_id='old-1' THEN 'old-' || i ELSE target_node_id END,
+          type,data,weight
+        FROM "latest_history".edges CROSS JOIN generate_series(2,1003) i
+        WHERE namespace=$1 AND (source_node_id='old-1' OR target_node_id='old-1')`,
+        [namespace],
+      );
+    });
+    await test.domain.actions.createThreadMessage({
+      id: "old-1004",
+      threadId: "thread",
+      sender: { id: "user", externalId: "user", participantType: "human" },
+      content: "old-1004",
+    });
     await test.domain.actions.createThreadMessage({
       id: "private-other",
       threadId: "thread",
@@ -309,13 +341,13 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
   const backingStore = createMemoryBodyStore();
   const gatedStore: BodyStore = {
     ...backingStore,
-    async read(input) {
+    async readRange(input) {
       if (armed) {
         armed = false;
         entered.resolve();
         await release.promise;
       }
-      return await backingStore.read(input);
+      return await backingStore.readRange(input);
     },
   };
   let promptRef: ContentRef | undefined;
@@ -368,7 +400,20 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
         // Preserve the original test failure while still releasing the fixture.
       }
     };
-    await entered.promise;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        entered.promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("Timed out waiting for context-body read")),
+            5000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
     await test.domain.collections.thread.update({
       id: "thread",
       set: { participantIds: ["user", "other"] },

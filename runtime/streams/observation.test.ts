@@ -117,15 +117,15 @@ Deno.test("stream output metadata rejects accessors, sparse keys, and cycles wit
       role: "assistant",
       metadata,
     }, { namespace: "tenant-a" });
-  assertThrows(descriptor(accessor), TypeError, "enumerable data");
+  assertThrows(descriptor(accessor), TypeError, "bounded plain JSON data");
   assertEquals(read, false);
   const sparse: unknown[] = [];
   sparse[1] = "gap";
-  assertThrows(descriptor({ sparse }), TypeError, "dense");
+  assertThrows(descriptor({ sparse }), TypeError, "bounded plain JSON data");
   const extra = ["value"] as unknown[] & { extra?: string };
   extra.extra = "forbidden";
-  assertThrows(descriptor({ extra }), TypeError, "extra keys");
+  assertThrows(descriptor({ extra }), TypeError, "bounded plain JSON data");
   const cycle: Record<string, unknown> = {};
   cycle.self = cycle;
-  assertThrows(descriptor(cycle), TypeError, "cycles");
+  assertThrows(descriptor(cycle), TypeError, "bounded plain JSON data");
 });

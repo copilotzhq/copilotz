@@ -394,10 +394,12 @@ for (const baseline of [8, 9]) {
         )
       );
       assertEquals(
-        (await db.query(
-          `SELECT last_seq FROM ${tables.owner_epochs} WHERE owner='schema'`,
-        )).rows[0].last_seq,
-        "1",
+        Number(
+          (await db.query(
+            `SELECT last_seq FROM ${tables.owner_epochs} WHERE owner='schema'`,
+          )).rows[0].last_seq,
+        ),
+        1,
       );
       assertEquals(
         (await db.query(

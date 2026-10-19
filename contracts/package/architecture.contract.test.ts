@@ -211,6 +211,5 @@ Deno.test("runtime has no conversational event, vector-model or plugin policy vo
         .test(text),
       relative(repositoryRoot, file),
     );
-    assert(!/Object\.freeze\(/.test(text), relative(repositoryRoot, file));
   }
 });

@@ -45,9 +45,6 @@ capabilities that contributes some combination of six primitives:
   events as they execute.
 - **Processors** react to events and implement orchestration and business logic
   by deciding which actions or mutations should happen next.
-- **Views** present authorized data for a selected mode and renderer. Hosts bind
-  read-only Collection access to the viewer. The built-in text renderer is pure
-  and one-shot.
 - **Resources** are named, immutable process-local semantic definitions consumed
   by the runtime and its plugins, such as agents, tools, models, prompts, or
   routing policies. A Resource may carry a typed policy hook when that hook is
@@ -55,6 +52,9 @@ capabilities that contributes some combination of six primitives:
 - **Adapters** provide interchangeable implementations for variable external or
   infrastructural boundaries, such as different LLM providers, storage systems,
   search engines, or execution environments.
+- **Views** present authorized data for a selected mode and renderer. Hosts bind
+  read-only Collection access to the viewer. The built-in text renderer is pure
+  and one-shot.
 
 These primitives deliberately operate at different levels of abstraction.
 **Collections describe what is**, **actions describe what the system can do**,
@@ -222,13 +222,12 @@ guarantee that protocol sets `readyGarbageCollection: false`; its `put` remains
 immutable and integrity-checking but need not renew protection. The built-in S3
 Adapter follows this conservative model.
 
-Body liveness uses one schema-wide advisory read/write barrier. Asset adoption
-holds the shared side through graph commit; physical Body deletion holds the
-exclusive side while it rechecks the indexed Ready Asset nodes. The graph
-transaction validates the captured protection deadline but performs no external
-BodyStore I/O. A Ready Asset node's indexed `bodyId` is the sole durable
-liveness authority. Collections have no `bodyRefs` declaration, and no
-`body_references` table exists.
+Body liveness uses owner-serialized adoption and durable retirement commands.
+Retirement rechecks domain ownership and retention deadlines before recording an
+irreversible intent. Physical deletion runs outside the command, and a later
+command confirms its outcome. Adoption rejects copies already retiring or
+retired. The graph transaction validates captured protection without external
+BodyStore I/O; domain ownership keeps referenced content alive.
 
 Asset provenance is runtime-neutral. It is one opaque provenance identity
 `{ type, id }`; semantic plugins may use values such as `thread`, while

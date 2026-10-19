@@ -1,3 +1,4 @@
+import { testEffect } from "../../runtime/testing/effects.ts";
 import { createHash } from "node:crypto";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
@@ -50,6 +51,7 @@ function fixtureContext(
   let prepareIndex = 0;
   return {
     adapters: { terminal: { default: terminal } },
+    effect: testEffect,
     namespace: "tenant-a",
     signal: new AbortController().signal,
     action: {

@@ -8,15 +8,15 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Current owner schema: v10
+## Current owner schema: v11
 
 Each physical database schema has one fenced owner shared by its namespaces.
-Fresh, absent-only provisioning installs schema **v10** and the operation
+Fresh, absent-only provisioning installs schema **v11** and the operation
 catalog fingerprint **`stream-taxonomy-content-v1`**. Startup validates the
 complete current shape; it does not upgrade an existing or partially provisioned
 schema. `provisionCopilotzSchema` is not a retained-data migration command.
 
-Existing supported v5–v9 schemas use the single explicit offline retained-data
+Existing supported v5–v10 schemas use the single explicit offline retained-data
 conversion. Rehearse on a disposable restored backup first, then stop admission,
 schedules, workers and every other writer. Do not run old and new runtimes
 against the same schema during conversion.
@@ -38,7 +38,7 @@ against the same schema during conversion.
    `upgradeActionLifecycle(session, schema, { plan,
    reviewedFingerprint: plan.fingerprint, contentDecisions })`.
    The owner revalidates physical evidence and exact intent, installs the
-   complete v10 shape, removes execution retention pins, migrates logical
+   complete v11 shape, removes execution retention pins, migrates logical
    content, backfills sequence and restores immutable-history protection in one
    transaction. Only successful final validation publishes the ready marker.
 
@@ -63,200 +63,9 @@ Keep such data offline until a separately reviewed conversion can establish its
 original durable invocation binding. Fixed-principal receipts and supported
 pre-conversion histories without owner receipts remain eligible.
 
-Earlier unpublished v10 schemas missing the required receipt-reader column are
-also refused by current validation. Do not relabel them or add a runtime
-compatibility path. See the offline guide for the exact supported inventory.
-
-## Historical migration notes
-
-The following sections describe earlier releases and their original migration
-procedures. They are retained as historical context, not instructions to chain
-those procedures into the current conversion. Use the v10 procedure above for
-this runtime; its single offline path incorporates the supported catalog,
-content, continuation and owner changes.
-
-## Stream taxonomy upgrade
-
-The stream catalog now uses fingerprint `stream-taxonomy-continuations-v1`. Stop
-admission, confirm that active work has drained, and stop all old writers before
-calling `upgradeOperationCatalog(session, schema)` from
-`@copilotz/copilotz/streams` for each existing schema. Startup rejects the
-previous catalog marker; it never converts rows implicitly. The upgrade is
-transactional and repeatable and preserves stream identities, offsets, digests,
-ordering and settlement times.
-
-| Previous value               | New value                                 |
-| ---------------------------- | ----------------------------------------- |
-| Outcome `superseded`         | `cancelled`, `reason: "superseded"`       |
-| Outcome `abandoned`          | `failed`, `reason: "abandoned"`           |
-| Availability `purge_pending` | `retained`, internal cleanup pending      |
-| Availability `missing`       | `purged`, `availabilityReason: "missing"` |
-| Availability `purged`        | `purged`, `availabilityReason: "deleted"` |
-
-The upgrade drops the `capture` column and replaces the old constraints.
-`completed` means complete. Failed and cancelled streams retain their prefix.
-The existing catalog upgrades from `retained-terminal-streams` and
-`indexed-observation-ordinals-v1` also finish on this schema. When upgrading an
-older Action schema, upgrade the catalog first, then run the Action lifecycle
-upgrade described below.
-
-Deploy the client protocol and server together. Remove `capture` from terminal
-fixtures and consumers. Replace the `stream_superseded` and `stream_abandoned`
-error branches with `stream_cancelled` and `stream_failed`, inspecting `reason`
-when needed. Treat `stream_unavailable` independently of the logical outcome;
-its `availabilityReason` explains whether bytes were lost or deleted. Preserve
-byte offsets, per-attempt lanes and checkpoint application during this change.
-
-## Declared operation continuations: schema v8
-
-Actions now return `context.awaitOperation({ start, handoff })` and declare
-`resume(handoff, outcome, context)`. Each child is a public operation with a
-parent link and inherited observation keys. Exact-key signals and resolver
-rearming are removed; memory compaction uses the producer's operation
-settlement.
-
-Drain all existing deliveries, operations, streams and Action obligations with
-the old runtime, then stop all writers. Run
-`upgradeActionLifecycle(session,
-schema)` for every schema before starting new
-writers. The offline upgrade supports v5, v6 and v7, refuses undrained work,
-preserves immutable event history, and replaces the old obligation layout. The
-operation catalog fingerprint is `stream-taxonomy-continuations-v1`. Historical
-receipts remain readable event history; the new runtime does not execute old
-deferred workflows.
-
-The release notes below describe earlier schema versions and their migrations.
-Use the current v10 retained-data procedure above, rather than these historical
-one-step migration examples.
-
-## 0.88.0: durable compaction waits
-
-Foreground memory compaction now records a durable wait and releases its worker
-slot. Checkpoint completion wakes the original recipient through Core's ordinary
-response pipeline. A bounded recovery interval rechecks pending checkpoints; a
-missing deterministic maintenance Message is dispatched independently of the
-waiting user operation. Existing healthy producers are retained, and checkpoint
-age alone is not a failure condition. History is never truncated to bypass an
-unfinished checkpoint.
-
-This change requires **Event schema v7**. Its additional `open_actions` columns
-record the wait key, signal, recovery deadline, and resolver generation.
-Existing v6 Actions keep their owners and immutable lifecycle receipts. An
-existing generation-zero resolver remains valid. The upgrade does not convert or
-erase Messages, memory summaries, source certificates, or other domain records.
-
-Deploy with a coordinated maintenance window:
-
-1. Build and validate the intended release, retain a database backup, and
-   inventory every physical schema used by gateways and workers. Rehearse the
-   upgrade on a representative copy first.
-2. Stop admission and **all old writers**, including scheduled invocations and
-   background workers. A traffic split is insufficient if old instances still
-   execute background work. Schema-v6 runtimes reject the v7 marker on startup.
-3. With the new package, call `upgradeActionLifecycle(session, schema)` from
-   `@copilotz/copilotz/actions` for each physical schema. Each call is atomic
-   and repeatable. The v6-to-v7 path preserves in-flight Actions; upgrading from
-   v5 still requires draining or cancelling its old workflows first.
-4. Validate every schema before starting new writers. Keep writers stopped if
-   one schema fails: successful upgrades of other schemas are not rolled back by
-   a later failure. A failed individual upgrade rolls back its DDL and marker.
-5. Start only compatible workers and gateways, restore admission, and verify a
-   pending compaction yields capacity, a fresh turn runs, and checkpoint
-   completion resumes its original response. Then restore contained schedules.
-
-Do not roll back by changing the version marker or deleting wait columns after
-new writers have started. Old workers cannot interpret new waits and resolver
-generations. Use a compatible forward fix, or stop all writers and follow a
-reviewed database-and-application restore plan. Startup does not run this
-upgrade implicitly.
-
-The scheduled-job initiator and terminal-dispatch fixes shipped in 0.86.3 remain
-in place. They prevent new instances of the former human-only dispatch failure;
-the recovery above additionally handles orphaned reservations left by older
-runtimes when those checkpoints are encountered by foreground compaction.
-
-## 0.87.3: readable Action and write errors
-
-Trusted host calls now reject with the Action's own error name, message and
-code, including on replay, and Collection writes rejected by their schema or a
-missing related record reject with a plain message and the code
-`collection_validation_failed`. Over HTTP, unknown Action errors stay redacted;
-throw `ActionError(message, { code, status? })` from an Action to let callers
-see a deliberate refusal. No data migration is needed.
-
-## 0.87.0: Actions and Collections from the host
-
-`createCopilotz` results gain `actions` and `collections`, matching the
-`context.actions` and `context.collections` that Actions and Processors use.
-Scripts, tests and seeds can now run an Action or write a record as its own
-recorded operation, with an optional `idempotencyKey`, instead of sending an
-Event to a Processor. The additions are additive: no data migration, and code
-that annotates a result as `CopilotzApplication` keeps compiling, since its new
-type parameters default to dynamic maps. HTTP ingress for Actions and Collection
-mutations now shares its admission path with these host calls; routes,
-identities and authorization are unchanged.
-
-## 0.86.3: workflow origins and memory ownership
-
-Memory maintenance no longer requires a human initiator. Core carries the
-initiating participant and optional stable origin Message through continuations;
-applications may use that reference instead of walking historical Tool plans.
-Keep application permission checks against current resource state. Update
-services that parse Core Tool metadata before producers emit `originMessageId`.
-Existing checkpoints and snapshots need no migration.
-
-## 0.86.2: preferred-model consolidation
-
-Core now consolidates ordinary history when the first configured model exceeds
-its input budget, even if a fallback fits. History capacity follows that
-preferred model's prefix, input limit and output allowance. Provider failures
-still use the configured fallback order; scoped maintenance turns retain their
-own LLM admission behavior. Existing snapshots remain usable without a database
-or memory migration.
-
-## 0.86.1: native-state memory budgets
-
-Memory consolidation now counts compatible native provider state using the same
-wire protocol as LLM admission. A history with large encrypted reasoning blocks
-triggers consolidation earlier and is reserved in smaller contiguous ranges. The
-ordinary Agent prompt prefix, tool catalog, stored snapshots and native blocks
-are preserved. This patch needs no database or memory migration.
-
-## 0.86.0: lifecycle and plain memory notes
-
-This release changes durable Action scheduling and the Memory plugin's public
-contract. Deploy all workers together after stopping old writers and draining or
-cancelling their in-flight work. Run `upgradeActionLifecycle` from
-`@copilotz/copilotz/actions` for the existing indexed runtime schema. It refuses
-an active database and preserves historical events. Read-only operation status
-checks no longer perform recovery or settlement.
-
-The current runtime uses declared operation continuations. Replace deferred
-Action definitions with `context.awaitOperation({ start, handoff })` and
-`resume(handoff, outcome, context)`. Replace exact-key producer signals with
-operation-backed producers. Before upgrading to schema v8, stop old writers and
-drain deliveries, operations, streams, and Action obligations to confirmed
-terminal states. `upgradeActionLifecycle` refuses undrained schemas, preserves
-immutable event history, and replaces the old obligation layout in place.
-
-Memory's tool input is now `{continuity, remember?, retire?}`. Remove
-`resources.memory.kinds`, `defineMemoryKind`, graph/form/kind queries and grants
-for `set_memory_status` or `invalidate_memory`. Search accepts
-`{query?, limit?, includeRetired?}`; inspect accepts `{ids}`. Results return
-`notes`, with `unavailableIds` on inspect. Use explicit note replacements and
-retirements instead of domain status mutations.
-
-There is **no memory data migration**. Keep existing `long_term_memory`
-checkpoints and their continuity and history certificates unchanged. New writes
-and reads use `memory_note`; historical `memory_record` rows stay in storage
-without conversion or re-embedding. The context allowance now covers continuity
-and both own and peer notes together. Check application settings against this
-single budget.
-
-Textual reasoning is no longer replayed in model input. Compatible native
-provider reasoning state is retained intact, and provider-output reasoning
-extraction remains available for display and diagnostics. Stored messages are
-not rewritten.
+Owner schemas missing the required receipt-reader column are also refused by
+current validation. Do not relabel them or add a runtime compatibility path. See
+the offline guide for the exact supported inventory.
 
 ## The pain
 
@@ -385,66 +194,13 @@ operation catalog, and fails if either is missing or incompatible. An operator
 must provision both beforehand, not just one index. The flag covers these two
 layers; check each optional feature you enable for its own provisioning needs.
 
-### Run the 0.85.0 catalog upgrade offline
-
-Release 0.85.0 changed the operation catalog fingerprint to
-`indexed-observation-ordinals-v1`. Event records stay at schema v5 and no Body
-is rewritten. The upgrade assigns operation-local ordinals to committed history
-and builds selection membership. It supports only the previous
-`retained-terminal-streams` catalog or an already-current one. It is not a
-migration path from arbitrary older releases.
-
-The procedure:
-
-1. Take a database backup and keep the previous build artifact.
-2. Stop every old writer and worker for that physical schema.
-3. Call the helper below once per physical schema.
-4. Deploy matching server and client versions. Clients bootstrap fresh history:
-   the `operation-selections-v1` cursor rejects older cursor generations with
-   `invalid_replay_cursor`.
-
-Never restart old binaries against an upgraded catalog. Rollback means restoring
-the backup with the previous artifact, under operator control.
-
-Create `upgrade-core-catalog.ts` as an offline host helper. It is a reusable
-definition, not a standalone command. Your operator code owns the SQL session,
-which must support real transactions, chooses the physical schema, and calls
-`upgradeCoreCatalog` only while old writers are stopped.
-
-```ts
-// The host owns the connection and its transaction implementation.
-import type { SqlSession } from "@copilotz/copilotz/events";
-// Explicit catalog upgrade; no application traffic may run this helper.
-import { upgradeOperationCatalog } from "@copilotz/copilotz/streams";
-// Core resolves its legacy conversation associations.
-import { resolveCoreObservationKeys } from "@copilotz/copilotz/core";
-
-export async function upgradeCoreCatalog(
-  session: SqlSession,
-  physicalSchema: string,
-) {
-  return await upgradeOperationCatalog(session, physicalSchema, {
-    // Translate Core associations into opaque selection keys.
-    resolveObservationKeys: resolveCoreObservationKeys,
-    // Legacy metadata fields read during this one offline backfill.
-    backfillMetadataKeys: ["observationKeys", "core", "operationMetadata"],
-  });
-}
-```
-
-Core's resolver derives legacy Thread associations from Events and operations. A
-runtime-only domain without Core supplies its own resolver; the generic default
-reads only `metadata.observationKeys`. The optional Core history index is a
-separate procedure, described in
-[History performance](./history-performance.md).
-
 ## Reference
 
 ### Upgrade layers
 
 | Layer              | Current state                        | How it is applied                                                                                          |
 | ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Event/owner schema | v10, complete converted owner layout | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
+| Event/owner schema | v11, complete converted owner layout | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
 | Operation catalog  | `stream-taxonomy-content-v1`         | Installed by fresh provisioning or the same retained-data conversion                                       |
 | Core history index | Optional since 0.85.1                | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
 
@@ -462,35 +218,6 @@ separate procedure, described in
 - Replay retention keeps settled operations for a 24-hour grace period until
   `app.maintenance(...)` prunes them. `operationRetentionMs: null` disables
   pruning. This is independent of the five-minute HTTP observation renewal.
-
-### Release history
-
-These entries record past changes. They describe history, not the current API.
-
-- **0.85.1 (2026-10-06).** Added optional `provisionCoreHistoryIndexes`.
-  Existing schemas can build it concurrently; stored Messages and the v5 Event
-  schema are unchanged. Installing the package alone does not create the index.
-- **0.85.0 (2026-10-06).** Indexed observation selections and the
-  `operation-selections-v1` cursor. Required the offline catalog upgrade above
-  and fresh client history.
-- **0.84.1–0.84.3 (2026-10-06).** Unknown or unadvertised Tool calls became
-  correctable `ToolUnavailable` results. Memory consolidation budgets its input
-  from the prepared prompt. Exhausted Ask preparation failures settle through
-  the existing owned deferred Tool-plan cursor. Durable Processors gained an
-  optional `onError` recovery hook.
-- **0.84.0 (2026-10-06).** OpenAPI, MCP and Skills became resources declared
-  with `defineApi`, awaited `defineMcp` and `defineSkill`. The empty plugins,
-  public compilers and separate Skill constructors were removed with no
-  compatibility layer: refactor applications and rebuild generated plugins.
-- **0.80.0 (2026-09-22).** Text and JSON Asset refs began resolving recursively
-  in Processor Events, outputs, observations and replay, while durable envelopes
-  keep canonical refs and binary refs stay metadata-only. Native Channel, memory
-  and schedule Processors consume the immutable `event.data` snapshot;
-  `submitChannel` and `createChannelSession` were added.
-- **0.76.0 (2026-09-17).** Core HTTP discovery moved behind generic
-  operation-catalog reads, and the catalog stopped exposing its SQL session and
-  table names. Schema v5 was kept, with no conversation-specific index at that
-  time.
 
 ## What this unlocks
 

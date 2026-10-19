@@ -205,9 +205,6 @@ Deno.test("Core authorized View prompt capture survives owner restart and comple
       random: () => 0,
       // Explicit test scheduler keeps fault/restart boundaries deterministic.
       alarmScheduler: { schedule: (callback) => callback, cancel() {} },
-      execution: {
-        scheduler: { schedule: (callback) => callback, cancel() {} },
-      },
     });
   let engine: CopilotzEngine | undefined;
   try {

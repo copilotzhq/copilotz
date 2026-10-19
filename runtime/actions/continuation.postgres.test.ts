@@ -19,7 +19,10 @@ import {
   ACTION_CONTINUATION_CONSUMER,
   scheduleResumptions,
 } from "./continuation-work.ts";
-import { upgradeActionLifecycle } from "./upgrade.ts";
+import {
+  prepareRetainedDataUpgrade,
+  upgradeActionLifecycle,
+} from "./upgrade.ts";
 import { ActionOwnershipLost } from "./ownership.ts";
 
 const postgres = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
@@ -194,6 +197,7 @@ async function fixture(url: string) {
     root,
     delivery,
     common,
+    lifecycle,
     childId,
     register,
     waiter,
@@ -433,6 +437,13 @@ for (const backend of ["memory", "postgres"] as const) {
     );
   });
   test("lifecycle upgrade refuses open work, then preserves immutable history after drain", async (f) => {
+    // Finish the Action truthfully; its still-leased delivery prevents upgrade.
+    await f.lifecycle.emit({
+      ...f.common,
+      status: "completed",
+      output: null,
+      deduplicationId: `${f.common.actionRunId}:action:terminal`,
+    });
     await f.db.query(
       `UPDATE ${f.store.tables.copilotz_schema_metadata} SET version = 7`,
     );
@@ -447,6 +458,9 @@ for (const backend of ["memory", "postgres"] as const) {
       ADD COLUMN resolve_generation INTEGER NOT NULL DEFAULT 0`);
     await f.db.query(
       `ALTER TABLE ${f.store.tables.open_actions} RENAME COLUMN await_event_id TO deferred_event_id`,
+    );
+    await f.db.query(
+      `ALTER TABLE ${catalog.operationStreams} ADD COLUMN committed_offset BIGINT NOT NULL DEFAULT 0, ADD COLUMN digest TEXT`,
     );
     await f.db.query(
       `ALTER TABLE ${catalog.operations} DROP COLUMN parent_operation_id, DROP COLUMN parent_action_run_id`,
@@ -466,14 +480,16 @@ for (const backend of ["memory", "postgres"] as const) {
       Error,
       "Drain",
     );
-    await f.db.query(`DELETE FROM ${f.store.tables.open_actions}`);
     await f.store.succeedDelivery(f.delivery.id, "current");
     await f.r.catalog.reconcile();
     const before = (await f.db.query(
       `SELECT * FROM ${f.store.tables.events} ORDER BY position`,
     )).rows;
-    await upgradeActionLifecycle(f.db, f.schema);
-    await upgradeActionLifecycle(f.db, f.schema);
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema);
+    if (!plan) throw new Error("Expected an offline upgrade plan.");
+    const options = { plan, reviewedFingerprint: plan.fingerprint };
+    await upgradeActionLifecycle(f.db, f.schema, options);
+    await upgradeActionLifecycle(f.db, f.schema, options);
     await validateCopilotzSchema(f.db, f.schema);
     assertEquals(
       (await f.db.query(

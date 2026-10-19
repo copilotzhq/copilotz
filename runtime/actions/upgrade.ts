@@ -406,6 +406,10 @@ export async function upgradeActionLifecycle(
     ) {
       await transaction.query(statement);
     }
+    // CREATE TABLE IF NOT EXISTS cannot add the v11 ingress capture to history.
+    await transaction.query(
+      `ALTER TABLE ${core.events} ADD COLUMN IF NOT EXISTS owner_ingress JSONB`,
+    );
     await upgradeReceiptReaders(transaction, schema);
     await migrateActionContent(session, schema, {
       apply: true,

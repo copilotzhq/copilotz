@@ -63,7 +63,7 @@ function createNativeAsyncContextStorage<T>(
 
 // An independent owner command/publication must not borrow its scheduler's stores.
 // This factory is lazy: importing authoring code does not load node:async_hooks.
-const executions = createNativeAsyncContextStorage<object>(
+const executions = /* @__PURE__ */ createNativeAsyncContextStorage<object>(
   loadNativeAsyncLocalStorage,
 );
 

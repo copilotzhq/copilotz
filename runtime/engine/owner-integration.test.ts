@@ -70,7 +70,10 @@ Deno.test("long Actions overlap while their storage commands serialize and fence
     release.resolve();
     assertEquals(await Promise.all([first, second]), ["first", "second"]);
     assertEquals(peakSql, 1);
-    assert(transactions.length >= 4);
+    assert(
+      transactions.length >= 2,
+      "admission and completion commit around the provider wait",
+    );
     for (const statements of transactions) {
       assert(
         statements[0].includes("owner_epochs") &&

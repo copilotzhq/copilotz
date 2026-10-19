@@ -277,12 +277,22 @@ async function runQueryFixture(url: string): Promise<void> {
       }),
       bothProgress.event.position,
     );
+    // Settlement may append its own durable event after the last progress event.
+    const namespaceEvents = await events.listEvents({
+      namespace: "tenant-a",
+      limit: 100,
+    });
+    const namespaceHead = namespaceEvents.reduce(
+      (head, event) =>
+        BigInt(event.position) > head ? BigInt(event.position) : head,
+      0n,
+    );
     assertEquals(
       await catalog.maxEventPosition({
         namespace: "tenant-a",
         eventMetadata: {},
       }),
-      bothProgress.event.position,
+      String(namespaceHead),
     );
     assertEquals(
       await catalog.maxEventPosition({

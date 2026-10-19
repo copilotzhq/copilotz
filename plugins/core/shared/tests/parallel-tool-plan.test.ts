@@ -464,7 +464,7 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
     }),
     finish: defineTool("finish", finish, {
       name: "Parallel Finish",
-      description: "Finishes one branch after jq",
+      description: "Finishes one branch after its root Tool",
     }),
   };
   const testAgent = agent("a", Object.keys(tools));
@@ -490,7 +490,9 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
                   "root",
                   "finish",
                   String(index),
-                  true,
+                  // Fanout exercises Tool scheduling. The bounded jq runtime
+                  // deliberately refuses overlapping evaluations.
+                  false,
                 )),
               attempts: [{ status: "completed" }],
               finishReason: "tool_calls",
@@ -511,7 +513,9 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
   const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
-  const schema = `${SCHEMA}_bulk_${crypto.randomUUID().replaceAll("-", "")}`;
+  const schema = `${SCHEMA}_bulk_${
+    crypto.randomUUID().replaceAll("-", "").slice(0, 16)
+  }`;
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
@@ -738,7 +742,7 @@ Deno.test("in-flight legacy plan migrates its running cursor and prior jq result
     session: createSqlSession(db),
     registry,
     defaultDatabaseSchema: `${SCHEMA}_legacy_${
-      crypto.randomUUID().replaceAll("-", "")
+      crypto.randomUUID().replaceAll("-", "").slice(0, 16)
     }`,
     retryBaseMs: 0,
     random: () => 0,

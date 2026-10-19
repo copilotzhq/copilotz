@@ -835,9 +835,7 @@ export function createDatabaseScope(
         : null;
       let retired = head === null;
       if (
-        head &&
-        (head.state === "ready" || head.state === "incomplete" ||
-          head.state === "aborted") &&
+        head && logical?.terminal &&
         physicalStore.conditionalDelete &&
         (head.state !== "ready" || readyGarbageCollection)
       ) {

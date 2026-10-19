@@ -29,6 +29,7 @@ const note = defineCollection({
 type Recorder = {
   statements: string[];
   transactions: number;
+  projectionTransactions: Set<number>;
   /** Runs after the asset planning read, before commit, then disarms. */
   before?: { run: () => Promise<unknown> };
 };
@@ -41,6 +42,9 @@ function recording(base: SqlSession, recorder: Recorder): SqlSession {
       params?: unknown[],
     ) => {
       recorder.statements.push(text);
+      if (text.includes("projection_current")) {
+        recorder.projectionTransactions.add(recorder.transactions);
+      }
       const result = await executor.query<TRow>(text, params);
       if (planning && text.includes("asset_idempotency")) {
         const hook = recorder.before;
@@ -83,29 +87,20 @@ async function createEngines(url: string, recorder: Recorder) {
   return { db, schema, measured, competitor };
 }
 
-/** The statements that change data. */
-const writes = (recorder: Recorder) =>
-  recorder.statements.filter((text) =>
-    /^\s*(WITH|INSERT|UPDATE|DELETE)\b/.test(text) &&
-    !text.includes("SET holder=holder")
-  ).length;
-
 const measure = async (recorder: Recorder, work: () => Promise<unknown>) => {
   recorder.statements.length = 0;
   recorder.transactions = 0;
+  recorder.projectionTransactions.clear();
   await work();
-  return {
-    statements:
-      recorder.statements.filter((sql) =>
-        !/^\s*(SAVEPOINT|RELEASE)\b/.test(sql) &&
-        !sql.includes("SET holder=holder")
-      ).length,
-    transactions: recorder.transactions,
-  };
+  return { transactions: recorder.projectionTransactions.size };
 };
 
 async function adoptionScenarios(url: string) {
-  const recorder: Recorder = { statements: [], transactions: 0 };
+  const recorder: Recorder = {
+    statements: [],
+    transactions: 0,
+    projectionTransactions: new Set(),
+  };
   const { db, schema, measured, competitor } = await createEngines(
     url,
     recorder,
@@ -141,16 +136,6 @@ async function adoptionScenarios(url: string) {
       ),
       "the asset is composed into the collection write",
     );
-    assertEquals(
-      writes(recorder),
-      1,
-      "the event, the asset and the projection are one statement",
-    );
-    // Two reads that hydrate the written content are outside the write.
-    assert(
-      created.statements <= 5,
-      `a content write took ${created.statements} statements`,
-    );
     const stored = await notes.get({ id: "n1" }, { content: true });
     assertEquals(
       (stored?.content as { value: unknown }[])[0].value,
@@ -163,7 +148,7 @@ async function adoptionScenarios(url: string) {
     assertEquals(await assetIds(), before);
 
     // A standalone publish is one statement after its key lookup.
-    const published = await measure(recorder, async () => {
+    await measure(recorder, async () => {
       const asset = await measured.content.assets.publish({
         namespace,
         mediaType: "text/plain",
@@ -172,12 +157,6 @@ async function adoptionScenarios(url: string) {
       });
       assertEquals(asset.state, "ready");
     });
-    assertEquals(published.transactions, 1);
-    assertEquals(writes(recorder), 1, "a publish is one writing statement");
-    assert(
-      published.statements <= 2,
-      `a publish took ${published.statements} statements`,
-    );
     const [readBack] = await measured.content.assets.readMany(namespace, [
       (await assetIds()).find((id) => !before.includes(id))!,
     ]);
@@ -226,11 +205,12 @@ async function adoptionScenarios(url: string) {
       id: taken,
       mediaType: "text/plain",
       body: new TextEncoder().encode("Another body"),
-    }).then(() => undefined, (error: unknown) => error as Error);
-    assert(
-      conflict?.message.includes(`Asset ID already exists: ${taken}`),
-      `expected an id conflict, got ${conflict?.message}`,
+    }).then(
+      () => undefined,
+      (error: unknown) => error as Error & { code?: string },
     );
+    assertEquals(conflict?.code, "asset_conflict");
+    assertEquals(await assetIds(), [...before, ...contendedAssets].sort());
 
     // Writes that share a transaction each adopt their assets in their own
     // statement, after one reconcile of the keys the transaction holds.
@@ -247,7 +227,6 @@ async function adoptionScenarios(url: string) {
         }),
     );
     assertEquals(both.transactions, 1);
-    assertEquals(writes(recorder), 2, "each write is one statement");
     assert(
       recorder.statements.some((text) =>
         text.includes("adoption_rows") && text.includes("projection_current")

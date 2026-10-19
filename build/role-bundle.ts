@@ -14,6 +14,7 @@ const runtimeModules = new Set([
   "dependencies/oxian-work.ts",
   "dependencies/oxian-worker.ts",
   "runtime/actions/content.ts",
+  "runtime/actions/caller-identity.ts",
   "runtime/actions/continuation.ts",
   "runtime/actions/define.ts",
   "runtime/actions/effect-client.ts",

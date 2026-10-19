@@ -109,8 +109,8 @@ This map describes the current implementation.
 - The runtime owns generic lifecycle, composition, persistence, and execution
   mechanics; it never owns plugin business meaning.
 - Runtime production code never imports a concrete plugin.
-- Plugins compose six primitives: Collections, Actions, Processors, Views,
-  Resources, and Adapters.
+- Plugins compose six primitives: Collections, Actions, Processors, Resources,
+  Adapters, and Views.
 - Views receive authorized projections and read-only Collection capabilities;
   the pure one-shot text renderer has no mutation or live-subscription
   capability.

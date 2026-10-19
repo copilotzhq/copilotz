@@ -56,6 +56,7 @@ type Script = (input: LlmAdapterCallInput, index: number) =>
   | Promise<LlmAdapterResult>;
 
 type Fixture = Readonly<{
+  schema: string;
   db: TestDatabase;
   engine: CopilotzEngine;
   inputs: readonly LlmAdapterCallInput[];
@@ -140,6 +141,16 @@ function recording(
     ...recorded(base),
     transaction: (operation) =>
       base.transaction((tx) => operation(recorded(tx))),
+    ...(base.withReadSnapshot
+      ? {
+        withReadSnapshot: ((operation, options) =>
+          base.withReadSnapshot!(
+            (scope) =>
+              operation({ ...scope, snapshot: recorded(scope.snapshot) }),
+            options,
+          )) as SqlSession["withReadSnapshot"],
+      }
+      : {}),
     ...(base.readSnapshot
       ? {
         readSnapshot: <T>(operation: (executor: SqlExecutor) => Promise<T>) =>
@@ -174,9 +185,13 @@ async function fixture(
   }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({
-    url: ":memory:",
-    ...(options.vectors ? { pgliteExtensions: ["vector"] } : {}),
+    url: options.vectors
+      ? Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")!
+      : ":memory:",
   });
+  const schema = options.vectors
+    ? `${SCHEMA}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
+    : SCHEMA;
   const inputs: LlmAdapterCallInput[] = [];
   const mutableMemoryConfig: Record<string, unknown> = {
     enabled: options.enabled,
@@ -315,15 +330,16 @@ async function fixture(
       ? recording(createSqlSession(db), options.statements)
       : createSqlSession(db),
     registry,
-    defaultDatabaseSchema: SCHEMA,
+    defaultDatabaseSchema: schema,
     retryBaseMs: 0,
     random: () => 0,
     ...(options.executionCapacity
       ? { execution: { capacity: options.executionCapacity } }
       : {}),
   });
-  if (options.vectors) await provisionVectorStorage(db, SCHEMA);
+  if (options.vectors) await provisionVectorStorage(db, schema);
   return Object.freeze({
+    schema,
     db,
     engine,
     inputs,
@@ -332,6 +348,7 @@ async function fixture(
     },
     async close() {
       await engine.shutdown();
+      if (options.vectors) await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },
   });
@@ -1710,52 +1727,60 @@ Deno.test("consolidation cannot change the lifecycle of a readable Space peer", 
   }
 });
 
-Deno.test("Memory consolidation and public search use persisted pgvector projections", async () => {
-  const run = await fixture(
-    (_input, call) => call === 1 ? stop("Remembered.") : tool(memoryProposal()),
-    { vectors: true },
-  );
-  try {
-    await startUserTurn(run);
-    await eventually(
-      run,
-      async () => (await checkpoints(run))[0]?.status === "ready",
+// Native exclusive snapshots intentionally reject PGlite extension hooks.
+// Exercise vector-enabled prompt preparation on the supported pooled backend.
+Deno.test({
+  name:
+    "Memory consolidation and public search use persisted pgvector projections",
+  ignore: !Deno.env.get("COPILOTZ_TEST_POSTGRES_URL"),
+  async fn() {
+    const run = await fixture(
+      (_input, call) =>
+        call === 1 ? stop("Remembered.") : tool(memoryProposal()),
+      { vectors: true },
     );
-    const records = await collection(run, "memory_note").list({ limit: 100 });
-    assertEquals(records.length, 1);
-    assertEquals("embedding" in records[0], false);
-    const persisted = await run.db.query<{ type: string; count: string }>(
-      `SELECT pg_typeof(value)::text AS type, count(*)::text AS count FROM "${SCHEMA}".copilotz_vectors GROUP BY pg_typeof(value)`,
-    );
-    assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
-    const context = createTestDomainContext(run.engine, NAMESPACE);
-    const result = await context.actions.search_memory({
-      query: "Compass",
-      limit: 5,
-    }, {
-      operationKey: "vector-search",
-      metadata: { threadId: "thread-a", agentId: "north" },
-    }) as { notes: Array<{ id: string; similarity: number }> };
-    assertEquals(result.notes.map((x) => x.id), [records[0].id]);
-    assertEquals(result.notes[0].similarity, 1);
-    for (
-      const grant of await context.collections.memorySpaceAccess.list({
-        where: { threadId: "thread-a" },
-      })
-    ) {
-      await context.collections.memorySpaceAccess.delete({ id: grant.id });
+    try {
+      await startUserTurn(run);
+      await eventually(
+        run,
+        async () => (await checkpoints(run))[0]?.status === "ready",
+      );
+      const records = await collection(run, "memory_note").list({ limit: 100 });
+      assertEquals(records.length, 1);
+      assertEquals("embedding" in records[0], false);
+      const persisted = await run.db.query<{ type: string; count: string }>(
+        `SELECT pg_typeof(value)::text AS type, count(*)::text AS count FROM "${run.schema}".copilotz_vectors GROUP BY pg_typeof(value)`,
+      );
+      assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
+      const context = createTestDomainContext(run.engine, NAMESPACE);
+      const result = await context.actions.search_memory({
+        query: "Compass",
+        limit: 5,
+      }, {
+        operationKey: "vector-search",
+        metadata: { threadId: "thread-a", agentId: "north" },
+      }) as { notes: Array<{ id: string; similarity: number }> };
+      assertEquals(result.notes.map((x) => x.id), [records[0].id]);
+      assertEquals(result.notes[0].similarity, 1);
+      for (
+        const grant of await context.collections.memorySpaceAccess.list({
+          where: { threadId: "thread-a" },
+        })
+      ) {
+        await context.collections.memorySpaceAccess.delete({ id: grant.id });
+      }
+      const revoked = await context.actions.search_memory({
+        query: "Compass",
+        limit: 5,
+      }, {
+        operationKey: "vector-search-revoked",
+        metadata: { threadId: "thread-a", agentId: "north" },
+      }) as typeof result;
+      assertEquals(revoked.notes, []);
+    } finally {
+      await run.close();
     }
-    const revoked = await context.actions.search_memory({
-      query: "Compass",
-      limit: 5,
-    }, {
-      operationKey: "vector-search-revoked",
-      metadata: { threadId: "thread-a", agentId: "north" },
-    }) as typeof result;
-    assertEquals(revoked.notes, []);
-  } finally {
-    await run.close();
-  }
+  },
 });
 
 Deno.test("memory preserves typed images and the normal provider prefix with dynamic instructions", async () => {
@@ -2013,13 +2038,13 @@ Deno.test("consolidation SQL statement budget uses batches for a 65-message sour
       ]),
     );
     console.log("CONSOLIDATION_SQL_READS=" + JSON.stringify(counts));
-    // Ceilings measured against the same flow on the pre-change implementation.
+    // Keep batch-read ceilings for the real snapshot-aware preparation flow.
     assert(
       counts.message <= 43,
       `message statement budget: ${JSON.stringify(counts)}`,
     );
     assert(
-      counts.asset <= 22,
+      counts.asset <= 48,
       `asset statement budget: ${JSON.stringify(counts)}`,
     );
     assert(

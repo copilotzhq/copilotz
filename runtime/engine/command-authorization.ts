@@ -14,7 +14,7 @@ type Scope = Authority & {
   readonly authorizing?: boolean;
   captured?: OwnerCommandAuthorization;
 };
-const scopes = createAsyncContextStorage<Scope | undefined>();
+const scopes = /* @__PURE__ */ createAsyncContextStorage<Scope | undefined>();
 const captured = new WeakMap<OwnerCommandAuthorization, Authority>();
 function closed(): never {
   throw Object.assign(new Error("Action capability lifetime has ended."), {

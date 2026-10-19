@@ -210,9 +210,12 @@ async function messageContentLifetime(url: string) {
     assertEquals(owners.rows, [{ source_node_id: "message" }]);
     await collections.message.delete({ id: "message" });
     await engine.content.assets.markDeleted(namespace, assetId);
-    // Advance the fixture's physical protection deadline before collection.
+    // Owner commands use their own time; expire catalog protection in the fixture.
     await db.query(
-      `UPDATE "${schema}".content_bodies SET protected_until = NOW() - INTERVAL '1 second'`,
+      `UPDATE ${tables.content_logical_bodies} SET protected_until = NOW() - INTERVAL '1 second'`,
+    );
+    await db.query(
+      `UPDATE ${tables.pending_content} SET expires_at = NOW() - INTERVAL '1 second'`,
     );
     const result = await engine.maintenance({
       namespace,

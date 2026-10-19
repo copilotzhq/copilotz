@@ -18,9 +18,6 @@ for (const backend of ["pglite", "postgres"] as const) {
       `${backend} native admission preserves repeatable snapshot and mixed-write progress with capacity refusal`,
     ignore: backend === "postgres" && !url,
     async fn() {
-      if (backend === "postgres") {
-        assertEquals(Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL"), url);
-      }
       const managed = await openManagedOminipgDatabase(
         backend === "postgres"
           ? { url: localPostgresUrl(url!), pgPoolMax: 4 }
@@ -102,7 +99,6 @@ for (const backend of ["pglite", "postgres"] as const) {
 }
 
 async function fixture() {
-  assertEquals(Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL"), url);
   const managed = await openManagedOminipgDatabase({
     url: localPostgresUrl(url!),
     pgPoolMax: 4,
@@ -207,4 +203,25 @@ Deno.test({
       await f.close();
     }
   },
+});
+
+Deno.test("PGlite extension configuration refuses uncertified exclusive snapshots", async () => {
+  const managed = await openManagedOminipgDatabase({
+    pgliteExtensions: ["vector"],
+  });
+  let entered = false;
+  try {
+    await assertRejects(
+      () =>
+        managed.session.withReadSnapshot!(() => {
+          entered = true;
+          return Promise.resolve();
+        }),
+      Error,
+      "Exclusive snapshots are unsupported by this PGlite configuration",
+    );
+    assertEquals(entered, false);
+  } finally {
+    await managed.close();
+  }
 });

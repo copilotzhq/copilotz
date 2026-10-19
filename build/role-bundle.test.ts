@@ -6,7 +6,9 @@ async function fixture(
   files: Record<string, string>,
   run: (root: string) => Promise<void>,
 ) {
-  const root = await Deno.makeTempDir({ prefix: "role-fixture-" });
+  const root = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "role-fixture-" }),
+  );
   try {
     for (const [path, text] of Object.entries(files)) {
       await Deno.writeTextFile(root + "/" + path, text);
@@ -173,12 +175,12 @@ Deno.test("worker role refuses self aliases and symlink disguises of owner modul
       "Unsupported worker runtime module: index.ts",
     );
     await Deno.symlink(
-      new URL("runtime/events", packageRoot),
+      packageRoot,
       root + "/disguised",
     );
     await Deno.writeTextFile(
       root + "/entry.ts",
-      'import "./disguised/session.ts"; export const ok = true;',
+      'import "./disguised/runtime/events/session.ts"; export const ok = true;',
     );
     await assertRejects(
       () =>

@@ -13,6 +13,7 @@ import {
   captureScheduledAlarmAdmission,
   recordScheduledAlarmIngress,
   scheduledAlarmAdmission,
+  scheduledIngressProof,
 } from "../application/ingress/scheduled.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import {
@@ -1887,6 +1888,9 @@ export function createCollectionKernel(
       const result = await options.coordinator.commitMutation({
         draft,
         ...(alarmEventId ? { eventId: alarmEventId } : {}),
+        ...(alarmAdmission
+          ? { ingress: scheduledIngressProof(alarmAdmission) }
+          : {}),
         ...(execution ? { transaction: execution.transaction } : {}),
         dispatch: execution ? false : true,
         ...(matchData === undefined ? {} : {

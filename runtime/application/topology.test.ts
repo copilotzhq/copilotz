@@ -199,7 +199,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   let ready = 0;
   let started = 0;
   const gatewayDiagnostics: string[] = [];
-  const workerDiagnostics: string[] = [];
   const gateway = await createCopilotzGateway({
     namespace,
     database,
@@ -225,9 +224,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     id: workerId,
     transport,
     capacity: 1,
-    onDeliveryDiagnostic(diagnostic) {
-      workerDiagnostics.push(diagnostic.phase);
-    },
   }, {
     onReady() {
       ready += 1;
@@ -301,8 +297,8 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     });
     assertEquals(new Set(durableIds).size, durableIds.length);
     assert(gatewayDiagnostics.includes("placement_requested"));
-    assert(workerDiagnostics.includes("worker_handler_started"));
-    assert(workerDiagnostics.includes("worker_handler_settled"));
+    assert(gatewayDiagnostics.includes("worker_handler_started"));
+    assert(gatewayDiagnostics.includes("worker_handler_settled"));
     assertEquals(
       (await projectMessages(gateway.application, namespace, "topology-thread"))
         .length,

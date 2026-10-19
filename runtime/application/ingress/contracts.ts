@@ -84,10 +84,8 @@ export function parseServerActionRequest(value: unknown): ServerActionRequest {
     schema: SERVER_ACTION_REQUEST_SCHEMA,
     requestId: input.requestId.trim(),
     actionAlias: input.actionAlias.trim(),
-    input: structuredClone(input.input),
-    actionMetadata: structuredClone(
-      input.actionMetadata as Record<string, unknown>,
-    ),
+    input: input.input,
+    actionMetadata: input.actionMetadata as Record<string, unknown>,
   } as const);
 }
 
@@ -179,12 +177,11 @@ export function parseServerCollectionMutationRequest(
     ...(typeof input.command === "string"
       ? { command: input.command.trim() }
       : {}),
-    input: structuredClone(input.input),
+    input: input.input,
     ...(input.condition !== undefined
       ? {
-        condition: structuredClone(
-          input.condition as Record<string, unknown>,
-        ) as ServerCollectionMutationRequest["condition"],
+        condition: input
+          .condition as ServerCollectionMutationRequest["condition"],
       }
       : {}),
   } as const);

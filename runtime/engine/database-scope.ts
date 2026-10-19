@@ -1,10 +1,7 @@
 import type { CollectionProjectionRegistrations } from "../collections/projection-registration.ts";
 import { validateCollectionPolicies } from "../collections/policy-registration.ts";
 import { createProtectedActions } from "../actions/protected-actions.ts";
-import {
-  assertOwnerIngressReplay,
-  recordOwnerIngress,
-} from "../application/ingress/authority.ts";
+import { assertOwnerIngressReplay } from "../application/ingress/authority.ts";
 import { readLogicalHead } from "../content/catalog.ts";
 import { registerDeliveryAlarms } from "../execution/alarms.ts";
 import { registerCollectionAlarms } from "../collections/alarms.ts";
@@ -403,19 +400,13 @@ export function createDatabaseScope(
       return await coordinator.commitMutation({
         eventId,
         draft: { ...draft, payload: persistedPayload },
+        ingress,
         matchData: prepared.publicData,
         body: { id: bodyId, json: prepared.body },
         mutate: async (context) => {
           for (const value of prepared.prepared) {
             await protectedValues!.adopt(context, draft.namespace, value);
           }
-          await recordOwnerIngress(
-            context,
-            options.databaseSchema,
-            { ...draft, id: eventId, payload: persistedPayload },
-            prepared.body,
-            ingress,
-          );
         },
         recoverDuplicate: async (event, context) => {
           const existing = await readEventBody(

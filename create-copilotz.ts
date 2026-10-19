@@ -1,5 +1,4 @@
 import { withOwnedHosting } from "./runtime/application/hosting.ts";
-import type { HostCommandDefinitions } from "./runtime/application/host-command-types.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
@@ -57,9 +56,7 @@ type ApplicationComposition<T extends CompositionOptions> = RegistryComposition<
 type GatewayApplication<T extends CompositionOptions = CompositionOptions> =
   & CopilotzApplication<
     ApplicationComposition<T>["actions"],
-    ApplicationComposition<T>["collections"],
-    T extends { hostCommands: infer H extends HostCommandDefinitions } ? H
-      : Readonly<Record<never, never>>
+    ApplicationComposition<T>["collections"]
   >
   & Readonly<{
     fetch(request: Request): Promise<Response>;
@@ -77,7 +74,7 @@ type WorkerFactoryResult = Readonly<{
 
 /** The `/api` facade when `serverPlugin` is composed; otherwise 404. */
 function serverFetch(
-  gateway: InternalCopilotzGateway,
+  gateway: Pick<InternalCopilotzGateway, "application" | "admit">,
 ): (request: Request) => Promise<Response> {
   return gateway.application.plugins.resources.server?.default
     ? createServerFacadeFetchHandler(gateway.application, {
@@ -122,7 +119,6 @@ export async function createCopilotz(
       return withOwnedHosting(
         {
           send: gateway.send,
-          hostCommands: gateway.hostCommands,
           actions: gateway.actions,
           collections: gateway.collections,
           attach: gateway.attach,

@@ -43,7 +43,6 @@ Deno.test("worker role audits root reexports and side effects before tree shakin
         "runtime/execution/owner-capability-worker.ts",
         "runtime/execution/owner-capture.ts",
         "runtime/content/preparer.ts",
-        "runtime/execution/owner-receipt.ts",
       ]
     ) {
       assert(graph.modules.some((module) => module.source === core(path)));

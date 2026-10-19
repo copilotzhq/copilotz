@@ -551,24 +551,24 @@ export function applicationOutputsMultipartResponse(
     heartbeat = setInterval(() => {
       if (heartbeatPending || cancelled) return;
       heartbeatPending = true;
-      void writePart((cursor) =>
-        part(
+      void writePart((cursor) => {
+        const heartbeat = source.heartbeat?.([
+          ...deliveredPayloadPositions.keys(),
+        ]);
+        return part(
           boundary,
           "output",
           encoder.encode(JSON.stringify({
             type: "observation.heartbeat",
-            headSeq: source.heartbeat?.([...deliveredPayloadPositions.keys()])
-              .headSeq ?? "0",
-            payloadPositions:
-              source.heartbeat?.([...deliveredPayloadPositions.keys()])
-                .payloadPositions ?? [],
+            headSeq: heartbeat?.headSeq ?? "0",
+            payloadPositions: heartbeat?.payloadPositions ?? [],
             deliveredPayloadPositions: [...deliveredPayloadPositions].map((
               [streamId, committedOffset],
             ) => ({ streamId, committedOffset })),
           })),
           { ...partOptions, cursor },
-        )
-      )
+        );
+      })
         .catch((error) =>
           isRenewalError(error) ? requestRenewal() : detach(error)
         ).finally(() => {

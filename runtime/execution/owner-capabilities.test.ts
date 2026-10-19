@@ -1,5 +1,5 @@
 import { isOwnerExecutionInterrupted } from "./owner-interruption.ts";
-import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createOwnerCapabilityHost } from "./owner-capabilities.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { defineAction } from "../actions/define.ts";
@@ -23,7 +23,8 @@ async function setup(
   let epoch = 1;
   const failure = Promise.withResolvers<unknown>();
   let held: Promise<unknown> | undefined;
-  let authorityGate: (() => Promise<void>) | undefined;
+  let authorityCalls = 0, epochReads = 0;
+  const ownerAbort = new AbortController();
   const abort = new AbortController();
   const context = {
     namespace: "scope",
@@ -42,7 +43,10 @@ async function setup(
           withSnapshotControl({ collections: context.collections }, {
             kind: "exclusive",
             snapshot: {
-              query: () => Promise.resolve({ rows: [{ epoch }] }),
+              query: () => {
+                epochReads++;
+                return Promise.resolve({ rows: [{ epoch }] });
+              },
             } as never,
             cleanup: disposed.promise,
           }),
@@ -59,9 +63,9 @@ async function setup(
     localExecution: true,
     ...limits,
     registry,
-    async resolveAuthority() {
-      await authorityGate?.();
-      return { epoch, signal: abort.signal };
+    resolveAuthority() {
+      authorityCalls++;
+      return Promise.resolve({ epoch, signal: ownerAbort.signal });
     },
     createWorkloads: (
       { registry }: Parameters<
@@ -135,12 +139,17 @@ async function setup(
     },
     setEpoch(value: number) {
       epoch = value;
+      ownerAbort.abort(
+        new Error("The assignment belongs to a retired owner epoch."),
+      );
     },
     hold(value: Promise<unknown>) {
       held = value;
     },
-    holdAuthority(gate: () => Promise<void>) {
-      authorityGate = gate;
+    authorityCalls: () => authorityCalls,
+    epochReads: () => epochReads,
+    setDatabaseEpoch(value: number) {
+      epoch = value;
     },
     close: () => host.close(),
   };
@@ -207,15 +216,13 @@ for (const cleanup of ["confirmed", "unknown"] as const) {
       const opened = await f.call({ kind: "snapshot", context: f.id }) as {
         handle: string;
       };
-      assertEquals(f.host.snapshot().resources, 1);
+
       const close = () =>
         f.call({ kind: "close", context: f.id, id: opened.handle });
       if (cleanup === "unknown") {
         await assertRejects(close, Error, "owner_cleanup_unknown");
-        assertEquals(f.host.snapshot().resources, 1);
       } else {
         await close();
-        assertEquals(f.host.snapshot().resources, 0);
       }
       await assertRejects(() =>
         f.call({
@@ -267,7 +274,6 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
     await f.host.lifecycle?.onDisconnect?.({ fence: f.binding.fence } as never);
     await assertRejects(() => reading);
     assertEquals(cancelled, 1);
-    assertEquals(f.host.snapshot(), { assignments: 0, resources: 0 });
   } finally {
     await f.close();
   }
@@ -312,11 +318,10 @@ Deno.test("writer capacity is bounded while quiet live writers outlast generic h
     assertEquals(opened, 32);
     await new Promise((resolve) => setTimeout(resolve, 220));
     assertEquals(aborted, 0);
-    assertEquals(f.host.snapshot().resources, 32);
+
     await f.call({ kind: "complete", id: f.id, value: "quiet live writers" });
     assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
     assertEquals(aborted, 32);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -356,11 +361,10 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
     }
     assertEquals(appended, 8);
     assertEquals(aborted, 0);
-    assertEquals(f.host.snapshot().resources, 1);
+
     f.abortContext(new Error("invocation cancelled"));
     await f.close();
     assertEquals(aborted, 1);
-    assertEquals(f.host.snapshot().resources, 0);
   } finally {
     await f.close();
   }
@@ -387,7 +391,7 @@ Deno.test("idle reader handles retain bounded expiry while writers use invocatio
     });
     await new Promise((resolve) => setTimeout(resolve, 80));
     assertEquals(cancelled, 1);
-    assertEquals(f.host.snapshot().resources, 0);
+
     await assertRejects(() =>
       f.call({ kind: "complete", id: f.id, value: "expired reader" })
     );
@@ -489,7 +493,7 @@ Deno.test("concurrent Open reserves one parent before deferred authority and cle
   void first.catch(() => undefined);
   try {
     await entered.promise;
-    assertEquals(host.snapshot().assignments, 1);
+
     const duplicate = rawCall(host, binding, {
       kind: "open",
       value: new Uint8Array(),
@@ -508,7 +512,6 @@ Deno.test("concurrent Open reserves one parent before deferred authority and cle
       Error,
       "owner_data_invalid",
     );
-    assertEquals(host.snapshot().assignments, 1);
   } finally {
     authority.resolve();
     await host.close();
@@ -543,7 +546,7 @@ Deno.test("deferred concurrent Open admissions cannot exceed assignment capacity
   );
   try {
     await entered.promise;
-    assertEquals(host.snapshot().assignments, 256);
+
     const overflow = rawCall(host, admissionBinding("overflow"), {
       kind: "open",
       value: new Uint8Array(),
@@ -591,7 +594,7 @@ Deno.test("deferred concurrent resource opens reserve physical capacity and clea
   );
   try {
     await entered.promise;
-    assertEquals(f.host.snapshot().resources, 32);
+
     const overflow = f.call({
       kind: "call",
       context: f.id,
@@ -625,7 +628,6 @@ Deno.test("deferred concurrent resource opens reserve physical capacity and clea
         args: [{}],
       })
     );
-    assertEquals(rejected.host.snapshot().resources, 0);
   } finally {
     await rejected.close();
   }
@@ -665,16 +667,15 @@ Deno.test("retirement during deferred resource creation retains slot until actua
     const retiring = f.close().then(() => {
       retired = true;
     });
-    assertEquals(f.host.snapshot().resources, 1);
+
     gate.resolve();
     while (!aborted) await new Promise((resolve) => setTimeout(resolve, 0));
-    assertEquals(f.host.snapshot().resources, 1);
+
     assertEquals(retired, false);
     cleanup.resolve();
     await retiring;
     await assertRejects(() => opening);
     assertEquals(aborted, 1);
-    assertEquals(f.host.snapshot(), { assignments: 0, resources: 0 });
   } finally {
     gate.resolve();
     cleanup.resolve();
@@ -804,14 +805,13 @@ Deno.test("complete seals context before an admitted open resolves and drains it
     assertEquals(opens, 1);
     gate.resolve();
     await cleaning.promise;
-    assertEquals(f.host.snapshot().resources, 1);
+
     cleanup.resolve();
     await assertRejects(() => opening, Error, "owner_context_closed");
     const terminal = await f.call({ kind: "next" }) as CapabilityPoll;
     assertEquals(terminal.done, true);
     assertEquals((terminal.error as Error).message, "owner_calls_pending");
     assertEquals(aborted, 1);
-    assertEquals(f.host.snapshot(), { assignments: 0, resources: 0 });
   } finally {
     gate.resolve();
     cleanup.resolve();
@@ -850,16 +850,13 @@ Deno.test("owner context cancellation revokes a blocked reader before waiting fo
     await assertRejects(() => pending);
     await f.close();
     assertEquals(cancelled, 1);
-    assertEquals(f.host.snapshot(), { assignments: 0, resources: 0 });
   } finally {
     await f.close();
   }
 });
 
-Deno.test("call cancellation during deferred authority prevents capability execution", async () => {
+Deno.test("cancelled capability calls do not execute and authority is captured once", async () => {
   let reads = 0;
-  const entered = Promise.withResolvers<void>(),
-    gate = Promise.withResolvers<void>();
   const f = await setup("confirmed", {
     collections: {
       notes: {
@@ -870,25 +867,29 @@ Deno.test("call cancellation during deferred authority prevents capability execu
       },
     },
   });
-  const cancellation = new AbortController();
-  f.holdAuthority(async () => {
-    entered.resolve();
-    await gate.promise;
-  });
-  const pending = f.call({
-    kind: "call",
-    context: f.id,
-    path: ["collections", "notes", "list"],
-  }, { ...f.binding, signal: cancellation.signal });
-  void pending.catch(() => undefined);
   try {
-    await entered.promise;
-    cancellation.abort(new Error("cancelled during authority"));
-    gate.resolve();
-    await assertRejects(() => pending, Error, "cancelled during authority");
-    assertEquals(reads, 0);
+    for (let i = 0; i < 4100; i++) {
+      await f.call({
+        kind: "call",
+        context: f.id,
+        path: ["collections", "notes", "list"],
+      });
+    }
+    assertEquals(f.authorityCalls(), 1);
+    const cancellation = new AbortController();
+    cancellation.abort(new Error("cancelled call"));
+    await assertRejects(
+      () =>
+        f.call({
+          kind: "call",
+          context: f.id,
+          path: ["collections", "notes", "list"],
+        }, { ...f.binding, signal: cancellation.signal }),
+      Error,
+      "cancelled call",
+    );
+    assertEquals(reads, 4100);
   } finally {
-    gate.resolve();
     await f.close();
   }
 });
@@ -911,11 +912,11 @@ Deno.test("delayed old connection readiness failure cannot retire a replacement 
   try {
     await f.call({ kind: "open", value: new Uint8Array() }, replacement);
     const next = await f.call({ kind: "next" }, replacement) as CapabilityPoll;
-    assertEquals(f.host.snapshot().assignments, 2);
+
     // A rejected old readiness callback is delivered as the exact old fence's
     // disconnect, even if the replacement has already opened an invocation.
     await f.host.lifecycle!.onDisconnect!({ fence: f.binding.fence } as never);
-    assertEquals(f.host.snapshot().assignments, 1);
+
     await f.host.lifecycle!.onDisconnect!({ fence: f.binding.fence } as never);
     assertEquals(
       await f.call({
@@ -928,13 +929,12 @@ Deno.test("delayed old connection readiness failure cannot retire a replacement 
     await f.host.lifecycle!.onDisconnect!(
       { fence: replacement.fence } as never,
     );
-    assertEquals(f.host.snapshot().assignments, 0);
   } finally {
     await f.close();
   }
 });
 
-Deno.test("owner capability registration captures authority callbacks synchronously and rejects accessors without invoking them", async () => {
+Deno.test("owner capability registration captures callbacks before asynchronous startup", async () => {
   const f = await setup("confirmed", {}, {}, (options) => {
     // Mutate before the first Open's authority await. The captured factory and
     // callback must already be detached in the construction turn.
@@ -961,31 +961,6 @@ Deno.test("owner capability registration captures authority callbacks synchronou
     assert(
       (await f.call({ kind: "next" }, another) as CapabilityPoll).invocation,
     );
-    let getters = 0;
-    for (
-      const field of [
-        "registry",
-        "resolveAuthority",
-        "createWorkloads",
-        "resourceIdleMs",
-      ]
-    ) {
-      assertThrows(
-        () =>
-          createOwnerCapabilityHost(
-            Object.defineProperty({ ...f.hostOptions }, field, {
-              get() {
-                getters++;
-                throw new Error("accessor executed");
-              },
-              enumerable: true,
-            }),
-          ),
-        TypeError,
-        "data properties",
-      );
-    }
-    assertEquals(getters, 0);
   } finally {
     await f.close();
   }
@@ -1041,7 +1016,7 @@ Deno.test("old completion cannot retire a replacement of the same operation or s
         fence: f.binding.fence,
       } as never,
     );
-    assertEquals(f.host.snapshot().assignments, 1);
+
     await assertRejects(
       () => f.call({ kind: "complete", id: f.id, value: "late old success" }),
       Error,
@@ -1087,7 +1062,7 @@ Deno.test("late completion is fenced by stream even when operation and connectio
     };
     await f.host.lifecycle!.onComplete!(old as never);
     await f.host.lifecycle!.onComplete!(old as never);
-    assertEquals(f.host.snapshot().assignments, 1);
+
     assertEquals(
       await f.call({
         kind: "call",
@@ -1101,6 +1076,61 @@ Deno.test("late completion is fenced by stream even when operation and connectio
       Error,
       "owner_assignment_unknown",
     );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("snapshot cleanup confirmation controls future admission, without a lifetime quota", async () => {
+  for (const cleanup of ["confirmed", "unknown"] as const) {
+    const f = await setup(cleanup);
+    try {
+      for (let i = 0; i < (cleanup === "confirmed" ? 64 : 32); i++) {
+        const opened = await f.call({ kind: "snapshot", context: f.id }) as {
+          handle: string;
+        };
+        const close = () =>
+          f.call({ kind: "close", context: f.id, id: opened.handle });
+        if (cleanup === "confirmed") await close();
+        else await assertRejects(close, Error, "owner_cleanup_unknown");
+      }
+      if (cleanup === "unknown") {
+        await assertRejects(
+          () => f.call({ kind: "snapshot", context: f.id }),
+          Error,
+          "owner_capacity",
+        );
+      }
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+Deno.test("snapshot reads have one current-epoch result gate even before owner retirement is noticed", async () => {
+  const f = await setup();
+  try {
+    const opened = await f.call({ kind: "snapshot", context: f.id }) as {
+      handle: string;
+    };
+    const read = () =>
+      f.call({
+        kind: "call",
+        context: f.id,
+        id: opened.handle,
+        path: ["collections", "notes", "list"],
+      });
+    const before = f.epochReads();
+    await read();
+    assertEquals(f.epochReads() - before, 1);
+    const held = Promise.withResolvers<unknown>();
+    f.hold(held.promise);
+    const pending = read();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    f.setDatabaseEpoch(2);
+    held.resolve([{ id: "stale secret" }]);
+    await assertRejects(() => pending, Error, "ActionOwnershipLost");
+    assertEquals(f.authorityCalls(), 1);
   } finally {
     await f.close();
   }

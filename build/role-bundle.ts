@@ -42,7 +42,6 @@ const runtimeModules = new Set([
   "runtime/execution/owner-capability-wire.ts",
   "runtime/execution/owner-capture.ts",
   "runtime/execution/owner-capability-worker.ts",
-  "runtime/execution/owner-receipt.ts",
   "runtime/failure.ts",
   "runtime/json.ts",
   "runtime/plugins/contribution.ts",

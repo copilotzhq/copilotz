@@ -1,3 +1,7 @@
+import {
+  ownerIngressEvidence,
+  type OwnerIngressProof,
+} from "../application/ingress/authority.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import {
@@ -60,6 +64,9 @@ type EventRow = Record<string, unknown> & {
   payload: unknown;
   delta: unknown;
   metadata: unknown;
+  owner_ingress:
+    | import("../actions/protected-action-types.ts").ProtectedActionIngress
+    | null;
   causation_id: string | null;
   correlation_id: string;
   deduplication_id: string | null;
@@ -115,6 +122,8 @@ export type EventStatement<T> = Readonly<{
 }>;
 
 export type CommitEventMutationOptions<T> = {
+  /** Private admission facts; never accepted from an Event draft. */
+  ingress?: OwnerIngressProof;
   draft: DurableEventDraft;
   /** Stable runtime-owned root event identity. */
   eventId?: string;
@@ -287,6 +296,7 @@ export type EventStore = {
   /** Bounded accepted-session batch; caller binds current transport authority. */
   heartbeatDeliveries(
     attempts: readonly DeliveryAttemptHeartbeat[],
+    accept?: (attempt: DeliveryAttemptHeartbeat, epoch: number) => boolean,
   ): Promise<readonly Pick<DeliveryAttemptHeartbeat, "id" | "owner">[]>;
   /** Settles a leased delivery and returns the row it settled into. */
   succeedDelivery(id: string, owner: string): Promise<EventDelivery | null>;
@@ -410,6 +420,7 @@ function mapEvent(row: EventRow): DurableEvent {
     payload: row.payload,
     ...(row.delta == null ? {} : { delta: row.delta }),
     metadata: record(row.metadata),
+    ...(row.owner_ingress ? { ownerIngress: row.owner_ingress } : {}),
     ...(row.causation_id ? { causationId: String(row.causation_id) } : {}),
     correlationId: String(row.correlation_id),
     ...(row.deduplication_id
@@ -766,6 +777,7 @@ export function createEventStore(
       deduplicationId: mutation.draft.deduplicationId?.trim() || undefined,
     };
     const encoded = encodeDraft(draft);
+    const ingress = ownerIngressEvidence(mutation.ingress);
     const consumers = uniqueConsumers(mutation.consumers);
     const eventId = mutation.eventId ?? createId();
     const settlementScopeId = draft.settlementScopeId?.trim() || eventId;
@@ -827,6 +839,7 @@ export function createEventStore(
         `${param(encoded.payload.text)}::jsonb`,
         `${param(encoded.delta.text)}::jsonb`,
         `${param(encoded.metadata.text)}::jsonb`,
+        `${param(JSON.stringify(ingress ?? null))}::jsonb`,
         param(draft.causationId ?? null),
         param(correlationId),
         param(draft.deduplicationId ?? null),
@@ -864,7 +877,7 @@ export function createEventStore(
            INSERT INTO ${tables.events} (
              seq, id, schema_version, type, namespace,
              subject_type, subject_id, payload, delta,
-             metadata, causation_id, correlation_id, deduplication_id, created_at
+             metadata, owner_ingress, causation_id, correlation_id, deduplication_id, created_at
            ) SELECT owner_sequence.last_seq, ${values} FROM owner_sequence
            RETURNING *
          )`,
@@ -1493,7 +1506,7 @@ export function createEventStore(
       );
       return result.rows.length === 1;
     },
-    async heartbeatDeliveries(attempts) {
+    async heartbeatDeliveries(attempts, accept) {
       if (!attempts.length || attempts.length > 256) {
         throw new RangeError("Heartbeat batch must contain 1 to 256 attempts.");
       }
@@ -1511,7 +1524,10 @@ export function createEventStore(
         async (attempts, context) => {
           const live: DeliveryAttemptHeartbeat[] = [];
           for (const attempt of attempts) {
-            if (attempt.ownerEpoch !== context.caller.epoch) continue;
+            if (
+              attempt.ownerEpoch !== context.caller.epoch ||
+              accept && !accept(attempt, context.caller.epoch)
+            ) continue;
             try {
               await assertOwnerInvocationLive(context, {
                 databaseSchema,

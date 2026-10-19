@@ -2,13 +2,6 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { assertJsonValue } from "./json.ts";
 import { captureHostCommandJson } from "./application/host-command-json.ts";
 import { snapshotStreamMetadata } from "./streams/json.ts";
-import { createHostCommands } from "./application/host-commands.ts";
-import type { HostCommandJson } from "./application/host-command-types.ts";
-import type {
-  CommandCaller,
-  CommandRequest,
-  DatabaseOwner,
-} from "./engine/commands.ts";
 import { canonicalContentJson } from "./content/json.ts";
 import {
   decodeCapability,
@@ -262,46 +255,4 @@ Deno.test("capture boundaries retain snapshot versus per-property descriptor tim
   assertEquals(decodeCapability(encodeCapability(array)), [1]);
   assertThrows(() => stream(array));
   assertEquals(hooks, 0);
-});
-
-Deno.test("host admission retains the historical logical receipt identity tuple", async () => {
-  let captured: CommandRequest<HostCommandJson> | undefined;
-  const signal = new AbortController().signal;
-  const owner = {
-    signal,
-    epoch: 7,
-    ready: Promise.resolve(),
-    register:
-      () =>
-      (_caller: CommandCaller, request: CommandRequest<HostCommandJson>) => {
-        captured = request;
-        return Promise.resolve(request.input);
-      },
-  } as unknown as DatabaseOwner;
-  const host = createHostCommands({
-    defaultSchema: "command_test",
-    signal,
-    admit: () => Promise.resolve(),
-    openScope: () => Promise.resolve(),
-    definitions: {
-      echo: {
-        namespace: "space|one",
-        principal: "service",
-        authorize() {},
-        execute: (input) => input,
-      },
-    },
-  });
-  host.install("command_test", owner);
-  await host.commands.invoke("echo", { z: -0, a: "😀\ud800" }, {
-    idempotencyKey: "same|key",
-  });
-  assertEquals(captured?.receipt, {
-    identity: {
-      domain: "logical",
-      key:
-        '["host.command.v1","command_test","space|one","echo","service","same|key"]',
-    },
-    intent: { z: 0, a: "😀\ud800" },
-  });
 });

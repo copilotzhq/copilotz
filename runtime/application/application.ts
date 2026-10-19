@@ -1,6 +1,6 @@
 import { runIndependentAsyncContext } from "../../dependencies/async-hooks.ts";
 import type { OwnerIngressProof } from "./ingress/authority.ts";
-import { createHostCommands, hostDatabaseScopes } from "./host-commands.ts";
+import { hostDatabaseScopes } from "./database-scopes.ts";
 import { createHostServices } from "./host.ts";
 import { withApplicationIngress } from "./ingress/registry.ts";
 import { createSharedOperationReaders } from "./operation-readers.ts";
@@ -339,9 +339,7 @@ export async function createCopilotzApplication(
   beforeRecovery?: (engine: CopilotzEngine) => void | Promise<void>,
 ): Promise<InternalCopilotzApplication> {
   const requestedScopes = hostDatabaseScopes(
-    options.databaseSchema ?? "public",
     options.databaseScopes,
-    options.hostCommands,
   );
   const persistence = await openCopilotzPersistence(options, lifecycle);
   const namespace = optionalText(options.namespace, "Namespace");
@@ -367,13 +365,6 @@ export async function createCopilotzApplication(
     | ReturnType<typeof createSharedOperationReaders>
     | undefined;
   const lifetime = new AbortController();
-  const hostCommands = createHostCommands({
-    definitions: options.hostCommands,
-    defaultSchema: databaseSchema,
-    signal: lifetime.signal,
-    admit: () => persistence.recovery?.admit() ?? Promise.resolve(),
-    openScope: (schema) => openRecoveredScope(schema),
-  });
   const outputHub = createApplicationOutputHub(async (output, schema) => {
     const scoped = await openRecoveredScope(schema);
     return ({
@@ -417,7 +408,7 @@ export async function createCopilotzApplication(
       async publishLocalStream(stream, context) {
         await outputHub.emit(stream, context.databaseSchema);
       },
-    }, { ownerAcquired: hostCommands.install, beforeRecovery });
+    }, { beforeRecovery });
   } catch (error) {
     outputHub.close();
     await persistence.close("copilotz_application_initialization_failed").catch(
@@ -797,7 +788,6 @@ export async function createCopilotzApplication(
     engine,
     execution: engine.execution,
     interruptActiveSends,
-    hostCommands: hostCommands.commands,
     async startRecovery() {
       // Only explicit host scopes are opened; no catalog-wide schema discovery.
       for (const schema of requestedScopes) await engine.databaseScope(schema);

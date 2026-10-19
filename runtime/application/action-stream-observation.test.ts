@@ -147,7 +147,7 @@ for (const mode of ["immediate", "deferred", "cancelled"] as const) {
           async () =>
             await retainedOpen!({ mediaType: "text/plain", role: "output" }),
           Error,
-          "owner_assignment_ended",
+          "Action capability lifetime has ended.",
         );
         await assertRejects(
           async () =>
@@ -156,7 +156,7 @@ for (const mode of ["immediate", "deferred", "cancelled"] as const) {
               bytes: new TextEncoder().encode("forbidden"),
             }),
           Error,
-          "owner_assignment_ended",
+          "Action capability lifetime has ended.",
         );
       } finally {
         releaseProducer.resolve();

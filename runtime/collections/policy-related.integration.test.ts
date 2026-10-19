@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { createCopilotz } from "../../create-copilotz.ts";
+import { createFixtureCopilotz as createCopilotz } from "../testing/fixture-commands.test.ts";
 import {
   type ActionContext,
   ActionError,

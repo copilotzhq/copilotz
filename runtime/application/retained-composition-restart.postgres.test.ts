@@ -520,7 +520,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           receipts: beforeRestart.receipts.length,
           nodes: beforeRestart.nodes.length,
           sequence: beforeRestart.sequence.length,
-        }, { events: 10, bodies: 9, receipts: 4, nodes: 2, sequence: 10 });
+        }, { events: 10, bodies: 9, receipts: 3, nodes: 2, sequence: 10 });
         current = await start();
         assertEquals(await epoch(), 2);
         await settled();
@@ -636,7 +636,7 @@ for (const mode of ["in-process", "websocket"] as const) {
           receipts: secondSnapshot.receipts.length,
           nodes: secondSnapshot.nodes.length,
           sequence: secondSnapshot.sequence.length,
-        }, { events: 22, bodies: 18, receipts: 8, nodes: 4, sequence: 22 });
+        }, { events: 22, bodies: 18, receipts: 6, nodes: 4, sequence: 22 });
         assertEquals(claims.length, 3);
         assertEquals(claims[2].opening, 2);
         assert(claims[2].deliveryId !== firstDelivery.id);

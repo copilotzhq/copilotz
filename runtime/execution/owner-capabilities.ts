@@ -2,7 +2,6 @@ import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import {
   withoutOwnerCommandAuthorization,
-  withOwnerCommandAuthorization,
 } from "../engine/command-authorization.ts";
 import type {
   DeliveryAttemptRegistration,
@@ -49,7 +48,6 @@ type Deferred<T> = ReturnType<typeof Promise.withResolvers<T>>;
 const MAX_CONTEXTS = 256;
 const MAX_RESOURCES = 32;
 const MAX_ASSIGNMENTS = 256;
-const MAX_CALLS = 4096;
 const POLL_MS = 10_000;
 const RESOURCE_IDLE_MS = 30_000;
 const RESOURCE_LIFETIME_MS = 120_000;
@@ -97,9 +95,9 @@ type Assignment = {
   queue: CapabilityPoll[];
   wake?: Deferred<void>;
   task: Promise<void>;
-  calls: number;
   terminal?: { result?: WorkerWorkResult; error?: unknown };
-  snapshotAuthority?: Promise<() => Promise<void>>;
+  snapshotOpen?: boolean;
+  authority?: Readonly<{ epoch: number; signal: AbortSignal }>;
   interruption?: Error;
   semanticRetirement?: boolean;
   heartbeatSequence: number;
@@ -207,19 +205,16 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
 export function captureOwnerSessionAuthority(
   source: OwnerSessionSource | undefined,
 ): OwnerSessionAuthority {
-  const methods = ["subscribe", "assertCurrent"] as const;
-  const captured = methods.map((name) =>
-    source && Object.getOwnPropertyDescriptor(source, name)?.value
-  );
-  if (captured.some((method) => typeof method !== "function")) {
+  const { subscribe, assertCurrent } = source ?? {};
+  if (typeof subscribe !== "function" || typeof assertCurrent !== "function") {
     throw new TypeError(
       "Remote dispatcher requires its accepted session authority (subscribe and assertCurrent).",
     );
   }
-  return Object.freeze({
-    subscribe: captured[0].bind(source),
-    assertCurrent: captured[1].bind(source),
-  });
+  return {
+    subscribe: subscribe.bind(source),
+    assertCurrent: assertCurrent.bind(source),
+  };
 }
 
 function sameSession(
@@ -237,7 +232,6 @@ export type OwnerCapabilityHost = Readonly<{
   workerCalls: WorkerCallOptions;
   lifecycle: HypervisorLifecycleCallbacks;
   close(reason?: string): Promise<void>;
-  snapshot(): Readonly<{ assignments: number; resources: number }>;
 }>;
 
 export function createOwnerCapabilityHost(
@@ -255,22 +249,12 @@ export function createOwnerCapabilityHost(
     ): Promise<unknown>;
     resourceIdleMs?: number;
     resourceLifetimeMs?: number;
+    onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
   }>,
 ): OwnerCapabilityHost {
   // Capture trusted registration synchronously. Later caller mutation must not
   // replace authority/receipt callbacks after admission has already begun.
-  const descriptors = Object.getOwnPropertyDescriptors(options);
-  for (const key of Reflect.ownKeys(descriptors)) {
-    const descriptor = Reflect.get(descriptors, key) as PropertyDescriptor;
-    if (!("value" in descriptor)) {
-      throw new TypeError(
-        "Owner capability configuration must contain data properties.",
-      );
-    }
-  }
-  options = Object.freeze(
-    Object.defineProperties({}, descriptors),
-  ) as typeof options;
+  options = { ...options };
   const sessions = options.localExecution
     ? undefined
     : captureOwnerSessionAuthority(options.sessions);
@@ -280,7 +264,6 @@ export function createOwnerCapabilityHost(
     {
       sequence: number;
       attempt: DeliveryAttemptRegistration;
-      retried?: boolean;
     }
   >();
   let renewing: Promise<void> | undefined;
@@ -349,19 +332,15 @@ export function createOwnerCapabilityHost(
     }
     assignment.wake?.resolve();
   };
-  const check = async (assignment: Assignment) => {
+  const check = (assignment: Assignment) => {
     assignment.abort.signal.throwIfAborted();
     sessions?.assertCurrent(assignment.binding.fence);
-    if (assignment.snapshotAuthority) {
-      await (await assignment.snapshotAuthority)();
-      return;
-    }
-    const metadata = assignment.binding.parent!.metadata;
-    const authority = await options.resolveAuthority(
-      String(metadata.databaseSchema),
-    );
-    assignment.abort.signal.throwIfAborted();
-    if (authority.epoch !== metadata.ownerEpoch || authority.signal.aborted) {
+    const authority = assignment.authority;
+    if (
+      !authority ||
+      authority.epoch !== assignment.binding.parent!.metadata.ownerEpoch ||
+      authority.signal.aborted
+    ) {
       const error = capabilityError(
         "ActionOwnershipLost",
         "The assignment belongs to a retired owner epoch.",
@@ -390,43 +369,30 @@ export function createOwnerCapabilityHost(
         groups.set(evidence.attempt.store, group);
       }
       for (const [store, group] of groups) {
-        const invalid = new Map<DeliveryAttemptRegistration, Error>();
         try {
-          const renewed = await withOwnerCommandAuthorization(
-            (command) => {
-              for (const [assignment, evidence] of group) {
-                try {
-                  if (closed) throw capabilityError("owner_closed");
-                  const current = sessions!.assertCurrent(
-                    assignment.binding.fence,
-                  );
-                  if (
-                    assignments.get(assignment.key) !== assignment ||
-                    assignment.attempt !== evidence.attempt ||
-                    assignment.terminal ||
-                    current.nextHeartbeatSequence < evidence.sequence ||
-                    command.caller.epoch !==
-                      evidence.attempt.heartbeat.ownerEpoch
-                  ) {
-                    throw new ActionOwnershipLost(
-                      evidence.attempt.heartbeat.id,
-                    );
-                  }
-                  assignment.abort.signal.throwIfAborted();
-                  evidence.attempt.signal.throwIfAborted();
-                } catch (error) {
-                  invalid.set(
-                    evidence.attempt,
-                    error instanceof Error ? error : new Error(String(error)),
-                  );
-                }
+          const members = new Map(
+            group.map((entry) => [entry[1].attempt.heartbeat.id, entry]),
+          );
+          const renewed = await store.heartbeatDeliveries(
+            group.map(([, evidence]) => evidence.attempt.heartbeat),
+            (heartbeat, epoch) => {
+              const [assignment, evidence] = members.get(heartbeat.id)!;
+              try {
+                if (closed) return false;
+                const current = sessions!.assertCurrent(
+                  assignment.binding.fence,
+                );
+                return assignments.get(assignment.key) === assignment &&
+                  assignment.attempt === evidence.attempt &&
+                  !assignment.terminal &&
+                  !assignment.abort.signal.aborted &&
+                  !evidence.attempt.signal.aborted &&
+                  current.nextHeartbeatSequence >= evidence.sequence &&
+                  epoch === heartbeat.ownerEpoch;
+              } catch {
+                return false;
               }
-              if (invalid.size) throw invalid.values().next().value;
             },
-            () =>
-              store.heartbeatDeliveries(
-                group.map(([, evidence]) => evidence.attempt.heartbeat),
-              ),
           );
           const accepted = new Set(
             renewed.map(({ id, owner }) => JSON.stringify([id, owner])),
@@ -446,25 +412,10 @@ export function createOwnerCapabilityHost(
             }
           }
         } catch (error) {
-          for (const [assignment, evidence] of group) {
-            if (
-              invalid.size && !invalid.has(evidence.attempt) &&
-              !evidence.retried
-            ) {
-              // An identified stale member rolled the command back. Keep the
-              // remaining accepted evidence, without replacing a newer pulse.
-              if (!pendingHeartbeats.has(assignment)) {
-                pendingHeartbeats.set(assignment, {
-                  ...evidence,
-                  retried: true,
-                });
-              }
-            } else {
-              evidence.attempt.revoke(
-                invalid.get(evidence.attempt) ??
-                  (error instanceof Error ? error : new Error(String(error))),
-              );
-            }
+          for (const [, evidence] of group) {
+            evidence.attempt.revoke(
+              error instanceof Error ? error : new Error(String(error)),
+            );
           }
         }
       }
@@ -536,7 +487,7 @@ export function createOwnerCapabilityHost(
     args: readonly unknown[],
     context: ProcessorContext | ActionContext,
   ): Promise<unknown> => {
-    await check(assignment);
+    check(assignment);
     if (assignment.contexts.size >= MAX_CONTEXTS) {
       throw capabilityError("owner_capacity");
     }
@@ -606,7 +557,7 @@ export function createOwnerCapabilityHost(
       encodeCapability(invocation);
       notify(assignment, { invocation });
       value = await result.promise;
-      await check(assignment);
+      check(assignment);
       context.signal.throwIfAborted();
     } catch (error) {
       // Only the trusted transport lifecycle can classify a physical loss.
@@ -862,12 +813,10 @@ export function createOwnerCapabilityHost(
     if (assignment.resources.size >= MAX_RESOURCES) {
       throw capabilityError("owner_capacity");
     }
-    if (assignment.snapshotAuthority) {
+    if (assignment.snapshotOpen) {
       throw capabilityError("owner_snapshot_nested");
     }
-    const authority = Promise.withResolvers<() => Promise<void>>();
-    assignment.snapshotAuthority = authority.promise;
-    void authority.promise.catch(() => undefined);
+    assignment.snapshotOpen = true;
     const opened = Promise.withResolvers<RecordValue>();
     const exit = Promise.withResolvers<void>();
     const wake = { current: Promise.withResolvers<void>() };
@@ -907,7 +856,6 @@ export function createOwnerCapabilityHost(
         if (control.kind === "pooled") await control.current(read);
         else await read(control.snapshot);
       };
-      authority.resolve(validate);
       await validate();
       opened.resolve(scope);
       while (!closing || jobs.length) {
@@ -918,12 +866,13 @@ export function createOwnerCapabilityHost(
           continue;
         }
         try {
-          await check(assignment);
-          job.result.resolve(
-            await withCollectionReadBudget(async () =>
-              await callPath(scope, job.path, job.args)
-            ),
+          check(assignment);
+          const value = await withCollectionReadBudget(async () =>
+            await callPath(scope, job.path, job.args)
           );
+          await validate();
+          check(assignment);
+          job.result.resolve(value);
         } catch (error) {
           job.result.reject(error);
         }
@@ -931,7 +880,6 @@ export function createOwnerCapabilityHost(
       if (closeError) throw closeError;
     });
     void task.then(exit.resolve, (error) => {
-      authority.reject(error);
       opened.reject(error);
       exit.reject(error);
     });
@@ -953,7 +901,7 @@ export function createOwnerCapabilityHost(
           failed = true;
           failure = error;
         } finally {
-          assignment.snapshotAuthority = undefined;
+          assignment.snapshotOpen = false;
         }
         // Unknown cleanup takes precedence over callback failure; a confirmed
         // cleanup preserves the original callback error without throwing from
@@ -972,7 +920,7 @@ export function createOwnerCapabilityHost(
     });
     try {
       await opened.promise;
-      await check(assignment);
+      check(assignment);
       return { handle: resource.id };
     } catch (error) {
       await closeResource(assignment, resource, error).catch(() => undefined);
@@ -1005,14 +953,16 @@ export function createOwnerCapabilityHost(
         resources: new Map(),
         queue: [],
         task: Promise.resolve(),
-        calls: 0,
         heartbeatSequence:
           sessions?.assertCurrent(binding.fence).nextHeartbeatSequence ?? 0,
       };
       const active = assignment;
       assignments.set(key, active);
       try {
-        await check(active);
+        active.authority = await options.resolveAuthority(
+          String(binding.parent.metadata.databaseSchema),
+        );
+        check(active);
         binding.signal.throwIfAborted();
         const workloads = options.createWorkloads({
           registry: rehost(active),
@@ -1034,7 +984,7 @@ export function createOwnerCapabilityHost(
             attempt.signal.addEventListener("abort", remove, { once: true });
             return remove;
           },
-          onDiagnostic: (diagnostic) => notify(active, { diagnostic }),
+          onDiagnostic: options.onDiagnostic,
         });
         const workload = workloads[binding.parent.workload];
         if (!workload) throw capabilityError("owner_workload_refused");
@@ -1074,8 +1024,7 @@ export function createOwnerCapabilityHost(
     }
     if (!assignment) throw capabilityError("owner_assignment_unknown");
     const active = assignment;
-    if (++active.calls > MAX_CALLS) throw capabilityError("owner_capacity");
-    await check(active);
+    check(active);
     const abort = () => abortAssignment(active, binding.signal.reason);
     binding.signal.addEventListener("abort", abort, { once: true });
     try {
@@ -1093,7 +1042,7 @@ export function createOwnerCapabilityHost(
             active.wake = undefined;
           }
         }
-        await check(active);
+        check(active);
         const next = active.queue.shift();
         if (next) return next;
         if (active.terminal) {
@@ -1154,7 +1103,7 @@ export function createOwnerCapabilityHost(
             throw capabilityError("owner_handle_unknown");
           }
           await closeResource(active, resource, call.error);
-          await check(active);
+          check(active);
           checkInvocation();
           return undefined;
         }
@@ -1246,9 +1195,6 @@ export function createOwnerCapabilityHost(
           const intent = capabilityReceiptIntent(
             encodeCapability({ plan, options: call.options }),
           );
-          if (JSON.stringify(intent) !== JSON.stringify(receipt.intent)) {
-            throw capabilityError("owner_receipt_intent");
-          }
           if (!invocation.receiptPrincipal) {
             throw capabilityError("owner_receipt_authority");
           }
@@ -1278,7 +1224,7 @@ export function createOwnerCapabilityHost(
                 await callPath(scope, operation.path, operation.args);
               }
             }, call.options));
-          await check(active);
+          check(active);
           checkInvocation();
           return undefined;
         }
@@ -1309,7 +1255,7 @@ export function createOwnerCapabilityHost(
           }
           try {
             const result = resource.serial.then(async () => {
-              await check(active);
+              check(active);
               checkInvocation();
               if (resource.closed) {
                 throw capabilityError("owner_handle_unknown");
@@ -1326,7 +1272,7 @@ export function createOwnerCapabilityHost(
               const value = resource.run
                 ? await resource.run(path, args)
                 : await callPath(resource.value, path, args);
-              await check(active);
+              check(active);
               checkInvocation();
               if (resource.closed) {
                 throw capabilityError("owner_handle_unknown");
@@ -1363,7 +1309,7 @@ export function createOwnerCapabilityHost(
             });
             resource.serial = result.catch(() => undefined);
             const value = await result;
-            await check(active);
+            check(active);
             checkInvocation();
             return await exposeResult(active, call.context!, value);
           } finally {
@@ -1416,7 +1362,7 @@ export function createOwnerCapabilityHost(
             reservation.ready.resolve(undefined);
             await closeResource(active, reservation.resource);
           }
-          await check(active);
+          check(active);
           checkInvocation();
           return exposed;
         } catch (error) {
@@ -1541,15 +1487,6 @@ export function createOwnerCapabilityHost(
         renewing,
       ]);
       if (failure) throw failure;
-    },
-    snapshot() {
-      return {
-        assignments: assignments.size,
-        resources: [...assignments.values()].reduce(
-          (count, item) => count + item.resources.size,
-          0,
-        ),
-      };
     },
   };
 }

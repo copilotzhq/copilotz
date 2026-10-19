@@ -153,7 +153,6 @@ Deno.test("downstream app embeds Copilotz with app-owned database, Hypervisor, a
       "close",
       "collections",
       "fetch",
-      "hostCommands",
       "listOperations",
       "maintenance",
       "observe",

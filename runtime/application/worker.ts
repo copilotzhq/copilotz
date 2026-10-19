@@ -1,4 +1,3 @@
-import { recoverOwnerReceipt } from "../execution/owner-receipt.ts";
 import {
   createWorker,
   type Worker,
@@ -22,7 +21,6 @@ export type CreateCopilotzWorkerOptions =
     | "views"
     | "resources"
     | "adapters"
-    | "onDeliveryDiagnostic"
   >
   & Omit<WorkerOptions, "workloads">
   & Readonly<
@@ -77,8 +75,6 @@ export async function createCopilotzWorker(
   });
   const workloads = createOwnerWorkerWorkloads({
     registry,
-    onDiagnostic: options.onDeliveryDiagnostic,
-    recoverReceipt: (receipt) => recoverOwnerReceipt(worker, receipt),
   });
   const worker = createWorker({
     id: options.id,

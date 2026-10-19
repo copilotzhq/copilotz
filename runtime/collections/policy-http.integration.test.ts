@@ -4,7 +4,7 @@ import {
   defineAction,
 } from "../actions/index.ts";
 import { assertEquals, assertRejects } from "@std/assert";
-import { createCopilotz } from "../../create-copilotz.ts";
+import { createFixtureCopilotz as createCopilotz } from "../testing/fixture-commands.test.ts";
 import { definePlugin } from "../plugins/index.ts";
 import { serverPlugin } from "../../plugins/server/plugin.ts";
 import { defineServerFacade } from "../../plugins/server/resources/facade/index.ts";

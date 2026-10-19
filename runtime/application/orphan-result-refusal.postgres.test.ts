@@ -1,8 +1,8 @@
+import { createCopilotz } from "../../create-copilotz.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type ActionCallers,
   type ActionContext,
-  createCopilotz,
   defineAction,
   defineCollection,
   definePlugin,
@@ -300,15 +300,6 @@ async function fixture(
       actions,
       collections,
       processors,
-      hostCommands: {
-        probe: {
-          namespace,
-          databaseSchema: schema,
-          principal: "integrity-observer",
-          authorize() {},
-          execute: (_input: Record<string, never>) => "ready",
-        },
-      },
       plugins: [definePlugin({
         ...serverPlugin,
         resources: {
@@ -377,10 +368,18 @@ async function fixture(
     // Factory readiness is measured separately from a connected worker and from
     // any explicit alarm wake. Its handler returns only a readiness marker;
     // it never manufactures lifecycle, capture, effect, or business rows.
-    assertEquals(
-      await gateway.hostCommands.invoke("probe", {}),
-      "ready",
-    );
+    const probeOwner = await openDatabaseOwner(database, schema);
+    const invokeProbe = probeOwner.register("fixture.readiness", {
+      authorize() {},
+      execute: () => "ready",
+    });
+    releaseDatabaseOwner(probeOwner);
+    const probe = () =>
+      invokeProbe(
+        { principal: "integrity-observer", epoch: probeOwner.epoch! },
+        { input: {} },
+      );
+    assertEquals(await probe(), "ready");
     const factoryCounts = { ...counts };
     // Use the real owner boundary already used by retained-attempt tests. This
     // does not fabricate a delivery, Action, receipt, or recovery implementation.
@@ -441,6 +440,7 @@ async function fixture(
     };
     return {
       gateway,
+      probe,
       close,
       wake,
       ordinal,
@@ -1047,12 +1047,12 @@ for (const source of ["unregistered-source", ""] as const) {
         await reopened.wake();
         const failure = await eventually(async () => {
           try {
-            await reopened.gateway.hostCommands.invoke("probe", {});
+            await reopened.probe();
             return undefined;
           } catch (error) {
             return error;
           }
-        }, "public owner command refuses after unknown source wake");
+        }, "owner command refuses after unknown source wake");
         assert(
           String(failure).includes(
             `No owner alarm handler registered for '${source}'`,

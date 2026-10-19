@@ -2,7 +2,6 @@ import { assertEquals, assertRejects } from "@std/assert";
 import {
   authenticatedServerIngressProof,
   type OwnerIngressProof,
-  recordOwnerIngress,
 } from "../application/ingress/authority.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import {
@@ -85,14 +84,7 @@ async function fixture() {
         consumerId: `fixture:${id}`,
         settlement: options.detached ? "detached" : "inherit",
       }],
-      mutate: (context) =>
-        recordOwnerIngress(
-          context,
-          schema,
-          { id, namespace: scope, type, payload, metadata },
-          data,
-          options.proof,
-        ),
+      ingress: options.proof,
     });
     return {
       eventId: result.event.id,

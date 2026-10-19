@@ -15,6 +15,9 @@ export type EventBodyRef = Readonly<{
 export type DurableEvent<TPayload = unknown> = Readonly<{
   durable: true;
   id: string;
+  /** Trusted owner admission, independent of client metadata. */
+  ownerIngress?:
+    import("../actions/protected-action-types.ts").ProtectedActionIngress;
   /** Database-assigned monotonic position, serialized without precision loss. */
   position: string;
   /** Gap-free owner sequence; namespaces interleave within one database schema. */

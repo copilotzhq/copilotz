@@ -328,9 +328,9 @@ Deno.test({
           const signal = AbortSignal.any([work.signal, abort.signal]);
           const remove = trackAttempt!({
             store: {
-              async heartbeatDeliveries(attempts) {
+              async heartbeatDeliveries(attempts, accept) {
                 const notice = observed;
-                renewing = f.store.heartbeatDeliveries(attempts);
+                renewing = f.store.heartbeatDeliveries(attempts, accept);
                 try {
                   const result = await renewing;
                   notice.resolve(result);

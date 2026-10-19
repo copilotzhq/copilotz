@@ -1,6 +1,7 @@
+import { createCopilotz as createWorkerCopilotz } from "../../create-copilotz.ts";
 import { ActionError } from "../actions/errors.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { createCopilotz } from "../../create-copilotz.ts";
+import { createFixtureCopilotz as createCopilotz } from "../testing/fixture-commands.test.ts";
 import { type ActionContext, defineAction } from "../actions/index.ts";
 import { defineCollection } from "./definition.ts";
 import type {
@@ -9,7 +10,7 @@ import type {
 } from "./policy-types.ts";
 import { validateCollectionPolicies } from "./policy-registration.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { createCopilotzGateway } from "../application/gateway.ts";
+import { createFixtureGateway as createCopilotzGateway } from "../testing/fixture-commands.test.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import { defineProcessor } from "../plugins/processor.ts";
 import { bounded, until } from "../testing/effect-commit-proxy.ts";
@@ -58,7 +59,8 @@ Deno.test("Collection policy required registration fails closed and Worker host 
     "exactly one",
   );
   await assertRejects(
-    () => createCopilotz({ role: "worker", collectionPolicies: {} } as never),
+    () =>
+      createWorkerCopilotz({ role: "worker", collectionPolicies: {} } as never),
     TypeError,
     "Workers accept",
   );
@@ -483,7 +485,7 @@ for (const topology of ["embedded", "websocket"] as const) {
           async execute(
             input: { operationId: string },
             context:
-              import("../application/host-command-types.ts").HostCommandContext,
+              import("../testing/fixture-command-types.ts").HostCommandContext,
           ) {
             const changed = await context.query(
               `UPDATE "${schema}".event_deliveries SET lease_owner='replacement-attempt' WHERE settlement_scope_id=$1 AND status='leased' RETURNING id`,
@@ -499,7 +501,7 @@ for (const topology of ["embedded", "websocket"] as const) {
           async execute(
             _input: unknown,
             context:
-              import("../application/host-command-types.ts").HostCommandContext,
+              import("../testing/fixture-command-types.ts").HostCommandContext,
           ) {
             await context.query(
               `INSERT INTO "${schema}".edges(id,namespace,source_node_id,target_node_id,type,data,weight) VALUES('existing-edge','space','one','dependent','linked','{"sourceType":"policyEntry","targetType":"policyEntry","metadata":{}}'::jsonb,1)`,
@@ -514,7 +516,7 @@ for (const topology of ["embedded", "websocket"] as const) {
           async execute(
             input: { allowed: boolean },
             context:
-              import("../application/host-command-types.ts").HostCommandContext,
+              import("../testing/fixture-command-types.ts").HostCommandContext,
           ) {
             await context.query(
               `CREATE TABLE IF NOT EXISTS "${schema}".policy_members(id text PRIMARY KEY,allowed boolean NOT NULL)`,
@@ -567,18 +569,24 @@ for (const topology of ["embedded", "websocket"] as const) {
     const app = (gateway ??
       await createCopilotz(
         options,
-      )) as import("../application/types.ts").CopilotzApplication<
-        typeof options.actions,
-        typeof options.collections,
-        typeof options.hostCommands
-      >;
+      )) as unknown as
+        & import("../application/types.ts").CopilotzApplication<
+          typeof options.actions,
+          typeof options.collections
+        >
+        & {
+          hostCommands:
+            import("../testing/fixture-command-types.ts").HostCommands<
+              typeof options.hostCommands
+            >;
+        };
     let closeWorker: (() => Promise<void>) | undefined;
     let listener: ReturnType<typeof listen> | undefined;
     if (topology === "websocket") {
       listener = listen(gateway!, { hostname: "127.0.0.1", port: 0 });
       const url = new URL("/_copilotz/workers", listener.url);
       url.protocol = "ws:";
-      const worker = await createCopilotz({
+      const worker = await createWorkerCopilotz({
         role: "worker",
         namespace: "space",
         databaseSchema: schema,

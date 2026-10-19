@@ -221,7 +221,6 @@ export type CopilotzEngine = Readonly<{
   execution: Readonly<{
     ownership: DeliveryExecutorOwnership;
     workload: string;
-    liveWorkload: string;
     createWorkerWorkloads:
       import("../execution/workload.ts").OwnerExecutionFactory;
     lookupReceipt(

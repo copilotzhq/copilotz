@@ -1,5 +1,4 @@
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
-import { reportDeliveryDiagnostic } from "./diagnostics.ts";
 /** The single worker execution path for in-process and WebSocket placement. */
 import type { WorkerWorkHandler } from "../../dependencies/oxian-worker.ts";
 import { isHostCallError } from "../../dependencies/oxian-work.ts";
@@ -25,7 +24,6 @@ type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Request = (call: CapabilityCall, signal?: AbortSignal) => Promise<unknown>;
 const MAX_ACTIVE_INVOCATIONS = 256;
-const MAX_CALLS = 4096;
 
 function signalFrom(args: readonly unknown[]): AbortSignal | undefined {
   for (const argument of args) {
@@ -86,7 +84,6 @@ function workerContext(options: {
   const sampledAt = performance.now();
   const pending = new Set<Promise<unknown>>();
   let stopped = false;
-  let calls = 0;
   let fatal: unknown;
   let transactionIndex = 0;
   const check = () => {
@@ -95,7 +92,6 @@ function workerContext(options: {
   };
   const track = <T>(run: () => Promise<T>): Promise<T> => {
     check();
-    if (++calls > MAX_CALLS) throw capabilityError("owner_capacity");
     const promise = run();
     pending.add(promise);
     void promise.then(() => pending.delete(promise), (error) => {
@@ -327,7 +323,6 @@ function workerContext(options: {
         if (typeof input.id !== "string" || !input.id.trim()) {
           throw capabilityError("owner_plan_invalid");
         }
-        encodeCapability(entry);
         return { id: input.id };
       })();
       planning.push(task.catch((error) => {
@@ -385,11 +380,6 @@ function workerContext(options: {
         key,
       ]),
       databaseSchema: String(invocation.scope.databaseSchema),
-      intent: JSON.parse(
-        new TextDecoder().decode(
-          encodeCapability({ plan, options: ownerOptions }),
-        ),
-      ),
     };
     await track(() =>
       request(
@@ -531,10 +521,6 @@ export function createOwnerWorkerWorkloads(
   options: Readonly<{
     registry: PluginRegistry;
     workloads?: readonly string[];
-    onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
-    recoverReceipt?: (
-      receipt: NonNullable<CapabilityCall["receipt"]>,
-    ) => Promise<boolean>;
   }>,
 ): Readonly<Record<string, WorkerWorkHandler>> {
   const execute: WorkerWorkHandler = async (work) => {
@@ -557,13 +543,6 @@ export function createOwnerWorkerWorkloads(
         return response.value;
       } catch (error) {
         if (isHostCallError(error)) {
-          // A lost response is never permission to repeat a mutation. Only a
-          // durable receipt from the authenticated owner may release its output.
-          if (
-            error.execution === "indeterminate" && call.receipt &&
-            options.recoverReceipt &&
-            await options.recoverReceipt(call.receipt).catch(() => false)
-          ) return undefined;
           const failure = capabilityError(
             error.execution === "indeterminate"
               ? "owner_call_indeterminate"
@@ -652,9 +631,6 @@ export function createOwnerWorkerWorkloads(
       while (true) {
         signal.throwIfAborted();
         const poll = await request({ kind: "next" }) as CapabilityPoll;
-        if (poll.diagnostic) {
-          reportDeliveryDiagnostic(options.onDiagnostic, poll.diagnostic);
-        }
         if (poll.aborted) {
           running.get(poll.aborted)?.abort.abort(
             capabilityError("owner_context_cancelled"),
@@ -690,8 +666,25 @@ export function createOwnerWorkerWorkloads(
     }
   };
   return Object.fromEntries(
-    (options.workloads ?? ["copilotz.delivery.v1", "copilotz.live.v1"]).map((
+    (options.workloads ?? ["copilotz.delivery.v1"]).map((
       name,
     ) => [name, execute]),
   );
+}
+
+export async function recoverOwnerReceipt(
+  worker: Pick<import("../../dependencies/oxian-worker.ts").Worker, "callHost">,
+  receipt: NonNullable<CapabilityCall["receipt"]>,
+): Promise<boolean> {
+  const handle = await worker.callHost({
+    workload: OWNER_CAPABILITY_WORKLOAD,
+    body: encodeCapability({ kind: "receipt", value: receipt }),
+    deadlineAtMs: Date.now() + 10_000,
+  });
+  const response = await readCapability(handle.output) as {
+    value?: unknown;
+    error?: unknown;
+  };
+  await handle.completed;
+  return response.error === undefined && response.value === true;
 }

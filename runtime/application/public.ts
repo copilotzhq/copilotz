@@ -27,15 +27,6 @@ export type {
 } from "../execution/index.ts";
 
 export type {
-  HostCommandContext,
-  HostCommandDefinition,
-  HostCommandDefinitions,
-  HostCommandJson,
-  HostCommandOptions,
-  HostCommands,
-} from "./host-command-types.ts";
-
-export type {
   ProtectedActionAdoptionContext,
   ProtectedActionCollection,
   ProtectedActionCollections,

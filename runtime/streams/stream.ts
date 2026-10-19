@@ -1,3 +1,4 @@
+import { isDatabaseBodyStore } from "../content/database-body-store.ts";
 import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import {
   contentStreamBodyId,
@@ -193,6 +194,19 @@ function createStreamRuntime(
         generation: identity.generation,
       });
       let offset = writer.byteLength, committed = logical.committedOffset;
+      const buffered = isDatabaseBodyStore(store);
+      const liveTail = buffered ? catalog.openTail(bodyId) : undefined;
+      const databaseAppend = () =>
+        buffered && offset !== committed
+          ? {
+            databaseAppend: {
+              writer,
+              expectedOffset: committed,
+              appendId: `checkpoint:${committed}`,
+              bytes: liveTail!.bytes(),
+            },
+          }
+          : {};
       let stopped = false,
         closed: PendingContentRef | undefined,
         terminalTask: Promise<void> | undefined;
@@ -216,7 +230,7 @@ function createStreamRuntime(
       let tail: Promise<void> = Promise.resolve();
       let checkpointTimer: ReturnType<typeof setTimeout> | undefined,
         renewTimer: ReturnType<typeof setTimeout> | undefined;
-      let lastCheckpoint = 0;
+      let lastCheckpoint = buffered ? Date.now() : 0;
       let published = false;
       let removeAbort = () => {};
       const appends = new Map<
@@ -240,7 +254,9 @@ function createStreamRuntime(
           ...identity,
           expectedOffset,
           offset: next,
+          ...databaseAppend(),
         });
+        liveTail?.committed(committed);
         lastCheckpoint = Date.now();
         await options.onAppend?.(opened, {
           startOffset: expectedOffset,
@@ -299,6 +315,7 @@ function createStreamRuntime(
           if (current.terminal) {
             terminalAccepted = current.terminal.outcome === "completed";
             appends.clear();
+            liveTail?.close();
             removeAbort();
             return;
           }
@@ -316,6 +333,7 @@ function createStreamRuntime(
             byteLength: committed,
           }, terminal);
           appends.clear();
+          liveTail?.close();
           removeAbort();
         }).catch((error) => {
           terminalTask = undefined;
@@ -466,18 +484,32 @@ function createStreamRuntime(
             if (bytes.byteLength) {
               let result;
               try {
-                result = await store.append({
-                  writer,
-                  expectedOffset: startOffset,
-                  appendId,
-                  bytes,
-                });
+                if (liveTail) {
+                  // Live delivery is a disclosure before the durable command.
+                  // Reuse the acquiring invocation's policy/lifetime preflight.
+                  await scheduled(() => undefined);
+                  if (offset - committed + bytes.length > CONTENT_CHUNK_BYTES) {
+                    await checkpoint();
+                  }
+                  liveTail.append(startOffset, bytes);
+                  result = {
+                    startOffset,
+                    endOffset: startOffset + bytes.length,
+                  };
+                } else {
+                  result = await store.append({
+                    writer,
+                    expectedOffset: startOffset,
+                    appendId,
+                    bytes,
+                  });
+                }
               } catch (error) {
                 fail(error);
                 throw error;
               } finally {
                 // A rejected storage reply may still have written tentative bytes.
-                catalog.notifyPhysicalChange(bodyId);
+                if (!buffered) catalog.notifyPhysicalChange(bodyId);
               }
               if (
                 result.startOffset !== startOffset ||
@@ -495,7 +527,10 @@ function createStreamRuntime(
             const result = { startOffset, endOffset: offset };
             appends.set(appendId, { digest, ...result });
             try {
-              if (Date.now() - lastCheckpoint >= interval) await checkpoint();
+              if (
+                Date.now() - lastCheckpoint >= interval ||
+                buffered && offset - committed >= 64 * 1024
+              ) await checkpoint();
               else scheduleCheckpoint();
             } catch (error) {
               fail(error);
@@ -517,6 +552,7 @@ function createStreamRuntime(
               store,
               logical.copy.key,
               offset,
+              liveTail?.bytes(),
             );
             const descriptor = capturePendingContentDescriptor(
               closeInput.descriptor ?? {
@@ -556,10 +592,12 @@ function createStreamRuntime(
               ...(offset !== committed ? { expectedOffset: committed } : {}),
               digest,
               pending,
+              ...databaseAppend(),
             });
             if (offset !== committed) {
               const startOffset = committed;
               committed = offset;
+              liveTail?.committed(committed);
               lastCheckpoint = Date.now();
               await options.onAppend?.(opened, {
                 startOffset,
@@ -585,6 +623,7 @@ function createStreamRuntime(
             });
             await options.onSeal?.(opened, head);
             appends.clear();
+            liveTail?.close();
             closed = {
               type: "content.pending",
               pendingRef,
@@ -688,6 +727,14 @@ function createStreamRuntime(
                 );
               }
               const copy = logical.copy, physical = resolveStore(copy);
+              // The watch is attached to the owner, including for remote readers.
+              // Tentative bytes bypass storage and disappear on revocation/takeover.
+              const live = !logical.terminal && watch.readTail?.(cursor);
+              if (live && live.length) {
+                cursor += live.length;
+                controller.enqueue(live);
+                return;
+              }
               try {
                 const head = await physical.head({ bodyId: copy.key });
                 if (!head) {

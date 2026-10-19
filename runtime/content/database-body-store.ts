@@ -292,50 +292,14 @@ export function createDatabaseBodyStore(
   const store: BodyStore = {
     ...operations,
     append: async (raw) => {
-      const input = captureBodyAppend(raw),
-        digest = await digestContent(input.bytes);
+      const input = captureBodyAppend(raw);
       await ensure();
-      return await runCommand("body.append", {}, async (_, { transaction }) => {
-        const result = await transaction.query<{ version_token: string }>(
-          `
-        WITH current AS (
-          SELECT body.*,part.start_offset,part.bytes,part.part_digest
-          FROM ${bodies} body LEFT JOIN ${parts} part
-            ON part.body_id=body.body_id AND part.append_id=$6
-          WHERE body.body_id=$1 AND body.reservation_id=$2 AND body.writer_generation=$3
-            AND body.media_type=$4 AND body.state='open' AND body.fenced_from IS NULL
-        ), changed AS (
-          UPDATE ${bodies} SET byte_length=$5::bigint+octet_length($7::bytea),
-            version_token=$9,maintenance_version=maintenance_version+1,updated_at=NOW()
-          WHERE body_id=$1 AND EXISTS (SELECT 1 FROM current WHERE start_offset IS NULL AND byte_length=$5)
-          RETURNING version_token
-        ), inserted AS (
-          INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
-          SELECT $1,$5,$6,$7,$8 FROM changed RETURNING body_id
-        )
-        SELECT version_token FROM changed WHERE EXISTS(SELECT 1 FROM inserted)
-        UNION ALL SELECT version_token FROM current
-          WHERE start_offset=$5 AND bytes=$7::bytea AND part_digest=$8
-            AND byte_length >= $5::bigint+octet_length($7::bytea)`,
-          [
-            input.writer.bodyId,
-            input.writer.reservationId,
-            input.writer.generation,
-            input.writer.mediaType,
-            input.expectedOffset,
-            input.appendId,
-            input.bytes,
-            digest,
-            crypto.randomUUID(),
-          ],
-        );
-        if (!result.rows.length) bodyConflict();
-        return Object.freeze({
-          startOffset: input.expectedOffset,
-          endOffset: input.expectedOffset + input.bytes.length,
-          versionToken: result.rows[0].version_token,
-        });
-      });
+      return await runCommand(
+        "body.append",
+        {},
+        async (_, { transaction }) =>
+          await appendDatabaseBody(transaction, schemaName, input),
+      );
     },
   };
   readers.set(
@@ -368,4 +332,55 @@ export function createDatabaseBodyStore(
   });
   provisioners.set(store, ensure);
   return store;
+}
+
+/** Physical bytes join the checkpoint transaction and its rollback boundary. */
+export async function appendDatabaseBody(
+  transaction: SqlExecutor,
+  schema: string,
+  raw: import("./body-store.ts").AppendBodyInput,
+): Promise<import("./body-store.ts").AppendResult> {
+  assertSchemaCommandTransaction(transaction, schema);
+  const { bodies, parts } = bodyStoreTables(schema);
+  const input = captureBodyAppend(raw),
+    digest = await digestContent(input.bytes);
+  const result = await transaction.query<{ version_token: string }>(
+    `
+        WITH current AS (
+          SELECT body.*,part.start_offset,part.bytes,part.part_digest
+          FROM ${bodies} body LEFT JOIN ${parts} part
+            ON part.body_id=body.body_id AND part.append_id=$6
+          WHERE body.body_id=$1 AND body.reservation_id=$2 AND body.writer_generation=$3
+            AND body.media_type=$4 AND body.state='open' AND body.fenced_from IS NULL
+        ), changed AS (
+          UPDATE ${bodies} SET byte_length=$5::bigint+octet_length($7::bytea),
+            version_token=$9,maintenance_version=maintenance_version+1,updated_at=NOW()
+          WHERE body_id=$1 AND EXISTS (SELECT 1 FROM current WHERE start_offset IS NULL AND byte_length=$5)
+          RETURNING version_token
+        ), inserted AS (
+          INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+          SELECT $1,$5,$6,$7,$8 FROM changed RETURNING body_id
+        )
+        SELECT version_token FROM changed WHERE EXISTS(SELECT 1 FROM inserted)
+        UNION ALL SELECT version_token FROM current
+          WHERE start_offset=$5 AND bytes=$7::bytea AND part_digest=$8
+            AND byte_length >= $5::bigint+octet_length($7::bytea)`,
+    [
+      input.writer.bodyId,
+      input.writer.reservationId,
+      input.writer.generation,
+      input.writer.mediaType,
+      input.expectedOffset,
+      input.appendId,
+      input.bytes,
+      digest,
+      crypto.randomUUID(),
+    ],
+  );
+  if (!result.rows.length) bodyConflict();
+  return Object.freeze({
+    startOffset: input.expectedOffset,
+    endOffset: input.expectedOffset + input.bytes.length,
+    versionToken: result.rows[0].version_token,
+  });
 }

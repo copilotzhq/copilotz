@@ -33,6 +33,7 @@ jobs:
           --health-retries 5
     env:
       COPILOTZ_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
+      COPILOTZ_OWNER_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
     steps:
       - uses: actions/checkout@v6
       - uses: denoland/setup-deno@v2
@@ -40,6 +41,18 @@ jobs:
           deno-version: v2.9.2
           cache: true
           cache-hash: ${{ hashFiles('deno.json', 'dependencies/*.ts') }}
+      # The bundle CLI test runs its worker artifact on native Node 24.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.0
+          package-manager-cache: false
+      # Owner bundle export needs a pg_dump at least as new as the pg17 service.
+      - name: Install the PostgreSQL 17 client
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client-17
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
       - name: Architecture and package-surface checks
         run: deno task check
       - name: Complete retained suite with PostgreSQL

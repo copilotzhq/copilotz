@@ -387,20 +387,22 @@ export function createDeliveryExecutor(
     const requestedSchema = typeof deliveryInput === "string"
       ? dispatchOptions.databaseSchema?.trim() || defaultDatabaseSchema
       : deliveryInput.databaseSchema;
-    const store = await resolveStore(requestedSchema);
-    const delivery = typeof deliveryInput === "string"
-      ? await store.getDelivery(deliveryInput)
-      : deliveryInput;
-    if (!delivery) {
-      throw new Error(`Delivery '${deliveryInput}' was not found.`);
-    }
-    const key = deliveryKey(delivery);
+    // Join in-flight work before the first await, so a concurrent caller never
+    // starts a second dispatch while the first is still reading the delivery.
+    const key = deliveryKey(deliveryInput, requestedSchema);
     const existing = active.get(key);
     if (existing) return existing;
     const dispatching = dispatchTasks.get(key);
     if (dispatching) return await dispatching;
 
     const task = (async () => {
+      const store = await resolveStore(requestedSchema);
+      const delivery = typeof deliveryInput === "string"
+        ? await store.getDelivery(deliveryInput)
+        : deliveryInput;
+      if (!delivery) {
+        throw new Error(`Delivery '${deliveryInput}' was not found.`);
+      }
       const event = await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       if (!options.dispatcher) {
@@ -534,11 +536,8 @@ export function createDeliveryExecutor(
     try {
       return await task;
     } finally {
-      if (!active.has(key)) {
-        resolvedEvents.delete(
-          `${delivery.databaseSchema}\0${delivery.id}`,
-        );
-      }
+      // The event cache uses the same schema-and-ID key.
+      if (!active.has(key)) resolvedEvents.delete(key);
       if (dispatchTasks.get(key) === task) {
         dispatchTasks.delete(key);
         // A consumed wake may also be waiting on a placement that rejected

@@ -608,6 +608,44 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
     await closeFixture(fixture);
   }
 });
+Deno.test("a concurrent dispatch joins in-flight work even when the first finishes before its read", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  let reads = 0;
+  let firstDone: Promise<unknown> | undefined;
+  // The second read would resolve only after the first dispatch has finished.
+  const store = new Proxy(fixture.store, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== "getDelivery" || typeof value !== "function") {
+        return value;
+      }
+      return async (...args: unknown[]) => {
+        if (++reads > 1) await firstDone;
+        return await Reflect.apply(value, target, args);
+      };
+    },
+  });
+  const executor = createDeliveryExecutor({
+    store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-dedup-race-test",
+  });
+  try {
+    const first = executor.dispatchDelivery(committed.deliveries[0].id);
+    firstDone = first.then((handle) => handle.done);
+    const second = executor.dispatchDelivery(committed.deliveries[0].id);
+    const [a, b] = await Promise.all([first, second]);
+    assertEquals(a.operationId, b.operationId);
+    assertEquals(reads, 1);
+    assertEquals((await b.done).delivery.attempts, 1);
+    assertEquals(fixture.calls.length, 1);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
 Deno.test("scope progress resolves when local work for the scope finishes", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => release = resolve);

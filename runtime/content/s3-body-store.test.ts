@@ -490,3 +490,50 @@ Deno.test("fresh S3 append uses one manifest GET and two conditional PUTs", asyn
     ["GET", "PUT", "PUT"],
   );
 });
+
+Deno.test("S3 owner prefix contains every physical part and scopes maintenance listing", async () => {
+  const fixture = createS3Fixture();
+  const store = createS3BodyStore(s3TestConfig, { fetch: fixture.fetch });
+  for (const schema of ["scope_a", "scope_b"]) {
+    await store.put({
+      bodyId: `root/schemas/${schema}/namespaces/space/assets/item`,
+      bytes: bytes(schema),
+      digest: await digestContent(bytes(schema)),
+      mediaType: "text/plain",
+      ifAbsent: true,
+    });
+  }
+  assertEquals(
+    [...fixture.objects.keys()].filter((key) =>
+      key.includes("/schemas/scope_a/")
+    ).length,
+    2,
+  );
+  assertEquals(
+    [...fixture.objects.keys()].filter((key) =>
+      key.includes("/schemas/scope_b/")
+    ).length,
+    2,
+  );
+  const before = fixture.requests.length;
+  const listed = await store.maintenance.list({
+    prefix: "root/schemas/scope_a/",
+    states: ["ready"],
+    idleForMs: 0,
+    limit: 10,
+  });
+  assertEquals(listed.bodies.length, 1);
+  assert(
+    fixture.requests.slice(before).every((request) =>
+      !request.url.includes("scope_b")
+    ),
+  );
+  const listing = fixture.requests.slice(before).find((request) =>
+    new URL(request.url).searchParams.has("list-type")
+  );
+  assert(
+    new URL(listing!.url).searchParams.get("prefix")!.endsWith(
+      "/schemas/scope_a/",
+    ),
+  );
+});

@@ -1,4 +1,4 @@
-/** Process-local encryption boundary for protected Action values. @module */
+/** Platform key adapter: wraps owner data-key material with authenticated encryption. @module */
 
 import { snapshotEventData } from "../events/types.ts";
 

@@ -44,6 +44,7 @@ Deno.test({
         "open_actions",
         "owner_alarms",
         "owner_body_retirements",
+        "owner_data_keys",
         "owner_deadlines",
         "owner_epochs",
         "owner_receipts",

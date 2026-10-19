@@ -1,3 +1,8 @@
+import {
+  objectBodyBase,
+  objectBodyRoot,
+  objectOwnerSegment,
+} from "./object-owner-prefix.ts";
 import type { BodyStore, S3BodyStorageConfig } from "./body-store.ts";
 import {
   BODY_APPEND_MAX_BYTES,
@@ -64,8 +69,8 @@ export function createS3BodyStore(
   const encoder = new TextEncoder(),
     hash = async (value: unknown) =>
       (await digestContent(encoder.encode(JSON.stringify(value)))).slice(7);
-  const root = hash(config.prefix ?? "").then((value) => `bodies/${value}/`);
-  const base = async (bodyId: string) => `${await root}${await hash(bodyId)}`;
+  const root = objectBodyRoot(config.prefix ?? "");
+  const base = (bodyId: string) => objectBodyBase(config.prefix ?? "", bodyId);
   const metadataKey = async (bodyId: string) =>
     `${await base(bodyId)}/manifest.json`;
   const partKey = async (body: StoredBody, part: BodyPart) =>
@@ -357,7 +362,15 @@ export function createS3BodyStore(
     },
     async list(input) {
       const candidates: StoredVersion[] = [];
-      for await (const key of objectKeys(await root)) {
+      for await (
+        const key of objectKeys(
+          `${await root}${
+            objectOwnerSegment(input.prefix) === "unscoped/"
+              ? ""
+              : objectOwnerSegment(input.prefix)
+          }`,
+        )
+      ) {
         if (!key.endsWith("/manifest.json")) continue;
         const stored = await loadKey(key);
         if (

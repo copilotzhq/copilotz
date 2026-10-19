@@ -54,15 +54,16 @@ async function fixture(
       const result = await db.transaction(async (transaction) => {
         const result = await run({
           query(sql, params) {
-            const projection = sql.includes("copilotz_operation_streams") &&
-              sql.includes("UPDATE");
+            const projection = sql.includes("UPDATE");
             const matches = fault === "checkpoint"
-              ? sql.includes("SET committed_offset = GREATEST")
+              ? sql.includes("content_logical_bodies") &&
+                sql.includes("SET committed_offset=")
               : fault === "seal"
-              ? sql.includes("SET state = 'terminal', outcome = 'completed'")
+              ? sql.includes("SET state='terminal'") &&
+                params?.[3] === "completed"
               : fault === "failure" &&
-                sql.includes("SET state = 'terminal',") &&
-                sql.includes("outcome = CASE");
+                sql.includes("SET state='terminal'") &&
+                params?.[3] !== "completed";
             if (projection && matches) {
               fault = undefined;
               injected++;
@@ -182,7 +183,7 @@ async function fixture(
   };
 }
 
-Deno.test("accepted stream checkpoint and its projection roll back together", async () => {
+Deno.test("accepted stream checkpoint rolls back before publication", async () => {
   const f = await fixture();
   const writer = await f.context.streams.open({
     id: "checkpoint",
@@ -324,20 +325,29 @@ Deno.test("accepted failed stream prefix and its projection roll back together",
     assertEquals(projection?.state, "terminating");
     assertEquals(
       (await f.physical.head({ bodyId: body!.copy.key }))?.state,
-      "incomplete",
+      "open",
     );
     const next = await f.restart();
     assertEquals(
       await recoverLogicalBody(
-        next.catalog,
+        {
+          ...next.catalog,
+          recordFailure: (content) =>
+            next.operations.acceptStreamFailure({
+              namespace: "scope",
+              operationId: f.root.id,
+              streamId: writer.id,
+              content,
+            }),
+        },
         (await next.catalog.read(body!.bodyId))!,
         f.physical,
       ),
       "terminated",
     );
     const head = (await f.physical.head({ bodyId: body!.copy.key }))!;
-    if (head.state !== "incomplete") {
-      throw new Error("Expected the immutable failed prefix.");
+    if (head.state !== "open") {
+      throw new Error("Expected the fenced physical copy.");
     }
     assertEquals(
       await next.operations.terminateStream({
@@ -526,8 +536,8 @@ Deno.test("cancellation wins before terminal intent and cannot rewrite an accept
   }
 });
 
-Deno.test("physical append seal fence and terminate do not hold the owner command transaction", async (t) => {
-  for (const phase of ["append", "seal", "fence", "terminate"] as const) {
+Deno.test("physical append seal and fence do not hold the owner command transaction", async (t) => {
+  for (const phase of ["append", "seal", "fence"] as const) {
     await t.step(phase, async () => {
       const entered = Promise.withResolvers<void>(),
         release = Promise.withResolvers<void>();
@@ -674,7 +684,7 @@ Deno.test({
   },
 });
 
-Deno.test("a lost accepted checkpoint commit reply restarts with both durable offsets", async () => {
+Deno.test("a lost checkpoint commit reply restarts with the authoritative content offset", async () => {
   const f = await fixture();
   const writer = await f.context.streams.open({
     id: "unknown-commit",

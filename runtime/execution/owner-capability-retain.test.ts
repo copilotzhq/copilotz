@@ -411,7 +411,6 @@ Deno.test({
         digest: `sha256:${"a".repeat(64)}` as `sha256:${string}`,
       };
       await recordTestContentTerminal(db, schema, "scope", head);
-      await catalog.commitStreamOffset({ ...coordinate, committedOffset: 1 });
       await catalog.sealStream({
         ...coordinate,
         body: {

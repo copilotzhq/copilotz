@@ -13,6 +13,7 @@ export async function recordTestContentTerminal(
     versionToken?: string;
   },
   outcome: "completed" | "failed" | "cancelled" = "completed",
+  reason?: string,
 ) {
   const catalog = createContentCatalog(session, schema),
     identity = {
@@ -56,6 +57,10 @@ export async function recordTestContentTerminal(
   } else {
     await catalog.beginRevocation(identity);
     await catalog.revoked(identity);
-    await catalog.recordFailure({ ...identity, outcome, digest: head.digest });
+    await catalog.recordFailure({
+      ...identity,
+      outcome,
+      ...(reason ? { reason } : {}),
+    });
   }
 }

@@ -12,10 +12,12 @@ import {
 import {
   bodyConflict,
   bodyUnavailable,
+  captureBodyAppend,
   createBodyStoreOperations,
   type StoredBody,
   type StoredVersion,
 } from "./body-store-operations.ts";
+import { digestContent } from "./digest.ts";
 import { base64ToBytes } from "./encoding.ts";
 
 type BodyRow = {
@@ -160,7 +162,7 @@ export function createDatabaseBodyStore(
       });
   const selection = `SELECT body.*,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('appendId',part.append_id,'offset',part.start_offset,'length',octet_length(part.bytes),'digest',part.part_digest) ORDER BY part.start_offset) FROM ${parts} part WHERE part.body_id=body.body_id),'[]'::jsonb) AS parts FROM ${bodies} body`;
-  const store = createBodyStoreOperations({
+  const operations = createBodyStoreOperations({
     kind: "database",
     backendId: options.backendId?.trim() || "database:default",
     conditionalDelete: true,
@@ -204,7 +206,7 @@ export function createDatabaseBodyStore(
             [body.bodyId, part.offset, part.appendId, bytes, part.digest],
           );
         }
-        return true;
+        return body.nonce;
       });
     },
     async readRange(stored, start, end) {
@@ -273,6 +275,55 @@ export function createDatabaseBodyStore(
       });
     },
   });
+  const store: BodyStore = {
+    ...operations,
+    append: async (raw) => {
+      const input = captureBodyAppend(raw),
+        digest = await digestContent(input.bytes);
+      await ensure();
+      return await runCommand("body.append", {}, async (_, { transaction }) => {
+        const result = await transaction.query<{ version_token: string }>(
+          `
+        WITH current AS (
+          SELECT body.*,part.start_offset,part.bytes,part.part_digest
+          FROM ${bodies} body LEFT JOIN ${parts} part
+            ON part.body_id=body.body_id AND part.append_id=$6
+          WHERE body.body_id=$1 AND body.reservation_id=$2 AND body.writer_generation=$3
+            AND body.media_type=$4 AND body.state='open' AND body.fenced_from IS NULL
+        ), changed AS (
+          UPDATE ${bodies} SET byte_length=$5::bigint+octet_length($7::bytea),
+            version_token=$9,maintenance_version=maintenance_version+1,updated_at=NOW()
+          WHERE body_id=$1 AND EXISTS (SELECT 1 FROM current WHERE start_offset IS NULL AND byte_length=$5)
+          RETURNING version_token
+        ), inserted AS (
+          INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+          SELECT $1,$5,$6,$7,$8 FROM changed RETURNING body_id
+        )
+        SELECT version_token FROM changed WHERE EXISTS(SELECT 1 FROM inserted)
+        UNION ALL SELECT version_token FROM current
+          WHERE start_offset=$5 AND bytes=$7::bytea AND part_digest=$8
+            AND byte_length >= $5::bigint+octet_length($7::bytea)`,
+          [
+            input.writer.bodyId,
+            input.writer.reservationId,
+            input.writer.generation,
+            input.writer.mediaType,
+            input.expectedOffset,
+            input.appendId,
+            input.bytes,
+            digest,
+            crypto.randomUUID(),
+          ],
+        );
+        if (!result.rows.length) bodyConflict();
+        return Object.freeze({
+          startOffset: input.expectedOffset,
+          endOffset: input.expectedOffset + input.bytes.length,
+          versionToken: result.rows[0].version_token,
+        });
+      });
+    },
+  };
   readers.set(
     store.readRange,
     (transaction, readAuthority) => {

@@ -1101,20 +1101,6 @@ export function createDatabaseAssetRepository(
         "This body has entered irreversible retirement.",
       );
     }
-    if (candidate.pendingAdoption) {
-      const adopted = await catalog.adoptPending(context.transaction, {
-        namespace,
-        pendingRef: candidate.pendingAdoption.pendingRef,
-        ownerId: candidate.pendingAdoption.ownerId,
-        assetId: asset.id,
-      });
-      if (adopted !== asset.id) {
-        throw createContentError(
-          "asset_conflict",
-          "Pending adoption has a different canonical asset identity.",
-        );
-      }
-    }
     let data: string;
     try {
       data = JSON.stringify(assetNodeData(asset, bodyId));
@@ -1168,11 +1154,14 @@ export function createDatabaseAssetRepository(
           source,
           executor,
         );
-        await catalog.checkPendingOwner(executor, {
-          namespace: input.namespace,
-          pendingRef: source.pendingRef,
-          ownerId: JSON.stringify(input.origin),
-        });
+        if (
+          pending.ownerId && pending.ownerId !== JSON.stringify(input.origin)
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Pending content already belongs to another domain owner.",
+          );
+        }
         const id = `asset:${
           (await digestContent(
             new TextEncoder().encode(
@@ -1669,10 +1658,7 @@ export function createDatabaseAssetRepository(
     >,
     idleForMs: number,
   ): Promise<ReadyBodyRetirementResult> => {
-    if (
-      !input.store.conditionalDelete ||
-      !["ready", "incomplete", "aborted"].includes(input.body.state)
-    ) return { status: "blocked" };
+    if (!input.store.conditionalDelete) return { status: "blocked" };
     const backendId = input.store.kind === "database"
       ? ""
       : input.store.backendId;
@@ -2170,7 +2156,7 @@ export function createDatabaseAssetRepository(
           });
           if (!store.conditionalDelete) continue;
           const head = await store.head({ bodyId: copy.copy_key });
-          if (head && ["ready", "incomplete", "aborted"].includes(head.state)) {
+          if (head) {
             const result = await retireBody(
               { store, body: head },
               orphanAfterMs,

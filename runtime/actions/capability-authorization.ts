@@ -11,7 +11,7 @@ import {
 import { inheritActionCaller } from "./caller-identity.ts";
 import {
   bindContentStreamCommands,
-  inheritContentStreamFailure,
+  contentStreamLifecycle,
 } from "../streams/stream.ts";
 import type { ActionContext } from "./types.ts";
 const readResourceOwners = new WeakMap<object, object>();
@@ -206,21 +206,26 @@ export function authorizeActionCapabilities(
     methods(target, Object.keys(target ?? {}));
   const writer = (value: unknown) => {
     const source = value as import("../streams/types.ts").ContentStreamWriter;
-    const facade = Object.freeze({
-      id: source.id,
-      offset: () => {
-        check();
-        return source.offset();
+    const facade = Object.freeze(Object.defineProperty(
+      {
+        id: source.id,
+        offset: () => {
+          check();
+          return source.offset();
+        },
+        ...methods(source, [
+          "append",
+          "close",
+          "abort",
+          "retain",
+          Symbol.asyncDispose,
+        ]),
       },
-      ...methods(source, [
-        "append",
-        "close",
-        "abort",
-        "retain",
-        Symbol.asyncDispose,
-      ]),
-    });
-    inheritContentStreamFailure(source, facade);
+      contentStreamLifecycle,
+      {
+        value: Reflect.get(source, contentStreamLifecycle),
+      },
+    ));
     return facade;
   };
   const native = (value: unknown): ReadableStream => {
@@ -361,8 +366,9 @@ export function authorizeActionCapabilities(
     streams: {
       ...methods(context.streams, ["open"], writer),
       ...methods(context.streams, ["follow"], (value) => {
-        const follower =
-          value as import("../content/progressive.ts").ProgressiveBodyFollower;
+        const follower = value as Awaited<
+          ReturnType<ActionContext["streams"]["follow"]>
+        >;
         return { ...follower, body: native(follower.body) };
       }),
     },

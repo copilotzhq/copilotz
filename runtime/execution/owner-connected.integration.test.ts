@@ -9,7 +9,7 @@ import { provisionOperationCatalog } from "../streams/catalog.ts";
 import { openDatabaseOwner } from "../engine/commands.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { secret } from "../actions/secret.ts";
-import { telegramSendTextAction } from "../../plugins/channel-telegram/actions/send-text/index.ts";
+import { channelDeliverAction } from "../../plugins/channel-core/actions/deliver/index.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext } from "../actions/types.ts";
@@ -302,21 +302,21 @@ for (const transport of ["in-process", "websocket"] as const) {
 
 for (const transport of ["in-process", "websocket"] as const) {
   for (const boundary of ["begin", "confirm"] as const) {
-    Deno.test(`${transport}: lost Telegram effect ${boundary} response never dispatches twice`, async () => {
+    Deno.test(`${transport}: lost channel delivery effect ${boundary} response never dispatches twice`, async () => {
       let dispatches = 0;
       let lost = false;
       const f = await fixture(transport, {
-        actions: { send: telegramSendTextAction },
+        actions: { send: channelDeliverAction },
         resources: { channels: { telegram: { egress: "external" } } },
         adapters: {
-          channelProviders: {
+          channels: {
             telegram: {
-              config: { botToken: "local-test-only" },
-              fetch: () => {
+              deliver: ({ intent }: { intent: { deliveryKey: string } }) => {
                 dispatches++;
-                return Promise.resolve(
-                  Response.json({ ok: true, result: { message_id: 17 } }),
-                );
+                return Promise.resolve({
+                  deliveryKey: intent.deliveryKey,
+                  delivered: 1,
+                });
               },
             },
           },
@@ -327,9 +327,9 @@ for (const transport of ["in-process", "websocket"] as const) {
       });
       const input = {
         channelId: "telegram",
-        chatId: "chat",
         deliveryKey: "one",
-        text: "test",
+        content: [],
+        address: {},
       };
       try {
         await f.gateway.actions.send(input, { idempotencyKey: "telegram" })

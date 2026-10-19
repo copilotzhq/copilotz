@@ -1,4 +1,4 @@
-import { bindContentStreamTerminalizer } from "../streams/stream.ts";
+import { createOwnerContentStreamRuntime } from "../streams/stream.ts";
 import { bindProcessorCollectionInvocation } from "../collections/policy-invocation.ts";
 import {
   snapshotControl,
@@ -104,7 +104,7 @@ export function createProcessorContext(
     Readonly<{ settle(status: StreamTerminalStatus): void }>
   >();
 
-  const streams = createContentStreamRuntime({
+  const streams = createOwnerContentStreamRuntime({
     namespace,
     store: options.streamBodyStore,
     catalog: {
@@ -224,36 +224,6 @@ export function createProcessorContext(
       );
       publication.established();
     },
-    onTerminalizing: bindContentStreamTerminalizer(async (stream, input) => {
-      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
-        return;
-      }
-      const terminalizing = await options.operationCatalog
-        .beginStreamTerminalization({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          outcome: input.outcome,
-          ...(input.reason ? { reason: input.reason } : {}),
-        });
-      if (!terminalizing) {
-        const current = await options.operationCatalog.getStream(
-          namespace,
-          settlementScopeId,
-          stream.id,
-        );
-        // Cancellation/supersession may win among non-completed outcomes, but
-        // a Ready seal and an incomplete freeze are different physical
-        // settlements. Never let a producer cross that cataloged boundary.
-        if (
-          current?.state === "terminating" &&
-          (current.outcome === "completed") === (input.outcome === "completed")
-        ) return;
-        throw new Error(
-          `Operation stream '${stream.id}' could not begin terminalization.`,
-        );
-      }
-    }),
     onSeal(stream, body) {
       const local = localStreams.get(stream.id);
       if (local) {
@@ -308,6 +278,35 @@ export function createProcessorContext(
         ...input,
       });
     },
+  }, async (stream, input) => {
+    if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+      return;
+    }
+    const terminalizing = await options.operationCatalog
+      .beginStreamTerminalization({
+        namespace,
+        operationId: settlementScopeId,
+        streamId: stream.id,
+        outcome: input.outcome,
+        ...(input.reason ? { reason: input.reason } : {}),
+      });
+    if (!terminalizing) {
+      const current = await options.operationCatalog.getStream(
+        namespace,
+        settlementScopeId,
+        stream.id,
+      );
+      // Cancellation/supersession may win among non-completed outcomes, but
+      // a completed seal intent and a failed logical prefix are distinct.
+      // Never let a producer cross that cataloged boundary.
+      if (
+        current?.state === "terminating" &&
+        (current.outcome === "completed") === (input.outcome === "completed")
+      ) return;
+      throw new Error(
+        `Operation stream '${stream.id}' could not begin terminalization.`,
+      );
+    }
   });
 
   const content: ProcessorContext["content"] = {

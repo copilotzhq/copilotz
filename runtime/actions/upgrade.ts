@@ -226,7 +226,6 @@ export async function prepareRetainedDataUpgrade(
     await validateRetainedHistory(transaction, schema);
     await assertReceiptUpgradeAuthority(transaction, schema);
     await migrateBodyStoreSchema(joined(transaction), schema);
-    await upgradeOperationCatalog(joined(transaction), schema);
     await transaction.query(
       `ALTER TABLE ${metadata} ADD COLUMN IF NOT EXISTS upgrade_from INTEGER, ADD COLUMN IF NOT EXISTS upgrade_to INTEGER, ADD COLUMN IF NOT EXISTS upgrade_id TEXT, ADD COLUMN IF NOT EXISTS upgrade_reviewed_fingerprint TEXT, ADD COLUMN IF NOT EXISTS upgrade_decisions_fingerprint TEXT`,
     );
@@ -387,6 +386,7 @@ export async function upgradeActionLifecycle(
       drained: true,
       reviewedFingerprint: actual.fingerprint,
     });
+    await upgradeOperationCatalog(session, schema);
     await validateRetainedHistory(transaction, schema);
     await assertReceiptUpgradeAuthority(transaction, schema);
     const updated = await transaction.query(

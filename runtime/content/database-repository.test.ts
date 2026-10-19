@@ -890,7 +890,7 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
   }
 });
 
-Deno.test("asset maintenance collects orphan incomplete bodies but preserves catalog retention", async () => {
+Deno.test("asset maintenance collects failed copies but preserves catalog retention", async () => {
   const memory = createMemoryBodyStore({
     backendId: "memory:incomplete-maintenance",
   });
@@ -948,7 +948,7 @@ Deno.test("asset maintenance collects orphan incomplete bodies but preserves cat
     assertEquals(await memory.head({ bodyId: orphanId }), null);
     assertEquals(
       (await memory.head({ bodyId: retainedId }))?.state,
-      "incomplete",
+      "open",
     );
 
     assertEquals(

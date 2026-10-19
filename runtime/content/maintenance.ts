@@ -51,8 +51,8 @@ export async function recoverLogicalBody(
     discarded: 0,
   };
   const writer = await store.fence({ writer: original });
-  const length = await catalog.revoked(body);
-  head = await store.head({ bodyId: body.copy.key });
+  await catalog.revoked(body);
+  if (body.sealIntent) head = await store.head({ bodyId: body.copy.key });
   // A seal that won the physical fence is accepted only against the prior intent.
   if (
     body.sealIntent && head?.state === "ready" &&
@@ -71,7 +71,7 @@ export async function recoverLogicalBody(
       store,
       body.copy.key,
       body.sealIntent.length,
-    );
+    ).catch(() => undefined);
     if (digest === body.sealIntent.digest) {
       const sealed = await store.seal({
         writer,
@@ -82,18 +82,7 @@ export async function recoverLogicalBody(
       return "sealed";
     }
   }
-  const digest = await digestCatalogPrefix(store, body.copy.key, length);
-  if (
-    head?.state === "open" || head?.state === "sealing" ||
-    head?.state === "terminating"
-  ) {
-    await store.terminate({
-      writer,
-      expectedByteLength: length,
-      expectedDigest: digest,
-    });
-  }
-  await catalog.recordFailure({ ...body, digest, reason: "abandoned" });
+  await catalog.recordFailure({ ...body, reason: "abandoned" });
   return "terminated";
 }
 export async function maintainProgressiveBodies(

@@ -1,3 +1,4 @@
+import { createContentCatalog } from "../content/catalog.ts";
 import { recordTestContentTerminal } from "../testing/content-catalog.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
@@ -36,6 +37,7 @@ async function migration(url: string) {
       DROP CONSTRAINT copilotz_operation_streams_outcome_check,
       DROP CONSTRAINT copilotz_operation_streams_availability_check,
       DROP COLUMN reason, DROP COLUMN availability_reason, DROP COLUMN cleanup_state,
+      ADD COLUMN committed_offset BIGINT NOT NULL DEFAULT 0, ADD COLUMN digest TEXT,
       ADD COLUMN capture TEXT CONSTRAINT copilotz_operation_streams_capture_check
         CHECK (capture IN ('complete','truncated')),
       ADD CONSTRAINT copilotz_operation_streams_outcome_check
@@ -82,6 +84,37 @@ async function migration(url: string) {
     for (
       const [i, [state, outcome, availability, capture]] of cases.entries()
     ) {
+      const content = createContentCatalog(db, schema);
+      if (state === "terminal") {
+        await recordTestContentTerminal(
+          db,
+          schema,
+          "scope",
+          {
+            bodyId: String(i),
+            byteLength: 7,
+            mediaType: "text/plain",
+            digest: `sha256:${"a".repeat(64)}`,
+          },
+          outcome === "completed"
+            ? "completed"
+            : outcome === "cancelled" || outcome === "superseded"
+            ? "cancelled"
+            : "failed",
+        );
+      } else {
+        const identity = {
+          bodyId: String(i),
+          writerId: String(i),
+          generation: 1,
+        };
+        await content.reserve({
+          ...identity,
+          namespace: "scope",
+          copy: { key: String(i), backendKind: "memory", backendId: "test" },
+        });
+        await content.checkpoint({ ...identity, expectedOffset: 0, offset: 7 });
+      }
       await db.query(
         `INSERT INTO ${tables.operationStreams}
         (namespace, operation_id, stream_id, semantic_stream_id, stream_ordinal,
@@ -190,7 +223,12 @@ async function migration(url: string) {
       assertEquals(row.streamOrdinal, String(i + 1));
       assertEquals(row.replayKey, String(before[i].replay_key));
       assertEquals(row.bodyId, String(i));
-      assertEquals(row.digest, `sha256:${"a".repeat(64)}`);
+      assertEquals(
+        row.digest,
+        outcome === "completed" && state === "terminal"
+          ? `sha256:${"a".repeat(64)}`
+          : undefined,
+      );
       assertEquals(row.createdAt, "2026-10-01T00:00:00.000Z");
       assertEquals(row.updatedAt, row.createdAt);
       assertEquals(
@@ -286,7 +324,14 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
           descriptor: descriptor(outcome),
         }),
       );
-      await recordTestContentTerminal(db, schema, "scope", body, outcome);
+      await recordTestContentTerminal(
+        db,
+        schema,
+        "scope",
+        body,
+        outcome,
+        "provider_error",
+      );
       assertEquals(
         outcome === "completed"
           ? await catalog.sealStream({
@@ -297,7 +342,7 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
             ...target,
             outcome,
             reason: "provider_error",
-            body: { ...body, state: "incomplete" },
+            body,
           }),
         true,
       );
@@ -337,7 +382,7 @@ Deno.test("missing bytes preserve terminal outcomes and cleanup cannot resurrect
         await catalog.terminateStream({
           ...target,
           outcome: "failed",
-          body: { ...body, state: "incomplete" },
+          body,
         }),
         false,
       );
@@ -384,13 +429,19 @@ Deno.test("completion requires a full sealed body and an unaccepted seal can fai
       bodyId: "lane",
       descriptor: descriptor("lane"),
     });
-    await recordTestContentTerminal(db, schema, "scope", {
-      bodyId: "lane",
-      byteLength: 7,
-      digest: `sha256:${"a".repeat(64)}`,
-      mediaType: "text/plain",
-    }, "failed");
-    await catalog.commitStreamOffset({ ...target, committedOffset: 7 });
+    await recordTestContentTerminal(
+      db,
+      schema,
+      "scope",
+      {
+        bodyId: "lane",
+        byteLength: 7,
+        digest: `sha256:${"a".repeat(64)}`,
+        mediaType: "text/plain",
+      },
+      "failed",
+      "abandoned",
+    );
     const body = {
       bodyId: "lane",
       state: "ready" as const,
@@ -429,7 +480,7 @@ Deno.test("completion requires a full sealed body and an unaccepted seal can fai
         ...target,
         outcome: "failed",
         reason: "abandoned",
-        body: { ...body, state: "incomplete" },
+        body,
       }),
       true,
     );

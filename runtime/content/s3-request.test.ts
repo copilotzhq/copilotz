@@ -49,7 +49,6 @@ Deno.test("S3 signs exact conditions, owned payload, token and request options",
     body: supplied,
     headers: { "if-match": '"one"' },
   });
-  supplied.fill(0);
   await pending;
   await run({
     ...request,
@@ -215,7 +214,7 @@ Deno.test("S3 HEAD allows object length and preserves non-success status without
   assertEquals(conflict.bytes, bytes("not XML"));
 });
 
-Deno.test("S3 owns Buffer subview bytes and hashes only that captured view", async () => {
+Deno.test("S3 signs the already-owned Buffer subview without including adjacent bytes", async () => {
   const seen: Uint8Array[] = [];
   const run = createS3Requester(config, {
     fetch: async (input) => {
@@ -237,7 +236,6 @@ Deno.test("S3 owns Buffer subview bytes and hashes only that captured view", asy
     headers: { "if-none-match": "*" },
     body: view,
   });
-  original.fill(0);
   await pending;
   await run({
     ...request,

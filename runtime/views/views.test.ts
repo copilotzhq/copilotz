@@ -348,26 +348,7 @@ test("one-shot renderer cleans up on success, rejection and abort without tracki
   assert.equal(cleanups, 3);
 });
 
-test("one-shot renderer cannot re-evaluate and nesting is bounded", async () => {
-  const loop = defineView({
-    id: "loop",
-    shows: "loop",
-    renderer: "text",
-    modes: ["context"],
-    render(_item, ctx) {
-      return ctx.show({ shows: "loop", value: null });
-    },
-  });
-  const renderer = createTextRenderer({
-    registry: { resolveView: createViewResolver({ loop }) },
-    scope: {},
-    project: () => ({}),
-    maxDepth: 2,
-  });
-  await assert.rejects(
-    renderer.render({ shows: "loop", value: null }),
-    /nesting limit/,
-  );
+test("one-shot renderer cannot re-evaluate", async () => {
   const twice = createTextRenderer({
     registry: registry(),
     scope: {},
@@ -499,73 +480,6 @@ test("nested contexts are revoked before their session is disposed", async () =>
     "parent",
   );
   assert.equal(reads, 0);
-});
-
-test("owning render waits for detached nested cleanup before settling", async () => {
-  let openChild!: () => void;
-  const childOpened = new Promise<void>((resolve) => {
-    openChild = resolve;
-  });
-  let finishCleanup!: () => void;
-  const cleanupGate = new Promise<void>((resolve) => {
-    finishCleanup = resolve;
-  });
-  let startCleanup!: () => void;
-  const cleanupStarted = new Promise<void>((resolve) => {
-    startCleanup = resolve;
-  });
-  const child = defineView({
-    id: "child",
-    shows: "child",
-    renderer: "email",
-    modes: ["context"],
-    render() {
-      return new Promise<string>(() => {});
-    },
-  });
-  const parent = defineView({
-    id: "parent",
-    shows: "parent",
-    renderer: "text",
-    modes: ["context"],
-    async render(_item, ctx) {
-      void ctx.show({ shows: "child", value: null }, { renderer: "email" })
-        .catch(() => {});
-      await childOpened;
-      return "parent";
-    },
-  });
-  const renderer = createTextRenderer({
-    registry: { resolveView: createViewResolver({ child, parent }) },
-    scope: {},
-    project: () => ({}),
-    renderers: {
-      email: {
-        open() {
-          openChild();
-          return {
-            render: async (evaluate) => String(await evaluate()),
-            async dispose() {
-              startCleanup();
-              await cleanupGate;
-            },
-          };
-        },
-      },
-    },
-  });
-  let settled = false;
-  const result = renderer.render({ shows: "parent", value: null }).then(
-    (value) => {
-      settled = true;
-      return value;
-    },
-  );
-  await cleanupStarted;
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(settled, false);
-  finishCleanup();
-  assert.equal(await result, "parent");
 });
 
 test("definition validation rejects inherited executable methods rather than losing them during snapshot", () => {

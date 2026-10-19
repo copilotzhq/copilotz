@@ -604,7 +604,30 @@ export function createDatabaseScope(
     maintenanceOptions: { limit?: number } = {},
   ) => {
     const recoveredBodies = await maintainProgressiveBodies(
-      assets.catalog,
+      {
+        ...assets.catalog,
+        async recordFailure(content) {
+          const stream = (await engine.session.query<{
+            namespace: string;
+            operation_id: string;
+            stream_id: string;
+          }>(
+            `SELECT namespace,operation_id,stream_id FROM ${
+              createOperationCatalogTables(databaseSchema).operationStreams
+            }
+            WHERE body_id=$1`,
+            [content.bodyId],
+          )).rows[0];
+          return stream
+            ? await options.operationCatalog.acceptStreamFailure({
+              namespace: stream.namespace,
+              operationId: stream.operation_id,
+              streamId: stream.stream_id,
+              content,
+            })
+            : await assets.catalog.recordFailure(content);
+        },
+      },
       assets.storeForCopy,
       {
         limit: maintenanceOptions.limit,
@@ -669,7 +692,6 @@ export function createDatabaseScope(
           state: "incomplete" as const,
           bodyId: stream.bodyId,
           byteLength: terminal.length,
-          digest: terminal.digest,
         };
         if (
           await options.operationCatalog.terminateStream({

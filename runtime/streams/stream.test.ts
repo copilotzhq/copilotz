@@ -199,7 +199,7 @@ catalogTest(
       },
       onTerminate(_opened, body, terminal) {
         callbacks.push(
-          `terminal:${terminal.outcome}:${body?.state ?? "purged"}`,
+          `terminal:${terminal.outcome}:${body.byteLength}`,
         );
       },
     });
@@ -218,11 +218,11 @@ catalogTest(
       bodyId: "content-streams/tenant-a/failed-prefix",
     });
     assertExists(head);
-    assertEquals(head.state, "incomplete");
+    assertEquals(head.state, "open");
     assertEquals(callbacks, [
       "published",
       "terminalizing:cancelled",
-      "terminal:cancelled:incomplete",
+      "terminal:cancelled:16",
     ]);
     const follower = await stream.follow({ id: "failed-prefix" });
     assertEquals(
@@ -271,7 +271,7 @@ catalogTest(
       (await store.head({
         bodyId: "content-streams/tenant-a/cancelled-by-lifetime",
       }))?.state,
-      "incomplete",
+      "open",
     );
   },
 );
@@ -311,7 +311,7 @@ catalogTest(
       (await store.head({
         bodyId: "content-streams/tenant-a/leaked-after-success",
       }))?.state,
-      "incomplete",
+      "open",
     );
   },
 );
@@ -359,7 +359,7 @@ catalogTest(
       (await store.head({
         bodyId: "content-streams/tenant-a/superseded-writer",
       }))?.state,
-      "incomplete",
+      "open",
     );
     await assertRejects(
       () =>
@@ -403,11 +403,11 @@ catalogTest(
       (await unpublishedStore.head({
         bodyId: "content-streams/tenant-a/unpublished",
       }))?.state,
-      "incomplete",
+      "open",
     );
 
     const publishedStore = createMemoryBodyStore();
-    let retainedState: string | undefined;
+    let retainedLength: number | undefined;
     await assertRejects(
       () =>
         createContentStreamRuntime({
@@ -419,7 +419,7 @@ catalogTest(
             throw new Error("publication relay failed");
           },
           onTerminate(_opened, body) {
-            retainedState = body?.state;
+            retainedLength = body.byteLength;
           },
         }).open({
           id: "published",
@@ -429,12 +429,12 @@ catalogTest(
       Error,
       "publication relay failed",
     );
-    assertEquals(retainedState, "incomplete");
+    assertEquals(retainedLength, 0);
     assertEquals(
       (await publishedStore.head({
         bodyId: "content-streams/tenant-a/published",
       }))?.state,
-      "incomplete",
+      "open",
     );
   },
 );

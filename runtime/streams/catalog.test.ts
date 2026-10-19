@@ -114,22 +114,6 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       digest: `sha256:${"a".repeat(64)}`,
       mediaType: "text/plain",
     });
-    await writer.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 5,
-    });
-    assertEquals(hints.at(-1)?.kind, "stream-offset");
-    assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
-    assertEquals(hints.at(-1)?.committedOffset, 5);
-    await writer.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 2,
-    });
-    assertEquals(hints.at(-1)?.committedOffset, 5);
     await writer.sealStream({
       namespace: "tenant-a",
       operationId,
@@ -282,18 +266,19 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       bodyId: "body-old",
       descriptor: descriptor("physical-old"),
     });
-    await recordTestContentTerminal(database, SCHEMA, "tenant-a", {
-      bodyId: "body-old",
-      byteLength: 11,
-      digest: `sha256:${"d".repeat(64)}`,
-      mediaType: "text/plain",
-    }, "cancelled");
-    await catalog.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId: "operation-incarnation",
-      streamId: "physical-old",
-      committedOffset: 11,
-    });
+    await recordTestContentTerminal(
+      database,
+      SCHEMA,
+      "tenant-a",
+      {
+        bodyId: "body-old",
+        byteLength: 11,
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "text/plain",
+      },
+      "cancelled",
+      "superseded",
+    );
     await catalog.openStream({
       namespace: "tenant-a",
       operationId: "operation-incarnation",
@@ -301,15 +286,6 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       bodyId: "body-new",
       descriptor: descriptor("physical-new"),
     });
-    assertEquals(
-      await catalog.commitStreamOffset({
-        namespace: "tenant-a",
-        operationId: "operation-incarnation",
-        streamId: "physical-old",
-        committedOffset: 12,
-      }),
-      false,
-    );
 
     const streams = await catalog.listStreams({
       namespace: "tenant-a",
@@ -344,12 +320,7 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
         streamId: "physical-old",
         body: {
           bodyId: "body-old",
-          state: "incomplete",
           byteLength: 11,
-          mediaType: "text/plain",
-          digest: `sha256:${"d".repeat(64)}`,
-          maintenanceVersion: 2,
-          versionToken: "test-version",
         },
         outcome: "cancelled",
         reason: "superseded",
@@ -430,12 +401,6 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
       digest: `sha256:${"c".repeat(64)}`,
       mediaType: "text/plain",
     }, "failed");
-    await catalog.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 7,
-    });
     assertEquals(
       await catalog.beginStreamTerminalization({
         namespace: "tenant-a",
@@ -469,12 +434,7 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
         streamId: descriptor.streamId,
         body: {
           bodyId: "failed-body",
-          state: "incomplete",
           byteLength: 7,
-          mediaType: "text/plain",
-          digest: `sha256:${"c".repeat(64)}`,
-          maintenanceVersion: 2,
-          versionToken: "test-version",
         },
         outcome: "failed",
       }),

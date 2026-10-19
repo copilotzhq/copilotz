@@ -50,12 +50,10 @@ async function assertUnpublishedReservation(
     outcome: "failed",
     reason: "abandoned",
     length: 0,
-    digest:
-      "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   });
   const head = await bodyStore.head({ bodyId: logical.copy.key });
   assertExists(head);
-  assertEquals(head.state, "incomplete");
+  assertEquals(head.state, "open");
   assertEquals(head.byteLength, 0);
   // Publication refusal retires writer authority; the catalog owns copy cleanup.
   await assertRejects(() =>
@@ -394,7 +392,7 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
     (await bodyStore.head({
       bodyId: "content-streams/tenant-a/local-publication-rejection",
     }))?.state,
-    "incomplete",
+    "open",
   );
 });
 

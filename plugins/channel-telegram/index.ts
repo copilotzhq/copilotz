@@ -24,5 +24,3 @@ export type {
   TelegramUser,
   TransformTelegramDelivery,
 } from "./adapters/channels/telegram/contracts.ts";
-
-export * from "./actions/index.ts";

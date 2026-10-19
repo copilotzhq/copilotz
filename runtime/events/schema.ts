@@ -1,12 +1,17 @@
 import {
+  AUTHORIZATION_SCHEMA_COLUMNS,
+  authorizationSchemaStatements,
+} from "../authorization/schema.ts";
+import {
   CONTENT_CATALOG_COLUMNS,
   contentCatalogStatements,
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 11;
+export const EVENT_SCHEMA_VERSION = 12;
 
 export type CoreTableName =
+  | keyof typeof AUTHORIZATION_SCHEMA_COLUMNS
   | "action_effects"
   | keyof typeof CONTENT_CATALOG_COLUMNS
   | "owner_epochs"
@@ -41,6 +46,9 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     `${schema}.${quoteEventIdentifier(name)}`;
   return ({
     action_effects: table("action_effects"),
+    authorization_sessions: table("authorization_sessions"),
+    authorization_channels: table("authorization_channels"),
+    authorization_invocations: table("authorization_invocations"),
     content_logical_bodies: table("content_logical_bodies"),
     content_copies: table("content_copies"),
     pending_content: table("pending_content"),
@@ -61,6 +69,7 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
 }
 
 const CORE_SCHEMA_COLUMNS = {
+  ...AUTHORIZATION_SCHEMA_COLUMNS,
   action_effects: [
     "namespace",
     "action_run_id",
@@ -202,7 +211,7 @@ export async function validateCopilotzSchema(
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
-          'action_effects',
+          'action_effects', 'authorization_sessions', 'authorization_channels', 'authorization_invocations',
           'content_logical_bodies', 'content_copies', 'pending_content', 'content_adoptions',
           'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements',
           'nodes',
@@ -344,6 +353,7 @@ export function createOwnerSchemaStatements(
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [
+    ...authorizationSchemaStatements(schemaName),
     ...createEffectSchemaStatements(schemaName),
     ...contentCatalogStatements(validateEventSchemaName(schemaName)),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (

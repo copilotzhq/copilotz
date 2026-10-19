@@ -24,7 +24,8 @@ export async function admitInlineAction(
     coordinator: EventCoordinator;
     registry: PluginRegistry;
     protectedValues?: ProtectedValueRuntime;
-    protectedActions?: Readonly<Record<string, unknown>>;
+    authorization?:
+      import("../../authorization/evaluator.ts").OwnerAuthorization;
   },
   draft: DurableEventDraft,
   admit: (transaction: SqlExecutor) => Promise<CoordinatedMutationResult<void>>,
@@ -44,7 +45,7 @@ export async function admitInlineAction(
       );
       if (
         !admitted.deduplicated && delivery?.status === "leased" &&
-        !action.content && !runtime.protectedActions?.[action.id]
+        !action.content && !runtime.authorization?.actions[request.actionAlias]
       ) {
         const runId = serverActionRunId(
           delivery.id,

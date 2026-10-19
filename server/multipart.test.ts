@@ -1149,14 +1149,14 @@ Deno.test("bounded observation lifetime detaches server readers before a blocked
   );
 });
 
-Deno.test("observation lifetime overrides can only shorten the five-minute ceiling", () => {
+Deno.test("observation lifetime overrides can only shorten the 15-minute ceiling", () => {
   const source: HttpObservation = {
     type: HTTP_OBSERVATION,
     outputs: new ReadableStream(),
     done: Promise.resolve(),
     cancel: () => Promise.resolve(),
   };
-  for (const renewAfterMs of [0, -1, 300001, Number.POSITIVE_INFINITY, 1.5]) {
+  for (const renewAfterMs of [0, -1, 900001, Number.POSITIVE_INFINITY, 1.5]) {
     assertThrows(
       () => applicationOutputsMultipartResponse(source, { renewAfterMs }),
       RangeError,

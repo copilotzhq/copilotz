@@ -1,7 +1,7 @@
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import { decodeCapability } from "../execution/owner-capability-wire.ts";
 import type { CollectionDefinition } from "./definition.ts";
-import type { CollectionPolicyRegistrations } from "./policy-registration.ts";
+import type { CollectionPolicyRegistrations } from "../authorization/resources.ts";
 
 /** A parentless recovery has no live original invocation to reauthorize. */
 export function canRecoverCollectionReceipt(

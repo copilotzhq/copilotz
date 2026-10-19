@@ -113,7 +113,7 @@ export type CollectionDefinition<
     : Record<string, unknown>,
 > = Readonly<{
   name: string;
-  /** Requires a host-only collectionPolicies registration before owner startup. */
+  /** Requires an owner authorization policy binding before startup. */
   ownerPolicy?: "required";
   schema: S;
   timestamps?: Readonly<{ createdAt?: string; updatedAt?: string }>;

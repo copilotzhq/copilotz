@@ -1,8 +1,7 @@
-import { withAuthenticatedViewer } from "./viewer-authority.ts";
-import { withTrustedCollectionPolicyRead } from "../runtime/collections/policy-invocation.ts";
+import { retainedAuthority } from "../runtime/authorization/authority.ts";
+import { withTrustedCollectionPolicyRead } from "../runtime/authorization/invocation.ts";
 import {
-  authenticatedServerIngressProof,
-  serverRouteIngressProof,
+  authorityIngressProof,
 } from "../runtime/application/ingress/authority.ts";
 import { withFacadeIngress } from "./context.ts";
 /** Resolves trusted scope and policy once for a compiled HTTP endpoint. @module */
@@ -21,7 +20,9 @@ function text(value: unknown): string | undefined {
 }
 
 function authorizedScope(value: unknown): ServerAuthorizedScope {
-  if (value === undefined) return ({} as const);
+  if (value === undefined) {
+    throw new TypeError("Authentication must return retained authority.");
+  }
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     (Object.getPrototypeOf(value) !== Object.prototype &&
@@ -32,7 +33,7 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     Reflect.ownKeys(input).some((key) =>
       key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
       key !== "actionMetadata" && key !== "operationMetadata" &&
-      key !== "context" && key !== "actor"
+      key !== "context" && key !== "actor" && key !== "authority"
     )
   ) {
     throw new TypeError(
@@ -72,6 +73,7 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     return (structuredClone(candidate as Record<string, unknown>));
   };
   return ({
+    authority: retainedAuthority(input.authority),
     ...(input.actor
       ? {
         actor: plain(
@@ -112,6 +114,11 @@ export async function authenticateHttpRequest(
   facade: ServerFacadeResource,
   match: ServerRouteMatch,
 ): Promise<FacadeContext | Response> {
+  assertUploadContentLength(
+    request,
+    match.endpoint,
+    facade.maxAssetUploadBytes,
+  );
   const authenticationContext = {
     lookup: (scope: ServerAuthorizedScope) =>
       createHttpReads(application, scope),
@@ -142,34 +149,27 @@ export async function authenticateHttpRequest(
     databaseSchema: selected.databaseSchema ??
       application.config.databaseSchema,
   } as const;
-  const read = await createHttpReads(application, scope);
-  const policyRequest = request.clone();
-  let authorized;
-  try {
-    authorized = await withTrustedCollectionPolicyRead(() =>
-      facade.authorize?.(policyRequest, {
-        ...authenticationContext,
-        scope,
-        read,
-      })
+  const authority = retainedAuthority({
+    ...scope.authority,
+    requestFacts: {
+      ...scope.authority!.requestFacts,
+      endpoint: match.endpoint.key,
+      operation: match.endpoint.operation ?? match.endpoint.kind,
+      params: match.params,
+    },
+  });
+  if (
+    authority.scope.namespace !== scope.namespace ||
+    authority.scope.databaseSchema !== scope.databaseSchema
+  ) {
+    throw new TypeError(
+      "Authentication scope differs from retained authority.",
     );
-  } finally {
-    if (!policyRequest.bodyUsed) {
-      void policyRequest.body?.cancel().catch(() => undefined);
-    }
   }
-  if (authorized instanceof Response) return authorized;
-  const constraints = structuredClone(authorized ?? {});
-  assertUploadContentLength(
-    request,
-    match.endpoint,
-    facade.maxAssetUploadBytes,
-  );
   const result = withFacadeIngress(
     {
       ...(scope.context ?? {}),
-      serverScope: scope,
-      serverConstraints: constraints,
+      serverScope: { ...scope, authority },
       serverRequest: request,
       namespace: scope.namespace,
       databaseSchema: scope.databaseSchema,
@@ -177,7 +177,6 @@ export async function authenticateHttpRequest(
       serverParams: match.params,
       serverActionMetadata: {
         ...scope.actionMetadata,
-        ...constraints.actionMetadata,
         ...(scope.actor ? { httpActor: scope.actor } : {}),
       },
       operationMetadata: {
@@ -187,16 +186,7 @@ export async function authenticateHttpRequest(
       serverIdentity: scope.identity ?? ({} as const),
       serverSignal: request.signal,
     } as const,
-    facade.authenticate && facade.authorize && authenticated && authorized
-      ? scope.actor
-        ? authenticatedServerIngressProof(scope.actor)
-        : match.endpoint.kind === "http" &&
-            facade.protectedBootstrapRoutes?.includes(match.endpoint.id)
-        ? serverRouteIngressProof(match.endpoint.id)
-        : undefined
-      : undefined,
+    authorityIngressProof(authority),
   );
-  return facade.authenticate && facade.authorize && authenticated && authorized
-    ? withAuthenticatedViewer(result)
-    : result;
+  return result;
 }

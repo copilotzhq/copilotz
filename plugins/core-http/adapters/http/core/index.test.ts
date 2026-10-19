@@ -1,8 +1,9 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { createTestApplication as createCopilotzApplication } from "../../../../../runtime/testing/server-authorization.test.ts";
+import { defineTestServerFacade as fixtureServerFacade } from "../../../../../runtime/testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { createCopilotzApplication } from "../../../../../runtime/application/index.ts";
+
 import { createTestDatabase } from "../../../../../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../../../../server/index.ts";
 import { createServerFacadeFetchHandler } from "../../../../../server/facade.ts";
@@ -204,7 +205,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
                   actor: { id: request.headers.get("x-user") ?? "person" },
                 };
               },
-              authorize(_request, context) {
+              evaluate(_request, context) {
                 return {
                   operations: {
                     metadata: { actorId: context.scope.actor!.id },

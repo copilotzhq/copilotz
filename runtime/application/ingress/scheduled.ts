@@ -11,6 +11,7 @@ import {
 
 const symbol = Symbol("owner-scheduled-occurrence");
 type Admission = Readonly<{
+  authority?: import("../../authorization/authority.ts").AuthenticatedAuthority;
   databaseSchema: string;
   namespace: string;
   scheduleId: string;
@@ -47,6 +48,20 @@ export function captureScheduledAlarmAdmission<T extends object>(
 }
 export const scheduledIngressProof = (admission: Admission) =>
   scheduledOccurrenceIngressProof({
+    ...(admission.authority
+      ? {
+        authority: {
+          ...admission.authority,
+          requestFacts: {
+            ...admission.authority.requestFacts,
+            input: {
+              scheduleId: admission.scheduleId,
+              scheduleVersion: admission.scheduleVersion,
+            },
+          },
+        },
+      }
+      : {}),
     scheduleId: admission.scheduleId,
     occurrenceId: admission.occurrenceId,
     scheduledFor: admission.scheduledFor,

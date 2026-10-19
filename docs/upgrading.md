@@ -461,7 +461,7 @@ separate procedure, described in
   storage cost. Operator scripts are your repository's code, not a package CLI.
 - Replay retention keeps settled operations for a 24-hour grace period until
   `app.maintenance(...)` prunes them. `operationRetentionMs: null` disables
-  pruning. This is independent of the five-minute HTTP observation renewal.
+  pruning. This is independent of the 15-minute HTTP observation renewal.
 
 ### Release history
 

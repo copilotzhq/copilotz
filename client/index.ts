@@ -220,6 +220,16 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
             attempt = 0;
             continue;
           }
+          if (
+            frame.kind === "output" &&
+            frame.output.type === "observation.revoked"
+          ) {
+            throw new CopilotzHttpError(
+              403,
+              "revoked",
+              "Observation authority was revoked.",
+            );
+          }
           applying = true;
           await observation.onFrame(frame);
           applying = false;

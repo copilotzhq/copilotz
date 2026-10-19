@@ -1,12 +1,10 @@
 import type { OwnerIngressProof } from "../runtime/application/ingress/authority.ts";
 import type {
   ServerAuthorizedScope,
-  ServerConstraints,
 } from "../plugins/server/shared/contracts.ts";
 
 export type FacadeContext = Readonly<{
   serverScope: ServerAuthorizedScope;
-  serverConstraints: ServerConstraints;
   serverRequest: Request;
   serverEndpointKey: string;
   serverParams: Readonly<Record<string, string>>;

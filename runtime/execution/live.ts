@@ -1,4 +1,4 @@
-import { closeCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
+import { closeCollectionPolicyInvocation } from "../authorization/invocation.ts";
 import { readViews } from "../collections/read-view.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {

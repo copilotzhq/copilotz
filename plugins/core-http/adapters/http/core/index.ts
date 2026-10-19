@@ -40,21 +40,8 @@ function query(
     });
   }
 }
-function membership(context: HttpHandlerContext) {
-  if (!context.scope.actor) {
-    throw Object.assign(new Error("Authentication required."), {
-      status: 401,
-      code: "unauthorized",
-    });
-  }
-  // An application can authorize historical identities or administrative access.
-  // The read service has already intersected this explicit policy with every query.
-  if (context.constraints.collections?.thread) return {};
-  return { contains: { participantIds: [context.scope.actor.id] } };
-}
 async function thread(context: HttpHandlerContext, id: string) {
   const values = await context.read.list("thread", {
-    ...membership(context),
     where: { id },
     limit: 1,
   });
@@ -104,7 +91,6 @@ export function createCoreHttpAdapter(): HttpAdapter {
             limit: limit + 1,
             order: { field: "updatedAt", direction: input.order ?? "desc" },
             ...(input.status ? { where: { status: input.status } } : {}),
-            all: [membership(context)],
           });
           return Response.json({
             data: await Promise.all(

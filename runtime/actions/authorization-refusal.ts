@@ -1,5 +1,5 @@
 import { awaitEventPublication } from "../events/coordinator.ts";
-import { withoutCollectionPolicyInvocation } from "../collections/policy-invocation.ts";
+import { withoutCollectionPolicyInvocation } from "../authorization/invocation.ts";
 import { createOperationCatalogTables } from "../streams/catalog.ts";
 /** Owner-only terminal settlement after a trusted current-policy refusal. */
 import { createSchemaCommandRunner } from "../engine/commands.ts";

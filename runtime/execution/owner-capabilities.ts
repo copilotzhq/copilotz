@@ -9,7 +9,7 @@ import type {
   OwnerSessionSource,
 } from "./types.ts";
 import { ownerExecutionInterrupted } from "./owner-interruption.ts";
-import { collectionReceiptInvocation } from "../collections/policy-invocation.ts";
+import { collectionReceiptInvocation } from "../authorization/invocation.ts";
 import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,

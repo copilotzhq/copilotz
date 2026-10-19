@@ -15,7 +15,6 @@ import { snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
   "id",
-  "ownerHooks",
   "content",
   "inputSchema",
   "outputSchema",
@@ -61,18 +60,6 @@ export function isActionDefinition(
     (value.resume !== undefined && typeof value.resume !== "function") ||
     (value.reconcile !== undefined && typeof value.reconcile !== "function")
   ) return false;
-  if (
-    value.ownerHooks !== undefined &&
-    (!isRecord(value.ownerHooks) || !Object.keys(value.ownerHooks).length ||
-      Object.entries(value.ownerHooks).some(([key, value]) =>
-        key !== "prepareInput" || value !== true
-      ))
-  ) return false;
-  try {
-    if (value.content !== undefined) actionContentDeclaration(value.content);
-  } catch {
-    return false;
-  }
   return (value.inputSchema === undefined || isRecord(value.inputSchema)) &&
     (value.outputSchema === undefined || isRecord(value.outputSchema));
 }
@@ -87,7 +74,6 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
-    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -122,7 +108,6 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
-    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -150,7 +135,6 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
-    ownerHooks?: Definition<TInput, TOutput, TContext>["ownerHooks"];
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -190,18 +174,7 @@ export function defineAction<
   ) {
     throw new TypeError(`Action '${id}' reconcile must be a function.`);
   }
-  const ownerHooks = definition.ownerHooks;
-  if (
-    ownerHooks !== undefined &&
-    (!isRecord(ownerHooks) || !Object.keys(ownerHooks).length ||
-      Object.entries(ownerHooks).some(([key, value]) =>
-        key !== "prepareInput" || value !== true
-      ))
-  ) {
-    throw new TypeError(
-      "Action ownerHooks must declare required owner phases.",
-    );
-  }
+
   const inputSchema = optionalSchema(
     id,
     "inputSchema",
@@ -230,7 +203,6 @@ export function defineAction<
   }
   return ({
     id,
-    ...(ownerHooks ? { ownerHooks: Object.freeze({ ...ownerHooks }) } : {}),
     ...(content ? { content } : {}),
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),

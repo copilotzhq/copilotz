@@ -1,3 +1,6 @@
+import { testAuthority } from "../testing/authority.ts";
+import { credentialValidity } from "../authorization/authority.ts";
+import { defineCollection } from "../collections/definition.ts";
 import type { DeliveryDiagnostic } from "../execution/types.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzApplication } from "../application/application.ts";
@@ -17,11 +20,11 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../plugins/index.ts";
-import { withOwnerCollectionInvocation } from "../collections/policy-invocation.ts";
+import { withOwnerCollectionInvocation } from "../authorization/invocation.ts";
 import {
   isCollectionAlarmPolicyStale,
   withCollectionAlarmPolicy,
-} from "../collections/policy-alarm.ts";
+} from "../collections/alarm-authority.ts";
 import { defineAction } from "./define.ts";
 import { ActionError } from "./errors.ts";
 import type { RuntimeActionCallers } from "./types.ts";
@@ -42,7 +45,6 @@ Deno.test({
     let queryFailure = false;
     const consume = defineAction({
       id: "fixture.policy-schedule-use",
-      ownerHooks: { prepareInput: true },
       inputSchema: {
         type: "object",
         properties: { credential: secret({ type: "string" }) },
@@ -60,6 +62,12 @@ Deno.test({
       database: db,
       databaseSchema: schema,
       namespace,
+      collections: {
+        delegation: defineCollection({
+          name: "fixture_delegation",
+          schema: { type: "object" },
+        }),
+      },
       engine: {
         now: () => now,
         execution: {
@@ -92,77 +100,67 @@ Deno.test({
           },
         }),
       ],
-      collectionPolicies: {
-        scheduledJob: {
-          async authorize(intent, ctx) {
-            if (
-              ctx.invocation.kind === "action" &&
-              ctx.invocation.id === "fixture.setup"
-            ) return;
-            if (ctx.invocation.kind === "alarm") {
-              assertEquals(
-                ctx.invocation.recordId,
-                (intent.args as { id: string }).id,
-              );
-            } else if (ctx.invocation.kind === "processor") {
-              const source = await ctx.resolveSource();
+      authorization: {
+        systemScopes: { [namespace]: testAuthority(schema, namespace).scope },
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: ["scheduledJob", "delegation"],
+            async evaluate({ authority, intent, read }) {
+              const constraints = {
+                collections: { scheduledJob: {} },
+                collectionMutations: {
+                  scheduledJob: {
+                    create: {},
+                    update: {},
+                    delete: {},
+                    commands: { due: {} },
+                  },
+                },
+                actions: {
+                  consume: {
+                    input: { credential: "synthetic-scheduled-credential" },
+                  },
+                },
+              };
               if (
-                source.ingress?.kind !== "scheduled-occurrence" ||
-                source.ingress.scheduleId !== (intent.args as { id: string }).id
-              ) return deny();
-            } else return deny();
-            if (queryFailure && ctx.invocation.kind === "alarm") {
-              try {
-                await ctx.query(`SELECT missing_column FROM "${schema}".nodes`);
-              } catch {
-                // Even a real policy refusal cannot hide a failed authority read.
-                throw new ActionError("Forbidden", {
-                  code: "forbidden",
-                  status: 403,
-                });
+                authority.principal.id === "fixture.setup"
+              ) return constraints;
+              if (authority.provenance.ingress !== "alarm") return deny();
+              if (queryFailure) {
+                try {
+                  await read.get("undeclared", "none");
+                } catch {
+                  return deny();
+                }
               }
-            }
-            const record = intent.current;
-            if (!record || record.status !== "active") return deny();
-            const rows = await ctx.query<
-              { data: { active: boolean; version: string } }
-            >(
-              `SELECT data FROM "${schema}".nodes WHERE namespace=$1 AND id=$2 AND type='fixture_delegation'`,
-              [namespace, `delegation:${record.id}`],
-            );
-            if (
-              !rows.rows[0]?.data.active ||
-              rows.rows[0].data.version !==
-                await scheduledJobDelegationDigest({
-                  databaseSchema: schema,
-                  namespace,
-                  record,
-                })
-            ) return deny();
+              const id = authority.requestFacts.params.id;
+              const record = await read.get("scheduledJob", id);
+              const delegation = await read.get(
+                "delegation",
+                `delegation:${id}`,
+              );
+              if (
+                !record || record.status !== "active" || !delegation?.active ||
+                delegation.version !==
+                  await scheduledJobDelegationDigest({
+                    databaseSchema: schema,
+                    namespace,
+                    record,
+                  })
+              ) return deny();
+              if (
+                intent.kind === "action" &&
+                delegation.version !==
+                  (authority.requestFacts.input as { scheduleVersion: string })
+                    .scheduleVersion
+              ) return deny();
+              return constraints;
+            },
           },
         },
-      },
-      protectedActions: {
-        [consume.id]: {
-          async authorize(_input, ctx) {
-            const source = await ctx.resolveSource();
-            assertEquals(source.ingress?.kind, "scheduled-occurrence");
-            if (source.ingress?.kind !== "scheduled-occurrence") return deny();
-            const rows = await ctx.query<
-              { data: { active: boolean; version: string } }
-            >(
-              `SELECT data FROM "${schema}".nodes WHERE namespace=$1 AND id=$2 AND type='fixture_delegation'`,
-              [namespace, `delegation:${source.ingress.scheduleId}`],
-            );
-            if (
-              !rows.rows[0]?.data.active ||
-              rows.rows[0].data.version !== source.ingress.scheduleVersion
-            ) return deny();
-          },
-          prepareInput() {
-            return { credential: "synthetic-scheduled-credential" };
-          },
-        },
+        collections: { scheduledJob: { id: "fixture", revision: "1" } },
+        actions: { consume: { id: "fixture", revision: "1" } },
       },
     });
     const run = createSchemaCommandRunner(db, schema);
@@ -194,6 +192,10 @@ Deno.test({
     };
     try {
       await withOwnerCollectionInvocation({
+        authority: {
+          ...testAuthority(schema, namespace, "fixture.setup"),
+          validity: credentialValidity(new Date("2026-01-01T00:00:00Z")),
+        },
         scope: { databaseSchema: schema, namespace },
         signal: new AbortController().signal,
         invocation: { kind: "action", id: "fixture.setup", runId: "setup" },
@@ -255,6 +257,10 @@ Deno.test({
         assert(before.revision !== after.revision);
         const error = await assertRejects(() =>
           withCollectionAlarmPolicy({
+            authority: {
+              ...testAuthority(schema, namespace),
+              validity: credentialValidity(now),
+            },
             definition: jobs.definition,
             deadline: before,
             databaseSchema: schema,

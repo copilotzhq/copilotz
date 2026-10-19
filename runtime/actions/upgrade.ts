@@ -1,4 +1,9 @@
 import {
+  applyAuthorityUpgrade,
+  type AuthorityUpgradeManifest,
+  upgradeAuthoritySchema,
+} from "../authorization/upgrade.ts";
+import {
   assertReceiptUpgradeAuthority,
   upgradeReceiptReaders,
 } from "./upgrade-receipts.ts";
@@ -270,10 +275,20 @@ export async function upgradeActionLifecycle(
       plan?: RetainedDataUpgradePlan;
       reviewedFingerprint?: string;
       contentDecisions?: readonly ContentMigrationDecision[];
+      authority?: AuthorityUpgradeManifest;
     }> = {},
 ): Promise<void> {
   const schema = validateEventSchemaName(schemaName);
   const core = createCoreTableNames(schema);
+  const currentVersion = Number(
+    (await session.query<{ version: number }>(
+      `SELECT version FROM ${core.copilotz_schema_metadata} WHERE singleton`,
+    )).rows[0]?.version,
+  );
+  if (currentVersion === 11 || (currentVersion === 12 && options.authority)) {
+    await upgradeAuthoritySchema(session, schema, options.authority);
+    return;
+  }
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
   const decisions = canonicalDecisions(options.contentDecisions);
   let plan = options.plan ? structuredClone(options.plan) : undefined;
@@ -376,6 +391,7 @@ export async function upgradeActionLifecycle(
       await transaction.query(statement);
     }
     await upgradeReceiptReaders(transaction, schema);
+    await applyAuthorityUpgrade(transaction, schema, options.authority);
     await migrateActionContent(session, schema, {
       apply: true,
       decisions,

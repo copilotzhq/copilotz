@@ -1,4 +1,4 @@
-import { bindActionCollectionInvocation } from "../collections/policy-invocation.ts";
+import { bindActionCollectionInvocation } from "../authorization/invocation.ts";
 /** Capability-only Action assembly used by the sole owner invocation kernel. */
 import { fail as effectFailure } from "./effect-client.ts";
 import { awaitOperation } from "./continuation.ts";

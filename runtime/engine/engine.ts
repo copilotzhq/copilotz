@@ -1,13 +1,15 @@
+import {
+  captureOwnerAuthorization,
+  collectionAuthorizations,
+} from "../authorization/evaluator.ts";
 import { sameActionValue } from "../actions/value.ts";
 import { SERVER_ACTION_REQUEST_EVENT_TYPE } from "../application/ingress/contracts.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
-import { canRecoverCollectionReceipt } from "../collections/policy-receipt.ts";
+import { canRecoverCollectionReceipt } from "../collections/receipt-authority.ts";
 import { resolveProtectedActionSource } from "../actions/protected-action-source.ts";
-import { validateCollectionPolicies } from "../collections/policy-registration.ts";
 import { settleActionAuthorizationRefusal } from "../actions/authorization-refusal.ts";
-import { createProtectedActions } from "../actions/protected-actions.ts";
-import { validateProtectedActions } from "../actions/protected-action-policy.ts";
+import { createAuthorizedActions } from "../actions/authorized-capture.ts";
 import { createOwnerEffectClient } from "../actions/effect-commands.ts";
 import {
   createDeliveryWorkload,
@@ -119,14 +121,28 @@ export async function createCopilotzEngine(
     beforeRecovery?(engine: CopilotzEngine): void | Promise<void>;
   }> = {},
 ): Promise<CopilotzEngine> {
+  if (
+    ["collectionPolicies", "protectedActions"].some((key) =>
+      Object.hasOwn(options, key)
+    )
+  ) {
+    throw new TypeError(
+      "Use the owner authorization registry; removed authorization registrations are forbidden.",
+    );
+  }
   const databaseSchema = options.defaultDatabaseSchema ?? "public";
-  const collectionPolicyRegistrations = validateCollectionPolicies(
-    options.collectionPolicies,
+  options = {
+    ...options,
+    authorization: captureOwnerAuthorization(
+      options.authorization,
+      options.registry.collections,
+      options.registry.actions,
+    ),
+  };
+  const collectionPolicyRegistrations = collectionAuthorizations(
+    options.authorization,
     options.registry.collections,
-  );
-  const protectedActionDefinitions = validateProtectedActions(
-    options.protectedActions,
-    options.registry.actions,
+    databaseSchema,
   );
   const configuredSecretAdapter = options.secretAdapter ??
     options.registry.adapters.secrets?.default;
@@ -143,7 +159,6 @@ export async function createCopilotzEngine(
   }
   const engineOptions: CreateCopilotzEngineOptions = {
     ...options,
-    protectedActions: protectedActionDefinitions,
     assetStorage: options.assetStorage ??
       createBodyStorageRuntime(options.assets),
     ...(secretAdapter ? { secretAdapter } : {}),
@@ -322,8 +337,9 @@ export async function createCopilotzEngine(
       if (!scopedCoordinator) {
         throw new Error("Copilotz action lifecycle is not initialized.");
       }
-      const protectedActions = createProtectedActions({
-        definitions: protectedActionDefinitions,
+      const authorizedActions = createAuthorizedActions({
+        authorization: options.authorization,
+        collections: options.registry.collections,
         actions: (execution?.registry ?? options.registry).actions,
         store: scopedStore,
         coordinator: scopedCoordinator,
@@ -416,25 +432,27 @@ export async function createCopilotzEngine(
             runId: base.executionIncarnationId ?? base.idempotencyKey,
           },
         },
-        authorizeAction: Object.keys(protectedActionDefinitions).length
-          ? async (frame, _purpose, transaction) => {
-            const authorize = protectedActions.output(frame).authorize;
-            if (!authorize) return;
-            if (transaction) await authorize(transaction);
-            else {
-              await createSchemaCommandRunner(
-                scopedStore.session,
-                scopedStore.databaseSchema,
-              )(
-                "actions.authorizeInput",
-                { actionRunId: frame.actionRunId },
-                async (_input, command) => await authorize(command.transaction),
-              );
+        authorizeAction:
+          Object.keys(options.authorization?.actions ?? {}).length
+            ? async (frame, _purpose, transaction) => {
+              const authorize = authorizedActions.output(frame).authorize;
+              if (!authorize) return;
+              if (transaction) await authorize(transaction);
+              else {
+                await createSchemaCommandRunner(
+                  scopedStore.session,
+                  scopedStore.databaseSchema,
+                )(
+                  "actions.authorizeInput",
+                  { actionRunId: frame.actionRunId },
+                  async (_input, command) =>
+                    await authorize(command.transaction),
+                );
+              }
             }
-          }
-          : undefined,
+            : undefined,
         prepareActionInput: async (frame, input) => {
-          const protectedInput = protectedActions.prepareInput(frame, input);
+          const protectedInput = authorizedActions.prepareInput(frame, input);
           if (protectedInput) return await protectedInput;
           if (
             frame.parentActionRunId ||
@@ -502,7 +520,7 @@ export async function createCopilotzEngine(
               (execution?.registry ?? options.registry).actions,
               frame.actionId,
             ),
-            authorize: protectedActions.output(frame).authorize,
+            authorize: authorizedActions.output(frame).authorize,
             verifyNotStarted: (_transaction, reference, evidence) => {
               frame.signal.throwIfAborted();
               return options.verifyEffectNotStarted?.(
@@ -692,7 +710,7 @@ export async function createCopilotzEngine(
             actions: (execution?.registry ?? options.registry).actions,
             protectedValues: scopedCapabilities.protectedValues,
             protectedActionOutput: (data) =>
-              protectedActions.output({
+              authorizedActions.output({
                 actionId: data.actionId,
                 actionRunId: data.actionRunId,
                 parentActionRunId: data.parentActionRunId,

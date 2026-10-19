@@ -1,5 +1,4 @@
 import type { OwnerIngressProof } from "./ingress/authority.ts";
-import type { ProtectedActionDefinitions } from "../actions/protected-action-types.ts";
 import type { ViewMap } from "../views/index.ts";
 import type {
   CopilotzEngine,
@@ -47,10 +46,8 @@ export type CreateCopilotzApplicationOptions =
     databaseSchema?: string;
     /** Trusted owner-local data commands; never sent to workers or HTTP routes. */
     /** Trusted owner-only Collection authorization callbacks. */
-    collectionPolicies?:
-      import("../collections/policy-types.ts").CollectionPolicies;
+    authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
 
-    protectedActions?: ProtectedActionDefinitions;
     /** Explicit pre-provisioned schemas to activate before factory readiness. */
     databaseScopes?: readonly string[];
     plugins?: readonly AnyCopilotzPlugin[];
@@ -66,7 +63,7 @@ export type CreateCopilotzApplicationOptions =
     onDeliveryDiagnostic?: DeliveryDiagnosticSink;
     engine?: Omit<
       CreateCopilotzEngineOptions,
-      | "protectedActions"
+      | "authorization"
       | "session"
       | "registry"
       | "defaultDatabaseSchema"

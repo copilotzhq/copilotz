@@ -123,29 +123,14 @@ export function defineServerFacade(
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" &&
-      key !== "authenticate" && key !== "authorize" &&
-      key !== "maxAssetUploadBytes" && key !== "protectedBootstrapRoutes"
+      key !== "authenticate" &&
+      key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
-  for (const key of ["authenticate", "authorize"] as const) {
+  for (const key of ["authenticate"] as const) {
     if (input[key] !== undefined && typeof input[key] !== "function") {
       throw new TypeError(`Server ${key} must be a function.`);
     }
-  }
-  const bootstrap = input.protectedBootstrapRoutes;
-  if (
-    bootstrap !== undefined &&
-    (!Array.isArray(bootstrap) || bootstrap.length > 128 ||
-      new Set(bootstrap).size !== bootstrap.length ||
-      bootstrap.some((id) =>
-        typeof id !== "string" || !id.trim() || id !== id.trim() ||
-        id.length > 256
-      ) ||
-      (bootstrap.length > 0 && (!input.authenticate || !input.authorize)))
-  ) {
-    throw new TypeError(
-      "Protected bootstrap routes require exact unique route IDs and both server policy hooks.",
-    );
   }
   const expose = input.expose === undefined
     ? {}
@@ -171,11 +156,7 @@ export function defineServerFacade(
         | boolean
         | ServerPatternPolicy,
     } as const,
-    ...(bootstrap
-      ? { protectedBootstrapRoutes: Object.freeze([...bootstrap]) }
-      : {}),
     ...(input.authenticate ? { authenticate: input.authenticate } : {}),
-    ...(input.authorize ? { authorize: input.authorize } : {}),
   } as const);
 }
 
@@ -183,7 +164,6 @@ export type {
   DefineServerFacadeInput,
   ServerAuthenticate,
   ServerAuthenticationContext,
-  ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
   ServerCollectionMutationConstraints,

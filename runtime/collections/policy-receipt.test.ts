@@ -1,8 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { encodeCapability } from "../execution/owner-capability-wire.ts";
 import { defineCollection } from "./definition.ts";
-import { canRecoverCollectionReceipt } from "./policy-receipt.ts";
-import { validateCollectionPolicies } from "./policy-registration.ts";
+import { canRecoverCollectionReceipt } from "./receipt-authority.ts";
+import { collectionAuthorizations } from "../authorization/evaluator.ts";
 Deno.test("parentless receipt recovery cannot release protected operations without their original invocation", () => {
   const entry = defineCollection({
     name: "protectedEntry",
@@ -14,9 +14,16 @@ Deno.test("parentless receipt recovery cannot release protected operations witho
     schema: { type: "object" },
   });
   const definitions = { entry, publicEntry };
-  const policies = validateCollectionPolicies(
-    { entry: { authorize() {} } },
+  const policies = collectionAuthorizations(
+    {
+      policies: {
+        fixture: { revision: "1", sources: [], evaluate: () => ({}) },
+      },
+      collections: { entry: { id: "fixture", revision: "1" } },
+      actions: {},
+    },
     definitions,
+    "test",
   );
   const intent = (path: readonly string[], input: unknown = { id: "one" }) =>
     JSON.parse(

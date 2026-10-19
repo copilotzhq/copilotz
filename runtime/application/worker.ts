@@ -27,8 +27,7 @@ export type CreateCopilotzWorkerOptions =
     {
       hostCommands?: never;
       databaseScopes?: never;
-      protectedActions?: never;
-      collectionPolicies?: never;
+      authorization?: never;
     }
   >;
 
@@ -53,8 +52,7 @@ export async function createCopilotzWorker(
       "assets",
       "hostCommands",
       "databaseScopes",
-      "protectedActions",
-      "collectionPolicies",
+      "authorization",
     ]
       .some((key) => Object.hasOwn(options, key))
   ) {

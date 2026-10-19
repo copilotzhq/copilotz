@@ -1,4 +1,6 @@
-import { withCollectionAlarmPolicy } from "./policy-alarm.ts";
+import type { AuthenticatedAuthority } from "../authorization/authority.ts";
+import type { OwnerAuthorization } from "../authorization/evaluator.ts";
+import { withCollectionAlarmPolicy } from "./alarm-authority.ts";
 import { reportDeliveryDiagnostic } from "../execution/diagnostics.ts";
 import type { DeliveryDiagnosticSink } from "../execution/types.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
@@ -33,6 +35,8 @@ export async function syncCollectionAlarm(
 
 /** Installs declarations on their database owner; a wake touches only due records. */
 export function registerCollectionAlarms(options: {
+  authorization?: OwnerAuthorization;
+  aliases?: Readonly<Record<string, CollectionDefinition>>;
   owner: DatabaseOwner;
   session: SqlSession;
   schema: string;
@@ -73,9 +77,45 @@ export function registerCollectionAlarms(options: {
               );
               if (!selected.rows.length) return;
               const id = (deadline.payload as { id: string }).id;
+              const alias = Object.entries(options.aliases ?? {}).find((
+                [, value],
+              ) => value.name === definition.name)?.[0];
+              const policy = alias && options.authorization?.collections[alias];
+              const ownerScope = options.authorization?.systemScopes
+                ?.[deadline.namespace!];
+              const authority: AuthenticatedAuthority | undefined =
+                policy && ownerScope
+                  ? {
+                    version: 1,
+                    principal: { kind: "host-task", id: deadline.source },
+                    scope: ownerScope,
+                    validity: {
+                      kind: "occurrence",
+                      key: deadline.key,
+                      revision: deadline.revision,
+                    },
+                    policy,
+                    requestFacts: {
+                      endpoint: deadline.source,
+                      transport: "alarm",
+                      operation: "due",
+                      params: { id },
+                      input: null,
+                    },
+                    provenance: { ingress: "alarm", source: deadline.key },
+                    dependencies: [],
+                    authorityBasis: { kind: "occurrence", id: deadline.key },
+                  }
+                  : undefined;
+              if (policy && !authority) {
+                throw new Error(
+                  "Protected owner alarms require explicit systemScopes placement.",
+                );
+              }
               const scope = { namespace: deadline.namespace! };
               const collection = options.collections.get(definition.name)!;
               const current = await withCollectionAlarmPolicy({
+                authority,
                 definition,
                 deadline,
                 databaseSchema: options.schema,
@@ -120,6 +160,7 @@ export function registerCollectionAlarms(options: {
                   throw new Error("Scheduled alarm command is invalid.");
                 }
                 withScheduledAlarmAdmission(callOptions, {
+                  ...(authority ? { authority } : {}),
                   databaseSchema: options.schema,
                   namespace: deadline.namespace!,
                   scheduleId: id,
@@ -135,6 +176,7 @@ export function registerCollectionAlarms(options: {
               }
               await withCollectionAlarmPolicy(
                 {
+                  authority,
                   definition,
                   deadline,
                   databaseSchema: options.schema,

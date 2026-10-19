@@ -1,3 +1,13 @@
+import { testAuthority } from "../runtime/testing/authority.ts";
+import { createAuthorizationOwner } from "../runtime/authorization/owner.ts";
+import {
+  openDatabaseOwner,
+  releaseDatabaseOwner,
+} from "../runtime/engine/commands.ts";
+import {
+  captureOperationConstraints,
+  matchesOperationConstraints,
+} from "../runtime/authorization/metadata.ts";
 import {
   CONTENT_CHUNK_BYTES,
   createContentCatalog,
@@ -130,7 +140,11 @@ function testRead(): HttpReadServices {
 }
 
 function testScope(): ServerAuthorizedScope {
-  return { namespace: "tenant", databaseSchema: "test" };
+  return {
+    namespace: "tenant",
+    databaseSchema: "test",
+    authority: testAuthority("test", "tenant"),
+  };
 }
 
 function pause(milliseconds: number): Promise<void> {
@@ -229,10 +243,48 @@ async function createOperations(
   constraints: ServerConstraints = {},
   read: HttpReadServices = testRead(),
 ) {
+  const owner = {
+    async operation(_authority: unknown, id: string) {
+      const status = await application.operationStatus({
+        operationId: id,
+        namespace: "tenant",
+        databaseSchema: "test",
+      });
+      if (
+        !status ||
+        !matchesOperationConstraints(
+          status.metadata ?? {},
+          captureOperationConstraints(
+            constraints.operations ?? { metadata: {} },
+          ),
+        )
+      ) {
+        throw Object.assign(new Error("Operation was not found."), {
+          status: 404,
+          code: "operation_not_found",
+        });
+      }
+      return {
+        ...status,
+        metadata: { operationMetadata: status.metadata ?? {} },
+      };
+    },
+    async observe(
+      _authority: unknown,
+      input: { operationIds?: readonly string[] },
+    ) {
+      for (const id of input.operationIds ?? []) {
+        await owner.operation(_authority, id);
+      }
+      return { publish: <T>(send: () => Promise<T>) => send(), close() {} };
+    },
+  };
   return await createHttpOperations(
-    application,
+    {
+      ...application,
+      authorization: owner,
+    } as unknown as InternalCopilotzApplication,
     testScope(),
-    constraints,
     read,
   );
 }
@@ -281,7 +333,10 @@ function checkpointApplication(
   );
   return testApplication({
     attach: () => Promise.resolve(closedAttachment("unused")),
-    operationStatus: () => Promise.resolve(null),
+    operationStatus: ({ operationId }) =>
+      Promise.resolve(
+        records.find((record) => record.operationId === operationId) ?? null,
+      ),
     operations: {
       list() {
         return Promise.resolve(records);
@@ -522,7 +577,8 @@ Deno.test("history checkpoint propagates unrelated stream catalog errors", async
   });
   const application = testApplication({
     attach: () => Promise.resolve(closedAttachment("unused")),
-    operationStatus: () => Promise.resolve(null),
+    operationStatus: ({ operationId }) =>
+      Promise.resolve({ ...operation(operationId, {}), metadata: {} }),
     operations: {
       list() {
         return Promise.resolve([operation(operationId, {
@@ -564,6 +620,9 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
   const schema = `http_observe_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   await provisionOperationCatalog(db, schema);
+  const owner = await openDatabaseOwner(db, schema);
+  owner.activate();
+  const authorities: ReturnType<typeof createAuthorizationOwner>[] = [];
   const rawCatalog = createOperationCatalog(db, schema);
   const bodies = createMemoryBodyStore();
   const counts = {
@@ -638,6 +697,16 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     createContext: createTestProcessorContext,
   });
   const coordinator = createEventCoordinator({
+    publish(event) {
+      if (!event.durable) return;
+      for (const authority of authorities) {
+        authority.notice({
+          namespace: event.namespace,
+          collection: event.subject?.type,
+          id: event.subject?.id,
+        });
+      }
+    },
     store: events,
     registry,
     executor,
@@ -702,10 +771,35 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
   const scope: ServerAuthorizedScope = {
     namespace: "tenant",
     databaseSchema: schema,
+    authority: testAuthority(schema, "tenant"),
   };
   const create = async (constraints: ServerConstraints = {}) => {
-    const read = await createHttpReads(application, scope, constraints);
-    return await createHttpOperations(application, scope, constraints, read);
+    const authorization = createAuthorizationOwner({
+      session: db,
+      databaseSchema: schema,
+      owner,
+      collections: { thread: threadDefinition },
+      operations,
+      registration: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate: () => ({
+              collections: { thread: {} },
+              operations: { metadata: {} },
+              ...constraints,
+            }),
+          },
+        },
+        collections: { thread: { id: "fixture", revision: "1" } },
+        actions: {},
+      },
+    });
+    authorities.push(authorization);
+    const selected = { ...application, authorization };
+    const read = await createHttpReads(selected, scope);
+    return await createHttpOperations(selected, scope, read);
   };
   const selected: Awaited<ReturnType<typeof createHttpOperations>>[] = [];
   const observations: Awaited<
@@ -877,6 +971,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
       );
       await readers.close();
       await executor.shutdown();
+      releaseDatabaseOwner(owner);
       await db.close();
     },
   };
@@ -1147,7 +1242,7 @@ Deno.test("thread access revocation closes observation using the scoped collecti
       "Revoked observation did not close.",
     );
     assertEquals(f.counts.removed, 1);
-    assert(f.counts.resources.length >= 1);
+    assertEquals(f.counts.resources.length, 0, "revocation uses owner notices");
   } finally {
     await f.close();
   }
@@ -1225,7 +1320,7 @@ Deno.test("late shared operation readers are released when an explicit observati
   }
 });
 
-Deno.test("1000 distinct idle observations share batched selection heads and scoped existence reads", async () => {
+Deno.test("1000 distinct idle observations share selection heads without authorization polling", async () => {
   const f = await observationFixture();
   try {
     const ids = Array.from({ length: 1000 }, (_, index) => `thread-${index}`);
@@ -1250,8 +1345,11 @@ Deno.test("1000 distinct idle observations share batched selection heads and sco
       0,
       "matching heartbeat heads must not trigger safety scans",
     );
-    assert(f.counts.resources.length >= 18 && f.counts.resources.length <= 24);
-    assert(f.counts.resources.every((batch) => batch.length === 1000));
+    assertEquals(
+      f.counts.resources.length,
+      0,
+      "idle authority must not poll records",
+    );
     await Promise.all(views.map((view) => view.observation.cancel()));
     await Promise.all(views.map((view) => view.observation.done));
     assertEquals(f.counts.removed, 1);

@@ -5,7 +5,7 @@ import {
 /** One bounded observation coordinator for operation selections and conversations. */
 import { coreThreadObservationKey } from "@copilotz/copilotz/core";
 import { watchSelection } from "./selection-watch.ts";
-import { watchHttpRead } from "./reads.ts";
+
 import type {
   ApplicationOperationAttachment,
   ApplicationOutput,
@@ -19,7 +19,6 @@ import {
 import type { HttpReadServices } from "../plugins/server/authoring/http-adapter/index.ts";
 import type {
   ServerAuthorizedScope,
-  ServerConstraints,
 } from "../plugins/server/shared/contracts.ts";
 import { HTTP_OBSERVATION, type HttpObservation } from "./http-types.ts";
 
@@ -30,7 +29,6 @@ function failure(code: string, status: number, message: string) {
 export async function createHttpOperations(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
-  constraints: ServerConstraints,
   read: HttpReadServices,
 ) {
   const namespace = scope.namespace ?? application.config.namespace!;
@@ -39,25 +37,25 @@ export async function createHttpOperations(
   const runtime = databaseSchema === application.config.databaseSchema
     ? application
     : await application.databaseScope(databaseSchema);
-  const authorizedOperationMetadata = (candidate: unknown): boolean => {
-    const metadata = candidate && typeof candidate === "object" &&
-        !Array.isArray(candidate)
-      ? candidate as Record<string, unknown>
-      : {};
-    return Object.entries(constraints.operations?.metadata ?? {}).every((
-      [key, value],
-    ) => JSON.stringify(metadata[key]) === JSON.stringify(value));
-  };
   const get = async (operationId: string) => {
-    const status = await application.operationStatus({
-      operationId,
-      namespace,
-      databaseSchema,
-    });
-    if (!status || !authorizedOperationMetadata(status.metadata)) {
-      throw failure("operation_not_found", 404, "Operation was not found.");
+    if (!scope.authority) {
+      throw failure("forbidden", 403, "Retained authority is required.");
     }
-    return status;
+    const record = await runtime.authorization.operation(
+      scope.authority,
+      operationId,
+    );
+    return {
+      operationId: record.operationId,
+      namespace: record.namespace,
+      correlationId: record.correlationId,
+      state: record.state,
+      metadata: record.metadata.operationMetadata as Record<string, unknown> ??
+        {},
+      acceptedAt: record.acceptedAt,
+      updatedAt: record.updatedAt,
+      ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+    };
   };
   const thread = async (id: string) => {
     if (!await read.get("thread", id)) {
@@ -86,9 +84,7 @@ export async function createHttpOperations(
       );
     }
     for (const operation of operations) {
-      if (!authorizedOperationMetadata(operation.metadata.operationMetadata)) {
-        throw failure("operation_not_found", 404, "Operation was not found.");
-      }
+      await get(operation.operationId);
     }
     return operations.map((operation) => operation.operationId);
   };
@@ -179,6 +175,9 @@ export async function createHttpOperations(
       const terminal = new Map<string, ApplicationOutput>();
       const pumps = new Set<Promise<void>>();
       let stopAccess: (() => void) | undefined;
+      let authorityChannel:
+        | Awaited<ReturnType<typeof runtime.authorization.observe>>
+        | undefined;
       let feed: Awaited<ReturnType<typeof watchSelection>> | undefined;
       let wake: (() => void) | undefined;
       let changed = true;
@@ -202,7 +201,7 @@ export async function createHttpOperations(
         reason: unknown = "observation_detached",
         drain = false,
       ) => {
-        stopAccess?.();
+        if (!drain) stopAccess?.();
         feed?.close();
         if (detached) {
           if (!drain && renewalDraining) {
@@ -223,7 +222,7 @@ export async function createHttpOperations(
         }
         abort.abort(reason);
         notify();
-        stopAccess?.();
+        if (!drain) stopAccess?.();
         feed?.close();
         selection.signal?.removeEventListener("abort", cancelled);
         await Promise.allSettled(
@@ -251,6 +250,22 @@ export async function createHttpOperations(
         | undefined;
       try {
         if (selection.signal?.aborted) throw selection.signal.reason;
+        if (!scope.authority) {
+          throw failure("forbidden", 403, "Retained authority is required.");
+        }
+        authorityChannel = await runtime.authorization.observe(
+          scope.authority,
+          {
+            ...(selection.threadId ? { threadId: selection.threadId } : {}),
+            ...(selection.operationIds
+              ? { operationIds: selection.operationIds }
+              : {}),
+          },
+          (error) => {
+            void detach(error);
+          },
+        );
+        stopAccess = () => authorityChannel?.close();
         if (selection.threadId) {
           await thread(selection.threadId);
           feed = await watchSelection(
@@ -258,14 +273,6 @@ export async function createHttpOperations(
             namespace,
             coreThreadObservationKey(selection.threadId),
             notify,
-          );
-          stopAccess = watchHttpRead(
-            read,
-            "thread",
-            selection.threadId,
-            (error) => {
-              void detach(error);
-            },
           );
         }
         checkpoint = selection.checkpoint ??
@@ -323,8 +330,7 @@ export async function createHttpOperations(
           for (const id of authorizedIds) {
             const operation = found.get(id);
             if (
-              !operation ||
-              !authorizedOperationMetadata(operation.metadata.operationMetadata)
+              !operation
             ) {
               throw failure(
                 "invalid_replay_cursor",
@@ -332,6 +338,7 @@ export async function createHttpOperations(
                 "Checkpoint is outside the authorized selection.",
               );
             }
+            await get(id);
           }
           // The history boundary covers terminal work. Operations still running
           // at that boundary must be followed even if they began earlier.
@@ -342,15 +349,7 @@ export async function createHttpOperations(
             limit: 33,
           });
           for (const operation of active) {
-            if (
-              !authorizedOperationMetadata(operation.metadata.operationMetadata)
-            ) {
-              throw failure(
-                "operation_not_found",
-                404,
-                "Operation was not found.",
-              );
-            }
+            await get(operation.operationId);
             if (!ids.includes(operation.operationId)) {
               ids.push(operation.operationId);
             }
@@ -503,17 +502,7 @@ export async function createHttpOperations(
               const registered: string[] = [];
               let consumed = 0;
               for (const operation of page) {
-                if (
-                  !authorizedOperationMetadata(
-                    operation.metadata.operationMetadata,
-                  )
-                ) {
-                  throw failure(
-                    "operation_not_found",
-                    404,
-                    "Operation was not found.",
-                  );
-                }
+                await get(operation.operationId);
                 const retirement = retired.get(operation.operationId);
                 if (
                   retirement &&
@@ -598,7 +587,6 @@ export async function createHttpOperations(
           );
           throw error;
         } finally {
-          stopAccess?.();
           feed?.close();
           selection.signal?.removeEventListener("abort", cancelled);
         }
@@ -606,6 +594,7 @@ export async function createHttpOperations(
       void done.catch(() => undefined);
       return {
         type: HTTP_OBSERVATION,
+        authorizePublication: (publish) => authorityChannel!.publish(publish),
         heartbeat: (streamIds) =>
           runtime.operations.pushState({
             namespace,

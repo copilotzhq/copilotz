@@ -714,3 +714,20 @@ export function actionDefinitionHasSecrets(
   return actionSchemaHasSecrets(action.inputSchema) ||
     actionSchemaHasSecrets(action.outputSchema);
 }
+
+/** Shared input-secret disclosure check for invocation and lifecycle capture. */
+export function assertMetadataIsSecretFree(
+  metadata: unknown,
+  secrets: readonly string[],
+): void {
+  const encoded = JSON.stringify(metadata);
+  if (
+    secrets.some((secret) =>
+      secret && encoded.includes(JSON.stringify(secret).slice(1, -1))
+    )
+  ) {
+    throw new TypeError(
+      "Action invocation metadata cannot contain schema-marked secret values.",
+    );
+  }
+}

@@ -1,8 +1,25 @@
+import { authorizeOperation } from "../authorization/operation.ts";
+import { withOwnerCommandAuthorization } from "./command-authorization.ts";
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { captureCollectionInvocation } from "../authorization/invocation.ts";
+import { sameActionValue } from "../actions/value.ts";
+import { constrainCollection } from "../authorization/collection-constraints.ts";
+import { validateCollectionInput } from "../collections/validate.ts";
+import { captureHostCommandJson } from "../application/host-command-json.ts";
+import { createAuthorizationOwner } from "../authorization/owner.ts";
+import {
+  authorizationRefused,
+  collectionAuthorizations,
+  createOwnerEvaluator,
+} from "../authorization/evaluator.ts";
 import { admitInlineAction } from "../application/ingress/inline-action.ts";
 import { completeHostCollection } from "../application/ingress/inline-collection.ts";
-import { validateCollectionPolicies } from "../collections/policy-registration.ts";
-import { createProtectedActions } from "../actions/protected-actions.ts";
-import { assertOwnerIngressReplay } from "../application/ingress/authority.ts";
+import { createAuthorizedActions } from "../actions/authorized-capture.ts";
+import {
+  assertOwnerIngressReplay,
+  hostIngressProof,
+  ownerIngressEvidence,
+} from "../application/ingress/authority.ts";
 import { readLogicalHead } from "../content/catalog.ts";
 import { registerDeliveryAlarms } from "../execution/alarms.ts";
 import { registerCollectionAlarms } from "../collections/alarms.ts";
@@ -306,9 +323,10 @@ export function createDatabaseScope(
     databaseSchema,
   });
   const collections = createCollectionRuntime({
-    policies: validateCollectionPolicies(
-      engine.collectionPolicies,
+    policies: collectionAuthorizations(
+      engine.authorization,
       options.registry.collections,
+      databaseSchema,
     ),
     coordinator,
     session: engine.session,
@@ -379,60 +397,176 @@ export function createDatabaseScope(
       const commit = (
         transaction?: import("../events/session.ts").SqlExecutor,
       ) =>
-        coordinator.commitMutation({
-          transaction,
-          ...(inlineAction && !engine.execution?.dispatcher
-            ? {
-              initialLocalClaim: {
-                consumerId: "processor:copilotz.server.action-request",
-                owner: crypto.randomUUID(),
-              },
-            }
-            : {}),
-          ...(completion
-            ? {
-              consumers: options.registry.durableConsumers(
-                draft,
-                prepared.publicData,
-              ).filter((consumer) =>
-                consumer.consumerId !==
-                  "processor:copilotz.server.collection-mutation-request"
-              ),
-            }
-            : {}),
-          eventId,
-          draft: { ...draft, payload: persistedPayload },
-          ingress,
-          matchData: prepared.publicData,
-          body: { id: bodyId, json: prepared.body },
-          mutate: async (context) => {
-            for (const value of prepared.prepared) {
-              await protectedValues!.adopt(context, draft.namespace, value);
-            }
-          },
-          recoverDuplicate: async (event, context) => {
-            const existing = await readEventBody(
-              context,
-              event.namespace,
-              eventDataRef(event.payload),
-            );
-            await assertOwnerIngressReplay(
-              context,
-              options.databaseSchema,
-              event,
-              existing,
-              ingress,
-            );
-            if (!samePreparedProtectedEventBody(existing, prepared.body)) {
-              throw Object.assign(
-                new Error(
-                  `Protected Event '${event.id}' was retried with different data.`,
+        createSchemaCommandRunner(transaction ?? store.session, databaseSchema)(
+          "ingress.authorize",
+          {},
+          async (_, command) => {
+            const authority = ownerIngressEvidence(ingress)?.authority;
+            let accepted = draft;
+            if (authority) {
+              if (!engine.authorization) authorizationRefused();
+              const constraints = (await createOwnerEvaluator({
+                registration: engine.authorization,
+                collections: options.registry.collections,
+                databaseSchema,
+              })(authority, {
+                kind: draft.type.includes("collection")
+                  ? "collection"
+                  : "action",
+                resource: String(
+                  (payload as Record<string, unknown>).actionAlias ??
+                    (payload as Record<string, unknown>).collectionAlias ??
+                    draft.type,
                 ),
-                { code: "event_deduplication_conflict" },
-              );
+                operation: "admit",
+                input: captureHostCommandJson(payload),
+              }, command)).constraints;
+              const request = payload as Record<string, unknown>;
+              let validatedInput = request.input;
+              if (typeof request.actionAlias === "string") {
+                const policy = constraints.actions?.[request.actionAlias];
+                if (!policy) authorizationRefused();
+                if (policy.input) {
+                  const supplied = request.input as Record<string, unknown>;
+                  for (const [key, value] of Object.entries(policy.input)) {
+                    if (
+                      Object.hasOwn(supplied, key) &&
+                      !sameActionValue(supplied[key], value)
+                    ) authorizationRefused();
+                  }
+                  validatedInput = { ...supplied, ...policy.input };
+                }
+              } else if (typeof request.collectionAlias === "string") {
+                const mutation =
+                  constraints.collectionMutations?.[request.collectionAlias] ??
+                    constraints.collectionMutations
+                      ?.[
+                        options.registry.collections[request.collectionAlias]
+                          .name
+                      ];
+                const allowed = request.operation === "command"
+                  ? mutation?.commands?.[String(request.command)]
+                  : mutation
+                    ?.[request.operation as "create" | "update" | "delete"];
+                if (!allowed) authorizationRefused();
+                const constrained = constrainCollection({
+                  collection: {
+                    alias: request.collectionAlias,
+                    name: options.registry.collections[request.collectionAlias]
+                      .name,
+                  },
+                  phase: "mutation",
+                  method: request.operation as
+                    | "create"
+                    | "update"
+                    | "delete"
+                    | "command",
+                  args: captureHostCommandJson(
+                    request.operation === "create"
+                      ? { input: request.input }
+                      : request.operation === "command"
+                      ? {
+                        id: request.id,
+                        name: request.command,
+                        input: request.input,
+                      }
+                      : { ...request.input as object, id: request.id },
+                  ),
+                }, constraints) as Record<string, unknown>;
+                validatedInput = request.operation === "create" ||
+                    request.operation === "command"
+                  ? constrained.input
+                  : request.input;
+              }
+              if (schema) {
+                try {
+                  validateCollectionInput(schema, {
+                    ...request,
+                    input: validatedInput,
+                  }, "Protected request input");
+                } catch (error) {
+                  if (
+                    (error as { code?: string }).code ===
+                      "collection_validation_failed"
+                  ) Object.assign(error as object, { status: 422 });
+                  throw error;
+                }
+              }
+              const metadata = { ...draft.metadata };
+              const operationMetadata = {
+                ...(metadata.operationMetadata as Record<string, unknown> ??
+                  {}),
+                ...constraints.operations?.metadata,
+              };
+              if (constraints.admission) {
+                operationMetadata.httpAdmissionKey = constraints.admission.key;
+                operationMetadata.httpIdempotencyKey = deduplicationId;
+                if (constraints.admission.threadId) {
+                  operationMetadata.threadId = constraints.admission.threadId;
+                }
+              }
+              if (constraints.observationKeys) {
+                metadata.observationKeys = [...constraints.observationKeys];
+              }
+              metadata.operationMetadata = operationMetadata;
+              accepted = { ...draft, metadata };
             }
+            return await coordinator.commitMutation({
+              transaction: command.transaction,
+              ...(inlineAction && !engine.execution?.dispatcher
+                ? {
+                  initialLocalClaim: {
+                    consumerId: "processor:copilotz.server.action-request",
+                    owner: crypto.randomUUID(),
+                  },
+                }
+                : {}),
+              ...(completion
+                ? {
+                  consumers: options.registry.durableConsumers(
+                    draft,
+                    prepared.publicData,
+                  ).filter((consumer) =>
+                    consumer.consumerId !==
+                      "processor:copilotz.server.collection-mutation-request"
+                  ),
+                }
+                : {}),
+              eventId,
+              draft: { ...accepted, payload: persistedPayload },
+              ingress,
+              matchData: prepared.publicData,
+              body: { id: bodyId, json: prepared.body },
+              mutate: async (context) => {
+                for (const value of prepared.prepared) {
+                  await protectedValues!.adopt(context, draft.namespace, value);
+                }
+              },
+              recoverDuplicate: async (event, context) => {
+                const existing = await readEventBody(
+                  context,
+                  event.namespace,
+                  eventDataRef(event.payload),
+                );
+                await assertOwnerIngressReplay(
+                  context,
+                  options.databaseSchema,
+                  event,
+                  existing,
+                  ingress,
+                );
+                if (!samePreparedProtectedEventBody(existing, prepared.body)) {
+                  throw Object.assign(
+                    new Error(
+                      `Protected Event '${event.id}' was retried with different data.`,
+                    ),
+                    { code: "event_deduplication_conflict" },
+                  );
+                }
+              },
+            });
           },
-        });
+        );
       if (inlineAction && !engine.execution?.dispatcher) {
         return await admitInlineAction(
           {
@@ -440,7 +574,7 @@ export function createDatabaseScope(
             coordinator,
             registry: options.registry,
             protectedValues,
-            protectedActions: engine.protectedActions,
+            authorization: engine.authorization,
           },
           draft,
           commit,
@@ -482,6 +616,71 @@ export function createDatabaseScope(
         throw new TypeError(
           `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
         );
+      }
+      const binding = captureCollectionInvocation()?.authority;
+      if (binding) {
+        if (
+          binding.scope.databaseSchema !== databaseSchema ||
+          binding.scope.namespace !== draft.namespace
+        ) authorizationRefused();
+        const ingress = hostIngressProof();
+        return (async () => {
+          const committed = await createSchemaCommandRunner(
+            store.session,
+            databaseSchema,
+          )("ingress.event", {}, async (_, command) => {
+            if (!engine.authorization) authorizationRefused();
+            const decision = await createOwnerEvaluator({
+              registration: engine.authorization,
+              collections: options.registry.collections,
+              databaseSchema,
+            })(binding, {
+              kind: "event",
+              resource: draft.type,
+              operation: "admit",
+              input: draft.payload,
+            }, command);
+            if (!decision.constraints.events?.includes(draft.type)) {
+              authorizationRefused();
+            }
+            return await coordinator.commitMutation({
+              transaction: command.transaction,
+              draft: {
+                ...draft,
+                metadata: {
+                  ...draft.metadata,
+                  operationMetadata: {
+                    ...(draft.metadata?.operationMetadata as Record<
+                      string,
+                      unknown
+                    > ?? {}),
+                    ...decision.constraints.operations?.metadata,
+                  },
+                  ...(decision.constraints.observationKeys
+                    ? {
+                      observationKeys: [
+                        ...decision.constraints.observationKeys,
+                      ],
+                    }
+                    : {}),
+                },
+              },
+              ingress,
+              maxAttempts: appendOptions?.maxAttempts,
+              recoverDuplicate: async (event, context) => {
+                await assertOwnerIngressReplay(
+                  context,
+                  databaseSchema,
+                  event,
+                  event.payload,
+                  ingress,
+                );
+              },
+            });
+          });
+          await awaitEventPublication(committed);
+          return committed;
+        })();
       }
       return coordinator.append(draft, appendOptions);
     },
@@ -598,33 +797,37 @@ export function createDatabaseScope(
           protectedValues,
           transaction,
         });
-      const data = options.engine.protectedActions?.[parsed.actionId]
-        ? await createSchemaCommandRunner(
-          store.session,
-          options.databaseSchema,
-        )(
-          "actions.readAuthorizedResult",
-          {},
-          async (_, command) => {
-            const guard = createProtectedActions({
-              definitions: options.engine.protectedActions ?? {},
-              actions: options.registry.actions,
-              store,
-              coordinator,
-              namespace,
-              protectedValues,
-              signal: command.signal,
-            }).output({
-              actionId: parsed.actionId,
-              actionRunId: parsed.actionRunId,
-              parentActionRunId: parsed.parentActionRunId,
-              signal: command.signal,
-            });
-            await guard.authorize?.(command.transaction);
-            return await restore(command.transaction);
-          },
-        )
-        : await restore();
+      const data =
+        Object.keys(options.engine.authorization?.actions ?? {}).some((alias) =>
+            options.registry.actions[alias]?.id === parsed.actionId
+          )
+          ? await createSchemaCommandRunner(
+            store.session,
+            options.databaseSchema,
+          )(
+            "actions.readAuthorizedResult",
+            {},
+            async (_, command) => {
+              const guard = createAuthorizedActions({
+                authorization: options.engine.authorization,
+                collections: options.registry.collections,
+                actions: options.registry.actions,
+                store,
+                coordinator,
+                namespace,
+                protectedValues,
+                signal: command.signal,
+              }).output({
+                actionId: parsed.actionId,
+                actionRunId: parsed.actionRunId,
+                parentActionRunId: parsed.parentActionRunId,
+                signal: command.signal,
+              });
+              await guard.authorize?.(command.transaction);
+              return await restore(command.transaction);
+            },
+          )
+          : await restore();
       if (data.status !== "completed") return data;
       return {
         ...data,
@@ -640,8 +843,32 @@ export function createDatabaseScope(
       store.scopeSettlement(namespace, settlementScopeId),
     outstanding: (namespace, settlementScopeId) =>
       store.scopeOutstanding(namespace, settlementScopeId),
-    cancel: (namespace, settlementScopeId, reason) =>
-      store.cancelScope(namespace, settlementScopeId, reason),
+    cancel: (namespace, settlementScopeId, reason) => {
+      const binding = captureCollectionInvocation()?.authority;
+      if (!binding) {
+        return store.cancelScope(namespace, settlementScopeId, reason);
+      }
+      if (
+        binding.scope.namespace !== namespace ||
+        binding.scope.databaseSchema !== databaseSchema
+      ) authorizationRefused();
+      const evaluate = engine.authorization &&
+        createOwnerEvaluator({
+          registration: engine.authorization,
+          collections: options.registry.collections,
+          databaseSchema,
+        });
+      return withOwnerCommandAuthorization(async (command) => {
+        await authorizeOperation(
+          evaluate,
+          options.operationCatalog,
+          binding,
+          settlementScopeId,
+          "cancel",
+          command,
+        );
+      }, () => store.cancelScope(namespace, settlementScopeId, reason));
+    },
   } as const;
   const deliveries: CopilotzEngineDatabaseScope["deliveries"] = {
     get: deliveryInNamespace,
@@ -900,6 +1127,14 @@ export function createDatabaseScope(
     return result;
   };
   const publicScope: CopilotzEngineDatabaseScope = {
+    authorization: createAuthorizationOwner({
+      session: engine.session,
+      databaseSchema,
+      owner: options.owner,
+      registration: engine.authorization,
+      collections: options.registry.collections,
+      operations: options.operationCatalog,
+    }),
     databaseSchema,
     content: { assets, preparer: options.preparer, resolver } as const,
     collections,
@@ -964,6 +1199,8 @@ export function createDatabaseScope(
     databaseSchema,
   );
   const collectionAlarms = registerCollectionAlarms({
+    authorization: engine.authorization,
+    aliases: options.registry.collections,
     owner: options.owner,
     session: engine.session,
     schema: databaseSchema,
@@ -1032,6 +1269,11 @@ export function createDatabaseScope(
           pushedHead === undefined || BigInt(frame.headSeq) > BigInt(pushedHead)
         ) pushedHead = frame.headSeq;
         if (frame.kind === "change" && frame.change.event) {
+          publicScope.authorization.notice({
+            namespace: frame.change.namespace,
+            collection: frame.change.event.subject?.type,
+            id: frame.change.event.subject?.id,
+          });
           void options.eventHub.publish(frame.change.event);
         }
       },

@@ -1,10 +1,13 @@
-import { defineServerFacade, serverPlugin } from "../../server/index.ts";
+import {
+  createTestCopilotz as createTypedCopilotz,
+  defineTestServerFacade as defineServerFacade,
+} from "../testing/server-authorization.test.ts";
+import { serverPlugin } from "../../server/index.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type ActionContext,
   type ApplicationOutput,
   type CopilotzApplication,
-  createCopilotz as createTypedCopilotz,
   type CreateCopilotzOptions,
   defineAction,
   defineCollection,
@@ -648,7 +651,7 @@ Deno.test("host and HTTP calls keep distinct outcomes when keys and correlations
       server: {
         default: defineServerFacade({
           expose: { actions: { include: ["host.echo"] } },
-          authorize() {
+          evaluate() {
             authorized++;
             return {};
           },

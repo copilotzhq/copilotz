@@ -272,7 +272,11 @@ export type OperationCatalog = Readonly<{
     input: Omit<OperationEventIndexInput, "position">,
     param: (value: unknown) => string,
   ): string;
-  get(namespace: string, operationId: string): Promise<OperationRecord | null>;
+  get(
+    namespace: string,
+    operationId: string,
+    transaction?: SqlExecutor,
+  ): Promise<OperationRecord | null>;
   list(
     input: Readonly<{
       namespace: string;
@@ -2035,10 +2039,10 @@ export function createOperationCatalog(
         eventOrdinal: String(row.event_ordinal),
       }));
     },
-    async get(namespaceInput, operationIdInput) {
+    async get(namespaceInput, operationIdInput, transaction) {
       const namespace = requiredText(namespaceInput, "Operation namespace");
       const operationId = requiredText(operationIdInput, "Operation id");
-      const result = await session.query<OperationRow>(
+      const result = await (transaction ?? session).query<OperationRow>(
         `SELECT * FROM ${tables.operations}
           WHERE namespace = $1 AND operation_id = $2 LIMIT 1`,
         [namespace, operationId],

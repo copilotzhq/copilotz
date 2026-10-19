@@ -117,10 +117,15 @@ export async function resolveProtectedActionSource(
   const ancestors: ProtectedActionSourceEntry[] = [];
   for (const id of ids) {
     const event = rows.find((row) => row.id === id);
-    if (!event || !event.digest) {
+    if (!event) {
       throw new Error("Protected Action source is unavailable in this scope.");
     }
-    const body = await verifiedEventBody(event, eventDataRef(event.payload));
+    // Inline input is part of the same immutable retained Event. A dataRef must
+    // still resolve and verify; a missing/corrupt referenced body never falls back.
+    const body = event.payload && typeof event.payload === "object" &&
+        Object.hasOwn(event.payload, "dataRef")
+      ? await verifiedEventBody(event, eventDataRef(event.payload))
+      : captureHostCommandJson(event.payload);
     const ingress = await resolveOwnerIngress(
       { transaction, tables },
       databaseSchema,

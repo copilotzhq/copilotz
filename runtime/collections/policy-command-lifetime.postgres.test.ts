@@ -17,13 +17,14 @@ import { createTestDatabase } from "../testing/ominipg.ts";
 import { defineCollection } from "./definition.ts";
 
 import { createCollectionRuntime } from "./kernel.ts";
-import { captureCollectionPolicy } from "./policy-authorization.ts";
+import { captureCollectionPolicy } from "../authorization/collection.ts";
 import {
   captureCollectionInvocation,
   type CollectionInvocationAuthority,
   withOwnerCollectionInvocation,
-} from "./policy-invocation.ts";
-import { validateCollectionPolicies } from "./policy-registration.ts";
+} from "../authorization/invocation.ts";
+import { testCollectionAuthorizations } from "../testing/collection-authorization.ts";
+import { testAuthority } from "../testing/authority.ts";
 
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
 const record = defineCollection({
@@ -39,6 +40,7 @@ const record = defineCollection({
 async function fixture() {
   const db = await createTestDatabase({ url, pgPoolMax: 4 });
   const schema = `policy_command_${crypto.randomUUID().replaceAll("-", "")}`;
+  const binding = testAuthority(schema);
   await provisionCopilotzSchema(db, schema);
   const owner = await openDatabaseOwner(db, schema);
   const store = createEventStore({ session: db, schema });
@@ -55,14 +57,14 @@ async function fixture() {
   });
   const controller = new AbortController();
   const run = createSchemaCommandRunner(db, schema);
-  await run("policy.setup", {}, async (_input, { transaction }) => {
-    await transaction.query(
-      `CREATE TABLE "${schema}".policy_state (allowed boolean NOT NULL)`,
-    );
-    await transaction.query(
-      `INSERT INTO "${schema}".policy_state VALUES (true)`,
-    );
+  const membership = defineCollection({
+    name: "policy_state",
+    schema: { type: "object" },
   });
+  await run("policy.setup", {}, (_, command) =>
+    command.transaction.query(
+      `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('state','space','policy_state','state','{"allowed":true}')`,
+    ));
   let closed = false;
   let checkedAfterClose = 0;
   let sourceAfterClose = 0;
@@ -90,33 +92,37 @@ async function fixture() {
       );
       assertEquals(rows.rows.length, 1);
       if (closed) sourceAfterClose++;
-      return { event: source.event, data: { retained: true }, ancestors: [] };
+      return {
+        event: source.event,
+        data: { retained: true },
+        ingress: { kind: "host" as const, authority: binding },
+        ancestors: [],
+      };
     },
   };
-  const registration = {
-    alias: "records",
-    name: record.name,
-    policy: {
-      async authorize(
-        intent: import("./policy-types.ts").CollectionPolicyIntent,
-        context: import("./policy-types.ts").CollectionPolicyContext,
-      ) {
-        assertEquals(context.invocation, authority.invocation);
-        assertEquals(context.scope, authority.scope);
-        assertEquals((await context.resolveSource()).data, { retained: true });
-        const state = await context.query<{ allowed: boolean }>(
-          `SELECT allowed FROM "${schema}".policy_state`,
-        );
-        if (closed && intent.phase === "result") resultAfterClose++;
-        if (!state.rows[0].allowed) {
-          throw new ActionError("Current policy denied.", {
-            code: "forbidden",
-            status: 403,
-          });
-        }
-      },
+  const registrations = testCollectionAuthorizations(
+    { records: record, membership },
+    schema,
+    async ({ intent, read }) => {
+      const phase = (intent
+        .input as import("../authorization/intent.ts").CollectionPolicyIntent)
+        .phase;
+      if (closed && phase === "result") resultAfterClose++;
+      if (!(await read.get("membership", "state"))?.allowed) {
+        throw new ActionError("Current policy denied.", {
+          code: "forbidden",
+          status: 403,
+        });
+      }
+      return {
+        collections: { records: {} },
+        collectionMutations: {
+          records: { create: {}, update: {}, delete: {} },
+        },
+      };
     },
-  };
+  );
+  const registration = registrations.get(record.name)!;
   const coordinator: EventCoordinator = {
     async commitMutation(input) {
       return {
@@ -141,9 +147,7 @@ async function fixture() {
     session: db,
     eventStore: store,
     coordinator,
-    policies: validateCollectionPolicies({ records: registration.policy }, {
-      records: record,
-    }),
+    policies: registrations,
   });
   runtime.bind(record);
   let captured!: CollectionInvocationAuthority;
@@ -223,7 +227,7 @@ for (const denial of ["policy", "assignment", "signal"] as const) {
             await f.adopt(command);
             if (denial === "policy") {
               await command.transaction.query(
-                `UPDATE "${f.schema}".policy_state SET allowed=false`,
+                `UPDATE "${f.schema}".nodes SET data='{"allowed":false}' WHERE id='state'`,
               );
             } else if (denial === "assignment") {
               await command.transaction.query(
@@ -248,7 +252,7 @@ for (const denial of ["policy", "assignment", "signal"] as const) {
         assertEquals(f.published(), 0);
         assertEquals(
           (await f.db.query(
-            `SELECT allowed FROM "${f.schema}".policy_state`,
+            `SELECT (data->>'allowed')::boolean AS allowed FROM "${f.schema}".nodes WHERE id='state'`,
           )).rows,
           [{ allowed: true }],
         );
@@ -284,7 +288,7 @@ Deno.test({
             namespace: "space",
             databaseSchema: f.schema,
             method: "create",
-            args: { id: "one", name: "one" },
+            args: { input: { id: "one", name: "one" } },
           });
           retained = policy.forCommand(command);
         });

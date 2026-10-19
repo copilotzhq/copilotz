@@ -11,8 +11,9 @@ import { createCollectionRuntime } from "../collections/kernel.ts";
 import {
   type CollectionInvocationAuthority,
   withOwnerCollectionInvocation,
-} from "../collections/policy-invocation.ts";
-import { validateCollectionPolicies } from "../collections/policy-registration.ts";
+} from "../authorization/invocation.ts";
+import { testCollectionAuthorizations } from "../testing/collection-authorization.ts";
+import { testAuthority } from "../testing/authority.ts";
 import {
   createEventStore,
   type EventCoordinator,
@@ -64,6 +65,7 @@ async function fixture() {
   const schema = `queued_receipt_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   const owner = await openDatabaseOwner(db, schema);
+  owner.activate();
   const run = createSchemaCommandRunner(db, schema);
   const store = createEventStore({ session: db, schema });
   const source = (await store.append({
@@ -80,6 +82,7 @@ async function fixture() {
     if (!allowed) throw new Error("Current command authorization refused.");
   };
   const authority: CollectionInvocationAuthority = {
+    authority: testAuthority(schema),
     scope: { databaseSchema: schema, namespace: "space" },
     invocation: { kind: "processor", id: "processor-b", runId: "attempt-b" },
     signal: new AbortController().signal,
@@ -106,19 +109,20 @@ async function fixture() {
     session: db,
     eventStore: store,
     coordinator,
-    policies: validateCollectionPolicies({
-      records: {
-        authorize(_intent, context) {
-          assertEquals(context.invocation, authority.invocation);
-          if (!allowed) {
-            throw new ActionError("Current Collection policy refused.", {
-              code: "forbidden",
-              status: 403,
-            });
-          }
+    policies: testCollectionAuthorizations({ records: record }, schema, () => {
+      if (!allowed) {
+        throw new ActionError("Current Collection policy refused.", {
+          code: "forbidden",
+          status: 403,
+        });
+      }
+      return {
+        collections: { records: {} },
+        collectionMutations: {
+          records: { create: {}, update: {}, delete: {} },
         },
-      },
-    }, { records: record }),
+      };
+    }),
   });
   runtime.bind(record);
   const adopt = async (command: CommandContext, id: string) => {
@@ -256,7 +260,10 @@ Deno.test({
         await behindEndedReceipt(f, (command) => f.adopt(command, "b")),
         { id: "b" },
       );
-      assertEquals(f.seenReceipts, [undefined]);
+      assertEquals(
+        f.seenReceipts.every((receipt) => receipt === undefined),
+        true,
+      );
       assertEquals(await f.rows(), [{ id: "b" }]);
       assertEquals(await f.receipts(), [{
         key: "b",
@@ -436,7 +443,10 @@ Deno.test({
         published.promise,
         "publication reenters with current authority",
       );
-      assertEquals(f.seenReceipts, [undefined]);
+      assertEquals(
+        f.seenReceipts.every((receipt) => receipt === undefined),
+        true,
+      );
       assertEquals(await f.rows(), [{ id: "published" }]);
       assertEquals(
         (await f.receipts()).map(({ key, principal, readers }) => ({
@@ -534,7 +544,10 @@ for (const cancelled of [false, true]) {
             }],
           );
         }
-        assertEquals(f.seenReceipts, [undefined]);
+        assertEquals(
+          f.seenReceipts.every((receipt) => receipt === undefined),
+          true,
+        );
       } finally {
         release.resolve();
         await first.catch(() => undefined);

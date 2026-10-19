@@ -129,10 +129,7 @@ export {
 export { externalEffect } from "./external-effect.ts";
 
 export type {
-  ProtectedActionDefinition,
-  ProtectedActionDefinitions,
   ProtectedActionIngress,
-  ProtectedActionOwnerContext,
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "./protected-action-types.ts";

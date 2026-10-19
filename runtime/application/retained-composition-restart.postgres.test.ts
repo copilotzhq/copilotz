@@ -1,8 +1,11 @@
+import {
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as defineServerFacade,
+} from "../testing/server-authorization.test.ts";
 import { assert, assertEquals, assertExists } from "@std/assert";
 import {
   type ActionCallers,
   type ActionContext,
-  createCopilotz,
   defineAction,
   defineCollection,
   definePlugin,
@@ -11,7 +14,7 @@ import {
 } from "../../index.ts";
 import { listen } from "../adapters/deno/listen.ts";
 import { serverPlugin } from "../../plugins/server/plugin.ts";
-import { defineServerFacade } from "../../server/index.ts";
+
 import { createTestDatabase } from "../testing/ominipg.ts";
 
 const selected = Deno.env.get("COPILOTZ_OWNER_TEST_POSTGRES_URL");
@@ -227,7 +230,7 @@ for (const mode of ["in-process", "websocket"] as const) {
                     channels: false,
                   },
                   authenticate: () => ({ actor: { id: "retained-reader" } }),
-                  authorize() {
+                  evaluate() {
                     authorizations++;
                     return allowed ? {} : Response.json({
                       error: { code: "forbidden", message: "Forbidden" },

@@ -1,9 +1,13 @@
+import {
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as defineServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
 import { assertEquals } from "@std/assert";
-import { createCopilotz } from "../create-copilotz.ts";
+
 import { ActionError, defineAction, secret } from "../runtime/actions/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
 import { serverPlugin } from "../plugins/server/plugin.ts";
-import { defineServerFacade } from "../plugins/server/resources/facade/index.ts";
+
 import { createOwnerTestDatabase } from "../runtime/testing/owner-database.ts";
 import { testSecretAdapter } from "../runtime/testing/secret-adapter.ts";
 import { until } from "../runtime/testing/effect-commit-proxy.ts";
@@ -17,7 +21,6 @@ Deno.test({
     let executed = 0, resultAllowed = true;
     const child = defineAction({
       id: "fixture.denied-child",
-      ownerHooks: { prepareInput: true },
       inputSchema: {
         type: "object",
         properties: { credential: secret({ type: "string" }) },
@@ -37,17 +40,38 @@ Deno.test({
       database,
       actions: { child, root },
       adapters: { secrets: { default: await testSecretAdapter() } },
-      protectedActions: {
-        [child.id]: {
-          authorize() {
-            throw new ActionError("private-policy-detail", {
-              code: "forbidden",
-              status: 403,
-            });
+      authorization: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate({ authority, intent }) {
+              if (intent.resource === "child" && intent.operation !== "admit") {
+                throw new ActionError("private-policy-detail", {
+                  code: "forbidden",
+                  status: 403,
+                });
+              }
+              const facts = authority.requestFacts.input as
+                | { path?: string }
+                | null;
+              if (!resultAllowed && facts?.path?.endsWith("/result")) {
+                throw new ActionError("Forbidden", {
+                  code: "forbidden",
+                  status: 403,
+                });
+              }
+              return {
+                actions: { child: {}, root: {} },
+                operations: { metadata: {} },
+              };
+            },
           },
-          prepareInput() {
-            throw new Error("Denied input must not be prepared");
-          },
+        },
+        collections: {},
+        actions: {
+          child: { id: "fixture", revision: "1" },
+          root: { id: "fixture", revision: "1" },
         },
       },
       plugins: [
@@ -60,7 +84,7 @@ Deno.test({
                 authenticate() {
                   return { actor: { id: "member" } };
                 },
-                authorize(request) {
+                evaluate(request) {
                   if (
                     !resultAllowed &&
                     new URL(request.url).pathname.endsWith("/result")

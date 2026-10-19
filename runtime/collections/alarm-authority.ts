@@ -1,11 +1,15 @@
+import {
+  type AuthenticatedAuthority,
+  retainedAuthority,
+} from "../authorization/authority.ts";
 /** Only the registered owner scheduler mints this exact, short-lived authority. */
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import type { OwnerDeadline } from "../engine/alarms.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { stableStringify } from "./equal.ts";
-import { collectionPolicyRefused } from "./policy-authorization.ts";
-import { withOwnerCollectionInvocation } from "./policy-invocation.ts";
+import { collectionPolicyRefused } from "../authorization/collection.ts";
+import { withOwnerCollectionInvocation } from "../authorization/invocation.ts";
 
 const stale = new WeakSet<object>();
 export function isCollectionAlarmPolicyStale(error: unknown): boolean {
@@ -22,6 +26,7 @@ function staleAlarm(): never {
 
 export function withCollectionAlarmPolicy<T>(
   options: Readonly<{
+    authority?: AuthenticatedAuthority;
     definition: CollectionDefinition;
     deadline: OwnerDeadline;
     databaseSchema: string;
@@ -53,6 +58,9 @@ export function withCollectionAlarmPolicy<T>(
     }),
   });
   return withOwnerCollectionInvocation({
+    ...(options.authority
+      ? { authority: retainedAuthority(options.authority) }
+      : {}),
     scope: Object.freeze({ databaseSchema, namespace }),
     signal,
     invocation,

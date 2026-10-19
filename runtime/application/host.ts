@@ -156,7 +156,8 @@ export function createHostServices(
     }
     const { id: requestId, envelope } = admission(options);
     const inlineContent = !definition.content || collectionAssetAdopterFor(
-      (await application().databaseScope(envelope.databaseSchema)).content.assets,
+      (await application().databaseScope(envelope.databaseSchema)).content
+        .assets,
     ).prepareInCommand;
     const completion:
       import("./ingress/inline-collection.ts").InlineCollectionCompletion = {};

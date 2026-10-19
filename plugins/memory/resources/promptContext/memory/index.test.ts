@@ -96,7 +96,7 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
                   branch: "public",
                   startMessageId: "m1",
                   endMessageId: "m1",
-                  continuity: "Compass remains the active project.",
+                  continuity: "Atlas remains the active project.",
                 },
               },
               updatedAt: "2026-01-01T00:00:00.000Z",

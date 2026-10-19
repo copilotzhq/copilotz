@@ -34,6 +34,6 @@ conversation processors accidentally.
 
 ## Scope
 
-This is a library refactor. Application changes and deployments for Compass,
-Mobizap and Pricing Agent remain separate milestones. Knowledge's own retrieval
-strategy remains plugin-owned; this milestone changes Memory vector retrieval.
+This is a library refactor. Application changes and deployments remain separate
+milestones. Knowledge's own retrieval strategy remains plugin-owned; this
+milestone changes Memory vector retrieval.

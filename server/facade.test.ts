@@ -930,7 +930,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
                       commands: {
                         patchSystemMetadata: {
                           fields: ["namespace", "set", "unset"],
-                          input: { namespace: "compass" },
+                          input: { namespace: "atlas" },
                           filter: {
                             contains: { participantIds: ["participant-a"] },
                           },
@@ -1002,7 +1002,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
       "thread",
       "thread-1",
       "patchSystemMetadata",
-      { namespace: "compass", set: { teamProfileId: "profile-1" } },
+      { namespace: "atlas", set: { teamProfileId: "profile-1" } },
       { idempotencyKey: "thread-command-1" },
     );
     await client.operations.result(receipt.operationId);

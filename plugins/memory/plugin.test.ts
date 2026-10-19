@@ -110,9 +110,9 @@ function adapter(script: Script, inputs: LlmAdapterCallInput[]): LlmAdapter {
 
 function memoryProposal(sources?: string[]) {
   return {
-    continuity: "Compass remains the active project for the next turn.",
+    continuity: "Atlas remains the active project for the next turn.",
     remember: [{
-      text: "Compass is the active project.",
+      text: "Atlas is the active project.",
       ...(sources ? { sources } : {}),
     }],
   };
@@ -475,7 +475,7 @@ async function startUserTurn(fixture: Fixture, id = "message:user") {
   await setupThread(fixture);
   return await createHumanMessage(fixture, {
     id,
-    text: "Remember Compass and answer normally.",
+    text: "Remember Atlas and answer normally.",
     recipientIds: ["agent-north"],
   });
 }
@@ -603,7 +603,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     // than the ordinary public reply that follows the triggering message.
     assertStringIncludes(
       maintenanceText,
-      "Remember Compass and answer normally.",
+      "Remember Atlas and answer normally.",
     );
     // The source uses the identical normal preparation, followed by maintenance.
     assertEquals(
@@ -626,7 +626,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       (savedCheckpoint.metadata as {
         coverage?: { continuity?: string };
       }).coverage?.continuity,
-      "Compass remains the active project for the next turn.",
+      "Atlas remains the active project for the next turn.",
     );
     assertConsolidationLifecycleOutput(
       (savedCheckpoint.metadata as { result?: unknown }).result,
@@ -663,7 +663,7 @@ Deno.test("a no_changes maintenance Action completes with schema-valid continuit
   const run = await fixture((_input, call) =>
     call === 1 ? stop("I will remember that.") : tool({
       continuity:
-        "Continue the Compass conversation; no durable memory record changed and no user answer is pending.",
+        "Continue the Atlas conversation; no durable memory record changed and no user answer is pending.",
     })
   );
   try {
@@ -944,7 +944,7 @@ for (const fallbackInputLimit of [undefined, 120_000]) {
       );
       assertStringIncludes(
         retriedInput.request.instructions ?? "",
-        "Compass remains the active project",
+        "Atlas remains the active project",
       );
       assertStringIncludes(retried, "LATEST_TAIL");
       assert(!retried.includes("OLD_0"));
@@ -1284,7 +1284,7 @@ Deno.test("invalid and omitted consolidation calls repair through ordinary Core 
     if (call === 1) return stop("Initial answer.");
     if (call === 2) {
       return tool({
-        continuity: "The user still expects a normal answer about Compass.",
+        continuity: "The user still expects a normal answer about Atlas.",
         remember: [{ text: "" }],
       }); // Invalid: an empty note.
     }
@@ -1754,7 +1754,7 @@ Deno.test({
       assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
       const context = createTestDomainContext(run.engine, NAMESPACE);
       const result = await context.actions.search_memory({
-        query: "Compass",
+        query: "Atlas",
         limit: 5,
       }, {
         operationKey: "vector-search",
@@ -1770,7 +1770,7 @@ Deno.test({
         await context.collections.memorySpaceAccess.delete({ id: grant.id });
       }
       const revoked = await context.actions.search_memory({
-        query: "Compass",
+        query: "Atlas",
         limit: 5,
       }, {
         operationKey: "vector-search-revoked",
@@ -1906,7 +1906,7 @@ Deno.test("consolidation accepts a frozen source snapshot larger than the JSON p
     const metadata = { trace: "x".repeat(600 * 1024) };
     await createHumanMessage(run, {
       id: "message:large-source",
-      text: "Compass remains the active project.",
+      text: "Atlas remains the active project.",
       metadata,
     });
     await createHumanMessage(run, {
@@ -2164,7 +2164,7 @@ for (const participantType of ["agent", "job"] as const) {
       });
       await createHumanMessage(run, {
         id: "message:nonhuman",
-        text: "Remember Compass.",
+        text: "Remember Atlas.",
         recipientIds: ["agent-north"],
       });
       await eventually(

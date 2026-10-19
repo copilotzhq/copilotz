@@ -5,7 +5,7 @@ import {
 } from "./index.ts";
 
 Deno.test("defineServerFacade snapshots exposure and defaults", () => {
-  const include = ["compass.*"];
+  const include = ["atlas.*"];
   const value = defineServerFacade({
     expose: { actions: { include } },
   });
@@ -13,7 +13,7 @@ Deno.test("defineServerFacade snapshots exposure and defaults", () => {
   assertEquals(value.basePath, "/api");
   assertEquals(value.maxAssetUploadBytes, DEFAULT_SERVER_ASSET_UPLOAD_BYTES);
   assertEquals(value.expose.actions, {
-    include: ["compass.*"],
+    include: ["atlas.*"],
     exclude: [],
   });
 });

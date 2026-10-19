@@ -41,10 +41,10 @@ Deno.test("Thread patches one system namespace without replacing siblings", () =
       current: {
         metadata: {
           public: { topic: "keep" },
-          system: { runtime: { attempt: 2 }, compass: { old: true } },
+          system: { runtime: { attempt: 2 }, atlas: { old: true } },
         },
       },
-      input: { namespace: "compass", set: { teamProfileId: "profile-1" } },
+      input: { namespace: "atlas", set: { teamProfileId: "profile-1" } },
     }),
     {
       set: {
@@ -52,7 +52,7 @@ Deno.test("Thread patches one system namespace without replacing siblings", () =
           public: { topic: "keep" },
           system: {
             runtime: { attempt: 2 },
-            compass: { old: true, teamProfileId: "profile-1" },
+            atlas: { old: true, teamProfileId: "profile-1" },
           },
         },
       },
@@ -61,9 +61,9 @@ Deno.test("Thread patches one system namespace without replacing siblings", () =
   assertEquals(
     mutate({
       current: {
-        metadata: { system: { compass: { teamProfileId: "profile-1" } } },
+        metadata: { system: { atlas: { teamProfileId: "profile-1" } } },
       },
-      input: { namespace: "compass", unset: ["teamProfileId"] },
+      input: { namespace: "atlas", unset: ["teamProfileId"] },
     }),
     { set: { metadata: { public: {}, system: {} } } },
   );
@@ -81,7 +81,7 @@ Deno.test("Thread system metadata rejects protected namespaces and keys", () => 
     mutate({
       current: { metadata: {} },
       input: {
-        namespace: "compass",
+        namespace: "atlas",
         set: { ["__proto__"]: "unsafe" },
       },
     })
@@ -89,7 +89,7 @@ Deno.test("Thread system metadata rejects protected namespaces and keys", () => 
   assertThrows(() =>
     mutate({
       current: { metadata: {} },
-      input: { namespace: "compass", unset: ["constructor"] },
+      input: { namespace: "atlas", unset: ["constructor"] },
     })
   );
 });

@@ -46,7 +46,7 @@ const notes = defineCollection({
 });
 
 const preview = defineAction({
-  id: "compass.sandbox.preview.list",
+  id: "atlas.sandbox.preview.list",
   inputSchema: { type: "object" } as const,
   execute: () => ({ ok: true }),
 });
@@ -95,9 +95,9 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
     defineServerFacade(),
   );
   assertEquals(
-    routes.match("POST", "/api/actions/compass/sandbox/preview/list")?.endpoint
+    routes.match("POST", "/api/actions/atlas/sandbox/preview/list")?.endpoint
       .id,
-    "compass.sandbox.preview.list",
+    "atlas.sandbox.preview.list",
   );
   assertEquals(
     routes.match("POST", "/api/collections/notes/queries/byLabel")
@@ -116,7 +116,7 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
   );
   assertEquals(paths["/api/collections/notes"].post, undefined);
   assertEquals(paths["/api/collections/notes/{id}"].delete, undefined);
-  const submitted = paths["/api/actions/compass/sandbox/preview/list"]
+  const submitted = paths["/api/actions/atlas/sandbox/preview/list"]
     .post as Record<
       string,
       unknown
@@ -186,10 +186,10 @@ Deno.test("route compiler applies glob exclusion", () => {
   const registry = createPluginRegistry({ plugins: [fixture] });
   const routes = compileServerRoutes(
     registry,
-    defineServerFacade({ expose: { actions: { exclude: ["compass.*"] } } }),
+    defineServerFacade({ expose: { actions: { exclude: ["atlas.*"] } } }),
   );
   assertEquals(
-    routes.match("POST", "/api/actions/compass/sandbox/preview/list"),
+    routes.match("POST", "/api/actions/atlas/sandbox/preview/list"),
     null,
   );
 });

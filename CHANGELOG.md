@@ -1085,7 +1085,7 @@ schema scope, avoiding transient `operation_not_found` responses on refresh.
 
 ## 0.64.1 — 2026-08-31
 
-Clarifies the storage-provider compatibility boundary used by the Compass/GCS
+Clarifies the storage-provider compatibility boundary used by the GCS
 interoperability hotfix. AWS Signature Version 4 HMAC clients must select
 `provider: "s3"`; `x-goog-*` coordination requires GOOG4 signing and is not safe
 through `s3-lite`. Storage behavior is unchanged in this metadata-only patch.
@@ -1188,7 +1188,7 @@ requires those mappings to mirror `exports` exactly.
 ## 0.63.1 — 2026-08-25
 
 Adds the schema-level Secret lifecycle, compiled Server façade, named Collection
-query schemas, and trusted event recovery required by the Compass 0.63
+query schemas, and trusted event recovery required by an application upgrade
 migration. Secret-bearing Action values are encrypted through a process-local
 Adapter, remain redacted in ordinary observation, and never become public
 Assets.
@@ -1242,7 +1242,7 @@ Final plugin-first runtime and deployed-data migration release.
 
 ### Verified
 
-- A frozen real Gilpinna 0.48 PGlite fixture preserves all 12 messages and both
+- A frozen real application PGlite fixture preserves all 12 messages and both
   original Asset byte streams, resumes after a crash immediately before the
   readiness marker, and continues through the final Core/LLM seam.
 - The package passes the complete type, architecture, boundary, runtime test,

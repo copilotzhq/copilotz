@@ -9,6 +9,7 @@ export function withRetainedAuthority<T>(
 ): Promise<T> {
   const authority = retainedAuthority(value);
   return withOwnerCollectionInvocation({
+    direct: true,
     authority,
     scope: authority.scope,
     invocation: {

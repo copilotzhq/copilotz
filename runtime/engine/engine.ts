@@ -3,7 +3,10 @@ import {
   collectionAuthorizations,
 } from "../authorization/evaluator.ts";
 import { sameActionValue } from "../actions/value.ts";
-import { SERVER_ACTION_REQUEST_EVENT_TYPE } from "../application/ingress/contracts.ts";
+import {
+  SERVER_ACTION_REQUEST_EVENT_TYPE,
+  SERVER_COLLECTION_MUTATION_RELAY_CONSUMER,
+} from "../application/ingress/contracts.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/receipt-authority.ts";
@@ -381,6 +384,10 @@ export async function createCopilotzEngine(
       return createProcessorContext({
         collectionInvocation: {
           owner: {
+            // The Server relay applies a client's own HTTP mutation: policies
+            // see a direct call, never an executing Processor grant.
+            direct: base.source?.consumerId ===
+              SERVER_COLLECTION_MUTATION_RELAY_CONSUMER,
             logicalRunId: base.idempotencyKey,
             scope: {
               databaseSchema: base.databaseSchema,

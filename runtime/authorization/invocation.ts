@@ -14,6 +14,8 @@ import type {
 } from "./intent.ts";
 
 type OwnerBinding = Readonly<{
+  /** Direct ingress has no executing Action, Processor or alarm identity. */
+  direct?: boolean;
   /** Minted only by the in-process host surface, never by a wire binding. */
   trustedHost?: boolean;
   authority?: import("./authority.ts").AuthenticatedAuthority;
@@ -257,7 +259,7 @@ export function bindActionCollectionInvocation<T extends object>(
   if (!parent) return context;
   return bind(
     context,
-    binding({ ...parent, signal: frame.signal }, {
+    binding({ ...parent, direct: false, signal: frame.signal }, {
       kind: "action",
       id: frame.actionId,
       runId: frame.actionRunId,

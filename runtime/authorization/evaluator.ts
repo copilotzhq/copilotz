@@ -4,7 +4,9 @@ import type {
   AuthorityDependency,
   AuthorityPolicy,
 } from "./authority.ts";
-import { retainedAuthority } from "./authority.ts";
+import { credentialValidity, retainedAuthority } from "./authority.ts";
+import { digestContent } from "../content/digest.ts";
+import { stableStringify } from "../collections/equal.ts";
 import type { ServerConstraints } from "./contracts.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
@@ -23,6 +25,13 @@ import {
   withOwnerPolicyRefusal,
 } from "../engine/authorization-refusal.ts";
 import { standardActionError } from "../actions/errors.ts";
+import {
+  type AuthorizationSource,
+  captureAuthorizationSource,
+  readStaffSource,
+  sourceAlias,
+  validStaffSource,
+} from "./directory.ts";
 
 export type AuthorizationIntent = Readonly<{
   kind:
@@ -36,6 +45,11 @@ export type AuthorizationIntent = Readonly<{
   resource: string;
   operation: string;
   input: unknown;
+  /** Owner-resolved executing identity. Absent for direct ingress calls. */
+  invocation?: Readonly<{
+    kind: "action" | "processor" | "alarm";
+    id: string;
+  }>;
 }>;
 export type AuthorizationRead = Readonly<{
   get(collection: string, id: string): Promise<CollectionRecord | null>;
@@ -46,8 +60,8 @@ export type AuthorizationRead = Readonly<{
 }>;
 export type OwnerPolicy = Readonly<{
   revision: string;
-  /** Registered Collection aliases. Every read, including a missing row, is tracked. */
-  sources: readonly string[];
+  /** Local Collection aliases, or explicit directory capabilities for staff grants. */
+  sources: readonly AuthorizationSource[];
   evaluate(
     context: Readonly<{
       authority: AuthenticatedAuthority;
@@ -112,8 +126,13 @@ export function validateOwnerAuthorization(
     if (
       !id || !policy.revision || typeof policy.evaluate !== "function" ||
       !Array.isArray(policy.sources) ||
-      new Set(policy.sources).size !== policy.sources.length ||
-      policy.sources.some((source) => !Object.hasOwn(collections, source))
+      new Set(policy.sources.map(sourceAlias)).size !== policy.sources.length ||
+      policy.sources.some((source) =>
+        typeof source === "string"
+          ? !Object.hasOwn(collections, source)
+          : !validStaffSource(source) ||
+            Object.hasOwn(collections, source.alias)
+      )
     ) {
       throw new TypeError(
         "Owner policies require a revision, evaluator and declared registered sources.",
@@ -169,7 +188,9 @@ export function captureOwnerAuthorization(
           id,
           Object.freeze({
             revision: policy.revision,
-            sources: Object.freeze([...policy.sources]),
+            sources: Object.freeze(
+              policy.sources.map(captureAuthorizationSource),
+            ),
             evaluate: policy.evaluate,
           }),
         ]),
@@ -235,6 +256,7 @@ export function createOwnerEvaluator(
           Date.parse(command.commandTime))
     ) authorizationRefused();
     const dependencies: AuthorityDependency[] = [];
+    const staffReads: Array<Record<string, unknown>> = [];
     let active = true;
     let failed = false;
     const pending: Promise<unknown>[] = [];
@@ -244,10 +266,14 @@ export function createOwnerEvaluator(
     };
     const source = (alias: string, id?: string) => {
       assertActive();
-      if (!policy.sources.includes(alias)) {
+      const declared = policy.sources.find((entry) =>
+        sourceAlias(entry) === alias
+      );
+      if (!declared) {
         failed = true;
         authorizationRefused();
       }
+      if (typeof declared !== "string") return declared;
       const definition = collections[alias];
       if (!definition) authorizationRefused();
       dependencies.push({
@@ -331,6 +357,17 @@ export function createOwnerEvaluator(
             read: {
               get(alias, id) {
                 const definition = source(alias, id);
+                if ("kind" in definition) {
+                  staffReads.push({
+                    owner: definition.owner,
+                    namespace: definition.namespace,
+                    collection: definition.collection,
+                    id,
+                  });
+                  return track(() =>
+                    readStaffSource(definition, { id }, command, databaseSchema)
+                  ) as Promise<CollectionRecord | null>;
+                }
                 return track(() =>
                   loadCollectionRecord(
                     command.transaction,
@@ -344,6 +381,25 @@ export function createOwnerEvaluator(
               list(alias, query = {}) {
                 const definition = source(alias);
                 if (query.include?.length) authorizationRefused();
+                if ("kind" in definition) {
+                  query = captureHostCommandJson(query, {
+                    omitUndefinedProperties: true,
+                  }) as CollectionQuery;
+                  staffReads.push({
+                    owner: definition.owner,
+                    namespace: definition.namespace,
+                    collection: definition.collection,
+                    query,
+                  });
+                  return track(() =>
+                    readStaffSource(
+                      definition,
+                      { query },
+                      command,
+                      databaseSchema,
+                    )
+                  ) as Promise<readonly CollectionRecord[]>;
+                }
                 return track(() =>
                   queryCollectionRecords(
                     command.transaction,
@@ -363,6 +419,47 @@ export function createOwnerEvaluator(
       await Promise.all(pending);
       if (failed) {
         throw new Error("Owner authorization could not be completed.");
+      }
+      if (staffReads.length) {
+        if (authority.validity.kind === "credential") {
+          authority = retainedAuthority({
+            ...authority,
+            validity: {
+              ...authority.validity,
+              expiresAt: credentialValidity(
+                new Date(command.commandTime),
+                authority.validity.expiresAt,
+              ).expiresAt,
+            },
+          });
+        }
+        await command.transaction.query(
+          `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical',$1,$2,'authorization.staff',$3::jsonb,'null')`,
+          [
+            `authorization.staff:${crypto.randomUUID()}`,
+            authority.principal.id,
+            JSON.stringify({
+              principal: authority.principal,
+              scope: authority.scope,
+              provenance: authority.provenance,
+              policy: authority.policy,
+              commandTime: command.commandTime,
+              // Audit what was done, not the payload: input may hold secrets.
+              operation: {
+                kind: intent.kind,
+                resource: intent.resource,
+                operation: intent.operation,
+                inputDigest: await digestContent(
+                  new TextEncoder().encode(
+                    stableStringify(intent.input ?? null),
+                  ),
+                ),
+                ...(intent.invocation ? { invocation: intent.invocation } : {}),
+              },
+              sources: staffReads,
+            }),
+          ],
+        );
       }
       return {
         authority,

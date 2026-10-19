@@ -1,6 +1,6 @@
 # Owner authorization
 
-Authorization is a breaking owner contract in schema version 12. The gateway
+Authorization is a breaking owner contract in schema version 13. The gateway
 only authenticates and routes to the tenant owner. Authentication returns an
 `AuthenticatedAuthority` binding with principal, explicit owner/database/tenant/
 namespace scope, validity, policy ID and revision, immutable request facts,
@@ -9,11 +9,12 @@ credential authority.
 
 Configure `authorization.policies`, `authorization.collections` and
 `authorization.actions` on the application. Every policy has a `revision`, a
-`sources` array of registered Collection aliases and an `evaluate` function.
-Resource entries reference `{id, revision}`. Exposed resources and Collections
-with `ownerPolicy: "required"` need complete registrations before startup.
-Workers cannot register policy. Old `authorize`, `collectionPolicies`,
-`protectedActions`, `ownerHooks` and bootstrap route registrations are rejected.
+`sources` array of local Collection aliases or explicit directory staff sources,
+and an `evaluate` function. Resource entries reference `{id, revision}`. Exposed
+resources and Collections with `ownerPolicy: "required"` need complete
+registrations before startup. Workers cannot register policy. Old `authorize`,
+`collectionPolicies`, `protectedActions`, `ownerHooks` and bootstrap route
+registrations are rejected.
 
 The owner evaluates `ServerConstraints` within each protected command. Policy
 receives `authority`, `intent`, `commandTime`, `signal`, and revocable read-only
@@ -29,6 +30,60 @@ permissions and opaque `observationKeys` for catalog selections. Apply the
 domain's selection-key helper in policy when selecting a conversation. Filters
 run before pagination. Writes validate current and resulting scope. Action input
 is captured once; retries reauthorize the original capture.
+
+Collection policy also receives `intent.invocation?: {kind, id}`, where `kind`
+is `action`, `processor` or `alarm`. Only the owner supplies this executing
+identity; direct calls have no invocation. Nested Actions identify the immediate
+executing Action. Run IDs and caller metadata cannot select this grant, and
+attempt takeover still fences the call. Retained user authority remains present;
+execution identity grants nothing unless the policy explicitly allows it:
+
+```ts
+if (
+  intent.kind === "collection" && intent.resource === "participants" &&
+  intent.operation === "create" &&
+  intent.invocation?.kind === "action" &&
+  intent.invocation.id === "threads.create" &&
+  await mayCreateThreads(authority, read)
+) {
+  return { collectionMutations: { participants: { create: {} } } };
+}
+```
+
+A platform-staff policy may declare an owner-qualified
+`StaffAuthorizationSource` in `sources`, then use its alias with the same
+`read.get` / `read.list` API:
+
+```ts
+sources: [{
+  kind: "platform-staff",
+  alias: "staffGrants",
+  owner: "directory-owner",
+  namespace: "directory",
+  collection: "staff_grant",
+  read: directoryStaffReads,
+}];
+```
+
+`directoryStaffReads` is a trusted host-bound capability with `get(id, signal)`
+and `list(query, signal)`. Bind it to fresh read commands on the declared
+directory owner, namespace and Collection; do not use a cache or a tenant role
+reader. It receives no tenant command authority. The source cannot shadow a
+local Collection alias. The policy must check the staff principal, target tenant
+and requested operation against the returned grant. Declaring or reading a
+source alone grants nothing.
+
+Every command reads the directory again. Repeated reads of the same source and
+query within that command retain the first result, so it finishes under the
+staff authority it read. A failed directory read refuses the command even if
+policy catches the error. Directory and tenant reads are not one transaction.
+Successful staff-source evaluations write `authorization.staff` receipts in the
+tenant schema, in the operation's transaction, recording the principal, target
+scope, provenance, policy, operation and directory source coordinates. Refused
+transactions roll back these receipts with their effects. No new audit table or
+cross-owner change notice is required. Staff channels use the existing admission
+expiry and renewal path, capped at 15 minutes; tenant source invalidation
+remains local.
 
 API keys and enrolled device credentials use `credentialValidity(now)` for a
 15-minute admission/channel lifetime. This does not expire the stored device
@@ -66,9 +121,16 @@ The manifest declares supported policy IDs/revisions, exact invocation digests,
 and exact ingress digests and bindings. An unclassified root additionally needs
 explicit `ingress` provenance; the upgrade never guesses its identity. A capture
 without an old preparation receipt needs an explicit `actionSchemas` snapshot.
-Missing, duplicate, stale, conflicting and unknown-revision entries abort the
-transaction. Lifecycle bodies, encrypted values and existing capture receipts
-remain byte-for-byte unchanged; preparation is never rerun.
+For the v12 → v13 authority upgrade, every `authenticated-server` event entry
+also requires `actorBinding`, exactly matching the full ingress `actor` object
+(for example `{id: "participant-id", name: "Member"}`). This applies to both
+retained classified ingress and explicitly reviewed unclassified ingress. The
+credential principal and authority basis remain separate (for example a session
+SID); the upgrade never rewrites the actor into a credential identity. The
+reviewed event digest binds the original source provenance. Missing, duplicate,
+stale, conflicting and unknown-revision entries abort the transaction. Lifecycle
+bodies, encrypted values and existing capture receipts remain byte-for-byte
+unchanged; preparation is never rerun.
 
 The upgrade locks the schema, records a manifest digest, advances the owner
 epoch and version marker, and invalidates retained live channels. Repeating the

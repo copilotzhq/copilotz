@@ -129,6 +129,14 @@ export function captureCollectionPolicy(
       resource: operation.registration.alias,
       operation: operation.method,
       input: fixed,
+      ...(!policyAuthority.direct
+        ? {
+          invocation: {
+            kind: policyAuthority.invocation.kind,
+            id: policyAuthority.invocation.id,
+          },
+        }
+        : {}),
     }, { ...read, signal: policyAuthority.signal });
     authorizedArgs = constrainCollection(fixed, decision.constraints);
     if (

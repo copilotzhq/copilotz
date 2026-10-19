@@ -8,6 +8,9 @@ export const SERVER_ACTION_REQUEST_EVENT_TYPE =
   "copilotz.server.action.requested";
 export const SERVER_ACTION_REQUEST_SCHEMA = "copilotz.server.action-request.v1";
 export const SERVER_ACTION_METADATA_SCHEMA = "copilotz.server.action.v1";
+/** Delivery consumer of the platform relay that applies client HTTP mutations. */
+export const SERVER_COLLECTION_MUTATION_RELAY_CONSUMER =
+  "processor:copilotz.server.collection-mutation-request";
 export const SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE =
   "copilotz.server.collection.mutation.requested";
 export const SERVER_COLLECTION_MUTATION_REQUEST_SCHEMA =

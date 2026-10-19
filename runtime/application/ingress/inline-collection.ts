@@ -87,6 +87,9 @@ export async function completeHostCollection(
         );
       }
       const mutation = await withOwnerCollectionInvocation({
+        // A client's HTTP mutation is a direct call: policies see no executing
+        // Action or Processor, so processor grants never cover it.
+        direct: true,
         logicalRunId: admitted.event.id,
         scope: {
           databaseSchema: runtime.store.databaseSchema,

@@ -51,9 +51,14 @@ export type {
 export type {
   AuthorizationDecision,
   AuthorizationIntent,
+  AuthorizationRead,
   OwnerAuthorization,
   OwnerPolicy,
 } from "../authorization/evaluator.ts";
+export type {
+  AuthorizationSource,
+  StaffAuthorizationSource,
+} from "../authorization/directory.ts";
 
 export {
   inspectAuthorityUpgrade,

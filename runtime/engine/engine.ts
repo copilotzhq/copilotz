@@ -431,21 +431,23 @@ export async function createCopilotzEngine(
             runId: base.executionIncarnationId ?? base.idempotencyKey,
           },
         },
-        authorizeAction: async (frame, _purpose, transaction) => {
-          const authorize = protectedActions.output(frame).authorize;
-          if (!authorize) return;
-          if (transaction) await authorize(transaction);
-          else {
-            await createSchemaCommandRunner(
-              scopedStore.session,
-              scopedStore.databaseSchema,
-            )(
-              "actions.authorizeInput",
-              { actionRunId: frame.actionRunId },
-              async (_input, command) => await authorize(command.transaction),
-            );
+        authorizeAction: Object.keys(protectedActionDefinitions).length
+          ? async (frame, _purpose, transaction) => {
+            const authorize = protectedActions.output(frame).authorize;
+            if (!authorize) return;
+            if (transaction) await authorize(transaction);
+            else {
+              await createSchemaCommandRunner(
+                scopedStore.session,
+                scopedStore.databaseSchema,
+              )(
+                "actions.authorizeInput",
+                { actionRunId: frame.actionRunId },
+                async (_input, command) => await authorize(command.transaction),
+              );
+            }
           }
-        },
+          : undefined,
         prepareActionInput: protectedActions.prepareInput,
         refuseActionAuthorization: base.event.durable
           ? (frame) =>
@@ -479,22 +481,11 @@ export async function createCopilotzEngine(
             schema: base.databaseSchema,
             namespace: base.event.namespace,
             actionRunId: frame.actionRunId,
-            parentActionRunId: frame.parentActionRunId,
-            ...(scopedCapabilities.protectedValues
-              ? {
-                output: {
-                  ...protectedActions.output(frame),
-                  action: actionDefinitionById(
-                    (execution?.registry ?? options.registry).actions,
-                    frame.actionId,
-                  ),
-                  protectedValues: scopedCapabilities.protectedValues,
-                },
-                authorizeOutput: () => {
-                  frame.signal.throwIfAborted();
-                },
-              }
-              : {}),
+            action: actionDefinitionById(
+              (execution?.registry ?? options.registry).actions,
+              frame.actionId,
+            ),
+            authorize: protectedActions.output(frame).authorize,
             verifyNotStarted: (_transaction, reference, evidence) => {
               frame.signal.throwIfAborted();
               return options.verifyEffectNotStarted?.(

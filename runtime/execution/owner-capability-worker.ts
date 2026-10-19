@@ -502,7 +502,6 @@ function workerContext(options: {
         "begin",
         "inspect",
         "confirm",
-        "confirmOutput",
         "notStarted",
         "inventory",
       ],

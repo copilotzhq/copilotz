@@ -36,6 +36,18 @@ type ActionInvocationHost = Pick<
 const SOURCE_ACTION_RUN_ID_METADATA_KEY = "sourceActionRunId";
 
 /** Adds invocation lifecycle state to the shared runtime context. */
+const unavailable = () =>
+  Promise.reject(effectFailure(
+    "effect_unavailable",
+    "An owner-bound effect capability is required.",
+  ));
+const unavailableEffects = Object.freeze({
+  begin: unavailable,
+  inspect: unavailable,
+  confirm: unavailable,
+  notStarted: unavailable,
+});
+
 export function createActionInvocationContext(
   options: Readonly<{
     host: ActionInvocationHost;
@@ -113,43 +125,7 @@ export function createActionInvocationContext(
       signal: frame.signal,
       progress: options.progress,
       awaitOperation,
-      effect: {
-        begin: () =>
-          Promise.reject(
-            effectFailure(
-              "effect_unavailable",
-              "An owner-bound effect capability is required.",
-            ),
-          ),
-        inspect: () =>
-          Promise.reject(
-            effectFailure(
-              "effect_unavailable",
-              "An owner-bound effect capability is required.",
-            ),
-          ),
-        confirm: () =>
-          Promise.reject(
-            effectFailure(
-              "effect_unavailable",
-              "An owner-bound effect capability is required.",
-            ),
-          ),
-        confirmOutput: () =>
-          Promise.reject(
-            effectFailure(
-              "effect_unavailable",
-              "An owner-bound effect capability is required.",
-            ),
-          ),
-        notStarted: () =>
-          Promise.reject(
-            effectFailure(
-              "effect_unavailable",
-              "An owner-bound effect capability is required.",
-            ),
-          ),
-      },
+      effect: unavailableEffects,
       transaction: (
         execute: Parameters<ActionContext["transaction"]>[0],
         transactionOptions: ActionTransactionOptions = {},

@@ -1,3 +1,4 @@
+import { externalEffect } from "./external-effect.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createActionEffectController } from "./effects.ts";
@@ -36,7 +37,6 @@ function fixture(input: {
     reconcile: input.reconcile,
     client: {
       inventory: () => Promise.resolve([]),
-      confirmOutput: () => Promise.resolve(),
       begin() {
         begins++;
         if (state.status === "none") {
@@ -74,31 +74,28 @@ function fixture(input: {
   };
 }
 
-test("same-step racing begin grants proceed once and coalesces only reconciliation", async () => {
+test("racing begins grant proceed once and refuse concurrent reconciliation", async () => {
+  const entered = deferred();
   const gate = deferred();
   let reconciles = 0;
   const f = fixture({
     reconcile: async () => {
       reconciles++;
+      entered.resolve();
       await gate.promise;
-      return { status: "confirmed", outcome: { reference: "durable" } };
+      return { status: "confirmed", outcome: null };
     },
   });
-  const calls = [
-    f.effect.begin("send"),
-    f.effect.begin("send"),
-    f.effect.begin("send"),
-  ];
-  assert.deepEqual(await calls[0], { status: "proceed" });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(reconciles, 1);
+  assert.deepEqual(await f.effect.begin("send"), { status: "proceed" });
+  const pending = f.effect.begin("send");
+  await entered.promise;
+  await assert.rejects(f.effect.begin("send"), {
+    code: "effect_indeterminate",
+  });
   gate.resolve();
-  assert.deepEqual(await Promise.all(calls.slice(1)), [
-    { status: "replay", outcome: { reference: "durable" } },
-    { status: "replay", outcome: { reference: "durable" } },
-  ]);
-  assert.equal(f.stats().begins, 3);
-  assert.equal(f.stats().settlements, 1);
+  await assert.rejects(pending, { code: "effect_indeterminate" });
+  assert.equal(reconciles, 1);
+  assert.equal(f.stats().settlements, 0);
 });
 
 test("missing or unresolved reconciliation fails fixed effect_indeterminate without dispatch permission", async () => {
@@ -218,41 +215,22 @@ test("a plain return or forged proceed reconciliation cannot authorize another s
   }
 });
 
-test("concurrent cross-step reconciliation cycles refuse instead of deadlocking", async () => {
-  const entered = deferred();
+test("recursive cross-step reconciliation refuses without starting another step", async () => {
   let count = 0;
   const f = fixture({
     state: { status: "indeterminate" },
-    reconcile: async (step, ctx) => {
-      if (++count === 2) entered.resolve();
-      await entered.promise;
-      await assert.rejects(ctx.effect.begin(step === "A" ? "B" : "A"), {
+    reconcile: async (_step, ctx) => {
+      count++;
+      await assert.rejects(ctx.effect.begin("B"), {
         code: "effect_indeterminate",
       });
-      return { status: "confirmed", outcome: "must not settle" };
+      return { status: "confirmed", outcome: null };
     },
   });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const results = await Promise.race([
-      Promise.allSettled([f.effect.begin("A"), f.effect.begin("B")]),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("reconciliation cycle deadlocked")),
-          500,
-        );
-      }),
-    ]);
-    for (const result of results) {
-      assert.equal(result.status, "rejected");
-      if (result.status === "rejected") {
-        assert.equal(result.reason.code, "effect_indeterminate");
-      }
-    }
-    assert.equal(f.stats().settlements, 0);
-  } finally {
-    clearTimeout(timer);
-  }
+  await assert.rejects(f.effect.begin("A"), { code: "effect_indeterminate" });
+  assert.equal(count, 1);
+  assert.equal(f.stats().begins, 1);
+  assert.equal(f.stats().settlements, 0);
 });
 
 test("preflight recovery never begins or grants proceed and leaves closed steps closed", async () => {
@@ -286,7 +264,6 @@ test("authored reconcile cannot receive private controller ports as this", async
     context: () => ({} as ActionContext),
     client: {
       inventory: () => Promise.resolve([]),
-      confirmOutput: () => Promise.resolve(),
       begin: () => Promise.resolve({ status: "indeterminate" as const }),
       inspect: () =>
         Promise.resolve(
@@ -330,7 +307,6 @@ test("authored reconcile cannot replace the controller private lifetime check", 
     context: () => ({} as ActionContext),
     client: {
       inventory: () => Promise.resolve([]),
-      confirmOutput: () => Promise.resolve(),
       begin: () => Promise.resolve({ status: "indeterminate" as const }),
       inspect: () =>
         Promise.resolve(
@@ -386,5 +362,29 @@ test("reconciliation retains nonenumerable protected context capabilities", asyn
   assert.deepEqual(await f.effect.begin("send"), {
     status: "replay",
     outcome: { reference: "verified" },
+  });
+});
+
+test("externalEffect retains the provider result while confirmation waits", async () => {
+  const entered = deferred(), release = deferred();
+  const value = { reference: "accepted" };
+  const f = fixture({
+    settle: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  const pending = externalEffect(
+    { effect: f.effect, signal: f.control.signal },
+    "send",
+    () => value,
+  );
+  await entered.promise;
+  value.reference = "mutated";
+  release.resolve();
+  assert.deepEqual(await pending, { reference: "accepted" });
+  assert.deepEqual(await f.effect.inspect("send"), {
+    status: "replay",
+    outcome: { reference: "accepted" },
   });
 });

@@ -4,7 +4,6 @@ export const testEffect: ActionEffect = {
   begin: () => Promise.resolve({ status: "proceed" }),
   inspect: () => Promise.resolve({ status: "none" }),
   confirm: () => Promise.resolve(),
-  confirmOutput: () => Promise.resolve(),
   notStarted: () =>
     Promise.reject(new Error("No no-start proof in this fixture.")),
 };

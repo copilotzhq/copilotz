@@ -1,6 +1,5 @@
 import { createMemoryBodyStore } from "../content/body-store.ts";
 import { createContentCatalog } from "../content/catalog.ts";
-import { createDatabaseBodyStore } from "../content/database-body-store.ts";
 import type { BodyStorageRuntime } from "../content/body-store.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -22,10 +21,7 @@ import type {
   ProtectedActionOwnerContext,
 } from "./protected-action-types.ts";
 import type { ActionInvocationFrame } from "./invoker.ts";
-import {
-  createActionLifecycleAppender,
-  createActionLifecycleLoader,
-} from "./persistence.ts";
+import { createActionLifecycleAppender } from "./persistence.ts";
 import { createOwnerEffectClient } from "./effect-commands.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { resolveActionSourceData } from "./protected-context.ts";
@@ -240,7 +236,8 @@ async function fixture(
       schema,
       namespace: "space",
       actionRunId: f.actionRunId,
-      output: { action, protectedValues, ...current.output(f) },
+      action,
+      authorize: current.output(f).authorize,
       signal: f.signal,
     });
   const complete = (
@@ -356,90 +353,6 @@ Deno.test("protected input preparation captures once, refuses forged account, re
     await f.db.close();
   }
 });
-Deno.test("protected output confirm and terminal completion share one atomic immutable adoption", async () => {
-  const f = await fixture();
-  try {
-    await f.hooks.prepareInput(frame(), { account: "account-a" });
-    const client = f.client();
-    await client.begin("provider");
-    await client.confirmOutput("provider", output);
-    await client.confirmOutput("provider", output);
-    await f.complete();
-    await f.complete();
-    assertEquals(f.stats().prepared, 1);
-    assertEquals(f.stats().accepted, 1);
-    assertEquals(await f.count("adopted"), 1);
-    assertEquals(await client.inspect("provider"), {
-      status: "replay",
-      outcome: output,
-    });
-    await assertRejects(
-      () => client.confirmOutput("provider", { ...output, token: "changed" }),
-      Error,
-    );
-    const rows = await f.db.query<{ v: unknown }>(
-      `SELECT to_jsonb(row) AS v FROM "${f.schema}".owner_receipts row UNION ALL SELECT to_jsonb(row) AS v FROM "${f.schema}".event_bodies row UNION ALL SELECT to_jsonb(row) AS v FROM "${f.schema}".action_effects row`,
-    );
-    const encoded = JSON.stringify(rows.rows);
-    assert(!encoded.includes(token));
-    assert(!encoded.includes(candidate));
-    await f.revoke();
-    await assertRejects(
-      () => client.inspect("provider"),
-      Error,
-      "owner phase failed",
-    );
-  } finally {
-    await f.db.close();
-  }
-});
-Deno.test("normal secret-input public-output completion adopts once and preserves public result", async () => {
-  const f = await fixture(true);
-  try {
-    await f.hooks.prepareInput(frame(), { account: "account-a" });
-    await f.complete();
-    await f.complete();
-    assertEquals(f.stats().accepted, 1);
-    assertEquals(await f.count("adopted"), 1);
-    const result = await createActionLifecycleLoader({
-      store: f.store,
-      actions: { action: f.action },
-      protectedValues: f.protectedValues,
-    })("space", "run:action:terminal");
-    assertEquals(result?.status, "completed");
-    assertEquals(result && "output" in result ? result.output : null, {
-      ok: true,
-    });
-  } finally {
-    await f.db.close();
-  }
-});
-Deno.test("failed acceptance rolls back domain adoption and output receipt without leaking callback errors", async () => {
-  const f = await fixture();
-  try {
-    await f.hooks.prepareInput(frame(), { account: "account-a" });
-    const client = f.client();
-    await client.begin("provider");
-    f.fail();
-    const error = await assertRejects(
-      () => client.confirmOutput("provider", output),
-      Error,
-      "owner phase failed",
-    );
-    assert(!error.message.includes(candidate));
-    assertEquals(await f.count("adopted"), 0);
-    assertEquals(await client.inspect("provider"), { status: "indeterminate" });
-    const capture = await f.db.query(
-      `SELECT key FROM "${f.schema}".owner_receipts WHERE kind='action.output.capture'`,
-    );
-    assertEquals(capture.rows, []);
-    f.clearFailure();
-    await client.confirmOutput("provider", output);
-    assertEquals(await f.count("adopted"), 1);
-  } finally {
-    await f.db.close();
-  }
-});
 Deno.test("synchronous protected callbacks lose query authority before their scheduled microtask", async () => {
   const f = await fixture();
   try {
@@ -459,144 +372,6 @@ Deno.test("synchronous protected callbacks lose query authority before their sch
     await hooks.prepareInput(frame(), { account: "account-a" });
     await late?.catch(() => {});
     assertEquals(rejected, true);
-  } finally {
-    await f.db.close();
-  }
-});
-Deno.test({
-  name:
-    "real lost COMMIT during public-output adoption recovers receipt without repeating acceptance",
-  ignore: !url,
-  sanitizeOps: false,
-  sanitizeResources: false,
-  async fn() {
-    const proxy = await commitProxy(url!);
-    const proxied = await createTestDatabase({ url: proxy.url, pgPoolMax: 1 });
-    const f = await fixture(true, {
-      db: proxied,
-      schema: `protected_lost_${crypto.randomUUID().replaceAll("-", "")}`,
-    });
-    let nextDb: TestDatabase | undefined;
-    try {
-      await f.hooks.prepareInput(frame(), { account: "account-a" });
-      const hooks = f.build({}, proxied);
-      const client = f.client(frame(), hooks, proxied);
-      await client.begin("provider");
-      // Arm immediately before the acceptance transaction, after output staging/inspection.
-      const controlled = f.build({
-        acceptOutput: async (_output, context) => {
-          await context.query(
-            `INSERT INTO "${f.schema}".nodes(id,namespace,type,name) VALUES('lost-adopt','space','adopted','accepted')`,
-          );
-          proxy.arm();
-        },
-      }, proxied);
-      const active = f.client(frame(), controlled, proxied);
-      const confirming = active.confirmOutput("provider", { ok: true });
-      const rejection = assertRejects(() => confirming);
-      await bounded(proxy.forwarded, "adoption COMMIT forwarded");
-      assertEquals(
-        await bounded(proxy.resolved, "adoption COMMIT resolved"),
-        "COMMIT",
-      );
-      proxy.cutClient();
-      const error = await bounded(rejection, "unknown adoption commit");
-      assertEquals((error as { code?: string }).code, "owner_commit_unknown");
-      nextDb = await createTestDatabase({
-        url: localPostgresUrl(url!),
-        pgPoolMax: 1,
-      });
-      const recovered = f.client(frame(), f.build({}, nextDb), nextDb);
-      assertEquals(await recovered.inspect("provider"), {
-        status: "replay",
-        outcome: { ok: true },
-      });
-      await recovered.confirmOutput("provider", { ok: true });
-      assertEquals(
-        Number(
-          (await nextDb.query<{ n: string }>(
-            `SELECT count(*) AS n FROM "${f.schema}".nodes WHERE type='adopted'`,
-          )).rows[0].n,
-        ),
-        1,
-      );
-      assertEquals(f.stats().accepted, 0);
-      assertEquals(proxy.errors, []);
-    } finally {
-      await proxy.close();
-      await nextDb?.close();
-      await proxied.close();
-    }
-  },
-});
-Deno.test("fixed accepted-output reads are run-bound and revoked with failed or cancelled policy handles", async () => {
-  const f = await fixture();
-  try {
-    let retained: ProtectedActionOwnerContext | undefined;
-    let expected: unknown;
-    const hooks = f.build({
-      async authorize(_input, context) {
-        retained = context;
-        assertEquals(await context.readAcceptedOutput(), expected);
-      },
-    });
-    await hooks.prepareInput(frame(), { account: "account-a" });
-    const client = f.client(frame(), hooks);
-    await client.begin("provider");
-    await client.confirmOutput("provider", output);
-    expected = output;
-    await client.inspect("provider");
-    await assertRejects(() => retained!.readAcceptedOutput(), Error, "closed");
-    expected = undefined;
-    await hooks.prepareInput(frame("other-run"), { account: "account-a" });
-    const failed = f.build({
-      authorize(_input, context) {
-        retained = context;
-        throw new Error(token);
-      },
-    });
-    await assertRejects(
-      () => failed.prepareInput(frame(), { account: "account-a" })!,
-      Error,
-      "owner phase failed",
-    );
-    await assertRejects(() => retained!.query("SELECT 1"), Error, "closed");
-    const controller = new AbortController();
-    const cancelled = f.build({
-      authorize(_input, context) {
-        retained = context;
-        controller.abort();
-      },
-    });
-    await assertRejects(() =>
-      cancelled.prepareInput(frame("cancel", controller.signal), {
-        account: "account-a",
-      })!
-    );
-    await assertRejects(() => retained!.query("SELECT 1"));
-    assertEquals(f.stats().accepted, 1);
-    const changed = createProtectedActions({
-      definitions: {
-        [f.action.id]: {
-          authorize() {},
-          prepareInput(input) {
-            return input;
-          },
-        },
-      },
-      actions: { action: f.action },
-      store: f.store,
-      coordinator: f.coordinator,
-      namespace: "space",
-      source: { eventId: "forged-root" },
-      protectedValues: f.protectedValues,
-      signal: new AbortController().signal,
-    });
-    await assertRejects(
-      () => changed.prepareInput(frame(), { account: "account-a" })!,
-      Error,
-      "binding",
-    );
   } finally {
     await f.db.close();
   }
@@ -739,37 +514,6 @@ Deno.test({
       await proxied.close();
     }
   },
-});
-Deno.test("atomic owner preparation preserves single-connection custom database BodyStore wrappers", async () => {
-  const db = await createTestDatabase({ url: url ?? ":memory:", pgPoolMax: 1 });
-  const schema = `custom_hook_${crypto.randomUUID().replaceAll("-", "")}`;
-  const storage = createBodyStorageRuntime({
-    storage: {
-      type: "custom",
-      config: {
-        store: createDatabaseBodyStore({
-          session: db,
-          schema,
-          backendId: "fixture-custom",
-        }),
-      },
-    },
-  });
-  const f = await fixture(false, { db, schema, storage });
-  try {
-    await f.hooks.prepareInput(frame(), { account: "account-a" });
-    const client = f.client();
-    await client.begin("provider");
-    await client.confirmOutput("provider", output);
-    assertEquals(await client.inspect("provider"), {
-      status: "replay",
-      outcome: output,
-    });
-    await f.complete();
-    assertEquals(f.stats().accepted, 1);
-  } finally {
-    await db.close();
-  }
 });
 Deno.test("transactional protected input uses committed database staging and existing promotion with read fallback", async () => {
   const db = await createTestDatabase({ url: url ?? ":memory:", pgPoolMax: 1 });

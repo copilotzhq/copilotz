@@ -9,7 +9,6 @@ import { resolveProtectedActionParent } from "./protected-action-parent.ts";
 import {
   protectedActionCollectionFacade,
   type ProtectedActionCollectionRuntime,
-  withProtectedActionCollections,
 } from "./protected-action-collections.ts";
 import type { CollectionTransactionCollections } from "../collections/kernel.ts";
 import { standardActionError } from "./errors.ts";
@@ -19,10 +18,7 @@ import {
   markOwnerAuthorizationRefusal,
   withOwnerPolicyRefusal,
 } from "../engine/authorization-refusal.ts";
-import {
-  openCapturedActionOutput,
-  readCapturedActionOutput,
-} from "./protected-effect-output.ts";
+
 /** Owner-local Action policy and first input capture on the existing owner queue. */
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import {
@@ -280,42 +276,6 @@ export function createProtectedActions(
               }),
             );
           },
-          readAcceptedOutput() {
-            try {
-              assertActive();
-            } catch (error) {
-              return Promise.reject(error);
-            }
-            return track((async () => {
-              if (!options.protectedValues) return undefined;
-              const action = actionDefinitionById(
-                options.actions,
-                frame.actionId,
-              );
-              const binding = {
-                databaseSchema,
-                namespace,
-                actionRunId: frame.actionRunId,
-                action,
-                protectedValues: options.protectedValues,
-                ...(definition(frame.actionId)?.acceptOutput
-                  ? { accept: async () => {} }
-                  : {}),
-              };
-              const accepted = await readCapturedActionOutput(
-                transaction,
-                binding,
-              );
-              if (!accepted) return undefined;
-              const output = await openCapturedActionOutput(
-                binding,
-                accepted,
-                transaction,
-              );
-              assertActive();
-              return captureHostCommandJson(output);
-            })());
-          },
         }, async () => (await resolveSource()).data);
       },
     ).catch((caught) => {
@@ -546,82 +506,6 @@ export function createProtectedActions(
           value.source,
         );
       },
-      accept: hook.acceptOutput
-        ? async (value: unknown, tx: SqlExecutor) => {
-          await authority(schemaCommandContext(tx, databaseSchema), frame);
-          const capturedInput = await captured(tx);
-          if (hook.acceptOutput) {
-            const adoptionChecks: Array<
-              (transaction: SqlExecutor) => Promise<void>
-            > = [];
-            const accept = (collections: CollectionTransactionCollections) =>
-              phase(
-                schemaCommandContext(tx, databaseSchema),
-                frame,
-                capturedInput.input,
-                capturedInput.source,
-                (context) => {
-                  const result = hook.acceptOutput!(
-                    captureHostCommandJson(value),
-                    context as import("./protected-action-types.ts").ProtectedActionAdoptionContext,
-                  );
-                  const validateVoid = (value: unknown) => {
-                    if (value !== undefined) {
-                      throw new TypeError(
-                        "Protected output acceptance must return void.",
-                      );
-                    }
-                  };
-                  return result instanceof Promise
-                    ? result.then(validateVoid)
-                    : validateVoid(result);
-                },
-                collections,
-                adoptionChecks,
-              );
-            const command = schemaCommandContext(tx, databaseSchema);
-            if (options.collections) {
-              await withProtectedActionCollections(
-                options.collections,
-                command,
-                {
-                  scope: { databaseSchema, namespace },
-                  source: capturedInput.source,
-                  action: {
-                    id: frame.actionId,
-                    runId: frame.actionRunId,
-                    ...(frame.parentActionRunId
-                      ? { parentRunId: frame.parentActionRunId }
-                      : {}),
-                  },
-                  signal: AbortSignal.any([
-                    options.signal,
-                    frame.signal,
-                    command.signal,
-                  ]),
-                  resolveSource: (transaction) =>
-                    resolveProtectedActionSource({
-                      transaction,
-                      databaseSchema,
-                      namespace,
-                      source: capturedInput.source,
-                      protectedValues: options.protectedValues,
-                    }),
-                },
-                accept,
-              );
-            } else {
-              await accept({});
-            }
-            // Public handles are closed; all staged Collection SQL has run in
-            // this same command. These fixed checks cannot commit or publish.
-            for (const check of adoptionChecks) {
-              await check(command.transaction);
-            }
-          }
-          await authority(schemaCommandContext(tx, databaseSchema), frame);
-        }
-        : undefined,
     };
   };
   return { prepareInput, output };

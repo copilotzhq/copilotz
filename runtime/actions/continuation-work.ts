@@ -1,7 +1,4 @@
-import {
-  createSchemaCommandRunner,
-  schemaCommandContext,
-} from "../engine/commands.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type { OperationStart } from "./continuation.ts";
 import {
   prepareProtectedEventBody,
@@ -78,10 +75,11 @@ export async function admitActionOperation(
     }
   >,
   prepared: Awaited<ReturnType<typeof prepareActionOperation>>,
+  retained?: { rows: readonly { payload: unknown }[] },
 ): Promise<Awaited<ReturnType<EventStore["commitMutation"]>> | undefined> {
   const { store } = runtime;
   const { namespace, operationId } = input;
-  const existing = await tx.query<{ payload: unknown }>(
+  const existing = retained ?? await tx.query<{ payload: unknown }>(
     `SELECT event.payload FROM ${
       createOperationCatalogTables(store.databaseSchema).operations
     } AS operation
@@ -192,21 +190,6 @@ export async function startAwaitedOperation(
     [namespace, parentId],
   );
   if (!parent.rows[0]) throw new ActionOwnershipLost(data.actionRunId);
-  const authority = await tx.query(
-    `SELECT action.action_run_id FROM ${store.tables.open_actions} AS action
-     JOIN ${store.tables.event_deliveries} AS delivery ON delivery.id = $3
-     WHERE action.namespace = $1 AND action.action_run_id = $2 AND action.state = 'awaiting'
-       AND delivery.status = 'leased' AND delivery.lease_owner = $4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at > $5::timestamptz) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema')
-    `,
-    [
-      namespace,
-      data.actionRunId,
-      writer.deliveryId,
-      writer.leaseOwner,
-      schemaCommandContext(tx, store.databaseSchema).commandTime,
-    ],
-  );
-  if (!authority.rows.length) throw new ActionOwnershipLost(data.actionRunId);
   let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;
   const existing = await tx.query<
     {
@@ -238,18 +221,24 @@ export async function startAwaitedOperation(
     if (!preparedChild) {
       throw new Error("Linked child input must be prepared before admission.");
     }
-    committed = await admitActionOperation(runtime, tx, {
-      namespace,
-      operationId: childId,
-      start: data.start,
-      correlationId: draft.correlationId,
-      causationId: draft.causationId,
-      metadata: {
-        ...parent.rows[0].metadata,
-        observationKeys: parent.rows[0].observation_keys,
-        parent: { operationId: parentId, actionRunId: data.actionRunId },
+    committed = await admitActionOperation(
+      runtime,
+      tx,
+      {
+        namespace,
+        operationId: childId,
+        start: data.start,
+        correlationId: draft.correlationId,
+        causationId: draft.causationId,
+        metadata: {
+          ...parent.rows[0].metadata,
+          observationKeys: parent.rows[0].observation_keys,
+          parent: { operationId: parentId, actionRunId: data.actionRunId },
+        },
       },
-    }, preparedChild);
+      preparedChild,
+      existing,
+    );
     const catalogTables = createOperationCatalogTables(store.databaseSchema);
     await tx.query(
       `WITH linked AS (
@@ -275,10 +264,6 @@ export async function startAwaitedOperation(
       ],
     );
   }
-  await tx.query(
-    `UPDATE ${store.tables.open_actions} SET child_operation_id = $3 WHERE namespace = $1 AND action_run_id = $2`,
-    [namespace, data.actionRunId, childId],
-  );
   const resume = await scheduleResumptions(runtime, {
     namespace,
     operationId: childId,

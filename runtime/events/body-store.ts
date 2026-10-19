@@ -152,6 +152,15 @@ export async function readEventBody<T>(
     throw new TypeError("Event body ref is missing eventBodyId.");
   }
   const row = await requireStoredBody(context, namespace, eventBodyId);
+  return await verifiedEventBody<T>(row, dataRef);
+}
+
+/** Verify a retained row fetched together with its event. */
+export async function verifiedEventBody<T>(
+  row: Pick<EventBodyRow, "body" | "schema_version" | "digest">,
+  dataRef: EventBodyRef,
+): Promise<T> {
+  const eventBodyId = dataRef.eventBodyId;
   if (Number(row.schema_version) !== dataRef.schemaVersion) {
     throw new Error(
       `Event body '${eventBodyId}' has the wrong schema version.`,

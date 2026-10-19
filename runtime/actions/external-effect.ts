@@ -1,6 +1,6 @@
 /** Run one JSON-result external call only after a fresh durable dispatch permit. */
 import type { ActionContext, ActionEffectOutcome } from "./types.ts";
-import { copy, fail } from "./effect-client.ts";
+import { confirmCapturedEffect, copy, fail } from "./effect-client.ts";
 
 export async function externalEffect<T>(
   context: Pick<ActionContext, "effect" | "signal">,
@@ -17,7 +17,7 @@ export async function externalEffect<T>(
       );
   }
   const permission = await context.effect.begin(step);
-  if (permission.status === "replay") return copy(permission.outcome) as T;
+  if (permission.status === "replay") return permission.outcome as T;
   if (permission.status !== "proceed") {
     return fail(
       "effect_indeterminate",
@@ -34,6 +34,10 @@ export async function externalEffect<T>(
       );
   }
   const result = copy(await dispatch());
-  await context.effect.confirm(step, result as ActionEffectOutcome);
+  await confirmCapturedEffect(
+    context.effect,
+    step,
+    result as ActionEffectOutcome,
+  );
   return result;
 }

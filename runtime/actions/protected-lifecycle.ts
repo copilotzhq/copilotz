@@ -133,7 +133,6 @@ export async function prepareActionLifecycleBody(
     protectedValues?: ProtectedValueRuntime;
     transaction?: SqlExecutor;
     existingInput?: ProtectedValueRef;
-    existingOutput?: ProtectedValueRef;
     awaitedAction?: AnyActionDefinition;
   }>,
 ): Promise<PreparedActionLifecycleBody> {
@@ -181,7 +180,7 @@ export async function prepareActionLifecycleBody(
   if (!inputSplit.secret && inputRef) {
     throw new Error("Protected Action input reference is unexpected.");
   }
-  let outputRef = input.existingOutput;
+  let outputRef: ProtectedValueRef | undefined;
   if (data.status === "completed" && outputSplit?.secret && !outputRef) {
     const value = await input.protectedValues!.prepare(
       coordinates(input.namespace, data, "output"),

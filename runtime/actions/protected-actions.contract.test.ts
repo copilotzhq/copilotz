@@ -51,7 +51,7 @@ function publicContract(context: ProtectedActionOwnerContext) {
     protectedActions: {
       fixture: {
         authorize(_input, owner) {
-          void owner.readAcceptedOutput();
+          void owner.resolveSource();
         },
         prepareInput(input) {
           return input;

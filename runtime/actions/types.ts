@@ -135,8 +135,7 @@ export type RuntimeIdentity = Readonly<{
 /** Caller-owned, JSON-safe data carried by one Action invocation. */
 export type ActionInvocationMetadata = Readonly<Record<string, unknown>>;
 
-/** JSON effect data. Plain confirm accepts only secret-free outcomes;
- * confirmOutput captures the complete registered protected Action output. */
+/** JSON effect data; confirmation accepts only secret-free outcomes. */
 export type ActionEffectOutcome =
   | null
   | boolean
@@ -176,12 +175,6 @@ export type ActionEffect = Readonly<{
   confirm(
     step: string,
     outcome: ActionEffectOutcome,
-    options?: ActionEffectOptions,
-  ): Promise<void>;
-  /** Atomically retain this Action's complete declared protected output and confirm the step. */
-  confirmOutput(
-    step: string,
-    output: ActionEffectOutcome,
     options?: ActionEffectOptions,
   ): Promise<void>;
   notStarted(

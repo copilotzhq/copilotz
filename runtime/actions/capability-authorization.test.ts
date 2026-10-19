@@ -262,14 +262,16 @@ Deno.test("non-command acquired read capabilities reauthorize before disclosure 
 
 Deno.test("revoked native readers can cancel and release owned resources while writer mutation remains fenced", async () => {
   let active = true, cancelled = 0, writes = 0;
-  const writer = new WritableStream({
-    close() {
+  const writer = {
+    id: "writer",
+    offset: () => 0,
+    close: () => {
       writes++;
     },
-    abort() {
+    abort: () => {
       writes++;
     },
-  }).getWriter();
+  };
   const ctx = authorizeActionCapabilities(
     {
       content: {
@@ -279,8 +281,8 @@ Deno.test("revoked native readers can cancel and release owned resources while w
               cancelled++;
             },
           }, { highWaterMark: 0 }),
-        writer,
       },
+      streams: { open: () => writer },
     } as unknown as ActionContext,
     () => {},
     () => {
@@ -291,16 +293,14 @@ Deno.test("revoked native readers can cancel and release owned resources while w
   );
   const stream = await ctx.content.open({} as never);
   const reader = stream.getReader();
-  const guardedWriter =
-    (ctx.content as unknown as { writer: WritableStreamDefaultWriter }).writer;
+  const guardedWriter = await ctx.streams.open({} as never);
   active = false;
   await reader.cancel();
   reader.releaseLock();
   assertEquals(cancelled, 1);
-  assertThrows(() => guardedWriter.close(), Error, "revoked");
+  assertThrows(() => guardedWriter.close({} as never), Error, "revoked");
   assertThrows(() => guardedWriter.abort(), Error, "revoked");
   assertEquals(writes, 0);
-  writer.releaseLock();
 });
 Deno.test("post-acquisition denial disposes the new read resource without waiting for noncooperative cancellation", async () => {
   let allowed = true, cancelled = 0, settled = false;

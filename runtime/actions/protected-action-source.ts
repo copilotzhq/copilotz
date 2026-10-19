@@ -3,7 +3,7 @@ import { resolveOwnerIngress } from "../application/ingress/authority.ts";
 /** Fixed-source retained provenance. Caller metadata is never an ancestry edge. */
 import { createOperationCatalogTables } from "../streams/catalog.ts";
 import { createCoreTableNames } from "../events/schema.ts";
-import { eventDataRef, readEventBody } from "../events/body-store.ts";
+import { eventDataRef, verifiedEventBody } from "../events/body-store.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
 import { openProtectedEventBody } from "./protected-event.ts";
@@ -32,43 +32,46 @@ async function readSourceAncestry(
   operationId: string | undefined,
 ): Promise<readonly SourceOperation[]> {
   const tables = createOperationCatalogTables(databaseSchema);
-  const ancestors: SourceOperation[] = [];
+  if (!operationId) return [];
+  const ancestors = (await transaction.query<
+    SourceOperation & { next_id: string | null; valid_edge: boolean }
+  >(
+    `WITH RECURSIVE edges AS NOT MATERIALIZED (
+      SELECT operation.operation_id,operation.root_event_id,operation.parent_operation_id,operation.parent_action_run_id,operation.visibility, CASE WHEN operation.parent_operation_id IS NOT NULL THEN operation.parent_operation_id
+        WHEN operation.visibility='internal' THEN detached.id END AS next_id,
+        (operation.parent_operation_id IS NOT NULL OR operation.visibility<>'internal' OR
+          (detached.n=1 AND detached.id<>'' AND detached.id<>operation.operation_id)) AS valid_edge
+      FROM ${tables.operations} AS operation
+      LEFT JOIN LATERAL (
+        SELECT count(*) AS n,min(indexed.operation_id) AS id FROM ${tables.operationEvents} AS indexed
+        JOIN ${tables.events} AS event ON event.id=indexed.event_id AND event.namespace=indexed.namespace
+        WHERE indexed.namespace=$1 AND indexed.event_id=operation.root_event_id
+      ) AS detached ON operation.parent_operation_id IS NULL AND operation.visibility='internal'
+      WHERE operation.namespace=$1
+    ), chain AS (
+      SELECT edges.*,1 AS depth FROM edges WHERE operation_id=$2
+      UNION ALL
+      SELECT edges.*,chain.depth+1 FROM chain JOIN edges ON edges.operation_id=chain.next_id WHERE chain.depth<65
+    ) SELECT operation_id,root_event_id,parent_operation_id,parent_action_run_id,visibility,next_id,valid_edge
+      FROM chain ORDER BY depth`,
+    [namespace, operationId],
+  )).rows;
   const visited = new Set<string>();
-  while (operationId) {
-    if (visited.has(operationId) || visited.size >= 64) {
+  for (const operation of ancestors) {
+    if (visited.has(operation.operation_id) || visited.size >= 64) {
       throw new Error("Protected Action ancestry is invalid.");
     }
-    visited.add(operationId);
-    const operation = (await transaction.query<SourceOperation>(
-      `SELECT operation_id,root_event_id,parent_operation_id,parent_action_run_id,visibility FROM ${tables.operations} WHERE namespace=$1 AND operation_id=$2`,
-      [namespace, operationId],
-    )).rows[0];
+    visited.add(operation.operation_id);
     if (
-      !operation ||
+      !operation.valid_edge ||
       Boolean(operation.parent_operation_id) !==
         Boolean(operation.parent_action_run_id)
-    ) throw new Error("Protected Action ancestry is unavailable.");
-    ancestors.push(operation);
-    if (operation.parent_operation_id) {
-      operationId = operation.parent_operation_id;
-    } else if (operation.visibility === "internal") {
-      // Detached delivery operations have no parent. Their root event stays
-      // uniquely indexed to the operation that emitted it, in the same commit.
-      // Require the retained event's namespace as well as the index namespace.
-      const indexed = (await transaction.query<{ operation_id: string }>(
-        `SELECT indexed.operation_id FROM ${tables.operationEvents} AS indexed JOIN ${tables.events} AS event ON event.id=indexed.event_id AND event.namespace=indexed.namespace WHERE indexed.namespace=$1 AND indexed.event_id=$2`,
-        [namespace, operation.root_event_id],
-      )).rows;
-      if (
-        indexed.length !== 1 || !indexed[0].operation_id ||
-        indexed[0].operation_id === operationId
-      ) {
-        throw new Error("Protected Action ancestry is unavailable.");
-      }
-      operationId = indexed[0].operation_id;
-    } else {
-      operationId = undefined;
+    ) {
+      throw new Error("Protected Action ancestry is unavailable.");
     }
+  }
+  if (!ancestors.length || ancestors.at(-1)!.next_id !== null) {
+    throw new Error("Protected Action ancestry is unavailable.");
   }
   return ancestors;
 }
@@ -84,27 +87,37 @@ export async function resolveProtectedActionSource(
 ): Promise<ProtectedActionSource> {
   const { transaction, databaseSchema, namespace, source } = options;
   const tables = createCoreTableNames(databaseSchema);
-  const read = async (id: string): Promise<ProtectedActionSourceEntry> => {
-    const event = (await transaction.query<
-      {
-        id: string;
-        type: string;
-        namespace: string;
-        metadata: Record<string, unknown>;
-        payload: unknown;
-      }
-    >(
-      `SELECT id,type,namespace,metadata,payload FROM ${tables.events} WHERE id=$1 AND namespace=$2`,
-      [id, namespace],
-    )).rows[0];
-    if (!event) {
+  const chain = await readSourceAncestry(
+    transaction,
+    databaseSchema,
+    namespace,
+    source.operationId,
+  );
+  const ids = chain.map((operation) => operation.root_event_id).reverse();
+  if (!ids.includes(source.eventId)) ids.push(source.eventId);
+  const rows = (await transaction.query<{
+    id: string;
+    type: string;
+    namespace: string;
+    metadata: Record<string, unknown>;
+    payload: unknown;
+    body: unknown;
+    schema_version: number;
+    digest: string;
+  }>(
+    `SELECT event.id,event.type,event.namespace,event.metadata,event.payload,body.body,body.schema_version,body.digest
+      FROM ${tables.events} AS event LEFT JOIN ${tables.event_bodies} AS body
+      ON body.namespace=event.namespace AND body.event_body_id=trim(event.payload->'dataRef'->>'eventBodyId')
+      WHERE event.namespace=$1 AND event.id=ANY($2::text[])`,
+    [namespace, ids],
+  )).rows;
+  const ancestors: ProtectedActionSourceEntry[] = [];
+  for (const id of ids) {
+    const event = rows.find((row) => row.id === id);
+    if (!event || !event.digest) {
       throw new Error("Protected Action source is unavailable in this scope.");
     }
-    const body = await readEventBody(
-      { transaction, tables },
-      namespace,
-      eventDataRef(event.payload),
-    );
+    const body = await verifiedEventBody(event, eventDataRef(event.payload));
     const ingress = await resolveOwnerIngress(
       { transaction, tables },
       databaseSchema,
@@ -117,7 +130,7 @@ export async function resolveProtectedActionSource(
       protectedValues: options.protectedValues,
       transaction,
     });
-    return captureHostCommandJson({
+    ancestors.push(captureHostCommandJson({
       event: {
         id: event.id,
         type: event.type,
@@ -126,18 +139,8 @@ export async function resolveProtectedActionSource(
       },
       data,
       ...(ingress ? { ingress } : {}),
-    }) as ProtectedActionSourceEntry;
-  };
-  const chain = await readSourceAncestry(
-    transaction,
-    databaseSchema,
-    namespace,
-    source.operationId,
-  );
-  const ids = chain.map((operation) => operation.root_event_id).reverse();
-  if (!ids.includes(source.eventId)) ids.push(source.eventId);
-  const ancestors: ProtectedActionSourceEntry[] = [];
-  for (const id of ids) ancestors.push(await read(id));
+    }) as ProtectedActionSourceEntry);
+  }
   const root = ancestors[0];
   if (!root) throw new Error("Protected Action source is unavailable.");
   return Object.freeze({ ...root, ancestors: Object.freeze(ancestors) });

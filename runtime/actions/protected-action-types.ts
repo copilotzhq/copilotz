@@ -70,7 +70,6 @@ export type ProtectedActionOwnerContext<Input = unknown, Output = unknown> =
      * Other phases require already durable destination edges. */
     assertParentCapture(input: ProtectedActionParentCapture): Promise<void>;
     /** Fixed accepted output of this Action/run; authorize provenance before reading. */
-    readAcceptedOutput(): Promise<Output | undefined>;
   }>;
 
 /** Registered alias-keyed mutations, staged in the current output acceptance transaction. */

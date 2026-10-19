@@ -163,9 +163,7 @@ async function recoverActions(
           ? "AbortError"
           : indeterminate
           ? "ActionEffectError"
-          : abandoned
-          ? "ActionAbandoned"
-          : "ActionDeliveryExhausted",
+          : "ActionFailed",
         message: cancelled
           ? "The owning delivery was cancelled."
           : indeterminate

@@ -1194,7 +1194,7 @@ Deno.test("websocket: bound placement retired before Open leaves delivery unclai
 });
 
 for (const transport of ["in-process", "websocket"] as const) {
-  Deno.test(`${transport}: protected effect output uses owner capture and terminal reuses its reference`, async () => {
+  Deno.test(`${transport}: safe effect references preserve one dispatch and encrypted terminal replay`, async () => {
     let dispatches = 0;
     let seals = 0;
     const crypto = await testSecretAdapter();
@@ -1213,17 +1213,17 @@ for (const transport of ["in-process", "websocket"] as const) {
       async execute(_input: unknown, ctx: ActionContext) {
         assertEquals(ctx.adapters.secrets, undefined);
         const begun = await ctx.effect.begin("exchange");
-        if (begun.status === "replay") return begun.outcome;
+        if (begun.status === "replay") return output;
         assertEquals(begun.status, "proceed");
         dispatches++;
-        await ctx.effect.confirmOutput("exchange", output);
+        await ctx.effect.confirm("exchange", { reference: "accepted" });
         assertEquals(await ctx.effect.inspect("exchange"), {
           status: "replay",
-          outcome: output,
+          outcome: { reference: "accepted" },
         });
         assertEquals(await ctx.effect.begin("exchange"), {
           status: "replay",
-          outcome: output,
+          outcome: { reference: "accepted" },
         });
         return output;
       },
@@ -1256,7 +1256,7 @@ for (const transport of ["in-process", "websocket"] as const) {
       const captures = (await f.database.query<{ result: { ref: unknown } }>(
         "SELECT result FROM public.owner_receipts WHERE kind='action.output.capture'",
       )).rows;
-      assertEquals(captures.length, 1);
+      assertEquals(captures.length, 0);
       const bodies = (await f.database.query<
         {
           body: {
@@ -1268,7 +1268,7 @@ for (const transport of ["in-process", "websocket"] as const) {
       const terminal = bodies.find((row) =>
         row.body.data?.status === "completed"
       );
-      assertEquals(terminal?.body.protected?.output, captures[0].result.ref);
+      assert(terminal?.body.protected?.output);
       for (
         const table of [
           "events",
@@ -1289,49 +1289,7 @@ for (const transport of ["in-process", "websocket"] as const) {
     }
   });
 }
-Deno.test("WebSocket protected effect rejects a changed terminal output", async () => {
-  const output = { token: "connected-first-secret-6582" };
-  const run = defineAction({
-    id: "connected.changed-output",
-    outputSchema: {
-      type: "object",
-      required: ["token"],
-      additionalProperties: false,
-      properties: { token: secret({ type: "string" }) },
-    } as const,
-    async execute(_input: unknown, ctx: ActionContext) {
-      await ctx.effect.begin("exchange");
-      await ctx.effect.confirmOutput("exchange", output);
-      return { token: "connected-changed-secret-1379" };
-    },
-  });
-  const f = await fixture("websocket", {
-    actions: { run },
-    ownerAdapters: { secrets: { default: await testSecretAdapter() } },
-  });
-  try {
-    const error = await assertRejects(() =>
-      f.gateway.actions.run({}, { idempotencyKey: "changed-output" })
-    );
-    assert(!String(error).includes(output.token));
-    assertEquals(
-      (await f.database.query(
-        "SELECT count(*)::int AS n FROM public.event_bodies WHERE body->'data'->>'status'='completed'",
-      )).rows[0].n,
-      0,
-    );
-    assertEquals(
-      (await f.database.query(
-        "SELECT count(*)::int AS n FROM public.owner_receipts WHERE kind='action.output.capture'",
-      )).rows[0].n,
-      1,
-    );
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("WebSocket lost protected effect confirmation response preserves one dispatch and capture", async () => {
+Deno.test("WebSocket lost safe effect confirmation response preserves one dispatch and encrypted terminal", async () => {
   let dispatches = 0;
   let seals = 0;
   let lost = false;
@@ -1347,10 +1305,10 @@ Deno.test("WebSocket lost protected effect confirmation response preserves one d
     } as const,
     async execute(_input: unknown, ctx: ActionContext) {
       const begun = await ctx.effect.begin("exchange");
-      if (begun.status === "replay") return begun.outcome;
+      if (begun.status === "replay") return output;
       assertEquals(begun.status, "proceed");
       dispatches++;
-      await ctx.effect.confirmOutput("exchange", output);
+      await ctx.effect.confirm("exchange", { reference: "accepted" });
       return output;
     },
   });
@@ -1368,7 +1326,7 @@ Deno.test("WebSocket lost protected effect confirmation response preserves one d
       },
     },
     fault: (call) =>
-      call.kind === "call" && call.path?.join(".") === "effect.confirmOutput" &&
+      call.kind === "call" && call.path?.join(".") === "effect.confirm" &&
       !lost && (lost = true),
   });
   try {
@@ -1378,7 +1336,7 @@ Deno.test("WebSocket lost protected effect confirmation response preserves one d
       .catch(() => undefined);
     assertEquals(f.dropped, 1);
     assertEquals(dispatches, 1);
-    assertEquals(seals, 1);
+    assertEquals(seals, 0);
     assertEquals(
       (await f.database.query("SELECT status FROM public.action_effects")).rows,
       [{ status: "confirmed" }],
@@ -1387,7 +1345,7 @@ Deno.test("WebSocket lost protected effect confirmation response preserves one d
       (await f.database.query(
         "SELECT count(*)::int AS n FROM public.owner_receipts WHERE kind='action.output.capture'",
       )).rows[0].n,
-      1,
+      0,
     );
     for (
       const table of [

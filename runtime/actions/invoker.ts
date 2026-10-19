@@ -1,3 +1,4 @@
+import { wrapEffectConfirmation } from "./effect-client.ts";
 import { isOwnerExecutionInterrupted } from "../execution/owner-interruption.ts";
 import { bindActionInvocationParent } from "./invocation-parent.ts";
 import {
@@ -62,7 +63,6 @@ import type {
 } from "./types.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
-const unresolvedEffectFailures = new WeakMap<object, unknown>();
 const settledActionErrors = new WeakSet<object>();
 const actionInputValidationErrors = new WeakSet<object>();
 // A composed Action alias is presentation only: Core needs the immutable
@@ -695,7 +695,8 @@ function actionCaller(
     const rawClient = invoker.createEffectClient?.(frame);
     const client = rawClient && {
       ...rawClient,
-      confirm: (
+      confirm: wrapEffectConfirmation(rawClient.confirm, (confirm) =>
+      (
         step: string,
         outcome: Parameters<ActionEffectClient["confirm"]>[1],
         callOptions?: Parameters<ActionEffectClient["confirm"]>[2],
@@ -707,8 +708,8 @@ function actionCaller(
             "Protected effect outcomes must use safe references.",
           );
         }
-        return rawClient.confirm(step, outcome, callOptions);
-      },
+        return confirm(step, outcome, callOptions);
+      }),
     };
     const pendingEffects = new Set<Promise<unknown>>();
     const pendingCapabilityCleanup = new Set<Promise<void>>();
@@ -745,11 +746,14 @@ function actionCaller(
         context,
       );
     }
-    if (authorize) {
+    {
       context = preserveCollectionInvocation(
         authorizeActionCapabilities(
           context,
-          (command, purpose) => authorize!(frame, purpose, command.transaction),
+          authorize
+            ? (command, purpose) =>
+              authorize(frame, purpose, command.transaction)
+            : undefined,
           () => {
             if (closed) {
               throw new Error("Action capability lifetime has ended.");
@@ -757,7 +761,7 @@ function actionCaller(
             frame.signal.throwIfAborted();
           },
           invocation.remember,
-          () => authorize!(frame, "result"),
+          authorize ? () => authorize(frame, "result") : undefined,
           (pending) => {
             pendingCapabilityCleanup.add(pending);
             void pending.finally(() =>
@@ -771,9 +775,6 @@ function actionCaller(
     const drainEffects = async () => {
       while (pendingEffects.size) await Promise.allSettled([...pendingEffects]);
       if (effectError) throw effectError;
-      if (unresolvedEffectFailures.has(frame)) {
-        throw unresolvedEffectFailures.get(frame);
-      }
     };
     try {
       throwIfAborted(frame.signal);
@@ -785,15 +786,9 @@ function actionCaller(
       }
       // Reconcile before re-entering user code, including effects a new deployment
       // no longer mentions. An empty current inventory cannot upgrade an old run.
-      if (client && controller) {
+      if ((!claimed || resumption) && client && controller) {
         for (const entry of await client.inventory()) {
           if (entry.status === "begun") {
-            if (entry.actionRunId) {
-              effectFailure(
-                "effect_indeterminate",
-                "An interrupted descendant Action requires reconciliation.",
-              );
-            }
             await controller.recover(entry.step);
           }
         }
@@ -808,15 +803,6 @@ function actionCaller(
       if (invocation.refusal) throw invocation.refusal;
       await progressTail;
       await drainEffects();
-      if (
-        client &&
-        (await client.inventory()).some((entry) => entry.status === "begun")
-      ) {
-        effectFailure(
-          "effect_indeterminate",
-          "An external effect has no confirmed outcome.",
-        );
-      }
       throwIfAborted(frame.signal);
       if (isActionContinuation(output)) {
         if (!action.resume) {
@@ -886,7 +872,7 @@ function actionCaller(
       await Promise.allSettled([...pendingEffects]);
       let error = effectError ?? caught;
       // A provider exception after dispatch proves neither success nor no-start.
-      // Preserve ambiguity in the terminal so ancestors cannot swallow it.
+      // Preserve ambiguity in this Action's failure terminal.
       if (client) {
         try {
           if (
@@ -900,13 +886,6 @@ function actionCaller(
         } catch (classification) {
           error = classification;
         }
-      }
-      const code = (error as { code?: unknown } | null)?.code;
-      if (
-        parent && (effectError || unresolvedEffectFailures.has(frame) ||
-          code === "effect_indeterminate" || code === "owner_commit_unknown")
-      ) {
-        unresolvedEffectFailures.set(parent, error);
       }
       const existingTerminal = captureRace
         ? await lifecycle.terminal(frame.actionRunId)
@@ -1001,11 +980,6 @@ function actionCaller(
           ? settledActionError(refusal.error)
           : refusal.error;
       }
-      const code = (error as { code?: unknown } | null)?.code;
-      if (
-        parent &&
-        (code === "effect_indeterminate" || code === "owner_commit_unknown")
-      ) unresolvedEffectFailures.set(parent, error);
       throw error;
     }
   };

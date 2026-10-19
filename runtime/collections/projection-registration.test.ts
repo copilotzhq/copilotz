@@ -1,15 +1,11 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { createFixtureCopilotz as createCopilotz } from "../runtime/testing/fixture-commands.test.ts";
-import { createCopilotzClient } from "../client/index.ts";
-import { ActionError } from "../runtime/actions/index.ts";
-import { defineCollection } from "../runtime/collections/definition.ts";
-import type { CollectionProjectionContext } from "../runtime/collections/projection-types.ts";
-import { validateCollectionProjections } from "../runtime/collections/projection-registration.ts";
-import { definePlugin } from "../runtime/plugins/index.ts";
-import { createTestDatabase } from "../runtime/testing/ominipg.ts";
-import { serverPlugin } from "../plugins/server/plugin.ts";
-import { defineServerFacade } from "../plugins/server/resources/facade/index.ts";
-import { until } from "../runtime/testing/effect-commit-proxy.ts";
+import { createCopilotzApplication } from "../application/index.ts";
+import { ActionError } from "../actions/index.ts";
+import { defineCollection } from "./definition.ts";
+import type { CollectionProjectionContext } from "./projection-types.ts";
+import { validateCollectionProjections } from "./projection-registration.ts";
+import { withOwnerCollectionInvocation } from "./policy-invocation.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
 
 const declaration = () =>
   defineCollection({
@@ -84,7 +80,7 @@ Deno.test("owner named projections share readonly snapshot, current viewer polic
   const schema = `view_projection_${crypto.randomUUID().replaceAll("-", "")}`;
   let retained: CollectionProjectionContext | undefined;
   let permitted = true;
-  const app = await createCopilotz({
+  const app = await createCopilotzApplication({
     database: db,
     databaseSchema: schema,
     namespace: "space",
@@ -141,75 +137,36 @@ Deno.test("owner named projections share readonly snapshot, current viewer polic
         },
       },
     },
-    hostCommands: {
-      seed: {
-        namespace: "space",
-        principal: "fixture",
-        authorize() {},
-        async execute(_input, context) {
-          await context.query(
-            `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('one','space','projectedEntry','original','{"value":"safe summary"}'::jsonb)`,
-          );
-          await context.query(
-            `CREATE FUNCTION "${schema}".view_attempt_write() RETURNS text LANGUAGE plpgsql AS $$ BEGIN UPDATE "${schema}".nodes SET name='changed' WHERE id='one'; RETURN 'changed'; END $$`,
-          );
-          return true;
-        },
-      },
-    },
-    plugins: [definePlugin({
-      ...serverPlugin,
-      resources: {
-        server: {
-          default: defineServerFacade({
-            expose: {
-              actions: false,
-              collections: {
-                include: ["projectedEntry"],
-                operations: { include: ["query:public", "observe"] },
-              },
-              channels: false,
-            },
-            authenticate() {
-              return {
-                namespace: "space",
-                databaseSchema: schema,
-                actor: { id: "member" },
-                context: {
-                  viewer: {
-                    kind: "session",
-                    subject: "member",
-                    expiresAt: 9999999999,
-                  },
-                },
-              };
-            },
-            authorize() {
-              return {};
-            },
-          }),
-        },
-      },
-    })],
   });
-  const command: () => Promise<unknown> = () =>
-    app.collections.entry.commands.rename({ id: "one" });
-  const client = createCopilotzClient({
-    baseUrl: "http://fixture.test/api",
-    fetch: (input, init) => app.fetch(new Request(input, init)),
-  });
-  const abort = new AbortController();
-  let observed: unknown;
-  let observationError: unknown;
-  let done: Promise<unknown> = Promise.resolve();
+  const command = () =>
+    app.collections.withScope({ namespace: "space" }).projectedEntry.commands
+      .rename({ id: "one" });
+  const read = (mode: string) =>
+    withOwnerCollectionInvocation({
+      scope: { databaseSchema: schema, namespace: "space" },
+      invocation: {
+        kind: "viewer",
+        id: "member",
+        runId: "read",
+        actor: { id: "member" },
+        claims: {},
+      },
+      signal: new AbortController().signal,
+      check() {},
+      resolveSource(): Promise<never> {
+        throw new Error("unused");
+      },
+    }, () =>
+      app.collections.readSnapshot({ namespace: "space" }, ({ collections }) =>
+        collections.projectedEntry.queries.public({ mode })));
   try {
-    await app.hostCommands.invoke("seed", null);
-    assertEquals(
-      await client.collections.query("projectedEntry", "public", {
-        mode: "read",
-      }),
-      { data: [{ summary: "safe summary" }] },
+    await db.query(
+      `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('one','space','projectedEntry','original','{"value":"safe summary"}'::jsonb)`,
     );
+    await db.query(
+      `CREATE FUNCTION "${schema}".view_attempt_write() RETURNS text LANGUAGE plpgsql AS $$ BEGIN UPDATE "${schema}".nodes SET name='changed' WHERE id='one'; RETURN 'changed'; END $$`,
+    );
+    assertEquals<unknown>(await read("read"), [{ summary: "safe summary" }]);
     await assertRejects(() => retained!.query("SELECT 1"), Error, "closed");
     for (
       const mode of [
@@ -221,35 +178,17 @@ Deno.test("owner named projections share readonly snapshot, current viewer polic
         "bad-schema",
       ]
     ) {
-      await assertRejects(() =>
-        client.collections.query("projectedEntry", "public", { mode })
-      );
+      await assertRejects(() => read(mode));
     }
     assertEquals(
       (await db.query(`SELECT name FROM "${schema}".nodes WHERE id='one'`))
         .rows,
       [{ name: "original" }],
     );
-    done = client.collections.observe("projectedEntry", {
-      queryName: "public",
-      input: { mode: "read" },
-    }, {
-      signal: abort.signal,
-      onSnapshot(value) {
-        observed = value.value;
-      },
-    }).catch((error) => {
-      observationError = error;
-    });
-    await until(() => observed || observationError, "named query snapshot");
-    if (observationError) throw observationError;
-    assertEquals(observed, [{ summary: "safe summary" }]);
     permitted = false;
-    await until(() => observationError, "named projection idle revocation");
-    assertEquals((observationError as { code: string }).code, "revoked");
+    const denied = await assertRejects(() => read("read"), ActionError);
+    assertEquals(denied.code, "forbidden");
   } finally {
-    abort.abort();
-    await done;
     await app.close();
     await db.close();
   }

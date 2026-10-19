@@ -1,5 +1,3 @@
-import { observeCollection } from "./collection-observation.ts";
-import { projectedOutputsMultipartResponse } from "./multipart.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
 /** Compiled Fetch facade over composed Copilotz primitives. @module */
@@ -274,45 +272,6 @@ export function createServerFacadeFetchHandler(
       }
       if (endpoint.kind === "collection") {
         const name = endpoint.collectionAlias!;
-        if (endpoint.operation === "observe") {
-          const template = new Request(context.serverRequest.url, {
-            method: "POST",
-            headers: context.serverRequest.headers,
-            body: JSON.stringify(request.body),
-          });
-          const observations = await observeCollection({
-            application,
-            context,
-            collection: endpoint.id,
-            selector: request.body,
-            async reauthorize(signal) {
-              const fresh = await authenticateHttpRequest(
-                new Request(template.clone(), { signal }),
-                application,
-                facade,
-                { endpoint, params: context.serverParams },
-              );
-              if (fresh instanceof Response) {
-                throw appError(
-                  fresh.status === 401 || fresh.status === 403
-                    ? fresh.status
-                    : 503,
-                  fresh.status === 401 || fresh.status === 403
-                    ? "revoked"
-                    : "auth_unavailable",
-                  "Collection observation authorization failed.",
-                );
-              }
-              return fresh;
-            },
-          });
-          return {
-            status: 200,
-            data: projectedOutputsMultipartResponse(observations, {
-              signal: context.serverSignal,
-            }),
-          };
-        }
         if (
           endpoint.operation === "create" || endpoint.operation === "update" ||
           endpoint.operation === "delete" ||

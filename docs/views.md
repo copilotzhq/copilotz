@@ -1,6 +1,6 @@
 ---
 title: "Views"
-description: "Compose authorized presentations and attach bounded owner-backed Collection observations."
+description: "Compose authorized presentations over read-only Collection data."
 section: Runtime
 order: 15
 ---
@@ -14,10 +14,10 @@ result/context while preserving the default text context.
 
 `createTextRenderer` remains a pure, one-shot text renderer. The public package
 does not include a React renderer or a browser component scheduler. A React host
-can evaluate these same View definitions over the owner-backed Collection
-observation seam below and mount the returned elements. React hooks belong in
-mounted React components, not asynchronous View functions. None of this is a
-JavaScript sandbox or an alternative worker execution runtime.
+can evaluate these same View definitions over authorized data and mount the
+returned elements. React hooks belong in mounted React components, not
+asynchronous View functions. None of this is a JavaScript sandbox or an
+alternative worker execution runtime.
 
 ```ts
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
@@ -158,51 +158,18 @@ apply to View leaves just as they do to Actions, Collections and Processors.
 See [Plugins and Processors](plugins-and-processors.md) for composition and
 [Collections](collections.md) for scoped reads.
 
-## Owner-backed live Collection selections
+## Collection subscriptions
 
-The canonical client exposes
-`client.collections.observe(name, selection,
-{signal, checkpoint?, onSnapshot})`.
-A selection is exactly one of:
+The generic live Collection observation API and its server projection extension
+were removed by decision D1 (2026-10-19). They polled and compared replacement
+snapshots; F6 §6 requires subscriptions ordered by owner sequence with
+contiguous delta coverage. Collection subscriptions will be rebuilt on owner
+push later. The client no longer exposes `collections.observe`, and the
+corresponding HTTP route is removed. Use one-shot Collection reads for current
+data.
 
-- `{id}` for a record
-- `{query}` for a bounded list window (default 100, maximum 1000 records)
-- `{queryName, input}` for a declared owner projection
-
-The HTTP route is `POST /collections/:name/observe` through the existing
-multipart protocol. It must be explicitly enabled in the Collection exposure
-operations policy, and the Collection must require an owner policy. Both
-configured authentication and authorization must succeed. A private server
-binding captures only the authenticated actor, schema, namespace and bounded
-`scope.context.viewer` claims; headers, selectors and namespace strings cannot
-mint that authority.
-
-A frame replaces the complete selected value and contains `reset`, `from?`,
-`to`, `status`, `pending:false` and an opaque checkpoint. The value and owner
-sequence are read from the same repeatable database snapshot. Sequence numbers
-belong to the schema owner, so different namespaces can interleave. A fresh
-attachment or reconnect always sends `reset:true`; this is snapshot replacement,
-not historical delta replay. The client rejects gaps in non-reset coverage and
-advances its applied checkpoint only after `onSnapshot` succeeds. No raw owner
-event payload is exposed.
-
-Owner change notifications are hints. The existing shared owner heartbeat
-repairs missed hints and rechecks current viewer authority, including idle
-membership revocation. Idle record/list checks retain the original predicate and
-probe only previously disclosed IDs; changed owner heads refresh the selected
-window. Arbitrary owner projections run again because their closed
-identity/authorization dependencies cannot be safely inferred from one owner
-head. Applications should keep these projections short and bounded.
-
-There are at most 256 observers per owner and 128 per namespace. Snapshot scans
-are serialized per owner, and hints coalesce while a scan is running.
-Cancellation removes a waiting scan. Each observer buffers one replacement
-snapshot; a slow consumer must reset instead of accumulating an unbounded
-history. These are resource bounds, not throughput guarantees. Selection input
-is limited to 16 KiB, 512 nodes and 16 levels; output to 1 MiB and 40,000 nodes.
-List cursors and relation includes are not accepted by this live-window API. Use
-a declared summary projection and explicit UI pagination for large
-records/lists.
+Operation observations and their multipart streaming remain supported, including
+payload replay, terminal ordering, revocation and bounded renewal (F6 §5).
 
 ## Host-only named projections
 
@@ -217,15 +184,12 @@ activation; worker composition rejects these host-only callbacks.
 This is the existing Collection named-query primitive. It still enters its
 ordinary `query` read/result policy. The context contains an immutable current
 `viewer`, fixed `scope`, `commandTime`, `signal`, and a revocable query-only SQL
-capability. Browser callers provide only a declared name and validated domain
-arguments, never a role or principal to trust. The callback runs only inside the
-existing database READ ONLY snapshot and cannot submit owner commands. Its SQL
-results use the existing bounded Collection transfer budget; its sanitized
-output is bounded, copied, frozen and validated before disclosure. Retained
-query handles reject calls after the callback ends.
+capability. These owner-only queries are not exposed by the HTTP facade or its
+read service. The callback runs only inside the existing database READ ONLY
+snapshot and cannot submit owner commands. Its SQL results use the existing
+bounded Collection transfer budget; its sanitized output is bounded, copied,
+frozen and validated before disclosure. Retained query handles reject calls
+after the callback ends.
 
 Projection callbacks must perform no mutations or external side effects and must
-return only explicitly whitelisted public fields. A generic raw-row HTTP
-constraint cannot authorize a projected aggregate/object; nonempty such filters
-fail closed for owner projections. Their explicit current-viewer query policy
-and callback must enforce the full projection's authorization instead.
+return only explicitly whitelisted public fields.

@@ -66,17 +66,6 @@ function binding(context: FacadeContext): Binding | undefined {
   return value;
 }
 
-export function viewerIdentity(context: FacadeContext): string {
-  const value = binding(context) ?? denied();
-  return JSON.stringify([
-    value.scope.databaseSchema,
-    value.scope.namespace,
-    value.invocation.actor.id,
-    value.invocation.actor.externalId ?? null,
-    value.invocation.claims,
-  ]);
-}
-
 /** Every call installs a fresh, revocable, read-only owner policy invocation. */
 export function withServerViewerRead<T>(
   context: FacadeContext | undefined,

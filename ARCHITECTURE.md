@@ -46,8 +46,8 @@ capabilities that contributes some combination of six primitives:
 - **Processors** react to events and implement orchestration and business logic
   by deciding which actions or mutations should happen next.
 - **Views** present authorized data for a selected mode and renderer. Hosts bind
-  read-only Collection access to the viewer; live hosts observe those
-  Collections, while the built-in text renderer is pure and one-shot.
+  read-only Collection access to the viewer. The built-in text renderer is pure
+  and one-shot.
 - **Resources** are named, immutable process-local semantic definitions consumed
   by the runtime and its plugins, such as agents, tools, models, prompts, or
   routing policies. A Resource may carry a typed policy hook when that hook is
@@ -63,10 +63,10 @@ describe how authorized data is presented**. Resources provide the configuration
 that influences those decisions, while adapters isolate the parts of an
 implementation that may vary depending on the external system being used. View
 definitions, resolution, and the pure text renderer are exported from
-`@copilotz/copilotz/views`; owner-backed read-only Collection observations are
-exposed through `client.collections.observe` from `@copilotz/copilotz/client`.
-The package does not include a React renderer or browser component scheduler.
-See [Views](docs/views.md).
+`@copilotz/copilotz/views`. Collection subscriptions await an owner-push
+implementation; operation observations remain available through the client. The
+package does not include a React renderer or browser component scheduler. See
+[Views](docs/views.md).
 
 Events connect these components without requiring them to know about one another
 directly. A collection mutation can emit lifecycle events such as created,

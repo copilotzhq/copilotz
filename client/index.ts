@@ -1,15 +1,5 @@
 /** Fetch-only client for the canonical Copilotz HTTP facade. @module */
 import {
-  type CollectionObserver,
-  createCollectionObserver,
-} from "./collection-observation.ts";
-export type {
-  CollectionObserveOptions,
-  CollectionObserveSelection,
-  CollectionSnapshot,
-} from "./collection-observation.ts";
-
-import {
   decodeObservation,
   type ObservationFrame as DecodedObservationFrame,
   ProtocolError,
@@ -313,7 +303,6 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       },
     } as const,
     collections: {
-      observe: createCollectionObserver(observe),
       get: (name: string, id: string) =>
         json(`/collections/${segment(name)}/${segment(id)}`),
       list: (name: string, query: unknown = {}) =>
@@ -426,7 +415,6 @@ export type CopilotzClient = Readonly<{
     ): Promise<string | undefined>;
   }>;
   collections: Readonly<{
-    observe: CollectionObserver;
     get(name: string, id: string): Promise<unknown>;
     list(name: string, query?: unknown): Promise<unknown>;
     query(name: string, queryName: string, input: unknown): Promise<unknown>;

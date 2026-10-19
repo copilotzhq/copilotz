@@ -1,7 +1,6 @@
 /** Scoped, bounded read capabilities; policy predicates reach SQL before pagination. */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
-import type { SnapshotCollections } from "../runtime/collections/kernel.ts";
 import type { FacadeContext } from "./context.ts";
 import { withServerViewerRead } from "./viewer-authority.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
@@ -37,15 +36,13 @@ export async function createHttpReads(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
   constraints: ServerConstraints = {},
-  host: Readonly<
-    { viewer?: FacadeContext; collections?: SnapshotCollections }
-  > = {},
+  host: Readonly<{ viewer?: FacadeContext }> = {},
 ): Promise<HttpReadServices> {
   const runtime = scope.databaseSchema &&
       scope.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(scope.databaseSchema)
     : application;
-  const collections = host.collections ?? runtime.collections.withScope({
+  const collections = runtime.collections.withScope({
     namespace: scope.namespace ?? application.config.namespace!,
   });
   const definition = (name: string) => {
@@ -115,41 +112,11 @@ export async function createHttpReads(
     async query(name, queryName, input) {
       const selected = definition(name);
       const spec = selected.schema.queries?.[queryName];
-      if (!spec) {
+      if (!spec || spec.ownerProjection) {
         throw Object.assign(new Error("Query was not found."), {
           status: 404,
           code: "query_not_found",
         });
-      }
-      if (spec.ownerProjection) {
-        // These callbacks receive query-only authority solely inside the
-        // existing repeatable READ ONLY snapshot, never an owner write command.
-        if (!host.collections) {
-          return await withServerViewerRead(
-            host.viewer,
-            () =>
-              runtime.collections.readSnapshot(
-                { namespace: scope.namespace ?? application.config.namespace! },
-                async (snapshot) =>
-                  (await createHttpReads(application, scope, constraints, {
-                    viewer: host.viewer,
-                    collections: snapshot.collections,
-                  })).query(name, queryName, input),
-              ),
-          );
-        }
-        if (selected.policy && Object.keys(selected.policy).length) {
-          throw Object.assign(
-            new Error(
-              "Owner projections require their explicit query policy; generic row filters cannot authorize projected objects.",
-            ),
-            { status: 403, code: "forbidden" },
-          );
-        }
-        return await withServerViewerRead(
-          host.viewer,
-          () => selected.collection.queries[queryName](input),
-        );
       }
       if (spec.inputSchema) {
         try {

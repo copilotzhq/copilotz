@@ -370,3 +370,40 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
     SECRET_DISCLOSURE_KEYWORDS.every((keyword) => keyword in routePassword),
   );
 });
+
+Deno.test("route compiler keeps operation observations and ordinary queries without Collection subscriptions or owner projections", () => {
+  const entry = defineCollection({
+    ...notes,
+    ownerPolicy: "required",
+    queries: {
+      ...notes.queries,
+      projected: {
+        ownerProjection: true,
+        inputSchema: { type: "object" },
+        outputSchema: { type: "array" },
+      },
+    },
+  });
+  const routes = compileServerRoutes(
+    createPluginRegistry({
+      plugins: [definePlugin({ ...fixture, collections: { entry } })],
+    }),
+    defineServerFacade({
+      expose: { collections: { operations: { include: ["*"] } } },
+    }),
+  );
+  assertEquals(routes.match("POST", "/api/collections/notes/observe"), null);
+  assertEquals(
+    routes.match("POST", "/api/collections/notes/queries/projected"),
+    null,
+  );
+  assertEquals(
+    routes.match("POST", "/api/collections/notes/queries/byLabel")?.endpoint
+      .operation,
+    "query:byLabel",
+  );
+  assertEquals(
+    routes.match("POST", "/api/operations/observe")?.endpoint.kind,
+    "operation",
+  );
+});

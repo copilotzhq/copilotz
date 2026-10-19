@@ -135,13 +135,14 @@ Deno.test({
       );
       allowed = true;
       let detached!: () => Promise<unknown>;
-      await withOwnerCommandAuthorization(guard, async () => {
+      await withOwnerCommandAuthorization(guard, () => {
         const captured = captureOwnerCommandAuthorization()!;
         detached = () =>
           withOwnerCommandAuthorization(
             captured,
             () => run("late", {}, () => {}),
           );
+        return Promise.resolve();
       });
       await assertRejects(detached, Error, "lifetime has ended");
       const first = Promise.withResolvers<void>();

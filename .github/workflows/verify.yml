@@ -118,8 +118,11 @@ jobs:
           set -euo pipefail
           if [[ "$BACKEND" == postgres ]]; then
             export COPILOTZ_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/copilotz_test
+            export COPILOTZ_OWNER_TEST_POSTGRES_URL="$COPILOTZ_TEST_POSTGRES_URL"
+            deno eval 'const { createOwnerTestDatabase } = await import("./runtime/testing/owner-database.ts"); const db = await createOwnerTestDatabase(); try { const result = await db.query("SELECT version() AS version"); if (!String(result.rows[0]?.version).startsWith("PostgreSQL ")) throw new Error("PostgreSQL backend verification failed"); console.log("Verified complete-suite backend: PostgreSQL with explicit owner admission"); } finally { await db.close(); }'
           else
-            unset COPILOTZ_TEST_POSTGRES_URL
+            unset COPILOTZ_TEST_POSTGRES_URL COPILOTZ_OWNER_TEST_POSTGRES_URL
+            echo "Selected complete-suite backend: PGlite"
           fi
           deno task test
 

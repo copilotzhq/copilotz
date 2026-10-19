@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -21,7 +22,9 @@ import {
 async function fixture(
   run: (root: string, temporary: string) => Promise<void>,
 ) {
-  const temporary = await mkdtemp(join(tmpdir(), "copilotz-suite-"));
+  const temporary = await realpath(
+    await mkdtemp(join(tmpdir(), "copilotz-suite-")),
+  );
   const root = join(temporary, "source # space");
   try {
     await mkdir(root);

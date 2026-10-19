@@ -187,23 +187,11 @@ Deno.test("collection writes atomically project their relations", async () => {
       )?.includes("owner_epochs"),
       "the fence precedes the projection",
     );
-    // Each fenced command also refreshes its durable wake. Account for that
-    // maintenance separately so the event/projection statement budget stays exact.
-    const alarmStatements = fixture.sql.statements.filter((sql) =>
-      sql.startsWith(`INSERT INTO ${fixture.store.tables.owner_alarms} `) ||
-      sql.startsWith(`DELETE FROM ${fixture.store.tables.owner_alarms} `)
-    );
-    assertEquals(
-      alarmStatements.map((sql) => sql.split(" ", 1)[0]),
-      ["INSERT", "DELETE"],
-      "the command refreshes its owner alarm once",
-    );
     return {
       statements:
         fixture.sql.statements.filter((sql) =>
           !/^\s*(SAVEPOINT|RELEASE)\b/.test(sql) &&
-          !sql.includes("SET holder=holder") &&
-          !alarmStatements.includes(sql)
+          !sql.includes("SET holder=holder")
         ).length,
       transactions: fixture.sql.transactions,
     };

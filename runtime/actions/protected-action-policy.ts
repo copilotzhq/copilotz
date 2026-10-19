@@ -84,7 +84,6 @@ export function validateProtectedActions(
       "userId",
       "tenantId",
       "workspaceId",
-      "threadId",
       "provider",
       "providerId",
       "actorId",

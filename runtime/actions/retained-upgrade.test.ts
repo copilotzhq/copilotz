@@ -166,7 +166,11 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
     }
     const upgraded =
       (await f.db.query(`SELECT * FROM ${f.tables.events} ORDER BY seq`)).rows;
-    assertEquals(upgraded.map(({ seq: _seq, ...event }) => event), history);
+    assertEquals(
+      upgraded.map(({ seq: _seq, owner_ingress: _ingress, ...event }) => event),
+      history,
+    );
+    assert(upgraded.every((event) => event.owner_ingress === null));
     assertEquals(
       upgraded.map((event) => Number(event.seq)),
       history.map((_, index) => index + 1),
@@ -465,7 +469,7 @@ Deno.test("prepared upgrade survives failed inventory and finalization, rejects 
       const mutation of [
         "upgrade_id='different-preparation'",
         "upgrade_from=5",
-        "upgrade_to=11",
+        `upgrade_to=${EVENT_SCHEMA_VERSION + 1}`,
       ]
     ) {
       await assertRejects(
@@ -487,7 +491,11 @@ Deno.test("prepared upgrade survives failed inventory and finalization, rejects 
       );
     }
     for (
-      const mutation of ["upgrade_id=NULL", "upgrade_to=11", "upgrade_from=0"]
+      const mutation of [
+        "upgrade_id=NULL",
+        `upgrade_to=${EVENT_SCHEMA_VERSION + 1}`,
+        "upgrade_from=0",
+      ]
     ) {
       await assertRejects(
         () =>

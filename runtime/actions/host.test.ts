@@ -93,7 +93,7 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     actionLifecycle: {
       append({ data }) {
         lifecycleData.push(data);
-        return Promise.resolve(undefined as never);
+        return Promise.resolve({ deduplicated: false } as never);
       },
       load: () => Promise.resolve(null),
     },
@@ -259,7 +259,7 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
       withScope: () => Object.freeze({}),
     } as unknown as CollectionRuntime,
     actionLifecycle: {
-      append: () => Promise.resolve(undefined as never),
+      append: () => Promise.resolve({ deduplicated: false } as never),
       load: () => Promise.resolve(null),
     },
     content: () =>

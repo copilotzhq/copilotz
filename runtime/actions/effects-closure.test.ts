@@ -13,7 +13,11 @@ test("emitted effect client closure includes JSON validation only, with no owner
     }).outputText;
   assert.match(sideEffectImport, /from ["']\.\/must-remain\.ts["']/);
   const root = new URL("../", import.meta.url);
-  const allowed = new Set(["actions/effect-client.ts", "json.ts"]);
+  const allowed = new Set([
+    "actions/effect-client.ts",
+    "json.ts",
+    "data-only-json.ts",
+  ]);
   const seen = new Set<string>();
   const pending = [new URL("effect-client.ts", import.meta.url)];
   while (pending.length) {

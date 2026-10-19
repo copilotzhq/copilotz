@@ -1,3 +1,4 @@
+import { testEffect } from "../../../../runtime/testing/effects.ts";
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createPluginRegistry } from "@copilotz/copilotz/plugins";
 import { defineMcp, type McpRuntimeConnection } from "../../index.ts";
@@ -37,6 +38,7 @@ Deno.test("one awaited MCP resource discovers once and reuses configuration acro
       {},
       {
         adapters: first.adapters,
+        effect: testEffect,
         signal: new AbortController().signal,
       } as never,
     ),

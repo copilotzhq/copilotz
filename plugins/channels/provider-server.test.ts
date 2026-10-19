@@ -225,13 +225,11 @@ Deno.test("signed WhatsApp server ingress persists no credentials and never retr
     engine: {
       retryBaseMs: 0,
       random: () => 0,
-      execution: {
-        scheduler: {
-          schedule(callback) {
-            return callback;
-          },
-          cancel() {},
+      alarmScheduler: {
+        schedule(callback) {
+          return callback;
         },
+        cancel() {},
       },
     },
   });

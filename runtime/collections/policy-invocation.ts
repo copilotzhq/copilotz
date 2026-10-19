@@ -36,13 +36,15 @@ export type CollectionInvocationAuthority =
   }>;
 type Binding = CollectionInvocationAuthority & { root: object; close(): void };
 type CallScope = { authority: Binding; active: boolean };
-const calls = createAsyncContextStorage<CallScope | undefined>();
+const calls = /* @__PURE__ */ createAsyncContextStorage<
+  CallScope | undefined
+>();
 const contexts = new WeakMap<object, Binding>();
 const commandAuthorities = new WeakMap<
   CollectionInvocationAuthority,
   CollectionInvocationAuthority
 >();
-const trustedReads = createAsyncContextStorage<
+const trustedReads = /* @__PURE__ */ createAsyncContextStorage<
   { active: boolean } | undefined
 >();
 function closed(): never {

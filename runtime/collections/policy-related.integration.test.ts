@@ -132,10 +132,17 @@ Deno.test("unprotected root reads recheck every protected related disclosure aft
       const read = bounded(app.actions.read(method), `${method} disclosure`);
       void read.catch(() => undefined);
       await bounded(opened.promise, `${method} hydration gate`);
-      // Queue revocation while hydration holds the owner, before its fresh gate.
-      const revoked = app.hostCommands.invoke("grant", { allowed: false });
+      // Commit the policy authority change before releasing hydration. Calling
+      // host ingress without awaiting admission races its asynchronous capture.
+      const revoked = db.query(`UPDATE "${schema}".grants SET allowed=false`);
+      if (!Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+        // PGlite serializes writes behind the active read transaction. Queue
+        // revocation first,
+        // then release selection so it can commit before the current-state check.
+        proceed.resolve();
+      }
+      await bounded(revoked, `${method} revocation`);
       proceed.resolve();
-      await revoked;
       await assertActionForbidden(() => read);
     }
   } finally {

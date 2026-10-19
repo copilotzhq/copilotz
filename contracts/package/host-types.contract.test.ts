@@ -125,7 +125,9 @@ async function hostTypes() {
   empty.actions.saveNote;
   const options: CreateCopilotzOptions = { plugins: [plugin] };
   const dynamic = await createCopilotz(options);
+  // @ts-expect-error Widened options do not declare arbitrary Collection aliases.
   await dynamic.collections.anyAlias.create({ dynamic: true });
+  // @ts-expect-error Widened options do not declare arbitrary Action aliases.
   await dynamic.actions.anyAlias({ dynamic: true });
   return {
     direct,

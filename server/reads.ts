@@ -42,6 +42,24 @@ export async function createHttpReads(
     return { collection: collections[entry[1].name], schema: entry[1] };
   };
   const read: HttpReadServices = {
+    async observe(name, query = {}, options = {}) {
+      const { schema } = definition(name);
+      const alias = Object.keys(application.plugins.collections).find((key) =>
+        application.plugins.collections[key] === schema
+      )!;
+      if (!scope.authority) {
+        throw Object.assign(new Error("Retained authority is required."), {
+          code: "forbidden",
+          status: 403,
+        });
+      }
+      return await runtime.observeCollection(
+        scope.authority,
+        alias,
+        query,
+        options,
+      );
+    },
     async get(name, id, options) {
       return (await read.list(name, { where: { id }, limit: 1 }, options))[0] ??
         null;

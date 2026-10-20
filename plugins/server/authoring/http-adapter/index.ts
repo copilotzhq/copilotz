@@ -4,7 +4,9 @@ import type {
   CollectionAggregateRow,
   CollectionQuery,
   CollectionRecord,
+  CollectionSubscription,
   ScopedCollectionReadOptions,
+  SubscriptionOptions,
 } from "@copilotz/copilotz/collections";
 import type {
   ServerAuthorizedScope,
@@ -13,6 +15,13 @@ import type {
 } from "../../shared/contracts.ts";
 
 export type HttpReadServices = Readonly<{
+  observe(
+    collection: string,
+    query?: CollectionQuery,
+    options?: SubscriptionOptions,
+  ): Promise<
+    CollectionSubscription
+  >;
   get(
     collection: string,
     id: string,

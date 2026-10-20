@@ -224,6 +224,30 @@ export function createHostServices(
         schema: definition.schema,
         relations: definition.relations,
       },
+      async observe(query = {}, options = {}) {
+        const authority = options.authority ??
+          captureCollectionInvocation()?.authority;
+        if (!authority) {
+          throw Object.assign(
+            new Error("Subscription requires retained authority."),
+            { code: "forbidden" },
+          );
+        }
+        const boundary = scope(options);
+        if (
+          authority.scope.namespace !== boundary.namespace ||
+          authority.scope.databaseSchema !== boundary.databaseSchema
+        ) throw new TypeError("Subscription authority scope mismatch.");
+        const runtime = await application().databaseScope(
+          boundary.databaseSchema,
+        );
+        return await runtime.observeCollection(
+          authority,
+          alias,
+          query,
+          options,
+        );
+      },
       async get(input: { id: string }, options: ApplicationReadOptions = {}) {
         return await (await collection(alias, options)).get(input, options);
       },

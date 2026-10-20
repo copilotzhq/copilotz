@@ -446,7 +446,13 @@ export function createSharedOperationReaders(
             }
             // A final no-progress pass includes lanes/events racing settlement.
             if (!advanced && !lanes.size) {
-              terminal = terminalOutput(status);
+              terminal = {
+                ...terminalOutput(status),
+                seq: await runtime.operations.resultSequence(
+                  input.namespace,
+                  input.operationId,
+                ),
+              } as ApplicationOutput;
               for (const subscriber of [...subscribers]) {
                 subscriber.output(terminal);
                 subscriber.finish();

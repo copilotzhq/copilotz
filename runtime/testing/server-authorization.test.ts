@@ -148,6 +148,10 @@ function fixtureOptions<
                 endpoint: facts.endpoint,
                 intent,
                 read: {
+                  observe: () =>
+                    Promise.reject(
+                      new Error("Policy sources cannot subscribe"),
+                    ),
                   get: read.get,
                   list: read.list,
                   aggregate: () =>

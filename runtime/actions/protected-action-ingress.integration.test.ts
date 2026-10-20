@@ -116,7 +116,7 @@ Deno.test("owner Action admission inserts trusted fields, retains first capture 
     const receipt = await client.actions.submit(action.id, { label: "one" }, {
       idempotencyKey: "one",
     });
-    assertEquals(await client.operations.result(receipt.operationId), {
+    assertEquals((await client.operations.result(receipt.operationId)).value, {
       ok: true,
     });
     assertEquals(uses, 1);

@@ -115,6 +115,9 @@ function closedAttachment(
 
 function testRead(): HttpReadServices {
   return {
+    observe() {
+      throw new Error("unused");
+    },
     get(collection, id) {
       return Promise.resolve(
         collection === "thread"

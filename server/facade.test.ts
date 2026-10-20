@@ -311,7 +311,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
       input,
       { idempotencyKey: "secret" },
     );
-    assertEquals(await client.operations.result(first.operationId), {
+    assertEquals((await client.operations.result(first.operationId)).value, {
       ok: true,
       sessionToken: SECRET_OUTPUT,
     });
@@ -404,14 +404,15 @@ Deno.test("HTTP Action results hydrate nested output content without changing du
       {},
       { idempotencyKey: "content-output-result" },
     );
-    const result = await client.operations.result(receipt.operationId) as {
-      nested: {
-        text: ContentRef & { value?: unknown };
-        json: ContentRef & { value?: unknown };
+    const result = (await client.operations.result(receipt.operationId))
+      .value as {
+        nested: {
+          text: ContentRef & { value?: unknown };
+          json: ContentRef & { value?: unknown };
+        };
+        unresolved: ContentRef & { value?: unknown; resolve?: boolean };
+        binary: ContentRef & { value?: unknown };
       };
-      unresolved: ContentRef & { value?: unknown; resolve?: boolean };
-      binary: ContentRef & { value?: unknown };
-    };
     assertEquals(result.nested.text.value, "resolved action text");
     assertEquals(result.nested.json.value, { answer: 42 });
     assertEquals(result.unresolved.value, undefined);
@@ -785,7 +786,8 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
         gateway.fetch(new Request(url, init))) as typeof fetch,
     });
     assertEquals(
-      await client.operations.result((await response.json()).data.operationId),
+      (await client.operations.result((await response.json()).data.operationId))
+        .value,
       { echoed: "gateway" },
     );
     const legacy = await gateway.fetch(
@@ -834,7 +836,8 @@ Deno.test("the embedded application serves the composed facade", async () => {
         application.fetch(new Request(url, init))) as typeof fetch,
     });
     assertEquals(
-      await client.operations.result((await response.json()).data.operationId),
+      (await client.operations.result((await response.json()).data.operationId))
+        .value,
       { echoed: "embedded" },
     );
     const unserved = await bare.fetch(
@@ -903,9 +906,9 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
     const created = await client.collections.create("serverNotes", {
       label: "allowed",
     }, { idempotencyKey: "create-1" });
-    const createdResult = await client.operations.result(
+    const createdResult = (await client.operations.result(
       created.operationId,
-    ) as { id: string; label: string };
+    )).value as { id: string; label: string };
     assertEquals(createdResult.label, "allowed");
     const createdStatus = (await client.operations.get(created.operationId) as {
       data?: { metadata?: Record<string, unknown> };
@@ -930,9 +933,9 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
       { label: "renamed" },
       { idempotencyKey: "rename-1" },
     );
-    const renamedResult = await client.operations.result(
+    const renamedResult = (await client.operations.result(
       renamed.operationId,
-    ) as { id: string; label: string };
+    )).value as { id: string; label: string };
     assertEquals(renamedResult.label, "renamed");
     const replay = await client.collections.command(
       "serverNotes",
@@ -1060,7 +1063,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
       { namespace: "atlas", set: { teamProfileId: "profile-1" } },
       { idempotencyKey: "thread-command-1" },
     );
-    await client.operations.result(receipt.operationId);
+    (await client.operations.result(receipt.operationId)).value;
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
@@ -1434,7 +1437,10 @@ Deno.test("F4 cancellation reauthorizes in the owner command after its HTTP meta
     };
     assert(["accepted", "running"].includes(status.data.state));
     gate.resolve();
-    assertEquals(await client.operations.result(receipt.operationId), "done");
+    assertEquals(
+      (await client.operations.result(receipt.operationId)).value,
+      "done",
+    );
   } finally {
     gate.resolve();
     await application.close();

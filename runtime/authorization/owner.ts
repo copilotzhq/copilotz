@@ -27,6 +27,8 @@ import {
 import { type AuthenticatedAuthority, retainedAuthority } from "./authority.ts";
 
 export type AuthorityObservation = Readonly<{
+  /** Cached gate for Collection push; notices fence it before queued policy work. */
+  current(): boolean;
   publish<T>(send: () => Promise<T>): Promise<T>;
   close(): void;
 }>;
@@ -44,11 +46,16 @@ export type AuthorizationOwner = Readonly<{
     authority: AuthenticatedAuthority,
     input: Readonly<
       {
+        collection?: string;
+        query?: import("../collections/types.ts").CollectionQuery;
         record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
       }
     >,
     failed: (error: unknown) => void,
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void,
   ): Promise<AuthorityObservation>;
   notice(change: { namespace: string; collection?: string; id?: string }): void;
   asset(authority: AuthenticatedAuthority, id: string): Promise<void>;
@@ -96,9 +103,18 @@ export function createAuthorizationOwner(
     id: string;
     authority: AuthenticatedAuthority;
     intent: AuthorizationIntent;
+    selection: {
+      collection?: string;
+      record?: Readonly<{ collection: string; id: string }>;
+      operationIds?: readonly string[];
+    };
     dependencies: readonly AuthorityDependency[];
     generation: number;
     active: boolean;
+    pending: number;
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void;
     failed(reason: unknown): void;
   };
   const channels = new Map<string, Channel>();
@@ -140,11 +156,15 @@ export function createAuthorizationOwner(
     if (!evaluate) authorizationRefused();
     const decision = await evaluate(channel.authority, channel.intent, command);
     channel.authority = decision.authority;
-    const input = channel.intent.input as {
-      record?: Readonly<{ collection: string; id: string }>;
-      operationIds?: readonly string[];
-    };
+    const input = channel.selection;
     const dependencies = [...decision.dependencies];
+    if (input.collection) {
+      const definition = options.collections[input.collection];
+      if (
+        !definition || !(decision.constraints.collections?.[input.collection] ??
+          decision.constraints.collections?.[definition.name])
+      ) authorizationRefused();
+    }
     if (input.record) {
       const definition = options.collections[input.record.collection];
       const filter =
@@ -197,29 +217,48 @@ export function createAuthorizationOwner(
     value: AuthenticatedAuthority,
     input: Readonly<
       {
+        collection?: string;
+        query?: import("../collections/types.ts").CollectionQuery;
         record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
       }
     >,
     failed: (error: unknown) => void,
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void,
   ) => {
     const authority = retainedAuthority(value);
     const channel: Channel = {
       id: crypto.randomUUID(),
       authority,
+      selection: input,
       intent: {
-        kind: "observation",
-        resource: input.record?.id ?? "operations",
-        operation: "attach",
-        input,
+        kind: input.collection ? "collection" : "observation",
+        resource: input.collection ?? input.record?.id ?? "operations",
+        operation: input.collection ? "list" : "attach",
+        input: input.collection
+          ? {
+            collection: {
+              alias: input.collection,
+              name: options.collections[input.collection]?.name ??
+                input.collection,
+            },
+            method: "list",
+            phase: "read",
+            args: input.query ?? {},
+          }
+          : input,
       },
       dependencies: [],
       generation: 0,
       active: true,
+      pending: 0,
+      changed,
       failed,
     };
     await run("authorization.attach", {}, async (_, command) => {
-      await checkObservation(channel, command);
+      const decision = await checkObservation(channel, command);
       await command.transaction.query(
         `INSERT INTO ${channelTable}(id,namespace,tenant,authority,dependencies,owner_epoch) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,
         [
@@ -243,9 +282,14 @@ export function createAuthorizationOwner(
       }
       afterSqlCommit(command.transaction, () => {
         channels.set(channel.id, channel);
+        channel.changed?.(decision);
       });
     });
     return {
+      current() {
+        check(channel);
+        return channel.pending === 0;
+      },
       async publish<T>(send: () => Promise<T>): Promise<T> {
         const delivered = Promise.withResolvers<T>();
         void delivered.promise.catch(() => undefined);
@@ -320,15 +364,20 @@ export function createAuthorizationOwner(
         )
       ) continue;
       channel.generation++;
+      channel.pending++;
       void run(
         "authorization.reauthorize",
         { id: channel.id },
         async (_, command) => {
-          await checkObservation(channel, command);
+          const decision = await checkObservation(channel, command);
           await command.transaction.query(
             `UPDATE ${channelTable} SET dependencies=$2::jsonb WHERE id=$1`,
             [channel.id, JSON.stringify(channel.dependencies)],
           );
+          afterSqlCommit(command.transaction, () => {
+            channel.pending--;
+            channel.changed?.(decision);
+          });
         },
       ).catch(() => close(channel, revoked()));
     }

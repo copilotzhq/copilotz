@@ -1,4 +1,23 @@
-/** Fetch-only client for the canonical Copilotz HTTP facade. @module */
+import {
+  createLiveQuery,
+  type LiveQuery,
+  type LiveQueryOptions,
+  type OperationResult,
+  type SubscriptionTransport,
+} from "./live-query.ts";
+import type { CollectionQuery } from "../runtime/collections/types.ts";
+export type {
+  LiveQuery,
+  LiveQueryOptions,
+  OperationResult,
+  SubscriptionTransport,
+} from "./live-query.ts";
+export type {
+  CollectionSubscription,
+  SubscriptionDelta,
+  SubscriptionFrame,
+} from "../runtime/subscriptions/types.ts";
+/** HTTP client with owner-backed live Collection queries. @module */
 import {
   decodeObservation,
   type ObservationFrame as DecodedObservationFrame,
@@ -49,6 +68,7 @@ export type ObserveOptions = Readonly<{
 }>;
 export type ClientOptions = Readonly<{
   baseUrl: string;
+  device?: SubscriptionTransport;
   getRequestHeaders?: () => HeadersInit | Promise<HeadersInit>;
   fetch?: typeof globalThis.fetch;
 }>;
@@ -273,11 +293,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   const result = async (
     operationId: string,
     signal?: AbortSignal,
-  ): Promise<unknown> => {
+  ): Promise<OperationResult> => {
     const path = `/operations/${segment(operationId)}/result`;
     for (;;) {
       const response = await request(path, { signal });
-      if (response.status !== 202) return (await response.json()).data;
+      if (response.status !== 202) {
+        const envelope = await response.json();
+        if (
+          typeof envelope.seq !== "string" ||
+          !/^(0|[1-9][0-9]*)$/.test(envelope.seq)
+        ) throw new ProtocolError("Operation result has no owner sequence.");
+        return { value: envelope.data, seq: envelope.seq };
+      }
       await pause(100, signal);
     }
   };
@@ -289,7 +316,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         submit(actionPath(id), input, options),
       async invoke(id: string, input: unknown, options: SubmitOptions) {
         const receipt = await submit(actionPath(id), input, options);
-        return await result(receipt.operationId, options.signal);
+        return (await result(receipt.operationId, options.signal)).value;
       },
     } as const,
     channels: {
@@ -313,6 +340,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       },
     } as const,
     collections: {
+      observe: (
+        name: string,
+        query: CollectionQuery = {},
+        observation: LiveQueryOptions = {},
+      ) => {
+        if (!options.device) {
+          throw new Error(
+            "An authenticated device subscription transport is required.",
+          );
+        }
+        return createLiveQuery(options.device, name, query, observation);
+      },
       get: (name: string, id: string) =>
         json(`/collections/${segment(name)}/${segment(id)}`),
       list: (name: string, query: unknown = {}) =>
@@ -329,7 +368,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       submit: submitCollectionMutation,
       async invoke(mutation: CollectionMutation, options: SubmitOptions) {
         const receipt = await submitCollectionMutation(mutation, options);
-        return await result(receipt.operationId, options.signal);
+        return (await result(receipt.operationId, options.signal)).value;
       },
       create: (name: string, input: unknown, options: SubmitOptions) =>
         submitCollectionMutation({ operation: "create", name, input }, options),
@@ -418,13 +457,18 @@ export type CopilotzClient = Readonly<{
   }>;
   operations: Readonly<{
     get(id: string): Promise<unknown>;
-    result(id: string, signal?: AbortSignal): Promise<unknown>;
+    result(id: string, signal?: AbortSignal): Promise<OperationResult>;
     cancel(id: string): Promise<unknown>;
     observe(
       options: ObserveOptions & { operationIds: readonly string[] },
     ): Promise<string | undefined>;
   }>;
   collections: Readonly<{
+    observe(
+      name: string,
+      query?: CollectionQuery,
+      options?: LiveQueryOptions,
+    ): LiveQuery;
     get(name: string, id: string): Promise<unknown>;
     list(name: string, query?: unknown): Promise<unknown>;
     query(name: string, queryName: string, input: unknown): Promise<unknown>;

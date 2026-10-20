@@ -160,7 +160,7 @@ Deno.test({
       });
       assertEquals(collected, [...bytes]);
       assertEquals(
-        await reconnect.operations.result(receipt.operationId),
+        (await reconnect.operations.result(receipt.operationId)).value,
         "complete",
       );
       assertEquals(executions, 1);

@@ -87,3 +87,10 @@ export type {
   CollectionPredicate,
   CollectionPredicateValue,
 } from "./predicate.ts";
+
+export type {
+  CollectionSubscription,
+  SubscriptionDelta,
+  SubscriptionFrame,
+  SubscriptionOptions,
+} from "../subscriptions/types.ts";

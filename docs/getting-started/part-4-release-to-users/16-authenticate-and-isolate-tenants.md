@@ -430,7 +430,7 @@ export const serverScenarios = {
         text: "Mine.",
       }, { idempotencyKey: "auth-1" });
       assert.equal(
-        noteOf(await ada.operations.result(receipt.operationId)).text,
+        noteOf((await ada.operations.result(receipt.operationId)).value).text,
         "Mine.",
       );
     }),
@@ -443,7 +443,7 @@ export const serverScenarios = {
         text: "Plan the launch.",
       }, { idempotencyKey: "own-1" });
       assert.equal(
-        noteOf(await ada.operations.result(receipt.operationId)).text,
+        noteOf((await ada.operations.result(receipt.operationId)).value).text,
         "Plan the launch.",
       );
     }),
@@ -460,8 +460,8 @@ export const serverScenarios = {
       }, { idempotencyKey: "retry-1" });
       assert.equal(retry.operationId, first.operationId);
       assert.equal(
-        noteOf(await ada.operations.result(retry.operationId)).id,
-        noteOf(await ada.operations.result(first.operationId)).id,
+        noteOf((await ada.operations.result(retry.operationId)).value).id,
+        noteOf((await ada.operations.result(first.operationId)).value).id,
       );
       assert.equal(
         await rejectedStatus(() =>
@@ -527,7 +527,7 @@ export const serverScenarios = {
       );
       // Ada still owns an intact result.
       assert.equal(
-        noteOf(await ada.operations.result(receipt.operationId)).text,
+        noteOf((await ada.operations.result(receipt.operationId)).value).text,
         "Ada's draft.",
       );
     }),
@@ -550,7 +550,7 @@ export const serverScenarios = {
         text: "Allowed.",
       }, { idempotencyKey: "deny-1" });
       assert.equal(
-        noteOf(await ada.operations.result(receipt.operationId)).text,
+        noteOf((await ada.operations.result(receipt.operationId)).value).text,
         "Allowed.",
       );
     }),
@@ -578,7 +578,7 @@ export const serverScenarios = {
       // The operation lives in Ada's trusted tenant, not the requested one.
       const ada = clientFor(app, "token-ada");
       assert.equal(
-        noteOf(await ada.operations.result(operationId)).text,
+        noteOf((await ada.operations.result(operationId)).value).text,
         "Where am I?",
       );
       assert.equal(

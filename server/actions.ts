@@ -131,5 +131,13 @@ export async function operationResult(
       ? {}
       : { headers: { "cache-control": "no-store" } }),
     data: result.value,
+    ...(!result.pending
+      ? {
+        seq: await runtime.operations.resultSequence(
+          context.namespace ?? application.config.namespace!,
+          operationId,
+        ),
+      }
+      : {}),
   };
 }

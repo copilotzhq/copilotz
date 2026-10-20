@@ -936,7 +936,7 @@ Deno.test({
       // A read refusal does not rewrite the receipt or authorize new admission.
       assertEquals(await reopened.gateway.operationStatus(scope), status);
       assertEquals(
-        await client.operations.result(originalRoot),
+        (await client.operations.result(originalRoot)).value,
         "accepted:original",
       );
       const originalReceipt = await f.submit(reopened, "original");

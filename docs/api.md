@@ -330,8 +330,9 @@ isolation. The host configures both, as shown in
 [Authenticate and isolate tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md).
 See [HTTP server and browser client](server.md).
 
-Over HTTP, `client.operations.result` and `client.actions.invoke` return the
-target Action's output once that Action is ready. They do not wait for
+Over HTTP, `client.operations.result` returns `{ value, seq }`, containing the
+target Action's output and owner sequence. `client.actions.invoke` returns the
+value directly. Both resolve once that Action is ready. They do not wait for
 descendant work or an agent reply: `sendConversation` returns
 `{ threadId, message }` once the message is stored, which can happen before the
 model produces output. Observe the terminal operation state when you need full
@@ -373,3 +374,23 @@ settlement apart from domain or model success.
 - [Events, deliveries and recovery](events-deliveries-recovery.md)
 - [HTTP server and browser client](server.md)
 - [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
+
+### Collection subscriptions
+
+See [Subscriptions](./subscriptions.md) for lifecycle and limits.
+
+| Surface                                              | Contract                                                                                                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.collections[name].observe(query?, options?)`    | Authorized async `frames` and `detach()`. Options include retained `authority`, scope, `checkpoint`, `signal`.                                              |
+| `context.read.observe(name, query?, options?)`       | Same owner subscription, using the adapter's admitted authority.                                                                                            |
+| `createCopilotzClient({ baseUrl, device })`          | Supplies the authenticated device's `observe` transport. WebSocket binding is a separate integration dependency in this branch.                             |
+| `client.collections.observe(name, query?, options?)` | Live handle: `rows`, `deltas`, `sequence`, `checkpoint`, `optimisticLayers`, `done`, `optimistic(id, value, result)`, `reconnect()`, `close()`.             |
+| `client.operations.result(id, signal?)`              | `{ value, seq }`, where `seq` is an owner sequence string. HTTP result responses carry `{ data, seq }`; pending results do not carry a settlement sequence. |
+
+Data frames are `snapshot { rows, sequence, complete: true, checkpoint }` or
+`batch { from, to, changes, checkpoint }`. Each change has `seq`, `id`, and
+`record` (null means removal). The query supplies the membership sort direction;
+deltas are ordered by sequence then record id. Control frames are
+`reset { reason }` and `revoked { reason }`; they do not advance an applied
+checkpoint. These contracts are exported by `./collections`, `./application`,
+and `./client`.

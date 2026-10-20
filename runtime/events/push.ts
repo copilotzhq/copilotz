@@ -21,6 +21,14 @@ export type OwnerChange = Readonly<{
   streamId?: string;
   committedOffset?: number;
   event?: DurableEvent;
+  /** Prepared Collection body, captured before commit; never read per subscriber. */
+  collectionChange?: Readonly<
+    {
+      collection: string;
+      id: string;
+      record: import("../collections/types.ts").CollectionRecord | null;
+    }
+  >;
 }>;
 export type OwnerPushFrame =
   | Readonly<

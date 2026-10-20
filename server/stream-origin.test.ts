@@ -120,7 +120,10 @@ Deno.test("replay retains a stream's source Action context when invocation prece
         frame.kind === "output" && frame.output.id === invocation.id
       ),
     );
-    assertEquals(await client.operations.result(receipt.operationId), "done");
+    assertEquals(
+      (await client.operations.result(receipt.operationId)).value,
+      "done",
+    );
   } finally {
     release();
     await application.close();

@@ -282,9 +282,10 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       new TextDecoder().decode(new Uint8Array(collected)),
       "Hello 🌎",
     );
-    const result = await client.operations.result(receipt.operationId) as {
-      threadId: string;
-    };
+    const result = (await client.operations.result(receipt.operationId))
+      .value as {
+        threadId: string;
+      };
     const page = await core.threads.messages(result.threadId);
     assertEquals(page.data.length, 2);
     assertEquals(page.data[0].sender.id, "person");

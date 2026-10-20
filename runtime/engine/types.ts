@@ -172,6 +172,7 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
 
 export type CopilotzEngineDatabaseScope = Readonly<{
   authorization: import("../authorization/owner.ts").AuthorizationOwner;
+  observeCollection: import("../subscriptions/types.ts").CollectionObserver;
   databaseSchema: string;
   content: Readonly<{
     assets: DatabaseAssetRepository;
@@ -210,6 +211,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
 
 export type CopilotzEngine = Readonly<{
   authorization: import("../authorization/owner.ts").AuthorizationOwner;
+  observeCollection: import("../subscriptions/types.ts").CollectionObserver;
   databaseSchema: string;
   operations: OperationCatalog;
   databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;

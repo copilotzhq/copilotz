@@ -151,13 +151,15 @@ Large or binary content belongs in Assets; see
 
 ### Results and observation
 
-`client.operations.result(id)` returns the target Action's output once that
-Action and its own streams are complete. It does not wait for descendant work:
-for a Core `sendConversation`, it returns `{ threadId, message }` possibly
-before any model output, and the enclosing operation may still fail later. When
-you need full completion, observe the operation until a terminal status and
-handle semantic failures such as `llm.call.failed` yourself.
-`client.actions.invoke` is submit plus `result`, with the same boundary.
+`client.operations.result(id)` returns `{ value, seq }` once the target Action
+and its own streams are complete. `value` is the Action output and `seq` is the
+owner sequence used for optimistic subscription settlement. It does not wait for
+descendant work: for a Core `sendConversation`, its `value` contains
+`{ threadId, message }` possibly before any model output, and the enclosing
+operation may still fail later. When you need full completion, observe the
+operation until a terminal status and handle semantic failures such as
+`llm.call.failed` yourself. `client.actions.invoke` returns the Action value
+with the same completion boundary.
 
 Action submissions still return `202` receipts. A failed Action's result read
 returns `422` with an `error` body containing code `action_failed` and message

@@ -1,3 +1,6 @@
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 "use client";
 
 import * as React from "react";

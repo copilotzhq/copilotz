@@ -1,3 +1,7 @@
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
@@ -12,7 +16,10 @@ import {
   type BrowserRuntime,
   createBrowserRuntime,
 } from "@copilotz/copilotz/web";
-import { coreWebPlugin } from "@copilotz/copilotz/core/web";
+import {
+  coreWebPlugin,
+  messageReadSelection,
+} from "@copilotz/copilotz/core/web";
 import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
 import { usageWebPlugin } from "@copilotz/copilotz/usage/web";
 import { uiWebPlugin, workspaceNavigation } from "@copilotz/copilotz/ui/web";
@@ -29,17 +36,7 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
   ) =>
     live.publish({
       collection,
-      ...(collection === "message"
-        ? {
-          content: {
-            fields: ["content"],
-            byteLimit: 262144,
-            exclude: [{ kind: "image" }, { kind: "audio" }, { kind: "video" }, {
-              kind: "file",
-            }, { kind: "json" }],
-          },
-        }
-        : {}),
+      ...(collection === "message" ? messageReadSelection : {}),
       ...(query ? { query } : {}),
       ...(id ? { id } : {}),
     }, {
@@ -49,8 +46,8 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
       sequence: "1",
       checkpoint: "1",
     });
-  publish("thread", undefined, [{ id: "t", title: "A conversation" }], "t");
-  publish("thread", { limit: 100 }, [{ id: "t", title: "A conversation" }]);
+  publish("thread", undefined, [{ id: "t", name: "A conversation" }], "t");
+  publish("thread", { limit: 100 }, [{ id: "t", name: "A conversation" }]);
   publish("message", { where: { threadId: "t" }, limit: 100 }, [{
     id: "m",
     content: [{
@@ -79,6 +76,8 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
       const [shows, value, expected] of [
         ["thread", { id: "t" }, "Hello <strong>reader</strong>"],
         ["admin", null, "Administration"],
+        ["thread", { id: "t" }, "A conversation"],
+        [{ list: "thread" }, null, "A conversation"],
         ["usage", null, "123"],
       ] as const
     ) {

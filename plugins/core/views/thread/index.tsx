@@ -1,14 +1,14 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { useState } from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
   Button,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
+  ConfirmAction,
   ReadStatus,
   Screen,
   Textarea,
@@ -66,64 +66,36 @@ function Revise(
 function ClearConversation(
   { threadId, ctx }: { threadId: string; ctx: BrowserViewContext },
 ) {
-  const [open, setOpen] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost">Clear messages</Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Clear this conversation?</DialogTitle>
-        </DialogHeader>
-        <p>This removes the messages in this conversation.</p>
-        {error && <p role="alert">{error}</p>}
-        <Button
-          variant="destructive"
-          disabled={busy}
-          onClick={() => {
-            setBusy(true);
-            setError("");
-            ctx.actions.deleteMessages({ threadId }).result().then(
-              () => setOpen(false),
-              (cause) => setError(String(cause)),
-            ).finally(() => setBusy(false));
-          }}
-        >
-          {busy ? "Clearing…" : "Clear messages"}
-        </Button>
-      </DialogContent>
-    </Dialog>
+    <ConfirmAction
+      trigger={<Button type="button" variant="ghost">Clear messages</Button>}
+      title="Clear this conversation?"
+      description="This removes the messages in this conversation."
+      confirmLabel="Clear messages"
+      destructive
+      onConfirm={async () => {
+        await ctx.actions.deleteMessages({ threadId }).result();
+        return true;
+      }}
+    />
   );
 }
-export default defineView<{ id: string }, React.ReactNode, BrowserViewContext>({
+
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  { id: string },
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<{ id: string }, React.ReactNode, BrowserViewContext>({
   id: "core.thread",
   shows: "thread",
   renderer: "react",
   modes: ["full", "panel"],
   render({ id }, ctx) {
     const thread = ctx.collections.thread.get(id);
-    const messages = ctx.collections.message.list({
-      where: { threadId: id },
-      limit: 100,
-    }, {
-      content: {
-        fields: ["content"],
-        byteLimit: 262144,
-        exclude: [
-          { kind: "image" },
-          { kind: "audio" },
-          { kind: "video" },
-          { kind: "file" },
-          { kind: "json" },
-        ],
-      },
-    });
+    const messages = readThreadMessages(ctx, id);
     return (
       <Screen
-        title={String(thread.value?.title ?? "Conversation")}
+        title={String(thread.value?.name ?? "Conversation")}
         density={ctx.hints.mode}
         actions={<ClearConversation threadId={id} ctx={ctx} />}
       >
@@ -153,3 +125,7 @@ export default defineView<{ id: string }, React.ReactNode, BrowserViewContext>({
     );
   },
 });
+
+import { readThreadMessages } from "../reads.ts";
+
+export default view;

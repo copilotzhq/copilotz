@@ -1,4 +1,8 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { useState } from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
@@ -15,7 +19,7 @@ import {
   Screen,
 } from "@copilotz/copilotz/web/kit";
 function CreateConversation({ ctx }: { ctx: BrowserViewContext }) {
-  const [open, setOpen] = useState(false), [title, setTitle] = useState("");
+  const [open, setOpen] = useState(false), [name, setName] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -36,14 +40,13 @@ function CreateConversation({ ctx }: { ctx: BrowserViewContext }) {
             setError("");
             ctx.actions.createThread({
               id,
-              title,
-              metadata: { name: title },
+              name,
               participants: ctx.resources.chat?.sender
                 ? [ctx.resources.chat.sender]
                 : [],
             }).result().then(() => {
               setOpen(false);
-              setTitle("");
+              setName("");
               ctx.show({ shows: "thread", value: { id } }, {
                 source: "navigator",
               });
@@ -54,12 +57,12 @@ function CreateConversation({ ctx }: { ctx: BrowserViewContext }) {
         >
           <Input
             aria-label="Conversation title"
-            value={title}
+            value={name}
             onChange={(event) =>
-              setTitle((event.target as unknown as { value: string }).value)}
+              setName((event.target as unknown as { value: string }).value)}
           />
           {error && <p role="alert">{error}</p>}
-          <Button disabled={busy || !title.trim()}>
+          <Button disabled={busy || !name.trim()}>
             {busy ? "Creating…" : "Create"}
           </Button>
         </form>
@@ -67,7 +70,11 @@ function CreateConversation({ ctx }: { ctx: BrowserViewContext }) {
     </Dialog>
   );
 }
-export default defineView<unknown, React.ReactNode, BrowserViewContext>({
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  unknown,
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<unknown, React.ReactNode, BrowserViewContext>({
   id: "core.threads",
   shows: { list: "thread" },
   renderer: "react",
@@ -83,7 +90,7 @@ export default defineView<unknown, React.ReactNode, BrowserViewContext>({
         <ReadStatus state={threads} />
         <ResourceTable
           rows={threads.value}
-          columns={["title", "updatedAt"]}
+          columns={["name", "updatedAt"]}
           open={(row) =>
             ctx.show({ shows: "thread", value: { id: row.id } }, {
               source: "navigator",
@@ -93,3 +100,5 @@ export default defineView<unknown, React.ReactNode, BrowserViewContext>({
     );
   },
 });
+
+export default view;

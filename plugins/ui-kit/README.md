@@ -9,3 +9,14 @@ Process `styles.css` with Tailwind CSS 4 and `@tailwindcss/typography`. Add the
 app's own source path to Tailwind scanning. React and React DOM must resolve to
 one copy in the host bundle (19.1.1 in this repository). Core entry points
 import none of it.
+
+Additional shared components: Tabs and DropdownMenu families, Field,
+NativeSelect, Checkbox, Notice, EmptyState, CopyField, ConfirmAction, Frame,
+PaneBoundary and showSafely. See `docs/web-runtime-and-views.md` for composition
+and callback contracts.
+
+TSX sources carry explicit React runtime imports and JSX pragmas, so hosts need
+no JSX compiler override. The npm source package exports
+`@copilotz/copilotz/web/kit/styles.css`. JSR includes the CSS asset in its
+archive but its publisher cannot export CSS modules; see the web runtime
+documentation for asset setup and the npm/JSR packaging distinction.

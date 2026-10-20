@@ -1,8 +1,16 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { ReadStatus, ResourceTable, Screen } from "@copilotz/copilotz/web/kit";
-export default defineView<
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  { collection: string; columns?: string[] },
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<
   { collection: string; columns?: string[] },
   React.ReactNode,
   BrowserViewContext
@@ -25,3 +33,5 @@ export default defineView<
     );
   },
 });
+
+export default view;

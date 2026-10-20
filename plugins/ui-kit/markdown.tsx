@@ -1,4 +1,8 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 /** Raw HTML is discarded; code remains text. No raw-HTML or arbitrary plugins. */

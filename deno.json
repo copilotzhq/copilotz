@@ -201,13 +201,17 @@
     "tailwindcss": "npm:tailwindcss@4.1.12",
     "@tailwindcss/typography": "npm:@tailwindcss/typography@0.5.16",
     "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12",
-    "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts"
+    "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts",
+    "@radix-ui/react-tabs": "npm:@radix-ui/react-tabs@1.1.13",
+    "@radix-ui/react-dropdown-menu": "npm:@radix-ui/react-dropdown-menu@2.1.16"
   },
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": [
       "jsr:@oxian/ominipg",
-      "jsr:@oxian/oxian-js"
+      "jsr:@oxian/oxian-js",
+      "npm:@jsr/oxian__ominipg",
+      "npm:@jsr/oxian__oxian-js"
     ]
   },
   "tasks": {
@@ -242,5 +246,6 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "react"
-  }
+  },
+  "nodeModulesDir": "none"
 }

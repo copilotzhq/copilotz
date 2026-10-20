@@ -1,4 +1,8 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
@@ -30,7 +34,7 @@ const sections: Record<
   participants: {
     action: "adminParticipants",
     title: "Participants",
-    columns: ["id", "name", "participantType"],
+    columns: ["id", "displayName", "participantType"],
   },
   usage: {
     action: "adminUsage",
@@ -38,7 +42,11 @@ const sections: Record<
     columns: ["model", "totalTokens", "totalCostUsd"],
   },
 };
-export default defineView<
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  { section: string; query?: Record<string, string> },
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<
   { section: string; query?: Record<string, string> },
   React.ReactNode,
   BrowserViewContext
@@ -93,6 +101,18 @@ export default defineView<
           : (
             <ResourceTable
               rows={rows}
+              open={section === "agents" || section === "participants" ||
+                  section === "threads"
+                ? (row) =>
+                  ctx.show({
+                    shows: section === "agents"
+                      ? "agent"
+                      : section === "participants"
+                      ? "participant"
+                      : "thread",
+                    value: { id: row.id },
+                  }, { source: "link" })
+                : undefined}
               columns={section === "usage"
                 ? [
                   "dimensions",
@@ -108,3 +128,5 @@ export default defineView<
     );
   },
 });
+
+export default view;

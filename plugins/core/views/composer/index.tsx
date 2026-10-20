@@ -7,6 +7,7 @@ import { useState } from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { ActionHandle, BrowserViewContext } from "@copilotz/copilotz/web";
 import { Button, ConfirmAction, Textarea } from "@copilotz/copilotz/web/kit";
+import { monotonicUlid } from "../../../../dependencies/ulid.ts";
 function Composer(
   { threadId, text, ctx }: {
     threadId: string;
@@ -22,7 +23,8 @@ function Composer(
     event.preventDefault();
     if (!text.trim() || active) return;
     const handle = ctx.actions.sendMessage({
-      id: crypto.randomUUID(),
+      // Time-ordered, so message ids sort in the order they were written.
+      id: monotonicUlid(),
       threadId,
       sender,
       content: [{ type: "text", text }],

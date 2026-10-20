@@ -1,6 +1,10 @@
 import { retainedAuthority } from "../runtime/authorization/authority.ts";
 import { attachDeviceSocket } from "./device.ts";
-import type { DeviceSocket } from "../runtime/subscriptions/device.ts";
+import {
+  type DeviceUpgrade,
+  hostedDeviceUpgrade,
+  trackHostedDeviceSocket,
+} from "../runtime/subscriptions/hosting.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
@@ -35,9 +39,7 @@ import { collectionMutationResponse } from "./mutations.ts";
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
   /** Host WebSocket upgrade; mounts the authenticated device binding at /device. */
-  upgradeDevice?: (
-    request: Request,
-  ) => { socket: DeviceSocket; response: Response; requestDeadline?: number };
+  upgradeDevice?: DeviceUpgrade;
   admit?: () => void | Promise<void>;
   responseHeaders?: Readonly<Record<string, string>>;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
@@ -594,15 +596,24 @@ export function createServerFacadeFetchHandler(
   });
   const handler: HttpFetchHandler = async (request) => {
     if (
-      new URL(request.url).pathname !== `${facade.basePath}/device` ||
-      !options.upgradeDevice
+      new URL(request.url).pathname !== `${facade.basePath}/device`
     ) return fetch(request);
+    const upgradeDevice = options.upgradeDevice ?? hostedDeviceUpgrade(request);
+    if (!upgradeDevice) return fetch(request);
+    if (
+      request.method !== "GET" ||
+      request.headers.get("upgrade")?.toLowerCase() !== "websocket"
+    ) {
+      return new Response("WebSocket upgrade required", { status: 426 });
+    }
     await options.admit?.();
+    request.signal.throwIfAborted();
     const requestHeaders = new Headers(request.headers),
       requestUrl = request.url;
-    const { socket, response, requestDeadline } = options.upgradeDevice(
+    const { socket, response, requestDeadline } = upgradeDevice(
       request,
     );
+    trackHostedDeviceSocket(request, socket);
     attachDeviceSocket(socket, {
       requestDeadline,
       async authenticate(credentials) {

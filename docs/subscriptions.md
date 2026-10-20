@@ -51,25 +51,51 @@ const device = createDeviceTransport({
 // On device teardown: device.close();
 ```
 
-The server uses the existing facade authentication and Collection exposure:
+Compose the server facade as usual, then use the public hosting adapter. Both
+Deno and Node mount `/api/device` automatically (or `<basePath>/device` when the
+facade sets `basePath`), alongside HTTP routes and worker sockets:
 
 ```ts
-const handler = createServerFacadeFetchHandler(application, {
-  upgradeDevice: (request) => Deno.upgradeWebSocket(request),
+import { createCopilotz } from "@copilotz/copilotz";
+import { listen } from "@copilotz/copilotz/adapters/deno";
+// Node: import { listen } from "@copilotz/copilotz/adapters/node";
+
+const app = await createCopilotz({
+  // Your plugins, resources.server.default, authorization and database options.
 });
-Deno.serve(handler);
+const listener = await listen(app, { port: 8000 });
+// await app.close() closes its listeners too.
 ```
 
-The host supplies the WebSocket upgrade, keeping the binding portable. A host
-with a request deadline may return `requestDeadline` (epoch milliseconds)
-alongside `socket` and `response`; the binding renews the connection one second
-before it. `attachDeviceSocket(socket, { authenticate })` is the lower-level
-binding for hosts with their own session admission. An open socket
-reauthenticates explicitly; changing an HTTP cookie alone does not change a
-channel's authority. Each channel renews after five minutes, fences late output
-by generation and resumes from its applied checkpoint. Fifteen-second heartbeats
-expose channel heads and repair a lost final push. Transport buffers and logical
-fragment reassembly are bounded.
+For a custom Fetch host, both embedded and gateway factory options accept
+`upgradeDevice`. It takes the original Request and returns `socket`, `response`
+and an optional `requestDeadline` (epoch milliseconds):
+
+```ts
+const app = await createCopilotz({
+  // Your server facade and application options.
+  upgradeDevice: (request) => ({
+    ...Deno.upgradeWebSocket(request),
+    requestDeadline: Date.now() + 60_000,
+  }),
+});
+Deno.serve(app.fetch);
+```
+
+An explicit upgrade takes precedence over the adapter default and must suit the
+native host. The existing facade still owns session authentication, Collection
+exposure, admission and revocation. The binding renews one second before a
+supplied request deadline. Deno completes recovery admission before upgrading.
+With Oxian 0.22's synchronous Node upgrade decision, the native handshake can
+complete first; device messages remain bounded and held until recovery admission
+succeeds. Worker paths remain reserved for worker admission; configure them
+separately from `/api/device`.
+
+An open socket reauthenticates explicitly; changing an HTTP cookie alone does
+not change a channel's authority. Each channel renews after five minutes, fences
+late output by generation and resumes from its applied checkpoint.
+Fifteen-second heartbeats expose channel heads and repair a lost final push.
+Transport buffers and logical fragment reassembly are bounded.
 
 ```ts
 const client = createCopilotzClient({ baseUrl: "/api", device });

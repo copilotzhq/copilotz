@@ -1,3 +1,5 @@
+import type { DeviceSocket } from "../../subscriptions/device.ts";
+import { provideDeviceUpgrade } from "../../subscriptions/hosting.ts";
 import {
   attachOwnedListenerSync,
   ownedHypervisor,
@@ -33,11 +35,50 @@ export function listen(
   options: ListenCopilotzOptions = {},
 ): HypervisorListener {
   const hypervisor = ownedHypervisor(gateway) ?? gateway.hypervisor;
+  const sockets = new Set<DeviceSocket>();
+  let stopping = false;
+  const stopDevices = () => {
+    stopping = true;
+    for (const socket of sockets) socket.close(1000, "Listener shutdown");
+    sockets.clear();
+  };
+  const prepareDevice = (request: Request) => {
+    provideDeviceUpgrade(request, () => Deno.upgradeWebSocket, (socket) => {
+      if (stopping) {
+        socket.close(1000, "Listener shutdown");
+        throw new Error("Listener is closed");
+      }
+      sockets.add(socket);
+      socket.addEventListener("close", () => sockets.delete(socket), {
+        once: true,
+      });
+    });
+  };
+  const own = (listener: HypervisorListener): HypervisorListener => {
+    options.signal?.addEventListener("abort", stopDevices, { once: true });
+    const cleanup = () => {
+      stopDevices();
+      options.signal?.removeEventListener("abort", stopDevices);
+    };
+    void listener.finished.then(cleanup, cleanup);
+    return attachOwnedListenerSync(gateway, {
+      ...listener,
+      shutdown() {
+        stopDevices();
+        return listener.shutdown();
+      },
+    });
+  };
   if (hypervisor) {
-    return attachOwnedListenerSync(
-      gateway,
+    return own(
       serve({
-        hypervisor,
+        hypervisor: {
+          ...hypervisor,
+          prepare(request) {
+            prepareDevice(request);
+            return hypervisor.prepare(request);
+          },
+        },
         hostname: options.hostname,
         port: options.port,
         signal: options.signal,
@@ -55,7 +96,10 @@ export function listen(
     port,
     signal: options.signal,
     onListen() {},
-  }, gateway.fetch);
+  }, (request) => {
+    prepareDevice(request);
+    return gateway.fetch!(request);
+  });
   if (server.addr.transport !== "tcp") {
     throw new TypeError("Copilotz Gateway listener requires a TCP address.");
   }
@@ -65,11 +109,11 @@ export function listen(
     shutdownTask = server.shutdown().catch(() => undefined);
     return shutdownTask;
   };
-  return ({
+  return own({
     hostname: server.addr.hostname,
     port: server.addr.port,
     url: listenerUrl(server.addr.hostname, server.addr.port),
     finished: server.finished,
     shutdown,
-  } as const);
+  });
 }

@@ -1,3 +1,4 @@
+import type { DeviceUpgrade } from "./runtime/subscriptions/hosting.ts";
 import {
   type CopilotzShard,
   createCopilotzShard,
@@ -19,10 +20,19 @@ import type { CopilotzApplication } from "./runtime/application/types.ts";
 import type { RegistryComposition } from "./runtime/plugins/index.ts";
 import type { InternalCopilotzGateway } from "./runtime/application/gateway.ts";
 
-type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
+type DeviceHostingOptions = Readonly<{
+  /** Custom host upgrade; listen() supplies a runtime default when omitted. */
+  upgradeDevice?: DeviceUpgrade;
+}>;
+
+type EmbeddedOptions =
+  & RuntimeEmbeddedOptions
+  & DeviceHostingOptions
+  & Readonly<{ role?: "embedded" }>;
 
 type GatewayOptions =
   & RuntimeGatewayOptions
+  & DeviceHostingOptions
   & Readonly<{
     role: "gateway";
   }>;
@@ -83,10 +93,12 @@ type WorkerFactoryResult = Readonly<{
 /** The `/api` facade when `serverPlugin` is composed; otherwise 404. */
 function serverFetch(
   gateway: Pick<InternalCopilotzGateway, "application" | "admit">,
+  upgradeDevice?: DeviceUpgrade,
 ): (request: Request) => Promise<Response> {
   return gateway.application.plugins.resources.server?.default
     ? createServerFacadeFetchHandler(gateway.application, {
       admit: gateway.admit,
+      upgradeDevice,
     })
     : (_request: Request) =>
       Promise.resolve(new Response(null, { status: 404 }));
@@ -126,7 +138,7 @@ export async function createCopilotz(
     } = options;
     const gateway = await createGateway(gatewayOptions);
     try {
-      const fetch = serverFetch(gateway);
+      const fetch = serverFetch(gateway, options.upgradeDevice);
       gateway.installFetchFallback(fetch);
       return withOwnedHosting(
         {
@@ -157,6 +169,6 @@ export async function createCopilotz(
   return await createEmbeddedCopilotz(
     embeddedOptions,
     embeddedOptions.databaseLifecycle,
-    (gateway) => serverFetch(gateway),
+    (gateway) => serverFetch(gateway, embeddedOptions.upgradeDevice),
   );
 }

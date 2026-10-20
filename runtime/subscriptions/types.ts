@@ -26,15 +26,27 @@ export type SubscriptionFrame =
       from: string;
       to: string;
       changes: readonly SubscriptionDelta[];
+      /** A mutation of this Collection, including outside the selected window. */
+      collectionChanged?: boolean;
     }
   >
   | Readonly<{ t: "reset"; reason: string }>
   | Readonly<{ t: "revoked"; reason: string }>;
 export type SubscriptionOptions = Readonly<
-  { checkpoint?: string; signal?: AbortSignal }
+  {
+    checkpoint?: string;
+    signal?: AbortSignal;
+    content?: import("../collections/read-options.ts").CollectionContentOptions;
+  }
 >;
 export type CollectionSubscription = Readonly<{
   frames: AsyncIterable<SubscriptionFrame>;
+  /** Acknowledge only after the consumer has atomically applied the output. */
+  applied?(checkpoint: string): void;
+  /** False once a transport generation has been fenced, including in-flight handlers. */
+  isActive?(): boolean;
+  /** Owner publication gate; may pause while a permission notice is evaluated. */
+  canPublish?(): boolean;
   detach(): void;
 }>;
 export type CollectionObserver = (

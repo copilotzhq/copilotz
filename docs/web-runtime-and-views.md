@@ -22,7 +22,7 @@ import { uiWebPlugin, workspaceNavigation } from "@copilotz/copilotz/ui/web";
 // Ports are bound to this authenticated session by the host.
 const runtime = await createBrowserRuntime({
   plugins: [coreWebPlugin, adminWebPlugin, usageWebPlugin, uiWebPlugin()],
-  live: liveReadPort,
+  live: device,
   actions: actionTransport,
   renderer: reactRenderer,
   show: workspaceNavigation(() => runtime),
@@ -31,12 +31,14 @@ const mounted = runtime.mount(element, { shows: "workspace", value: null });
 // Later: mounted.dispose(); runtime.dispose();
 ```
 
-`LiveReadPort` and `ActionTransport` are small integration contracts, not a new
-server protocol. The subscription track supplies the real live transport. For
-embedded use and deterministic tests, `/web` exports `MemoryLiveReads`. No
-polling or chat projection/reconciliation engine is included. An Action
-transport resolves only on terminal success with `{ value, seq }`, and reports
-its accepted operation ID separately so cancellation targets that exact
+`live` accepts the SDK's `SubscriptionTransport`; use `createDeviceTransport`
+from `/client` for authenticated WebSocket reads (see
+[Subscriptions](./subscriptions.md)). Each client Collection consumes
+`createLiveQuery`, including its applied checkpoint and optimistic settlement.
+The old `LiveReadPort`, `LiveFrame` and `MemoryLiveReads` have been removed.
+Tests supply canonical subscription frames through the same transport contract.
+An Action transport resolves only on terminal success with `{ value, seq }`, and
+reports its accepted operation ID separately so cancellation targets that exact
 operation.
 
 ## Authoring Views
@@ -82,11 +84,12 @@ browser-safe leaves and server Action contracts, never server execute closures.
 ## Live reads and optimism
 
 Reads expose `value`, `status` and `pending`. Status is loading, ready, missing,
-stale or denied. A live port delivers an atomic snapshot with owner sequence and
-checkpoint, then ordered contiguous `(from,to]` deltas. Upserts include order
-keys; removals discard lost membership. The server owns authorization,
-projection and limited-window refill. Only applied batches advance the
-checkpoint. Revocation clears readable values, including optimistic overlays.
+stale or denied. The SDK receives an atomic snapshot with owner sequence and
+checkpoint, then ordered contiguous `(from,to]` batches. Deltas carry owner seq
+and record id; records reconstruct the authorized id-ordered window. The server
+owns authorization, projection and limited-window refill. Only applied batches
+advance the checkpoint. Revocation clears readable values, including optimistic
+overlays.
 
 An Action's `optimistic` declaration names a Collection, pure command and
 record-ID selector. Each invocation has its own layer. Failure removes only that
@@ -97,8 +100,10 @@ never settlement.
 
 Query Actions declare `query: { reads: [collectionNames] }`. Views call
 `ctx.readAction(alias, input)`. Results are shared by input, invalidated by live
-progress on declared Collections, and fenced against late responses. Admin Views
-use the existing admin Actions this way; they have no independent fetch effects.
+Collection mutations (including outside the subscribed window), and fenced
+against late responses. Empty owner progress settles optimism without restarting
+a query Action, so its own result cannot cause a refresh loop. Admin Views use
+the existing admin Actions this way; they have no independent fetch effects.
 
 The single bounded diagnostic event log exposes local changes, live deltas,
 Action transitions and `app.started`. Processors receive live changes, never
@@ -140,14 +145,15 @@ The old external packages are read-only migration inputs, not dependencies of
 the new Views. Host-specific media/voice and attachment ingestion still require
 host capabilities; no old projection engine is copied into the browser runtime.
 
-Chat opts into the existing Collection content read contract for text bodies, with
-an aggregate 256 KiB limit. Non-text assets remain explicit references. The live
-port must honor the read's `content` selection as well as authorization; snapshots
-and deltas carry resolved text entries (`kind: "text", value: string`).
+Chat opts into the existing Collection content read contract for text bodies,
+with an aggregate 256 KiB limit. Non-text assets remain explicit references. The
+live port must honor the read's `content` selection as well as authorization;
+snapshots and deltas carry resolved text entries
+(`kind: "text", value: string`).
 
 Run `deno task build:web-css` to compile the first-party kit and View styles to
 `dist/web.css` for a host to include.
 
-Host-selected browser capabilities can be injected through `adapters` and read as
-`ctx.adapters.namespace.alias`. The host grants these ports explicitly; the core
-neither imports UI libraries nor obtains browser capabilities on its own.
+Host-selected browser capabilities can be injected through `adapters` and read
+as `ctx.adapters.namespace.alias`. The host grants these ports explicitly; the
+core neither imports UI libraries nor obtains browser capabilities on its own.

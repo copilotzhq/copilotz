@@ -1,3 +1,6 @@
+import { createResolvedCollectionReader } from "../collections/resolved-read.ts";
+import type { ContentResolver } from "../content/resolver.ts";
+import { withRetainedAuthority } from "../authorization/binding.ts";
 import type {
   AuthorityObservation,
   AuthorizationOwner,
@@ -69,6 +72,7 @@ export function createCollectionObserver(options: {
   owner: DatabaseOwner;
   authorization: AuthorizationOwner;
   collections: Readonly<Record<string, CollectionDefinition>>;
+  contentResolver?: ContentResolver;
   maxFrames?: number;
   maxBytes?: number;
   retentionMs?: number;
@@ -210,6 +214,7 @@ export function createCollectionObserver(options: {
       basis: authority.authorityBasis,
       alias,
       query,
+      content: observation.content,
       schema: definition.schema,
       name: definition.name,
     });
@@ -247,6 +252,50 @@ export function createCollectionObserver(options: {
         reader.wake?.();
       },
     };
+    const resolveRows = createResolvedCollectionReader(
+      (rows: readonly CollectionRecord[]) => Promise.resolve(rows),
+      definition,
+      authority.scope.namespace,
+      options.contentResolver,
+    );
+    const project = async (
+      frame: SubscriptionFrame,
+    ): Promise<SubscriptionFrame> => {
+      if (
+        !observation.content || frame.t === "reset" || frame.t === "revoked"
+      ) return structuredClone(frame);
+      return await withRetainedAuthority(
+        authority,
+        observation.signal ?? options.owner.signal,
+        async () => {
+          const rows = frame.t === "snapshot"
+            ? frame.rows
+            : frame.changes.flatMap((change) =>
+              change.record ? [change.record] : []
+            );
+          const resolved = await resolveRows(rows, {
+            content: observation.content,
+            signal: observation.signal,
+          });
+          if (frame.t === "snapshot") {
+            return {
+              ...frame,
+              rows: resolved as readonly CollectionRecord[],
+            };
+          }
+          let index = 0;
+          return {
+            ...frame,
+            changes: frame.changes.map((change) => ({
+              ...change,
+              record: change.record
+                ? resolved[index++] as CollectionRecord
+                : null,
+            })),
+          };
+        },
+      );
+    };
     let consuming = false;
     const frames: AsyncIterable<SubscriptionFrame> = {
       async *[Symbol.asyncIterator]() {
@@ -264,9 +313,15 @@ export function createCollectionObserver(options: {
                 reader.ready && reader.authorization?.current() &&
                 reader.queue.length
               ) {
-                const frame = reader.queue.shift()!;
+                const frame = reader.queue[0];
+                const projected = await project(frame);
+                if (
+                  reader.closed || reader.queue[0] !== frame ||
+                  !reader.authorization.current()
+                ) continue;
+                reader.queue.shift();
                 reader.bytes -= bytes(frame);
-                yield structuredClone(frame);
+                yield projected;
                 continue;
               }
             } catch (error) {
@@ -289,6 +344,9 @@ export function createCollectionObserver(options: {
       },
     };
     try {
+      if (observation.content) {
+        await resolveRows([], { content: observation.content });
+      }
       await run("subscription.attach", {}, async (_, command) => {
         observation.signal?.throwIfAborted();
         command.afterCommit(() => {
@@ -474,6 +532,7 @@ export function createCollectionObserver(options: {
                   from,
                   to: item.seq,
                   changes: selection.changes,
+                  collectionChanged: change?.collection === definition.name,
                 });
               }
             },
@@ -516,6 +575,18 @@ export function createCollectionObserver(options: {
       once: true,
     });
     if (observation.signal?.aborted) reader.detach();
-    return { frames, detach: reader.detach } satisfies CollectionSubscription;
+    return {
+      frames,
+      detach: reader.detach,
+      isActive: () => !reader.closed,
+      canPublish() {
+        if (reader.closed || !reader.ready) return false;
+        try {
+          return Boolean(reader.authorization?.current());
+        } catch {
+          return false;
+        }
+      },
+    } satisfies CollectionSubscription;
   };
 }

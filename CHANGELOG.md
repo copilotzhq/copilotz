@@ -52,6 +52,8 @@ connection. There is no alternate runtime or compatibility mode.
 - Owner export and import bundles (`scripts/owner-bundle.ts`) move one owner's
   schema, bodies and re-wrapped key to another database.
 - Views are the sixth plugin primitive.
+- `createDatabaseStaffSource` builds a staff source for a directory Collection
+  in the same database; its reads run inside the evaluating command.
 
 ### Fixed
 
@@ -62,6 +64,8 @@ connection. There is no alternate runtime or compatibility mode.
   cancellation and purge timestamps.
 - Concurrent dispatches of one delivery share a single handle even when the
   first finishes before the second has read the delivery.
+- Staff directory reads receive the evaluating command's transaction, so a
+  same-database directory no longer deadlocks single-connection backends.
 
 ### Removed
 

@@ -65,13 +65,16 @@ sources: [{
 }];
 ```
 
-`directoryStaffReads` is a trusted host-bound capability with `get(id, signal)`
-and `list(query, signal)`. Bind it to fresh read commands on the declared
-directory owner, namespace and Collection; do not use a cache or a tenant role
-reader. It receives no tenant command authority. The source cannot shadow a
-local Collection alias. The policy must check the staff principal, target tenant
-and requested operation against the returned grant. Declaring or reading a
-source alone grants nothing.
+`directoryStaffReads` is a trusted host-bound capability with
+`get(id, signal, transaction)` and `list(query, signal, transaction)`.
+`transaction` is the evaluating command's transaction. A directory in the same
+database reads through it, read-only; on a single-connection backend such as
+PGlite it must, because a second transaction cannot start. A directory in
+another database issues its own fresh read to that owner. Either way the read is
+fresh for this command; never use a cache or a tenant role reader. It receives
+no tenant command authority. The source cannot shadow a local Collection alias.
+The policy must check the staff principal, target tenant and requested operation
+against the returned grant. Declaring or reading a source alone grants nothing.
 
 Every command reads the directory again. Repeated reads of the same source and
 query within that command retain the first result, so it finishes under the

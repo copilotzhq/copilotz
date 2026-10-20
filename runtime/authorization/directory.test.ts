@@ -314,3 +314,112 @@ Deno.test("F4 declared directory staff reads are fresh per command, fail closed 
     await directoryDb.close();
   }
 });
+
+Deno.test("F4 staff reads of a same-database directory run inside the evaluating command", async () => {
+  // PGlite has one connection: a second directory transaction would deadlock.
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const id = crypto.randomUUID().replaceAll("-", "");
+  const schema = `staff_same_target_${id}`;
+  const directorySchema = `staff_same_directory_${id}`;
+  await provisionCopilotzSchema(db, schema);
+  await provisionCopilotzSchema(db, directorySchema);
+  const owner = await openDatabaseOwner(db, schema);
+  const run = createSchemaCommandRunner(db, schema);
+  const directoryTables = createCoreTableNames(directorySchema);
+  const grants = defineCollection({
+    name: "staff_grant",
+    schema: { type: "object" },
+  });
+  await db.query(
+    `INSERT INTO "${directorySchema}".nodes(id,namespace,type,name,data) VALUES('member','directory','staff_grant','member',$1::jsonb)`,
+    [JSON.stringify({ allowed: true })],
+  );
+  const source: StaffAuthorizationSource = {
+    kind: "platform-staff",
+    alias: "staff",
+    owner: "directory-owner",
+    namespace: "directory",
+    collection: grants.name,
+    read: {
+      get: (id, signal, transaction) => {
+        signal.throwIfAborted();
+        return loadCollectionRecord(
+          transaction,
+          directoryTables,
+          "directory",
+          grants.name,
+          id,
+        );
+      },
+      list: (query, signal, transaction) => {
+        signal.throwIfAborted();
+        return queryCollectionRecords(
+          transaction,
+          directoryTables,
+          grants,
+          "directory",
+          query,
+        );
+      },
+    },
+  };
+  const registration: OwnerAuthorization = {
+    policies: {
+      fixture: {
+        revision: "1",
+        sources: [source],
+        async evaluate({ read, authority }) {
+          const grant = await read.get("staff", authority.principal.id);
+          if (!grant?.allowed) authorizationRefused();
+          return { sessions: { create: true } };
+        },
+      },
+    },
+    collections: {},
+    actions: {},
+  };
+  const evaluate = createOwnerEvaluator({
+    registration: captureOwnerAuthorization(registration, {}, {})!,
+    collections: {},
+    databaseSchema: schema,
+  });
+  const authority = testAuthority(schema, "space", "member");
+  const intent = {
+    kind: "session" as const,
+    resource: "requested-session",
+    operation: "create",
+    input: null,
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const decision = await Promise.race([
+      run(
+        "staff.same",
+        {},
+        (_, context) => evaluate(authority, intent, context),
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("staff read deadlocked")),
+          10_000,
+        );
+      }),
+    ]);
+    assert(decision.constraints.sessions?.create);
+    assertEquals(
+      (await db.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM "${schema}".owner_receipts WHERE kind='authorization.staff'`,
+      )).rows[0].n,
+      1,
+    );
+  } finally {
+    clearTimeout(timer);
+    releaseDatabaseOwner(owner);
+    owner.stop();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.query(`DROP SCHEMA "${directorySchema}" CASCADE`);
+    await db.close();
+  }
+});

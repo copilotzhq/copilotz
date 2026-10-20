@@ -20,12 +20,23 @@ export type StaffAuthorizationSource = Readonly<{
   owner: string;
   namespace: string;
   collection: string;
-  /** Host-bound capability: issue fresh read commands to this directory owner. */
+  /**
+   * Host-bound capability for fresh directory reads. `transaction` is the
+   * evaluating command's transaction: a directory in the same database reads
+   * through it, read-only, and must on a single-connection backend, where a
+   * second transaction cannot start. A directory elsewhere issues its own
+   * fresh read to that owner.
+   */
   read: Readonly<{
-    get(id: string, signal: AbortSignal): Promise<CollectionRecord | null>;
+    get(
+      id: string,
+      signal: AbortSignal,
+      transaction: SqlExecutor,
+    ): Promise<CollectionRecord | null>;
     list(
       query: CollectionQuery,
       signal: AbortSignal,
+      transaction: SqlExecutor,
     ): Promise<readonly CollectionRecord[]>;
   }>;
 }>;
@@ -81,10 +92,15 @@ export function readStaffSource(
     result = withoutOwnerCommandAuthorization(() =>
       withoutCollectionPolicyInvocation(async () => {
         const value = "id" in captured
-          ? await source.read.get(captured.id, command.signal)
+          ? await source.read.get(
+            captured.id,
+            command.signal,
+            command.transaction,
+          )
           : await source.read.list(
             captured.query as CollectionQuery,
             command.signal,
+            command.transaction,
           );
         command.signal.throwIfAborted();
         return captureHostCommandJson(value) as DirectoryResult;

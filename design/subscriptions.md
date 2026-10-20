@@ -145,3 +145,60 @@ Query Action invalidation distinguishes a Collection mutation from empty owner
 progress. Batches carry `collectionChanged` even when the limited projection is
 unchanged; query Actions refresh on that signal, while their own result/receipt
 progress only advances optimistic settlement. This prevents feedback loops.
+
+## LIVE follow-up: browser integration
+
+Baseline: `client/index.ts:295` validates decimal terminal seq, but `/web` has
+no SDK Action binding. `client/web/runtime.ts:640` reads real rows for
+query-Action dependencies and collapses all failures to denied; `:745` inherits
+navigation hints; `:872` tracks a mounted tree as one read. `:466` saves every
+command. `client/web/storage.ts:22` has no navigation restore notification.
+
+Add `createBrowserPorts(client)` using the SDK's shared subscription capability
+and operation submit/observe/result/cancel path. Decode terminal seq to bigint
+without a zero fallback; canonical SDK settlement remains decimal-string based.
+Returned `{ok:false,error}` values reject with structured ActionFailure details.
+Add progressOnly subscription selection to the same owner/device/SDK path: empty
+snapshots/deltas, Collection mutation signal, no record scan or bodies, normal
+authorization, checkpoints, resume and revocation. Selection identity includes
+this mode. Query reads expose optional structured errors and refresh; keep
+existing status/value/pending and ctx signatures source compatible.
+
+Add an optional renderer `view(output,key)` boundary. React binds each nested
+View to its own tracked observation. Reconcile children by call position and
+View kind, compare immutable props/hints, release removed children. Only reads
+whose visible value/status/pending changed notify; child reads do not subscribe
+parents. Other renderers retain the existing whole-output contract until they
+implement boundaries. Explicit hints apply only to the requested View.
+
+Batch stored Collection saves once per browser Action, including async commands;
+mutations remain immediate and failures persist already-applied changes. Storage
+adapters may subscribe to external changes; the URL adapter binds popstate via
+an injected event target. Restore validates rows, notifies tracked reads, never
+writes back, and fences older loads and queued saves. Add restoreStorage for
+manual host refresh. Test overlapping Actions and stale async restores.
+
+Operation streams/agent lanes are deferred in this pass. Proposed API:
+`ctx.readOperation(id)` returns tracked {outputs, streams, status, error,
+refresh} and an ActionHandle exposes its accepted operationId. A shared
+per-operation subscription owns `client.operations.observe`, applies output
+descriptors and stream chunks atomically before checkpoint advancement, and
+exposes bounded stream handles (offset, terminal, incremental read) instead of
+accumulating unbounded text. Lane identity must come from existing admitted
+output descriptors (`runtime/streams/observation.ts:28`: streamId, role and
+metadata, including application-declared lane/source; operation identity comes
+from admission), never inferred from chunk timing or View order. Agent-lane
+selection should resolve authorized operations through an explicit host
+capability; there is no general browser lane selector in the current SDK.
+Cancellation remains operation-scoped. Disposal aborts observation; reconnect
+uses SDK applied checkpoints; revocation clears retained private data. Before
+shipping, specify retained byte limits and lane descriptor identity, then test
+interleaved lanes, offset replay, final-frame loss, cancellation, refusal,
+revocation and independent View updates using actual multipart observation.
+
+Regression coverage: SDK binding and exact seq, returned/thrown failures,
+progress-only wire/owner resume and SQL absence, query retry/error categories,
+record-specific Processor deltas, independent React View counts, scoped hints,
+storage batching/popstate races, existing WEB/SUBS conformance and real server
+integration. Product adoption: replace custom Action/pending-live ports with
+createBrowserPorts, update React adapter, and supply URL host event target.

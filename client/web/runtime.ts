@@ -1,3 +1,4 @@
+import { ownerSequence, readFailure, rejectActionFailure } from "./ports.ts";
 import { createViewResolver } from "../../runtime/views/resolution.ts";
 import { resolveContributions } from "../../runtime/plugins/contribution.ts";
 import type {
@@ -26,6 +27,7 @@ import type {
   ClientCollectionDefinition,
   ClientEvent,
   Observation,
+  QueryReadState,
   ReadState,
 } from "./types.ts";
 
@@ -33,6 +35,7 @@ type Entry = {
   request: ReadRequest;
   live?: LiveQuery;
   close?: () => void;
+  stateKey?: string;
 };
 type Layer = {
   id: string;
@@ -41,7 +44,22 @@ type Layer = {
   command: string;
   input: unknown;
 };
-type Watch = { dependencies: Set<string>; run(): void; dispose(): void };
+type ViewNode = {
+  kind: string;
+  signature: string;
+  reference: ViewReference;
+  hints: ViewHints;
+  observation: Observation<unknown>;
+  output: unknown;
+  refresh(): void;
+};
+type Watch = {
+  dependencies: Set<string>;
+  children: ViewNode[];
+  cursor: number;
+  run(): void;
+  dispose(): void;
+};
 const clone = <T>(value: T): T => structuredClone(value);
 function immutable<T>(value: T): T {
   if (ArrayBuffer.isView(value)) return value;
@@ -50,15 +68,6 @@ function immutable<T>(value: T): T {
     Object.freeze(value);
   }
   return value;
-}
-function sequence(seq: number | string): void {
-  if (
-    typeof seq === "string"
-      ? !/^(0|[1-9][0-9]*)$/.test(seq)
-      : !Number.isSafeInteger(seq) || seq < 0
-  ) {
-    throw new TypeError("Invalid owner sequence");
-  }
 }
 
 /** One browser host, using the existing View resolution and contribution mechanism. */
@@ -151,6 +160,15 @@ export async function createBrowserRuntime(
   const resolve = createViewResolver(views, resources.views?.prefer);
   const local = new Map<string, readonly Row[]>();
   const writes = new Map<string, Promise<void>>();
+  const storageEpoch = new Map<string, number>();
+  const localVersion = new Map<string, number>();
+  function validateRows(rows: readonly Row[]) {
+    if (
+      !Array.isArray(rows) ||
+      rows.some((row) => !row || typeof row.id !== "string" || !row.id) ||
+      new Set(rows.map((row) => row.id)).size !== rows.length
+    ) throw new TypeError("Invalid rows");
+  }
   for (const [name, definition] of Object.entries(definitions)) {
     if (definition.placement === "browser") {
       const storage = definition.storage &&
@@ -160,10 +178,7 @@ export async function createBrowserRuntime(
       }
       const rows = (storage ? await storage.load(name) : undefined) ??
         definition.initial ?? [];
-      if (
-        rows.some((row) => typeof row.id !== "string" || !row.id) ||
-        new Set(rows.map((row) => row.id)).size !== rows.length
-      ) throw new TypeError("Invalid rows");
+      validateRows(rows);
       local.set(name, clone(rows));
     }
   }
@@ -181,12 +196,14 @@ export async function createBrowserRuntime(
       generation: number;
       controller: AbortController;
       start(): void;
+      refresh(): void;
     }
   >();
   const watches = new Set<Watch>();
   const events: ClientEvent[] = [];
   const eventListeners = new Set<(event: ClientEvent) => void>();
   let tracking: Set<string> | undefined;
+  let activeWatch: Watch | undefined;
   let rendering = 0;
   let notifying = false;
   const changed = new Set<string>();
@@ -243,9 +260,15 @@ export async function createBrowserRuntime(
       }
     }
   }
+  function notifyEntry(key: string, entry: Entry) {
+    const next = readKey({ collection: key, query: { state: project(entry) } });
+    if (next === entry.stateKey) return;
+    entry.stateKey = next;
+    notify(key);
+  }
   function invalidateCollection(name: string) {
     for (const [key, entry] of entries) {
-      if (entry.request.collection === name) notify(key);
+      if (entry.request.collection === name) notifyEntry(key, entry);
     }
   }
   function applied(
@@ -256,12 +279,13 @@ export async function createBrowserRuntime(
     if (!frame && entry.live?.status === "denied") {
       frame = { t: "revoked", reason: "authorization" };
     }
-    notify(key);
+    notifyEntry(key, entry);
     if (
-      frame?.t === "batch" &&
-        (frame.collectionChanged ?? frame.changes.length > 0) ||
-      frame?.t === "reset" ||
-      frame?.t === "revoked"
+      entry.request.progressOnly && (
+        frame?.t === "batch" &&
+          (frame.collectionChanged ?? frame.changes.length > 0) ||
+        frame?.t === "reset" || frame?.t === "revoked"
+      )
     ) {
       for (const [queryKey, query] of queries) {
         if (
@@ -276,9 +300,16 @@ export async function createBrowserRuntime(
               value: undefined,
               status: "denied",
               pending: false,
+              error: readFailure({
+                code: "revoked",
+                message: "Query dependency was revoked.",
+              }),
             };
             notify(queryKey);
-          } else query.start();
+          } else {
+            query.start();
+            notify(queryKey);
+          }
         }
       }
     }
@@ -298,25 +329,27 @@ export async function createBrowserRuntime(
     tracking?.add(key);
     let entry = entries.get(key);
     if (!entry) {
+      if (!local.has(request.collection) && !options.live) {
+        throw Object.assign(
+          new TypeError(`No live-read transport for '${request.collection}'`),
+          { code: "unavailable" },
+        );
+      }
       entry = { request: clone(request) };
       entries.set(key, entry);
       if (!local.has(request.collection)) {
-        if (!options.live) {
-          throw new TypeError(
-            `No live-read transport for '${request.collection}'`,
-          );
-        }
         const target = entry;
         const query = request.id === undefined
           ? request.query ?? {}
           : { where: { id: request.id }, limit: 1 };
         target.live = createLiveQuery(
-          options.live,
+          options.live!,
           request.collection,
           query as CollectionQuery,
           {
             signal: lifetime.signal,
             content: request.content,
+            progressOnly: request.progressOnly,
             onState: (frame) => {
               if (!lifetime.signal.aborted) applied(target, frame, key);
             },
@@ -365,10 +398,17 @@ export async function createBrowserRuntime(
       Object.entries(where).every(([key, value]) => row[key] === value);
   }
   function read(request: ReadRequest): ReadState<readonly Row[]> {
-    const [, entry] = entryFor(request);
+    const [key, entry] = entryFor(request);
+    const value = project(entry);
+    entry.stateKey = readKey({ collection: key, query: { state: value } });
+    return value;
+  }
+  function project(entry: Entry): ReadState<readonly Row[]> {
+    const request = entry.request;
     let rows = local.has(request.collection)
       ? [...local.get(request.collection)!]
       : [...entry.live!.rows];
+    if (request.progressOnly) rows = [];
     let pending = false;
     if (entry.live?.status !== "denied") {
       for (const value of entry.live?.optimisticLayers.values() ?? []) {
@@ -440,6 +480,7 @@ export async function createBrowserRuntime(
     id: string,
     name: string,
     input: unknown,
+    batch?: Set<string>,
   ) {
     alive();
     if (rendering) throw new TypeError("Views cannot mutate during render");
@@ -451,16 +492,49 @@ export async function createBrowserRuntime(
     if (index < 0) next.push(row);
     else next[index] = row;
     local.set(collection, next);
-    const storageName = definitions[collection].storage;
-    if (storageName) {
-      const write = (writes.get(collection) ?? Promise.resolve()).catch(
-        () => {},
-      ).then(() => options.storage![storageName].save(collection, clone(next)));
-      writes.set(collection, write);
-      write.catch(report);
-    }
+    localVersion.set(collection, (localVersion.get(collection) ?? 0) + 1);
+    if (batch) batch.add(collection);
+    else persist(collection);
     invalidateCollection(collection);
     emit("collection.changed", collection, id);
+  }
+  function persist(collection: string) {
+    const storageName = definitions[collection].storage;
+    if (!storageName || lifetime.signal.aborted) return;
+    const epoch = storageEpoch.get(collection) ?? 0;
+    const rows = clone(local.get(collection)!);
+    const write = (writes.get(collection) ?? Promise.resolve()).catch(() => {})
+      .then(() => {
+        if (
+          !lifetime.signal.aborted &&
+          epoch === (storageEpoch.get(collection) ?? 0)
+        ) return options.storage![storageName].save(collection, rows);
+      });
+    writes.set(collection, write);
+    void write.catch(report);
+  }
+  async function restoreStorage(storageName?: string) {
+    alive();
+    await Promise.all(
+      Object.entries(definitions).map(async ([name, definition]) => {
+        if (
+          !local.has(name) || !definition.storage ||
+          storageName && definition.storage !== storageName
+        ) return;
+        const epoch = (storageEpoch.get(name) ?? 0) + 1;
+        storageEpoch.set(name, epoch);
+        const version = localVersion.get(name) ?? 0;
+        const rows = await options.storage![definition.storage].load(name) ??
+          definition.initial ?? [];
+        if (
+          lifetime.signal.aborted || storageEpoch.get(name) !== epoch ||
+          (localVersion.get(name) ?? 0) !== version
+        ) return;
+        validateRows(rows);
+        local.set(name, clone(rows));
+        invalidateCollection(name);
+      }),
+    );
   }
   const actions: Record<string, (input: unknown) => ActionHandle> = Object
     .create(null);
@@ -519,10 +593,16 @@ export async function createBrowserRuntime(
           if (!definition.execute) {
             throw new TypeError(`Missing browser execute '${definition.id}'`);
           }
-          const value = await definition.execute(
-            invocation,
-            actionContext(signal),
-          );
+          const batch = new Set<string>();
+          let value: unknown;
+          try {
+            value = await definition.execute(
+              invocation,
+              actionContext(signal, batch),
+            );
+          } finally {
+            for (const collection of batch) persist(collection);
+          }
           signal.throwIfAborted();
           settlement.resolve({ value, seq: "0" });
           transition("completed");
@@ -542,10 +622,11 @@ export async function createBrowserRuntime(
           },
         );
         signal.throwIfAborted();
-        sequence(terminal.seq);
+        const seq = ownerSequence(terminal.seq);
+        rejectActionFailure(terminal.value);
         settlement.resolve({
           value: terminal.value,
-          seq: String(terminal.seq),
+          seq: String(seq),
         });
         transition("completed");
         return terminal.value;
@@ -599,22 +680,33 @@ export async function createBrowserRuntime(
   }
   Object.freeze(collections);
   Object.freeze(actions);
-  function readAction(alias: string, input: unknown): ReadState {
+  function readAction(alias: string, input: unknown): QueryReadState {
     alive();
     const definition = actionDefinitions[alias];
     if (!definition?.query || definition.placement !== "server") {
       throw new TypeError(`Action '${alias}' is not a query`);
     }
-    if (!options.actions) throw new TypeError("No Action transport");
     const key = `query:${readKey({ collection: alias, query: { input } })}`;
     tracking?.add(key);
     let denied = false;
+    let unavailable: ReturnType<typeof readFailure> | undefined;
     for (const name of definition.query.reads) {
-      const state = collections[name]?.list({ limit: 1 });
-      if (!state) throw new TypeError(`Unknown query dependency '${name}'`);
-      if (state.status === "denied") denied = true;
+      if (!definitions[name]) {
+        throw new TypeError(`Unknown query dependency '${name}'`);
+      }
+      try {
+        const state = read({ collection: name, progressOnly: true });
+        if (state.status === "denied") denied = true;
+        else if (state.status === "stale") {
+          unavailable = readFailure({
+            code: "subscription_unavailable",
+            message: "Query dependency is unavailable.",
+          });
+        }
+      } catch (cause) {
+        unavailable = readFailure(cause);
+      }
     }
-    if (denied) return { value: undefined, status: "denied", pending: false };
     let query = queries.get(key);
     if (!query) {
       query = {
@@ -623,6 +715,22 @@ export async function createBrowserRuntime(
         value: { value: undefined, status: "loading", pending: false },
         generation: 0,
         controller: new AbortController(),
+        refresh() {
+          alive();
+          for (const name of definition.query!.reads) {
+            const request = { collection: name, progressOnly: true };
+            const dependency = readKey(request);
+            const entry = entries.get(dependency);
+            if (
+              entry?.live && ["stale", "denied"].includes(entry.live.status)
+            ) {
+              entry.close?.();
+              entries.delete(dependency);
+            }
+          }
+          this.start();
+          notify(key);
+        },
         start() {
           const generation = ++this.generation;
           this.controller.abort();
@@ -632,19 +740,25 @@ export async function createBrowserRuntime(
             this.controller.signal,
           ]);
           this.value = {
-            ...this.value,
+            value: this.value.value,
             status: this.value.value === undefined ? "loading" : "stale",
+            pending: false,
           };
-          // Defer submission until dependency tracking is installed; no render-time writes.
           Promise.resolve().then(() => {
             signal.throwIfAborted();
-            return options.actions!.invoke(definition.id, this.input, {
+            if (!options.actions) {
+              throw Object.assign(new Error("No Action transport"), {
+                code: "unavailable",
+              });
+            }
+            return options.actions.invoke(definition.id, this.input, {
               idempotencyKey: crypto.randomUUID(),
               signal,
               accepted() {},
             });
           }).then((result) => {
             if (signal.aborted || generation !== this.generation) return;
+            rejectActionFailure(result.value);
             this.value = immutable(
               clone({
                 value: result.value,
@@ -653,18 +767,41 @@ export async function createBrowserRuntime(
               }),
             );
             notify(key);
-          }, (error) => {
+          }).catch((cause) => {
             if (signal.aborted || generation !== this.generation) return;
-            this.value = { value: undefined, status: "denied", pending: false };
-            report(error);
+            const error = readFailure(cause);
+            this.value = {
+              value: undefined,
+              status: error.kind === "denied" ? "denied" : "stale",
+              pending: false,
+              error,
+            };
+            report(cause);
             notify(key);
           });
         },
       };
       queries.set(key, query);
-      query.start();
+      if (!denied) query.start();
     }
-    return query.value;
+    if (denied) {
+      query.value = {
+        value: undefined,
+        status: "denied",
+        pending: false,
+        error: readFailure({
+          code: "revoked",
+          message: "Query dependency was revoked.",
+        }),
+      };
+    }
+    return {
+      ...query.value,
+      ...(!denied && unavailable
+        ? { status: "stale" as const, error: unavailable }
+        : {}),
+      refresh: () => query!.refresh(),
+    };
   }
   function context(hints: ViewHints = {}): BrowserViewContext {
     return {
@@ -682,25 +819,76 @@ export async function createBrowserRuntime(
       },
       show(reference, next = {}) {
         alive();
-        const combined = { ...hints, ...next };
-        if (
-          combined.region !== undefined || combined.source !== undefined
-        ) return options.show?.(reference, combined);
-        return render(reference, combined);
+        if (next.region !== undefined || next.source !== undefined) {
+          return options.show?.(reference, next);
+        }
+        return render(reference, next);
       },
     };
   }
-  function actionContext(signal = lifetime.signal): BrowserActionContext {
+  function actionContext(
+    signal = lifetime.signal,
+    batch?: Set<string>,
+  ): BrowserActionContext {
     return {
       ...context(),
       signal,
       command(...args) {
         signal.throwIfAborted();
-        command(...args);
+        command(...args, batch);
       },
     };
   }
   function render(reference: ViewReference, hints: ViewHints = {}): unknown {
+    alive();
+    if (!activeWatch || !options.renderer?.view) {
+      return evaluateView(reference, hints);
+    }
+    const slot = activeWatch.cursor++;
+    const kind = readKey({
+      collection: "view",
+      query: { shows: reference.shows },
+    });
+    const signature = readKey({
+      collection: "view",
+      query: { reference, hints },
+    });
+    let node = activeWatch.children[slot];
+    if (!node || node.kind !== kind) {
+      node?.observation.dispose();
+      const next: ViewNode = {
+        kind,
+        signature,
+        reference: clone(reference),
+        hints: clone(hints),
+        observation: undefined!,
+        output: undefined,
+        refresh() {},
+      };
+      next.observation = observeTracked(
+        () => evaluateView(next.reference, next.hints),
+        (watch) => {
+          next.refresh = () => watch.run();
+        },
+      );
+      next.output = options.renderer.view(
+        next.observation,
+        crypto.randomUUID(),
+      );
+      activeWatch.children[slot] = next;
+      node = next;
+    } else if (node.signature !== signature) {
+      node.signature = signature;
+      node.reference = clone(reference);
+      node.hints = clone(hints);
+      node.refresh();
+    }
+    return node.output;
+  }
+  function evaluateView(
+    reference: ViewReference,
+    hints: ViewHints = {},
+  ): unknown {
     alive();
     const ctx = context(hints);
     const view = resolve(reference.shows, ctx.hints.mode, ctx.hints.renderer);
@@ -726,6 +914,7 @@ export async function createBrowserRuntime(
     }
   }
   function releaseUnused() {
+    if (activeWatch) return;
     for (const [key, query] of queries) {
       if (![...watches].some((watch) => watch.dependencies.has(key))) {
         query.controller.abort();
@@ -741,6 +930,12 @@ export async function createBrowserRuntime(
   function observe<T>(
     evaluate: (ctx: BrowserViewContext) => T,
   ): Observation<T> {
+    return observeTracked(evaluate);
+  }
+  function observeTracked<T>(
+    evaluate: (ctx: BrowserViewContext) => T,
+    installed?: (watch: Watch) => void,
+  ): Observation<T> {
     alive();
     let value: T;
     let disposed = false;
@@ -749,10 +944,14 @@ export async function createBrowserRuntime(
     const listeners = new Set<() => void>();
     const watch: Watch = {
       dependencies: new Set(),
+      children: [],
+      cursor: 0,
       run() {
         if (disposed || running) return;
         running = true;
-        const previous = tracking;
+        const previous = tracking, previousWatch = activeWatch;
+        activeWatch = watch;
+        watch.cursor = 0;
         tracking = new Set();
         try {
           value = evaluate(context());
@@ -762,6 +961,10 @@ export async function createBrowserRuntime(
         } finally {
           watch.dependencies = tracking;
           tracking = previous;
+          for (const node of watch.children.splice(watch.cursor)) {
+            node.observation.dispose();
+          }
+          activeWatch = previousWatch;
           running = false;
         }
         for (const listener of [...listeners]) {
@@ -774,13 +977,16 @@ export async function createBrowserRuntime(
         releaseUnused();
       },
       dispose() {
+        if (disposed) return;
         disposed = true;
+        for (const node of watch.children.splice(0)) node.observation.dispose();
         watches.delete(watch);
         listeners.clear();
         releaseUnused();
       },
     };
     watches.add(watch);
+    installed?.(watch);
     watch.run();
     return {
       getSnapshot() {
@@ -810,6 +1016,7 @@ export async function createBrowserRuntime(
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
     },
+    restoreStorage,
     async flushStorage() {
       await Promise.all(writes.values());
     },
@@ -849,6 +1056,17 @@ export async function createBrowserRuntime(
       eventListeners.clear();
     },
   };
+  const storageSubscriptions = Object.entries(options.storage ?? {}).flatMap(
+    ([name, adapter]) => {
+      const stop = adapter.subscribe?.(() => {
+        void restoreStorage(name).catch(report);
+      });
+      return stop ? [stop] : [];
+    },
+  );
+  lifetime.signal.addEventListener("abort", () => {
+    for (const stop of storageSubscriptions) stop();
+  }, { once: true });
   emit("app.started");
   return runtime;
 }

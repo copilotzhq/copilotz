@@ -1,3 +1,5 @@
+import { defineView } from "@copilotz/copilotz/views";
+import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
   MemorySubscriptions,
   record,
@@ -205,4 +207,92 @@ test("admin query Views render existing authorized Action results", async () => 
   assert.ok(html.includes("Example agent"));
   assert.ok(html.includes("Assistant"));
   runtime.dispose();
+});
+
+test("React View boundaries keep composer keystrokes out of siblings and update changed props", async () => {
+  const counts = { root: 0, composer: 0, history: 0 };
+  const runtime = await createBrowserRuntime({
+    renderer: reactRenderer,
+    plugins: [{
+      id: "app",
+      collections: {
+        draft: {
+          placement: "browser",
+          initial: [{ id: "a", text: "" }],
+          commands: {
+            set: { mutate: ({ input }) => ({ set: { text: input } }) },
+          },
+        },
+      },
+      actions: {
+        type: {
+          id: "type",
+          placement: "browser",
+          execute(input, ctx) {
+            ctx.command("draft", "a", "set", input);
+          },
+        },
+      },
+      views: {
+        root: defineView<unknown, unknown, BrowserViewContext>({
+          id: "root",
+          shows: "root",
+          modes: ["full"],
+          renderer: "react",
+          render(_value, ctx) {
+            counts.root++;
+            return (
+              <main>
+                {ctx.show({ shows: "history", value: null }) as React.ReactNode}
+                {ctx.show({
+                  shows: "composer",
+                  value: null,
+                }) as React.ReactNode}
+              </main>
+            );
+          },
+        }),
+        history: defineView<unknown, unknown, BrowserViewContext>({
+          id: "history",
+          shows: "history",
+          modes: ["full"],
+          renderer: "react",
+          render() {
+            counts.history++;
+            return <p>History</p>;
+          },
+        }),
+        composer: defineView<unknown, unknown, BrowserViewContext>({
+          id: "composer",
+          shows: "composer",
+          modes: ["full"],
+          renderer: "react",
+          render(_value, ctx) {
+            counts.composer++;
+            return (
+              <span>{String(ctx.collections.draft.get("a").value?.text)}</span>
+            );
+          },
+        }),
+      },
+    }],
+  });
+  try {
+    const root = runtime.observe(() =>
+      runtime.render({ shows: "root", value: null })
+    );
+    const snapshot = root.getSnapshot();
+    let rootNotifications = 0;
+    root.subscribe(() => rootNotifications++);
+    await runtime.actions.type("a").result();
+    await runtime.actions.type("ab").result();
+    assert.deepEqual(counts, { root: 1, composer: 3, history: 1 });
+    assert.equal(rootNotifications, 0);
+    assert.equal(root.getSnapshot(), snapshot);
+    const html = renderToStaticMarkup(<ObservedView output={root} />);
+    assert.ok(html.includes("<span>ab</span>"), html);
+    root.dispose();
+  } finally {
+    runtime.dispose();
+  }
 });

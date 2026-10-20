@@ -44,6 +44,7 @@ type State = {
   filter: CollectionFilter;
   cache: Cache;
   query: CollectionQuery;
+  progressOnly: boolean;
   rows: readonly CollectionRecord[];
   seq: string;
   history: DataFrame[];
@@ -65,7 +66,7 @@ const bytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).length;
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 
-/** One cache and one push listener per observed Collection, never SQL per commit. */
+/** One cache/listener per Collection and row/progress mode, never SQL per commit. */
 export function createCollectionObserver(options: {
   session: SqlSession;
   schema: string;
@@ -105,7 +106,10 @@ export function createCollectionObserver(options: {
       }
     }
   };
-  const select = (state: Pick<State, "cache" | "query" | "filter">) => {
+  const select = (
+    state: Pick<State, "cache" | "query" | "filter" | "progressOnly">,
+  ) => {
+    if (state.progressOnly) return [];
     const query = state.query;
     const rows = [...state.cache.rows.values()].filter((row) =>
       matchesCollectionFilter(state.filter, row) &&
@@ -166,6 +170,21 @@ export function createCollectionObserver(options: {
       (typeof observation.checkpoint !== "string" || !observation.checkpoint ||
         observation.checkpoint.length > 16384)
     ) throw new TypeError("Invalid subscription checkpoint.");
+    if (
+      observation.progressOnly !== undefined &&
+      typeof observation.progressOnly !== "boolean"
+    ) {
+      throw new TypeError("Invalid progress-only selection.");
+    }
+    if (
+      observation.progressOnly &&
+      (Object.keys(input).length || observation.content)
+    ) {
+      throw new TypeError(
+        "Progress-only subscriptions do not select rows or content.",
+      );
+    }
+    const progressOnly = observation.progressOnly === true;
     const authority = retainedAuthority(value);
     // Worker attempts are lease-bound, not renewable device admissions. Their
     // retirement cannot be represented by this credential notice/deadline gate.
@@ -215,6 +234,7 @@ export function createCollectionObserver(options: {
       alias,
       query,
       content: observation.content,
+      progressOnly,
       schema: definition.schema,
       name: definition.name,
     });
@@ -418,16 +438,19 @@ export function createCollectionObserver(options: {
         const key = JSON.stringify([
           authority.scope.namespace,
           definition.name,
+          progressOnly,
         ]);
         let cache = caches.get(key);
         if (!cache) {
           if (caches.size >= 32) {
             throw new RangeError("Subscription Collection capacity exceeded.");
           }
-          const rows = (await command.transaction.query<NodeRow>(
-            `SELECT id,namespace,data FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT 10001`,
-            [authority.scope.namespace, definition.name],
-          )).rows.map(mapNode);
+          const rows = progressOnly
+            ? []
+            : (await command.transaction.query<NodeRow>(
+              `SELECT id,namespace,data FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT 10001`,
+              [authority.scope.namespace, definition.name],
+            )).rows.map(mapNode);
           if (rows.length > 10000 || bytes(rows) > 16 * 1024 * 1024) {
             throw new RangeError("Subscription Collection capacity exceeded.");
           }
@@ -464,7 +487,7 @@ export function createCollectionObserver(options: {
               const change = frame.kind === "change"
                 ? frame.change.collectionChange
                 : undefined;
-              if (change?.collection === definition.name) {
+              if (!progressOnly && change?.collection === definition.name) {
                 shared.bytes -= shared.rowBytes.get(change.id) ?? 0;
                 shared.rowBytes.delete(change.id);
                 if (change.record) {
@@ -547,7 +570,8 @@ export function createCollectionObserver(options: {
           if (reader.closed || !filter) return;
           state = {
             identity,
-            selectionKey: stableStringify([query, filter]),
+            selectionKey: stableStringify([query, filter, progressOnly]),
+            progressOnly,
             filter,
             cache: selectedCache,
             query,

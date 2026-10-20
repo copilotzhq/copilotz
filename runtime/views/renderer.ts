@@ -342,6 +342,14 @@ export function createTextRenderer(
 /** Interactive host port. Framework implementations belong to plugins. */
 export interface ViewRendererAdapter {
   readonly id: string;
+  /** Embed an independently observed View. Stable key identifies its retained slot. */
+  view?(
+    output: {
+      getSnapshot(): unknown;
+      subscribe(listener: () => void): () => void;
+    },
+    key: string,
+  ): unknown;
   mount(target: unknown, output: {
     getSnapshot(): unknown;
     subscribe(listener: () => void): () => void;

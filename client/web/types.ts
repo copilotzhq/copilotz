@@ -8,10 +8,19 @@ import type {
 import type { CollectionCommandDefinition } from "../../runtime/collections/definition.ts";
 import type { Row } from "./reads.ts";
 export type Placement = "server" | "browser" | "both";
+export type ReadFailure = Readonly<{
+  kind: "denied" | "unavailable" | "invalid";
+  code: string;
+  message: string;
+  status?: number;
+  retryable: boolean;
+}>;
+export type QueryReadState = ReadState & { refresh(): void };
 export type ReadState<T = unknown> = Readonly<{
   value: T;
   status: "loading" | "ready" | "missing" | "stale" | "denied";
   pending: boolean;
+  error?: ReadFailure;
 }>;
 export interface ClientCollection {
   get(
@@ -34,6 +43,8 @@ export interface StorageAdapter {
     key: string,
   ): readonly Row[] | undefined | Promise<readonly Row[] | undefined>;
   save(key: string, rows: readonly Row[]): void | Promise<void>;
+  /** External changes (for example popstate), never notifications of own saves. */
+  subscribe?(listener: () => void): () => void;
 }
 export type ActionStatus =
   | "pending"
@@ -55,7 +66,7 @@ export interface BrowserViewContext extends ViewEnvironment {
   readonly collections: Readonly<Record<string, ClientCollection>>;
   readonly actions: Readonly<Record<string, (input: unknown) => ActionHandle>>;
   show(reference: ViewReference, hints?: ViewHints): unknown;
-  readAction(alias: string, input: unknown): ReadState;
+  readAction(alias: string, input: unknown): QueryReadState;
 }
 export interface BrowserActionContext extends BrowserViewContext {
   command(
@@ -105,7 +116,7 @@ export interface ActionTransport {
       signal: AbortSignal;
       accepted(operationId: string): void;
     },
-  ): Promise<{ value: unknown; seq: number | string }>;
+  ): Promise<{ value: unknown; seq: number | string | bigint }>;
   cancel(operationId: string): Promise<void>;
 }
 export interface ClientEvent {
@@ -139,6 +150,7 @@ export interface BrowserRuntime {
   observe<T>(evaluate: (ctx: BrowserViewContext) => T): Observation<T>;
   onEvent(listener: (event: ClientEvent) => void): () => void;
   flushStorage(): Promise<void>;
+  restoreStorage(): Promise<void>;
   mount(
     target: unknown,
     root: ViewReference,

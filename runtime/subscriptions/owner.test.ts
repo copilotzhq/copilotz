@@ -393,3 +393,61 @@ Deno.test("F6 schema replacement and byte capacity reset without joining snapsho
     await f.close();
   }
 });
+
+Deno.test("progress-only subscriptions scan no rows, resume progress and revoke through the same authority gate", async () => {
+  const f = await fixture();
+  try {
+    await f.collections.entry.create({ id: "private", title: "not disclosed" });
+    const start = f.statementsSql.length;
+    const sub = await f.observe(f.authority, "entry", {}, {
+      progressOnly: true,
+    });
+    const r = reader(sub);
+    const snapshot = await r.next();
+    assert(snapshot.t === "snapshot");
+    assertEquals(snapshot.rows, []);
+    assertEquals(
+      f.statementsSql.slice(start).some(({ sql, params }) =>
+        /^\s*SELECT/i.test(sql) && params?.includes("entry")
+      ),
+      false,
+      "progress-only admission must not scan Collection records",
+    );
+    assertEquals(f.intents.at(-1)?.operation, "list");
+    await f.collections.entry.update({
+      id: "private",
+      set: { title: "changed" },
+    });
+    const batch = await r.next();
+    assert(batch.t === "batch");
+    assertEquals(batch.changes, []);
+    assertEquals(batch.collectionChanged, true);
+    sub.detach();
+    const resumed = await f.observe(f.authority, "entry", {}, {
+      progressOnly: true,
+      checkpoint: snapshot.checkpoint,
+    });
+    const resumedReader = reader(resumed);
+    assertEquals(await resumedReader.next(), batch);
+    const rowMode = await f.observe(f.authority, "entry", {}, {
+      checkpoint: snapshot.checkpoint,
+    });
+    assertEquals(
+      (await reader(rowMode).next()).t,
+      "reset",
+      "progress cursor cannot resume a row selection",
+    );
+    rowMode.detach();
+    await f.collections.member.update({ id: "key", set: { allowed: false } });
+    await f.run("barrier", {}, () => undefined);
+    assertEquals((await resumedReader.next()).t, "revoked");
+    resumed.detach();
+    await assertRejects(
+      () =>
+        f.observe(f.authority, "entry", { limit: 1 }, { progressOnly: true }),
+      TypeError,
+    );
+  } finally {
+    await f.close();
+  }
+});

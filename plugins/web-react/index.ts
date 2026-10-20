@@ -16,6 +16,7 @@ export function ObservedView(
 }
 export const reactRenderer: ViewRendererAdapter = {
   id: "react",
+  view: (output, key) => React.createElement(ObservedView, { output, key }),
   mount(target, output) {
     const root = createRoot(target as Element);
     root.render(React.createElement(ObservedView, { output }));

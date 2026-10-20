@@ -837,3 +837,62 @@ Deno.test("device close while session proof is pending never opens a late socket
   assertEquals(opened, 0);
   live.close();
 });
+
+Deno.test("device forwards progress-only selection without row/content substitution", async () => {
+  const sockets = pair();
+  let selection: unknown;
+  const server = attachDeviceSocket(sockets.server, {
+    authenticate: () => ({
+      async observe(collection, query, options) {
+        selection = {
+          collection,
+          query,
+          progressOnly: options.progressOnly,
+          content: options.content,
+        };
+        const queue = new SubscriptionQueue<SubscriptionFrame>();
+        queue.push({
+          t: "snapshot",
+          rows: [],
+          sequence: "1",
+          complete: true,
+          checkpoint: "progress",
+        });
+        return {
+          frames: queue,
+          detach() {
+            queue.end();
+          },
+        };
+      },
+    }),
+  });
+  const device = createDeviceTransport({
+    url: "ws://test",
+    credentials: () => "proof",
+    socket: () => {
+      queueMicrotask(() => sockets.client.dispatchEvent(new Event("open")));
+      return sockets.client;
+    },
+  });
+  const live = createLiveQuery(device, "entry", {}, { progressOnly: true });
+  try {
+    await until(() => live.checkpoint === "progress");
+    assertEquals(selection, {
+      collection: "entry",
+      query: {},
+      progressOnly: true,
+      content: undefined,
+    });
+    assertEquals(live.rows, []);
+    assertEquals(
+      sockets.client.output.find((frame) => frame.t === "subscribe")
+        ?.progressOnly,
+      true,
+    );
+  } finally {
+    live.close();
+    device.close();
+    server.close();
+  }
+});

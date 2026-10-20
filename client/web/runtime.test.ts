@@ -15,7 +15,10 @@ import {
 } from "./index.ts";
 import { defineView } from "../../runtime/views/index.ts";
 const request: ReadRequest = { collection: "counter", id: "a" };
-const snapshot = (value: number, seq = 0): SubscriptionFrame => ({
+const snapshot = (
+  value: number,
+  seq = 0,
+): Extract<SubscriptionFrame, { t: "snapshot" }> => ({
   t: "snapshot",
   complete: true,
   rows: [record({ id: "a", value })],
@@ -376,14 +379,14 @@ test("late detached frames and disposed operations cannot revive a runtime", asy
   const runtime = await createBrowserRuntime({
     plugins: [counter],
     live: {
-      async observe() {
+      observe() {
         receive(snapshot(1));
-        return {
+        return Promise.resolve({
           frames: queue,
           detach() {
             queue.end();
           },
-        };
+        });
       },
     },
     actions: { invoke: () => terminal.promise, cancel: async () => {} },
@@ -436,13 +439,21 @@ test("query Actions cache by input, refresh on deltas, and fence late responses"
     live,
     actions: { invoke: () => pending[calls++].promise, cancel: async () => {} },
   });
+  const rows = runtime.observe((ctx) => ctx.collections.counter.get("a"));
   const output = runtime.observe((ctx) => ctx.readAction("total", {}));
   await tick();
   await Promise.resolve();
   assert.equal(calls, 1);
   assert.equal(output.getSnapshot().status, "loading");
-  const queryRead = { collection: "counter", query: { limit: 1 } };
-  await live.publish(queryRead, snapshot(1));
+  const queryRead = { collection: "counter", progressOnly: true };
+  await live.publish(queryRead, { ...snapshot(1), rows: [] });
+  await live.publish(request, snapshot(1));
+  await live.publish(request, delta(0, 1, 2));
+  assert.equal(
+    calls,
+    1,
+    "row reads must not duplicate the progress-only invalidation",
+  );
   await live.publish(queryRead, delta(0, 1));
   assert.equal(
     calls,
@@ -463,6 +474,7 @@ test("query Actions cache by input, refresh on deltas, and fence late responses"
   await live.publish(queryRead, { t: "revoked", reason: "permission" });
   assert.equal(output.getSnapshot().status, "denied");
   output.dispose();
+  rows.dispose();
   assert.equal(live.subscriptions, 0);
   runtime.dispose();
 });
@@ -634,6 +646,14 @@ test("browser Processors receive live readable record IDs, never snapshots or em
   assert.deepEqual(ids, ["a"]);
   await live.publish(request, snapshot(5, 3));
   assert.deepEqual(ids, ["a"]);
+  await live.publish(request, {
+    t: "batch",
+    from: "3",
+    to: "4",
+    checkpoint: "s4",
+    changes: [{ id: "a", seq: "4", record: null }],
+  });
+  assert.deepEqual(ids, ["a", "a"], "deletions identify their record too");
   output.dispose();
   runtime.dispose();
 });

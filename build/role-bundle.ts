@@ -26,6 +26,7 @@ const runtimeModules = new Set([
   "runtime/actions/transaction-identity.ts",
   "runtime/actions/value.ts",
   "runtime/application/worker.ts",
+  "runtime/application/shard-worker.ts",
   "runtime/collections/definition.ts",
   "runtime/collections/errors.ts",
   "runtime/collections/validate.ts",

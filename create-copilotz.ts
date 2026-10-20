@@ -1,3 +1,8 @@
+import {
+  type CopilotzShard,
+  createCopilotzShard,
+  type CreateCopilotzShardOptions,
+} from "./runtime/application/shard.ts";
 import { withOwnedHosting } from "./runtime/application/hosting.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
@@ -22,13 +27,16 @@ type GatewayOptions =
     role: "gateway";
   }>;
 
+type ShardOptions = CreateCopilotzShardOptions & Readonly<{ role: "shard" }>;
+
 type WorkerOptions = RuntimeWorkerOptions & Readonly<{ role: "worker" }>;
 
-/** One discriminated factory contract for embedded, Gateway, and Worker roles. */
+/** One discriminated factory contract for embedded, gateway, shard, and worker roles. */
 export type CreateCopilotzOptions =
   | EmbeddedOptions
   | GatewayOptions
-  | WorkerOptions;
+  | WorkerOptions
+  | ShardOptions;
 
 /** Reuse the registry's dependency and contribution composition at the public boundary. */
 type CompositionOptions = Pick<
@@ -84,6 +92,7 @@ function serverFetch(
       Promise.resolve(new Response(null, { status: 404 }));
 }
 
+export function createCopilotz(options: ShardOptions): Promise<CopilotzShard>;
 export function createCopilotz<const T extends GatewayOptions>(
   options: T & GatewayOptions,
 ): Promise<GatewayApplication<T>>;
@@ -96,7 +105,10 @@ export function createCopilotz<const T extends EmbeddedOptions = EmptyMap>(
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
-): Promise<CopilotzApplication | GatewayApplication | WorkerFactoryResult> {
+): Promise<
+  CopilotzApplication | GatewayApplication | WorkerFactoryResult | CopilotzShard
+> {
+  if (options.role === "shard") return createCopilotzShard(options);
   if (options.role === "worker") {
     const { role: _role, ...workerOptions } = options;
     const worker = await createWorker(workerOptions);

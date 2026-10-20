@@ -58,7 +58,8 @@
     "./core/web": "./plugins/core/web.ts",
     "./admin/web": "./plugins/admin/web.ts",
     "./usage/web": "./plugins/usage/web.ts",
-    "./ui/web": "./plugins/ui/web.ts"
+    "./ui/web": "./plugins/ui/web.ts",
+    "./shard": "./runtime/application/shard-public.ts"
   },
   "publish": {
     "include": [
@@ -199,7 +200,8 @@
     "react/jsx-runtime": "npm:react@19.1.1/jsx-runtime",
     "tailwindcss": "npm:tailwindcss@4.1.12",
     "@tailwindcss/typography": "npm:@tailwindcss/typography@0.5.16",
-    "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12"
+    "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12",
+    "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",

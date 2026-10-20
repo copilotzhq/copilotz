@@ -1,3 +1,5 @@
+import { assertFlowOperation } from "./flow.ts";
+import { createCredentialEffects } from "./credentials.ts";
 import { authorizeOperation } from "./operation.ts";
 import { afterSqlCommit } from "../events/session.ts";
 import { completeOwnerDeadline, writeOwnerDeadline } from "../engine/alarms.ts";
@@ -33,6 +35,7 @@ export type AuthorityObservation = Readonly<{
   close(): void;
 }>;
 export type AuthorizationOwner = Readonly<{
+  credentials: ReturnType<typeof createCredentialEffects>;
   assertResources(
     resources: Readonly<
       { collections: readonly string[]; actions: readonly string[] }
@@ -67,6 +70,8 @@ export type AuthorizationOwner = Readonly<{
 }>;
 export function createAuthorizationOwner(
   options: Readonly<{
+    master?: import("../actions/secret-adapter.ts").SecretAdapter;
+    actions?: Readonly<Record<string, { id: string }>>;
     session: SqlSession;
     databaseSchema: string;
     owner: DatabaseOwner;
@@ -189,6 +194,7 @@ export function createAuthorizationOwner(
       });
     }
     for (const id of input.operationIds ?? []) {
+      await assertFlowOperation(channel.authority, id, command.transaction);
       const result = await options.operations.get(
         channel.authority.scope.namespace,
         id,
@@ -415,19 +421,22 @@ export function createAuthorizationOwner(
   const createSession = async (
     value: AuthenticatedAuthority,
     input: Readonly<{ id: string; principal: string; expiresAt: string }>,
+    joined?: CommandContext,
+    invocation?: { kind: "action"; id: string; runId: string },
   ) => {
     const authority = retainedAuthority(value);
     if (
       !input.id.trim() || !input.principal.trim() ||
       !Number.isFinite(Date.parse(input.expiresAt))
     ) throw new TypeError("Invalid tenant session.");
-    await run("authorization.session.create", input, async (_, command) => {
+    const execute = async (command: CommandContext) => {
       if (!evaluate) authorizationRefused();
       const decision = await evaluate(authority, {
         kind: "session",
         resource: input.id,
         operation: "create",
         input,
+        ...(invocation ? { invocation } : {}),
       }, command);
       if (
         !decision.constraints.sessions?.create ||
@@ -443,17 +452,26 @@ export function createAuthorizationOwner(
           input.expiresAt,
         ],
       );
-    });
+    };
+    if (joined) await execute(joined);
+    else {await run("authorization.session.create", input, (_, command) =>
+        execute(command));}
   };
-  const revokeSession = async (value: AuthenticatedAuthority, id: string) => {
+  const revokeSession = async (
+    value: AuthenticatedAuthority,
+    id: string,
+    joined?: CommandContext,
+    invocation?: { kind: "action"; id: string; runId: string },
+  ) => {
     const authority = retainedAuthority(value);
-    await run("authorization.session.revoke", { id }, async (_, command) => {
+    const execute = async (command: CommandContext) => {
       if (!evaluate) authorizationRefused();
       const decision = await evaluate(authority, {
         kind: "session",
         resource: id,
         operation: "revoke",
         input: { id },
+        ...(invocation ? { invocation } : {}),
       }, command);
       const permission = decision.constraints.sessions?.revoke;
       if (
@@ -481,9 +499,30 @@ export function createAuthorizationOwner(
           ) close(channel, revoked());
         }
       });
-    });
+    };
+    if (joined) await execute(joined);
+    else {await run("authorization.session.revoke", { id }, (_, command) =>
+        execute(command));}
   };
   return {
+    credentials: createCredentialEffects({
+      session: options.session,
+      schema: options.databaseSchema,
+      master: options.master,
+      evaluate,
+      actions: options.actions ?? {},
+      authorizeProjection: (authority, id, command) =>
+        authorizeOperation(
+          evaluate,
+          options.operations,
+          authority,
+          id,
+          "read",
+          command,
+        ),
+      create: createSession,
+      revoke: revokeSession,
+    }),
     asset(value, id) {
       const authority = retainedAuthority(value);
       return run("authorization.asset", { id }, async (_, command) => {

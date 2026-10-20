@@ -44,6 +44,9 @@ export type AuthorityValidity =
   }>
   | Readonly<{ kind: "occurrence"; key: string; revision: string }>;
 export type AuthenticatedAuthority = Readonly<{
+  flow?: Readonly<
+    { id: string; kind: string; continuation: string; expiresAt: string }
+  >;
   version: 1;
   principal: AuthorityPrincipal;
   scope: AuthorityScope;
@@ -123,6 +126,7 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     invalid("binding exceeds 64 KiB");
   }
   const root = object(captured, [
+    "flow",
     "version",
     "principal",
     "scope",
@@ -134,6 +138,11 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     "authorityBasis",
   ]);
   if (root.version !== 1) invalid("unsupported version");
+  if (root.flow !== undefined) {
+    const flow = object(root.flow, ["id", "kind", "continuation", "expiresAt"]);
+    for (const key of ["id", "kind", "continuation"]) text(flow[key]);
+    timestamp(flow.expiresAt);
+  }
   const principal = object(root.principal, [
     "kind",
     "id",
@@ -290,9 +299,14 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     invalid("occurrence basis");
   }
   if (
-    ["session", "credential", "grant"].includes(String(basis.kind)) &&
+    ["credential", "grant"].includes(String(basis.kind)) &&
     basis.id !== principal.id
   ) invalid("credential basis cannot be its creator");
+  if (
+    root.flow &&
+    (principal.kind !== "grant" ||
+      (root.flow as Record<string, unknown>).id !== principal.id)
+  ) invalid("flow principal");
   return freeze(captured as AuthenticatedAuthority);
 }
 

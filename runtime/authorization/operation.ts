@@ -1,3 +1,4 @@
+import { assertFlowOperation } from "./flow.ts";
 import type { AuthenticatedAuthority } from "./authority.ts";
 import { authorizationRefused, type OwnerEvaluator } from "./evaluator.ts";
 import {
@@ -23,6 +24,7 @@ export async function authorizeOperation(
     operation,
     input: { id },
   }, command);
+  await assertFlowOperation(authority, id, command.transaction);
   const result = await catalog.get(
     authority.scope.namespace,
     id,

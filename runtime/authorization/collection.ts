@@ -134,6 +134,7 @@ export function captureCollectionPolicy(
           invocation: {
             kind: policyAuthority.invocation.kind,
             id: policyAuthority.invocation.id,
+            runId: policyAuthority.invocation.runId,
           },
         }
         : {}),

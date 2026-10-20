@@ -62,7 +62,14 @@ export function defineTestServerFacade(
               JSON.stringify({
                 path: new URL(request.url).pathname,
                 method: request.method,
-                headers: [...request.headers],
+                // Platform credentials are transport proofs, not retained policy facts.
+                headers: [...request.headers].filter(([name]) =>
+                  ![
+                    "cookie",
+                    "x-copilotz-flow",
+                    "x-copilotz-credential-proof",
+                  ].includes(name)
+                ),
                 endpoint: context.endpoint,
                 actor: scope.actor ?? null,
               }),

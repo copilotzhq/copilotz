@@ -173,7 +173,9 @@ export function createActionContext(
       operationKey,
       namespace,
       ...(options.identity ? { identity: options.identity } : {}),
-      execute: async ({ collections: byName, relations, vectors }) => {
+      execute: async (
+        { collections: byName, relations, vectors, sessions, flows },
+      ) => {
         throwIfAborted(options.signal);
         return await execute(
           {
@@ -183,6 +185,8 @@ export function createActionContext(
             ),
             relations,
             vectors,
+            sessions,
+            flows,
           } as const,
         );
       },

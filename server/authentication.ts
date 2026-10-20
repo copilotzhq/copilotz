@@ -1,3 +1,4 @@
+import { digestContent } from "../runtime/content/digest.ts";
 import { retainedAuthority } from "../runtime/authorization/authority.ts";
 import { withTrustedCollectionPolicyRead } from "../runtime/authorization/invocation.ts";
 import {
@@ -149,10 +150,44 @@ export async function authenticateHttpRequest(
     databaseSchema: selected.databaseSchema ??
       application.config.databaseSchema,
   } as const;
+  let selectedAuthority = scope.authority!;
+  const proof = request.headers.get("x-copilotz-credential-proof");
+  if (proof && !/^[A-Za-z0-9_-]{32,128}$/.test(proof)) {
+    throw new TypeError("Invalid credential projection proof.");
+  }
+  selectedAuthority = retainedAuthority({
+    ...selectedAuthority,
+    scope: {
+      ...selectedAuthority.scope,
+      bindings: {
+        ...selectedAuthority.scope.bindings,
+        "@credential-proof": proof
+          ? await digestContent(new TextEncoder().encode(proof))
+          : "",
+      },
+    },
+  });
+  const flowToken = request.headers.get("x-copilotz-flow");
+  const cookieName = facade.sessionCookie?.name ?? "copilotz_session";
+  const sessionToken = request.headers.get("cookie")?.split(";").map((value) =>
+    value.trim()
+  ).find((value) => value.startsWith(`${cookieName}=`))?.slice(
+    cookieName.length + 1,
+  );
+  if (flowToken || sessionToken) {
+    const runtime = scope.databaseSchema === application.config.databaseSchema
+      ? application
+      : await application.databaseScope(scope.databaseSchema);
+    selectedAuthority = await runtime.authorization.credentials.authenticate(
+      selectedAuthority,
+      flowToken || sessionToken!,
+      flowToken ? "flow" : "session",
+    );
+  }
   const authority = retainedAuthority({
-    ...scope.authority,
+    ...selectedAuthority,
     requestFacts: {
-      ...scope.authority!.requestFacts,
+      ...selectedAuthority.requestFacts,
       endpoint: match.endpoint.key,
       operation: match.endpoint.operation ?? match.endpoint.kind,
       params: match.params,
@@ -166,10 +201,27 @@ export async function authenticateHttpRequest(
       "Authentication scope differs from retained authority.",
     );
   }
+  if (
+    authority.flow && !(
+      match.endpoint.kind === "action" &&
+        match.endpoint.actionAlias === authority.flow.continuation ||
+      match.endpoint.kind === "operation" &&
+        ["get", "result", "observe"].includes(match.endpoint.operation ?? "")
+    )
+  ) {
+    throw Object.assign(new Error("Forbidden."), {
+      code: "forbidden",
+      status: 403,
+    });
+  }
   const result = withFacadeIngress(
     {
       ...(scope.context ?? {}),
-      serverScope: { ...scope, authority },
+      sessionCookie: facade.sessionCookie,
+      serverScope: {
+        ...scope,
+        authority,
+      },
       serverRequest: request,
       namespace: scope.namespace,
       databaseSchema: scope.databaseSchema,

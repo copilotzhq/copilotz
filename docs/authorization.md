@@ -145,3 +145,74 @@ epoch and version marker, and invalidates retained live channels. Repeating the
 same manifest is idempotent; a different manifest is refused. Clients reattach
 and reauthorize after restart. Unknown policy revisions fail closed for new
 protected work. Settlement of already begun effects remains available.
+
+## Sessions and anonymous flows in Actions
+
+Schema version 14 adds owner-private credential effects. Existing version 13
+schemas use the offline `upgradeActionLifecycle` entry point with producers
+stopped. The upgrade preserves existing sessions and authority bindings.
+Configure the application's Secret Adapter: signing uses its wrapped owner data
+key, so credential replay survives owner restart and key rewrapping.
+
+Actions stage sessions inside their existing transaction. `maxAge` is seconds,
+bounded to one year. No token is returned:
+
+```ts
+await context.transaction(async ({ collections, sessions }) => {
+  await collections.accounts.update({ id: accountId, lastLogin: timestamp });
+  await sessions.create({ principal: accountId, maxAge: 3600 });
+});
+```
+
+Policy must explicitly return `sessions: { create: true }` for the `session`
+`create` intent. Its input contains the owner-generated session ID, principal
+and expiry, and `intent.invocation` identifies the executing Action. Check that
+Action's identity and its authorized account before granting creation. A broad
+Action grant alone cannot mint a session. Policy refusal rolls back the entire
+transaction, including collection writes, effects and receipts.
+
+`await sessions.revoke()` revokes the caller's session; `revoke(id)` targets a
+specific session without clearing the caller's cookie when it targets someone
+else. The `session` `revoke` intent requires `sessions: { revoke: "self" }` or
+`{ revoke: "tenant" }`. For session transfer, create the replacement **before**
+revoking the old session in the same transaction. The transport delivers the
+replacement cookie. Logout commits revocation and closes that session's open
+channels; the exact logout Action can finish and recover its result without
+reviving authority for other operations. Session principal IDs identify
+accounts; `authority.authorityBasis.id` identifies the particular session.
+Existing fifteen-minute channel admission still applies.
+
+For an anonymous flow, the start Action runs under an explicitly authorized
+grant and stages a bounded credential:
+
+```ts
+await context.transaction(async ({ flows }) => {
+  await flows.start({
+    kind: "oauth",
+    continuation: "oauthCallback",
+    maxAge: 300,
+  });
+});
+```
+
+The `flow` `start` intent needs `flows: { start: ["oauth"] }` in policy.
+`continuation` is a registered Action **alias**. Lifetime defaults to 300
+seconds and cannot exceed 900 seconds. The signed credential binds schema,
+namespace, tenant, flow kind, nonce and expiry. Its principal is the nonce, with
+a validated `authority.flow` descriptor. The owner consumes it on the
+continuation's first input capture. The same retained Action run may replay; a
+second run is refused.
+
+Flow restrictions apply in addition to policy. A flow can invoke only its
+continuation, read or observe its start and continuation operations, and use the
+continuation's explicitly granted internal collection/session operations. It
+cannot read arbitrary Collections, assets or other flows' operations, even under
+a broad host policy. Flow expiry bounds observation and every command.
+
+Credential effects retain only public claims. Session tokens never enter Action
+outputs, event bodies, operation metadata, transaction receipts or live reads.
+The owner reconstructs them only for HTTP projection. Projection also requires a
+client-held proof: a hash is bound to admission, so another caller sharing an
+anonymous grant cannot obtain a session merely by reading its operation. The
+projection command reauthorizes operation access before reconstructing a
+credential, including current session revocation and policy constraints.

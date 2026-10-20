@@ -132,6 +132,8 @@ import {
 } from "./validate.ts";
 
 export type CreateCollectionRuntimeOptions = Readonly<{
+  credentials?:
+    import("../authorization/owner.ts").AuthorizationOwner["credentials"];
   coordinator: EventCoordinator;
   policies?: CollectionPolicyRegistrations;
   session: SqlSession;
@@ -414,6 +416,8 @@ export type CollectionTransactionOptions<T> = Readonly<{
   execute(
     context: Readonly<{
       collections: CollectionTransactionCollections;
+      sessions: import("../actions/session-effects.ts").ActionSessions;
+      flows: import("../actions/session-effects.ts").ActionFlows;
       relations: CollectionTransactionRelations;
       vectors: VectorTransaction;
     }>,
@@ -4146,7 +4150,50 @@ export function createCollectionKernel(
         }, () => protectedGraph);
       },
     };
-    const run = () => execute({ collections, relations, vectors });
+    let credentialIndex = 0;
+    const credential = (
+      method: import("../actions/session-effects.ts").CredentialEffectMethod,
+      input: unknown,
+    ): Promise<void> => {
+      if (scope.state !== "open") {
+        throw new Error("Transaction mutation planning is already closed.");
+      }
+      if (!options.credentials) collectionPolicyRefused();
+      const binding = captureCollectionInvocation();
+      if (!binding || binding.invocation.kind !== "action") {
+        collectionPolicyRefused();
+      }
+      const intent = structuredClone(input);
+      assertLosslessJson(intent, "Credential effect");
+      const key = `${operationKey}/credential:${++credentialIndex}`;
+      scope.plans.push({
+        id: key,
+        order: [++scope.orderSequence],
+        async commit(transaction) {
+          await options.credentials!.commit(
+            binding,
+            method,
+            intent,
+            key,
+            schemaCommandContext(
+              transaction,
+              options.eventStore.databaseSchema,
+            ),
+          );
+          return undefined;
+        },
+      });
+      return Promise.resolve();
+    };
+    const sessions: import("../actions/session-effects.ts").ActionSessions = {
+      create: (input) => credential("session.create", input),
+      revoke: (id) => credential("session.revoke", id ?? null),
+    };
+    const flows: import("../actions/session-effects.ts").ActionFlows = {
+      start: (input) => credential("flow.start", input),
+    };
+    const run = () =>
+      execute({ collections, relations, vectors, sessions, flows });
 
     const value = await finishPlanning(scope, run);
     const pending: CoordinatedMutationResult<unknown>[] = [];

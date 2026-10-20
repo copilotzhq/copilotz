@@ -1,3 +1,4 @@
+import { checkFlow } from "./flow.ts";
 /** One owner-local policy evaluator. Policy code receives declared, tracked reads. */
 import type {
   AuthenticatedAuthority,
@@ -40,6 +41,7 @@ export type AuthorizationIntent = Readonly<{
     | "operation"
     | "observation"
     | "session"
+    | "flow"
     | "asset"
     | "event";
   resource: string;
@@ -49,6 +51,7 @@ export type AuthorizationIntent = Readonly<{
   invocation?: Readonly<{
     kind: "action" | "processor" | "alarm";
     id: string;
+    runId?: string;
   }>;
 }>;
 export type AuthorizationRead = Readonly<{
@@ -308,6 +311,7 @@ export function createOwnerEvaluator(
         );
         if (!live.rows.length) authorizationRefused();
       }
+      await checkFlow(authority, intent, command);
       if (authority.authorityBasis.kind === "session") {
         const rows = await command.transaction.query<
           { expires_at: string; revoked_at: string | null }
@@ -323,8 +327,43 @@ export function createOwnerEvaluator(
           ],
         );
         const session = rows.rows[0];
+        let completingLogout = false;
         if (
-          !session || session.revoked_at ||
+          session?.revoked_at && intent.invocation?.runId &&
+          (intent.kind === "action" && intent.operation === "authorize" ||
+            intent.kind === "collection" &&
+              (intent.input as { phase?: string })?.phase === "result")
+        ) {
+          // A nested logout and its already-captured caller may finish the same
+          // operation. This exception grants no new capture or mutation.
+          const effect = await command.transaction.query(
+            `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND method='session.revoke' AND claims->>'id'=$4 AND (run_id=$3 OR operation_id=(SELECT source_event_id FROM "${databaseSchema}".authorization_invocations WHERE namespace=$1 AND run_id=$3))`,
+            [
+              authority.scope.namespace,
+              authority.scope.tenant,
+              intent.invocation.runId,
+              authority.authorityBasis.id,
+            ],
+          );
+          completingLogout = effect.rows.length > 0;
+        }
+        if (
+          session?.revoked_at && intent.kind === "operation" &&
+          intent.operation === "read"
+        ) {
+          const effect = await command.transaction.query(
+            `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND operation_id=$3 AND method='session.revoke' AND claims->>'id'=$4`,
+            [
+              authority.scope.namespace,
+              authority.scope.tenant,
+              intent.resource,
+              authority.authorityBasis.id,
+            ],
+          );
+          completingLogout = effect.rows.length > 0;
+        }
+        if (
+          !session || session.revoked_at && !completingLogout ||
           Date.parse(session.expires_at) <= Date.parse(command.commandTime)
         ) authorizationRefused();
         if (

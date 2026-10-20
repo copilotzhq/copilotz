@@ -8,7 +8,7 @@ import {
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 13;
+export const EVENT_SCHEMA_VERSION = 14;
 
 export type CoreTableName =
   | keyof typeof AUTHORIZATION_SCHEMA_COLUMNS
@@ -47,6 +47,7 @@ export function createCoreTableNames(schemaName = "public"): Readonly<
     `${schema}.${quoteEventIdentifier(name)}`;
   return ({
     action_effects: table("action_effects"),
+    authorization_effects: table("authorization_effects"),
     authorization_sessions: table("authorization_sessions"),
     authorization_channels: table("authorization_channels"),
     authorization_invocations: table("authorization_invocations"),
@@ -214,7 +215,7 @@ export async function validateCopilotzSchema(
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
-          'action_effects', 'authorization_sessions', 'authorization_channels', 'authorization_invocations',
+          'action_effects', 'authorization_effects', 'authorization_sessions', 'authorization_channels', 'authorization_invocations',
           'content_logical_bodies', 'content_copies', 'pending_content', 'content_adoptions',
           'owner_data_keys', 'owner_epochs', 'owner_receipts', 'owner_alarms', 'owner_deadlines', 'owner_body_retirements',
           'nodes',
@@ -353,7 +354,7 @@ export async function provisionCopilotzSchema(
 /** Additive owner upgrade: semantic events and open obligations remain untouched. */
 export function createOwnerSchemaStatements(
   schemaName: string,
-  options: { version?: 11 | 13 } = {},
+  options: { version?: 11 | 13 | 14 } = {},
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [

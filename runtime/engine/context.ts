@@ -455,7 +455,9 @@ export function createProcessorContext(
           ...transactionOptions.identity?.metadata,
         },
       },
-      execute: async ({ collections: byName, relations, vectors }) => {
+      execute: async (
+        { collections: byName, relations, vectors, sessions, flows },
+      ) => {
         const transactionCollections = (Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
@@ -474,6 +476,8 @@ export function createProcessorContext(
             collections: transactionCollections,
             relations,
             vectors,
+            sessions,
+            flows,
           } as const,
         );
       },

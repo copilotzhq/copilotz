@@ -335,3 +335,87 @@ and close the app after the listener finishes.
 - [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
 - [Channels](channels.md) for inbound adapters and chat delivery.
 - [Content and Assets](content-assets.md) for uploads and large inputs.
+
+## Action session cookies and flow credentials
+
+Actions use `context.transaction(({ sessions, flows }) => ...)` to stage
+owner-authorized credential effects alongside their writes. See
+[authorization](authorization.md#sessions-and-anonymous-flows-in-actions) for
+policy grants and the session-transfer pattern. A Secret Adapter is required.
+
+The host's `authenticate` callback still selects the trusted tenant, namespace,
+schema and policy, including an anonymous grant for login/flow-start endpoints.
+After that selection, the facade verifies its session cookie or the
+`x-copilotz-flow` header against the selected tenant. Derive tenant placement
+from a trusted host route or lookup; never choose it from an unverified token.
+The platform then supplies the verified principal to owner policy. Keep
+credentials out of host-generated `requestFacts`, metadata and logs.
+
+Configure cookie projection on the facade:
+
+```ts
+const facade = defineServerFacade({
+  authenticate,
+  sessionCookie: {
+    name: "app_session",
+    path: "/",
+    secure: true,
+    sameSite: "Lax",
+    // domain: "example.test", // omitted means host-only
+  },
+  expose: { actions: true },
+});
+```
+
+Defaults are `copilotz_session`, path `/`, HttpOnly, Secure, SameSite=Lax and no
+Domain. HttpOnly is mandatory. Max-Age is the remaining committed session
+lifetime, so replay does not extend expiry. Logout clears the same cookie with
+Max-Age=0. SameSite=None requires Secure. Local HTTP development can explicitly
+set `secure: false`.
+
+Action submission returns an asynchronous receipt. Cookies and flow headers are
+projected when the completed result is recovered, and on a completed submission
+replay. `client.actions.invoke` performs that recovery automatically. Call
+`client.operations.result(receipt.operationId)` after a separate `submit`; an
+operation observation alone does not install cookies. Result JSON contains only
+the Action's ordinary output, and credential responses use
+`Cache-Control: no-store`.
+
+`createCopilotzClient` uses browser credentials and a random in-memory
+projection proof. It captures the flow response headers and attaches the
+credential only to that flow's continuation and associated operation
+reads/observations. A session cookie response clears the retained flow. Use
+separate client instances for independent concurrent flows. Reuse the client
+instance for retries so its proof survives a lost response.
+
+Wire the web runtime's Action transport to the same SDK client; it then inherits
+cookie and flow handling without exposing credentials to browser Actions:
+
+```ts
+const runtime = await createBrowserRuntime({
+  plugins,
+  actions: {
+    async invoke(id, input, options) {
+      const receipt = await client.actions.submit(id, input, options);
+      options.accepted(receipt.operationId);
+      return await client.operations.result(
+        receipt.operationId,
+        options.signal,
+      );
+    },
+    async cancel(id) {
+      await client.operations.cancel(id);
+    },
+  },
+});
+```
+
+For a raw HTTP client, send a cryptographically random
+`x-copilotz-credential-proof` (32–128 URL-safe characters) on submission and
+result recovery, retaining it across retries. Only its hash is stored. Retain
+the `x-copilotz-flow` response header and send it on continuation and
+observation requests. `x-copilotz-flow-action` names the continuation's public
+Action ID. For cross-origin clients, host CORS configuration must allow these
+request headers, expose these two response headers, and allow credentials for
+the exact client origin. The browser handles Set-Cookie; application JavaScript
+never receives the session token.

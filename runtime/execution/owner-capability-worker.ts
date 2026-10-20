@@ -300,7 +300,9 @@ function workerContext(options: {
         ) as unknown[];
         const entry = { path: [...path], args: copied };
         plan.push(entry);
-        if (path[0] === "vectors") return undefined;
+        if (["vectors", "sessions", "flows"].includes(path[0])) {
+          return undefined;
+        }
         const input = copied[0] as RecordValue;
         if (!input || typeof input !== "object" || Array.isArray(input)) {
           throw capabilityError("owner_plan_invalid");
@@ -331,6 +333,11 @@ function workerContext(options: {
       return task;
     };
     const scoped = {
+      sessions: {
+        create: (...args: unknown[]) => stage(["sessions", "create"], args),
+        revoke: (...args: unknown[]) => stage(["sessions", "revoke"], args),
+      },
+      flows: { start: (...args: unknown[]) => stage(["flows", "start"], args) },
       collections: Object.fromEntries(
         Object.entries(registry.collections).map((
           [alias, definition],

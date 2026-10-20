@@ -105,7 +105,7 @@ async function fixture(
         hints.delete(listener);
       });
     },
-    async watch() {
+    watch() {
       counts.watches++;
       let closed = false;
       let pending = false;
@@ -115,7 +115,7 @@ async function fixture(
         finish?.();
       };
       hints.add(notified);
-      return {
+      return Promise.resolve({
         wait(
           { timeoutMs = 50, signal }: {
             timeoutMs?: number;
@@ -151,21 +151,17 @@ async function fixture(
             finish?.();
           }
         },
-      };
+      });
     },
-    async listStreams(input: { afterStreamOrdinal?: string }) {
+    listStreams(input: { afterStreamOrdinal?: string }) {
       counts.streams++;
-      return input.afterStreamOrdinal ? [] : [record];
+      return Promise.resolve(input.afterStreamOrdinal ? [] : [record]);
     },
-    async getStream() {
-      return record;
+    getStream() {
+      return Promise.resolve(record);
     },
-    // Terminal outputs carry the owner seq of the operation's last command.
-    async resultSequence() {
-      return "1";
-    },
-    async get() {
-      return {
+    get() {
+      return Promise.resolve({
         operationId: "op",
         namespace: "tenant",
         correlationId: "correlation",
@@ -174,13 +170,16 @@ async function fixture(
         metadata: {},
         acceptedAt: "2026-10-06T00:00:00Z",
         updatedAt: "2026-10-06T00:00:00Z",
-      };
+      });
     },
-    async listOperationEventIds(input: { afterEventOrdinal?: string }) {
-      return indexed.filter((row) =>
+    listOperationEventIds(input: { afterEventOrdinal?: string }) {
+      return Promise.resolve(indexed.filter((row) =>
         !input.afterEventOrdinal ||
         BigInt(row.eventOrdinal) > BigInt(input.afterEventOrdinal)
-      );
+      ));
+    },
+    resultSequence() {
+      return Promise.resolve(String(1001 + indexed.length));
     },
   };
   const application = {
@@ -195,10 +194,10 @@ async function fixture(
           cancelled: 0,
         });
       },
-      async resolve(_namespace: string, id: string) {
+      resolve(_namespace: string, id: string) {
         counts.eventReads++;
         const row = indexed.find((entry) => entry.eventId === id)!;
-        return {
+        return Promise.resolve({
           durable: true,
           id,
           position: String(1000 + Number(row.eventOrdinal)),
@@ -211,7 +210,7 @@ async function fixture(
           metadata: {},
           correlationId: "correlation",
           createdAt: "2026-10-06T00:00:00Z",
-        };
+        });
       },
     },
     streams: {
@@ -223,9 +222,9 @@ async function fixture(
         return body.readRange(input);
       },
     },
-    async operationStatus() {
+    operationStatus() {
       counts.status++;
-      return {
+      return Promise.resolve({
         operationId: "op",
         namespace: "tenant",
         correlationId: "correlation",
@@ -233,7 +232,7 @@ async function fixture(
         metadata: {},
         acceptedAt: "2026-10-06T00:00:00Z",
         updatedAt: "2026-10-06T00:00:00Z",
-      };
+      });
     },
   } as unknown as InternalCopilotzApplication;
   return {

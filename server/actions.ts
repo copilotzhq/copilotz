@@ -1,3 +1,4 @@
+import { credentialHeaders } from "./session-cookie.ts";
 import { facadeIngress } from "./context.ts";
 import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
 /** Durable Action ingress and authorized result recovery. @module */
@@ -96,7 +97,16 @@ export async function actionResponse(
     databaseSchema: context.databaseSchema,
   });
   await handle.detach("http_receipt_returned");
+  // Receipt acceptance is independent of current result access. A replay can
+  // install committed credentials when authorized; failed projection stays on
+  // the ordinary explicit result-recovery path.
+  const completed = status?.state === "completed"
+    ? await operationResult(application, context, handle.operationId).catch(
+      () => undefined,
+    )
+    : undefined;
   return {
+    ...(completed?.headers ? { headers: completed.headers } : {}),
     status: 202,
     data: {
       operationId: handle.operationId,
@@ -112,24 +122,39 @@ export async function operationResult(
   context: FacadeContext,
   operationId: string,
 ): Promise<HttpResponse> {
-  const result = await recordedOperationResult(
-    application,
-    context,
-    operationId,
-  );
   const runtime = context.databaseSchema &&
       context.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(context.databaseSchema)
     : application;
-  await runtime.authorization.operation(
-    context.serverScope.authority!,
+  const authorize = () =>
+    runtime.authorization.operation(
+      context.serverScope.authority!,
+      operationId,
+    );
+  const result = await recordedOperationResult(
+    application,
+    context,
     operationId,
-  );
+  ).catch(async (error) => {
+    // Availability and terminal failures must not disclose hidden operations.
+    await authorize();
+    throw error;
+  });
+  const effects = result.kind === "action" && !result.pending
+    ? await runtime.authorization.credentials.project(
+      context.serverScope.authority!,
+      operationId,
+    )
+    : [];
+  if (result.kind !== "action" || result.pending) await authorize();
   return {
     status: result.pending ? 202 : 200,
-    ...(result.kind === "collection"
-      ? {}
-      : { headers: { "cache-control": "no-store" } }),
+    ...(result.kind === "collection" ? {} : {
+      headers: {
+        "cache-control": "no-store",
+        ...credentialHeaders(effects, context.sessionCookie),
+      },
+    }),
     data: result.value,
     ...(!result.pending
       ? {

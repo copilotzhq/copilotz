@@ -324,7 +324,18 @@ export function createDatabaseScope(
     prefix: engine.assetStorage?.prefix,
     databaseSchema,
   });
+  const authorization = createAuthorizationOwner({
+    session: engine.session,
+    master: engine.secretAdapter,
+    actions: options.registry.actions,
+    databaseSchema,
+    owner: options.owner,
+    registration: engine.authorization,
+    collections: options.registry.collections,
+    operations: options.operationCatalog,
+  });
   const collections = createCollectionRuntime({
+    credentials: authorization.credentials,
     policies: collectionAuthorizations(
       engine.authorization,
       options.registry.collections,
@@ -1147,14 +1158,7 @@ export function createDatabaseScope(
     } as const;
     return result;
   };
-  const authorization = createAuthorizationOwner({
-    session: engine.session,
-    databaseSchema,
-    owner: options.owner,
-    registration: engine.authorization,
-    collections: options.registry.collections,
-    operations: options.operationCatalog,
-  });
+
   const publicScope: CopilotzEngineDatabaseScope = {
     authorization,
     observeCollection: createCollectionObserver({

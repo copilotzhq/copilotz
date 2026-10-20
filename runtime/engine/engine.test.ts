@@ -234,6 +234,7 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertEquals(tables.rows.map((row) => row.table_name), [
       "action_effects",
       "authorization_channels",
+      "authorization_effects",
       "authorization_invocations",
       "authorization_sessions",
       "content_adoptions",

@@ -26,6 +26,7 @@ export type ServerConstraints = Readonly<{
   /** Opaque catalog selection keys chosen by owner policy for admitted work. */
   observationKeys?: readonly string[];
   assets?: Readonly<{ read?: readonly string[] }>;
+  flows?: Readonly<{ start?: readonly string[] }>;
   sessions?: Readonly<{ create?: boolean; revoke?: "self" | "tenant" }>;
   actions?: Readonly<
     Record<string, Readonly<{ input?: Readonly<Record<string, unknown>> }>>

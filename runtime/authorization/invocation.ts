@@ -157,7 +157,9 @@ function bind<T extends object>(context: T, binding: Binding): T {
   const surface = (value: object, authority: Binding): object => {
     if (authority !== binding) return bind(value, authority);
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    for (const key of ["collections", "vectors", "relations"]) {
+    for (
+      const key of ["collections", "vectors", "relations", "sessions", "flows"]
+    ) {
       if (descriptors[key] && "value" in descriptors[key]) {
         descriptors[key] = {
           ...descriptors[key],

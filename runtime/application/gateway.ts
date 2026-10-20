@@ -1,3 +1,4 @@
+import { createPluginRegistry } from "../plugins/index.ts";
 import { registerRemoteAdmission } from "../execution/remote-admission.ts";
 import { hostDatabaseScopes } from "./database-scopes.ts";
 import {
@@ -168,6 +169,17 @@ export async function createCopilotzGateway(
   hostDatabaseScopes(
     options.databaseScopes,
   );
+  // Refuse an invalid composition before opening persistence or a Hypervisor,
+  // so a refusal never waits on cleanup of resources it should not have made.
+  createPluginRegistry({
+    plugins: options.plugins,
+    collections: options.collections,
+    actions: options.actions,
+    processors: options.processors,
+    views: options.views,
+    resources: options.resources,
+    adapters: options.adapters,
+  });
   const persistence = await openCopilotzPersistence(options);
   const transports = options.dispatcher
     ? ([] as const)

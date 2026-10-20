@@ -339,10 +339,11 @@ export async function createCopilotzApplication(
     options.databaseLifecycle ?? {},
   beforeRecovery?: (engine: CopilotzEngine) => void | Promise<void>,
 ): Promise<InternalCopilotzApplication> {
+  // Validate the whole composition before opening persistence: a refused
+  // composition must not leave a database owner or session open behind it.
   const requestedScopes = hostDatabaseScopes(
     options.databaseScopes,
   );
-  const persistence = await openCopilotzPersistence(options, lifecycle);
   const namespace = optionalText(options.namespace, "Namespace");
   const databaseSchema = optionalText(
     options.databaseSchema,
@@ -357,13 +358,13 @@ export async function createCopilotzApplication(
     resources: options.resources,
     adapters: options.adapters,
   }));
-  const configuredPublish = options.engine?.publish;
-
   if (
     ["collectionPolicies", "protectedActions"].some((key) =>
       Object.hasOwn(options, key)
     )
   ) throw new TypeError("Removed authorization registrations are forbidden.");
+  const persistence = await openCopilotzPersistence(options, lifecycle);
+  const configuredPublish = options.engine?.publish;
   let engine: CopilotzEngine;
   const owners = new Map<string, DatabaseOwner>();
   const retiredEngines = new Set<Promise<void>>();

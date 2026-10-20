@@ -17,6 +17,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     name: Deno, PGlite, and PostgreSQL
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     services:
       postgres:
         image: pgvector/pgvector:pg17

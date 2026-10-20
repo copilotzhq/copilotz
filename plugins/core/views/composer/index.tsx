@@ -1,8 +1,12 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { useState } from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { ActionHandle, BrowserViewContext } from "@copilotz/copilotz/web";
-import { Button, Textarea } from "@copilotz/copilotz/web/kit";
+import { Button, ConfirmAction, Textarea } from "@copilotz/copilotz/web/kit";
 function Composer(
   { threadId, text, ctx }: {
     threadId: string;
@@ -56,27 +60,38 @@ function Composer(
           Send
         </Button>
         {active && (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={stopping}
-            onClick={() => {
+          <ConfirmAction
+            trigger={
+              <Button type="button" variant="outline" disabled={stopping}>
+                {stopping ? "Stopping…" : "Stop"}
+              </Button>
+            }
+            title="Stop this response?"
+            description="This cancels the active response. Messages already received remain in the conversation."
+            confirmLabel="Stop response"
+            destructive
+            onConfirm={async () => {
               setStopping(true);
-              active.cancel().catch((cause) => {
-                setError(String(cause));
+              try {
+                await active.cancel();
+                return true;
+              } catch (cause) {
                 setStopping(false);
-              });
+                throw cause;
+              }
             }}
-          >
-            {stopping ? "Stopping…" : "Stop"}
-          </Button>
+          />
         )}
       </div>
       {!sender && <p role="status">Sign in to send messages.</p>}
     </form>
   );
 }
-export default defineView<
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  { threadId: string },
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<
   { threadId: string },
   React.ReactNode,
   BrowserViewContext
@@ -97,3 +112,5 @@ export default defineView<
     );
   },
 });
+
+export default view;

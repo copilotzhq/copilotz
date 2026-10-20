@@ -140,14 +140,137 @@ The old external packages are read-only migration inputs, not dependencies of
 the new Views. Host-specific media/voice and attachment ingestion still require
 host capabilities; no old projection engine is copied into the browser runtime.
 
-Chat opts into the existing Collection content read contract for text bodies, with
-an aggregate 256 KiB limit. Non-text assets remain explicit references. The live
-port must honor the read's `content` selection as well as authorization; snapshots
-and deltas carry resolved text entries (`kind: "text", value: string`).
+Chat opts into the existing Collection content read contract for text bodies,
+with an aggregate 256 KiB limit. Non-text assets remain explicit references. The
+live port must honor the read's `content` selection as well as authorization;
+snapshots and deltas carry resolved text entries
+(`kind: "text", value: string`).
 
 Run `deno task build:web-css` to compile the first-party kit and View styles to
 `dist/web.css` for a host to include.
 
-Host-selected browser capabilities can be injected through `adapters` and read as
-`ctx.adapters.namespace.alias`. The host grants these ports explicitly; the core
-neither imports UI libraries nor obtains browser capabilities on its own.
+Host-selected browser capabilities can be injected through `adapters` and read
+as `ctx.adapters.namespace.alias`. The host grants these ports explicitly; the
+core neither imports UI libraries nor obtains browser capabilities on its own.
+
+## Kit components and source packaging
+
+The kit also exports Radix `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, and
+`DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`,
+`DropdownMenuItem`, `DropdownMenuLabel`, `DropdownMenuSeparator`. Forms share
+`Field` (a generated label/control ID), `NativeSelect` and `Checkbox`. Feedback
+uses `Notice`, `EmptyState` and `CopyField`; pass the host's async clipboard
+function to `CopyField` as `copy`.
+
+`ConfirmAction` wraps a trigger and a Dialog. Its `onConfirm` returns true to
+close or false to remain open. Rejected callbacks display an error and allow
+retry. While pending, repeat submissions and dismissal are blocked. Both Stop
+and other disruptive app actions can use the same confirmation pattern.
+
+`Frame` takes `{ ctx, title, description?, actions?, children? }`: full/panel
+modes render a Screen, while dialog mode supplies a Dialog title and description
+inside the host's Dialog. Actions are available in every mode. The UI pane host
+renders dialog content full-screen on small viewports and as a bounded modal on
+larger ones. `PaneBoundary` contains component failures;
+`showSafely(ctx, ref,
+hints, label?)` additionally contains synchronous View
+resolution/render errors. Changing the reference resets the boundary. Reads
+still run synchronously in the tracked View evaluation.
+
+All plugin TSX has explicit React value imports and file-level classic JSX
+pragmas. Consumers can use their default TSX transform; they need no automatic
+JSX override for these sources. Keep a single React/React DOM installation.
+
+The npm source package exports `@copilotz/copilotz/web/kit/styles.css`. Import
+it into the host's Tailwind CSS 4 pipeline, alongside the host's source
+scanning. The npm manifest mirrors every executable JSR export and includes all
+TS/TSX sources; use a bundler that compiles dependency TS/TSX. For the npm
+aliases of JSR dependencies, configure `@jsr:registry=https://npm.jsr.io` in the
+consuming project's `.npmrc`. React and React DOM are peer dependencies.
+
+JSR's Deno 2.9.2 publisher rejects CSS as an export entry. The same stylesheet
+is included in the JSR archive at `plugins/ui-kit/styles.css`, but cannot be a
+JSR export. JSR-only hosts can vendor that asset from the pinned release or use
+the repository's `build:web-css` task. This is an asset packaging distinction;
+both distributions use the same components and stylesheet. `check:surface`
+verifies npm/JSR export parity and publication inclusion; package contracts
+check the npm archive and a consumer without JSX compiler options.
+`npm pack --dry-run` previews the source archive; the release workflow still
+publishes JSR.
+
+## Composing workspace panes and navigation
+
+`ui.workspace` (shows `workspace`) is now a composition of two independent
+Views:
+
+- `ui.panes` (shows `workspacePanes`) reads `workspace.main` and owns focus,
+  context, swap/close controls, pane error boundaries and dialogs.
+- `ui.navigator` (shows `workspaceNavigator`) owns resource navigation and the
+  ⌘K/Ctrl-K palette. It does not read or render the panes.
+
+The View definitions are exported as `panes`, `navigator` and `workspace` from
+`/ui/web`. An app root View can render its own navigator next to
+`ctx.show({ shows: "workspacePanes", value: null })`. Call `ctx.show` during the
+root View's render to preserve read tracking; do not defer it to a React effect.
+The default workspace continues to compose the provided navigator and panes.
+
+`workspace.main` contains `focus`, `context`, and `dialog`, each a ViewReference
+or null. Focus renders full, context renders panel, and dialog renders dialog.
+The browser Actions invoke these Collection commands atomically:
+
+| Action alias | Command   | Input and behavior                                                                                                                                                                      |
+| ------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uiOpen`     | `open`    | `{ reference, source?, region?, mode? }`; navigator/command/url choose focus and demote the previous focus; links choose context; `mode: "dialog"` or `region: "dialog"` opens a dialog |
+| `uiReplace`  | `replace` | `{ reference, region? }`; replace only that region without demotion (default context)                                                                                                   |
+| `uiSet`      | `set`     | `{ focus?, context?, dialog? }`; exact snapshot, omitted regions become null                                                                                                            |
+| `uiRestore`  | `restore` | Same exact snapshot semantics; suitable for history or saved state                                                                                                                      |
+| `uiSwap`     | `swap`    | Exchange focus/context, preserving dialog                                                                                                                                               |
+| `uiClose`    | `close`   | `{ region? }`; clear just that region (default context)                                                                                                                                 |
+
+Use `workspaceUrlStorageAdapter(host, codec)` for readable deep links. The host
+supplies `read(): URL` and `replace(URL)`; the codec supplies
+`decode(URL): WorkspaceState | undefined` and
+`encode(URL, WorkspaceState): void`. The adapter copies the URL before encoding.
+The codec owns route conventions and must preserve unrelated parameters. Attach
+it as the storage named by `uiWebPlugin("url")`. It restores before the first
+View mounts and saves through `runtime.flushStorage()`. On browser history
+navigation, call
+`runtime.actions.uiRestore(codec.decode(new URL(location.href))).result()` for a
+workspace route. An undefined decode means the route does not belong to the
+workspace; the host should choose its appropriate root View instead.
+
+```ts
+const codec = {
+  decode(url: URL) {
+    const id = url.searchParams.get("thread");
+    return {
+      focus: id ? { shows: "thread", value: { id } } : null,
+      context: null,
+      dialog: null,
+    };
+  },
+  encode(url: URL, state: WorkspaceState) {
+    const id = state.focus?.shows === "thread"
+      ? (state.focus.value as { id: string }).id
+      : undefined;
+    if (id) url.searchParams.set("thread", id);
+    else url.searchParams.delete("thread");
+  },
+};
+// This example stores only the thread focus; richer codecs encode all regions.
+```
+
+## Core and admin View contracts
+
+Threads display and create the Collection's `name`. `/core/web` exports
+`messageReadSelection` (the bounded text content options) and
+`readThreadMessages(ctx, threadId)` (the canonical thread query using those
+options). Apps reuse these in tracked View rendering.
+
+`createAdminWebPlugin({ actionIds: { agents: "app.admin.agents" } })` binds
+Action aliases to configured server IDs; omitted IDs retain the standard
+registry values. `adminWebPlugin` is the default instance. All query Views,
+including the agent detail View, read aliases. `agent` detail shows public agent
+fields from the authorized agents query, and `participant` detail reads its
+Collection by ID. Both accept `{ id }` and full/panel/dialog densities. Admin
+list links open those details through the host's navigation port.

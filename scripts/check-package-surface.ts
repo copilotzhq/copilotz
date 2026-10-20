@@ -1,3 +1,4 @@
+import { globToRegExp } from "@std/path";
 import { moduleSpecifiers } from "./check-plugin-boundaries.ts";
 
 const repositoryRoot = new URL("../", import.meta.url);
@@ -5,8 +6,10 @@ const configuration = JSON.parse(
   await Deno.readTextFile(new URL("deno.json", repositoryRoot)),
 ) as {
   name: string;
+  version: string;
   exports: Record<string, string>;
   imports: Record<string, string>;
+  publish: { include: string[]; exclude: string[] };
 };
 
 const packageName = "@copilotz/copilotz";
@@ -16,8 +19,55 @@ if (configuration.name !== packageName) {
   );
 }
 
-const exportTargets = Object.values(configuration.exports);
-for (const [subpath, target] of Object.entries(configuration.exports)) {
+const npmPackage = JSON.parse(
+  await Deno.readTextFile(new URL("package.json", repositoryRoot)),
+) as {
+  name: string;
+  version: string;
+  exports: Record<string, string>;
+  dependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+};
+if (npmPackage.version !== configuration.version) {
+  throw new Error("npm and JSR versions differ");
+}
+if (npmPackage.name !== configuration.name) {
+  throw new Error("npm and JSR names differ");
+}
+for (const [path, target] of Object.entries(configuration.exports)) {
+  if (npmPackage.exports[path] !== target) {
+    throw new Error(`npm export mismatch: ${path}`);
+  }
+}
+if (
+  npmPackage.exports["./web/kit/styles.css"] !== "./plugins/ui-kit/styles.css"
+) {
+  throw new Error("npm must export the kit stylesheet");
+}
+const allExportTargets = [
+  ...new Set([
+    ...Object.values(configuration.exports),
+    ...Object.values(npmPackage.exports),
+  ]),
+];
+const exportTargets = allExportTargets.filter((target) =>
+  /\.[cm]?[jt]sx?$/.test(target)
+);
+function assertPublished(target: string): void {
+  const path = target.replace(/^\.\//, "");
+  const matches = (patterns: string[]) =>
+    patterns.some((pattern) => globToRegExp(pattern).test(path));
+  if (
+    !matches(configuration.publish.include) ||
+    matches(configuration.publish.exclude)
+  ) {
+    throw new Error(
+      `Package surface file excluded from publication: ${target}`,
+    );
+  }
+}
+for (const [subpath, target] of Object.entries(npmPackage.exports)) {
+  assertPublished(target);
   const stat = await Deno.stat(new URL(target, repositoryRoot));
   if (!stat.isFile) {
     throw new Error(`Package export ${subpath} is not a file: ${target}`);
@@ -86,6 +136,7 @@ async function* productionSources(
 
 const production = [];
 for await (const file of productionSources(repositoryRoot)) {
+  assertPublished(file.path);
   production.push(file);
 }
 
@@ -203,5 +254,5 @@ if (unusedDependencies.length) {
 }
 
 console.log(
-  `Package surface passed: ${exportTargets.length} exports have JSR-safe self-import mappings, ${externalImports.length} external imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
+  `Package surface passed: ${exportTargets.length} executable exports have JSR-safe self-import mappings, ${allExportTargets.length} npm/JSR targets are included for publication, ${externalImports.length} external imports, ${production.length} production modules, and dependency wrappers are reachable and release-clean.`,
 );

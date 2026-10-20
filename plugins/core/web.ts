@@ -53,3 +53,5 @@ export const coreWebPlugin: BrowserPlugin = {
     },
   },
 };
+
+export { messageReadSelection, readThreadMessages } from "./views/reads.ts";

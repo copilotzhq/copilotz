@@ -1,4 +1,8 @@
-import type React from "react";
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
 import { Badge, Card, CardContent, Markdown } from "@copilotz/copilotz/web/kit";
@@ -17,7 +21,11 @@ export function messageText(content: unknown): string {
   }
   return "";
 }
-export default defineView<Row, React.ReactNode, BrowserViewContext>({
+const view: import("@copilotz/copilotz/views").ViewDefinition<
+  Row,
+  React.ReactNode,
+  BrowserViewContext
+> = defineView<Row, React.ReactNode, BrowserViewContext>({
   id: "core.message",
   shows: "message",
   renderer: "react",
@@ -36,3 +44,5 @@ export default defineView<Row, React.ReactNode, BrowserViewContext>({
     );
   },
 });
+
+export default view;

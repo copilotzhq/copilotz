@@ -1,4 +1,7 @@
-import type { ActionDefinition } from "@copilotz/copilotz/actions";
+import {
+  type ActionDefinition,
+  externalEffect,
+} from "@copilotz/copilotz/actions";
 /**
  * Defines the bounded HTTP Request Action.
  *
@@ -132,36 +135,41 @@ export const httpRequestAction: ActionDefinition<
         : undefined;
       if (context.signal.aborted) abort();
 
-      const startTime = Date.now();
-      const response = await fetch(url, {
-        method,
-        headers: requestHeaders,
-        body: method !== "GET" ? body : undefined,
-        signal: controller.signal,
-      });
+      const dispatch = async () => {
+        const startTime = Date.now();
+        const response = await fetch(url, {
+          method,
+          headers: requestHeaders,
+          body: method !== "GET" ? body : undefined,
+          signal: controller.signal,
+        });
 
-      const contentType = response.headers.get("content-type") || "";
-      const rawText = await response.text();
-      const maxChars = clampMaxResponseChars(maxResponseChars);
-      const truncatedBody = truncateResponseBody(rawText, maxChars);
-      let responseBody: unknown = truncatedBody.text;
+        const contentType = response.headers.get("content-type") || "";
+        const rawText = await response.text();
+        const maxChars = clampMaxResponseChars(maxResponseChars);
+        const truncatedBody = truncateResponseBody(rawText, maxChars);
+        let responseBody: unknown = truncatedBody.text;
 
-      if (
-        contentType.includes("application/json") && !truncatedBody.truncated
-      ) {
-        responseBody = JSON.parse(rawText);
-      }
+        if (
+          contentType.includes("application/json") && !truncatedBody.truncated
+        ) {
+          responseBody = JSON.parse(rawText);
+        }
 
-      return {
-        success: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: responseBody,
-        bodyLength: truncatedBody.length,
-        bodyTruncated: truncatedBody.truncated,
-        responseTime: Date.now() - startTime,
+        return {
+          success: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseBody,
+          bodyLength: truncatedBody.length,
+          bodyTruncated: truncatedBody.truncated,
+          responseTime: Date.now() - startTime,
+        };
       };
+      return method === "GET"
+        ? await dispatch()
+        : await externalEffect(context, "http.request", dispatch);
     } catch (error) {
       if (callerCancelled || context.signal.aborted) {
         throw actionAbortError(context.signal);

@@ -1,24 +1,30 @@
 import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
+  createOwnerCapabilityHost,
+  type OwnerCapabilityHost,
+} from "./owner-capabilities.ts";
+import { createOwnerWorkerWorkloads } from "./owner-capability-worker.ts";
+import {
+  type DatabaseOwner,
+  openDatabaseOwner,
+  releaseDatabaseOwner,
+} from "../engine/commands.ts";
+import { registerDeliveryAlarms } from "./alarms.ts";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import {
-  createCoreSchemaStatements,
   createCoreTableNames,
   createEventStore,
   createSqlSession,
   type EventStore,
+  provisionCopilotzSchema,
 } from "../events/index.ts";
 import {
   createPluginRegistry,
   definePlugin,
   defineProcessor,
+  isNonRetryableError,
   markNonRetryable,
   type PluginRegistry,
   type Processor,
@@ -33,6 +39,7 @@ import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { summarizeDeliveryError } from "./diagnostics.ts";
 type Fixture = Readonly<{
   db: TestDatabase;
+  owner: DatabaseOwner;
   store: EventStore;
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
@@ -56,12 +63,13 @@ async function createFixture(options?: {
   handle?: (eventId: string, idempotencyKey: string) => void | Promise<void>;
   onError?: Processor["onError"];
 }): Promise<Fixture> {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const session = createSqlSession(db);
-  const schema = "copilotz_execution";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  const schema = `execution_${crypto.randomUUID().replaceAll("-", "")}`;
+  await provisionCopilotzSchema(session, schema);
+  const owner = await openDatabaseOwner(session, schema);
   const store = createEventStore({
     session,
     schema,
@@ -110,7 +118,7 @@ async function createFixture(options?: {
     processors: { observer: processor },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
-  return Object.freeze({ db, store, registry, createContext, calls });
+  return Object.freeze({ db, owner, store, registry, createContext, calls });
 }
 async function appendMessage(fixture: Fixture) {
   const draft = {
@@ -125,6 +133,12 @@ async function appendMessage(fixture: Fixture) {
   );
 }
 async function closeFixture(fixture: Fixture): Promise<void> {
+  releaseDatabaseOwner(fixture.owner);
+  if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+    await fixture.db.query(
+      `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,
+    );
+  }
   await fixture.db.close();
 }
 async function waitForDeliveryStatus(
@@ -141,19 +155,7 @@ async function waitForDeliveryStatus(
   }
   throw new Error(`Delivery '${id}' did not reach '${status}'.`);
 }
-async function waitForScheduledCallback(
-  callbacks: readonly (() => void)[],
-): Promise<() => void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const callback = callbacks.at(-1);
-    if (callback) {
-      return callback;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
-  throw new Error("Expected a delivery recovery callback to be scheduled.");
-}
-Deno.test("A24 private in-process Oxian recovers and executes a durable delivery", async () => {
+Deno.test("direct local execution recovers and executes a durable delivery", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
   const executor = createDeliveryExecutor({
@@ -163,7 +165,7 @@ Deno.test("A24 private in-process Oxian recovers and executes a durable delivery
     workerId: "copilotz-private-test",
   });
   try {
-    assertEquals(executor.ownership, "private_hypervisor");
+    assertEquals(executor.ownership, "local");
     const recovery = await executor.dispatchRecoverable({
       namespace: "tenant-a",
     });
@@ -209,9 +211,13 @@ Deno.test("a settled delivery reports its row, so success is not read back", asy
       if (failing.current) throw new Error("boom");
     },
   });
-  let reads = 0;
+  let reads = 0, eventReads = 0;
   const store: EventStore = {
     ...fixture.store,
+    getEvent: (id) => {
+      eventReads++;
+      return fixture.store.getEvent(id);
+    },
     getDelivery: (id) => {
       reads++;
       return fixture.store.getDelivery(id);
@@ -231,6 +237,11 @@ Deno.test("a settled delivery reports its row, so success is not read back", asy
     const result = await handle.done;
     assertEquals(result.delivery.status, "succeeded");
     assertEquals(reads, 0, "success reports its own row");
+    assertEquals(
+      eventReads,
+      1,
+      "placement carries the owner-resolved event into execution",
+    );
     // The reported row is what the database holds.
     assertEquals(
       result.delivery,
@@ -251,110 +262,7 @@ Deno.test("a settled delivery reports its row, so success is not read back", asy
     await closeFixture(fixture);
   }
 });
-Deno.test("recovery owner automatically reclaims a lease that expires after its first sweep", async () => {
-  const fixture = await createFixture();
-  const committed = await appendMessage(fixture);
-  const delivery = committed.deliveries[0];
-  const callbacks: Array<() => void> = [];
-  const executor = createDeliveryExecutor({
-    store: fixture.store,
-    registry: fixture.registry,
-    createContext: fixture.createContext,
-    workerId: "copilotz-expired-lease-recovery-test",
-    continuousRecovery: true,
-    scheduler: {
-      schedule(callback) {
-        callbacks.push(callback);
-        return callback;
-      },
-      cancel() {},
-    },
-  });
-  try {
-    assertExists(
-      await fixture.store.claimDelivery({
-        id: delivery.id,
-        owner: "crashed",
-        leaseMs: 60000,
-      }),
-    );
-    const initial = await executor.dispatchRecoverable();
-    assertEquals(initial.handles, []);
-    const recoverExpiredLease = await waitForScheduledCallback(callbacks);
-    const tables = createCoreTableNames("copilotz_execution");
-    await fixture.db.query(
-      `UPDATE ${tables.event_deliveries}
-       SET lease_expires_at = NOW() - INTERVAL '1 millisecond'
-       WHERE id = $1`,
-      [delivery.id],
-    );
-    // The timer is the only second recovery trigger: no caller invokes
-    // dispatchRecoverable again after the lease becomes expired.
-    recoverExpiredLease();
-    const settled = await waitForDeliveryStatus(
-      fixture.store,
-      delivery.id,
-      "succeeded",
-    );
-    assertEquals(settled.attempts, 2);
-    assertEquals(fixture.calls.length, 1);
-  } finally {
-    await executor.shutdown();
-    await closeFixture(fixture);
-  }
-});
-Deno.test("continuous recovery leaves empty queues idle and cancels a settled queue's timer", async () => {
-  const fixture = await createFixture();
-  const callbacks: Array<() => void> = [];
-  const active = new Set<() => void>();
-  const executor = createDeliveryExecutor({
-    store: fixture.store,
-    registry: fixture.registry,
-    createContext: fixture.createContext,
-    workerId: "copilotz-idle-recovery-test",
-    continuousRecovery: true,
-    scheduler: {
-      schedule(callback) {
-        callbacks.push(callback);
-        active.add(callback);
-        return callback;
-      },
-      cancel(handle) {
-        active.delete(handle as () => void);
-      },
-    },
-  });
-  try {
-    await executor.dispatchRecoverable();
-    // Recovery scheduling is asynchronous after the sweep has returned.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assertEquals(callbacks, []);
-
-    const committed = await appendMessage(fixture);
-    const id = committed.deliveries[0].id;
-    assertExists(
-      await fixture.store.claimDelivery({
-        id,
-        owner: "other",
-        leaseMs: 60_000,
-      }),
-    );
-    await executor.dispatchRecoverable();
-    const timer = await waitForScheduledCallback(callbacks);
-    assert(active.has(timer), "New recoverable work arms a timer after idle.");
-
-    await fixture.store.succeedDelivery(id, "other");
-    await executor.dispatchRecoverable();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assertEquals(active.size, 0, "An empty queue cancels the previous timer.");
-    assertEquals(callbacks.length, 1, "An empty queue never rearms recovery.");
-  } finally {
-    await executor.shutdown();
-    await closeFixture(fixture);
-  }
-});
-
-Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep", async () => {
+Deno.test("a filtered recovery never dispatches another namespace", async () => {
   const fixture = await createFixture();
   const consumer = "processor:messages.observe";
   const tenantA = await fixture.store.append({
@@ -379,20 +287,11 @@ Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep",
   }, [consumer]);
   const deliveryA = tenantA.deliveries[0];
   const deliveryB = tenantB.deliveries[0];
-  const callbacks: Array<() => void> = [];
   const executor = createDeliveryExecutor({
     store: fixture.store,
     registry: fixture.registry,
     createContext: fixture.createContext,
     workerId: "copilotz-filtered-recovery-test",
-    continuousRecovery: true,
-    scheduler: {
-      schedule(callback) {
-        callbacks.push(callback);
-        return callback;
-      },
-      cancel() {},
-    },
   });
   try {
     for (const delivery of [deliveryA, deliveryB]) {
@@ -411,7 +310,6 @@ Deno.test("a filtered recovery cannot activate a cross-tenant continuous sweep",
     // Filtered recovery is an ordinary targeted operation, not a Gateway
     // recovery-owner activation. It therefore cannot later sweep tenant B.
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assertEquals(callbacks, []);
     assertEquals((await fixture.store.getDelivery(deliveryA.id))?.attempts, 1);
     assertEquals((await fixture.store.getDelivery(deliveryB.id))?.attempts, 1);
     assertEquals(
@@ -441,6 +339,8 @@ Deno.test("delivery failures retry through the same logical consumer and stable 
     createContext: fixture.createContext,
     workerId: "copilotz-retry-test",
   });
+  registerDeliveryAlarms(fixture.owner, fixture.store, executor);
+  fixture.owner.activate();
   try {
     const first = await executor.dispatchDelivery(delivery);
     assertEquals((await first.done).delivery.status, "retry_wait");
@@ -483,6 +383,8 @@ Deno.test("retryable failures automatically exhaust into a dead letter", async (
     createContext: fixture.createContext,
     workerId: "copilotz-retry-exhaustion-test",
   });
+  registerDeliveryAlarms(fixture.owner, fixture.store, executor);
+  fixture.owner.activate();
   try {
     const first = await executor.dispatchDelivery(delivery);
     assertEquals((await first.done).delivery.status, "retry_wait");
@@ -546,7 +448,14 @@ for (
       },
       onError(cause, event, context) {
         recoveries++;
-        assertEquals(cause, error);
+        // Owner capabilities transport error data, not the worker's prototype/stack.
+        assert(cause instanceof Error);
+        assertEquals(cause.name, error.name);
+        assertEquals(cause.message, error.message);
+        assertEquals(
+          isNonRetryableError(cause),
+          disposition === "non-retryable",
+        );
         assertEquals(event.namespace, "tenant-a");
         assertEquals(context.signal.aborted, false);
         if (disposition === "rejected") {
@@ -562,6 +471,8 @@ for (
       registry: fixture.registry,
       createContext: fixture.createContext,
     });
+    registerDeliveryAlarms(fixture.owner, fixture.store, executor);
+    fixture.owner.activate();
     try {
       const handle = await executor.dispatchDelivery(delivery);
       await handle.done;
@@ -605,6 +516,8 @@ Deno.test("successful retry never invokes terminal Processor recovery", async ()
     registry: fixture.registry,
     createContext: fixture.createContext,
   });
+  registerDeliveryAlarms(fixture.owner, fixture.store, executor);
+  fixture.owner.activate();
   try {
     const handle = await executor.dispatchDelivery(delivery);
     await handle.done;
@@ -634,6 +547,7 @@ Deno.test("cancelled execution never invokes terminal Processor recovery", async
     const { event, deliveries } = await appendMessage(fixture);
     const delivery = deliveries[0];
     const workload = createDeliveryWorkload({
+      localExecution: true,
       store: fixture.store,
       registry: fixture.registry,
       createContext: fixture.createContext,
@@ -647,8 +561,11 @@ Deno.test("cancelled execution never invokes terminal Processor recovery", async
         },
       }),
       sendMetadata: async () => {},
+      callHost: () =>
+        Promise.reject(new Error("owner test has no reverse callback")),
       metadata: {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: 1,
         databaseSchema: fixture.store.databaseSchema,
         namespace: event.namespace,
         eventId: event.id,
@@ -691,6 +608,44 @@ Deno.test("concurrent local dispatch calls share one physical delivery attempt",
     await closeFixture(fixture);
   }
 });
+Deno.test("a concurrent dispatch joins in-flight work even when the first finishes before its read", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  let reads = 0;
+  let firstDone: Promise<unknown> | undefined;
+  // The second read would resolve only after the first dispatch has finished.
+  const store = new Proxy(fixture.store, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== "getDelivery" || typeof value !== "function") {
+        return value;
+      }
+      return async (...args: unknown[]) => {
+        if (++reads > 1) await firstDone;
+        return await Reflect.apply(value, target, args);
+      };
+    },
+  });
+  const executor = createDeliveryExecutor({
+    store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "copilotz-dedup-race-test",
+  });
+  try {
+    const first = executor.dispatchDelivery(committed.deliveries[0].id);
+    firstDone = first.then((handle) => handle.done);
+    const second = executor.dispatchDelivery(committed.deliveries[0].id);
+    const [a, b] = await Promise.all([first, second]);
+    assertEquals(a.operationId, b.operationId);
+    assertEquals(reads, 1);
+    assertEquals((await b.done).delivery.attempts, 1);
+    assertEquals(fixture.calls.length, 1);
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
 Deno.test("scope progress resolves when local work for the scope finishes", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => release = resolve);
@@ -726,53 +681,6 @@ Deno.test("scope progress resolves when local work for the scope finishes", asyn
     await closeFixture(fixture);
   }
 });
-Deno.test("A52 a shared Hypervisor survives Copilotz worker shutdown", async () => {
-  const fixture = await createFixture();
-  const committed = await appendMessage(fixture);
-  const transport = {
-    type: "in-process",
-    config: { topic: `copilotz.shared.${crypto.randomUUID()}` },
-  } as const;
-  const hypervisor = createHypervisor({
-    transports: [transport],
-  });
-  const executor = createDeliveryExecutor({
-    store: fixture.store,
-    registry: fixture.registry,
-    createContext: fixture.createContext,
-    hypervisor,
-    transport,
-    workerId: "shared-copilotz",
-  });
-  let applicationWorker: ReturnType<typeof createWorker> | undefined;
-  try {
-    assertEquals(executor.ownership, "shared_hypervisor");
-    const result =
-      await (await executor.dispatchDelivery(committed.deliveries[0])).done;
-    assertEquals(result.delivery.status, "succeeded");
-    await executor.shutdown();
-    assertEquals(hypervisor.snapshot().inProcessWorkers, 0);
-    applicationWorker = createWorker({
-      id: "application-worker",
-      transport,
-      workloads: {
-        "application.probe.v1": () => ({ metadata: { alive: true } }),
-      },
-    });
-    await applicationWorker.ready;
-    const probe = await hypervisor.dispatch({
-      workload: "application.probe.v1",
-    });
-    assertEquals(await probe.metadata, { alive: true });
-    assertEquals((await probe.completed).status, "completed");
-  } finally {
-    await executor.shutdown();
-    await applicationWorker?.stop();
-    await applicationWorker?.closed;
-    await hypervisor.shutdown();
-    await closeFixture(fixture);
-  }
-});
 Deno.test("A53 remote dispatch contains serializable identities and resolves on the worker", async () => {
   const fixture = await createFixture();
   const committed = await appendMessage(fixture);
@@ -782,17 +690,29 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
   } as const;
   const hypervisor = createHypervisor({
     transports: [transport],
+    workerCalls: { admit: (binding) => ownerHost.workerCalls.admit(binding) },
+  }, {
+    onDisconnect: (event) => ownerHost.lifecycle?.onDisconnect?.(event),
+    onComplete: (event) => ownerHost.lifecycle?.onComplete?.(event),
+  });
+  const ownerHost: OwnerCapabilityHost = createOwnerCapabilityHost({
+    sessions: hypervisor.sessions,
+    registry: fixture.registry,
+    resolveAuthority: () => fixture.store.executionAuthority(),
+    createWorkloads: ({ registry, trackAttempt }) => ({
+      "copilotz.delivery.v1": createDeliveryWorkload({
+        trackAttempt,
+        store: fixture.store,
+        registry,
+        createContext: fixture.createContext,
+      }),
+    }),
   });
   const worker = createWorker({
     id: "external-copilotz",
     transport,
-    workloads: {
-      "copilotz.delivery.v1": createDeliveryWorkload({
-        store: fixture.store,
-        registry: fixture.registry,
-        createContext: fixture.createContext,
-      }),
-    },
+    hostCalls: {},
+    workloads: createOwnerWorkerWorkloads({ registry: fixture.registry }),
   });
   await worker.ready;
   const captured: unknown[] = [];
@@ -820,6 +740,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     assertEquals(captured.length, 1);
     assertEquals(captured[0], {
       schema: "copilotz.delivery.dispatch.v1",
+      ownerEpoch: 1,
       databaseSchema: fixture.store.databaseSchema,
       deliveryId: committed.deliveries[0].id,
       eventId: committed.event.id,
@@ -837,30 +758,7 @@ Deno.test("A53 remote dispatch contains serializable identities and resolves on 
     await worker.stop();
     await worker.closed;
     await hypervisor.shutdown();
-    await closeFixture(fixture);
-  }
-});
-Deno.test("shared Hypervisors require their explicit event-fabric transport", async () => {
-  const fixture = await createFixture();
-  const transport = {
-    type: "in-process",
-    config: { topic: `copilotz.explicit.${crypto.randomUUID()}` },
-  } as const;
-  const hypervisor = createHypervisor({ transports: [transport] });
-  try {
-    assertThrows(
-      () =>
-        createDeliveryExecutor({
-          store: fixture.store,
-          registry: fixture.registry,
-          createContext: fixture.createContext,
-          hypervisor,
-        }),
-      TypeError,
-      "requires its declared in-process transport",
-    );
-  } finally {
-    await hypervisor.shutdown();
+    await ownerHost.close();
     await closeFixture(fixture);
   }
 });
@@ -1217,5 +1115,162 @@ Deno.test("A55 delivery execution core is factory-first and runtime-neutral", as
       !/serializedClosure|producedEvents|shouldProcess/.test(source),
       module,
     );
+  }
+});
+
+Deno.test("a stale owner dispatch cannot claim a delivery under the new epoch", async () => {
+  const fixture = await createFixture();
+  try {
+    const { event, deliveries: [delivery] } = await appendMessage(fixture);
+    const authority = await fixture.store.executionAuthority();
+    const workload = createDeliveryWorkload({
+      localExecution: true,
+      store: fixture.store,
+      registry: fixture.registry,
+      createContext: fixture.createContext,
+    });
+    await assertRejects(
+      async () =>
+        await workload({
+          streamId: "stale",
+          workload: "copilotz.delivery.v1",
+          input: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          sendMetadata: () => Promise.resolve(),
+          callHost: () =>
+            Promise.reject(new Error("owner test has no reverse callback")),
+          metadata: {
+            schema: "copilotz.delivery.dispatch.v1",
+            ownerEpoch: authority.epoch + 1,
+            databaseSchema: fixture.store.databaseSchema,
+            namespace: event.namespace,
+            eventId: event.id,
+            deliveryId: delivery.id,
+            consumerId: delivery.consumerId,
+            dispatchAttemptId: "stale",
+            idempotencyKey: delivery.id,
+          },
+          signal: new AbortController().signal,
+        }),
+      Error,
+      "stale owner epoch",
+    );
+    assertEquals(
+      (await fixture.store.getDelivery(delivery.id))?.status,
+      "pending",
+    );
+    assertEquals(fixture.calls.length, 0);
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("owner alarm recovers an expired remote lease without an executor recovery timer", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  const delivery = committed.deliveries[0];
+  await fixture.store.claimDelivery({
+    id: delivery.id,
+    owner: "remote-lost",
+    leaseMs: 50,
+  });
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "owner-remote-recovery",
+  });
+  registerDeliveryAlarms(fixture.owner, fixture.store, executor);
+  try {
+    fixture.owner.activate();
+    const completed = await waitForDeliveryStatus(
+      fixture.store,
+      delivery.id,
+      "succeeded",
+    );
+    assertEquals(completed.attempts, 2);
+    assertEquals(fixture.calls.length, 1);
+    assertEquals(
+      (await fixture.db.query(
+        `SELECT * FROM ${
+          createCoreTableNames(fixture.store.databaseSchema).owner_deadlines
+        } WHERE source='deliveries'`,
+      )).rows,
+      [],
+    );
+  } finally {
+    fixture.owner.pauseAlarms();
+    await fixture.owner.drainAlarms();
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("owner retry alarm retains the original backoff across executor and owner restart", async () => {
+  const fixture = await createFixture();
+  const delivery = (await appendMessage(fixture)).deliveries[0];
+  await fixture.store.claimDelivery({ id: delivery.id, owner: "remote-first" });
+  const retry = await fixture.store.failDelivery({
+    id: delivery.id,
+    owner: "remote-first",
+    error: new Error("retry"),
+    backoffMs: 500,
+  });
+  assertExists(retry);
+  const table =
+    createCoreTableNames(fixture.store.databaseSchema).owner_deadlines;
+  const before = (await fixture.db.query<{ due_at: Date | string }>(
+    `SELECT due_at FROM ${table} WHERE source='deliveries' AND key=$1`,
+    [delivery.id],
+  )).rows[0];
+  assertEquals(new Date(before.due_at).toISOString(), retry.availableAt);
+  releaseDatabaseOwner(fixture.owner);
+  const owner = await openDatabaseOwner(
+    fixture.store.session,
+    fixture.store.databaseSchema,
+  );
+  const store = createEventStore({
+    session: fixture.store.session,
+    schema: fixture.store.databaseSchema,
+    random: () => 0,
+  });
+  const executor = createDeliveryExecutor({
+    store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "owner-retry-restart",
+  });
+  registerDeliveryAlarms(owner, store, executor);
+  try {
+    const after = (await fixture.db.query<{ due_at: Date | string }>(
+      `SELECT due_at FROM ${table} WHERE source='deliveries' AND key=$1`,
+      [delivery.id],
+    )).rows[0];
+    assertEquals(
+      new Date(after.due_at).toISOString(),
+      new Date(before.due_at).toISOString(),
+    );
+    owner.activate();
+    const completed = await waitForDeliveryStatus(
+      store,
+      delivery.id,
+      "succeeded",
+    );
+    assertEquals(completed.attempts, 2);
+    assertEquals(fixture.calls.length, 1);
+  } finally {
+    owner.pauseAlarms();
+    await owner.drainAlarms();
+    await executor.shutdown();
+    releaseDatabaseOwner(owner);
+    if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+      await fixture.db.query(
+        `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,
+      );
+    }
+    await fixture.db.close();
   }
 });

@@ -1,5 +1,7 @@
 /** Browser-safe, backpressured decoding of canonical multipart frames. @module */
 
+import { isStreamTerminalStatus } from "../runtime/streams/observation.ts";
+import { streamErrorOutput } from "../runtime/streams/terminal.ts";
 import { MAX_LOGICAL_OUTPUT_BYTES } from "../runtime/streams/limits.ts";
 export { OBSERVATION_FRAME_CAPACITY_CODE } from "../runtime/streams/limits.ts";
 
@@ -51,6 +53,11 @@ export class TruncatedObservationError extends ProtocolError {
 /** A deliberate bounded-observation handoff; reconnect using the last applied frame. */
 export class RenewalObservationError extends ProtocolError {
   override name = "RenewalObservationError";
+}
+
+/** Repair from the last application-applied checkpoint, never the failed frame's cursor. */
+export class ResetObservationError extends ProtocolError {
+  override name = "ResetObservationError";
 }
 
 const encoder = new TextEncoder();
@@ -126,6 +133,9 @@ export async function* decodeObservation(
     }
   };
   const streams = new Map<string, number | undefined>();
+  const delivered = new Map<string, number>();
+  let framePosition = 0;
+  let ownerHead = "0";
   try {
     let marker = await line();
     while (marker !== `--${boundary}--`) {
@@ -182,10 +192,58 @@ export async function* decodeObservation(
       buffer = buffer.subarray(length + 2);
       const checkpoint = headers.get("x-copilotz-cursor");
       if (!checkpoint) throw new ProtocolError("Frame has no checkpoint.");
+      const rawPosition = headers.get("x-copilotz-position") ?? "";
+      if (
+        !/^[1-9][0-9]*$/.test(rawPosition) ||
+        !Number.isSafeInteger(Number(rawPosition))
+      ) throw new ProtocolError("Invalid observation frame position.");
+      if (Number(rawPosition) !== framePosition + 1) {
+        throw new ResetObservationError(
+          "Observation push was lost; replay is required.",
+          { code: "observation_reset_required" },
+        );
+      }
+      framePosition = Number(rawPosition);
       if (kind === "output") {
         const output = object(bytes);
         if (typeof output.type !== "string") {
           throw new ProtocolError("Invalid output.");
+        }
+        if (output.type === "observation.heartbeat") {
+          if (
+            typeof output.headSeq !== "string" ||
+            !/^(0|[1-9][0-9]*)$/.test(output.headSeq) ||
+            BigInt(output.headSeq) < BigInt(ownerHead)
+          ) throw new ProtocolError("Invalid owner heartbeat sequence.");
+          ownerHead = output.headSeq;
+          for (
+            const field of ["payloadPositions", "deliveredPayloadPositions"]
+          ) {
+            const positions = output[field];
+            if (
+              !Array.isArray(positions) || positions.length > 256
+            ) {
+              throw new ProtocolError("Invalid heartbeat payload positions.");
+            }
+            for (const position of positions) {
+              if (
+                !position || typeof position.streamId !== "string" ||
+                !position.streamId ||
+                !Number.isSafeInteger(position.committedOffset) ||
+                position.committedOffset < 0
+              ) throw new ProtocolError("Invalid heartbeat payload position.");
+              if (
+                field === "deliveredPayloadPositions" &&
+                delivered.has(position.streamId) &&
+                delivered.get(position.streamId)! !== position.committedOffset
+              ) {
+                throw new ResetObservationError(
+                  "A stream push was lost; replay is required.",
+                  { code: "observation_reset_required" },
+                );
+              }
+            }
+          }
         }
         if (output.type === "stream.output") {
           const id = output.streamId;
@@ -222,6 +280,11 @@ export async function* decodeObservation(
         ) {
           throw new ProtocolError("Invalid observation failure.");
         }
+        if (failure.code === "observation_reset_required") {
+          throw new ResetObservationError(failure.message, {
+            code: failure.code,
+          });
+        }
         throw new ProtocolError(failure.message, { code: failure.code });
       } else {
         const streamId = headers.get("x-copilotz-stream-id") ?? "";
@@ -240,26 +303,28 @@ export async function* decodeObservation(
             throw new ProtocolError("Stream byte offset exceeds capacity.");
           }
           streams.set(streamId, offset + bytes.length);
+          delivered.set(streamId, offset + bytes.length);
           yield { kind, streamId, offset, bytes, checkpoint };
         } else if (kind === "stream-end" || kind === "stream-error") {
           const terminal = object(bytes);
           if (
             terminal.offset !== offset ||
-            !["completed", "failed", "cancelled", "superseded", "abandoned"]
-              .includes(String(terminal.outcome)) ||
-            !["retained", "purge_pending", "purged", "missing"].includes(
-              String(terminal.availability),
-            ) ||
-            !["complete", "truncated"].includes(String(terminal.capture)) ||
-            typeof terminal.terminalAt !== "string" ||
-            !Number.isFinite(Date.parse(terminal.terminalAt)) ||
+            !isStreamTerminalStatus(terminal) ||
+            (kind === "stream-error" &&
+              ((terminal.outcome === "completed" &&
+                terminal.availability === "retained") ||
+                terminal.type !== "stream.error" ||
+                terminal.streamId !== streamId ||
+                terminal.code !==
+                  streamErrorOutput(streamId, terminal)?.code)) ||
             (kind === "stream-end" && (terminal.outcome !== "completed" ||
-              terminal.capture !== "complete" ||
+              terminal.availability !== "retained" ||
               (expected !== undefined && offset !== expected)))
           ) {
             throw new ProtocolError("Invalid stream terminal.");
           }
           streams.delete(streamId);
+          delivered.delete(streamId);
           yield { kind, streamId, offset, terminal, checkpoint };
         } else throw new ProtocolError("Unknown frame kind.");
       }

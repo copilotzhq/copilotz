@@ -1,4 +1,4 @@
-/** Shared scoped hints and indexed selection-head scans. Payloads remain in the catalog. */
+/** Shared owner push and indexed selection repair. Payloads remain in the catalog. */
 import type {
   OperationCatalog,
   OperationSelectionChange,
@@ -11,6 +11,7 @@ type Entry = {
 };
 type Hub = {
   closed: boolean;
+  readonly error?: Error;
   entries: Map<string, Entry>;
   dirty: Set<string>;
   scan(keys: readonly string[]): Promise<void>;
@@ -24,14 +25,55 @@ async function createHub(
 ): Promise<Hub> {
   const entries = new Map<string, Entry>();
   const dirty = new Set<string>();
-  const remove = await catalog.onChange((_id, detail) => {
-    for (const key of detail?.selectionKeys ?? []) {
-      if (entries.has(key)) dirty.add(key);
-    }
-  }, { namespace });
   let scanning: Promise<void> | undefined;
-  let lastSafety = performance.now();
+  let headSeq: string | undefined;
+  let resetError: Error | undefined;
+  let queued = false;
+  const requestScan = () => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      void scan([]).catch(() => {
+        for (const [key, entry] of entries) {
+          dirty.add(key);
+          entry.reads.clear();
+          for (const listener of [...entry.listeners]) listener();
+        }
+      });
+    });
+  };
+  const remove = await catalog.onChange((_id, detail) => {
+    if (detail.kind === "reset") {
+      resetError = Object.assign(
+        new Error("Owner push reset; replay from the applied checkpoint."),
+        { code: "observation_reset_required" },
+      );
+      for (const entry of entries.values()) {
+        for (const listener of [...entry.listeners]) {
+          listener();
+        }
+      }
+      return;
+    }
+    if (
+      (detail.headSeq !== undefined && headSeq !== undefined &&
+        BigInt(detail.headSeq) > BigInt(headSeq) + 1n) ||
+      (detail.kind === "heartbeat" && headSeq !== undefined &&
+        detail.headSeq !== headSeq)
+    ) {
+      for (const key of entries.keys()) dirty.add(key);
+    } else {for (const key of detail.selectionKeys) {
+        if (entries.has(key)) dirty.add(key);
+      }}
+    if (
+      detail.headSeq !== undefined &&
+      (headSeq === undefined || BigInt(detail.headSeq) > BigInt(headSeq))
+    ) headSeq = detail.headSeq;
+    if (dirty.size) requestScan();
+  }, { namespace });
   const scan = async (keys: readonly string[]) => {
+    if (resetError) throw resetError;
     for (const key of keys) dirty.add(key);
     if (scanning) {
       await scanning;
@@ -64,30 +106,16 @@ async function createHub(
       scanning = undefined;
     }
   };
-  const timer = setInterval(() => {
-    if (scanning) return;
-    const safety = performance.now() - lastSafety >= 5000;
-    if (safety) lastSafety = performance.now();
-    if (safety || dirty.size) {
-      void scan(safety ? [...entries.keys()] : []).catch(() => {
-        // A failed notification/scan cannot establish absence. Wake each viewer
-        // to do an authoritative read, which surfaces database failures.
-        for (const [key, entry] of entries) {
-          dirty.add(key);
-          entry.reads.clear();
-          for (const listener of [...entry.listeners]) listener();
-        }
-      });
-    }
-  }, 25);
   const hub: Hub = {
     closed: false,
+    get error() {
+      return resetError;
+    },
     entries,
     dirty,
     scan,
     close() {
       hub.closed = true;
-      clearInterval(timer);
       remove();
     },
   };
@@ -125,11 +153,13 @@ export async function watchSelection(
     hub.dirty.add(selectionKey);
   }
   entry.listeners.add(changed);
+  void hub.scan([selectionKey]).catch(() => changed());
   let closed = false;
   return {
     /** Force a head check before forwarding an operation's terminal boundary. */
     refresh: () => hub.scan([selectionKey]),
     read(after: string): Promise<readonly OperationSelectionChange[]> {
+      if (hub.error) return Promise.reject(hub.error);
       let result = entry!.reads.get(after);
       if (!result) {
         result = catalog.listSelectionChanges({

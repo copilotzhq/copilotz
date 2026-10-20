@@ -6,6 +6,8 @@ import type {
   ApplicationOutput,
   InternalCopilotzApplication,
 } from "./types.ts";
+import type { ReadBodyRangeInput } from "../content/body-store.ts";
+import { isContentError } from "../content/errors.ts";
 import type { CopilotzEngineDatabaseScope } from "../engine/types.ts";
 import type {
   OperationChangeDetail,
@@ -30,11 +32,26 @@ export type OperationReaderOptions = Readonly<{
   maxActiveStreams?: number;
   bodyReadBytes?: number;
   minimumScanMs?: number;
-  safetyScanMs?: number;
 }>;
 
 function failure(code: string, status: number, message: string) {
   return Object.assign(new Error(message), { code, status });
+}
+
+async function readStreamRange(
+  streams: CopilotzEngineDatabaseScope["streams"],
+  input: ReadBodyRangeInput,
+): Promise<Uint8Array | null> {
+  try {
+    return await streams.readCommittedRange(input);
+  } catch (error) {
+    if (!isContentError(error) || error.code !== "asset_not_found") throw error;
+    throw failure(
+      "operation_stream_unavailable",
+      503,
+      "Committed operation stream bytes are unavailable.",
+    );
+  }
 }
 
 function requiredText(value: unknown, label: string): string {
@@ -150,7 +167,6 @@ export function createSharedOperationReaders(
     maxActiveStreams: options.maxActiveStreams ?? 256,
     bodyReadBytes: options.bodyReadBytes ?? 64 * 1024,
     minimumScanMs: options.minimumScanMs ?? 250,
-    safetyScanMs: options.safetyScanMs ?? 5_000,
   };
   for (const [name, value] of Object.entries(limits)) {
     if (
@@ -187,12 +203,11 @@ export function createSharedOperationReaders(
     let terminal: ApplicationOutput | undefined;
     let running = false;
     let stopped = false;
-    let lastReconciledAt = performance.now();
     let reconcileRequested = false;
     let dirtyTopology = true;
     let dirtyEvents = true;
     let dirtyStatus = true;
-    let lastSafetyScan = performance.now();
+    let ownerHead: string | undefined;
     let cachedStatus: ApplicationOperationStatus | null = null;
     let finalizing = false;
     const hintedLanes = new Set<string>();
@@ -209,6 +224,63 @@ export function createSharedOperationReaders(
     }
     function hint(detail: OperationChangeDetail) {
       if (detail.namespace !== input.namespace) return;
+      if (detail.kind === "reset") {
+        const error = failure(
+          "observation_reset_required",
+          409,
+          "Owner push was reset; replay from the applied checkpoint.",
+        );
+        for (const subscriber of [...subscribers]) subscriber.fail(error);
+        stop(error);
+        return;
+      }
+      if (
+        detail.headSeq && ownerHead &&
+        BigInt(detail.headSeq) > BigInt(ownerHead) + 1n
+      ) {
+        dirtyTopology = true;
+        dirtyEvents = true;
+        dirtyStatus = true;
+      }
+      if (detail.kind === "checkpoint") {
+        if (
+          detail.headSeq !== undefined &&
+          (ownerHead === undefined ||
+            BigInt(detail.headSeq) > BigInt(ownerHead))
+        ) ownerHead = detail.headSeq;
+        return;
+      }
+      if (detail.kind === "heartbeat") {
+        if (
+          ownerHead !== undefined && detail.headSeq !== undefined &&
+          BigInt(detail.headSeq) > BigInt(ownerHead)
+        ) {
+          dirtyTopology = true;
+          dirtyEvents = true;
+          dirtyStatus = true;
+        }
+        if (
+          detail.headSeq !== undefined &&
+          (ownerHead === undefined ||
+            BigInt(detail.headSeq) > BigInt(ownerHead))
+        ) ownerHead = detail.headSeq;
+        for (const position of detail.positions ?? []) {
+          if (position.operationId !== input.operationId) continue;
+          const lane = lanes.get(position.streamId);
+          if (lane && position.committedOffset > lane.record.committedOffset) {
+            lane.record = {
+              ...lane.record,
+              committedOffset: position.committedOffset,
+            };
+            hintedLanes.add(position.streamId);
+          }
+        }
+        return;
+      }
+      if (
+        detail.headSeq !== undefined &&
+        (ownerHead === undefined || BigInt(detail.headSeq) > BigInt(ownerHead))
+      ) ownerHead = detail.headSeq;
       if (
         detail.kind === "stream-offset" && detail.streamId &&
         Number.isSafeInteger(detail.committedOffset) &&
@@ -324,12 +396,6 @@ export function createSharedOperationReaders(
           }
           if (abort.signal.aborted) return;
           started = performance.now();
-          if (started - lastSafetyScan >= limits.safetyScanMs) {
-            dirtyTopology = true;
-            dirtyEvents = true;
-            dirtyStatus = true;
-            lastSafetyScan = started;
-          }
           await refreshHintedLanes();
           const advanced = await scan();
           if (abort.signal.aborted) return;
@@ -349,16 +415,22 @@ export function createSharedOperationReaders(
             let status: ApplicationOperationStatus | null = record;
             if (
               reconcileRequested ||
-              performance.now() - lastReconciledAt >=
-                limits.safetyScanMs ||
               (!lanes.size && advanced &&
                 !["completed", "failed", "cancelled"].includes(record.state))
             ) {
               status = await application.operationStatus(input);
-              lastReconciledAt = performance.now();
               reconcileRequested = false;
             }
             cachedStatus = status;
+            if (
+              status &&
+              !["completed", "failed", "cancelled"].includes(status.state)
+            ) {
+              await runtime.events.outstanding(
+                input.namespace,
+                input.operationId,
+              );
+            }
           }
           const status = cachedStatus;
           if (
@@ -386,7 +458,7 @@ export function createSharedOperationReaders(
             dirtyStatus = true;
             continue;
           }
-          await waitForChange(limits.safetyScanMs);
+          await waitForChange(60_000);
         }
       } catch (error) {
         if (abort.signal.aborted) return;
@@ -516,13 +588,13 @@ export function createSharedOperationReaders(
           current.committedOffset,
           lane.offset + limits.bodyReadBytes,
         );
-        const bytes = await runtime.streams.readCommittedRange({
+        const bytes = await readStreamRange(runtime.streams, {
           bodyId: current.bodyId,
           offset: lane.offset,
           end,
         });
-        if (bytes === null) break;
-        if (bytes.byteLength !== end - lane.offset) {
+        if (bytes === null && current.state !== "terminal") break;
+        if (bytes === null || bytes.byteLength !== end - lane.offset) {
           throw failure(
             "operation_stream_unavailable",
             503,
@@ -545,7 +617,10 @@ export function createSharedOperationReaders(
       lane.terminal.resolve({
         outcome: record.outcome ?? "completed",
         availability: record.availability,
-        capture: record.capture ?? "complete",
+        ...(record.reason ? { reason: record.reason } : {}),
+        ...(record.availabilityReason
+          ? { availabilityReason: record.availabilityReason }
+          : {}),
         offset: record.committedOffset,
         terminalAt: record.terminalAt ?? record.updatedAt,
       });
@@ -627,7 +702,11 @@ export function createSharedOperationReaders(
         try {
           hub.removeHint = await runtime.operations.onChange(
             (changedId, detail) => {
-              if (changedId === operationId) hub.hint(detail);
+              if (
+                changedId === operationId || detail.kind === "heartbeat" ||
+                detail.kind === "reset"
+              ) hub.hint(detail);
+              else hub.hint({ ...detail, kind: "checkpoint" });
             },
             { namespace },
           );
@@ -795,7 +874,7 @@ export function createSharedOperationReaders(
                 record.availability !== "retained")
             ) {
               const end = Math.min(cutoff, offset + limits.bodyReadBytes);
-              const bytes = await hub.runtime.streams.readCommittedRange({
+              const bytes = await readStreamRange(hub.runtime.streams, {
                 bodyId: record.bodyId,
                 offset,
                 end,
@@ -1002,7 +1081,10 @@ export function createSharedOperationReaders(
               terminal: lane?.terminal.promise ?? Promise.resolve({
                 outcome: record.outcome ?? "completed",
                 availability: record.availability,
-                capture: record.capture ?? "complete",
+                ...(record.reason ? { reason: record.reason } : {}),
+                ...(record.availabilityReason
+                  ? { availabilityReason: record.availabilityReason }
+                  : {}),
                 offset: record.committedOffset,
                 terminalAt: record.terminalAt ?? record.updatedAt,
               }),

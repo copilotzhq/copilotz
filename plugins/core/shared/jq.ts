@@ -5,11 +5,14 @@ const JQ_TIMEOUT_MS = 5_000;
 import type { JqWorkerRequest } from "./jq-worker.ts";
 
 function serialized(value: unknown, label: string): string {
-  let result: string;
+  let result: string | undefined;
   try {
     result = JSON.stringify(value);
   } catch (error) {
     throw new Error(`${label} must be JSON-compatible: ${String(error)}`);
+  }
+  if (typeof result !== "string") {
+    throw new Error(`${label} must be JSON-compatible.`);
   }
   if (new TextEncoder().encode(result).byteLength > MAX_JQ_BYTES) {
     throw new Error(`${label} exceeds the 1 MiB jq limit.`);
@@ -17,54 +20,47 @@ function serialized(value: unknown, label: string): string {
   return result;
 }
 
-/** A one-shot Worker makes synchronous jq preemptible and bounds every lease. */
+let active = false;
+/** One preemptible evaluation; excess work refuses before retaining its input. */
 export async function evaluateCoreJq(
   input: unknown,
   filter: string,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  signal?.throwIfAborted();
   if (!filter.trim()) throw new Error("jq filter is empty.");
-  if (signal?.aborted) {
-    throw signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
-  const inputJson = serialized(input, "Pipeline input");
-  const worker = new Worker(new URL("./jq-worker.ts", import.meta.url).href, {
-    type: "module",
-  });
+  if (active) throw new Error("jq capacity is full.");
+  active = true;
+  let worker: Worker | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
   try {
+    const inputJson = serialized(input, "Pipeline input");
+    signal?.throwIfAborted();
+    worker = new Worker(new URL("./jq-worker.ts", import.meta.url).href, {
+      type: "module",
+    });
     return await new Promise<unknown>((resolve, reject) => {
-      let done = false;
-      const close = () => {
-        if (!done) {
-          done = true;
-          worker.terminate();
-        }
-      };
-      const fail = (error: unknown) => {
-        close();
-        reject(error instanceof Error ? error : new Error(String(error)));
-      };
-      const timer = setTimeout(
-        () => fail(new Error("jq exceeded its 5 second execution limit.")),
+      abort = () =>
+        reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      signal?.addEventListener("abort", abort, { once: true });
+      timer = setTimeout(
+        () => reject(new Error("jq exceeded its 5 second execution limit.")),
         JQ_TIMEOUT_MS,
       );
-      const abort = () =>
-        fail(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-      signal?.addEventListener("abort", abort, { once: true });
-      worker.onmessage = (event: MessageEvent<unknown>) => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-        const message = event.data as Record<string, unknown>;
-        if (message.ok !== true) {
-          return fail(
-            new Error(
-              `jq failed: ${String(message.error ?? "worker failure")}`,
-            ),
-          );
-        }
+      worker!.onerror = (event) =>
+        reject(new Error(`jq worker failed: ${event.message}`));
+      worker!.onmessage = (event) => {
         try {
-          const output = serialized(message.value, "Pipeline output");
-          const values = JSON.parse(output) as unknown[];
+          const message = event.data as Record<string, unknown>;
+          if (message.ok !== true) {
+            throw new Error(
+              `jq failed: ${String(message.error ?? "worker failure")}`,
+            );
+          }
+          const values = JSON.parse(
+            serialized(message.value, "Pipeline output"),
+          );
           if (!Array.isArray(values) || values.length !== 1) {
             throw new Error(
               `jq produced ${
@@ -72,19 +68,20 @@ export async function evaluateCoreJq(
               } outputs; a pipeline stage requires exactly one.`,
             );
           }
-          close();
           resolve(values[0]);
         } catch (error) {
-          fail(error);
+          reject(error);
         }
       };
-      worker.onerror = (event) =>
-        fail(new Error(`jq worker failed: ${event.message}`));
+      signal?.throwIfAborted();
       const request: JqWorkerRequest = { input: inputJson, filter };
-      worker.postMessage(request);
+      worker!.postMessage(request);
     });
   } finally {
-    worker.terminate();
+    clearTimeout(timer);
+    if (abort) signal?.removeEventListener("abort", abort);
+    worker?.terminate();
+    active = false;
   }
 }
 

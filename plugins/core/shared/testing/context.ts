@@ -15,7 +15,7 @@ import {
   type ActionHostContext,
   createActionContext,
 } from "@copilotz/copilotz/actions";
-import type { PluginRegistry, Processor } from "@copilotz/copilotz/plugins";
+import type { PluginRegistry } from "@copilotz/copilotz/plugins";
 import type { ConversationMessage, ConversationThread } from "../contracts.ts";
 import {
   mapMessageRecord,
@@ -30,19 +30,15 @@ export type TestDomainHost = Readonly<{
   content: Readonly<{
     assets: Pick<
       DatabaseAssetRepository,
-      "get" | "getMany" | "materialize" | "publish"
+      "capture" | "get" | "getMany" | "materialize" | "publish"
     >;
     preparer: ContentPreparer;
     resolver: ContentResolver;
   }>;
-  bindTransient(
-    processor: Processor,
-    options?: Readonly<{
-      namespace?: string;
-      afterPosition?: string;
-      signal?: AbortSignal;
-    }>,
-  ): Promise<() => void>;
+  events: Pick<
+    import("@copilotz/copilotz/engine").CopilotzEngine["events"],
+    "list" | "resolveActionLifecycle"
+  >;
 }>;
 
 async function materialize(
@@ -66,6 +62,13 @@ export function createTestDomainContext(
 ): ActionHostContext {
   const lifecycle = new Map<string, ActionEventData>();
   return createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace,
     databaseSchema: host.databaseSchema,
     plugins: host.plugins,
@@ -81,6 +84,18 @@ export function createTestDomainContext(
           throw new Error("Test content streams are not configured.");
         },
       } as const,
+      openCapture() {
+        throw new Error("Test content captures are not configured.");
+      },
+      capture: (input, captureOptions) =>
+        host.content.assets.capture({
+          namespace: scopedNamespace,
+          content: input,
+          operationKey:
+            `test-action:${scopedNamespace}:${captureOptions.operationKey}`,
+          producer: `test-action:${scopedNamespace}`,
+          origin: captureOptions.origin,
+        }),
       prepare: (input, prepareOptions) =>
         host.content.preparer.prepare(input, {
           namespace: scopedNamespace,

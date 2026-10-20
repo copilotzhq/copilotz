@@ -1,222 +1,256 @@
-import { assertEquals } from "@std/assert";
-
+import { assertEquals, assertRejects } from "@std/assert";
+import { createTestDatabase } from "../testing/ominipg.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
+import { createContentCatalog } from "./catalog.ts";
 import { createMemoryBodyStore } from "./body-store.ts";
-import type {
-  ActiveMutableBodyHead,
-  BodyMaintenanceDeleteInput,
-  BodyStore,
-} from "./body-store.ts";
-import { maintainProgressiveBodies } from "./maintenance.ts";
-
-Deno.test("progressive body maintenance fences and terminates expired writers without semantic lookup", async () => {
-  const store = createMemoryBodyStore({ protectionMs: 0 });
-  const writer = await store.reserve({
-    bodyId: "content-streams/tenant-a/stream-a",
-    mediaType: "text/plain",
+import { digestContent } from "./digest.ts";
+import {
+  maintainProgressiveBodies,
+  recoverLogicalBody,
+} from "./maintenance.ts";
+const schema = "content_recovery_test";
+async function fixture() {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
-  await store.append({
-    writer,
-    expectedOffset: 0,
-    appendId: "first",
-    bytes: new TextEncoder().encode("partial"),
-  });
-
-  const result = await maintainProgressiveBodies(store);
-
-  assertEquals(result, {
-    examined: 1,
-    aborted: 0,
-    sealed: 0,
-    terminated: 1,
-    deferred: 0,
-    errors: [],
-  });
-  assertEquals(
-    (await store.head({ bodyId: writer.bodyId }))?.state,
-    "incomplete",
-  );
-});
-
-Deno.test("progressive maintenance continuation prevents live first-page starvation", async () => {
-  const store = createMemoryBodyStore({ protectionMs: 100 });
-  const expired = await store.reserve({
-    bodyId: "z-expired",
-    mediaType: "text/plain",
-  });
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  await store.reserve({ bodyId: "a-live", mediaType: "text/plain" });
-  await store.reserve({ bodyId: "b-live", mediaType: "text/plain" });
-
-  const first = await maintainProgressiveBodies(store, { limit: 2 });
-  assertEquals(first, {
-    examined: 2,
-    aborted: 0,
-    sealed: 0,
-    terminated: 0,
-    deferred: 2,
-    errors: [],
-    after: "b-live",
-  });
-  const second = await maintainProgressiveBodies(store, {
-    limit: 2,
-    after: first.after,
-  });
-  assertEquals(second, {
-    examined: 1,
-    aborted: 0,
-    sealed: 0,
-    terminated: 1,
-    deferred: 0,
-    errors: [],
-  });
-  assertEquals(
-    (await store.head({ bodyId: expired.bodyId }))?.state,
-    "incomplete",
-  );
-});
-
-Deno.test("progressive maintenance resumes expired sealing instead of aborting it", async () => {
-  const base = createMemoryBodyStore({ protectionMs: 0 });
-  const writer = await base.reserve({
-    bodyId: "content-streams/tenant-a/sealing",
-    mediaType: "text/plain",
-  });
-  const bytes = new TextEncoder().encode("frozen");
-  await base.append({
-    writer,
-    expectedOffset: 0,
-    appendId: "frozen",
-    bytes,
-  });
-  const open = await base.head({ bodyId: writer.bodyId });
-  if (!open || open.state !== "open") {
-    throw new Error("Expected active progressive body.");
+  if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
   }
-  const sealing: ActiveMutableBodyHead = Object.freeze({
-    ...open,
-    state: "sealing",
-    writerLeaseRemainingMs: 0,
-  });
-  let aborted = false;
-  let sealedExpectedByteLength: number | undefined;
-  const store: BodyStore = Object.freeze({
-    ...base,
-    abort(input) {
-      aborted = true;
-      return base.abort(input);
+  await provisionCopilotzSchema(db, schema);
+  const catalog = createContentCatalog(db, schema),
+    store = createMemoryBodyStore();
+  return {
+    db,
+    catalog,
+    store,
+    async reserve(id: string, protectForMs = 0) {
+      const identity = { bodyId: id, writerId: id, generation: 1 };
+      await catalog.reserve({
+        ...identity,
+        namespace: "namespace-a",
+        copy: { key: id, backendKind: store.kind, backendId: store.backendId },
+        protectForMs,
+      });
+      const writer = await store.reserve({
+        bodyId: id,
+        mediaType: "text/plain",
+        reservationId: id,
+        generation: 1,
+      });
+      return { identity, writer };
     },
-    seal(input) {
-      sealedExpectedByteLength = input.expectedByteLength;
-      return base.seal(input);
-    },
-    maintenance: Object.freeze({
-      ...base.maintenance,
-      list: () =>
-        Promise.resolve(Object.freeze({ bodies: Object.freeze([sealing]) })),
-    }),
-  });
-
-  assertEquals(await maintainProgressiveBodies(store), {
-    examined: 1,
-    aborted: 0,
-    sealed: 1,
-    terminated: 0,
-    deferred: 0,
-    errors: [],
-  });
-  assertEquals(aborted, false);
-  assertEquals(sealedExpectedByteLength, bytes.byteLength);
-  assertEquals((await base.head({ bodyId: writer.bodyId }))?.state, "ready");
-});
-
-Deno.test("progressive maintenance resumes expired terminating bodies as incomplete", async () => {
-  const base = createMemoryBodyStore({ protectionMs: 0 });
-  const writer = await base.reserve({
-    bodyId: "content-streams/tenant-a/terminating",
-    mediaType: "text/plain",
-  });
-  const bytes = new TextEncoder().encode("retained");
-  await base.append({
-    writer,
-    expectedOffset: 0,
-    appendId: "retained",
-    bytes,
-  });
-  const open = await base.head({ bodyId: writer.bodyId });
-  if (!open || open.state !== "open") {
-    throw new Error("Expected active progressive body.");
+  };
+}
+Deno.test("catalog maintenance freezes expired accepted prefixes without semantic lookup", async () => {
+  const f = await fixture();
+  try {
+    const { identity, writer } = await f.reserve("body-a");
+    const bytes = new TextEncoder().encode("partial");
+    await f.store.append({ writer, appendId: "one", expectedOffset: 0, bytes });
+    await f.catalog.checkpoint({
+      ...identity,
+      expectedOffset: 0,
+      offset: bytes.length,
+    });
+    const result = await maintainProgressiveBodies(f.catalog, () => f.store);
+    assertEquals(result.terminated, 1);
+    assertEquals(result.errors, []);
+    assertEquals(
+      (await f.store.head({ bodyId: identity.bodyId }))?.state,
+      "open",
+    );
+  } finally {
+    await f.db.close();
   }
-  const terminating: ActiveMutableBodyHead = Object.freeze({
-    ...open,
-    state: "terminating",
-    writerLeaseRemainingMs: 0,
-  });
-  const store: BodyStore = Object.freeze({
-    ...base,
-    maintenance: Object.freeze({
-      ...base.maintenance,
-      list: () =>
-        Promise.resolve(Object.freeze({
-          bodies: Object.freeze([terminating]),
-        })),
-    }),
-  });
-
-  assertEquals(await maintainProgressiveBodies(store), {
-    examined: 1,
-    aborted: 0,
-    sealed: 0,
-    terminated: 1,
-    deferred: 0,
-    errors: [],
-  });
-  assertEquals(
-    (await base.head({ bodyId: writer.bodyId }))?.state,
-    "incomplete",
-  );
 });
-
-Deno.test("progressive maintenance retries fenced abort cleanup", async () => {
-  const base = createMemoryBodyStore({ protectionMs: 0 });
-  let deleted = 0;
-  const store: BodyStore = Object.freeze({
-    ...base,
-    reserve() {
-      throw new Error("aborted cleanup must not reserve a writer");
-    },
-    maintenance: Object.freeze({
-      list: () =>
-        Promise.resolve(Object.freeze({
-          bodies: Object.freeze([Object.freeze({
-            bodyId: "content-streams/tenant-a/aborting",
-            state: "aborted" as const,
-            mediaType: "text/plain",
-            byteLength: 7,
-            discarded: 0,
-            maintenanceVersion: 4,
-            reservationId: "fenced-abort",
-          })]),
-        })),
-      delete(input: BodyMaintenanceDeleteInput) {
-        assertEquals(input, {
-          bodyId: "content-streams/tenant-a/aborting",
-          expectedState: "aborted",
-          expectedMaintenanceVersion: 4,
-          idleForMs: 0,
-        });
-        deleted++;
-        return Promise.resolve(true);
+Deno.test("catalog recovery pages skip quiet protected writers without starving expiry", async () => {
+  const f = await fixture();
+  try {
+    await f.reserve("a-live", 60000);
+    await f.reserve("b-live", 60000);
+    await f.reserve("z-expired");
+    const result = await maintainProgressiveBodies(f.catalog, () => f.store, {
+      limit: 1,
+    });
+    assertEquals(result.terminated, 1);
+    assertEquals(result.after, "z-expired");
+    assertEquals((await f.catalog.read("a-live"))?.terminal, undefined);
+    assertEquals((await f.store.head({ bodyId: "a-live" }))?.state, "open");
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("recovery completes a matching seal-intent prefix and drops later tentative bytes", async () => {
+  const f = await fixture();
+  try {
+    const { identity, writer } = await f.reserve("intent");
+    const prefix = new TextEncoder().encode("good"),
+      digest = await digestContent(prefix);
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: prefix,
+    });
+    await f.catalog.checkpoint({ ...identity, expectedOffset: 0, offset: 4 });
+    await f.catalog.sealIntent({ ...identity, length: 4, digest });
+    await f.store.append({
+      writer,
+      appendId: "late",
+      expectedOffset: 4,
+      bytes: new Uint8Array([9]),
+    });
+    const result = await maintainProgressiveBodies(f.catalog, () => f.store);
+    assertEquals(result.sealed, 1);
+    assertEquals(result.errors, []);
+    assertEquals((await f.store.head({ bodyId: "intent" }))?.byteLength, 4);
+    assertEquals((await f.catalog.read("intent"))?.terminal, {
+      outcome: "completed",
+      length: 4,
+      digest,
+    });
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("mismatching seal intent fails at the committed prefix and repeated recovery is immutable", async () => {
+  const f = await fixture();
+  try {
+    const { identity, writer } = await f.reserve("mismatch");
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1]),
+    });
+    await f.catalog.checkpoint({ ...identity, expectedOffset: 0, offset: 1 });
+    await f.catalog.sealIntent({
+      ...identity,
+      length: 1,
+      digest: await digestContent(new Uint8Array([2])),
+    });
+    assertEquals(
+      (await maintainProgressiveBodies(f.catalog, () => f.store)).terminated,
+      1,
+    );
+    const recorded = (await f.catalog.read("mismatch"))!;
+    assertEquals(recorded.terminal?.outcome, "failed");
+    assertEquals(
+      await recoverLogicalBody(f.catalog, recorded, f.store),
+      "deferred",
+    );
+    assertEquals(
+      (await f.catalog.read("mismatch"))?.terminal,
+      recorded.terminal,
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("renewal ordered before an expiry claim keeps the writer alive", async () => {
+  const f = await fixture();
+  try {
+    const { identity } = await f.reserve("renewed");
+    const stale = (await f.catalog.recoveryCandidates())[0];
+    await f.catalog.renew({
+      ...identity,
+      deadline: new Date(Date.now() + 60000).toISOString(),
+    });
+    assertEquals(
+      await recoverLogicalBody(f.catalog, stale, f.store),
+      "deferred",
+    );
+    assertEquals((await f.catalog.read("renewed"))?.revocation, "active");
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("transient storage failure leaves recovery retryable without inventing a terminal", async () => {
+  const f = await fixture();
+  try {
+    await f.reserve("retry");
+    let unavailable = true;
+    const faulty = {
+      ...f.store,
+      head(input: { bodyId: string }) {
+        if (unavailable) throw new Error("temporary transport failure");
+        return f.store.head(input);
       },
-    }),
-  });
+    };
+    const first = await maintainProgressiveBodies(f.catalog, () => faulty);
+    assertEquals(first.errors.length, 1);
+    assertEquals((await f.catalog.read("retry"))?.terminal, undefined);
+    unavailable = false;
+    await createSchemaCommandRunner(f.db, schema)(
+      "test.retry",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE "${schema}".content_logical_bodies SET recovery_after=NOW()-INTERVAL '1 second'`,
+        );
+      },
+    );
+    assertEquals(
+      (await maintainProgressiveBodies(f.catalog, () => faulty)).terminated,
+      1,
+    );
+    await createSchemaCommandRunner(f.db, schema)(
+      "test.expire",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE "${schema}".content_logical_bodies SET protected_until=NOW()-INTERVAL '1 second'`,
+        );
+      },
+    );
+    await assertRejects(() =>
+      f.catalog.renew({
+        bodyId: "retry",
+        writerId: "retry",
+        generation: 1,
+        deadline: new Date(Date.now() + 60000).toISOString(),
+      })
+    );
+  } finally {
+    await f.db.close();
+  }
+});
 
-  assertEquals(await maintainProgressiveBodies(store), {
-    examined: 1,
-    aborted: 1,
-    sealed: 0,
-    terminated: 0,
-    deferred: 0,
-    errors: [],
-  });
-  assertEquals(deleted, 1);
+Deno.test("missing failed-prefix bytes cannot postpone the accepted failure", async () => {
+  const f = await fixture();
+  try {
+    const { identity, writer } = await f.reserve("missing-prefix");
+    await f.store.append({
+      writer,
+      appendId: "one",
+      expectedOffset: 0,
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    await f.catalog.checkpoint({ ...identity, expectedOffset: 0, offset: 3 });
+    const unavailable = {
+      ...f.store,
+      readRange() {
+        throw new Error("missing prefix bytes");
+      },
+      terminate() {
+        throw new Error("must not normalize a failure");
+      },
+    };
+    assertEquals(
+      await recoverLogicalBody(
+        f.catalog,
+        (await f.catalog.read(identity.bodyId))!,
+        unavailable,
+      ),
+      "terminated",
+    );
+    assertEquals((await f.catalog.read(identity.bodyId))?.terminal, {
+      outcome: "failed",
+      reason: "abandoned",
+      length: 3,
+    });
+  } finally {
+    await f.db.close();
+  }
 });

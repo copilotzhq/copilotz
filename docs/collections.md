@@ -54,11 +54,38 @@ code can select a scope through the application methods below.
 Command and query names cannot reuse method names such as `create`, `list` or
 `query`.
 
+### Owner authorization
+
+Protected Collections declare `ownerPolicy: "required"`. Register their aliases
+in `authorization.collections`, referencing a policy ID and revision in
+`authorization.policies`. Startup rejects incomplete registrations. The same
+owner evaluator protects Collection reads, named queries, mutations, Actions and
+operation observations.
+
+Policies declare Collection aliases in `sources`. Their `evaluate` callback
+receives immutable retained authority, the actual command intent, command time,
+cancellation signal and bounded `read.get` / `read.list` capabilities. Reads
+must use declared sources. Missing records and empty queries are dependencies;
+committed changes re-authorize dependent observations. Reads cannot escape the
+callback, submit commands or access raw SQL.
+
+Return `ServerConstraints`: `collections` predicates are intersected before
+pagination and aggregation. Mutations require explicit `collectionMutations`
+permissions with optional field allowlists, trusted input and current/resulting
+record predicates. Conflicting trusted fields and immutable updates fail.
+Nonempty relation includes are refused. Decisions and effects share an owner
+transaction; joined work keeps its attempt fences through the outer commit.
+
+See [owner authorization and migration](authorization.md) for configuration,
+sessions, lifetimes and the version 12 offline upgrade.
+
 ### Read and write from a host
 
 Outside an Action or Processor, use `app.collections.<alias>`. This plain,
 enumerable map uses the same registered aliases as `context.collections` and
 works on embedded and Gateway handles without a Server plugin or HTTP policy.
+Collections with an owner policy additionally require a current authorized
+invocation as described above.
 
 For a registered `note` Collection,
 `await app.collections.note.create({ text }, { idempotencyKey: "seed-note-1" })`
@@ -96,8 +123,9 @@ the final options; omitted values use the application's defaults.
 Get/list/search accept Collection content and cancellation options; named
 queries, aggregates and relation reads accept cancellation via `signal`.
 
-Use direct host mutations for seeds, tests and admin changes. Use an Action for
-business rules or an atomic multi-record transaction, then call
+Use direct host mutations for unprotected seeds, tests and admin changes.
+Protected Collections require the appropriate owner-controlled workflow. Use an
+Action for business rules or an atomic multi-record transaction, then call
 `app.actions.<alias>(input, options)`. Use `app.send` plus a Processor when the
 input should trigger Event-driven orchestration. Separate host write calls are
 separate operations, not one transaction. See
@@ -126,15 +154,11 @@ require these indexes and never create them during a request.
 Provisioning is additive and idempotent: unchanged declarations reuse their
 indexes; changed declarations produce new indexes. It never drops obsolete or
 operator-created indexes or rewrites records. Adding a unique declaration fails
-if existing rows violate it. By default, index creation runs in a serialized DDL
-transaction and can block writes while building. For populated PostgreSQL
-schemas, pass a fourth argument `{ concurrently: true }` from a standalone
-provisioning operation to build without blocking normal writes. Run one
-provisioner per schema and supply a session outside any transaction. Concurrent
-builds commit individually; a failed build can leave an invalid index, which
-validation rejects for explicit repair. Removed declarations leave their old
-indexes, including unique constraints, in place until an explicit operator
-cleanup.
+if existing rows violate it. Index creation runs as a serialized owner command
+and can block writes while building. Provision before admitting work. Invalid or
+mismatched indexes are rejected for explicit repair. Removed declarations leave
+their old indexes, including unique constraints, in place until an explicit
+operator cleanup.
 
 Ordering and scalar index creation share the same SQL field expressions. A
 compound index should put equality-filter fields before the ordered field. The
@@ -239,7 +263,7 @@ resolving content you would not show. See
 ## Reference
 
 This standalone `app.ts` extends the Chapter 4 Notes example with a `pin`
-command and a filtered list. It needs `@copilotz/copilotz@^0.87.3` on Deno 2.9+
+command and a filtered list. It needs `@copilotz/copilotz@^0.89.0` on Deno 2.9+
 or Node 24+, and no credential.
 
 ```ts

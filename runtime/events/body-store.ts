@@ -1,3 +1,5 @@
+import { canonicalJson as encodeJson } from "../data-only-json.ts";
+import { assertCommandTransaction } from "../engine/commands.ts";
 import type { EventMutationContext } from "./store.ts";
 import type { EventBodyRef } from "./types.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
@@ -35,38 +37,26 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function normalizeJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeJson);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, normalizeJson(child)]),
-    );
-  }
-  return value;
-}
-
 function canonicalJson(value: unknown): string {
-  const text = JSON.stringify(
-    normalizeJson(value === undefined ? null : value),
-  );
+  const text = encodeJson(value === undefined ? null : value, {
+    order: "locale",
+    objectOrder: true,
+  });
   if (text === undefined) {
     throw new TypeError("Event body must be JSON serializable.");
   }
   return text;
 }
 
-async function eventBodyDigest(value: unknown): Promise<`sha256:${string}`> {
+async function eventBodyDigest(text: string): Promise<`sha256:${string}`> {
   if (!globalThis.crypto?.subtle) {
     throw new TypeError(
       "A Web Crypto SHA-256 implementation is required to persist event bodies.",
     );
   }
-  const bytes = new TextEncoder().encode(canonicalJson(value));
-  const input = bytes.slice().buffer as ArrayBuffer;
+  const bytes = new TextEncoder().encode(text);
   const digest = new Uint8Array(
-    await globalThis.crypto.subtle.digest("SHA-256", input),
+    await globalThis.crypto.subtle.digest("SHA-256", bytes),
   );
   const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0"))
     .join("");
@@ -96,10 +86,10 @@ async function requireStoredBody(
 export async function encodeEventBody(
   json: unknown,
 ): Promise<Readonly<{ body: string; digest: string }>> {
-  const canonical = canonicalizeContentRefs(json);
+  const body = canonicalJson(canonicalizeContentRefs(json));
   return ({
-    body: canonicalJson(canonical),
-    digest: await eventBodyDigest(canonical),
+    body,
+    digest: await eventBodyDigest(body),
   } as const);
 }
 
@@ -107,6 +97,7 @@ export async function writeEventBody(
   context: EventBodyStoreContext,
   input: WriteEventBodyInput,
 ): Promise<EventBodyRef> {
+  assertCommandTransaction(context.transaction);
   const { body, digest } = await encodeEventBody(input.json);
   const inserted = await context.transaction.query<EventBodyRow>(
     `INSERT INTO ${context.tables.event_bodies} (
@@ -122,16 +113,17 @@ export async function writeEventBody(
       digest,
     ],
   );
-  const row = inserted.rows[0] ??
-    await requireStoredBody(context, input.namespace, input.id);
-  if (
-    Number(row.schema_version) !== EVENT_BODY_SCHEMA_VERSION ||
-    String(row.digest) !== digest ||
-    canonicalJson(row.body) !== body
-  ) {
-    throw new Error(
-      `Event body '${input.id}' already exists with different content.`,
-    );
+  if (!inserted.rows.length) {
+    const row = await requireStoredBody(context, input.namespace, input.id);
+    if (
+      Number(row.schema_version) !== EVENT_BODY_SCHEMA_VERSION ||
+      String(row.digest) !== digest ||
+      canonicalJson(row.body) !== body
+    ) {
+      throw new Error(
+        `Event body '${input.id}' already exists with different content.`,
+      );
+    }
   }
   return ({
     eventBodyId: input.id,
@@ -150,12 +142,21 @@ export async function readEventBody<T>(
     throw new TypeError("Event body ref is missing eventBodyId.");
   }
   const row = await requireStoredBody(context, namespace, eventBodyId);
+  return await verifiedEventBody<T>(row, dataRef);
+}
+
+/** Verify a retained row fetched together with its event. */
+export async function verifiedEventBody<T>(
+  row: Pick<EventBodyRow, "body" | "schema_version" | "digest">,
+  dataRef: EventBodyRef,
+): Promise<T> {
+  const eventBodyId = dataRef.eventBodyId;
   if (Number(row.schema_version) !== dataRef.schemaVersion) {
     throw new Error(
       `Event body '${eventBodyId}' has the wrong schema version.`,
     );
   }
-  const digest = await eventBodyDigest(row.body);
+  const digest = await eventBodyDigest(canonicalJson(row.body));
   if (digest !== row.digest) {
     throw new Error(`Event body '${eventBodyId}' digest verification failed.`);
   }

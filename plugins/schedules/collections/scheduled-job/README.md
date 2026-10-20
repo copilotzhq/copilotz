@@ -17,3 +17,6 @@ Compose `schedulesPlugin` and use the exported Scheduled Job authoring helpers.
 
 The `due` command validates status and occurrence identity, advances cron state,
 and emits the durable `scheduled_job.due` fact atomically.
+
+The Collection declares a durable alarm for active `nextRunAtMs`. Every mutation
+updates that deadline atomically, and the owner invokes `due` without a tick.

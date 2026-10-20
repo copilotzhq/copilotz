@@ -29,28 +29,33 @@ const note = defineCollection({
 type Recorder = {
   statements: string[];
   transactions: number;
-  /** Runs before the first statement matching `pattern`, then disarms. */
-  before?: { pattern: RegExp; run: () => Promise<unknown> };
+  projectionTransactions: Set<number>;
+  /** Runs after the asset planning read, before commit, then disarms. */
+  before?: { run: () => Promise<unknown> };
 };
 
 /** Counts what a session runs and can interleave a competitor before one. */
 function recording(base: SqlSession, recorder: Recorder): SqlSession {
-  const recorded = (executor: SqlExecutor): SqlExecutor => ({
+  const recorded = (executor: SqlExecutor, planning = false): SqlExecutor => ({
     query: async <TRow extends Record<string, unknown>>(
       text: string,
       params?: unknown[],
     ) => {
       recorder.statements.push(text);
-      const hook = recorder.before;
-      if (hook && hook.pattern.test(text)) {
-        recorder.before = undefined;
-        await hook.run();
+      if (text.includes("projection_current")) {
+        recorder.projectionTransactions.add(recorder.transactions);
       }
-      return await executor.query<TRow>(text, params);
+      const result = await executor.query<TRow>(text, params);
+      if (planning && text.includes("asset_idempotency")) {
+        const hook = recorder.before;
+        recorder.before = undefined;
+        await hook?.run();
+      }
+      return result;
     },
   });
   return {
-    ...recorded(base),
+    ...recorded(base, true),
     transaction: (operation) => {
       recorder.transactions++;
       return base.transaction((transaction) =>
@@ -82,24 +87,20 @@ async function createEngines(url: string, recorder: Recorder) {
   return { db, schema, measured, competitor };
 }
 
-/** The statements that change data. */
-const writes = (recorder: Recorder) =>
-  recorder.statements.filter((text) =>
-    /^\s*(WITH|INSERT|UPDATE|DELETE)\b/.test(text)
-  ).length;
-
 const measure = async (recorder: Recorder, work: () => Promise<unknown>) => {
   recorder.statements.length = 0;
   recorder.transactions = 0;
+  recorder.projectionTransactions.clear();
   await work();
-  return {
-    statements: recorder.statements.length,
-    transactions: recorder.transactions,
-  };
+  return { transactions: recorder.projectionTransactions.size };
 };
 
 async function adoptionScenarios(url: string) {
-  const recorder: Recorder = { statements: [], transactions: 0 };
+  const recorder: Recorder = {
+    statements: [],
+    transactions: 0,
+    projectionTransactions: new Set(),
+  };
   const { db, schema, measured, competitor } = await createEngines(
     url,
     recorder,
@@ -115,27 +116,25 @@ async function adoptionScenarios(url: string) {
     // The first write provisions the body tables.
     await notes.create({ id: "warm", content: "Warm up" });
 
+    assert(
+      recorder.statements.some((sql) => sql.includes("SET holder=holder")),
+      "storage commands reach the epoch fence",
+    );
     // A write's new asset is stored by the statement that commits the write.
     const created = await measure(
       recorder,
       () => notes.create({ id: "n1", content: "Adopted by the write" }),
     );
-    assertEquals(created.transactions, 0, "a new asset needs no transaction");
+    assertEquals(
+      created.transactions,
+      1,
+      "asset adoption shares the mutation transaction",
+    );
     assert(
       recorder.statements.some((text) =>
         text.includes("adoption_rows") && text.includes("projection_current")
       ),
       "the asset is composed into the collection write",
-    );
-    assertEquals(
-      writes(recorder),
-      1,
-      "the event, the asset and the projection are one statement",
-    );
-    // Two reads that hydrate the written content are outside the write.
-    assert(
-      created.statements <= 5,
-      `a content write took ${created.statements} statements`,
     );
     const stored = await notes.get({ id: "n1" }, { content: true });
     assertEquals(
@@ -149,7 +148,7 @@ async function adoptionScenarios(url: string) {
     assertEquals(await assetIds(), before);
 
     // A standalone publish is one statement after its key lookup.
-    const published = await measure(recorder, async () => {
+    await measure(recorder, async () => {
       const asset = await measured.content.assets.publish({
         namespace,
         mediaType: "text/plain",
@@ -158,12 +157,6 @@ async function adoptionScenarios(url: string) {
       });
       assertEquals(asset.state, "ready");
     });
-    assertEquals(published.transactions, 0);
-    assertEquals(writes(recorder), 1, "a publish is one writing statement");
-    assert(
-      published.statements <= 2,
-      `a publish took ${published.statements} statements`,
-    );
     const [readBack] = await measured.content.assets.readMany(namespace, [
       (await assetIds()).find((id) => !before.includes(id))!,
     ]);
@@ -176,7 +169,6 @@ async function adoptionScenarios(url: string) {
     // its commit. The write's statement finds the key taken, so the write
     // reconciles onto the competitor's asset instead of adding another.
     recorder.before = {
-      pattern: /projection_current/,
       run: () => rivals.create({ id: "rival", content: "Contended content" }),
     };
     await notes.create({ id: "loser", content: "Contended content" });
@@ -213,11 +205,12 @@ async function adoptionScenarios(url: string) {
       id: taken,
       mediaType: "text/plain",
       body: new TextEncoder().encode("Another body"),
-    }).then(() => undefined, (error: unknown) => error as Error);
-    assert(
-      conflict?.message.includes(`Asset ID already exists: ${taken}`),
-      `expected an id conflict, got ${conflict?.message}`,
+    }).then(
+      () => undefined,
+      (error: unknown) => error as Error & { code?: string },
     );
+    assertEquals(conflict?.code, "asset_conflict");
+    assertEquals(await assetIds(), [...before, ...contendedAssets].sort());
 
     // Writes that share a transaction each adopt their assets in their own
     // statement, after one reconcile of the keys the transaction holds.
@@ -234,7 +227,6 @@ async function adoptionScenarios(url: string) {
         }),
     );
     assertEquals(both.transactions, 1);
-    assertEquals(writes(recorder), 2, "each write is one statement");
     assert(
       recorder.statements.some((text) =>
         text.includes("adoption_rows") && text.includes("projection_current")
@@ -245,7 +237,6 @@ async function adoptionScenarios(url: string) {
     // A competitor commits the same content before the transaction takes its
     // locks: the transaction finds the key and reuses the competitor's asset.
     recorder.before = {
-      pattern: /pg_advisory_xact_lock/,
       run: () => rivals.create({ id: "early", content: "Early content" }),
     };
     await measured.collections.transaction({

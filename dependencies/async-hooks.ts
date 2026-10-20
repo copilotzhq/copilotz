@@ -28,12 +28,9 @@ async function loadNativeAsyncLocalStorage(): Promise<
   return module.AsyncLocalStorage;
 }
 
-/**
- * Loads the host's native AsyncLocalStorage only when a scoped run begins.
- * Keeping the import lazy lets authoring-only browser bundles load safely.
- */
-export function createAsyncContextStorage<T>(
-  load: NativeAsyncLocalStorageLoader = loadNativeAsyncLocalStorage,
+/** Native storage is allocated lazily, including the private execution identity. */
+function createNativeAsyncContextStorage<T>(
+  load: NativeAsyncLocalStorageLoader,
 ): AsyncContextStorage<T> {
   let storage: NativeAsyncLocalStorage<T> | undefined;
   let loading: Promise<NativeAsyncLocalStorage<T>> | undefined;
@@ -61,5 +58,38 @@ export function createAsyncContextStorage<T>(
       const nativeStorage = await getNativeStorage();
       return await nativeStorage.run(store, callback);
     },
+  };
+}
+
+// An independent owner command/publication must not borrow its scheduler's stores.
+// This factory is lazy: importing authoring code does not load node:async_hooks.
+const executions = /* @__PURE__ */ createNativeAsyncContextStorage<object>(
+  loadNativeAsyncLocalStorage,
+);
+
+/** Package-only boundary; joined work keeps the current execution identity. */
+export function runIndependentAsyncContext<T>(
+  execute: () => T | Promise<T>,
+): Promise<T> {
+  return executions.run(Object.freeze({}), execute);
+}
+
+/** A binding is visible only in the independent execution that installed it. */
+export function createAsyncContextStorage<T>(
+  load: NativeAsyncLocalStorageLoader = loadNativeAsyncLocalStorage,
+): AsyncContextStorage<T> {
+  const storage = createNativeAsyncContextStorage<{
+    execution: object | undefined;
+    value: T;
+  }>(load);
+  return {
+    getStore() {
+      const binding = storage.getStore();
+      return binding?.execution === executions.getStore()
+        ? binding?.value
+        : undefined;
+    },
+    run: (value, execute) =>
+      storage.run({ execution: executions.getStore(), value }, execute),
   };
 }

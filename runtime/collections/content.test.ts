@@ -184,7 +184,7 @@ async function runCollectionContentContract(
     assertEquals(createdAssets.length, 1);
     assertEquals(createdAssets[0].assetId, first.content[0].assetId);
     assertEquals(typeof createdAssets[0].bodyId, "string");
-    assertEquals(typeof createdAssets[0].location, "object");
+    assertEquals("location" in createdAssets[0], false);
     const matchedDeliveries = await db.query<{ n: string | number }>(
       `SELECT count(*)::int AS n
        FROM "${input.schema}"."event_deliveries" delivery
@@ -551,15 +551,11 @@ async function runCollectionContentContract(
     );
     assertExists(storedAsset);
     assertEquals(
-      storedAsset.location,
-      commandAssets[0].location,
-      "the projection preserves the manifest body location exactly",
-    );
-    assertEquals(
-      "key" in storedAsset.location ? storedAsset.location.key : undefined,
+      storedAsset.bodyId,
       commandAssets[0].bodyId,
-      "the projection preserves the manifest body identity exactly",
+      "the projection preserves the manifest logical body identity exactly",
     );
+    assertEquals("location" in storedAsset, false);
     assertEquals(
       new TextDecoder().decode(
         (await engine.content.assets.read(
@@ -606,7 +602,6 @@ Deno.test("custom collection content materializes and links atomically with obje
           deployment: {
             durability: "ephemeral",
             reach: "process",
-            minimumProtectionMs: 0,
             readyGarbageCollection: false,
           },
         },

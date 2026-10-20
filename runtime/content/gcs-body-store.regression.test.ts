@@ -136,7 +136,7 @@ Deno.test("GCS binary multipart, immutable concurrent puts, range and follow ret
   assertEquals(await readBodyBytes(store, { bodyId: input.bodyId }), bytes);
 });
 
-Deno.test("GCS promotion publishes a stream under the same key read by the content scope", async () => {
+Deno.test("GCS explicit promotion keeps scope-independent keys and retains staging until catalog retirement", async () => {
   const fake = fakeGcs();
   const ready = createGcsBodyStoreAdapter({
     bucket: "test-bucket",
@@ -144,11 +144,10 @@ Deno.test("GCS promotion publishes a stream under the same key read by the conte
     fetch: fake.fetcher,
   });
   const staging = createFixedBodyStoreAdapter(
-    createMemoryBodyStore({ protectionMs: 0 }),
+    createMemoryBodyStore(),
     {
       durability: "durable",
       reach: "cluster",
-      minimumProtectionMs: 0,
       readyGarbageCollection: true,
     },
   );
@@ -160,7 +159,12 @@ Deno.test("GCS promotion publishes a stream under the same key read by the conte
   const streamStore = promoted.forScope(scope);
   const bodyId = "schemas/test_schema/namespaces/customer/body-stream";
   const bytes = encoder.encode("hello from stream");
-  const writer = await streamStore.reserve({ bodyId, mediaType: "text/plain" });
+  const writer = await streamStore.reserve({
+    bodyId,
+    mediaType: "text/plain",
+    reservationId: "stream",
+    generation: 1,
+  });
   await streamStore.append({
     writer,
     expectedOffset: 0,
@@ -173,14 +177,25 @@ Deno.test("GCS promotion publishes a stream under the same key read by the conte
     expectedDigest: await digestContent(bytes),
   });
   const content = ready.forScope({ ...scope, namespace: "@copilotz/content" });
+  assertEquals(await content.head({ bodyId }), null);
+  const published = await content.put({
+    bodyId,
+    mediaType: "text/plain",
+    bytes: await readBodyBytes(streamStore, { bodyId }),
+    digest: await digestContent(bytes),
+  });
   assertEquals(await readBodyBytes(content, { bodyId }), bytes);
-  assertEquals(await staging.forScope(scope).head({ bodyId }), null);
+  assertEquals(
+    (await staging.forScope(scope).head({ bodyId }))?.state,
+    "ready",
+  );
   const requestCount = fake.requests.length;
   assertEquals(
     await content.maintenance.delete({
       bodyId,
       expectedState: "ready",
       expectedMaintenanceVersion: 1,
+      expectedVersionToken: published.versionToken,
       idleForMs: 0,
     }),
     false,
@@ -327,4 +342,29 @@ Deno.test("GCS permission failures are bounded and do not reflect provider bodie
       Response.json({ access_token: "token", expires_in: "never" }),
   });
   await assertRejects(invalid, Error, "invalid");
+});
+
+Deno.test("GCS immutable retries verify retained bytes in bounded generation-bound ranges", async () => {
+  const fake = fakeGcs(), ranges: string[] = [];
+  const store = createGcsBodyStore({
+    bucket: "test-bucket",
+    backendId: "gcs:test",
+    fetch: (input, init) => {
+      const range = new Headers(init?.headers).get("range");
+      if (range) ranges.push(range);
+      return fake.fetcher(input, init);
+    },
+  });
+  const bytes = new Uint8Array(1024 * 1024 + 3).fill(17);
+  const input = {
+    bodyId: "retained",
+    mediaType: "application/octet-stream",
+    bytes,
+    digest: await digestContent(bytes),
+  };
+  await store.put(input);
+  assertEquals(ranges, ["bytes=0-1048575", "bytes=1048576-1048578"]);
+  fake.objects.get("retained")!.bytes[1048576] = 99;
+  const error = await assertRejects(() => store.put(input));
+  assertEquals((error as Error & { code: string }).code, "asset_corrupted");
 });

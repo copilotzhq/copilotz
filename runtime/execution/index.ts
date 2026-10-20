@@ -1,21 +1,5 @@
 export { createDeliveryExecutor } from "./executor.ts";
-export {
-  COPILOTZ_WORK_FRAME_SCHEMA,
-  COPILOTZ_WORK_OUTPUT_SCHEMA,
-  createCopilotzWorkOutputRelay,
-  relayCopilotzWorkHandle,
-} from "./protocol.ts";
-export type {
-  CopilotzWorkOutputMetadata,
-  CopilotzWorkOutputRelay,
-  RelayCopilotzWorkHandleOptions,
-} from "./protocol.ts";
-export {
-  COPILOTZ_LIVE_WORKLOAD,
-  createLiveEventDispatcher,
-  createLiveProcessorWorkload,
-  invokeLiveProcessors,
-} from "./live.ts";
+export { invokeLiveProcessors } from "./live.ts";
 export {
   createDeliveryWorkload,
   parseDeliveryDispatchMetadata,
@@ -41,18 +25,12 @@ export type {
   DeliveryMutationIdentity,
   DeliveryRecoveryDispatch,
   DeliveryWorkload,
-  DeliveryWorkloadScheduler,
   ExecutionWorkHandle,
   ExecutionWorkInput,
   ExecutionWorkTarget,
-  LocalWorkloadWorkerOptions,
 } from "./types.ts";
 export type {
-  CreateLiveEventDispatcherOptions,
-  CreateLiveProcessorWorkloadOptions,
   InvokeLiveProcessorsOptions,
-  LiveDispatchMetadata,
-  LiveEventDispatcher,
   LiveEventDispatchHandle,
   LiveMutationIdentity,
   LiveProcessorContextBase,

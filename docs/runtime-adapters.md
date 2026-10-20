@@ -42,7 +42,8 @@ Copilotz keeps that split visible in its import paths:
 
 | Entrypoint                        | Host            | Provides                                                                 |
 | --------------------------------- | --------------- | ------------------------------------------------------------------------ |
-| `/adapters/deno`                  | Deno            | `listen` (HTTP or a caller-owned Hypervisor)                             |
+| `/adapters/deno`                  | Deno            | `listen(app)` for owner HTTP and worker WebSockets                       |
+| `/adapters/node`                  | Node-compatible | Async `listen(app)` for owner HTTP and worker WebSockets                 |
 | `/core/cli`                       | any             | A portable interactive CLI. You inject its input and output              |
 | `/core/cli/node`                  | Node-compatible | The same CLI wired to readline, stdin and stdout                         |
 | `/skills/deno`                    | Deno            | A build-time packer that turns a local Skill directory into a bundle     |
@@ -51,10 +52,10 @@ Copilotz keeps that split visible in its import paths:
 | `/tools/persistent-terminal/deno` | Deno            | The persistent-terminal service                                          |
 | `/build`                          | Deno            | The filesystem-authoring build                                           |
 
-Copilotz has no generic `/adapters` entrypoint and no `/adapters/node`
-entrypoint. On Node, serve `app.fetch` with a Fetch bridge such as
-`@hono/node-server`, as `serve-node.ts` does in
-[Expose an HTTP API](getting-started/part-4-release-to-users/15-expose-an-http-api.md).
+Copilotz has no generic `/adapters` entrypoint. Import the adapter for the
+actual host. A Fetch-only bridge serves ordinary HTTP, but worker WebSocket
+connections need the public Node or Deno listener. Both reuse the existing
+application's owner transport without exposing persistence.
 
 ### Serve on Deno with `listen`
 
@@ -114,26 +115,27 @@ try {
 
 Run it with `deno run -A serve-listen.ts`.
 
-When you call `listen(app)`, it serves only `app.fetch`, which is plain HTTP.
-WebSocket Worker connections need a Hypervisor that the host creates and owns.
-Pass it as `listen({ hypervisor })`, as described in
-[Deployment Topologies](embedding-and-hypervisors.md).
+`listen(app)` serves its HTTP facade and configured worker WebSockets. The Node
+adapter returns a Promise for the same listener contract. Closing the listener
+leaves the app alive; closing the app also shuts down all listeners started from
+its public handle. Explicit `listen({ hypervisor })` listeners remain
+caller-owned. See [Deployment Topologies](embedding-and-hypervisors.md).
 
 ## Reference
 
 ### Host capability matrix
 
-| Capability                                              | Deno                     | Node                          | Bun                      | Browser           | Cloudflare Workers       |
-| ------------------------------------------------------- | ------------------------ | ----------------------------- | ------------------------ | ----------------- | ------------------------ |
-| Runtime-neutral definitions and in-memory Asset helpers | yes                      | yes                           | yes                      | yes               | yes                      |
-| Full database-backed application (`app.send`)           | yes                      | yes                           | not validated            | not validated     | not validated            |
-| HTTP serving                                            | `listen` or `Deno.serve` | Fetch bridge over `app.fetch` | the host's Fetch serving | not a server host | the host's Fetch serving |
-| Local filesystem Skill roots                            | yes                      | yes                           | yes                      | no                | no                       |
-| Subprocesses (MCP stdio, `/tools/deno`)                 | yes                      | MCP stdio                     | MCP stdio, not validated | no                | no                       |
-| PGlite (`file://`, `:memory:`)                          | yes                      | yes                           | not validated            | not validated     | not validated            |
-| PostgreSQL                                              | yes                      | not validated                 | not validated            | no                | not validated            |
-| `/build`, `/skills/deno`                                | yes                      | no                            | no                       | no                | no                       |
-| HTTP(S) Skill roots                                     | yes                      | yes                           | yes                      | yes, needs CORS   | yes                      |
+| Capability                                              | Deno                     | Node                       | Bun                      | Browser           | Cloudflare Workers       |
+| ------------------------------------------------------- | ------------------------ | -------------------------- | ------------------------ | ----------------- | ------------------------ |
+| Runtime-neutral definitions and in-memory Asset helpers | yes                      | yes                        | yes                      | yes               | yes                      |
+| Full database-backed application (`app.send`)           | yes                      | yes                        | not validated            | not validated     | not validated            |
+| HTTP serving                                            | `listen` or `Deno.serve` | `listen` or a Fetch bridge | the host's Fetch serving | not a server host | the host's Fetch serving |
+| Local filesystem Skill roots                            | yes                      | yes                        | yes                      | no                | no                       |
+| Subprocesses (MCP stdio, `/tools/deno`)                 | yes                      | MCP stdio                  | MCP stdio, not validated | no                | no                       |
+| PGlite (`file://`, `:memory:`)                          | yes                      | yes                        | not validated            | not validated     | not validated            |
+| PostgreSQL                                              | yes                      | not validated              | not validated            | no                | not validated            |
+| `/build`, `/skills/deno`                                | yes                      | no                         | no                       | no                | no                       |
+| HTTP(S) Skill roots                                     | yes                      | yes                        | yes                      | yes, needs CORS   | yes                      |
 
 Deno and Node application examples are checked against the database-backed
 runtime; the narrower CI coverage is listed below. "Not validated" means this

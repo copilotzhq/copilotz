@@ -1,3 +1,31 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { invalidateOwnerAlarm } from "../engine/alarms.ts";
+import {
+  promoteConfiguredLogicalBody,
+  promotedReadyStore,
+} from "./promoted-body-store.ts";
+import {
+  CONTENT_PROTECTION_MS,
+  CONTENT_REPLAY_RETENTION_MS,
+  type ContentCatalog,
+  type ContentCopy,
+  createContentCatalog,
+  openLogicalBody,
+  readLogicalHead,
+} from "./catalog.ts";
+import { isPendingContentRef } from "./schema.ts";
+import { createContentPreparer } from "./preparer.ts";
+import {
+  assertSchemaCommandTransaction,
+  createSchemaCommandRunner,
+  schemaCommandContext,
+} from "../engine/commands.ts";
+import {
+  bodyStoreTables,
+  provisionBodyStoreSchema,
+} from "./body-store-schema.ts";
+import { BODY_APPEND_MAX_BYTES } from "./body-store-operations.ts";
+import { afterSqlCommit } from "../events/session.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
@@ -16,24 +44,22 @@ import {
 import { digestContent } from "./digest.ts";
 import { assetNodeData } from "./asset-node.ts";
 import { createContentByteLimitError, createContentError } from "./errors.ts";
-import { cloneContentRef } from "./input.ts";
+import { captureContentInput, cloneContentRef } from "./input.ts";
 import {
   assetBodyKey,
   assetBodySchemaPrefix,
   readBodiesBounded,
-  readBodyBytes,
 } from "./body-store.ts";
 import {
-  composeDatabaseBodyPut,
-  createDatabaseBodyStore,
   createDatabaseBodyStoreAdapter,
+  databaseBodyStoreWriter,
+  isDatabaseBodyStore,
   provisionDatabaseBodyStore,
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 import type {
   AssetAdoptionPlan,
   AssetBody,
-  AssetBodyLocation,
   AssetEventBody,
   AssetManifestEntry,
   AssetMaterializationPlan,
@@ -41,9 +67,13 @@ import type {
   AssetRecord,
   AssetRepository,
   AssetState,
+  ContentInput,
   ContentRef,
   ContentSequence,
   DurableContentInput,
+  GeneratedContentSequence,
+  PendingContentDescriptor,
+  PendingContentRef,
   PreparedAsset,
   PreparedContent,
   PublishAssetInput,
@@ -52,7 +82,9 @@ import type {
 import type {
   BodyStorageRuntime,
   BodyStore,
+  MutableBodyHead,
   ReadyBodyHead,
+  TerminalBodyHead,
 } from "./body-store.ts";
 
 type AssetNodeRow = Record<string, unknown> & {
@@ -95,6 +127,20 @@ export type ReadyBodyRetirementResult = Readonly<
 export type DatabaseAssetRepository =
   & AssetRepository
   & Readonly<{
+    catalog: ContentCatalog;
+    storeForCopy(copy: ContentCopy): BodyStore;
+    registerStore(store: BodyStore): void;
+    capture(
+      input: Readonly<
+        {
+          namespace: string;
+          content: ContentInput | readonly ContentInput[] | PreparedContent;
+          operationKey: string;
+          producer: string;
+          origin?: AssetOrigin;
+        }
+      >,
+    ): Promise<GeneratedContentSequence>;
     /** Makes prepared bodies durable in one short repository transaction. */
     materialize(
       input: AssetMutationInput,
@@ -111,7 +157,9 @@ export type DatabaseAssetRepository =
     ): Promise<AssetBodyMaintenanceResult>;
     /** @internal CAS-deletes a Ready Body only while no graph owner exists. */
     retireUnownedReadyBody(
-      input: Readonly<{ store: BodyStore; body: ReadyBodyHead }>,
+      input: Readonly<
+        { store: BodyStore; body: TerminalBodyHead | MutableBodyHead }
+      >,
     ): Promise<ReadyBodyRetirementResult>;
   }>;
 
@@ -120,6 +168,7 @@ export type DatabaseAssetRepository =
  * optionally the asset nodes, only while nothing already holds their identity.
  */
 export type AssetAdoptionStatement = Readonly<{
+  invalidatesContent: boolean;
   ctes: readonly string[];
   /** Holds while no asset, key or body already occupies the adoption. */
   gate: string;
@@ -132,6 +181,7 @@ export type AssetAdoptionStatement = Readonly<{
 }>;
 
 type CollectionAssetAdopter = Readonly<{
+  prepareInCommand: boolean;
   reconcileMaterializations(
     transaction: SqlExecutor,
     plans: readonly AssetMaterializationPlan[],
@@ -141,11 +191,12 @@ type CollectionAssetAdopter = Readonly<{
   composeAdoption(
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    options: Readonly<{ nodes: boolean }>,
+    options: Readonly<{ nodes: boolean; commandTime: string }>,
   ): AssetAdoptionStatement;
 
   prepareMaterialization(
     input: AssetMutationInput,
+    transaction?: SqlExecutor,
   ): Promise<AssetMaterializationPlan>;
   adoptMaterialization(
     context: EventMutationContext,
@@ -259,38 +310,6 @@ function state(value: unknown, assetId: string): AssetState {
   );
 }
 
-function location(value: unknown, assetId: string): AssetBodyLocation {
-  const fields = record(value);
-  if (fields.kind === "database" && typeof fields.key === "string") {
-    return { kind: "database", key: fields.key };
-  }
-  if (fields.kind === "memory") {
-    return {
-      kind: "memory",
-      ...(typeof fields.backendId === "string"
-        ? { backendId: fields.backendId }
-        : {}),
-      ...(typeof fields.key === "string" ? { key: fields.key } : {}),
-    };
-  }
-  if (
-    fields.kind === "object" && typeof fields.backendId === "string" &&
-    typeof fields.key === "string"
-  ) {
-    return {
-      kind: "object",
-      backendId: fields.backendId,
-      key: fields.key,
-      ...(typeof fields.etag === "string" ? { etag: fields.etag } : {}),
-    };
-  }
-  throw createContentError(
-    "asset_corrupted",
-    `Asset has an invalid body location: ${assetId}`,
-    { assetId },
-  );
-}
-
 function mapAsset(row: AssetNodeRow): AssetRecord {
   const data = record(row.data);
   const mediaType = typeof data.mediaType === "string" ? data.mediaType : "";
@@ -313,7 +332,7 @@ function mapAsset(row: AssetNodeRow): AssetRecord {
     byteLength,
     digest: digest as `sha256:${string}`,
     state: state(data.state, row.id),
-    location: location(data.location, row.id),
+    bodyId: requiredText(String(data.bodyId ?? ""), "Logical body identity"),
     ...(cloneOrigin(data.origin) ? { origin: cloneOrigin(data.origin) } : {}),
     createdAt: iso(row.created_at),
     ...(typeof data.readyAt === "string" ? { readyAt: data.readyAt } : {}),
@@ -329,14 +348,21 @@ function mapAsset(row: AssetNodeRow): AssetRecord {
 
 function isContentSequence(
   content: DurableContentInput,
-): content is ContentSequence {
+): content is GeneratedContentSequence {
   return Array.isArray(content);
 }
 
 function preparedInput(content: DurableContentInput): PreparedContent {
   if (isContentSequence(content)) {
     return ({
-      content: content.map(cloneContentRef),
+      content: content.map((ref) => {
+        if (isPendingContentRef(ref)) {
+          throw new TypeError(
+            "Pending content must be resolved by the owner catalog.",
+          );
+        }
+        return cloneContentRef(ref);
+      }),
       assets: [] as const,
     } as const);
   }
@@ -390,7 +416,7 @@ function assertReadable(asset: AssetRecord): void {
 }
 
 function assetBodyId(asset: AssetRecord): string | undefined {
-  return "key" in asset.location ? asset.location.key : undefined;
+  return asset.bodyId;
 }
 
 function assetManifestEntry(
@@ -411,7 +437,6 @@ function assetManifestEntry(
     mediaType: asset.mediaType,
     byteLength: asset.byteLength,
     digest: asset.digest,
-    location: structuredClone(asset.location),
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(asset.origin ? { origin: structuredClone(asset.origin) } : {}),
     ...(asset.metadata ? { metadata: structuredClone(asset.metadata) } : {}),
@@ -454,7 +479,7 @@ export function createDatabaseAssetRepository(
     databaseSchema: options.databaseSchema,
   } as const;
   const scopedWriter = adapter.forScope(scope);
-  let databaseWriterProvisioned = false;
+
   const storage: BodyStorageRuntime = {
     adapter,
     writer: scopedWriter,
@@ -468,6 +493,20 @@ export function createDatabaseAssetRepository(
   } as const;
   const maxDatabaseBytes = storage.maxDatabaseBytes;
   const tables = options.eventStore.tables;
+  const runCommand = createSchemaCommandRunner(
+    options.session,
+    options.databaseSchema,
+  );
+  const catalog = createContentCatalog(options.session, options.databaseSchema);
+  let databaseBodiesProvisioned = false;
+  const databasePlans = new WeakMap<PreparedAsset, {
+    physical_key: string;
+    backend_id: string;
+    collectable: boolean;
+    token: string;
+    parts: { start_offset: number; bytes: string; digest: string }[];
+  }>();
+  const copyStores = new Map(storage.readers);
   const preparedBodies = new Map<string, PreparedBodyCacheEntry>();
   let preparedBodyBytes = 0;
 
@@ -617,16 +656,7 @@ export function createDatabaseAssetRepository(
         candidate.readyBody.mediaType !== candidate.mediaType ||
         candidate.readyBody.byteLength !== candidate.byteLength ||
         candidate.readyBody.digest !== candidate.digest ||
-        assetBodyId({
-            id: candidate.id,
-            namespace,
-            mediaType: candidate.mediaType,
-            byteLength: candidate.byteLength,
-            digest: candidate.digest,
-            state: "ready",
-            location: candidate.location,
-            createdAt: "",
-          }) !== candidate.readyBody.bodyId
+        candidate.location.key !== candidate.readyBody.bodyId
       ) {
         throw createContentError(
           "asset_corrupted",
@@ -747,6 +777,7 @@ export function createDatabaseAssetRepository(
     namespace: string,
     source: PreparedAsset,
     fallbackOrigin?: AssetOrigin,
+    deferDatabase = true,
   ): Promise<
     Readonly<{ asset: AssetRecord; adoption?: AssetAdoptionPlan }>
   > => {
@@ -814,62 +845,217 @@ export function createDatabaseAssetRepository(
       );
     }
     const configuredWriter = storage.writer!;
-    const bodyId = candidate.readyBody?.bodyId ?? assetBodyKey({
+    const logicalBodyId = candidate.logicalBodyId ??
+      `body:${namespace}:${candidate.id}`;
+    const physicalKey = candidate.readyBody?.bodyId ?? assetBodyKey({
       prefix: storage.prefix,
       databaseSchema: options.databaseSchema,
       namespace,
       assetId: candidate.id,
       origin,
     });
-    let adoptionKind: AssetAdoptionPlan["kind"] = "ready";
-    let adoptionCandidate = candidate;
-    let storedLocation: AssetBodyLocation;
-    if (candidate.readyBody) {
-      storedLocation = structuredClone(candidate.location!);
-    } else if (configuredWriter.kind === "database") {
-      adoptionKind = "database";
-      storedLocation = { kind: "database", key: bodyId };
-      databaseWriterProvisioned ||= await provisionDatabaseBodyStore(
-        configuredWriter,
+    const backend = candidate.location?.kind === "database"
+      ? "database:default"
+      : candidate.location && "backendId" in candidate.location
+      ? candidate.location.backendId
+      : undefined;
+    const physicalStore = backend
+      ? storage.readers.get(backend) ?? configuredWriter
+      : configuredWriter;
+    const writerIdentity = {
+      bodyId: logicalBodyId,
+      writerId: `capture:${namespace}:${candidate.id}`,
+      generation: 1,
+    };
+    const current = await catalog.read(logicalBodyId, executor);
+    if (
+      current &&
+      (current.namespace !== namespace ||
+        (current.terminal &&
+          (current.terminal.outcome !== "completed" ||
+            current.terminal.length !== candidate.byteLength ||
+            current.terminal.digest !== candidate.digest)) ||
+        (!current.terminal &&
+          (current.writerId !== writerIdentity.writerId ||
+            current.revocation !== "active" ||
+            current.copy.key !== physicalKey)))
+    ) {
+      throw createContentError(
+        "asset_conflict",
+        "Logical body identity is already occupied.",
       );
-    } else {
-      const head = await configuredWriter.put({
-        bodyId,
-        bytes: candidate.body,
-        mediaType: candidate.mediaType,
-        digest: candidate.digest,
-        ifAbsent: true,
+    }
+    let head: ReadyBodyHead;
+    if (
+      deferDatabase && !current && !candidate.readyBody &&
+      physicalStore.kind === "database" && isDatabaseBodyStore(physicalStore) &&
+      !promotedReadyStore(physicalStore)
+    ) {
+      // Captured bytes are staged as SQL values. Their physical and logical
+      // rows are written only by the eventual adoption statement.
+      if (!databaseBodiesProvisioned) {
+        if (executor === options.session) {
+          await provisionDatabaseBodyStore(physicalStore);
+          databaseBodiesProvisioned = true;
+        } else {
+          databaseBodyStoreWriter(physicalStore, executor);
+          await provisionBodyStoreSchema(executor, options.databaseSchema);
+          afterSqlCommit(executor, () => {
+            databaseBodiesProvisioned = true;
+          });
+        }
+      }
+      const parts = [] as {
+        start_offset: number;
+        bytes: string;
+        digest: string;
+      }[];
+      for (
+        let offset = 0;
+        offset < candidate.body.length;
+        offset += BODY_APPEND_MAX_BYTES
+      ) {
+        const bytes = candidate.body.slice(
+          offset,
+          offset + BODY_APPEND_MAX_BYTES,
+        );
+        parts.push({
+          start_offset: offset,
+          bytes: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+            .join(""),
+          digest: await digestContent(bytes),
+        });
+      }
+      const staged = { ...candidate, logicalBodyId };
+      databasePlans.set(staged, {
+        physical_key: physicalKey,
+        backend_id: physicalStore.backendId,
+        collectable: physicalStore.conditionalDelete,
+        token: crypto.randomUUID(),
+        parts,
       });
+      const readyAt = now().toISOString();
+      const asset: AssetRecord = {
+        id: candidate.id,
+        namespace,
+        mediaType: candidate.mediaType,
+        byteLength: candidate.byteLength,
+        digest: candidate.digest,
+        state: "ready",
+        bodyId: logicalBodyId,
+        origin: structuredClone(origin),
+        createdAt: readyAt,
+        readyAt,
+        ...(cloneMetadata(candidate.metadata)
+          ? { metadata: cloneMetadata(candidate.metadata) }
+          : {}),
+      };
+      return {
+        asset,
+        adoption: { kind: "database", candidate: staged, asset },
+      };
+    } else if (current?.terminal) {
+      const stored = (await readLogicalHead(
+        executor === options.session
+          ? catalog
+          : createContentCatalog(executor, options.databaseSchema),
+        current.bodyId,
+        (copy) =>
+          executor !== options.session && copy.backendKind === "database"
+            ? databaseBodyStoreWriter(storeForCopy(copy), executor)
+            : storeForCopy(copy),
+      ))?.head;
+      if (!stored || stored.state !== "ready") {
+        throw createContentError(
+          "content_missing",
+          "Captured content body is no longer available.",
+        );
+      }
+      head = stored;
+    } else {
+      if (executor !== options.session) {
+        throw new TypeError(
+          "External or unfinished content must be prepared before the owner command.",
+        );
+      }
+      if (!current) {
+        await catalog.reserve({
+          ...writerIdentity,
+          namespace,
+          copy: {
+            key: physicalKey,
+            backendKind: physicalStore.kind,
+            backendId: physicalStore.backendId,
+            collectable: physicalStore.conditionalDelete,
+          },
+        });
+      }
+      if (candidate.readyBody) {
+        const stored = await physicalStore.head({ bodyId: physicalKey });
+        if (!stored || stored.state !== "ready") {
+          throw createContentError(
+            "content_missing",
+            "Prepared content copy is unavailable.",
+          );
+        }
+        head = stored;
+      } else {
+        if (physicalStore.kind === "database") {
+          await provisionDatabaseBodyStore(physicalStore);
+        }
+        head = await physicalStore.put({
+          bodyId: physicalKey,
+          bytes: candidate.body,
+          mediaType: candidate.mediaType,
+          digest: candidate.digest,
+          ifAbsent: true,
+        });
+      }
       if (
-        head.bodyId !== bodyId || head.state !== "ready" ||
-        head.mediaType !== candidate.mediaType ||
         head.byteLength !== candidate.byteLength ||
-        head.digest !== candidate.digest
+        head.digest !== candidate.digest ||
+        head.mediaType !== candidate.mediaType
       ) {
         throw createContentError(
           "asset_corrupted",
-          `Prepared body integrity does not match: ${candidate.id}`,
-          { namespace, assetId: candidate.id },
+          "Prepared body integrity does not match its catalog descriptor.",
         );
       }
-      storedLocation = configuredWriter.kind === "object"
-        ? {
-          kind: "object",
-          backendId: configuredWriter.backendId,
-          key: bodyId,
-          ...(head.etag ? { etag: head.etag } : {}),
-        }
-        : {
-          kind: "memory",
-          backendId: configuredWriter.backendId,
-          key: bodyId,
-        };
-      adoptionCandidate = {
-        ...candidate,
-        readyBody: structuredClone(head),
-        location: structuredClone(storedLocation),
-      } as const;
+      if (!current?.sealIntent) {
+        await catalog.checkpoint({
+          ...writerIdentity,
+          expectedOffset: current?.committedOffset ?? 0,
+          offset: head.byteLength,
+        });
+      }
+      await catalog.sealIntent({
+        ...writerIdentity,
+        length: head.byteLength,
+        digest: head.digest,
+      });
+      await catalog.sealAccepted({ ...writerIdentity, head });
     }
+    if (
+      head.byteLength !== candidate.byteLength ||
+      head.digest !== candidate.digest || head.mediaType !== candidate.mediaType
+    ) {
+      throw createContentError(
+        "asset_corrupted",
+        "Captured body integrity does not match its descriptor.",
+      );
+    }
+    if (executor === options.session) {
+      await promoteConfiguredLogicalBody({
+        catalog,
+        bodyId: logicalBodyId,
+        storeFor: storeForCopy,
+      });
+    }
+    const adoptionCandidate = {
+      ...candidate,
+      logicalBodyId,
+      readyBody: head,
+    } as const;
     const readyAt = now().toISOString();
     const asset: AssetRecord = {
       id: candidate.id,
@@ -878,7 +1064,7 @@ export function createDatabaseAssetRepository(
       byteLength: candidate.byteLength,
       digest: candidate.digest,
       state: "ready",
-      location: storedLocation,
+      bodyId: logicalBodyId,
       origin: structuredClone(origin),
       createdAt: readyAt,
       readyAt,
@@ -889,32 +1075,19 @@ export function createDatabaseAssetRepository(
     return ({
       asset,
       adoption: {
-        kind: adoptionKind,
-        protectionRequired: adoptionKind === "ready" &&
-          adapter.deployment.readyGarbageCollection,
+        kind: "ready",
         candidate: adoptionCandidate,
         asset,
       } as const,
     } as const);
   };
 
-  const lockMaterializationKeys = async (
+  const assertMaterializationOwner = (
     transaction: SqlExecutor,
-    candidates: readonly { namespace: string; key?: string }[],
+    _candidates: readonly { namespace: string; key?: string }[],
   ): Promise<void> => {
-    const keys = [
-      ...new Set(
-        candidates.flatMap(({ namespace, key }) =>
-          key ? [JSON.stringify([namespace, key])] : []
-        ),
-      ),
-    ].sort();
-    for (const key of keys) {
-      await transaction.query(
-        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-        [options.databaseSchema + ":asset-materialization", key],
-      );
-    }
+    assertSchemaCommandTransaction(transaction, options.databaseSchema);
+    return Promise.resolve();
   };
 
   // Resolve races before Collection event matching, reference projection, or writes.
@@ -923,7 +1096,7 @@ export function createDatabaseAssetRepository(
     plans: readonly AssetMaterializationPlan[],
   ): Promise<ReadonlyMap<string, AssetManifestEntry>> => {
     const adoptions = plans.flatMap((plan) => plan.adoptions);
-    await lockMaterializationKeys(
+    await assertMaterializationOwner(
       transaction,
       adoptions.map(({ asset, candidate }) => ({
         namespace: asset.namespace,
@@ -951,8 +1124,19 @@ export function createDatabaseAssetRepository(
     const { asset, candidate } = plan;
     const namespace = asset.namespace;
     const key = candidate.idempotencyKey?.trim() || undefined;
+    if (candidate.pendingAdoption) {
+      await catalog.adoptPending(context.transaction, {
+        namespace,
+        pendingRef: candidate.pendingAdoption.pendingRef,
+        ownerId: candidate.pendingAdoption.ownerId,
+        assetId: asset.id,
+      });
+    }
     if (key) {
-      await lockMaterializationKeys(context.transaction, [{ namespace, key }]);
+      await assertMaterializationOwner(context.transaction, [{
+        namespace,
+        key,
+      }]);
       const existing = await findByIdempotency(
         context.transaction,
         namespace,
@@ -983,6 +1167,36 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id },
       );
     }
+    if (plan.kind === "database") {
+      const params: unknown[] = [];
+      const composed = composeAdoption(
+        [soleAdoption(plan)],
+        (value) => `$${params.push(value)}`,
+        {
+          nodes: false,
+          commandTime:
+            schemaCommandContext(context.transaction, options.databaseSchema)
+              .commandTime,
+        },
+      );
+      const result = await context.transaction.query(
+        `WITH ${
+          [
+            ...composed.ctes,
+            `adoption_accepted AS (SELECT 1 WHERE ${composed.gate})`,
+            ...composed.effects("adoption_accepted"),
+          ].join(",")
+        }
+         SELECT * FROM adoption_accepted`,
+        params,
+      );
+      if (!result.rows.length) throw takenAdoption();
+      invalidateOwnerAlarm(
+        context.transaction,
+        options.databaseSchema,
+        "content",
+      );
+    }
     const bodyId = assetBodyId(asset);
     if (!bodyId) {
       throw createContentError(
@@ -991,39 +1205,35 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id },
       );
     }
-    await context.transaction.query(
-      "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
-      [options.databaseSchema, "body-ownership"],
-    );
-    if (plan.kind === "ready" && plan.protectionRequired) {
-      const protectedUntil = candidate.readyBody?.protectedUntil;
-      const protectionDeadline = protectedUntil
-        ? Date.parse(protectedUntil)
-        : Number.NaN;
-      if (
-        !Number.isFinite(protectionDeadline) || protectionDeadline <= Date.now()
-      ) {
-        throw createContentError(
-          "asset_corrupted",
-          `Prepared ready body protection expired before adoption: ${candidate.id}`,
-          { namespace, assetId: candidate.id },
-        );
-      }
+    const logical = await createContentCatalog(
+      context.transaction,
+      options.databaseSchema,
+    ).read(bodyId);
+    if (
+      !logical || logical.namespace !== namespace ||
+      logical.terminal?.outcome !== "completed" ||
+      logical.terminal.length !== asset.byteLength ||
+      logical.terminal.digest !== asset.digest
+    ) {
+      throw createContentError(
+        "content_missing",
+        "The adopted logical body is unavailable.",
+      );
     }
-    if (plan.kind === "database") {
-      const writer = createDatabaseBodyStore({
-        session: context.transaction,
-        schema: options.databaseSchema,
-        backendId: storage.writer!.backendId,
-        provisioned: databaseWriterProvisioned,
-      });
-      await writer.put({
-        bodyId,
-        bytes: candidate.body,
-        mediaType: candidate.mediaType,
-        digest: candidate.digest,
-        ifAbsent: true,
-      });
+    const retired = await context.transaction.query(
+      `SELECT 1 FROM ${tables.content_copies} WHERE copy_key=$1 AND state IN ('retiring','retired')
+      UNION ALL SELECT 1 FROM ${tables.owner_body_retirements} WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3`,
+      [
+        logical.copy.key,
+        logical.copy.backendKind,
+        logical.copy.backendKind === "database" ? "" : logical.copy.backendId,
+      ],
+    );
+    if (retired.rows.length) {
+      throw createContentError(
+        "asset_conflict",
+        "This body has entered irreversible retirement.",
+      );
     }
     let data: string;
     try {
@@ -1058,6 +1268,97 @@ export function createDatabaseAssetRepository(
     executor: SqlExecutor,
     input: AssetMutationInput,
   ): Promise<AssetMaterializationPlan> => {
+    if (
+      Array.isArray(input.content) && input.content.some(isPendingContentRef)
+    ) {
+      if (!input.origin) {
+        throw new TypeError(
+          "Pending content adoption requires a domain owner.",
+        );
+      }
+      const refs: ContentRef[] = [];
+      const assets: PreparedAsset[] = [];
+      for (const source of input.content) {
+        if (!isPendingContentRef(source)) {
+          refs.push(cloneContentRef(source));
+          continue;
+        }
+        const pending = await catalog.resolvePending(
+          input.namespace,
+          source,
+          executor,
+        );
+        if (
+          pending.ownerId && pending.ownerId !== JSON.stringify(input.origin)
+        ) {
+          throw createContentError(
+            "asset_conflict",
+            "Pending content already belongs to another domain owner.",
+          );
+        }
+        const id = `asset:${
+          (await digestContent(
+            new TextEncoder().encode(
+              JSON.stringify([input.namespace, source.pendingRef]),
+            ),
+          )).slice(7)
+        }`;
+        const observed = await readLogicalHead(
+          executor === options.session
+            ? catalog
+            : createContentCatalog(executor, options.databaseSchema),
+          pending.body.bodyId,
+          (copy) =>
+            executor !== options.session &&
+              isDatabaseBodyStore(storeForCopy(copy))
+              ? databaseBodyStoreWriter(storeForCopy(copy), executor)
+              : storeForCopy(copy),
+        );
+        const head = observed?.head;
+        if (observed) pending.body = observed.body;
+        if (
+          !head || head.state !== "ready" || head.digest !== source.digest ||
+          head.byteLength !== source.byteLength ||
+          head.mediaType !== source.mediaType
+        ) {
+          throw createContentError(
+            "content_missing",
+            "Pending content bytes are unavailable.",
+          );
+        }
+        refs.push({
+          ...pending.descriptor.reference,
+          assetId: id,
+          mediaType: source.mediaType,
+        });
+        if (assets.some((asset) => asset.id === id)) continue;
+        assets.push({
+          id,
+          namespace: input.namespace,
+          mediaType: source.mediaType,
+          body: new Uint8Array(),
+          readyBody: head,
+          location: pending.body.copy.backendKind === "database"
+            ? { kind: "database", key: pending.body.copy.key }
+            : {
+              kind: pending.body.copy.backendKind as "memory" | "object",
+              key: pending.body.copy.key,
+              backendId: pending.body.copy.backendId,
+            },
+          logicalBodyId: pending.body.bodyId,
+          pendingAdoption: {
+            pendingRef: source.pendingRef,
+            ownerId: JSON.stringify(input.origin),
+          },
+          byteLength: source.byteLength,
+          digest: source.digest,
+          idempotencyKey: `pending:${source.pendingRef}`,
+          origin: input.origin,
+          metadata: pending.descriptor.asset.metadata,
+        });
+      }
+      input = { ...input, content: { content: refs, assets } };
+    }
     const { namespace, prepared, candidates } = await validateMutationInput(
       input,
     );
@@ -1111,6 +1412,7 @@ export function createDatabaseAssetRepository(
     context: EventMutationContext,
     plan: AssetMaterializationPlan,
   ): Promise<void> => {
+    assertSchemaCommandTransaction(context.transaction, options.databaseSchema);
     const namespace = requiredText(plan.namespace, "Asset namespace");
     for (const adoption of plan.adoptions) {
       if (adoption.asset.namespace !== namespace) {
@@ -1124,191 +1426,96 @@ export function createDatabaseAssetRepository(
     }
   };
 
-  const adoptable = (plans: readonly AssetMaterializationPlan[]): boolean => {
-    const adoptions = plans.flatMap((plan) => plan.adoptions);
-    return adoptions.length > 0 && (databaseWriterProvisioned ||
-      adoptions.every(({ kind }) => kind !== "database"));
-  };
-
-  // The same checks and writes as adoptCandidate, as fragments of the
-  // statement that inserts the owning event. Anything that already occupies an
-  // adoption's identity refuses it whole, and the caller adopts the slow way.
+  const adoptable = (plans: readonly AssetMaterializationPlan[]): boolean =>
+    plans.some((plan) => plan.adoptions.length > 0) &&
+    plans.every((plan) =>
+      plan.adoptions.every((adoption) => !adoption.candidate.pendingAdoption)
+    );
   const composeAdoption = (
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    { nodes }: Readonly<{ nodes: boolean }>,
+    { nodes, commandTime }: Readonly<{ nodes: boolean; commandTime: string }>,
   ): AssetAdoptionStatement => {
-    const wanted = plans.flatMap((plan) => {
-      const namespace = requiredText(plan.namespace, "Asset namespace");
-      return plan.adoptions.map((adoption) => {
-        const { asset, candidate } = adoption;
-        if (asset.namespace !== namespace) {
-          throw createContentError(
-            "content_invalid",
-            `Asset adoption belongs to another namespace: ${asset.id}`,
-            { namespace, assetId: asset.id },
-          );
-        }
-        const bodyId = assetBodyId(asset);
-        if (!bodyId) {
-          throw createContentError(
-            "asset_corrupted",
-            `Asset body location is missing a body id: ${asset.id}`,
-            { namespace, assetId: asset.id },
-          );
-        }
-        if (adoption.kind === "ready" && adoption.protectionRequired) {
-          const protectedUntil = candidate.readyBody?.protectedUntil;
-          const deadline = protectedUntil
-            ? Date.parse(protectedUntil)
-            : Number.NaN;
-          if (!Number.isFinite(deadline) || deadline <= Date.now()) {
-            throw createContentError(
-              "asset_corrupted",
-              `Prepared ready body protection expired before adoption: ${candidate.id}`,
-              { namespace, assetId: candidate.id },
-            );
-          }
-        }
-        const data = assetNodeData(asset, bodyId);
-        try {
-          JSON.stringify(data);
-        } catch (cause) {
-          throw createContentError(
-            "content_invalid",
-            `Asset metadata is not JSON serializable: ${asset.id}`,
-            { namespace, assetId: asset.id, cause },
-          );
-        }
-        return {
-          adoption,
-          bodyId,
-          row: {
+    const hasDatabase = plans.some((plan) =>
+      plan.adoptions.some((adoption) => adoption.kind === "database")
+    );
+    const physical = bodyStoreTables(options.databaseSchema);
+    const time = hasDatabase
+      ? `${param(commandTime)}::timestamptz`
+      : "NULL::timestamptz";
+    const rows = param(
+      JSON.stringify(
+        plans.flatMap((plan) =>
+          plan.adoptions.map(({ asset, candidate, kind }) => ({
+            database: kind === "database",
+            ...databasePlans.get(candidate),
             id: asset.id,
-            namespace,
-            key: candidate.idempotencyKey?.trim() || null,
+            namespace: asset.namespace,
+            key: candidate.idempotencyKey ?? null,
             media_type: asset.mediaType,
             created_at: asset.createdAt,
-            data,
-          },
-        } as const;
-      });
-    });
-    // Nodes are written in a fixed order so that concurrent adoptions of
-    // overlapping keys wait on each other instead of deadlocking.
-    wanted.sort((left, right) => {
-      const order = (item: typeof left) =>
-        `${item.row.namespace}\u0000${item.row.key ?? ""}\u0000${item.row.id}`;
-      return order(left) < order(right)
-        ? -1
-        : order(left) > order(right)
-        ? 1
-        : 0;
-    });
-    const rows = param(
-      JSON.stringify(wanted.map(({ row }, ord) => ({ ord, ...row }))),
-    );
-    const bodies = wanted.flatMap(({ adoption, bodyId }, ord) =>
-      adoption.kind === "database"
-        ? [composeDatabaseBodyPut({
-          schema: options.databaseSchema,
-          param,
-          label: `adoption_${ord}`,
-          bodyId,
-          mediaType: adoption.candidate.mediaType,
-          digest: adoption.candidate.digest,
-          bytes: adoption.candidate.body,
-        })]
-        : []
-    );
-    const keys = [
-      ...new Set(
-        wanted.flatMap(({ row }) =>
-          row.key ? [JSON.stringify([row.namespace, row.key])] : []
+            data: assetNodeData(asset, asset.bodyId),
+          }))
         ),
       ),
-    ].sort();
-    const taken = (match: string) =>
-      `SELECT 1 FROM adoption_rows AS wanted
-         JOIN ${tables.nodes} AS taken
-           ON taken.namespace = wanted.namespace AND taken.type = 'asset'
-          AND ${match}`;
-    return ({
+    );
+    return {
+      invalidatesContent: hasDatabase,
       ctes: [
-        `adoption_rows AS (
-           SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(
-             ord int, id text, namespace text, key text, media_type text,
-             created_at timestamptz, data jsonb
-           )
-         )`,
-        // The locks that adoption in a transaction takes, so that both kinds
-        // of adopter queue behind each other on a key. A statement that waited
-        // here read its snapshot before the winner committed; it then meets
-        // the key's unique index, and its retry sees the winner and refuses.
-        `adoption_lock AS (
-           SELECT (
-             SELECT count(*) FROM (
-               SELECT pg_advisory_xact_lock(
-                 hashtext(${
-          param(options.databaseSchema + ":asset-materialization")
-        }::text),
-                 hashtext(locked.key)
-               )
-               FROM (
-                 SELECT key, ord FROM unnest(${
-          param(keys)
-        }::text[]) WITH ORDINALITY AS keyed(key, ord)
-                 ORDER BY ord
-               ) AS locked
-             ) AS held
-           ) AS keys,
-           pg_advisory_xact_lock_shared(
-             hashtext(${param(options.databaseSchema)}::text),
-             hashtext('body-ownership')
-           ) AS body
-         )`,
-        `adoption_taken AS (
-           ${taken("taken.id = wanted.id")}
-           UNION ALL
-           ${
-          taken(
-            `taken.source_type = 'asset_idempotency' AND taken.source_id = wanted.key`,
-          )
+        `adoption_rows AS (SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(id text,namespace text,key text,media_type text,created_at timestamptz,data jsonb,database boolean,physical_key text,backend_id text,collectable boolean,token text,parts jsonb))`,
+        `adoption_refused AS (SELECT EXISTS(SELECT 1 FROM adoption_rows wanted LEFT JOIN ${tables.content_logical_bodies} body ON body.body_id=wanted.data->>'bodyId'
+          LEFT JOIN ${tables.content_copies} copy ON copy.copy_key=body.current_copy
+          WHERE (NOT wanted.database AND (body.body_id IS NULL OR copy.copy_key IS NULL OR body.namespace<>wanted.namespace OR body.terminal->>'outcome' IS DISTINCT FROM 'completed' OR body.terminal->>'digest' IS DISTINCT FROM wanted.data->>'digest' OR (body.terminal->>'length')::bigint IS DISTINCT FROM (wanted.data->>'byteLength')::bigint OR copy.state IN ('retiring','retired') OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} r WHERE r.body_id=copy.copy_key)))
+          ${
+          hasDatabase
+            ? `OR (wanted.database AND (body.body_id IS NOT NULL OR wanted.physical_key IS NULL
+            OR EXISTS(SELECT 1 FROM ${tables.content_copies} WHERE copy_key=wanted.physical_key)
+            OR EXISTS(SELECT 1 FROM ${tables.owner_body_retirements} WHERE body_id=wanted.physical_key)
+            OR EXISTS(SELECT 1 FROM ${physical.bodies} WHERE body_id=wanted.physical_key)))`
+            : ""
         }
-         )`,
-        `adoption_refused AS (
-           SELECT (EXISTS (SELECT 1 FROM adoption_taken)${
-          bodies.map(({ exists }) => ` OR ${exists}`).join("")
-        }) AS refused
-         )`,
+          OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND taken.type='asset' AND (taken.id=wanted.id OR (wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
       ],
-      gate:
-        "EXISTS (SELECT 1 FROM adoption_lock) AND NOT (SELECT refused FROM adoption_refused)",
+      gate: "NOT (SELECT refused FROM adoption_refused)",
       effects: (source) => [
-        ...(nodes
-          ? [`adoption_nodes AS (
-               INSERT INTO ${tables.nodes} (
-                 id, namespace, type, name, data, source_type, source_id,
-                 created_at, updated_at
-               )
-               SELECT wanted.id, wanted.namespace, 'asset', wanted.media_type,
-                      wanted.data,
-                      CASE WHEN wanted.key IS NULL THEN NULL
-                           ELSE 'asset_idempotency' END,
-                      wanted.key, wanted.created_at, wanted.created_at
-                 FROM adoption_rows AS wanted, ${source}
-                ORDER BY wanted.ord
-             )`]
+        ...(hasDatabase
+          ? [
+            `adoption_logical AS (INSERT INTO ${tables.content_logical_bodies}
+            (body_id,namespace,current_copy,writer_id,generation,protected_until,committed_offset,seal_intent,terminal)
+            SELECT wanted.data->>'bodyId',wanted.namespace,wanted.physical_key,'capture:'||wanted.namespace||':'||wanted.id,1,
+              ${time}+(${CONTENT_PROTECTION_MS}*interval '1 millisecond'),(wanted.data->>'byteLength')::bigint,
+              jsonb_build_object('length',(wanted.data->>'byteLength')::bigint,'digest',wanted.data->>'digest'),
+              jsonb_build_object('length',(wanted.data->>'byteLength')::bigint,'digest',wanted.data->>'digest','outcome','completed')
+            FROM adoption_rows wanted,${source} WHERE wanted.database RETURNING body_id)`,
+            `adoption_physical AS (INSERT INTO ${physical.bodies}
+            (body_id,state,media_type,reservation_id,writer_generation,byte_length,digest,version_token,maintenance_version,updated_at)
+            SELECT wanted.physical_key,'ready',wanted.media_type,'put:'||wanted.token,1,
+              (wanted.data->>'byteLength')::bigint,wanted.data->>'digest',wanted.token,1,${time}
+            FROM adoption_rows wanted JOIN adoption_logical ON adoption_logical.body_id=wanted.data->>'bodyId' RETURNING body_id)`,
+            `adoption_copies AS (INSERT INTO ${tables.content_copies}
+            (copy_key,backend_kind,backend_id,body_id,version_token,state,collectable,retire_after)
+            SELECT wanted.physical_key,'database',wanted.backend_id,wanted.data->>'bodyId',wanted.token,'current',wanted.collectable,
+              ${time}+(${CONTENT_REPLAY_RETENTION_MS}*interval '1 millisecond')
+            FROM adoption_rows wanted JOIN adoption_physical ON adoption_physical.body_id=wanted.physical_key)`,
+            `adoption_parts AS (INSERT INTO ${physical.parts}(body_id,start_offset,append_id,bytes,part_digest)
+            SELECT wanted.physical_key,part.start_offset,'put:'||part.start_offset,decode(part.bytes,'hex'),part.digest
+            FROM adoption_rows wanted JOIN adoption_physical ON adoption_physical.body_id=wanted.physical_key,
+              LATERAL jsonb_to_recordset(wanted.parts) AS part(start_offset bigint,bytes text,digest text))`,
+          ]
           : []),
-        ...bodies.flatMap((body) => body.effects(source)),
+        ...(nodes
+          ? [
+            `adoption_nodes AS (INSERT INTO ${tables.nodes}(id,namespace,type,name,data,source_type,source_id,created_at,updated_at)
+            SELECT wanted.id,wanted.namespace,'asset',wanted.media_type,wanted.data,CASE WHEN wanted.key IS NULL THEN NULL ELSE 'asset_idempotency' END,wanted.key,wanted.created_at,wanted.created_at FROM adoption_rows wanted,${source})`,
+          ]
+          : []),
       ],
       report:
-        "jsonb_build_object('refused', (SELECT refused FROM adoption_refused))",
-      refused: (report) => {
-        const value = typeof report === "string" ? JSON.parse(report) : report;
-        return (value as { refused?: unknown } | null)?.refused === true;
-      },
-    } as const);
+        "jsonb_build_object('refused',(SELECT refused FROM adoption_refused))",
+      refused: (report) =>
+        (typeof report === "string" ? JSON.parse(report) : report)?.refused ===
+          true,
+    };
   };
 
   const soleAdoption = (
@@ -1388,19 +1595,18 @@ export function createDatabaseAssetRepository(
   ): Promise<CoordinatedMutationResult<AssetRecord>> => {
     const event = assetCreationEvent(adoption);
     if (!execution) {
-      // One autocommitted statement inserts the event and the asset. It
-      // refuses when anything already holds the asset's identity, and the
-      // slower path below then decides what that means.
+      // The event and asset share the mutation transaction. If the asset's
+      // identity is already held, reconcile it before attempting adoption.
       if (adoptable([soleAdoption(adoption)])) {
         try {
           const result = await options.coordinator.commitMutation({
             ...event,
             dispatch: false,
-            statement: (param) => {
+            statement: (param, _tables, { commandTime }) => {
               const composed = composeAdoption(
                 [soleAdoption(adoption)],
                 param,
-                { nodes: true },
+                { nodes: true, commandTime },
               );
               return {
                 ...composed,
@@ -1415,7 +1621,7 @@ export function createDatabaseAssetRepository(
             },
           });
           retainPreparedBody(result.value!, adoption.candidate);
-          await options.coordinator.flushCommitted(result);
+          await awaitEventPublication(result);
           return result;
         } catch (error) {
           if (!(error as { [adoptionTaken]?: true })[adoptionTaken]) {
@@ -1423,18 +1629,22 @@ export function createDatabaseAssetRepository(
           }
         }
       }
-      const result = await options.session.transaction(async (transaction) => {
-        await lockMaterializationKeys(transaction, [{
-          namespace: adoption.asset.namespace,
-          key: adoption.candidate.idempotencyKey?.trim(),
-        }]);
-        return await commitAssetCreation(adoption, {
-          transaction,
-          dispatch: false,
-        });
-      });
+      const result = await runCommand(
+        "content.adopt",
+        { namespace: adoption.asset.namespace, assetId: adoption.asset.id },
+        async (_input, { transaction }) => {
+          await assertMaterializationOwner(transaction, [{
+            namespace: adoption.asset.namespace,
+            key: adoption.candidate.idempotencyKey?.trim(),
+          }]);
+          return await commitAssetCreation(adoption, {
+            transaction,
+            dispatch: false,
+          });
+        },
+      );
       retainPreparedBody(result.value!, adoption.candidate);
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
       return result;
     }
     return await options.coordinator.commitMutation({
@@ -1453,8 +1663,10 @@ export function createDatabaseAssetRepository(
       return;
     }
     const pending: CoordinatedMutationResult<AssetRecord>[] = [];
-    await options.session.transaction(async (transaction) => {
-      await lockMaterializationKeys(
+    await runCommand("content.materialize", {
+      assetIds: plan.adoptions.map(({ asset }) => asset.id),
+    }, async (_input, { transaction }) => {
+      await assertMaterializationOwner(
         transaction,
         plan.adoptions.map(({ asset, candidate }) => ({
           namespace: asset.namespace,
@@ -1472,7 +1684,7 @@ export function createDatabaseAssetRepository(
     });
     publishMaterializations([plan]);
     for (const result of pending) {
-      await options.coordinator.flushCommitted(result);
+      await awaitEventPublication(result);
     }
   };
 
@@ -1528,28 +1740,27 @@ export function createDatabaseAssetRepository(
     });
   };
 
-  const bodyStoreForAsset = (asset: AssetRecord): BodyStore => {
-    if (asset.location.kind === "database") {
-      const store = storage.writer?.kind === "database"
-        ? storage.writer
-        : storage.readers.get("database:default");
-      if (store) return store;
-      throw createContentError(
-        "asset_storage_unavailable",
-        `Database BodyStore is not configured for asset: ${asset.id}`,
-        { namespace: asset.namespace, assetId: asset.id },
-      );
-    }
-    const backendId = asset.location.backendId;
-    const store = backendId ? storage.readers.get(backendId) : undefined;
+  const storeForCopy = (copy: ContentCopy): BodyStore => {
+    const ready = promotedReadyStore(storage.writer!);
+    if (ready?.backendId === copy.backendId) return ready;
+    const store = copyStores.get(copy.backendId) ??
+      (copy.backendKind === "database"
+        ? storage.readers.get("database:default")
+        : undefined);
     if (store) return store;
     throw createContentError(
       "asset_storage_unavailable",
-      `Body backend '${
-        backendId ?? "memory"
-      }' is not configured for asset: ${asset.id}`,
-      { namespace: asset.namespace, assetId: asset.id },
+      `Body backend '${copy.backendId}' is not configured.`,
     );
+  };
+  const logicalBytes = async (asset: AssetRecord): Promise<Uint8Array> => {
+    const stream = await openLogicalBody(
+      catalog,
+      asset.bodyId,
+      storeForCopy,
+      asset.byteLength,
+    );
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   };
 
   const readRows = async (
@@ -1573,6 +1784,22 @@ export function createDatabaseAssetRepository(
       rows.map((row, index) => ({ row, asset: assets[index] })),
       storage.readConcurrency,
       async ({ asset }) => {
+        const head =
+          (await readLogicalHead(catalog, asset.bodyId, storeForCopy))?.head;
+        if (!head || head.state !== "ready") {
+          throw createContentError(
+            "content_missing",
+            "Captured content bytes are missing.",
+          );
+        }
+        if (
+          head.byteLength !== asset.byteLength || head.digest !== asset.digest
+        ) {
+          throw createContentError(
+            "asset_corrupted",
+            "Captured content integrity differs from its catalog descriptor.",
+          );
+        }
         const prepared = cachedPreparedBody(asset);
         if (prepared) return prepared;
         const key = assetBodyId(asset);
@@ -1583,9 +1810,7 @@ export function createDatabaseAssetRepository(
             { namespace: asset.namespace, assetId: asset.id },
           );
         }
-        const body = await readBodyBytes(bodyStoreForAsset(asset), {
-          bodyId: key,
-        });
+        const body = await logicalBytes(asset);
         if (
           body.byteLength !== asset.byteLength ||
           await digest(body) !== asset.digest
@@ -1608,7 +1833,236 @@ export function createDatabaseAssetRepository(
   // Rotate bounded Ready-body scans across maintenance calls. Otherwise a
   // stable first page of graph-owned Bodies can starve later orphans forever.
   let bodyMaintenanceAfter: string | undefined;
+  let catalogMaintenanceAfter: string | undefined;
+  // Retirement is irreversible. Physical deletion can finish after takeover,
+  // because every adopter checks the durable claim before taking ownership.
+  const retireBody = async (
+    input: Readonly<
+      { store: BodyStore; body: TerminalBodyHead | MutableBodyHead }
+    >,
+    idleForMs: number,
+  ): Promise<ReadyBodyRetirementResult> => {
+    if (!input.store.conditionalDelete) return { status: "blocked" };
+    const backendId = input.store.kind === "database"
+      ? ""
+      : input.store.backendId;
+    const request = {
+      backendKind: input.store.kind,
+      backendId,
+      bodyId: input.body.bodyId,
+    };
+    const claim = await runCommand(
+      "content.retireClaim",
+      request,
+      async (request, { transaction, commandTime }) => {
+        invalidateOwnerAlarm(transaction, options.databaseSchema, "content");
+        if (
+          "lastModified" in input.body && input.body.lastModified &&
+          Date.parse(input.body.lastModified) >
+            Date.parse(commandTime) - idleForMs
+        ) return { status: "blocked" as const };
+        const copy =
+          (await transaction.query<{ body_id: string; state: string }>(
+            `SELECT body_id,state FROM ${tables.content_copies} WHERE copy_key=$1 AND backend_kind=$2 AND backend_id=$3`,
+            [request.bodyId, request.backendKind, input.store.backendId],
+          )).rows[0];
+        if (copy && copy.state !== "retiring" && copy.state !== "retired") {
+          const body = await catalog.read(copy.body_id, transaction);
+          if (!body) return { status: "blocked" as const };
+          if (
+            body.promotionTarget?.key === request.bodyId &&
+            Date.parse(body.promotionTarget.expiresAt) > Date.parse(commandTime)
+          ) return { status: "blocked" as const };
+          if (body.copy.key === request.bodyId) {
+            if (
+              !body.terminal ||
+              Date.parse(body.protectedUntil) > Date.parse(commandTime)
+            ) return { status: "blocked" as const };
+            const owned = (await transaction.query<
+              { id: string; type: "asset" | "protected_value" }
+            >(
+              `SELECT id,type FROM ${tables.nodes} WHERE type IN ('asset','protected_value') AND data->>'state'='ready' AND data->>'bodyId'=$1 LIMIT 1`,
+              [body.bodyId],
+            )).rows[0];
+            if (owned) {
+              return {
+                status: "owned" as const,
+                ownerId: owned.id,
+                ownerType: owned.type,
+              };
+            }
+            const pending = (await transaction.query(
+              `SELECT 1 FROM ${tables.pending_content} p WHERE body_id=$1 AND expires_at>$2::timestamptz LIMIT 1`,
+              [body.bodyId, commandTime],
+            )).rows.length > 0;
+            if (pending) return { status: "blocked" as const };
+            const streams =
+              `"${options.databaseSchema}"."copilotz_operation_streams"`;
+            const present = (await transaction.query<{ present: boolean }>(
+              "SELECT to_regclass($1) IS NOT NULL AS present",
+              [streams],
+            )).rows[0]?.present;
+            if (
+              present &&
+              (await transaction.query(
+                `SELECT 1 FROM ${streams} WHERE body_id=$1 AND availability='retained' AND cleanup_state IS NULL LIMIT 1`,
+                [body.bodyId],
+              )).rows.length
+            ) return { status: "blocked" as const };
+            const operations =
+              `"${options.databaseSchema}"."copilotz_operations"`;
+            if (
+              present &&
+              (await transaction.query(
+                `SELECT 1 FROM ${tables.pending_content} p JOIN ${operations} o ON o.operation_id=p.producer AND o.namespace=p.namespace WHERE p.body_id=$1 AND o.state IN ('accepted','running') LIMIT 1`,
+                [body.bodyId],
+              )).rows.length
+            ) return { status: "blocked" as const };
+          }
+          await transaction.query(
+            `UPDATE ${tables.content_copies} SET state='retiring',version_token=$2 WHERE copy_key=$1`,
+            [request.bodyId, input.body.versionToken],
+          );
+        }
+        await transaction.query(
+          `INSERT INTO ${tables.owner_body_retirements} (owner,backend_kind,backend_id,body_id,token)
+         VALUES ('schema',$1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [
+            request.backendKind,
+            request.backendId,
+            request.bodyId,
+            input.body.versionToken,
+          ],
+        );
+        const row =
+          (await transaction.query<{ token: string; completed: boolean }>(
+            `SELECT token,completed FROM ${tables.owner_body_retirements} WHERE owner='schema' AND backend_kind=$1 AND backend_id=$2 AND body_id=$3`,
+            [request.backendKind, request.backendId, request.bodyId],
+          )).rows[0];
+        return {
+          status: "claimed" as const,
+          token: row.token,
+          completed: row.completed,
+        };
+      },
+    );
+    if (claim.status !== "claimed") return claim;
+    // External adapters never run while the owner holds its SQL fence.
+    const deleted = await input.store.maintenance.delete({
+      bodyId: input.body.bodyId,
+      expectedState: input.body.state,
+      expectedVersionToken: claim.token,
+      idleForMs,
+    });
+    if (!deleted && await input.store.head({ bodyId: input.body.bodyId })) {
+      return { status: "blocked" };
+    }
+    await runCommand("content.confirmRetirement", {
+      ...request,
+      token: claim.token,
+    }, async (request, { transaction }) => {
+      invalidateOwnerAlarm(transaction, options.databaseSchema, "content");
+      await transaction.query(
+        `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND backend_kind=$1 AND backend_id=$2 AND body_id=$3 AND token=$4`,
+        [request.backendKind, request.backendId, request.bodyId, request.token],
+      );
+      await transaction.query(
+        `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1 AND state='retiring'`,
+        [request.bodyId],
+      );
+    });
+    return { status: "deleted" };
+  };
+
   const repository: DatabaseAssetRepository = {
+    catalog,
+    storeForCopy,
+    registerStore(store) {
+      copyStores.set(store.backendId, store);
+      const ready = promotedReadyStore(store);
+      if (ready) copyStores.set(ready.backendId, ready);
+    },
+    async capture(input) {
+      input = captureContentInput(input);
+      const prepared = (input.content && typeof input.content === "object" &&
+          "content" in input.content && "assets" in input.content)
+        ? input.content as PreparedContent
+        : await createContentPreparer().prepare(
+          input.content as ContentInput | readonly ContentInput[],
+          {
+            namespace: input.namespace,
+            idempotencyKey: input.operationKey,
+            origin: input.origin,
+          },
+        );
+      const generated: Array<ContentRef | PendingContentRef> = [];
+      for (let index = 0; index < prepared.content.length; index++) {
+        const ref = prepared.content[index],
+          source = prepared.assets.find((asset) => asset.id === ref.assetId);
+        if (!source) {
+          generated.push(ref);
+          continue;
+        }
+        const pendingRef = `capture:${input.operationKey}:${index}`;
+        const id = `capture:${
+          (await digestContent(
+            new TextEncoder().encode(
+              JSON.stringify([input.namespace, pendingRef]),
+            ),
+          )).slice(7)
+        }`;
+        const candidate = { ...source, id, idempotencyKey: undefined };
+        const preparedCandidate = await prepareCandidate(
+          options.session,
+          input.namespace,
+          candidate,
+          input.origin,
+          false,
+        );
+        const body = await catalog.read(preparedCandidate.asset.bodyId);
+        if (!body?.terminal) {
+          throw createContentError(
+            "content_missing",
+            "Captured body was not accepted.",
+          );
+        }
+        const head = (await readLogicalHead(catalog, body.bodyId, storeForCopy))
+          ?.head;
+        if (!head || head.state !== "ready") {
+          throw createContentError(
+            "content_missing",
+            "Captured body is unavailable.",
+          );
+        }
+        const { assetId: _assetId, mediaType: _mediaType, ...reference } = ref;
+        const descriptor: PendingContentDescriptor = {
+          reference,
+          asset: {
+            ...(input.origin ? { origin: input.origin } : {}),
+            metadata: source.metadata ?? {},
+          },
+        };
+        await catalog.sealAccepted({
+          ...body,
+          head,
+          pending: {
+            ref: pendingRef,
+            producer: input.producer,
+            descriptor,
+            expiresAt: new Date(Date.now() + CONTENT_REPLAY_RETENTION_MS)
+              .toISOString(),
+          },
+        });
+        generated.push({
+          type: "content.pending",
+          pendingRef,
+          mediaType: source.mediaType,
+          byteLength: source.byteLength,
+          digest: source.digest,
+        });
+      }
+      return generated;
+    },
     async publish(input: PublishAssetInput) {
       const namespace = requiredText(input.namespace, "Asset namespace");
       const mediaType = requiredText(input.mediaType, "Asset mediaType");
@@ -1711,20 +2165,12 @@ export function createDatabaseAssetRepository(
           { namespace, assetId },
         );
       }
-      const store = bodyStoreForAsset(asset);
-      const head = await store.head({ bodyId: key });
-      if (
-        !head || head.state !== "ready" ||
-        head.byteLength !== asset.byteLength ||
-        head.digest !== asset.digest || head.mediaType !== asset.mediaType
-      ) {
-        throw createContentError(
-          "asset_corrupted",
-          `Asset body metadata integrity check failed: ${asset.id}`,
-          { namespace, assetId },
-        );
-      }
-      return await store.read({ bodyId: key });
+      return await openLogicalBody(
+        catalog,
+        asset.bodyId,
+        storeForCopy,
+        asset.byteLength,
+      );
     },
 
     async markDeleted(namespaceInput, assetIdInput) {
@@ -1746,24 +2192,21 @@ export function createDatabaseAssetRepository(
           deduplicationId: `asset.delete:${assetId}`,
         },
         mutate: async ({ transaction, tables: names }) => {
-          await transaction.query(
-            "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
-            [options.databaseSchema, "body-ownership"],
-          );
-          const locked = await transaction.query<AssetNodeRow>(
+          assertSchemaCommandTransaction(transaction, options.databaseSchema);
+          const selected = await transaction.query<AssetNodeRow>(
             `SELECT * FROM ${names.nodes}
              WHERE namespace = $1 AND id = $2 AND type = 'asset'
-             LIMIT 1 FOR UPDATE`,
+             LIMIT 1`,
             [namespace, assetId],
           );
-          if (!locked.rows[0]) {
+          if (!selected.rows[0]) {
             throw createContentError(
               "asset_not_found",
               `Asset not found: ${assetId}`,
               { namespace, assetId },
             );
           }
-          const currentRow = locked.rows[0];
+          const currentRow = selected.rows[0];
           const current = mapAsset(currentRow);
           if (current.state !== "ready") {
             throw createContentError(
@@ -1866,7 +2309,83 @@ export function createDatabaseAssetRepository(
         );
       }
       let orphanedBodiesDeleted = 0;
-      if (storage.writer) {
+      await catalog.expireReservations();
+      const attemptedCopies = new Set<string>();
+      const tracked = await options.session.query<
+        {
+          copy_key: string;
+          backend_kind: string;
+          backend_id: string;
+          state: string;
+          body_id: string;
+        }
+      >(
+        `SELECT copy_key,backend_kind,backend_id,state,body_id FROM ${tables.content_copies} WHERE ($1::text IS NULL OR copy_key>$1) ORDER BY copy_key LIMIT $2`,
+        [
+          catalogMaintenanceAfter ?? null,
+          Math.min(10000, Math.max(limit * 4, 100)),
+        ],
+      );
+      for (const copy of tracked.rows) {
+        catalogMaintenanceAfter = copy.copy_key;
+        if (
+          copy.state === "current" && maintenance.isBodyRetained &&
+          await maintenance.isBodyRetained(copy.body_id)
+        ) continue;
+        attemptedCopies.add(copy.copy_key);
+        try {
+          const store = storeForCopy({
+            key: copy.copy_key,
+            backendKind: copy.backend_kind,
+            backendId: copy.backend_id,
+          });
+          if (!store.conditionalDelete) continue;
+          const head = await store.head({ bodyId: copy.copy_key });
+          if (head) {
+            const result = await retireBody(
+              { store, body: head },
+              orphanAfterMs,
+            );
+            if (result.status === "deleted") orphanedBodiesDeleted++;
+            else if (result.status === "blocked") {
+              await catalog.deferRetirement(copy.copy_key);
+            }
+          } else if (!head) {
+            await runCommand("content.confirmAbsentRetirement", {
+              copyKey: copy.copy_key,
+            }, async (input, { transaction }) => {
+              invalidateOwnerAlarm(
+                transaction,
+                options.databaseSchema,
+                "content",
+              );
+              const claimed = await transaction.query(
+                `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
+                [
+                  input.copyKey,
+                  store.kind,
+                  store.kind === "database" ? "" : store.backendId,
+                ],
+              );
+              if (claimed.rows.length) {
+                await transaction.query(
+                  `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1`,
+                  [input.copyKey],
+                );
+              }
+            });
+          }
+        } catch {
+          await catalog.deferRetirement(
+            copy.copy_key,
+          ); /* The durable retry deadline does not slide on unrelated commands. */
+        }
+        if (orphanedBodiesDeleted >= limit) break;
+      }
+      if (tracked.rows.length < Math.min(10000, Math.max(limit * 4, 100))) {
+        catalogMaintenanceAfter = undefined;
+      }
+      if (storage.writer && orphanedBodiesDeleted < limit) {
         const prefix = assetBodySchemaPrefix({
           prefix: storage.prefix,
           databaseSchema: options.databaseSchema,
@@ -1903,7 +2422,11 @@ export function createDatabaseAssetRepository(
           for (const body of candidates.bodies) {
             scanned += 1;
             bodyMaintenanceAfter = body.bodyId;
-            if (!body.bodyId.startsWith(prefix)) continue;
+            if (
+              !body.bodyId.startsWith(prefix) ||
+              attemptedCopies.has(body.bodyId)
+            ) continue;
+            attemptedCopies.add(body.bodyId);
             if (body.state !== "ready" && body.state !== "incomplete") {
               continue;
             }
@@ -1911,31 +2434,6 @@ export function createDatabaseAssetRepository(
               ? new Date(body.lastModified).getTime()
               : Number.NaN;
             if (!Number.isFinite(modified) || modified > cutoff) continue;
-            if (body.state === "incomplete") {
-              // Incomplete Bodies are intentionally never graph-owned. Their
-              // only durable owner is an operational replay catalog, so the
-              // caller must supply that retention guard before orphan GC is
-              // allowed to collect unpublished terminal staging.
-              if (
-                !maintenance.isBodyRetained ||
-                await maintenance.isBodyRetained(body.bodyId)
-              ) continue;
-              try {
-                if (
-                  await storage.writer!.maintenance.delete({
-                    bodyId: body.bodyId,
-                    expectedState: "incomplete",
-                    expectedMaintenanceVersion: body.maintenanceVersion,
-                    idleForMs: orphanAfterMs,
-                  })
-                ) orphanedBodiesDeleted++;
-              } catch {
-                // One unavailable backend object cannot block the page.
-              }
-              if (orphanedBodiesDeleted >= limit) break;
-              continue;
-            }
-            if (body.state !== "ready") continue;
             // Operation replay Bodies have catalog-owned retention until that
             // row is pruned. Afterwards graph ownership and ordinary orphan GC
             // protect/collect an adopted canonical Body normally.
@@ -1944,57 +2442,15 @@ export function createDatabaseAssetRepository(
               maintenance.isBodyRetained &&
               await maintenance.isBodyRetained(body.bodyId)
             ) continue;
-            let deleted = false;
             try {
-              deleted = await options.session.transaction(
-                async (transaction) => {
-                  await transaction.query(
-                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-                    [options.databaseSchema, "body-ownership"],
-                  );
-                  const owner = await transaction.query<{ id: string }>(
-                    `SELECT id FROM ${tables.nodes}
-                 WHERE type IN ('asset', 'protected_value')
-                   AND data ->> 'state' = 'ready'
-                   AND data ->> 'bodyId' = $1
-                   AND data -> 'location' ->> 'kind' = $2
-                   AND (
-                     (type = 'asset' AND
-                       COALESCE(data -> 'location' ->> 'backendId', '') = $3)
-                     OR
-                     (type = 'protected_value' AND
-                       data -> 'location' ->> 'backendId' = $4)
-                   )
-                 LIMIT 1`,
-                    [
-                      body.bodyId,
-                      storage.writer!.kind,
-                      storage.writer!.kind === "database"
-                        ? ""
-                        : storage.writer!.backendId,
-                      storage.writer!.backendId,
-                    ],
-                  );
-                  if (owner.rows[0]) return false;
-                  const maintenanceStore = storage.writer!.kind === "database"
-                    ? createDatabaseBodyStore({
-                      session: transaction,
-                      schema: options.databaseSchema,
-                      backendId: storage.writer!.backendId,
-                    })
-                    : storage.writer!;
-                  return await maintenanceStore.maintenance.delete({
-                    bodyId: body.bodyId,
-                    expectedState: body.state,
-                    expectedMaintenanceVersion: body.maintenanceVersion,
-                    idleForMs: orphanAfterMs,
-                  });
-                },
+              const result = await retireBody(
+                { store: storage.writer!, body },
+                orphanAfterMs,
               );
+              if (result.status === "deleted") orphanedBodiesDeleted++;
             } catch {
-              // One unavailable backend object cannot block the remaining page.
+              // A durable retirement remains retryable after an adapter outage.
             }
-            if (deleted) orphanedBodiesDeleted++;
             if (orphanedBodiesDeleted >= limit) break;
           }
           if (!candidates.after) {
@@ -2006,64 +2462,7 @@ export function createDatabaseAssetRepository(
       return ({ orphanedBodiesDeleted } as const);
     },
 
-    async retireUnownedReadyBody(input) {
-      if (input.body.state !== "ready") {
-        return ({ status: "blocked" as const } as const);
-      }
-      return await options.session.transaction(async (transaction) => {
-        await transaction.query(
-          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-          [options.databaseSchema, "body-ownership"],
-        );
-        const owner = await transaction.query<{
-          id: string;
-          type: "asset" | "protected_value";
-        }>(
-          `SELECT id, type FROM ${tables.nodes}
-             WHERE type IN ('asset', 'protected_value')
-               AND data ->> 'state' = 'ready'
-               AND data ->> 'bodyId' = $1
-               AND data -> 'location' ->> 'kind' = $2
-               AND (
-                 (type = 'asset' AND
-                   COALESCE(data -> 'location' ->> 'backendId', '') = $3)
-                 OR
-                 (type = 'protected_value' AND
-                   data -> 'location' ->> 'backendId' = $4)
-               )
-             LIMIT 1`,
-          [
-            input.body.bodyId,
-            input.store.kind,
-            input.store.kind === "database" ? "" : input.store.backendId,
-            input.store.backendId,
-          ],
-        );
-        if (owner.rows[0]) {
-          return ({
-            status: "owned" as const,
-            ownerId: owner.rows[0].id,
-            ownerType: owner.rows[0].type,
-          } as const);
-        }
-        const maintenanceStore = input.store.kind === "database"
-          ? createDatabaseBodyStore({
-            session: transaction,
-            schema: options.databaseSchema,
-            backendId: input.store.backendId,
-          })
-          : input.store;
-        const deleted = await maintenanceStore.maintenance.delete({
-          bodyId: input.body.bodyId,
-          expectedState: "ready",
-          expectedMaintenanceVersion: input.body.maintenanceVersion,
-          idleForMs: 0,
-        });
-        return ({
-          status: deleted ? "deleted" as const : "blocked" as const,
-        } as const);
-      });
-    },
+    retireUnownedReadyBody: (input) => retireBody(input, 0),
 
     async materialize(input) {
       let plan = await prepareMaterializationOn(options.session, input);
@@ -2132,8 +2531,11 @@ export function createDatabaseAssetRepository(
   collectionAssetAdopters.set(
     frozenRepository,
     {
-      prepareMaterialization: (input) =>
-        prepareMaterializationOn(options.session, input),
+      prepareInCommand: storage.writer?.kind === "database" &&
+        isDatabaseBodyStore(storage.writer) &&
+        !promotedReadyStore(storage.writer),
+      prepareMaterialization: (input, transaction) =>
+        prepareMaterializationOn(transaction ?? options.session, input),
       adoptMaterialization,
       reconcileMaterializations,
       adoptable,

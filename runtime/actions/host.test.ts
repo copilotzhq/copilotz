@@ -79,6 +79,13 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     },
   } as unknown as CollectionRuntime;
   const context = createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace: "tenant-actions",
     databaseSchema: "copilotz_action_host",
     plugins,
@@ -86,7 +93,7 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
     actionLifecycle: {
       append({ data }) {
         lifecycleData.push(data);
-        return Promise.resolve(undefined as never);
+        return Promise.resolve({ deduplicated: false } as never);
       },
       load: () => Promise.resolve(null),
     },
@@ -101,6 +108,12 @@ Deno.test("Action transactions expose atomic relation projection", async () => {
             throw new Error("Content streams are not configured.");
           },
         }),
+        openCapture() {
+          throw new Error("Content is not configured.");
+        },
+        capture() {
+          throw new Error("Content is not configured.");
+        },
         prepare() {
           throw new Error("Content is not configured.");
         },
@@ -227,6 +240,13 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
     throw new Error("Content is not configured.");
   };
   const context = createActionContext({
+    operations: {
+      start() {
+        throw new Error(
+          "Operation admission is not configured in this test host.",
+        );
+      },
+    },
     namespace: "tenant-streams",
     databaseSchema: "copilotz_action_streams",
     plugins,
@@ -239,13 +259,15 @@ Deno.test("Action streams carry their exact root and nested action run IDs", asy
       withScope: () => Object.freeze({}),
     } as unknown as CollectionRuntime,
     actionLifecycle: {
-      append: () => Promise.resolve(undefined as never),
+      append: () => Promise.resolve({ deduplicated: false } as never),
       load: () => Promise.resolve(null),
     },
     content: () =>
       Object.freeze({
         resolver: { getMany: () => Promise.resolve([]) },
         stream: streams,
+        openCapture: unavailableContent,
+        capture: unavailableContent,
         prepare: unavailableContent,
         materialize: unavailableContent,
         publish: unavailableContent,

@@ -125,7 +125,7 @@ Deno.test({
         schema,
         Object.values(registry.collections),
       );
-      // Compass serves already-provisioned tenant schemas: exercise that path too.
+      // Atlas serves already-provisioned tenant schemas: exercise that path too.
       await engine.shutdown();
       engine = await createCopilotzEngine({
         session: db,

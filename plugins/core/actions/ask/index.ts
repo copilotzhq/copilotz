@@ -1,11 +1,10 @@
 /** Defines the durable Agent-to-Agent Ask Action. @module */
 
 import {
-  type ActionDeferral,
+  type ActionContinuation,
   type ActionDefinition,
-  type ActionResolution,
-  deferAction,
   defineAction,
+  type OperationOutcome,
 } from "@copilotz/copilotz/actions";
 import {
   type ContentSequence,
@@ -48,7 +47,7 @@ export type AskInput = Readonly<{
 export type AskResult = Readonly<
   { content: ContentSequence; askResult: AgentAskResultMetadata }
 >;
-export type AskOutput = AskResult | ActionDeferral;
+export type AskOutput = AskResult | ActionContinuation;
 export type AskWork = Readonly<{
   ask: AgentAskMetadata;
   question: Readonly<Record<string, unknown> & { id: string }>;
@@ -313,21 +312,24 @@ async function executeAsk(
     metadata: questionMetadata,
     ...(metadata.agentTurn ? { historyScopeId: metadata.agentTurn.id } : {}),
   };
-  return deferAction({ ask, question } satisfies AskWork);
+  return context.awaitOperation({
+    start: { action: "createThreadMessage", input: question },
+    handoff: { ask, question } satisfies AskWork,
+  });
 }
 
-async function resolveAsk(
-  _input: AskInput,
+async function resumeAsk(
+  handoff: unknown,
+  outcome: OperationOutcome,
   context: CoreActionContext,
-  resolution: ActionResolution,
 ): Promise<AskResult> {
-  const work = resolution.work as AskWork;
+  const work = handoff as AskWork;
   const ask = work.ask;
   if (
     !ask || ask.toolActionRunId !== context.action.runId ||
     ask.questionMessageId !== work.question.id
   ) {
-    throw new Error("Ask resolver received an inconsistent handoff.");
+    throw new Error("Ask resumption received an inconsistent handoff.");
   }
   const answers = await requireCollection(context, "message").list({
     filter: {
@@ -349,16 +351,16 @@ async function resolveAsk(
   });
   const answer = answers[0];
   const cursor = answer ? agentAskMetadata(asRecord(answer.metadata)) : null;
-  const outcome = asRecord(asRecord(answer?.metadata).copilotzAskOutcome);
+  const answerOutcome = asRecord(asRecord(answer?.metadata).copilotzAskOutcome);
   if (
     answers.length === 1 && cursor?.askId === ask.askId &&
-    (outcome.status === "failed" || outcome.status === "cancelled")
+    (answerOutcome.status === "failed" || answerOutcome.status === "cancelled")
   ) {
-    const cause = asRecord(outcome.error);
+    const cause = asRecord(answerOutcome.error);
     const error = new Error(
       typeof cause.message === "string" ? cause.message : "Asked agent failed.",
     );
-    error.name = outcome.status === "cancelled"
+    error.name = answerOutcome.status === "cancelled"
       ? "AbortError"
       : "AgentAskFailed";
     throw error;
@@ -368,13 +370,13 @@ async function resolveAsk(
     cursor.askedParticipantId !== ask.askedParticipantId ||
     !Array.isArray(answer.content) || answer.content.length === 0
   ) {
-    if (resolution.outcome !== "completed") {
+    if (outcome.status !== "completed") {
       const error = new Error(
-        `Asked turn for '${ask.askedAgentId}' ${resolution.outcome}.${
-          resolution.error ? " " + resolution.error.message : ""
+        `Asked turn for '${ask.askedAgentId}' ${outcome.status}.${
+          outcome.error?.message ? " " + outcome.error.message : ""
         }`,
       );
-      error.name = resolution.outcome === "cancelled"
+      error.name = outcome.status === "cancelled"
         ? "AbortError"
         : "AgentAskFailed";
       throw error;
@@ -409,7 +411,7 @@ export const askAction: ActionDefinition<
   inputSchema: askInputSchema,
   outputSchema: askOutputSchema,
   execute: executeAsk,
-  resolve: resolveAsk,
+  resume: resumeAsk,
 });
 
 export default askAction;

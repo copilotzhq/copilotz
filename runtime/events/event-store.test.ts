@@ -1,3 +1,8 @@
+import { claimFirst, heartbeat } from "../testing/owner-helpers.ts";
+import {
+  createSchemaCommandRunner,
+  openDatabaseOwner,
+} from "../engine/commands.ts";
 import {
   assert,
   assertEquals,
@@ -11,6 +16,7 @@ import {
   createCoreTableNames,
   createEventStore,
   createSqlSession,
+  EVENT_SCHEMA_VERSION,
   type EventStore,
   isEventStoreError,
   provisionCopilotzSchema,
@@ -18,6 +24,18 @@ import {
   validateCopilotzSchema,
 } from "./index.ts";
 
+async function persistedDeliveryDelayMs(
+  store: EventStore,
+): Promise<number | null> {
+  const result = await store.session.query<
+    { delay_ms: string | number | null }
+  >(
+    `SELECT EXTRACT(EPOCH FROM (MIN(due_at)-NOW()))*1000 AS delay_ms
+     FROM ${store.tables.owner_deadlines} WHERE owner='schema' AND source='deliveries'`,
+  );
+  const value = result.rows[0]?.delay_ms;
+  return value == null ? null : Math.max(0, Number(value));
+}
 const TEST_SCHEMA = "copilotz_event_native";
 
 Deno.test("status reads leave final-attempt expiry to explicit recovery and schedule its wake", async () => {
@@ -52,7 +70,7 @@ Deno.test("status reads leave final-attempt expiry to explicit recovery and sche
       cancelled: 0,
       succeeded: 0,
     });
-    assertEquals(await reads.nextRecoveryDelayMs(), 0);
+    assertEquals(await persistedDeliveryDelayMs(reads), 0);
     assertEquals(await reads.listRecoverable(), []);
     assertEquals(statements.length, 4);
     assertEquals(
@@ -65,7 +83,7 @@ Deno.test("status reads leave final-attempt expiry to explicit recovery and sche
     ]);
     assertEquals(await reads.recoverExpiredDeliveries(), []);
     assertEquals((await reads.getDelivery(id))?.status, "dead_letter");
-    assertEquals(await reads.nextRecoveryDelayMs(), null);
+    assertEquals(await persistedDeliveryDelayMs(reads), null);
   } finally {
     await closeFixture(fixture);
   }
@@ -117,7 +135,7 @@ async function failThreeTimes(
   }
 }
 
-Deno.test("A20 clean v7 baseline contains the marker and no body-reference table", async () => {
+Deno.test("A20 clean current baseline contains the marker and no body-reference table", async () => {
   const fixture = await createFixture();
   try {
     const result = await fixture.session.query<{ table_name: string }>(
@@ -129,6 +147,13 @@ Deno.test("A20 clean v7 baseline contains the marker and no body-reference table
     assertEquals(
       result.rows.map((row) => row.table_name),
       [
+        "action_effects",
+        "authorization_channels",
+        "authorization_invocations",
+        "authorization_sessions",
+        "content_adoptions",
+        "content_copies",
+        "content_logical_bodies",
         "copilotz_schema_metadata",
         "edges",
         "event_bodies",
@@ -136,6 +161,13 @@ Deno.test("A20 clean v7 baseline contains the marker and no body-reference table
         "events",
         "nodes",
         "open_actions",
+        "owner_alarms",
+        "owner_body_retirements",
+        "owner_data_keys",
+        "owner_deadlines",
+        "owner_epochs",
+        "owner_receipts",
+        "pending_content",
       ],
     );
 
@@ -197,17 +229,23 @@ Deno.test("normal provisioning refuses a released v3 schema without writing curr
   }
 });
 
-Deno.test("atomic provisioning creates and validates a fresh v7 marker", async () => {
+Deno.test("atomic provisioning creates and validates a fresh schema marker", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_fresh_v4_marker";
   try {
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 7);
+    assertEquals(
+      (await provisionCopilotzSchema(session, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
     const marker = await session.query<{ version: number }>(
       `SELECT version FROM "${schema}"."copilotz_schema_metadata"`,
     );
-    assertEquals(marker.rows, [{ version: 7 }]);
-    assertEquals((await provisionCopilotzSchema(session, schema)).version, 7);
+    assertEquals(marker.rows, [{ version: EVENT_SCHEMA_VERSION }]);
+    assertEquals(
+      (await provisionCopilotzSchema(session, schema)).version,
+      EVENT_SCHEMA_VERSION,
+    );
   } finally {
     await db.close();
   }
@@ -506,32 +544,34 @@ Deno.test("events this store committed are read back without a query", async () 
       undefined,
     );
 
-    // A joined transaction's event is only remembered once confirmed.
-    const joined = await fixture.session.transaction((transaction) =>
+    // A joined transaction's event is remembered only after outer COMMIT.
+    const joined = await createSchemaCommandRunner(
+      fixture.session,
+      TEST_SCHEMA,
+    )("test.mutation", {}, (_input, { transaction }) =>
       store.commitMutation({
         draft: draft("note-2"),
         consumers: [],
         transaction,
-      })
-    );
-    statements = 0;
-    assertExists(await store.getEvent(joined.event.id));
-    assertEquals(statements, 1);
-    store.confirmCommitted?.(joined.event.id);
+      }));
     statements = 0;
     assertExists(await store.getEvent(joined.event.id));
     assertEquals(statements, 0);
 
     let rolledBackId = "";
     await assertRejects(() =>
-      fixture.session.transaction(async (transaction) => {
-        rolledBackId = (await store.commitMutation({
-          draft: draft("note-3"),
-          consumers: [],
-          transaction,
-        })).event.id;
-        throw new Error("rollback");
-      })
+      createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+        "test.mutation",
+        {},
+        async (_input, { transaction }) => {
+          rolledBackId = (await store.commitMutation({
+            draft: draft("note-3"),
+            consumers: [],
+            transaction,
+          })).event.id;
+          throw new Error("rollback");
+        },
+      )
     );
     assertEquals(await store.getEvent(rolledBackId), null);
   } finally {
@@ -539,7 +579,7 @@ Deno.test("events this store committed are read back without a query", async () 
   }
 });
 
-Deno.test("an event with only a body commits as one statement and dedupes on retry", async () => {
+Deno.test("an event, body and deliveries commit atomically and dedupe on retry", async () => {
   const fixture = await createFixture();
   const statements: string[] = [];
   let transactions = 0;
@@ -550,7 +590,14 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
     },
     transaction: (operation) => {
       transactions++;
-      return fixture.session.transaction(operation);
+      return fixture.session.transaction((transaction) =>
+        operation({
+          query(sql, params) {
+            statements.push(sql);
+            return transaction.query(sql, params);
+          },
+        })
+      );
     },
   };
   const store = createEventStore({ session: counted, schema: TEST_SCHEMA });
@@ -567,9 +614,12 @@ Deno.test("an event with only a body commits as one statement and dedupes on ret
       body: { id: "body-1", json },
     });
   try {
+    await openDatabaseOwner(counted, TEST_SCHEMA);
+    transactions = 0;
+    statements.length = 0;
     const first = await commit({ text: "hello" });
-    assertEquals(statements.length, 1);
-    assertEquals(transactions, 0);
+    assertEquals(transactions, 1);
+    assert(statements.length > 0);
     assertEquals(first.deduplicated, false);
     assertEquals(first.deliveries.length, 1);
 
@@ -638,7 +688,7 @@ Deno.test("A22 delivery claims retry three times and retain dead-letter state", 
     assertEquals(first?.attempts, 1);
     assertEquals(await store.succeedDelivery(id, "wrong-owner"), null);
     assertEquals(
-      await store.heartbeatDelivery({
+      await heartbeat(store, {
         id,
         owner: "owner-1",
         leaseMs: 60_000,
@@ -740,7 +790,7 @@ for (
 ) {
   Deno.test({
     name:
-      `recovery delay distinguishes empty, due, deferred and settled queues (${backend.name})`,
+      `durable deadlines distinguish empty, due, deferred and settled queues (${backend.name})`,
     ignore: backend.ignore,
     async fn() {
       const schema = `recovery_delay_${
@@ -749,19 +799,19 @@ for (
       const fixture = await createFixture(backend.url, schema);
       const { store } = fixture;
       try {
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
         const committed = await store.append({
           type: "work.created",
           namespace: "tenant-a",
           payload: {},
         }, ["worker"]);
         const id = committed.deliveries[0].id;
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
 
         assertExists(
           await store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 }),
         );
-        const leaseDelay = await store.nextRecoveryDelayMs();
+        const leaseDelay = await persistedDeliveryDelayMs(store);
         assert(leaseDelay !== null && leaseDelay > 0 && leaseDelay <= 60_000);
 
         await store.failDelivery({
@@ -770,7 +820,7 @@ for (
           error: new Error("retry later"),
           backoffMs: 60_000,
         });
-        const retryDelay = await store.nextRecoveryDelayMs();
+        const retryDelay = await persistedDeliveryDelayMs(store);
         assert(retryDelay !== null && retryDelay > 0 && retryDelay <= 60_000);
         const tables = createCoreTableNames(schema);
         await fixture.session.query(
@@ -778,7 +828,11 @@ for (
            SET available_at = NOW() - INTERVAL '1 second' WHERE id = $1`,
           [id],
         );
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        await fixture.session.query(
+          `UPDATE ${tables.owner_deadlines} SET due_at=NOW()-INTERVAL '1 second' WHERE source='deliveries' AND key=$1`,
+          [id],
+        );
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
         assertExists(
           await store.claimDelivery({ id, owner: "retry", leaseMs: 60_000 }),
         );
@@ -786,7 +840,7 @@ for (
           (await store.succeedDelivery(id, "retry"))?.status,
           "succeeded",
         );
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
 
         // Scheduling is pure; the explicit sweep terminalizes exhausted leases.
         const exhausted = await store.append(
@@ -806,10 +860,10 @@ for (
             leaseMs: 0,
           }),
         );
-        assertEquals(await store.nextRecoveryDelayMs(), 0);
+        assertEquals(await persistedDeliveryDelayMs(store), 0);
         assertEquals((await store.getDelivery(exhaustedId))?.status, "leased");
         await store.recoverExpiredDeliveries();
-        assertEquals(await store.nextRecoveryDelayMs(), null);
+        assertEquals(await persistedDeliveryDelayMs(store), null);
         assertEquals(
           (await store.getDelivery(exhaustedId))?.status,
           "dead_letter",
@@ -862,7 +916,7 @@ Deno.test("delivery recovery and claims order by availability, creation time, th
     );
     for (const id of expected) {
       assertEquals(
-        (await store.claimNext({
+        (await claimFirst(store, {
           owner: "ordered-worker",
           namespace: "tenant-a",
           consumerIds: ["worker"],
@@ -930,7 +984,7 @@ Deno.test("A21 crash recovery and concurrent claims preserve one delivery owner"
       [secondQueued.deliveries[0].id, "2000-01-02T00:00:00Z"],
     );
     assertEquals(
-      (await store.claimNext({
+      (await claimFirst(store, {
         owner: "next",
         namespace: "tenant-a",
         consumerIds: ["worker"],
@@ -1173,8 +1227,8 @@ Deno.test("internal scope check reads only non-success rows as successful histor
     let previousCount = 0;
     for (const count of [1_000, 10_000]) {
       await fixture.session.query(
-        `INSERT INTO ${store.tables.events} (id, schema_version, type, namespace, payload, correlation_id)
-         SELECT 'history-event-' || n, 5, 'history.fixture', 'tenant-a', '{}', 'history-correlation'
+        `INSERT INTO ${store.tables.events} (seq, id, schema_version, type, namespace, payload, correlation_id)
+         SELECT (SELECT COALESCE(MAX(seq),0) FROM ${store.tables.events}) + row_number() OVER (ORDER BY n), 'history-event-' || n, 5, 'history.fixture', 'tenant-a', '{}', 'history-correlation'
          FROM generate_series($1::integer, $2::integer) AS fixture(n)`,
         [previousCount + 1, count],
       );

@@ -1,17 +1,26 @@
 import {
-  actionOwnershipStatement,
-  type ActionWriter,
-  combineActionStatements,
-} from "./ownership.ts";
-import type { SqlExecutor } from "../events/session.ts";
+  assertMetadataIsSecretFree,
+  protectedActionStrings,
+} from "./secret.ts";
+import { awaitEventPublication } from "../events/coordinator.ts";
 import {
-  composeActionInputRetention,
-  planActionInputRetention,
-  retainActionInputContent,
-} from "./content-retention.ts";
+  afterCommandAuthorization,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
+import {
+  prepareActionOperation,
+  startAwaitedOperation,
+} from "./continuation-work.ts";
+import { actionOwnershipStatement, type ActionWriter } from "./ownership.ts";
+import type { SqlExecutor } from "../events/session.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
-import { eventDataRef, readEventBody } from "../events/body-store.ts";
+import {
+  EVENT_BODY_SCHEMA_VERSION,
+  eventDataRef,
+  readEventBody,
+  verifiedEventBody,
+} from "../events/body-store.ts";
 import { withProcessorEventData } from "../plugins/processor.ts";
 import { parseActionLifecycleEvent } from "./event.ts";
 import {
@@ -32,10 +41,12 @@ import type {
   AnyActionDefinition,
 } from "./types.ts";
 
-type LifecycleStore = Pick<
-  EventStore,
-  "getEventByDeduplicationId" | "session" | "tables"
->;
+type LifecycleStore =
+  & Pick<
+    EventStore,
+    "getEventByDeduplicationId" | "session" | "tables"
+  >
+  & Partial<Pick<EventStore, "databaseSchema" | "recentEventBody">>;
 
 type ActionLifecyclePersistenceOptions = Readonly<{
   store?: LifecycleStore;
@@ -43,16 +54,29 @@ type ActionLifecyclePersistenceOptions = Readonly<{
   protectedValues?: ProtectedValueRuntime;
   writer?: ActionWriter;
   transaction?: SqlExecutor;
+  finishTerminal?(
+    transaction: SqlExecutor,
+    data: ActionEventData,
+  ): Promise<void>;
+  protectedActionOutput?(
+    data: ActionEventData,
+  ): { authorize?(transaction: SqlExecutor): Promise<void> };
 }>;
 
 async function rawEventBody(
-  store: Pick<EventStore, "session" | "tables">,
+  store:
+    & Pick<EventStore, "session" | "tables">
+    & Partial<Pick<EventStore, "recentEventBody">>,
   event: DurableEvent,
 ): Promise<unknown> {
-  return await readEventBody(
+  const ref = eventDataRef(event.payload);
+  const cached = ref.schemaVersion === EVENT_BODY_SCHEMA_VERSION
+    ? store.recentEventBody?.(event.id, ref.eventBodyId)
+    : undefined;
+  return cached ? cached.json : await readEventBody(
     { transaction: store.session, tables: store.tables },
     event.namespace,
-    eventDataRef(event.payload),
+    ref,
   );
 }
 
@@ -64,23 +88,33 @@ async function invokedInputRef(
   if (data.status === "invoked" || !options.store) return undefined;
   const deduplicationId = `${data.actionRunId}:action:invoked`;
   const executor = options.transaction ?? options.store.session;
-  const receipt = options.transaction
-    ? (await executor.query<{ payload: unknown }>(
-      `SELECT payload FROM ${options.store.tables.events} WHERE namespace = $1 AND deduplication_id = $2`,
-      [namespace, deduplicationId],
-    )).rows[0]
-    : await options.store.getEventByDeduplicationId(namespace, deduplicationId);
+  const receipt = (await executor.query<{
+    payload: unknown;
+    body: unknown;
+    schema_version: number | null;
+    digest: string;
+  }>(
+    `SELECT event.payload,body.body,body.schema_version,body.digest
+     FROM ${options.store.tables.events} AS event
+     LEFT JOIN ${options.store.tables.event_bodies} AS body
+       ON body.namespace=event.namespace AND body.event_body_id=event.payload->'dataRef'->>'eventBodyId'
+     WHERE event.namespace=$1 AND event.deduplication_id=$2`,
+    [namespace, deduplicationId],
+  )).rows[0];
   if (!receipt) {
     throw new Error(
       `Protected Action invoked receipt '${data.actionRunId}' is missing.`,
     );
   }
+  const ref = eventDataRef(receipt.payload);
+  if (receipt.schema_version === null) {
+    throw new Error(`Event body '${ref.eventBodyId}' was not found.`);
+  }
   const body = protectedActionLifecycleBody(
-    await readEventBody(
-      { transaction: executor, tables: options.store.tables },
-      namespace,
-      eventDataRef(receipt.payload),
-    ),
+    await verifiedEventBody({
+      ...receipt,
+      schema_version: receipt.schema_version,
+    }, ref),
   );
   return body?.protected.input;
 }
@@ -108,12 +142,26 @@ export function createActionLifecycleAppender(
     if (action && actionDefinitionHasSecrets(action) && !options.store) {
       throw new Error("Protected Action lifecycle requires an Event Store.");
     }
+    if (action && data.status === "invoked" && actionInputHasSecrets(action)) {
+      const secrets = protectedActionStrings(action.inputSchema, data.input);
+      assertMetadataIsSecretFree(data.metadata, secrets);
+      // Runtime-generated action coordinates are not caller metadata. The
+      // inherited origin is checked before the first capture can commit.
+      const { actionId: _id, actionStatus: _status, ...origin } =
+        draft.metadata ?? {};
+      assertMetadataIsSecretFree(origin, secrets);
+    }
+    const outputHooks = options.protectedActionOutput?.(data);
     const prepared = action
       ? await prepareActionLifecycleBody({
         namespace: draft.namespace,
         data,
         action,
+        awaitedAction: data.status === "awaiting" && data.start
+          ? options.actions?.[data.start.action]
+          : undefined,
         protectedValues: options.protectedValues,
+        transaction: options.transaction,
         // Only a secret input is sealed once, by the invoked receipt; a later
         // receipt of that run reuses its reference.
         existingInput: actionInputHasSecrets(action)
@@ -133,68 +181,135 @@ export function createActionLifecycleAppender(
         mediaType: "application/json" as const,
       },
     };
-    const retention = action
-      ? await planActionInputRetention(draft.namespace, action, data)
-      : undefined;
     const tables = options.store?.tables;
-    // The receipt's own statement retains the input Assets, unless protected
-    // values must be adopted in code beside them.
-    const inStatement = retention !== undefined && tables !== undefined &&
-      prepared.prepared.length === 0;
-    return await options.coordinator.commitMutation({
-      admission: {
-        openActionGroup: data.status === "deferred",
-        cancellation: options.writer?.kind === "cancellation",
-      },
-      draft: { ...draft, payload },
-      matchData: prepared.publicData,
-      body: { id: payload.dataRef.eventBodyId, json: prepared.body },
-      ...(tables
-        ? {
-          statement: (param: (value: unknown) => string) =>
-            combineActionStatements([
+    const commit = (transaction?: SqlExecutor) =>
+      options.coordinator.commitMutation({
+        admission: {
+          cancellation: options.writer?.kind === "cancellation",
+        },
+        draft: { ...draft, payload },
+        matchData: prepared.publicData,
+        body: { id: payload.dataRef.eventBodyId, json: prepared.body },
+        ...(tables
+          ? {
+            statement: (param, _tables, { commandTime }) =>
               actionOwnershipStatement(
                 { draft, data },
                 options.writer,
                 tables,
                 param,
+                commandTime,
               ),
-              ...(inStatement
-                ? [composeActionInputRetention(retention!, tables, param)]
-                : []),
-            ]),
-        }
-        : {}),
-      ...(options.transaction
-        ? { transaction: options.transaction, dispatch: false }
-        : {}),
-      ...(!inStatement && (retention || prepared.prepared.length > 0)
-        ? {
-          mutate: async (context) => {
-            if (retention) await retainActionInputContent(context, retention);
-            for (const value of prepared.prepared) {
-              await options.protectedValues!.adopt(
-                context,
-                draft.namespace,
-                value,
-              );
-            }
+          }
+          : {}),
+        ...(transaction ? { transaction, dispatch: false } : {}),
+        ...(prepared.prepared.length > 0
+          ? {
+            mutate: async (context) => {
+              for (const value of prepared.prepared) {
+                await options.protectedValues!.adopt(
+                  context,
+                  draft.namespace,
+                  value,
+                );
+              }
+            },
+          }
+          : {}),
+        recoverDuplicate: async (event, context) => {
+          const existing = await readEventBody(
+            context,
+            event.namespace,
+            eventDataRef(event.payload),
+          );
+          if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
+            throw new Error(
+              `Event body '${bodyId}' already exists with different content.`,
+            );
+          }
+        },
+      });
+    if (data.status === "awaiting" && !options.transaction) {
+      if (!options.store) {
+        throw new TypeError("Awaiting requires an Event Store.");
+      }
+      const store = options.store as EventStore;
+      const preparedChild = data.start
+        ? await prepareActionOperation(
+          {
+            store,
+            coordinator: options.coordinator,
+            actions: options.actions,
+            protectedValues: options.protectedValues,
           },
+          draft.namespace,
+          data.operationId ?? data.start.operationId ??
+            `${data.actionRunId}:child`,
+          data.start,
+        )
+        : undefined;
+      let flush!: () => Promise<void>;
+      const result = await createSchemaCommandRunner(
+        store.session,
+        store.databaseSchema,
+      )(
+        "actions.await",
+        { actionRunId: data.actionRunId },
+        async (_input, { transaction }) => {
+          const appended = await commit(transaction);
+          flush = await startAwaitedOperation(
+            {
+              store,
+              coordinator: options.coordinator,
+              actions: options.actions,
+              protectedValues: options.protectedValues,
+            },
+            transaction,
+            { draft, data },
+            options.writer,
+            preparedChild,
+          );
+          return appended;
+        },
+      );
+      await awaitEventPublication(result);
+      await flush();
+      return result;
+    }
+
+    if (
+      (options.finishTerminal && !data.parentActionRunId &&
+        ["completed", "failed", "cancelled"].includes(data.status)) ||
+      (data.status === "completed" && outputHooks?.authorize &&
+        options.store?.databaseSchema)
+    ) {
+      const complete = async (transaction: SqlExecutor) => {
+        if (data.status === "completed") {
+          await outputHooks?.authorize?.(transaction);
         }
-        : {}),
-      recoverDuplicate: async (event, context) => {
-        const existing = await readEventBody(
-          context,
-          event.namespace,
-          eventDataRef(event.payload),
-        );
-        if (!samePreparedActionLifecycleBody(existing, prepared.body)) {
-          throw new Error(
-            `Event body '${bodyId}' already exists with different content.`,
+        const result = await commit(transaction);
+        if (options.finishTerminal && !data.parentActionRunId) {
+          afterCommandAuthorization(
+            transaction,
+            () => options.finishTerminal!(transaction, data),
           );
         }
-      },
-    });
+        return result;
+      };
+      if (options.transaction) return await complete(options.transaction);
+      const result = await createSchemaCommandRunner(
+        options.store!.session,
+        options.store!.databaseSchema!,
+      )(
+        "actions.terminal",
+        { actionRunId: data.actionRunId },
+        (_input, command) => complete(command.transaction),
+      );
+      await awaitEventPublication(result);
+      return result;
+    }
+
+    return await commit(options.transaction);
   };
 }
 

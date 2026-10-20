@@ -1,13 +1,21 @@
 import {
+  closeSnapshotSession,
+  isSnapshotQuarantined,
+  markSnapshotDelegate,
+  retireSnapshotDatabase,
+  withSnapshotAdmission,
+} from "./snapshot-admission.ts";
+import {
   type CopilotzOminipgOptions,
   type OminipgDatabaseLike,
   openManagedOminipgDatabase,
 } from "./ominipg.ts";
 import { createOminipgSqlSession } from "./ominipg.ts";
 import type {
-  SqlNotification,
-  SqlNotificationSubscription,
+  SqlExecutor,
+  SqlReadSnapshot,
   SqlSession,
+  SqlSnapshotCleanup,
 } from "../events/index.ts";
 
 export type CopilotzDatabase = OminipgDatabaseLike;
@@ -320,15 +328,9 @@ type DatabaseGeneration = {
   database: CopilotzDatabase;
   active: number;
   retired: boolean;
+  lifetime: AbortController;
   closeTask?: Promise<void>;
   startClose?: () => void;
-};
-
-type RecoverableNotificationSubscription = {
-  channel: string;
-  handler(notification: SqlNotification): void;
-  current?: SqlNotificationSubscription;
-  closed: boolean;
 };
 
 function createManagedConnector(
@@ -364,9 +366,6 @@ async function openRecoverablePersistence(
   const unavailable = options.isUnavailable ?? isPersistenceUnavailable;
   const controller = new AbortController();
   const participants = new Set<CopilotzPersistenceRecoveryParticipant>();
-  const notificationSubscriptions = new Set<
-    RecoverableNotificationSubscription
-  >();
   const generations = new Set<DatabaseGeneration>();
   let state: CopilotzPersistenceState = "reconnecting";
   let current: DatabaseGeneration | undefined;
@@ -384,13 +383,24 @@ async function openRecoverablePersistence(
     ...(lastError === undefined ? {} : { lastError }),
   } as const);
 
-  const closeGeneration = (value: DatabaseGeneration): Promise<void> => {
+  const closeGeneration = (
+    value: DatabaseGeneration,
+    reason: unknown = persistenceError(
+      "persistence_indeterminate",
+      value.id,
+      retryAfterSeconds,
+    ),
+  ): Promise<void> => {
     value.retired = true;
+    value.lifetime.abort(reason);
+    const snapshots = retireSnapshotDatabase(value.database, reason);
     if (!value.closeTask) {
       value.closeTask = new Promise<void>((resolve) => {
         value.startClose = () => {
           value.startClose = undefined;
-          void value.database.close().catch(() => undefined).then(() => {
+          void snapshots.then(() => value.database.close()).catch(() =>
+            undefined
+          ).then(() => {
             generations.delete(value);
             resolve();
           });
@@ -463,25 +473,12 @@ async function openRecoverablePersistence(
       database,
       active: 0,
       retired: false,
+      lifetime: new AbortController(),
     };
     generations.add(current);
     lastError = undefined;
     state = "ready";
     if (previous) void closeGeneration(previous);
-    for (const subscription of notificationSubscriptions) {
-      if (subscription.closed || !database.listen) continue;
-      try {
-        const bound = await database.listen(
-          subscription.channel,
-          subscription.handler,
-        );
-        if (subscription.closed) await bound.close().catch(() => undefined);
-        else subscription.current = bound;
-      } catch {
-        // Notifications accelerate observation only. The catalog watcher has
-        // a bounded safety wake and a later database generation can rebind.
-      }
-    }
     if (!initial) await runRecoveryParticipants();
     await notify(
       lifecycle.onReady ? [lifecycle.onReady] : [],
@@ -512,6 +509,9 @@ async function openRecoverablePersistence(
       retryAfterSeconds,
       error,
     );
+    // Revoke retained snapshot handles immediately, before reconnection or
+    // observers can await a replacement. Physical close still waits raw users.
+    void closeGeneration(failed, availability);
     unavailableNotifications = Promise.all([
       notify(
         lifecycle.onUnavailable ? [lifecycle.onUnavailable] : [],
@@ -602,11 +602,23 @@ async function openRecoverablePersistence(
   };
 
   const execute = async <T>(
-    operation: (database: CopilotzDatabase) => Promise<T>,
+    operation: (
+      database: CopilotzDatabase,
+      assertSelected: () => void,
+      lifetime: AbortSignal,
+      generation: DatabaseGeneration,
+    ) => Promise<T>,
+    localSignal?: AbortSignal,
+    onNotStarted?: () => void,
   ): Promise<T> => {
-    const selected = await acquire();
+    let selected: DatabaseGeneration;
     try {
-      const result = await operation(selected.database);
+      selected = await acquire();
+    } catch (error) {
+      onNotStarted?.();
+      throw error;
+    }
+    const assertSelected = () => {
       if (state !== "ready" || current !== selected || selected.retired) {
         throw persistenceError(
           "persistence_indeterminate",
@@ -614,9 +626,20 @@ async function openRecoverablePersistence(
           retryAfterSeconds,
         );
       }
+    };
+    try {
+      const result = await operation(
+        selected.database,
+        assertSelected,
+        selected.lifetime.signal,
+        selected,
+      );
+      localSignal?.throwIfAborted();
+      assertSelected();
       return result;
     } catch (error) {
       if (isCopilotzPersistenceError(error)) throw error;
+      if (localSignal?.aborted && error === localSignal.reason) throw error;
       if (unavailable(error)) {
         markUnavailable(error, selected);
         throw persistenceError(
@@ -638,40 +661,159 @@ async function openRecoverablePersistence(
     query: (sql, params) => execute((selected) => selected.query(sql, params)),
     transaction: (operation) =>
       execute((selected) => selected.transaction(operation)),
-    async listen(channel, handler) {
-      const subscription: RecoverableNotificationSubscription = {
-        channel,
-        handler,
-        closed: false,
-      };
-      notificationSubscriptions.add(subscription);
-      try {
-        subscription.current = await execute(async (selected) => {
-          if (!selected.listen) {
-            throw new Error(
-              "The selected database does not support notifications.",
-            );
+    withReadSnapshot: (operation, options) => {
+      // Capture observations independently of later generation/result failures.
+      const observer = options?.onCleanup;
+      let reported = false;
+      const report = (outcome: SqlSnapshotCleanup) => {
+        if (reported) return;
+        reported = true;
+        try {
+          const result = observer?.(outcome);
+          if (result !== undefined) {
+            void Promise.resolve(result).catch(() => {});
           }
-          return await selected.listen(channel, handler);
-        });
+        } catch { /* Observation cannot replace the operation's outcome. */ }
+      };
+      let signal: AbortSignal | undefined;
+      try {
+        if (observer !== undefined && typeof observer !== "function") {
+          throw new TypeError("Snapshot cleanup observer must be a function.");
+        }
+        signal = options?.signal;
+        signal?.throwIfAborted();
       } catch (error) {
-        subscription.closed = true;
-        notificationSubscriptions.delete(subscription);
+        report("confirmed");
         throw error;
       }
-      return ({
-        async close() {
-          if (subscription.closed) return;
-          subscription.closed = true;
-          notificationSubscriptions.delete(subscription);
-          const current = subscription.current;
-          subscription.current = undefined;
-          await current?.close();
+      let quarantined: DatabaseGeneration | undefined;
+      return execute(
+        async (
+          selected,
+          assertSelected,
+          generationSignal,
+          selectedGeneration,
+        ) => {
+          let cleanup: SqlSnapshotCleanup = "confirmed";
+          let observations = 0;
+          try {
+            assertSelected();
+            const capability = selected.withReadSnapshot?.bind(selected);
+            if (!capability) {
+              throw new Error(
+                "The selected database does not support scoped snapshots.",
+              );
+            }
+            const lifetime = new AbortController();
+            const abort = () =>
+              lifetime.abort(
+                generationSignal.aborted
+                  ? generationSignal.reason
+                  : signal?.reason,
+              );
+            const reader = (executor: SqlExecutor): SqlExecutor => {
+              const query = executor.query.bind(executor);
+              return Object.freeze({
+                async query<
+                  TRow extends Record<string, unknown> = Record<
+                    string,
+                    unknown
+                  >,
+                >(
+                  sql: string,
+                  params?: unknown[],
+                ) {
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  const result = await query<TRow>(sql, params);
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  return result;
+                },
+              });
+            };
+            try {
+              generationSignal.addEventListener("abort", abort, { once: true });
+              signal?.addEventListener("abort", abort, { once: true });
+              if (generationSignal.aborted || signal?.aborted) abort();
+              // Once invoked, only the backend can confirm this scope's release.
+              cleanup = "unknown";
+              return await withSnapshotAdmission(
+                selected,
+                capability,
+                async (scope) => {
+                  assertSelected();
+                  lifetime.signal.throwIfAborted();
+                  const snapshot = reader(scope.snapshot);
+                  const current = scope.kind === "pooled"
+                    ? scope.current.bind(scope)
+                    : undefined;
+                  const wrapped: SqlReadSnapshot = scope.kind === "exclusive"
+                    ? { kind: "exclusive", snapshot }
+                    : scope.kind === "pooled"
+                    ? {
+                      kind: "pooled",
+                      snapshot,
+                      current: async (callback) => {
+                        assertSelected();
+                        lifetime.signal.throwIfAborted();
+                        const result = await current!(async (transaction) => {
+                          assertSelected();
+                          const value = await callback(reader(transaction));
+                          assertSelected();
+                          lifetime.signal.throwIfAborted();
+                          return value;
+                        });
+                        assertSelected();
+                        lifetime.signal.throwIfAborted();
+                        return result;
+                      },
+                    }
+                    : (() => {
+                      throw new Error("Unsupported database snapshot scope.");
+                    })();
+                  return await operation(Object.freeze(wrapped));
+                },
+                {
+                  signal: lifetime.signal,
+                  onCleanup(outcome) {
+                    observations++;
+                    cleanup = observations === 1 && outcome === "confirmed"
+                      ? "confirmed"
+                      : "unknown";
+                  },
+                },
+              );
+            } finally {
+              generationSignal.removeEventListener("abort", abort);
+              signal?.removeEventListener("abort", abort);
+            }
+          } finally {
+            if (isSnapshotQuarantined(selected)) {
+              quarantined = selectedGeneration;
+            }
+            report(cleanup);
+          }
         },
-      } as const);
+        signal,
+        () => report("confirmed"),
+      ).finally(() => {
+        if (quarantined) {
+          markUnavailable(
+            persistenceError(
+              "persistence_unavailable",
+              quarantined.id,
+              retryAfterSeconds,
+            ),
+            quarantined,
+          );
+        }
+      });
     },
     close: () => close(),
   } as const;
+
+  markSnapshotDelegate(database);
 
   const close = (): Promise<void> => {
     if (closeTask) return closeTask;
@@ -679,11 +821,6 @@ async function openRecoverablePersistence(
     controller.abort(new Error("Copilotz persistence closed."));
     closeTask = Promise.allSettled(
       [
-        ...[...notificationSubscriptions].map(async (subscription) => {
-          subscription.closed = true;
-          notificationSubscriptions.delete(subscription);
-          await subscription.current?.close();
-        }),
         ...[...generations].map((value) => closeGeneration(value)),
       ],
     ).then(() => undefined);
@@ -722,22 +859,24 @@ export async function openCopilotzPersistence(
         "Shared persistence cannot be combined with database or database lifecycle options.",
       );
     }
+    const session = createOminipgSqlSession(options.persistence.database);
     return ({
       database: options.persistence.database,
-      session: createOminipgSqlSession(options.persistence.database),
+      session,
       ownership: "injected" as const,
       ...(options.persistence.recovery
         ? { recovery: options.persistence.recovery }
         : {}),
-      close: () => Promise.resolve(),
+      close: () => closeSnapshotSession(session),
     } as const);
   }
   if (options.database && isDatabase(options.database)) {
+    const session = createOminipgSqlSession(options.database);
     return ({
       database: options.database,
-      session: createOminipgSqlSession(options.database),
+      session,
       ownership: "injected" as const,
-      close: () => Promise.resolve(),
+      close: () => closeSnapshotSession(session),
     } as const);
   }
   const connector = isConnector(options.database)

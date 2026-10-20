@@ -9,7 +9,7 @@ import {
 import { openManagedOminipgDatabase } from "../runtime/persistence/index.ts";
 
 export const HISTORY_PROVISION_USAGE =
-  "Usage: DATABASE_URL=URL deno run -A scripts/provision-core-history.ts --schema SCHEMA [--schema SCHEMA ...] [--apply]\nDefault: read-only preview. --apply builds the history index concurrently and analyzes each selected schema.";
+  "Usage: DATABASE_URL=URL deno run -A scripts/provision-core-history.ts --schema SCHEMA [--schema SCHEMA ...] [--apply]\nDefault: read-only preview. --apply builds the history index through its owner and analyzes each selected schema.";
 
 export function parseHistoryProvisionArgs(args: readonly string[]): {
   apply: boolean;
@@ -75,9 +75,7 @@ export async function runHistoryProvision(
   const before = await inspect();
   if (options.apply) {
     for (const schema of schemas) {
-      await provisionCoreHistoryIndexes(session, schema, {
-        concurrently: true,
-      });
+      await provisionCoreHistoryIndexes(session, schema);
     }
   }
   return {

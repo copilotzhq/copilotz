@@ -1,3 +1,9 @@
+import {
+  captureCollectionInvocation,
+  withOwnerCollectionInvocation,
+} from "../authorization/invocation.ts";
+import { collectionAssetAdopterFor } from "../content/database-repository.ts";
+import { hostIngressProof } from "./ingress/authority.ts";
 /** Trusted in-process ingress and reads over the ordinary application runtime. @module */
 import type { ActionSchema } from "../actions/types.ts";
 import type {
@@ -153,6 +159,12 @@ export function createHostServices(
       );
     }
     const { id: requestId, envelope } = admission(options);
+    const inlineContent = !definition.content || collectionAssetAdopterFor(
+      (await application().databaseScope(envelope.databaseSchema)).content
+        .assets,
+    ).prepareInCommand;
+    const completion:
+      import("./ingress/inline-collection.ts").InlineCollectionCompletion = {};
     const handle = await admitCollectionMutationRequest(
       application(),
       {
@@ -169,20 +181,25 @@ export function createHostServices(
         },
       },
       typeof inputSchema === "object" ? inputSchema as ActionSchema : undefined,
+      hostIngressProof(),
+      inlineContent ? completion : undefined,
     );
-    return await result(handle, envelope);
+    return !inlineContent || completion.deferred
+      ? await result(handle, envelope)
+      : completion.value;
   };
   const actions: ApplicationActions = bindings(
-    Object.entries(registry.actions).filter(([alias]) =>
-      alias !== "serverInvoke"
-    )
-      .map(([alias, action]) => [alias, async (input, options = {}) => {
-        input = structuredClone(input);
-        if (action.inputSchema) {
-          validateAgainstJsonSchema(action.inputSchema, input, "Action input");
-        }
-        const { id, envelope } = admission(options);
-        const handle = await admitActionRequest(application(), {
+    Object.entries(registry.actions).map((
+      [alias, action],
+    ) => [alias, async (input, options = {}) => {
+      input = structuredClone(input);
+      if (action.inputSchema) {
+        validateAgainstJsonSchema(action.inputSchema, input, "Action input");
+      }
+      const { id, envelope } = admission(options);
+      const handle = await admitActionRequest(
+        application(),
+        {
           ...envelope,
           type: SERVER_ACTION_REQUEST_EVENT_TYPE,
           payload: {
@@ -192,9 +209,13 @@ export function createHostServices(
             input,
             actionMetadata: structuredClone(options.actionMetadata ?? {}),
           },
-        }, action.inputSchema);
-        return await result(handle, envelope);
-      }]),
+        },
+        action.inputSchema,
+        hostIngressProof(),
+        true,
+      );
+      return await result(handle, envelope);
+    }]),
   );
   const collections: ApplicationCollections = bindings(
     Object.entries(registry.collections).map(([alias, definition]) => [alias, {
@@ -282,5 +303,38 @@ export function createHostServices(
       ),
     }]),
   );
-  return { actions, collections };
+  // Public host services are trusted capabilities. An existing invocation keeps
+  // its narrower authority, including when an HTTP handler calls a host method.
+  const bindHost = <T extends object>(value: T): T => {
+    const bound = Object.create(Object.getPrototypeOf(value));
+    for (const [key, member] of Object.entries(value)) {
+      bound[key] = typeof member === "function"
+        ? async (...args: unknown[]) => {
+          if (captureCollectionInvocation()) {
+            return Reflect.apply(member, value, args);
+          }
+          const options = (args[1] ?? {}) as ApplicationReadOptions;
+          const boundary = scope(options);
+          const signal = options.signal ?? new AbortController().signal;
+          return await withOwnerCollectionInvocation({
+            trustedHost: true,
+            scope: boundary,
+            signal,
+            invocation: {
+              kind: "processor",
+              id: "host",
+              runId: crypto.randomUUID(),
+            },
+            check: () => signal.throwIfAborted(),
+            resolveSource: () =>
+              Promise.reject(new Error("Host reads have no execution source.")),
+          }, () => Reflect.apply(member, value, args));
+        }
+        : member && typeof member === "object" && key !== "definition"
+        ? bindHost(member)
+        : member;
+    }
+    return bound;
+  };
+  return { actions: bindHost(actions), collections: bindHost(collections) };
 }

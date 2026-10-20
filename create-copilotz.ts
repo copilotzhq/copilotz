@@ -1,3 +1,4 @@
+import { withOwnedHosting } from "./runtime/application/hosting.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
 import type { CreateCopilotzOptions as RuntimeEmbeddedOptions } from "./runtime/application/copilotz.ts";
@@ -32,16 +33,25 @@ export type CreateCopilotzOptions =
 /** Reuse the registry's dependency and contribution composition at the public boundary. */
 type CompositionOptions = Pick<
   RuntimeEmbeddedOptions,
-  "plugins" | "resources" | "adapters" | "actions" | "collections"
+  | "plugins"
+  | "resources"
+  | "adapters"
+  | "actions"
+  | "collections"
+  | "processors"
+  | "views"
 >;
 type CompositionOption<T, K extends keyof CompositionOptions, Fallback> =
   K extends keyof T ? NonNullable<T[K]> : Fallback;
+type EmptyMap = Readonly<Record<never, never>>;
 type ApplicationComposition<T extends CompositionOptions> = RegistryComposition<
   CompositionOption<T, "plugins", readonly []>,
-  CompositionOption<T, "resources", {}>,
-  CompositionOption<T, "adapters", {}>,
-  CompositionOption<T, "actions", {}>,
-  CompositionOption<T, "collections", {}>
+  CompositionOption<T, "resources", EmptyMap>,
+  CompositionOption<T, "adapters", EmptyMap>,
+  CompositionOption<T, "actions", EmptyMap>,
+  CompositionOption<T, "collections", EmptyMap>,
+  CompositionOption<T, "processors", EmptyMap>,
+  CompositionOption<T, "views", EmptyMap>
 >;
 type GatewayApplication<T extends CompositionOptions = CompositionOptions> =
   & CopilotzApplication<
@@ -64,7 +74,7 @@ type WorkerFactoryResult = Readonly<{
 
 /** The `/api` facade when `serverPlugin` is composed; otherwise 404. */
 function serverFetch(
-  gateway: InternalCopilotzGateway,
+  gateway: Pick<InternalCopilotzGateway, "application" | "admit">,
 ): (request: Request) => Promise<Response> {
   return gateway.application.plugins.resources.server?.default
     ? createServerFacadeFetchHandler(gateway.application, {
@@ -75,13 +85,13 @@ function serverFetch(
 }
 
 export function createCopilotz<const T extends GatewayOptions>(
-  options: T,
+  options: T & GatewayOptions,
 ): Promise<GatewayApplication<T>>;
 export function createCopilotz(
   options: WorkerOptions,
 ): Promise<WorkerFactoryResult>;
-export function createCopilotz<const T extends EmbeddedOptions = {}>(
-  options?: T,
+export function createCopilotz<const T extends EmbeddedOptions = EmptyMap>(
+  options?: T & EmbeddedOptions,
 ): Promise<EmbeddedApplication<T>>;
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
@@ -106,20 +116,23 @@ export async function createCopilotz(
     try {
       const fetch = serverFetch(gateway);
       gateway.installFetchFallback(fetch);
-      return ({
-        send: gateway.send,
-        actions: gateway.actions,
-        collections: gateway.collections,
-        attach: gateway.attach,
-        operationStatus: gateway.operationStatus,
-        listOperations: gateway.listOperations,
-        operationCheckpoint: gateway.operationCheckpoint,
-        cancelOperation: gateway.cancelOperation,
-        maintenance: gateway.maintenance,
-        observe: gateway.observe,
-        close: gateway.close,
-        fetch,
-      } as const);
+      return withOwnedHosting(
+        {
+          send: gateway.send,
+          actions: gateway.actions,
+          collections: gateway.collections,
+          attach: gateway.attach,
+          operationStatus: gateway.operationStatus,
+          listOperations: gateway.listOperations,
+          operationCheckpoint: gateway.operationCheckpoint,
+          cancelOperation: gateway.cancelOperation,
+          maintenance: gateway.maintenance,
+          observe: gateway.observe,
+          close: gateway.close,
+          fetch,
+        } as const,
+        gateway.hypervisor,
+      );
     } catch (error) {
       await gateway.close("copilotz_gateway_initialization_failed").catch(() =>
         undefined

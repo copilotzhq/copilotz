@@ -1,3 +1,4 @@
+import { canonicalJson as canonical } from "@copilotz/copilotz/content/codec";
 /** Immutable note text with append-only source and retirement audit. @module */
 import {
   type CollectionDefinition,
@@ -73,18 +74,6 @@ const schema = {
   },
 } as const;
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${
-      Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map((
-        [key, entry],
-      ) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")
-    }}`;
-  }
-  return JSON.stringify(value);
-}
-
 export const memoryNoteCollection: CollectionDefinition<typeof schema> =
   defineCollection({
     name: "memory_note",
@@ -125,7 +114,9 @@ export const memoryNoteCollection: CollectionDefinition<typeof schema> =
           );
         }
       }
-      const sources = new Set((next.sources as unknown[]).map(canonical));
+      const sources = new Set(
+        (next.sources as unknown[]).map((value) => canonical(value)),
+      );
       if (
         (current.sources as unknown[]).some((item) =>
           !sources.has(canonical(item))

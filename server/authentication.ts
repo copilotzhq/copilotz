@@ -1,3 +1,9 @@
+import { retainedAuthority } from "../runtime/authorization/authority.ts";
+import { withTrustedCollectionPolicyRead } from "../runtime/authorization/invocation.ts";
+import {
+  authorityIngressProof,
+} from "../runtime/application/ingress/authority.ts";
+import { withFacadeIngress } from "./context.ts";
 /** Resolves trusted scope and policy once for a compiled HTTP endpoint. @module */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type {
@@ -14,7 +20,9 @@ function text(value: unknown): string | undefined {
 }
 
 function authorizedScope(value: unknown): ServerAuthorizedScope {
-  if (value === undefined) return ({} as const);
+  if (value === undefined) {
+    throw new TypeError("Authentication must return retained authority.");
+  }
   if (
     !value || typeof value !== "object" || Array.isArray(value) ||
     (Object.getPrototypeOf(value) !== Object.prototype &&
@@ -25,7 +33,7 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     Reflect.ownKeys(input).some((key) =>
       key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
       key !== "actionMetadata" && key !== "operationMetadata" &&
-      key !== "context" && key !== "actor"
+      key !== "context" && key !== "actor" && key !== "authority"
     )
   ) {
     throw new TypeError(
@@ -44,6 +52,17 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
       !text((input.actor as Record<string, unknown>).id)
     )
   ) throw new TypeError("Server actor must have a non-empty id.");
+  if (
+    input.actor &&
+    Object.entries(input.actor as Record<string, unknown>).some((
+      [key, value],
+    ) =>
+      !["id", "externalId", "name", "email"].includes(key) ||
+      typeof value !== "string"
+    )
+  ) {
+    throw new TypeError("Server actor contains unsupported identity fields.");
+  }
   const plain = (candidate: unknown, label: string) => {
     if (candidate === undefined) return undefined;
     if (
@@ -54,6 +73,7 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     return (structuredClone(candidate as Record<string, unknown>));
   };
   return ({
+    authority: retainedAuthority(input.authority),
     ...(input.actor
       ? {
         actor: plain(
@@ -94,6 +114,11 @@ export async function authenticateHttpRequest(
   facade: ServerFacadeResource,
   match: ServerRouteMatch,
 ): Promise<FacadeContext | Response> {
+  assertUploadContentLength(
+    request,
+    match.endpoint,
+    facade.maxAssetUploadBytes,
+  );
   const authenticationContext = {
     lookup: (scope: ServerAuthorizedScope) =>
       createHttpReads(application, scope),
@@ -105,9 +130,11 @@ export async function authenticateHttpRequest(
   const authenticationRequest = request.clone();
   let authenticated;
   try {
-    authenticated = await facade.authenticate?.(
-      authenticationRequest,
-      authenticationContext,
+    authenticated = await withTrustedCollectionPolicyRead(() =>
+      facade.authenticate?.(
+        authenticationRequest,
+        authenticationContext,
+      )
     );
   } finally {
     if (!authenticationRequest.bodyUsed) {
@@ -122,46 +149,44 @@ export async function authenticateHttpRequest(
     databaseSchema: selected.databaseSchema ??
       application.config.databaseSchema,
   } as const;
-  const read = await createHttpReads(application, scope);
-  const policyRequest = request.clone();
-  let authorized;
-  try {
-    authorized = await facade.authorize?.(policyRequest, {
-      ...authenticationContext,
-      scope,
-      read,
-    });
-  } finally {
-    if (!policyRequest.bodyUsed) {
-      void policyRequest.body?.cancel().catch(() => undefined);
-    }
+  const authority = retainedAuthority({
+    ...scope.authority,
+    requestFacts: {
+      ...scope.authority!.requestFacts,
+      endpoint: match.endpoint.key,
+      operation: match.endpoint.operation ?? match.endpoint.kind,
+      params: match.params,
+    },
+  });
+  if (
+    authority.scope.namespace !== scope.namespace ||
+    authority.scope.databaseSchema !== scope.databaseSchema
+  ) {
+    throw new TypeError(
+      "Authentication scope differs from retained authority.",
+    );
   }
-  if (authorized instanceof Response) return authorized;
-  const constraints = structuredClone(authorized ?? {});
-  assertUploadContentLength(
-    request,
-    match.endpoint,
-    facade.maxAssetUploadBytes,
+  const result = withFacadeIngress(
+    {
+      ...(scope.context ?? {}),
+      serverScope: { ...scope, authority },
+      serverRequest: request,
+      namespace: scope.namespace,
+      databaseSchema: scope.databaseSchema,
+      serverEndpointKey: match.endpoint.key,
+      serverParams: match.params,
+      serverActionMetadata: {
+        ...scope.actionMetadata,
+        ...(scope.actor ? { httpActor: scope.actor } : {}),
+      },
+      operationMetadata: {
+        ...scope.operationMetadata,
+        ...(scope.actor ? { actorId: scope.actor.id } : {}),
+      },
+      serverIdentity: scope.identity ?? ({} as const),
+      serverSignal: request.signal,
+    } as const,
+    authorityIngressProof(authority),
   );
-  return ({
-    ...(scope.context ?? {}),
-    serverScope: scope,
-    serverConstraints: constraints,
-    serverRequest: request,
-    namespace: scope.namespace,
-    databaseSchema: scope.databaseSchema,
-    serverEndpointKey: match.endpoint.key,
-    serverParams: match.params,
-    serverActionMetadata: {
-      ...scope.actionMetadata,
-      ...constraints.actionMetadata,
-      ...(scope.actor ? { httpActor: scope.actor } : {}),
-    },
-    operationMetadata: {
-      ...scope.operationMetadata,
-      ...(scope.actor ? { actorId: scope.actor.id } : {}),
-    },
-    serverIdentity: scope.identity ?? ({} as const),
-    serverSignal: request.signal,
-  } as const);
+  return result;
 }

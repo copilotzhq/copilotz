@@ -15,7 +15,6 @@ export function assetNodeData(
     digest: asset.digest,
     state: asset.state,
     bodyId: normalizedBodyId,
-    location: structuredClone(asset.location),
     ...(asset.readyAt ? { readyAt: asset.readyAt } : {}),
     ...(asset.deletedAt ? { deletedAt: asset.deletedAt } : {}),
     ...(asset.origin ? { origin: structuredClone(asset.origin) } : {}),

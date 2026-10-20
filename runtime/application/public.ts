@@ -25,3 +25,9 @@ export type {
   DeliveryDiagnostic,
   DeliveryDiagnosticSink,
 } from "../execution/index.ts";
+
+export type {
+  ProtectedActionIngress,
+  ProtectedActionSource,
+  ProtectedActionSourceEntry,
+} from "../actions/protected-action-types.ts";

@@ -22,6 +22,7 @@ import {
 import { collectPromptInstructions } from "../collection.ts";
 import { getPublicThreadMetadata } from "../../../shared/thread-metadata.ts";
 import { prepareLlmInput } from "../../../shared/agents/prepared-transcript.ts";
+import type { ContextContributionRenderer } from "./context-views.ts";
 
 type RenderedContext = Readonly<{
   title: string;
@@ -231,8 +232,13 @@ export async function buildCoreLlmRequest(
     historyScopeId?: string;
     history: readonly ConversationMessage[];
     messageIds: readonly string[];
+    /** Initial Ask only: current owner-captured, recipient-authorized question. */
+    routedAskQuestion?: ConversationMessage;
     tools: readonly CoreToolEntry[];
     contributions?: readonly CollectedContextContribution[];
+    /** Private host seam. Call this builder inside callLlm.prepare so receipt
+     * replay reuses the captured request without projection or rendering. */
+    renderContextContribution?: ContextContributionRenderer;
     historyByteLimit?: number;
     onHistoryPrepared?: (
       transcript:
@@ -248,7 +254,17 @@ export async function buildCoreLlmRequest(
     candidate.participantType === "human"
   );
   const userMetadata = human ? visibleMetadata(human.metadata) : undefined;
-  const rawHistory = input.history;
+  const question = input.routedAskQuestion;
+  const historyIds = new Set(input.messageIds);
+  const outsideHistory = question && !historyIds.has(question.id);
+  // This exact task can precede a certified history boundary. It still goes
+  // through canonical snapshot/Asset preparation and the same byte budget.
+  const rawHistory = outsideHistory
+    ? [question, ...input.history]
+    : input.history;
+  const messageIds = outsideHistory
+    ? [question.id, ...input.messageIds]
+    : input.messageIds;
   const contributions = input.frozenContributions?.map((item) => ({
     ...item,
     content: item.content.length === 1
@@ -270,22 +286,57 @@ export async function buildCoreLlmRequest(
     {
       threadId: thread.id,
       history: rawHistory,
-      messageIds: input.messageIds,
+      messageIds,
       participantId: participant.id,
     },
     contributions.map((item) => item.content),
     { byteLimit: input.historyByteLimit },
   );
-  input.onHistoryPrepared?.(prepared.transcript);
-  const rendered: readonly RenderedContext[] = contributions.map((
-    item,
-    index,
-  ) => ({
-    title: item.title,
-    role: item.role,
-    text: renderContextContent(prepared.contextValues[index]),
-  }));
-  const messages = prepared.transcript.map((entry) => entry.message);
+  // Memory observes the original chronological window, not provider task order.
+  input.onHistoryPrepared?.(
+    outsideHistory
+      ? prepared.transcript.filter((entry) => historyIds.has(entry.sourceId))
+      : prepared.transcript,
+  );
+  const rendered: readonly RenderedContext[] = await Promise.all(
+    contributions.map(async (
+      item,
+      index,
+    ) => ({
+      title: item.title,
+      role: item.role,
+      text: await input.renderContextContribution?.({
+        contribution: item,
+        content: prepared.contextValues[index],
+        scope: {
+          namespace: context.namespace,
+          agentId: input.agent.id,
+          participantId: participant.id,
+          threadId: thread.id,
+        },
+        signal: context.signal,
+      }) ?? renderContextContent(prepared.contextValues[index]),
+    })),
+  );
+  let transcript = prepared.transcript;
+  if (question) {
+    const selected = transcript.filter((entry) =>
+      entry.sourceId === question.id
+    );
+    if (selected.length !== 1 || selected[0].message.role !== "user") {
+      throw new Error(
+        "Initial Ask question is not available in its provider transcript.",
+      );
+    }
+    // Keep all other latest authorized context, but make this invocation's
+    // immutable question the final user turn exactly once. Ordinary triggers
+    // and Tool-result continuations never supply this selector.
+    transcript = [
+      ...transcript.filter((entry) => entry.sourceId !== question.id),
+      selected[0],
+    ];
+  }
+  const messages = transcript.map((entry) => entry.message);
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
   );

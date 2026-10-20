@@ -1,8 +1,9 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { createTestApplication as createCopilotzApplication } from "../../../../../runtime/testing/server-authorization.test.ts";
+import { defineTestServerFacade as fixtureServerFacade } from "../../../../../runtime/testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals, assertRejects } from "@std/assert";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { createCopilotzApplication } from "../../../../../runtime/application/index.ts";
+
 import { createTestDatabase } from "../../../../../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../../../../server/index.ts";
 import { createServerFacadeFetchHandler } from "../../../../../server/facade.ts";
@@ -204,8 +205,48 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
                   actor: { id: request.headers.get("x-user") ?? "person" },
                 };
               },
-              authorize(_request, context) {
+              async evaluate(_request, context) {
+                const asset = new URL(_request.url).pathname.match(
+                  /\/messages\/([^/]+)\/assets\/([^/]+)$/,
+                );
+                const message = asset
+                  ? await context.read.get(
+                    "message",
+                    decodeURIComponent(asset[1]),
+                  )
+                  : null;
+                const references = [
+                  ...(Array.isArray(message?.content) ? message.content : []),
+                  ...((message?.metadata as { llmReasoning?: unknown[] })
+                    ?.llmReasoning ?? []),
+                ];
+                const assetId = asset ? decodeURIComponent(asset[2]) : "";
                 return {
+                  assets: {
+                    read: references.some((ref) =>
+                        (ref as { assetId?: string }).assetId === assetId
+                      )
+                      ? [assetId]
+                      : [],
+                  },
+                  collections: {
+                    participant: {},
+                    thread: context.endpoint.kind !== "action"
+                      ? {
+                        contains: { participantIds: [context.scope.actor!.id] },
+                      }
+                      : {},
+                    message: {},
+                  },
+                  collectionMutations: {
+                    participant: { create: {}, update: {} },
+                    thread: {
+                      create: {},
+                      update: {},
+                      commands: { ensureMembership: {} },
+                    },
+                    message: { create: {}, update: {} },
+                  },
                   operations: {
                     metadata: { actorId: context.scope.actor!.id },
                   },

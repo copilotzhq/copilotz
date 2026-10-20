@@ -18,6 +18,8 @@ export function createTestProcessorContext(
   seed: TestProcessorContextSeed,
 ): ProcessorContext {
   const content: ProcessorContext["content"] = {
+    openCapture: unavailable,
+    capture: unavailable,
     prepare: unavailable,
     materialize: unavailable,
     publish: unavailable,
@@ -49,6 +51,7 @@ export function createTestProcessorContext(
     collections: {} as const,
     vectors: { search: unavailable },
     content,
+    operations: { start: unavailable },
     streams: {
       open: unavailable,
       follow: unavailable,
@@ -57,6 +60,5 @@ export function createTestProcessorContext(
     now: () => new Date(),
     transaction: unavailable,
     readSnapshot: unavailable,
-    signalDeferredWait: unavailable,
   } as const);
 }

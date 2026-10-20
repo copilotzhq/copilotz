@@ -1,3 +1,40 @@
+import { collectionAuthorizationInput } from "../authorization/collection-input.ts";
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { afterSqlCommit } from "../events/session.ts";
+import { readEventByDeduplicationIdOn } from "../events/store.ts";
+import { schemaCommandContext } from "../engine/commands.ts";
+import {
+  assertScheduledAlarmReplay,
+  captureScheduledAlarmAdmission,
+  recordScheduledAlarmIngress,
+  scheduledAlarmAdmission,
+  scheduledIngressProof,
+} from "../application/ingress/scheduled.ts";
+import {
+  captureCollectionPolicy,
+  collectionCommittedResultRefused,
+  collectionPolicyRefused,
+} from "../authorization/collection.ts";
+import {
+  captureCollectionInvocation,
+  hasTrustedCollectionPolicyRead,
+  withOwnerCollectionInvocation,
+  withTrustedCollectionPolicyRead,
+} from "../authorization/invocation.ts";
+import type { CollectionPolicyRegistrations } from "../authorization/resources.ts";
+import type { CollectionPolicyIntent } from "../authorization/intent.ts";
+import {
+  type OwnerCommandAuthorization,
+  withOwnerCommandAuthorization,
+} from "../engine/command-authorization.ts";
+import { collectionCommandReceipt } from "./command-receipt.ts";
+import { withSnapshotControl } from "./snapshot-control.ts";
+import { isPendingContentRef } from "../content/schema.ts";
+import { syncCollectionAlarm } from "./alarms.ts";
+import {
+  type CommandContext,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
 import {
   projectVector,
   searchVectors,
@@ -96,6 +133,7 @@ import {
 
 export type CreateCollectionRuntimeOptions = Readonly<{
   coordinator: EventCoordinator;
+  policies?: CollectionPolicyRegistrations;
   session: SqlSession;
   eventStore: EventStore;
   assets?: CollectionAssetAdopter;
@@ -106,6 +144,7 @@ export type CreateCollectionRuntimeOptions = Readonly<{
 
 /** Internal content-adoption seam used only by the Collection kernel. */
 type CollectionAssetAdopter = Readonly<{
+  prepareInCommand?: boolean;
   reconcileMaterializations(
     transaction: SqlExecutor,
     plans: readonly AssetMaterializationPlan[],
@@ -117,6 +156,7 @@ type CollectionAssetAdopter = Readonly<{
       content: DurableContentInput;
       origin?: AssetOrigin;
     }>,
+    transaction?: SqlExecutor,
   ): Promise<AssetMaterializationPlan>;
   adoptMaterialization(
     context: EventMutationContext,
@@ -127,7 +167,7 @@ type CollectionAssetAdopter = Readonly<{
   composeAdoption(
     plans: readonly AssetMaterializationPlan[],
     param: (value: unknown) => string,
-    options: Readonly<{ nodes: boolean }>,
+    options: Readonly<{ nodes: boolean; commandTime: string }>,
   ): Readonly<{
     ctes: readonly string[];
     gate: string;
@@ -408,6 +448,7 @@ export type CollectionKernel = Readonly<{
   operations(name: string): CollectionOperations | undefined;
   transaction<T>(
     options: CollectionTransactionOptions<T>,
+    command?: CommandContext,
   ): Promise<CollectionTransactionResult<T>>;
   withScope(scope: CollectionScope): ScopedCollections;
   readSnapshot<T>(
@@ -457,194 +498,206 @@ function assertLosslessJson(value: unknown, label: string): void {
   assertJsonValue(value, { label, rejectNegativeZero: true });
 }
 
-async function canonicalIntentValue(
+function canonicalIntentValue(
   value: unknown,
   preparedContentPaths: ReadonlySet<string> = new Set(),
   path: readonly string[] = ([] as const),
   ancestors = new WeakSet<object>(),
-): Promise<unknown> {
-  if (value === null) return (["null"] as const);
-  if (typeof value === "string") return (["string", value] as const);
-  if (typeof value === "boolean") {
-    return (["boolean", value] as const);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError("Collection mutation intent numbers must be finite.");
+): unknown | Promise<unknown> {
+  const hashes: Promise<void>[] = [];
+  function visit(
+    value: unknown,
+    preparedContentPaths: ReadonlySet<string> = new Set(),
+    path: readonly string[] = ([] as const),
+    ancestors = new WeakSet<object>(),
+  ): unknown {
+    if (value === null) return (["null"] as const);
+    if (typeof value === "string") return (["string", value] as const);
+    if (typeof value === "boolean") {
+      return (["boolean", value] as const);
     }
-    return ([
-      "number",
-      Object.is(value, -0) ? "-0" : String(value),
-    ] as const);
-  }
-  if (value === undefined) {
-    throw new TypeError("Collection mutation intent cannot contain undefined.");
-  }
-  if (value instanceof ArrayBuffer) {
-    const bytes = new Uint8Array(value);
-    return ([
-      "bytes",
-      await digestContent(bytes),
-      bytes.byteLength,
-    ] as const);
-  }
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(
-      value.buffer,
-      value.byteOffset,
-      value.byteLength,
-    );
-    return ([
-      "bytes",
-      await digestContent(bytes),
-      bytes.byteLength,
-    ] as const);
-  }
-  if (typeof value !== "object") {
-    throw new TypeError("Collection mutation intent must be JSON-safe.");
-  }
-  if (ancestors.has(value)) {
-    throw new TypeError("Collection mutation intent cannot be cyclic.");
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const items: unknown[] = [];
-      for (let index = 0; index < value.length; index += 1) {
-        if (!(index in value)) {
-          throw new TypeError(
-            "Collection mutation intent arrays cannot be sparse.",
-          );
-        }
-        items.push(
-          await canonicalIntentValue(
-            value[index],
-            preparedContentPaths,
-            [...path, String(index)] as const,
-            ancestors,
-          ),
-        );
-      }
-      return (["array", items] as const);
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(
-        "Collection mutation intent objects must be plain JSON objects.",
-      );
-    }
-    const source = value as Record<string, unknown>;
-    const ownKeys = Reflect.ownKeys(source);
-    if (ownKeys.some((key) => typeof key !== "string")) {
-      throw new TypeError(
-        "Collection mutation intent objects cannot contain symbol keys.",
-      );
-    }
-    for (const key of ownKeys as string[]) {
-      const descriptor = Object.getOwnPropertyDescriptor(source, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) {
         throw new TypeError(
-          "Collection mutation intent objects must contain enumerable data properties only.",
+          "Collection mutation intent numbers must be finite.",
         );
       }
-    }
-    const isPreparedContent = preparedContentPaths.has(JSON.stringify(path)) &&
-      ownKeys.every((key) => key === "content" || key === "assets") &&
-      Array.isArray(source.content) && Array.isArray(source.assets) &&
-      source.content.every((item) =>
-        item && typeof item === "object" && !Array.isArray(item) &&
-        typeof (item as Record<string, unknown>).assetId === "string" &&
-        typeof (item as Record<string, unknown>).kind === "string" &&
-        typeof (item as Record<string, unknown>).role === "string" &&
-        typeof (item as Record<string, unknown>).mediaType === "string"
-      ) &&
-      source.assets.every((item) =>
-        item && typeof item === "object" && !Array.isArray(item) &&
-        typeof (item as Record<string, unknown>).id === "string" &&
-        typeof (item as Record<string, unknown>).namespace === "string" &&
-        typeof (item as Record<string, unknown>).mediaType === "string" &&
-        typeof (item as Record<string, unknown>).digest === "string" &&
-        typeof (item as Record<string, unknown>).byteLength === "number" &&
-        (item as Record<string, unknown>).body instanceof Uint8Array
-      );
-    if (isPreparedContent) {
-      const assets = source.assets as readonly PreparedAsset[];
-      const preparedRefs = source.content as readonly Record<string, unknown>[];
-      const identities = new Map<string, readonly unknown[]>();
-      for (const asset of assets) {
-        const identity = asset.idempotencyKey?.trim()
-          ? (["key", asset.idempotencyKey.trim()] as const)
-          : ([
-            "digest",
-            asset.digest,
-            asset.mediaType,
-            asset.byteLength,
-          ] as const);
-        identities.set(asset.id, identity);
-      }
-      const refs: unknown[] = [];
-      for (const ref of preparedRefs) {
-        const stableId = identities.get(String(ref.assetId));
-        refs.push(
-          await canonicalIntentValue(
-            {
-              ...ref,
-              ...(stableId ? { assetId: ["prepared", stableId] as const } : {}),
-            },
-            new Set(),
-            [] as const,
-            ancestors,
-          ),
-        );
-      }
-      const normalizedAssets: unknown[] = [];
-      for (const asset of assets) {
-        const {
-          id: _id,
-          body: _body,
-          readyBody: _readyBody,
-          location: _location,
-          ...fields
-        } = asset;
-        normalizedAssets.push(
-          await canonicalIntentValue(
-            {
-              identity: identities.get(asset.id),
-              ...fields,
-            },
-            new Set(),
-            [] as const,
-            ancestors,
-          ),
-        );
-      }
-      normalizedAssets.sort((left, right) =>
-        JSON.stringify(left).localeCompare(JSON.stringify(right))
-      );
       return ([
-        "prepared-content",
-        refs,
-        normalizedAssets,
+        "number",
+        Object.is(value, -0) ? "-0" : String(value),
       ] as const);
     }
-    const entries: unknown[] = [];
-    for (const key of Object.keys(source).sort()) {
-      entries.push(
-        [
-          key,
-          await canonicalIntentValue(
-            source[key],
-            preparedContentPaths,
-            [...path, key] as const,
-            ancestors,
-          ),
-        ] as const,
+    if (value === undefined) {
+      throw new TypeError(
+        "Collection mutation intent cannot contain undefined.",
       );
     }
-    return (["object", entries] as const);
-  } finally {
-    ancestors.delete(value);
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      const bytes = value instanceof ArrayBuffer
+        ? new Uint8Array(value)
+        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      const tagged: unknown[] = ["bytes", undefined, bytes.byteLength];
+      hashes.push(
+        digestContent(bytes).then((digest) => {
+          tagged[1] = digest;
+        }),
+      );
+      return tagged;
+    }
+    if (typeof value !== "object") {
+      throw new TypeError("Collection mutation intent must be JSON-safe.");
+    }
+    if (ancestors.has(value)) {
+      throw new TypeError("Collection mutation intent cannot be cyclic.");
+    }
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        const items: unknown[] = [];
+        for (let index = 0; index < value.length; index += 1) {
+          if (!(index in value)) {
+            throw new TypeError(
+              "Collection mutation intent arrays cannot be sparse.",
+            );
+          }
+          items.push(
+            visit(
+              value[index],
+              preparedContentPaths,
+              [...path, String(index)] as const,
+              ancestors,
+            ),
+          );
+        }
+        return (["array", items] as const);
+      }
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(
+          "Collection mutation intent objects must be plain JSON objects.",
+        );
+      }
+      const source = value as Record<string, unknown>;
+      const ownKeys = Reflect.ownKeys(source);
+      if (ownKeys.some((key) => typeof key !== "string")) {
+        throw new TypeError(
+          "Collection mutation intent objects cannot contain symbol keys.",
+        );
+      }
+      for (const key of ownKeys as string[]) {
+        const descriptor = Object.getOwnPropertyDescriptor(source, key);
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          throw new TypeError(
+            "Collection mutation intent objects must contain enumerable data properties only.",
+          );
+        }
+      }
+      const isPreparedContent =
+        preparedContentPaths.has(JSON.stringify(path)) &&
+        ownKeys.every((key) => key === "content" || key === "assets") &&
+        Array.isArray(source.content) && Array.isArray(source.assets) &&
+        source.content.every((item) =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).assetId === "string" &&
+          typeof (item as Record<string, unknown>).kind === "string" &&
+          typeof (item as Record<string, unknown>).role === "string" &&
+          typeof (item as Record<string, unknown>).mediaType === "string"
+        ) &&
+        source.assets.every((item) =>
+          item && typeof item === "object" && !Array.isArray(item) &&
+          typeof (item as Record<string, unknown>).id === "string" &&
+          typeof (item as Record<string, unknown>).namespace === "string" &&
+          typeof (item as Record<string, unknown>).mediaType === "string" &&
+          typeof (item as Record<string, unknown>).digest === "string" &&
+          typeof (item as Record<string, unknown>).byteLength === "number" &&
+          (item as Record<string, unknown>).body instanceof Uint8Array
+        );
+      if (isPreparedContent) {
+        const assets = source.assets as readonly PreparedAsset[];
+        const preparedRefs = source.content as readonly Record<
+          string,
+          unknown
+        >[];
+        const identities = new Map<string, readonly unknown[]>();
+        for (const asset of assets) {
+          const identity = asset.idempotencyKey?.trim()
+            ? (["key", asset.idempotencyKey.trim()] as const)
+            : ([
+              "digest",
+              asset.digest,
+              asset.mediaType,
+              asset.byteLength,
+            ] as const);
+          identities.set(asset.id, identity);
+        }
+        const refs: unknown[] = [];
+        for (const ref of preparedRefs) {
+          const stableId = identities.get(String(ref.assetId));
+          refs.push(
+            visit(
+              {
+                ...ref,
+                ...(stableId
+                  ? { assetId: ["prepared", stableId] as const }
+                  : {}),
+              },
+              new Set(),
+              [] as const,
+              ancestors,
+            ),
+          );
+        }
+        const normalizedAssets: unknown[] = [];
+        for (const asset of assets) {
+          const {
+            id: _id,
+            body: _body,
+            readyBody: _readyBody,
+            location: _location,
+            ...fields
+          } = asset;
+          normalizedAssets.push(
+            visit(
+              {
+                identity: identities.get(asset.id),
+                ...fields,
+              },
+              new Set(),
+              [] as const,
+              ancestors,
+            ),
+          );
+        }
+        normalizedAssets.sort((left, right) =>
+          JSON.stringify(left).localeCompare(JSON.stringify(right))
+        );
+        return ([
+          "prepared-content",
+          refs,
+          normalizedAssets,
+        ] as const);
+      }
+      const entries: unknown[] = [];
+      for (const key of Object.keys(source).sort()) {
+        entries.push(
+          [
+            key,
+            visit(
+              source[key],
+              preparedContentPaths,
+              [...path, key] as const,
+              ancestors,
+            ),
+          ] as const,
+        );
+      }
+      return (["object", entries] as const);
+    } finally {
+      ancestors.delete(value);
+    }
   }
+  const result = visit(value, preparedContentPaths, path, ancestors);
+  return hashes.length ? Promise.all(hashes).then(() => result) : result;
 }
 
 function applyPatch(
@@ -789,6 +842,77 @@ export function createCollectionKernel(
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
+  const commands = createAsyncContextStorage<
+    { context: CommandContext; active: boolean; invalidated?: boolean }
+  >();
+  const currentCommand = () => {
+    const selected = commands.getStore();
+    if (!selected) return undefined;
+    selected.context.signal.throwIfAborted();
+    if (!selected.active) {
+      throw new Error("Owner Collection adoption has ended.");
+    }
+    schemaCommandContext(
+      selected.context.transaction,
+      options.eventStore.databaseSchema,
+    );
+    return selected.context;
+  };
+  const committedRunner = createSchemaCommandRunner(
+    options.session,
+    options.eventStore.databaseSchema,
+  );
+  const runCommand: typeof committedRunner = (
+    kind,
+    input,
+    execute,
+    binding,
+  ) => {
+    const command = currentCommand();
+    return command
+      ? createSchemaCommandRunner(
+        command.transaction,
+        options.eventStore.databaseSchema,
+      )(
+        kind,
+        input,
+        (input) => execute(input, command),
+        binding,
+      )
+      : committedRunner(kind, input, execute, binding);
+  };
+  const sql = () => currentCommand()?.transaction ?? options.session;
+  const replayEvent = (namespace: string, id: string) =>
+    readEventByDeduplicationIdOn(sql(), tables, namespace, id);
+  const prepareMaterialization:
+    CollectionAssetAdopter["prepareMaterialization"] = (input) =>
+      options.assets!.prepareMaterialization(
+        input,
+        currentCommand()?.transaction,
+      );
+  const publishAssets = (plans: readonly AssetMaterializationPlan[]) => {
+    const publish = () => options.assets!.publishMaterializations(plans);
+    const command = currentCommand();
+    if (command) command.afterCommit(publish);
+    else publish();
+  };
+  const publication = (
+    result: CoordinatedMutationResult<unknown>,
+  ): Promise<EventDispatchReport> =>
+    currentCommand()
+      ? Promise.resolve({ handles: [], failures: [] })
+      : awaitEventPublication(result);
+  const invalidateReads = (key?: string) => {
+    const command = currentCommand();
+    if (command) {
+      const selected = commands.getStore()!;
+      if (!selected.invalidated) {
+        afterSqlCommit(command.transaction, () => readViews.invalidateAll());
+        selected.invalidated = true;
+      }
+    } else if (key === undefined) readViews.invalidateAll();
+    else readViews.invalidate(key);
+  };
   const bound = new Map<string, BoundCollection>();
   const operations = new Map<string, CollectionOperations>();
   type TransactionBinding = Readonly<{
@@ -822,6 +946,7 @@ export function createCollectionKernel(
     id: string;
     order: readonly number[];
     protectionDeadline?: number;
+    policy?: ReturnType<typeof captureCollectionPolicy>;
     materializations?(
       replacements: ReadonlyMap<string, AssetManifestEntry>,
     ): readonly AssetMaterializationPlan[];
@@ -868,10 +993,199 @@ export function createCollectionKernel(
     state: "open" | "closed";
     /** A repeatable-read snapshot answers the same question the same way. */
     reads: Map<string, Promise<unknown>>;
+    control: import("../events/session.ts").SqlReadSnapshot;
+    commandTime?: Promise<string>;
   };
   const snapshots = createAsyncContextStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
   const activeSnapshot = () => snapshots.getStore();
+  type PolicyRead = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
+  type ActivePolicyRead = PolicyRead & {
+    snapshot?: SnapshotScope;
+    active: boolean;
+    authority: ReturnType<typeof captureCollectionInvocation>;
+  };
+  const policyReads = createAsyncContextStorage<ActivePolicyRead>();
+  type PolicyDisclosure = {
+    active: boolean;
+    checks: Array<(read: PolicyRead) => Promise<void>>;
+  };
+  const policyDisclosures = createAsyncContextStorage<PolicyDisclosure>();
+  const actualDefinition = (name: string) => {
+    const definition = bound.get(name)?.definition;
+    if (!definition) collectionPolicyRefused();
+    return definition;
+  };
+  const readPolicy = async <T>(
+    name: string,
+    namespace: string,
+    method: CollectionPolicyIntent["method"],
+    args: unknown,
+    load: (authorizedArgs?: unknown) => Promise<T>,
+    id?: string,
+    disclosureRoot = false,
+  ): Promise<T> => {
+    const registration = options.policies?.get(name);
+    const trusted = hasTrustedCollectionPolicyRead();
+    if (trusted) {
+      if (method === "query" || policyReads.getStore()) return await load();
+      const authority = captureCollectionInvocation();
+      return await runCommand(
+        "collections.authenticate",
+        {},
+        (_input, command) =>
+          withTrustedCollectionPolicyRead(() =>
+            policyReads.run(
+              { ...command, authority, active: true },
+              load,
+            )
+          ),
+      );
+    }
+    const relatedRead = method === "query" || method === "relations.list" ||
+      (method === "list" &&
+        (args as CollectionQuery)?.include?.some((relation) => {
+          const target = bound.get(name)?.definition.relations?.[relation]
+            ?.collection;
+          return !!target && options.policies?.has(target);
+        }));
+    if (!registration && (!options.policies?.size || !relatedRead)) {
+      return await load();
+    }
+    const disclosure = policyDisclosures.getStore();
+    if (!disclosure) {
+      const scope: PolicyDisclosure = { active: true, checks: [] };
+      try {
+        return await policyDisclosures.run(
+          scope,
+          () => readPolicy(name, namespace, method, args, load, id, true),
+        );
+      } finally {
+        scope.active = false;
+      }
+    }
+    if (!disclosure.active) collectionPolicyRefused();
+    const discloseAll = async (read: PolicyRead) => {
+      for (const check of disclosure.checks) await check(read);
+    };
+    const inherited = policyReads.getStore();
+    if (inherited && !inherited.active) collectionPolicyRefused();
+    const authority = captureCollectionInvocation() ?? inherited?.authority;
+    const policy = registration
+      ? captureCollectionPolicy({
+        databaseSchema: options.eventStore.databaseSchema,
+        registration,
+        namespace,
+        method,
+        args,
+        ...(id
+          ? {
+            current: (tx: SqlExecutor) =>
+              loadCollectionRecord(tx, tables, namespace, name, id),
+          }
+          : {}),
+      }, authority)
+      : undefined;
+    const disclose = async (read: PolicyRead, result: unknown) => {
+      if (!registration) return;
+      if (method === "query") {
+        // Selectors may return hydrated content. Authorize its canonical Asset
+        // references, as nested reads do, without embedding decoded body bytes.
+        assertJsonValue(result, {
+          allowBytes: true,
+          maxDepth: 64,
+          maxNodes: 100_000,
+        });
+        result = canonicalizeContentRefs(result);
+      }
+      const rows = Array.isArray(result) && result.length ? result : [result];
+      for (const row of rows) {
+        const value = row && typeof row === "object"
+          ? row as Record<string, unknown>
+          : undefined;
+        const record = method === "vectors.search"
+          ? value?.record as Record<string, unknown> | undefined
+          : value;
+        const recordId =
+          method !== "relations.list" && typeof record?.id === "string"
+            ? record.id
+            : id;
+        const check = captureCollectionPolicy({
+          databaseSchema: options.eventStore.databaseSchema,
+          registration,
+          namespace,
+          method,
+          args,
+          ...(recordId
+            ? {
+              current: (tx: SqlExecutor) =>
+                loadCollectionRecord(tx, tables, namespace, name, recordId),
+            }
+            : {}),
+        }, authority);
+        await check.authorize(read, "result", row);
+      }
+    };
+    const nested = policyReads.getStore();
+    if (nested) {
+      await policy?.authorize(nested, "read");
+      const result = await load(policy?.args());
+      await disclose(nested, result);
+      disclosure.checks.push((read) => disclose(read, result));
+      return result;
+    }
+    const snapshot = activeSnapshot();
+    if (snapshot && snapshot.state !== "open") {
+      throw new Error("Read snapshot access has already closed.");
+    }
+    // Named selectors orchestrate authorized reads and may hydrate external
+    // content. Never hold the owner queue across their body I/O. Each nested
+    // read decides atomically; the shared disclosure gate rechecks all results.
+    const result = method === "query"
+      ? await (async () => {
+        await runCommand("collections.read", {}, async (_input, command) => {
+          await policy?.authorize(command, "read");
+        });
+        return await load(policy?.args());
+      })()
+      : await runCommand(
+        "collections.read",
+        {},
+        async (_input, command) => {
+          // This read's captured aggregation belongs to its own queued command.
+          if (!disclosure.active) collectionPolicyRefused();
+          const read = { ...command, authority, active: true, snapshot };
+          return await policyDisclosures.run(
+            disclosure,
+            () =>
+              policyReads.run(read, async () => {
+                try {
+                  await policy?.authorize(command, "read");
+                  const value = await load(policy?.args());
+                  await disclose(command, value);
+                  if (snapshot && snapshot.state !== "open") {
+                    throw new Error("Read snapshot access has already closed.");
+                  }
+                  return value;
+                } finally {
+                  read.active = false;
+                }
+              }),
+          );
+        },
+      );
+    disclosure.checks.push((read) => disclose(read, result));
+    // Hydrated endpoints and named-query reads share the root's final fresh gate.
+    // An unprotected root cannot disclose a protected descendant on an old check.
+    if (disclosureRoot) {
+      await runCommand(
+        "collections.disclose",
+        {},
+        (_input, command) => discloseAll(command),
+      );
+    }
+    return result;
+  };
 
   const comparePlanOrder = (
     left: PlannedTransactionMutation,
@@ -940,8 +1254,15 @@ export function createCollectionKernel(
   };
 
   const executor = (): SqlExecutor => {
+    const read = policyReads.getStore();
+    if (read) {
+      if (read.snapshot?.state === "closed") {
+        throw new Error("Read snapshot access has already closed.");
+      }
+      return read.snapshot?.executor ?? read.transaction;
+    }
     const snapshot = activeSnapshot();
-    if (!snapshot) return options.session;
+    if (!snapshot) return sql();
     if (snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
     }
@@ -963,7 +1284,7 @@ export function createCollectionKernel(
     }
     if (!scope) return writeOptions;
     const inherited = writeOptions.identity;
-    return {
+    return captureScheduledAlarmAdmission(writeOptions, {
       namespace,
       metadata: writeOptions.metadata,
       identity: {
@@ -980,7 +1301,7 @@ export function createCollectionKernel(
         metadata: { ...scope.metadata, ...inherited?.metadata },
       },
       ...(writeOptions.condition ? { condition: writeOptions.condition } : {}),
-    };
+    });
   };
 
   const bind = <
@@ -993,6 +1314,171 @@ export function createCollectionKernel(
       throw new TypeError(`Collection '${definition.name}' is already bound.`);
     }
     const name = definition.name;
+    if (definition.ownerPolicy === "required" && !options.policies?.has(name)) {
+      throw new TypeError("A required Collection owner policy is missing.");
+    }
+    const mutationCalls = createAsyncContextStorage<
+      {
+        method: CollectionPolicyIntent["method"];
+        args: unknown;
+        committing: boolean;
+        prepared?: unknown;
+      }
+    >();
+    const mutationPolicy = (
+      planned: PlannedCollectionOperation,
+      transactional = false,
+    ) => {
+      if (planned.authorization) return planned.authorization;
+      const registration = options.policies?.get(name);
+      if (!registration) return undefined;
+      const call = mutationCalls.getStore();
+      if (!call) collectionPolicyRefused();
+      const namespace = planned.writeOptions.namespace;
+      return captureCollectionPolicy({
+        databaseSchema: options.eventStore.databaseSchema,
+        registration,
+        namespace,
+        method: call.method,
+        args: call.args,
+        expectedArgs: call.prepared,
+        current: (tx) =>
+          loadCollectionRecord(tx, tables, namespace, name, planned.id),
+        next: planned.operation === "delete" ? null : planned.plan.write.record,
+        result: transactional
+          ? { id: planned.id }
+          : planned.operation === "delete"
+          ? { id: planned.id, deleted: true }
+          : planned.plan.write.record,
+      });
+    };
+    const policyWrite = async <T>(
+      method: CollectionPolicyIntent["method"],
+      args: unknown,
+      namespace: string,
+      execute: (args: Record<string, unknown>) => Promise<T>,
+    ): Promise<T> => {
+      const registration = options.policies?.get(name);
+      if (!registration) return await execute(args as Record<string, unknown>);
+      const selectedInput = collectionAuthorizationInput(
+        method,
+        args,
+        definition.content?.fields,
+      );
+      const initial = captureCollectionPolicy({
+        databaseSchema: options.eventStore.databaseSchema,
+        registration,
+        namespace,
+        method,
+        args: selectedInput.input,
+        ...(method !== "create" &&
+            typeof (args as { id?: unknown }).id === "string"
+          ? {
+            current: (tx: SqlExecutor) =>
+              loadCollectionRecord(
+                tx,
+                tables,
+                namespace,
+                name,
+                (args as { id: string }).id,
+              ),
+          }
+          : {}),
+      });
+      const authority = captureCollectionInvocation()!;
+      const captured = selectedInput.input;
+      const call: {
+        method: typeof method;
+        args: typeof captured;
+        committing: boolean;
+        prepared?: unknown;
+      } = { method, args: captured, committing: false };
+      return await mutationCalls.run(call, async () => {
+        if (activeScope()) {
+          await runCommand(
+            "collections.planAuthorized",
+            {},
+            async (_, command) => {
+              await initial.authorize(command, "mutation");
+              call.prepared = initial.args();
+            },
+          );
+          return await execute(selectedInput.materialize(initial.args()));
+        }
+        let result: T;
+        try {
+          result = await runCommand(
+            "collections.authorize",
+            {},
+            async (_input, command) => {
+              await initial.authorize(command, "mutation");
+              call.prepared = initial.args();
+              const selected = { context: command, active: true };
+              try {
+                return await withOwnerCollectionInvocation(
+                  authority,
+                  () =>
+                    mutationCalls.run(
+                      call,
+                      () =>
+                        commands.run(selected, () =>
+                          execute(selectedInput.materialize(initial.args()))),
+                    ),
+                );
+              } finally {
+                selected.active = false;
+              }
+            },
+          );
+        } catch (error) {
+          initial.check();
+          throw error;
+        }
+        if (activeScope()) return result;
+        const value = result as {
+          record?: CollectionRecord;
+          event?: unknown;
+          noop?: boolean;
+        };
+        const id = value.record?.id;
+        const policy = captureCollectionPolicy({
+          databaseSchema: options.eventStore.databaseSchema,
+          registration,
+          namespace,
+          method,
+          args: captured,
+          ...(id
+            ? {
+              current: (tx: SqlExecutor) =>
+                loadCollectionRecord(tx, tables, namespace, name, id),
+            }
+            : {}),
+          ...(value.record
+            ? { next: method === "delete" ? null : value.record }
+            : {}),
+        });
+        try {
+          await runCommand(
+            "collections.disclose",
+            {},
+            async (_input, command) => {
+              if (value.noop) await policy.authorize(command, "mutation");
+              await policy.authorize(
+                command,
+                "result",
+                method === "delete" ? { id, deleted: true } : value.record,
+              );
+            },
+          );
+        } catch (error) {
+          if (value.event && !currentCommand()) {
+            collectionCommittedResultRefused();
+          }
+          throw error;
+        }
+        return result;
+      });
+    };
     const timestamps = definition.timestamps ?? {
       createdAt: "createdAt",
       updatedAt: "updatedAt",
@@ -1155,6 +1641,18 @@ export function createCollectionKernel(
       for (const field of fields) {
         let value = getPath(record, field);
         if (value === undefined) continue;
+        if (
+          Boolean(currentCommand()) && !options.assets.prepareInCommand &&
+          !(Array.isArray(value) &&
+            value.every((item) =>
+              item && typeof item === "object" &&
+              typeof item.assetId === "string" && !isPendingContentRef(item)
+            ))
+        ) {
+          throw new TypeError(
+            "Owner adoption requires existing canonical content references.",
+          );
+        }
         const scope = activeScope();
         let preparedValue = Array.isArray(value) && value.every((item) =>
             item && typeof item === "object" &&
@@ -1174,6 +1672,21 @@ export function createCollectionKernel(
             sequenceOnly: false,
           }
           : undefined;
+        if (Array.isArray(value) && value.some(isPendingContentRef)) {
+          const prepared = await prepareMaterialization({
+            namespace,
+            content: value as DurableContentInput,
+            origin: { type: name, id: write.record.id },
+          });
+          if (scope) {
+            registerMaterialization(scope, prepared);
+          }
+          content.push(prepared);
+          assets.push(...prepared.assets);
+          setPath(record, field, prepared.content);
+          changed = true;
+          continue;
+        }
         if (!preparedValue) {
           const source = await createContentPreparer().prepare(
             value as ContentInput | readonly ContentInput[],
@@ -1248,7 +1761,7 @@ export function createCollectionKernel(
             );
           }
           if (pendingRefs.length > 0) {
-            const pending = await options.assets.prepareMaterialization({
+            const pending = await prepareMaterialization({
               namespace,
               content: preparedValue.sequenceOnly ? pendingRefs : ({
                 content: pendingRefs,
@@ -1284,7 +1797,7 @@ export function createCollectionKernel(
           content: value as DurableContentInput,
           origin: { type: name, id: write.record.id },
         } as const;
-        const prepared = await options.assets.prepareMaterialization(input);
+        const prepared = await prepareMaterialization(input);
         content.push(prepared);
         assets.push(...prepared.assets);
         setPath(record, field, prepared.content);
@@ -1406,7 +1919,7 @@ export function createCollectionKernel(
             execution,
             true,
           );
-          if (!execution) options.assets!.publishMaterializations(plan.content);
+          if (!execution) publishAssets(plan.content);
           return result;
         } catch (error) {
           if (!(error as { [staleAdoption]?: true })[staleAdoption]) {
@@ -1417,8 +1930,10 @@ export function createCollectionKernel(
       if (composed === undefined && adopting && !execution) {
         const pending: CoordinatedMutationResult<unknown>[] = [];
         let resolvedPlan: CollectionMutationPlan | undefined;
-        const result = await options.session.transaction(
-          async (transaction) => {
+        const result = await runCommand(
+          "collections.reconcile",
+          { eventType, subjectId, operation },
+          async (_input, { transaction }) => {
             const replacements = await options.assets!
               .reconcileMaterializations(transaction, plan.content);
             const resolved = reconcileCollectionContent(
@@ -1438,10 +1953,10 @@ export function createCollectionKernel(
             );
           },
         );
-        options.assets.publishMaterializations(resolvedPlan!.content);
+        publishAssets(resolvedPlan!.content);
         const reports = [];
         for (const item of pending) {
-          reports.push(await options.coordinator.flushCommitted(item));
+          reports.push(await publication(item));
         }
         return ({
           ...result,
@@ -1457,6 +1972,8 @@ export function createCollectionKernel(
         operation,
         subjectId,
       );
+      const alarmAdmission = scheduledAlarmAdmission(scoped);
+      const alarmEventId = alarmAdmission ? createId() : undefined;
       const identity = scoped.identity;
       const dedup = identity?.deduplicationId?.trim();
       const bodyId = dedup
@@ -1484,9 +2001,13 @@ export function createCollectionKernel(
           ...scoped.metadata,
         }),
         causationId: identity?.causationId,
-        correlationId: identity?.correlationId,
+        correlationId: alarmAdmission ? undefined : identity?.correlationId,
         deduplicationId: identity?.deduplicationId,
-        settlementScopeId: identity?.settlementScopeId,
+        // Owner alarm occurrences remain their own roots, rather than inheriting
+        // the Collection planning transaction's synthetic settlement scope.
+        settlementScopeId: alarmAdmission
+          ? undefined
+          : identity?.settlementScopeId,
         actionScopeId: identity?.actionScopeId,
         deliveryLease: identity?.deliveryLease,
       };
@@ -1506,13 +2027,18 @@ export function createCollectionKernel(
       const inStatement = composed && adopts;
       const result = await options.coordinator.commitMutation({
         draft,
+        ...(alarmEventId ? { eventId: alarmEventId } : {}),
+        ...(alarmAdmission
+          ? { ingress: scheduledIngressProof(alarmAdmission) }
+          : {}),
         ...(execution ? { transaction: execution.transaction } : {}),
         dispatch: execution ? false : true,
         ...(matchData === undefined ? {} : {
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
-        ...((adopts && !inStatement) || (!guard && scoped.condition)
+        ...((adopts && !inStatement) || (!guard && scoped.condition) ||
+            definition.alarm
           ? {
             mutate: async (context: EventMutationContext) => {
               if (!guard && scoped.condition) {
@@ -1524,7 +2050,6 @@ export function createCollectionKernel(
                     scoped.namespace,
                     name,
                     subjectId,
-                    true,
                   ),
                   plan.write.record,
                 );
@@ -1541,11 +2066,26 @@ export function createCollectionKernel(
                 plan.write.body,
                 guard,
               );
+              if (alarmAdmission) {
+                await recordScheduledAlarmIngress(context, {
+                  admission: alarmAdmission,
+                  event: { ...draft, id: alarmEventId! },
+                  body: plan.write.body,
+                  record: plan.write.record,
+                });
+              }
+              await syncCollectionAlarm(
+                context.transaction,
+                options.eventStore.databaseSchema,
+                definition,
+                plan.write.record,
+                operation === "delete",
+              );
               return plan.write.record;
             },
           }
           : {
-            statement: (param: (value: unknown) => string) => {
+            statement: (param, _tables, { commandTime }) => {
               const projection = composeCollectionProjection(
                 tables,
                 definition,
@@ -1559,9 +2099,11 @@ export function createCollectionKernel(
               const adoption = inStatement
                 ? options.assets!.composeAdoption(plan.content, param, {
                   nodes: false,
+                  commandTime,
                 })
                 : undefined;
               return {
+                invalidatesContent: adopts,
                 ctes: [...adoption?.ctes ?? [], ...projection.ctes],
                 gate: adoption
                   ? `(${adoption.gate}) AND (${projection.gate})`
@@ -1601,6 +2143,14 @@ export function createCollectionKernel(
           const existingBody = await readEventBody<
             CollectionEventBody<CollectionRecord>
           >(context, event.namespace, eventDataRef(event.payload));
+          if (alarmAdmission) {
+            await assertScheduledAlarmReplay(
+              context,
+              alarmAdmission,
+              event,
+              existingBody,
+            );
+          }
           if (matchData !== undefined) {
             const plannedIntent = (matchData as CollectionEventBody<
               CollectionRecord
@@ -1636,6 +2186,7 @@ export function createCollectionKernel(
       writeOptions: CollectionWriteOptions;
       plan: CollectionMutationPlan;
       matchData?: unknown;
+      authorization?: ReturnType<typeof captureCollectionPolicy>;
     }>;
 
     const replayOperation = async (
@@ -1653,7 +2204,7 @@ export function createCollectionKernel(
       );
       const deduplicationId = scoped.identity?.deduplicationId?.trim();
       if (!deduplicationId) return null;
-      const event = await options.eventStore.getEventByDeduplicationId(
+      const event = await replayEvent(
         scoped.namespace,
         deduplicationId,
       );
@@ -1667,7 +2218,7 @@ export function createCollectionKernel(
         );
       }
       const body = await readEventBody<CollectionEventBody<CollectionRecord>>(
-        { transaction: options.session, tables },
+        { transaction: sql(), tables },
         scoped.namespace,
         eventDataRef(event.payload),
       );
@@ -1705,18 +2256,39 @@ export function createCollectionKernel(
       }>,
     ) => {
       try {
-        return await commit(
-          planned.eventType,
-          planned.id,
-          planned.operation,
-          planned.writeOptions,
-          planned.plan,
-          planned.matchData,
-          execution,
-        );
+        const policy = mutationPolicy(planned);
+        const adopted = !execution && policy ? currentCommand() : undefined;
+        const joinedExecution = execution ??
+          (adopted
+            ? { transaction: adopted.transaction, pending: [] }
+            : undefined);
+        const call = mutationCalls.getStore();
+        if (call) call.committing = true;
+        const execute = () =>
+          commit(
+            planned.eventType,
+            planned.id,
+            planned.operation,
+            planned.writeOptions,
+            planned.plan,
+            planned.matchData,
+            joinedExecution,
+          );
+        return await (policy && !execution
+          ? withOwnerCommandAuthorization(
+            policy.guard,
+            () =>
+              adopted
+                ? createSchemaCommandRunner(
+                  adopted.transaction,
+                  options.eventStore.databaseSchema,
+                )("collections.commitAuthorized", {}, execute)
+                : execute(),
+          )
+          : execute());
       } finally {
         // Also when refused: a compare-and-set retry must read the row again.
-        readViews.invalidate(
+        invalidateReads(
           rowKey(planned.writeOptions.namespace.trim(), planned.id),
         );
       }
@@ -1755,29 +2327,12 @@ export function createCollectionKernel(
         planned.plan.write.record,
         `${name} ${planned.operation}`,
       );
-      const deadlines: number[] = [];
-      for (const materialization of planned.plan.content) {
-        for (const adoption of materialization.adoptions) {
-          if (adoption.kind !== "ready" || !adoption.protectionRequired) {
-            continue;
-          }
-          const protectedUntil = adoption.candidate.readyBody?.protectedUntil;
-          const deadline = protectedUntil ? Date.parse(protectedUntil) : NaN;
-          if (!Number.isFinite(deadline) || deadline <= Date.now()) {
-            throw new Error(
-              `Prepared external body for Asset '${adoption.asset.id}' has no valid future protection.`,
-            );
-          }
-          deadlines.push(deadline);
-        }
-      }
+      planned = { ...planned, authorization: mutationPolicy(planned, true) };
       scope.plans.push(
         {
           id: planned.id,
+          policy: planned.authorization,
           order: [...order] as const,
-          ...(deadlines.length
-            ? { protectionDeadline: Math.min(...deadlines) }
-            : {}),
           materializations: (replacements) =>
             reconcileCollectionContent(
               planned.plan,
@@ -1835,15 +2390,13 @@ export function createCollectionKernel(
       const key = recordKey(id);
       if (scope?.records.has(key)) return scope.records.get(key) ?? null;
       const record = await loadCollectionRecord(
-        options.session,
+        sql(),
         tables,
         namespace,
         name,
         id,
       );
-      const snapshot = record
-        ? (structuredClone(record)) as CollectionRecord
-        : null;
+      const snapshot = record;
       scope?.records.set(key, snapshot);
       return snapshot;
     };
@@ -2257,7 +2810,10 @@ export function createCollectionKernel(
         throw new Error(`Unknown ${name} command '${command}'.`);
       }
       const value = structuredClone(input);
-      const optionsSnapshot = structuredClone(writeOptions);
+      const optionsSnapshot = captureScheduledAlarmAdmission(
+        writeOptions,
+        structuredClone(writeOptions),
+      );
       if (
         commandDefinition.input && typeof commandDefinition.input === "object"
       ) {
@@ -2374,9 +2930,11 @@ export function createCollectionKernel(
       ns: string,
       recordId: string,
     ): Promise<CollectionRecord | null> => {
-      const memo = activeSnapshot() || activeScope()
-        ? undefined
-        : readViews.memo();
+      const memo =
+        options.policies?.has(name) || activeSnapshot() || activeScope() ||
+          Boolean(currentCommand())
+          ? undefined
+          : readViews.memo();
       if (!memo) return await loadBatched(executor(), ns, recordId);
       const key = rowKey(ns, recordId);
       const hit = memo.recall<CollectionRecord | null>(key);
@@ -2390,14 +2948,25 @@ export function createCollectionKernel(
     const read = (id: string, namespace: string) => {
       const ns = requireText(namespace, "Namespace");
       const recordId = requireText(id, `${name} id`);
-      return inSnapshot(
-        JSON.stringify(["get", name, ns, recordId]),
-        () => loadInHop(ns, recordId),
-      ) as Promise<TSelect | null>;
+      return readPolicy(name, ns, "get", { id: recordId }, () =>
+        inSnapshot(
+          JSON.stringify(["get", name, ns, recordId]),
+          () => loadInHop(ns, recordId),
+        ), recordId) as Promise<TSelect | null>;
     };
 
     const list = (namespace: string, query?: CollectionQuery) => {
+      query = query === undefined ? undefined : structuredClone(query);
       const ns = requireText(namespace, "Namespace");
+      for (const relationName of query?.include ?? []) {
+        const target = definition.relations?.[relationName]?.collection;
+        if (!target) {
+          throw new TypeError(
+            `Unknown relation '${relationName}' on '${name}'.`,
+          );
+        }
+        actualDefinition(target);
+      }
       let key: string | undefined;
       try {
         key = JSON.stringify(["list", name, ns, query ?? null], (_, value) => {
@@ -2410,25 +2979,50 @@ export function createCollectionKernel(
       } catch {
         key = undefined;
       }
-      const load = () =>
+      const load = (authorizedQuery = query) =>
         queryCollectionRecords(
           executor(),
           tables,
           definition,
           ns,
-          query,
+          authorizedQuery,
+          undefined,
+          (target, id) => {
+            actualDefinition(target);
+            return bound.get(target)!.get(id, ns);
+          },
         ) as Promise<readonly TSelect[]>;
-      return key === undefined ? load() : inSnapshot(key, load);
+      return readPolicy(
+        name,
+        ns,
+        "list",
+        query ?? {},
+        (authorizedArgs) =>
+          authorizedArgs
+            ? load(authorizedArgs as CollectionQuery)
+            : key === undefined
+            ? load()
+            : inSnapshot(key, load),
+      );
     };
 
-    const aggregate = (namespace: string, query: CollectionAggregateQuery) =>
-      aggregateCollectionRecords(
-        executor(),
-        tables,
-        definition,
-        requireText(namespace, "Namespace"),
+    const aggregate = (namespace: string, query: CollectionAggregateQuery) => {
+      query = structuredClone(query);
+      return readPolicy(
+        name,
+        namespace,
+        "aggregate",
         query,
+        (authorizedArgs) =>
+          aggregateCollectionRecords(
+            executor(),
+            tables,
+            definition,
+            requireText(namespace, "Namespace"),
+            (authorizedArgs ?? query) as CollectionAggregateQuery,
+          ),
       );
+    };
 
     const namedQueries = Object.fromEntries(
       Object.entries(definition.queries ?? {}).map(([queryName, spec]) => [
@@ -2439,66 +3033,72 @@ export function createCollectionKernel(
           scope: CollectionScope = { namespace },
           readOptions?: Pick<ScopedCollectionReadOptions, "signal">,
         ) => {
-          scope = { ...scope, namespace } as const;
-          const queryInput = asRecord(input);
-          if (spec.inputSchema) {
-            validateAgainstJsonSchema(
-              spec.inputSchema,
-              queryInput,
-              `${name}.${queryName} input`,
-            );
-          }
-          let output: readonly TSelect[];
-          if (spec.select) {
-            const target = (name: string) => {
-              const collection = operations.get(name);
-              if (!collection) {
-                throw new Error(`Collection '${name}' is not bound.`);
-              }
-              return collection;
-            };
-            const controls = (input?: ScopedCollectionReadOptions) => ({
-              ...input,
-              signal: readOptions?.signal && input?.signal
-                ? AbortSignal.any([readOptions.signal, input.signal])
-                : readOptions?.signal ?? input?.signal,
-            });
-            const read = {
-              get: (
-                name: string,
-                id: string,
-                options?: ScopedCollectionReadOptions,
-              ) => target(name).get(scope, { id }, controls(options)),
-              list: (
-                name: string,
-                query?: CollectionQuery,
-                options?: ScopedCollectionReadOptions,
-              ) => target(name).list(scope, query, controls(options)),
-              aggregate: (
-                name: string,
-                query: CollectionAggregateQuery,
-                options?: Pick<ScopedCollectionReadOptions, "signal">,
-              ) => target(name).aggregate(scope, query, controls(options)),
-            } as const;
-            output = await spec.select({
-              input: queryInput,
-              read,
-            }) as readonly TSelect[];
-          } else if (spec.query) {
-            output = await list(namespace, spec.query({ input: queryInput }));
-          } else {
-            output = await list(namespace, {
-              where: spec.filter?.({ input: queryInput }),
-            });
-          }
-          if (spec.outputSchema) {
-            validateAgainstJsonSchema(
-              spec.outputSchema,
-              output,
-              `${name}.${queryName} output`,
-            );
-          }
-          return output;
+          input = structuredClone(input);
+          return await readPolicy(name, namespace, "query", {
+            name: queryName,
+            input,
+          }, async () => {
+            scope = { ...scope, namespace } as const;
+            const queryInput = asRecord(input);
+            if (spec.inputSchema) {
+              validateAgainstJsonSchema(
+                spec.inputSchema,
+                queryInput,
+                `${name}.${queryName} input`,
+              );
+            }
+            let output: readonly TSelect[];
+            if (spec.select) {
+              const target = (name: string) => {
+                const collection = operations.get(name);
+                if (!collection) {
+                  throw new Error(`Collection '${name}' is not bound.`);
+                }
+                return collection;
+              };
+              const controls = (input?: ScopedCollectionReadOptions) => ({
+                ...input,
+                signal: readOptions?.signal && input?.signal
+                  ? AbortSignal.any([readOptions.signal, input.signal])
+                  : readOptions?.signal ?? input?.signal,
+              });
+              const read = {
+                get: (
+                  name: string,
+                  id: string,
+                  options?: ScopedCollectionReadOptions,
+                ) => target(name).get(scope, { id }, controls(options)),
+                list: (
+                  name: string,
+                  query?: CollectionQuery,
+                  options?: ScopedCollectionReadOptions,
+                ) => target(name).list(scope, query, controls(options)),
+                aggregate: (
+                  name: string,
+                  query: CollectionAggregateQuery,
+                  options?: Pick<ScopedCollectionReadOptions, "signal">,
+                ) => target(name).aggregate(scope, query, controls(options)),
+              } as const;
+              output = await spec.select({
+                input: queryInput,
+                read,
+              }) as readonly TSelect[];
+            } else if (spec.query) {
+              output = await list(namespace, spec.query({ input: queryInput }));
+            } else {
+              output = await list(namespace, {
+                where: spec.filter?.({ input: queryInput }),
+              });
+            }
+            if (spec.outputSchema) {
+              validateAgainstJsonSchema(
+                spec.outputSchema,
+                output,
+                `${name}.${queryName} output`,
+              );
+            }
+            return output;
+          });
         },
       ]),
     );
@@ -2509,121 +3109,211 @@ export function createCollectionKernel(
 
     const collection = ({
       definition,
-      create,
-      update,
-      delete: remove,
-      mutate,
+      create: (input: TInsert, options: CollectionWriteOptions) =>
+        policyWrite(
+          "create",
+          { input },
+          options.namespace,
+          (args) => create(args.input as TInsert, options),
+        ),
+      update: (
+        id: string,
+        patch: CollectionUpdatePatch<TSelect>,
+        options: CollectionWriteOptions,
+      ) =>
+        policyWrite(
+          "update",
+          { id, set: patch.set ?? {}, unset: patch.unset ?? [] },
+          options.namespace,
+          (args) =>
+            update(
+              id,
+              { set: args.set, unset: args.unset } as CollectionUpdatePatch<
+                TSelect
+              >,
+              options,
+            ),
+        ),
+      delete: (id: string, options: CollectionWriteOptions) =>
+        policyWrite(
+          "delete",
+          { id },
+          options.namespace,
+          () => remove(id, options),
+        ),
+      mutate: (
+        id: string,
+        command: string,
+        input: unknown,
+        options: CollectionWriteOptions,
+      ) =>
+        policyWrite(
+          "command",
+          { id, name: command, ...(input !== undefined ? { input } : {}) },
+          options.namespace,
+          (args) => mutate(id, command, args.input, options),
+        ),
       get: read,
       list,
       aggregate,
       query,
-      search: (namespace: string, queryInput: CollectionQuery) =>
-        list(namespace, { ...queryInput, text: queryInput.text ?? "" }),
+      search: (namespace: string, queryInput: CollectionQuery) => {
+        queryInput = structuredClone(queryInput);
+        return readPolicy(
+          name,
+          namespace,
+          "search",
+          queryInput,
+          () => list(namespace, { ...queryInput, text: queryInput.text ?? "" }),
+        );
+      },
       ...namedQueries,
     } as const) as BoundCollection<TSelect, TInsert>;
-    transactionBindings.set(
-      name,
-      {
-        definition,
-        async create(input, writeOptions, order) {
-          const id = requireText(String(input.id), `${name} id`);
-          const intent: CollectionMutationIntent = {
-            operation: "create",
-            input: await canonicalIntent(input),
-          } as const;
-          return stageOperation(
-            await replayOperation(
-              `${name}.created`,
-              id,
-              "create",
-              writeOptions,
-              intent,
-            ) ?? await planCreate(input as TInsert, writeOptions, intent),
-            order,
-          );
-        },
-        async update(id, patch, writeOptions, order) {
-          const intent: CollectionMutationIntent = {
-            operation: "update",
+    const transactional = {
+      definition,
+      async create(input, writeOptions, order) {
+        const id = requireText(String(input.id), `${name} id`);
+        const intent: CollectionMutationIntent = {
+          operation: "create",
+          input: await canonicalIntent(input),
+        } as const;
+        return stageOperation(
+          await replayOperation(
+            `${name}.created`,
             id,
-            set: await canonicalIntent(patch.set ?? {}),
-            unset: [...(patch.unset ?? [])] as const,
-          } as const;
-          return stageOperation(
-            await replayOperation(
-              `${name}.updated`,
-              id,
-              "update",
-              writeOptions,
-              intent,
-            ) ?? await planUpdate(
-              id,
-              patch as CollectionUpdatePatch<TSelect>,
-              writeOptions,
-              intent,
-              true,
+            "create",
+            writeOptions,
+            intent,
+          ) ?? await planCreate(input as TInsert, writeOptions, intent),
+          order,
+        );
+      },
+      async update(id, patch, writeOptions, order) {
+        const intent: CollectionMutationIntent = {
+          operation: "update",
+          id,
+          set: await canonicalIntent(patch.set ?? {}),
+          unset: [...(patch.unset ?? [])] as const,
+        } as const;
+        return stageOperation(
+          await replayOperation(
+            `${name}.updated`,
+            id,
+            "update",
+            writeOptions,
+            intent,
+          ) ?? await planUpdate(
+            id,
+            patch as CollectionUpdatePatch<TSelect>,
+            writeOptions,
+            intent,
+            true,
+          ),
+          order,
+        );
+      },
+      async delete(id, writeOptions, order) {
+        const intent: CollectionMutationIntent = {
+          operation: "delete",
+          id,
+        } as const;
+        return stageOperation(
+          await replayOperation(
+            `${name}.deleted`,
+            id,
+            "delete",
+            writeOptions,
+            intent,
+          ) ?? await planRemove(id, writeOptions, intent),
+          order,
+        );
+      },
+      async mutate(id, command, input, writeOptions, order) {
+        const commandDefinition = definition.commands?.[command];
+        if (!commandDefinition) {
+          throw new Error(`Unknown ${name} command '${command}'.`);
+        }
+        if (
+          commandDefinition.input &&
+          typeof commandDefinition.input === "object"
+        ) {
+          validateCollectionRecord(
+            commandDefinition.input,
+            asRecord(input),
+            `${name}.${command} input`,
+          );
+        }
+        const intent: CollectionMutationIntent = {
+          operation: "command",
+          id,
+          name: command,
+          input: await canonicalIntent(input),
+        } as const;
+        const eventType = commandDefinition.event ?? `${name}.updated`;
+        return stageOperation(
+          await replayOperation(
+            eventType,
+            id,
+            `mutate:${command}`,
+            writeOptions,
+            intent,
+          ) ?? await planMutate(
+            id,
+            command,
+            input,
+            writeOptions,
+            intent,
+            true,
+          ),
+          order,
+        );
+      },
+    } satisfies TransactionBinding;
+    transactionBindings.set(name, {
+      definition,
+      create: (input, options, order) =>
+        policyWrite(
+          "create",
+          { input },
+          options.namespace,
+          (args) =>
+            transactional.create(
+              args.input as Record<string, unknown>,
+              options,
+              order,
             ),
-            order,
-          );
-        },
-        async delete(id, writeOptions, order) {
-          const intent: CollectionMutationIntent = {
-            operation: "delete",
-            id,
-          } as const;
-          return stageOperation(
-            await replayOperation(
-              `${name}.deleted`,
+        ),
+      update: (id, patch, options, order) =>
+        policyWrite(
+          "update",
+          { id, set: patch.set ?? {}, unset: patch.unset ?? [] },
+          options.namespace,
+          (args) =>
+            transactional.update(
               id,
-              "delete",
-              writeOptions,
-              intent,
-            ) ?? await planRemove(id, writeOptions, intent),
-            order,
-          );
-        },
-        async mutate(id, command, input, writeOptions, order) {
-          const commandDefinition = definition.commands?.[command];
-          if (!commandDefinition) {
-            throw new Error(`Unknown ${name} command '${command}'.`);
-          }
-          if (
-            commandDefinition.input &&
-            typeof commandDefinition.input === "object"
-          ) {
-            validateCollectionRecord(
-              commandDefinition.input,
-              asRecord(input),
-              `${name}.${command} input`,
-            );
-          }
-          const intent: CollectionMutationIntent = {
-            operation: "command",
-            id,
-            name: command,
-            input: await canonicalIntent(input),
-          } as const;
-          const eventType = commandDefinition.event ?? `${name}.updated`;
-          return stageOperation(
-            await replayOperation(
-              eventType,
-              id,
-              `mutate:${command}`,
-              writeOptions,
-              intent,
-            ) ?? await planMutate(
-              id,
-              command,
-              input,
-              writeOptions,
-              intent,
-              true,
+              { set: args.set, unset: args.unset } as CollectionUpdatePatch<
+                CollectionRecord
+              >,
+              options,
+              order,
             ),
-            order,
-          );
-        },
-      } as const,
-    );
+        ),
+      delete: (id, options, order) =>
+        policyWrite(
+          "delete",
+          { id },
+          options.namespace,
+          () => transactional.delete(id, options, order),
+        ),
+      mutate: (id, command, input, options, order) =>
+        policyWrite(
+          "command",
+          { id, name: command, ...(input !== undefined ? { input } : {}) },
+          options.namespace,
+          (args) =>
+            transactional.mutate(id, command, args.input, options, order),
+        ),
+    });
     bound.set(definition.name, collection as BoundCollection);
     operations.set(
       name,
@@ -2631,16 +3321,56 @@ export function createCollectionKernel(
         activeTransaction: () => Boolean(activeScope()),
         activeSnapshot: () => Boolean(activeSnapshot()),
         contentResolver: options.contentResolver,
-        relations: (namespace, query) =>
-          queryCollectionRelations(executor(), tables, namespace, name, query),
+        relations: (namespace, query) => {
+          query = structuredClone(query);
+          return readPolicy(
+            name,
+            namespace,
+            "relations.list",
+            query ?? {},
+            async () => {
+              const result = await queryCollectionRelations(
+                executor(),
+                tables,
+                namespace,
+                name,
+                query,
+              );
+              for (const relation of result) {
+                for (const endpoint of [relation.source, relation.target]) {
+                  actualDefinition(endpoint.type);
+                  await readPolicy(
+                    endpoint.type,
+                    namespace,
+                    "get",
+                    { id: endpoint.id },
+                    () =>
+                      loadCollectionRecord(
+                        executor(),
+                        tables,
+                        namespace,
+                        endpoint.type,
+                        endpoint.id,
+                      ),
+                    endpoint.id,
+                  );
+                }
+              }
+              return result;
+            },
+            query?.id,
+          );
+        },
       }),
     );
     return collection;
   };
 
-  const transaction = async <T>(
+  const transact = async <T>(
     input: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>> => {
+    const receipt = collectionCommandReceipt();
+    const commandReceipt = receipt ? { ...receipt } : undefined;
     if (activeSnapshot()) {
       throw new Error(
         "Collection transactions are not allowed inside a read snapshot.",
@@ -2762,7 +3492,7 @@ export function createCollectionKernel(
             id,
           ]),
         );
-      return ({
+      return captureScheduledAlarmAdmission(inputOptions ?? {}, {
         namespace,
         ...structuredClone(rest),
         identity: {
@@ -2803,15 +3533,34 @@ export function createCollectionKernel(
         key: string;
         operation: () => Promise<T>;
       }>,
+      protectedGraph?: () => boolean,
     ): Promise<T> => {
+      const authority = protectedGraph
+        ? captureCollectionInvocation()
+        : undefined;
+      const protect = async (operation: () => Promise<T>): Promise<T> => {
+        try {
+          return await operation();
+        } catch (error) {
+          if (protectedGraph?.()) {
+            authority?.check();
+            collectionPolicyRefused(false);
+          }
+          throw error;
+        }
+      };
       try {
         const mutation = register();
-        return beginPlanning(scope, mutation.key, mutation.operation);
+        return beginPlanning(
+          scope,
+          mutation.key,
+          () => protect(mutation.operation),
+        );
       } catch (error) {
         return beginPlanning(
           scope,
           JSON.stringify(["invalid-mutation", order]),
-          () => Promise.reject(error),
+          () => protect(() => Promise.reject(error)),
         );
       }
     };
@@ -2835,7 +3584,10 @@ export function createCollectionKernel(
               return registerMutation(order, () => {
                 const commandSnapshot = structuredClone(commandInput);
                 const optionsSnapshot = commandOptions
-                  ? (structuredClone(commandOptions))
+                  ? captureScheduledAlarmAdmission(
+                    commandOptions,
+                    structuredClone(commandOptions),
+                  )
                   : undefined;
                 const id = requireText(commandSnapshot.id, `${name} id`);
                 const { id: _id, ...value } = commandSnapshot;
@@ -3013,14 +3765,74 @@ export function createCollectionKernel(
       }),
     )) as CollectionTransactionCollections;
 
+    const graphPolicy = (
+      method: "relations.upsert" | "vectors.upsert",
+      args: unknown,
+      endpoints: readonly Readonly<{ type: string; id: string }>[],
+      result: unknown,
+    ) => {
+      const checks = endpoints.flatMap((endpoint) => {
+        actualDefinition(endpoint.type);
+        const registration = options.policies?.get(endpoint.type);
+        return registration
+          ? [
+            captureCollectionPolicy({
+              databaseSchema: options.eventStore.databaseSchema,
+              registration,
+              namespace,
+              method,
+              args,
+              result,
+              current: (tx) =>
+                loadCollectionRecord(
+                  tx,
+                  tables,
+                  namespace,
+                  endpoint.type,
+                  endpoint.id,
+                ),
+            }),
+          ]
+          : [];
+      });
+      if (!checks.length) return undefined;
+      const authorize = async (
+        ...args: Parameters<typeof checks[number]["authorize"]>
+      ) => {
+        for (const check of checks) await check.authorize(...args);
+      };
+      const guard: OwnerCommandAuthorization = async (command, purpose) => {
+        for (const check of checks) await check.guard(command, purpose);
+      };
+      return {
+        check: () => checks.forEach((check) => check.check()),
+        args: () => args,
+        authorize,
+        forCommand(command: CommandContext) {
+          const policies = checks.map((check) => check.forCommand(command));
+          return {
+            check: () => policies.forEach((policy) => policy.check()),
+            async authorize(...args: Parameters<typeof authorize>) {
+              for (const policy of policies) await policy.authorize(...args);
+            },
+          };
+        },
+        guard,
+      };
+    };
     const relations: CollectionTransactionRelations = {
       upsert(relationInput, relationOptions) {
         const order = allocateOrder();
+        let protectedGraph = false;
         return registerMutation(order, () => {
           const relationSnapshot = canonicalizeContentRefs(
             structuredClone(relationInput),
           ) as GraphRelationUpsertInput;
           assertLosslessJson(relationSnapshot, "Relation mutation input");
+          actualDefinition(relationSnapshot.source.type);
+          actualDefinition(relationSnapshot.target.type);
+          protectedGraph = [relationSnapshot.source, relationSnapshot.target]
+            .some((endpoint) => options.policies?.has(endpoint.type));
           const optionsSnapshot = relationOptions
             ? (structuredClone(relationOptions))
             : undefined;
@@ -3074,7 +3886,7 @@ export function createCollectionKernel(
               const identity = writeOptions.identity!;
               const deduplicationId = identity.deduplicationId!;
               const bodyId = `event-body:${namespace}:${deduplicationId}`;
-              const replay = await options.eventStore.getEventByDeduplicationId(
+              const replay = await replayEvent(
                 namespace,
                 deduplicationId,
               );
@@ -3091,7 +3903,7 @@ export function createCollectionKernel(
                   );
                 }
                 body = await readEventBody<GraphRelationEventBody>(
-                  { transaction: options.session, tables },
+                  { transaction: sql(), tables },
                   namespace,
                   eventDataRef(replay.payload),
                 );
@@ -3124,7 +3936,7 @@ export function createCollectionKernel(
                   : endpointWasInvalidated
                   ? null
                   : await loadGraphRelation(
-                    options.session,
+                    sql(),
                     tables,
                     namespace,
                     relationId,
@@ -3151,6 +3963,10 @@ export function createCollectionKernel(
               scope.plans.push(
                 {
                   id: relationId,
+                  policy: graphPolicy("relations.upsert", relationSnapshot, [
+                    normalized.source,
+                    normalized.target,
+                  ], { id: relationId }),
                   order: [...order] as const,
                   async commit(transaction, pending) {
                     const result = await options.coordinator.commitMutation({
@@ -3187,7 +4003,6 @@ export function createCollectionKernel(
                             context.tables,
                             namespace,
                             relationId,
-                            true,
                           );
                           if (!sameValue(current, expected)) {
                             throw new Error(
@@ -3224,17 +4039,20 @@ export function createCollectionKernel(
               return ({ id: relationId } as const);
             },
           };
-        });
+        }, () => protectedGraph);
       },
     } as const;
 
     const vectors: VectorTransaction = {
       upsert(input) {
         const order = allocateOrder();
+        let protectedGraph = false;
         return registerMutation(order, () => {
           const body = canonicalizeContentRefs(
             structuredClone(input),
           ) as VectorWrite;
+          actualDefinition(body.ownerType);
+          protectedGraph = options.policies?.has(body.ownerType) ?? false;
           validateVector(body.profile, body.values);
           const target = JSON.stringify([
             "vector",
@@ -3270,6 +4088,10 @@ export function createCollectionKernel(
               scope.plans.push({
                 id,
                 order,
+                policy: graphPolicy("vectors.upsert", body, [{
+                  type: body.ownerType,
+                  id: body.ownerId,
+                }], null),
                 async commit(transaction, pending) {
                   const result = await options.coordinator.commitMutation({
                     draft: {
@@ -3314,7 +4136,7 @@ export function createCollectionKernel(
               });
             },
           };
-        });
+        }, () => protectedGraph);
       },
     };
     const run = () => execute({ collections, relations, vectors });
@@ -3335,9 +4157,14 @@ export function createCollectionKernel(
       }
     };
     for (const plan of orderedPlans) assertProtection(plan);
-    // A lone collection write commits atomically on its own.
+    // Only an independent lone write may publish through its own commit path.
     const [only] = orderedPlans;
-    if (orderedPlans.length === 1 && only.commitAlone) {
+
+    if (
+      !commandReceipt && !currentCommand() &&
+      orderedPlans.length === 1 && only.commitAlone &&
+      !only.policy
+    ) {
       const write = await only.commitAlone();
       return ({
         value,
@@ -3349,27 +4176,75 @@ export function createCollectionKernel(
         dispatch: write.dispatch,
       } as const);
     }
-    try {
-      await options.session.transaction(async (transaction) => {
-        replacements = options.assets
-          ? await options.assets.reconcileMaterializations(transaction, [
-            ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
-          ])
-          : new Map<string, AssetManifestEntry>();
-        for (const plan of orderedPlans) {
-          assertProtection(plan);
-          const write = await plan.commit(transaction, pending, replacements);
-          if (write) writes.push(write);
+    const policies = orderedPlans.flatMap((plan) =>
+      plan.policy ? [plan.policy] : []
+    );
+    let executed = false;
+    const admitted = new WeakMap<
+      SqlExecutor,
+      Array<ReturnType<typeof policies[number]["forCommand"]>>
+    >();
+    const batchGuard: OwnerCommandAuthorization = async (command, purpose) => {
+      if (purpose === "mutation") {
+        admitted.set(
+          command.transaction,
+          policies.map((policy) => policy.forCommand(command)),
+        );
+        return;
+      }
+      const current = admitted.get(command.transaction);
+      if (!current) {
+        throw new Error("Collection command policy was not admitted.");
+      }
+      for (const policy of current) policy.check();
+      if (purpose === "result") {
+        // A retained receipt did not run the ordered mutation loop. Reauthorize
+        // the original operations against current committed state before replay.
+        if (!executed) {
+          for (const policy of current) {
+            await policy.authorize(command, "mutation");
+          }
         }
-      });
+        for (const policy of current) {
+          await policy.authorize(command, "result");
+        }
+      }
+    };
+    try {
+      const execute = () =>
+        runCommand("collections.commit", {
+          namespace,
+          operationKey,
+          plans: orderedPlans.map((plan) => plan.id),
+        }, async (_input, command) => {
+          executed = true;
+          const { transaction } = command;
+          replacements = options.assets
+            ? await options.assets.reconcileMaterializations(transaction, [
+              ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
+            ])
+            : new Map<string, AssetManifestEntry>();
+          for (const plan of orderedPlans) {
+            assertProtection(plan);
+            // Recheck each actual predecessor state, not only the batch's initial state.
+            await plan.policy?.authorize(command, "mutation");
+            const write = await plan.commit(transaction, pending, replacements);
+            if (write) writes.push(write);
+          }
+          commandReceipt?.signal.throwIfAborted();
+          return null;
+        }, commandReceipt);
+      await (policies.length
+        ? withOwnerCommandAuthorization(batchGuard, execute)
+        : execute());
     } catch (error) {
       throw error;
     }
 
-    // The writes became visible together, after their statements returned.
-    readViews.invalidateAll();
+    // Joined writes become visible only when the borrowed owner command commits.
+    invalidateReads();
     if (options.assets) {
-      options.assets.publishMaterializations(
+      publishAssets(
         orderedPlans.flatMap((plan) =>
           plan.materializations?.(replacements) ?? []
         ),
@@ -3378,7 +4253,23 @@ export function createCollectionKernel(
 
     const reports: EventDispatchReport[] = [];
     for (const committed of pending) {
-      reports.push(await options.coordinator.flushCommitted(committed));
+      reports.push(await publication(committed));
+    }
+    if (policies.length) {
+      try {
+        await runCommand(
+          "collections.disclose",
+          {},
+          async (_input, command) => {
+            for (const policy of policies) {
+              await policy.authorize(command, "result");
+            }
+          },
+        );
+      } catch (error) {
+        if (currentCommand()) throw error;
+        collectionCommittedResultRefused();
+      }
     }
     return ({
       value,
@@ -3393,6 +4284,24 @@ export function createCollectionKernel(
         failures: reports.flatMap((item) => [...item.failures]),
       } as const,
     } as const);
+  };
+
+  const transaction = async <T>(
+    input: CollectionTransactionOptions<T>,
+    command?: CommandContext,
+  ): Promise<CollectionTransactionResult<T>> => {
+    if (!command) return await transact(input);
+    // The executor belongs to this owner; afterCommit remains its outer gate.
+    schemaCommandContext(
+      command.transaction,
+      options.eventStore.databaseSchema,
+    );
+    const selected = { context: command, active: true };
+    try {
+      return await commands.run(selected, () => transact(input));
+    } finally {
+      selected.active = false;
+    }
   };
 
   const withScope = (scope: CollectionScope): ScopedCollections => {
@@ -3413,16 +4322,23 @@ export function createCollectionKernel(
     if (activeSnapshot()) {
       throw new Error("Nested read snapshots are not supported.");
     }
-    if (!options.session.readSnapshot) {
+    if (!options.session.withReadSnapshot) {
       throw new Error(
         "The configured SQL session does not support repeatable read snapshots.",
       );
     }
-    return await options.session.readSnapshot(async (executor) => {
+    const cleanup = Promise.withResolvers<
+      import("../events/session.ts").SqlSnapshotCleanup
+    >();
+    const select = async (
+      control: import("./snapshot-control.ts").SnapshotControl,
+    ): Promise<T> => {
+      const executor = control.snapshot;
       const snapshot: SnapshotScope = {
         executor,
         state: "open",
         reads: new Map(),
+        control,
       };
       return await snapshots.run(snapshot, async () => {
         const closed = () =>
@@ -3481,23 +4397,74 @@ export function createCollectionKernel(
           ]),
         )) as unknown as SnapshotCollections;
         try {
-          return await execute({ collections } as const);
+          return await execute(
+            withSnapshotControl(
+              { collections } as const,
+              control,
+            ),
+          );
         } finally {
           snapshot.state = "closed";
         }
       });
-    });
+    };
+    let exclusive = false;
+    const value = await options.session.withReadSnapshot(async (session) => {
+      if (session.kind === "exclusive" && options.policies?.size) {
+        exclusive = true;
+        return undefined;
+      }
+      return await select({ ...session, cleanup: cleanup.promise });
+    }, { onCleanup: cleanup.resolve });
+    if (!exclusive) return value as T;
+    // An exclusive backend cannot open a second owner command while its
+    // snapshot holds the connection. The acquired owner command itself provides
+    // the consistent read scope and evaluates policy in that same transaction.
+    const released = Promise.withResolvers<
+      import("../events/session.ts").SqlSnapshotCleanup
+    >();
+    try {
+      return await runCommand(
+        "collections.snapshot",
+        {},
+        async (_, command) => {
+          const selected = { context: command, active: true };
+          try {
+            return await commands.run(selected, () =>
+              select({
+                kind: "exclusive",
+                snapshot: command.transaction,
+                cleanup: released.promise,
+              }));
+          } finally {
+            selected.active = false;
+          }
+        },
+      );
+    } finally {
+      released.resolve("confirmed");
+    }
   };
 
   const runtime: CollectionKernel = {
     vectors: (namespace: string) => ({
-      search: (input) =>
-        searchVectors(
-          options.session,
-          options.eventStore.databaseSchema,
+      search: (input) => {
+        input = structuredClone(input);
+        actualDefinition(input.ownerType);
+        return readPolicy(
+          input.ownerType,
           namespace,
+          "vectors.search",
           input,
-        ),
+          (authorizedArgs) =>
+            searchVectors(
+              executor(),
+              options.eventStore.databaseSchema,
+              namespace,
+              (authorizedArgs ?? input) as typeof input,
+            ),
+        );
+      },
     }),
     bind,
     get: <
@@ -3544,7 +4511,7 @@ export function createCollectionRuntime(
   options: CreateCollectionRuntimeOptions,
 ): CollectionRuntime {
   const kernel = createCollectionKernel(options);
-  return ({
+  const runtime = ({
     bind(definition: CollectionDefinition) {
       kernel.bind(definition);
       return kernel.operations(definition.name)!;
@@ -3555,4 +4522,5 @@ export function createCollectionRuntime(
     readSnapshot: kernel.readSnapshot,
     transaction: kernel.transaction,
   } as const) as CollectionRuntime;
+  return runtime;
 }

@@ -1,4 +1,42 @@
-import { advanceDeferredActions } from "../actions/deferred-work.ts";
+import { authorizeOperation } from "../authorization/operation.ts";
+import { withOwnerCommandAuthorization } from "./command-authorization.ts";
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { captureCollectionInvocation } from "../authorization/invocation.ts";
+import { sameActionValue } from "../actions/value.ts";
+import { constrainCollection } from "../authorization/collection-constraints.ts";
+import { validateCollectionInput } from "../collections/validate.ts";
+import { captureHostCommandJson } from "../application/host-command-json.ts";
+import { createAuthorizationOwner } from "../authorization/owner.ts";
+import {
+  authorizationRefused,
+  collectionAuthorizations,
+  createOwnerEvaluator,
+} from "../authorization/evaluator.ts";
+import { prepareRemoteAdmission } from "../execution/remote-admission.ts";
+import { admitInlineAction } from "../application/ingress/inline-action.ts";
+import { completeHostCollection } from "../application/ingress/inline-collection.ts";
+import { createAuthorizedActions } from "../actions/authorized-capture.ts";
+import {
+  assertOwnerIngressReplay,
+  hostIngressProof,
+  ownerIngressEvidence,
+} from "../application/ingress/authority.ts";
+import { readLogicalHead } from "../content/catalog.ts";
+import { registerDeliveryAlarms } from "../execution/alarms.ts";
+import { registerCollectionAlarms } from "../collections/alarms.ts";
+import { completeOwnerDeadline, invalidateOwnerAlarm } from "./alarms.ts";
+import {
+  attachOwnerPush,
+  type OwnerPushSubscription,
+  watchOwnerPush,
+} from "../events/push.ts";
+import {
+  activateDatabaseOwner,
+  type CommandContext,
+  createSchemaCommandRunner,
+  type DatabaseOwner,
+} from "./commands.ts";
+import { scheduleResumptions } from "../actions/continuation-work.ts";
 import {
   cancelScopeActions,
   recoverDeliveryActions,
@@ -12,7 +50,6 @@ import {
   createDatabaseBodyStore,
   type DatabaseAssetRepository,
   maintainProgressiveBodies,
-  readBodyBytes,
   type ReadBodyRangeInput,
 } from "../content/index.ts";
 import { collectionAssetAdopterFor } from "../content/database-repository.ts";
@@ -21,7 +58,10 @@ import {
   createContentStreamRuntime,
   DEFAULT_OPERATION_REPLAY_RETENTION_MS,
 } from "../streams/index.ts";
-import type { OperationCatalog } from "../streams/catalog.ts";
+import {
+  createOperationCatalogTables,
+  type OperationCatalog,
+} from "../streams/catalog.ts";
 import {
   isRegisteredActionLifecycleEventType,
   isReservedActionLifecycleDeduplicationId,
@@ -49,6 +89,7 @@ import {
   createEventStore,
   type EventCoordinator,
   type EventStore,
+  matchesCopilotzEvent,
   waitForCopilotzEvent,
 } from "../events/index.ts";
 import { eventDataRef, readEventBody } from "../events/body-store.ts";
@@ -86,6 +127,12 @@ export type DatabaseScopeCapabilities = Readonly<{
 }>;
 
 export type DatabaseScopeRuntime = Readonly<{
+  owner: DatabaseOwner;
+  activate(): Promise<void>;
+  closePush(): void;
+  publishActivation(): Promise<void>;
+  closeAlarms(): void;
+  deferPublication(publish: () => Promise<void>): () => Promise<void>;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
   coordinator: EventCoordinator;
@@ -96,7 +143,7 @@ export type DatabaseScopeRuntime = Readonly<{
   onScopeCancellation: NonNullable<
     Parameters<typeof createEventStore>[0]["onScopeCancellation"]
   >;
-  advanceDeferred(
+  resumeSettled(
     input?: Readonly<
       { namespace?: string; operationId?: string; limit?: number }
     >,
@@ -107,6 +154,7 @@ export type DatabaseScopeRuntime = Readonly<{
 }>;
 
 export type CreateDatabaseScopeOptions = Readonly<{
+  owner: DatabaseOwner;
   databaseSchema: string;
   engine: CreateCopilotzEngineOptions;
   registry: PluginRegistry;
@@ -146,8 +194,6 @@ export function createDatabaseScope(
     maxAttempts: engine.maxAttempts,
     retryBaseMs: engine.retryBaseMs,
     retryCapMs: engine.retryCapMs,
-    lockSettlementScope: (transaction, scopeId) =>
-      options.operationCatalog.lockScope(transaction, scopeId),
     onScopeCancellation: (transaction, input) =>
       onScopeCancellation(transaction, input),
     settleActionOwners: (transaction, delivery) =>
@@ -168,6 +214,7 @@ export function createDatabaseScope(
     store,
     registry: options.registry,
     executor: options.executor,
+    deferPublication: (publish) => deferPublication(publish)(),
     async publish(event, context) {
       const dispatched = await options.publishLive(
         event,
@@ -178,6 +225,12 @@ export function createDatabaseScope(
     },
     onDispatchFailure: engine.onDispatchFailure,
   });
+  const activationPublications: Array<() => Promise<void>> = [];
+  const deferPublication = (publish: () => Promise<void>) => async () => {
+    if (options.owner.state === "acquired") {
+      activationPublications.push(publish);
+    } else await publish();
+  };
   const onScopeCancellation: DatabaseScopeRuntime["onScopeCancellation"] = (
     transaction,
     input,
@@ -198,7 +251,7 @@ export function createDatabaseScope(
     delivery,
   ) => settleDelivery(transaction, delivery);
   const settleDelivery: DatabaseScopeRuntime["settleActionOwners"] = async (
-    transaction,
+    transaction: CommandContext["transaction"],
     delivery,
   ) => {
     const recovered = await recoverDeliveryActions(
@@ -212,25 +265,25 @@ export function createDatabaseScope(
       transaction,
       delivery,
     );
-    const advanced = await advanceDeferredActions(
+    const advanced = await scheduleResumptions(
       { store, coordinator, catalog: options.operationCatalog },
       { operationId: delivery.settlementScopeId },
       transaction,
     );
-    return async () => {
+    return deferPublication(async () => {
       await recovered();
       await advanced();
-    };
+    });
   };
-  const advanceDeferred: DatabaseScopeRuntime["advanceDeferred"] = async (
+  const resumeSettled: DatabaseScopeRuntime["resumeSettled"] = async (
     input = {},
   ) => {
-    const flush = await advanceDeferredActions({
+    const flush = await scheduleResumptions({
       store,
       coordinator,
       catalog: options.operationCatalog,
     }, input);
-    await flush();
+    await deferPublication(flush)();
   };
   const assets = createDatabaseAssetRepository({
     coordinator,
@@ -256,6 +309,7 @@ export function createDatabaseScope(
       session: engine.session,
       schema: databaseSchema,
     });
+  assets.registerStore(streamBodyStore);
   const protectedValues = engine.secretAdapter
     ? createProtectedValueRuntime({
       databaseSchema,
@@ -270,6 +324,11 @@ export function createDatabaseScope(
     databaseSchema,
   });
   const collections = createCollectionRuntime({
+    policies: collectionAuthorizations(
+      engine.authorization,
+      options.registry.collections,
+      databaseSchema,
+    ),
     coordinator,
     session: engine.session,
     eventStore: store,
@@ -293,36 +352,26 @@ export function createDatabaseScope(
     const event = await store.getEvent(delivery.eventId);
     return event?.namespace === namespace ? delivery : null;
   };
-  const events: CopilotzEngineDatabaseScope["events"] = {
-    append(draft, appendOptions) {
+  const appendProtected:
+    CopilotzEngineDatabaseScope["events"]["appendProtected"] = async (
+      draft,
+      schema,
+      ownerId,
+      ingress,
+      completion,
+      inlineAction,
+    ) => {
       if (
-        isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
-      ) {
-        throw new TypeError(
-          `Event deduplication identity '${
-            draft.deduplicationId!.trim()
-          }' is reserved for the Action lifecycle.`,
-        );
-      }
-      if (
+        isReservedActionLifecycleDeduplicationId(draft.deduplicationId) ||
         isRegisteredActionLifecycleEventType(
           draft.type,
           options.registry.actions,
         )
       ) {
         throw new TypeError(
-          `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
+          "Protected Event ingress cannot publish runtime-owned Action events.",
         );
       }
-      return coordinator.append({
-        ...draft,
-        payload: canonicalizeContentRefs(draft.payload),
-        ...(draft.delta === undefined
-          ? {}
-          : { delta: canonicalizeContentRefs(draft.delta) }),
-      }, appendOptions);
-    },
-    async appendProtected(draft, schema, ownerId) {
       const deduplicationId = draft.deduplicationId?.trim();
       if (!deduplicationId) {
         throw new TypeError(
@@ -345,36 +394,318 @@ export function createDatabaseScope(
           mediaType: "application/json" as const,
         } as const,
       } as const;
-      return await coordinator.commitMutation({
-        draft: { ...draft, payload: persistedPayload },
-        matchData: prepared.publicData,
-        body: { id: bodyId, json: prepared.body },
-        ...(prepared.prepared.length > 0
-          ? {
-            mutate: async (context) => {
-              for (const value of prepared.prepared) {
-                await protectedValues!.adopt(context, draft.namespace, value);
+      const eventId = crypto.randomUUID();
+      const remoteClaim = inlineAction && engine.execution?.dispatcher
+        ? prepareRemoteAdmission(
+          engine.execution.dispatcher,
+          engine.execution.workload ?? "copilotz.delivery.v1",
+          engine.execution.target?.workerId,
+        )
+        : undefined;
+      const commit = (
+        transaction?: import("../events/session.ts").SqlExecutor,
+      ) =>
+        createSchemaCommandRunner(
+          transaction ?? store.session,
+          databaseSchema,
+          () => Promise.resolve(options.owner),
+        )(
+          "ingress.authorize",
+          {},
+          async (_, command) => {
+            const authority = ownerIngressEvidence(ingress)?.authority;
+            let accepted = draft;
+            if (authority) {
+              if (!engine.authorization) authorizationRefused();
+              const constraints = (await createOwnerEvaluator({
+                registration: engine.authorization,
+                collections: options.registry.collections,
+                databaseSchema,
+              })(authority, {
+                kind: draft.type.includes("collection")
+                  ? "collection"
+                  : "action",
+                resource: String(
+                  (payload as Record<string, unknown>).actionAlias ??
+                    (payload as Record<string, unknown>).collectionAlias ??
+                    draft.type,
+                ),
+                operation: "admit",
+                input: captureHostCommandJson(payload),
+              }, command)).constraints;
+              const request = payload as Record<string, unknown>;
+              let validatedInput = request.input;
+              if (typeof request.actionAlias === "string") {
+                const policy = constraints.actions?.[request.actionAlias];
+                if (!policy) authorizationRefused();
+                if (policy.input) {
+                  const supplied = request.input as Record<string, unknown>;
+                  for (const [key, value] of Object.entries(policy.input)) {
+                    if (
+                      Object.hasOwn(supplied, key) &&
+                      !sameActionValue(supplied[key], value)
+                    ) authorizationRefused();
+                  }
+                  validatedInput = { ...supplied, ...policy.input };
+                }
+              } else if (typeof request.collectionAlias === "string") {
+                const mutation =
+                  constraints.collectionMutations?.[request.collectionAlias] ??
+                    constraints.collectionMutations
+                      ?.[
+                        options.registry.collections[request.collectionAlias]
+                          .name
+                      ];
+                const allowed = request.operation === "command"
+                  ? mutation?.commands?.[String(request.command)]
+                  : mutation
+                    ?.[request.operation as "create" | "update" | "delete"];
+                if (!allowed) authorizationRefused();
+                const constrained = constrainCollection({
+                  collection: {
+                    alias: request.collectionAlias,
+                    name: options.registry.collections[request.collectionAlias]
+                      .name,
+                  },
+                  phase: "mutation",
+                  method: request.operation as
+                    | "create"
+                    | "update"
+                    | "delete"
+                    | "command",
+                  args: captureHostCommandJson(
+                    request.operation === "create"
+                      ? { input: request.input }
+                      : request.operation === "command"
+                      ? {
+                        id: request.id,
+                        name: request.command,
+                        input: request.input,
+                      }
+                      : { ...request.input as object, id: request.id },
+                  ),
+                }, constraints) as Record<string, unknown>;
+                validatedInput = request.operation === "create" ||
+                    request.operation === "command"
+                  ? constrained.input
+                  : request.input;
               }
-            },
-          }
-          : {}),
-        recoverDuplicate: async (event, context) => {
-          const existing = await readEventBody(
-            context,
-            event.namespace,
-            eventDataRef(event.payload),
-          );
-          if (!samePreparedProtectedEventBody(existing, prepared.body)) {
-            throw Object.assign(
-              new Error(
-                `Protected Event '${event.id}' was retried with different data.`,
-              ),
-              { code: "event_deduplication_conflict" },
-            );
-          }
+              if (schema) {
+                try {
+                  validateCollectionInput(schema, {
+                    ...request,
+                    input: validatedInput,
+                  }, "Protected request input");
+                } catch (error) {
+                  if (
+                    (error as { code?: string }).code ===
+                      "collection_validation_failed"
+                  ) Object.assign(error as object, { status: 422 });
+                  throw error;
+                }
+              }
+              const metadata = { ...draft.metadata };
+              const operationMetadata = {
+                ...(metadata.operationMetadata as Record<string, unknown> ??
+                  {}),
+                ...constraints.operations?.metadata,
+              };
+              if (constraints.admission) {
+                operationMetadata.httpAdmissionKey = constraints.admission.key;
+                operationMetadata.httpIdempotencyKey = deduplicationId;
+              }
+              if (constraints.observationKeys) {
+                metadata.observationKeys = [...constraints.observationKeys];
+              }
+              // Empty policy output must preserve an older admission's exact
+              // metadata so its immutable deduplication identity still replays.
+              if (
+                Object.keys(operationMetadata).length ||
+                Object.hasOwn(metadata, "operationMetadata")
+              ) {
+                metadata.operationMetadata = operationMetadata;
+              }
+              accepted = { ...draft, metadata };
+            }
+            return await coordinator.commitMutation({
+              transaction: command.transaction,
+              ...(remoteClaim ? { initialRemoteClaim: remoteClaim } : {}),
+              ...(inlineAction && !engine.execution?.dispatcher
+                ? {
+                  initialLocalClaim: {
+                    consumerId: "processor:copilotz.server.action-request",
+                    owner: crypto.randomUUID(),
+                  },
+                }
+                : {}),
+              ...(completion
+                ? {
+                  consumers: options.registry.durableConsumers(
+                    draft,
+                    prepared.publicData,
+                  ).filter((consumer) =>
+                    consumer.consumerId !==
+                      "processor:copilotz.server.collection-mutation-request"
+                  ),
+                }
+                : {}),
+              eventId,
+              draft: { ...accepted, payload: persistedPayload },
+              ingress,
+              matchData: prepared.publicData,
+              body: { id: bodyId, json: prepared.body },
+              mutate: async (context) => {
+                for (const value of prepared.prepared) {
+                  await protectedValues!.adopt(context, draft.namespace, value);
+                }
+              },
+              recoverDuplicate: async (event, context) => {
+                const existing = await readEventBody(
+                  context,
+                  event.namespace,
+                  eventDataRef(event.payload),
+                );
+                await assertOwnerIngressReplay(
+                  context,
+                  options.databaseSchema,
+                  event,
+                  existing,
+                  ingress,
+                );
+                if (!samePreparedProtectedEventBody(existing, prepared.body)) {
+                  throw Object.assign(
+                    new Error(
+                      `Protected Event '${event.id}' was retried with different data.`,
+                    ),
+                    { code: "event_deduplication_conflict" },
+                  );
+                }
+              },
+            });
+          },
+        );
+      if (inlineAction && (!engine.execution?.dispatcher || remoteClaim)) {
+        return await admitInlineAction(
+          {
+            store,
+            coordinator,
+            registry: options.registry,
+            protectedValues,
+            authorization: engine.authorization,
+            operationCatalog: options.operationCatalog,
+            owner: options.owner,
+          },
+          draft,
+          commit,
+        );
+      }
+      if (!completion) return await commit();
+      return await completeHostCollection(
+        {
+          store,
+          collections,
+          catalog: options.operationCatalog,
+          registry: options.registry,
+          signal: options.owner.signal,
+          owner: options.owner,
+          protectedValues,
         },
-      });
+        draft,
+        prepared.body,
+        completion,
+        commit,
+      );
+    };
+  const events: CopilotzEngineDatabaseScope["events"] = {
+    append(draft, appendOptions) {
+      if (
+        isReservedActionLifecycleDeduplicationId(draft.deduplicationId)
+      ) {
+        throw new TypeError(
+          `Event deduplication identity '${
+            draft.deduplicationId!.trim()
+          }' is reserved for the Action lifecycle.`,
+        );
+      }
+      if (
+        isRegisteredActionLifecycleEventType(
+          draft.type,
+          options.registry.actions,
+        )
+      ) {
+        throw new TypeError(
+          `Event type '${draft.type.trim()}' is reserved for the registered Action lifecycle.`,
+        );
+      }
+      const binding = captureCollectionInvocation()?.authority;
+      if (binding) {
+        if (
+          binding.scope.databaseSchema !== databaseSchema ||
+          binding.scope.namespace !== draft.namespace
+        ) authorizationRefused();
+        const ingress = hostIngressProof();
+        return (async () => {
+          const committed = await createSchemaCommandRunner(
+            store.session,
+            databaseSchema,
+            () => Promise.resolve(options.owner),
+          )("ingress.event", {}, async (_, command) => {
+            if (!engine.authorization) authorizationRefused();
+            const decision = await createOwnerEvaluator({
+              registration: engine.authorization,
+              collections: options.registry.collections,
+              databaseSchema,
+            })(binding, {
+              kind: "event",
+              resource: draft.type,
+              operation: "admit",
+              input: draft.payload,
+            }, command);
+            if (!decision.constraints.events?.includes(draft.type)) {
+              authorizationRefused();
+            }
+            return await coordinator.commitMutation({
+              transaction: command.transaction,
+              draft: {
+                ...draft,
+                metadata: {
+                  ...draft.metadata,
+                  operationMetadata: {
+                    ...(draft.metadata?.operationMetadata as Record<
+                      string,
+                      unknown
+                    > ?? {}),
+                    ...decision.constraints.operations?.metadata,
+                  },
+                  ...(decision.constraints.observationKeys
+                    ? {
+                      observationKeys: [
+                        ...decision.constraints.observationKeys,
+                      ],
+                    }
+                    : {}),
+                },
+              },
+              ingress,
+              maxAttempts: appendOptions?.maxAttempts,
+              recoverDuplicate: async (event, context) => {
+                await assertOwnerIngressReplay(
+                  context,
+                  databaseSchema,
+                  event,
+                  event.payload,
+                  ingress,
+                );
+              },
+            });
+          });
+          await awaitEventPublication(committed);
+          return committed;
+        })();
+      }
+      return coordinator.append(draft, appendOptions);
     },
+    appendProtected,
     async emit(input) {
       const event = createEphemeralEvent(input, options.now);
       const dispatched = await options.publishLive(event);
@@ -383,21 +714,48 @@ export function createDatabaseScope(
     },
     subscribe: (filter) => options.eventHub.subscribe(filter),
     waitFor(filterInput, signal) {
-      const { timeoutMs, pollIntervalMs, ...filter } = filterInput;
+      const { timeoutMs, ...filter } = filterInput;
+      let afterPosition = filter.afterPosition;
+      const deadline = timeoutMs === undefined
+        ? undefined
+        : Date.now() + timeoutMs;
       return waitForCopilotzEvent({
         hub: options.eventHub,
         filter,
         signal,
         timeoutMs,
-        pollIntervalMs,
-        loadDurable: () =>
-          store.listEvents({
-            namespace: filter.namespace,
-            metadata: filter.metadata,
-            correlationId: filter.correlationId,
-            afterPosition: filter.afterPosition,
-            limit: 1_000,
-          }),
+        ...(filter.durable === false ? {} : {
+          attachDurable: () =>
+            watchOwnerPush(engine.session, databaseSchema, {
+              namespace: filter.namespace,
+              relevant: (change) =>
+                !!change.event && matchesCopilotzEvent(change.event, filter),
+            }),
+          loadDurable: async () => {
+            for (;;) {
+              signal?.throwIfAborted();
+              if (deadline !== undefined && Date.now() >= deadline) {
+                throw new Error(
+                  `Timed out waiting for event after ${timeoutMs}ms.`,
+                );
+              }
+              const page = await store.listEvents({
+                namespace: filter.namespace,
+                metadata: filter.metadata,
+                correlationId: filter.correlationId,
+                afterPosition,
+                afterSeq: filter.afterSeq,
+                limit: 1_000,
+              });
+              const match = page.find((event) =>
+                matchesCopilotzEvent(event, filter)
+              );
+              if (match) return [match];
+              afterPosition = page.at(-1)?.position ?? afterPosition;
+              if (page.length < 1_000) return [];
+            }
+          },
+        }),
       });
     },
     async get(namespace, id) {
@@ -447,12 +805,51 @@ export function createDatabaseScope(
         publicActionLifecycleData(raw),
       ));
       if (!parsed) return null;
-      const data = await hydrateActionLifecycleBody({
-        namespace,
-        body: raw as never,
-        action: actionDefinitionById(options.registry.actions, parsed.actionId),
-        protectedValues,
-      });
+      const restore = (
+        transaction?: import("../events/session.ts").SqlExecutor,
+      ) =>
+        hydrateActionLifecycleBody({
+          namespace,
+          body: raw as never,
+          action: actionDefinitionById(
+            options.registry.actions,
+            parsed.actionId,
+          ),
+          protectedValues,
+          transaction,
+        });
+      const data =
+        Object.keys(options.engine.authorization?.actions ?? {}).some((alias) =>
+            options.registry.actions[alias]?.id === parsed.actionId
+          )
+          ? await createSchemaCommandRunner(
+            store.session,
+            options.databaseSchema,
+            () => Promise.resolve(options.owner),
+          )(
+            "actions.readAuthorizedResult",
+            {},
+            async (_, command) => {
+              const guard = createAuthorizedActions({
+                authorization: options.engine.authorization,
+                collections: options.registry.collections,
+                actions: options.registry.actions,
+                store,
+                coordinator,
+                namespace,
+                protectedValues,
+                signal: command.signal,
+              }).output({
+                actionId: parsed.actionId,
+                actionRunId: parsed.actionRunId,
+                parentActionRunId: parsed.parentActionRunId,
+                signal: command.signal,
+              });
+              await guard.authorize?.(command.transaction);
+              return await restore(command.transaction);
+            },
+          )
+          : await restore();
       if (data.status !== "completed") return data;
       return {
         ...data,
@@ -468,17 +865,168 @@ export function createDatabaseScope(
       store.scopeSettlement(namespace, settlementScopeId),
     outstanding: (namespace, settlementScopeId) =>
       store.scopeOutstanding(namespace, settlementScopeId),
-    cancel: (namespace, settlementScopeId, reason) =>
-      store.cancelScope(namespace, settlementScopeId, reason),
+    cancel: (namespace, settlementScopeId, reason) => {
+      const binding = captureCollectionInvocation()?.authority;
+      if (!binding) {
+        return store.cancelScope(namespace, settlementScopeId, reason);
+      }
+      if (
+        binding.scope.namespace !== namespace ||
+        binding.scope.databaseSchema !== databaseSchema
+      ) authorizationRefused();
+      const evaluate = engine.authorization &&
+        createOwnerEvaluator({
+          registration: engine.authorization,
+          collections: options.registry.collections,
+          databaseSchema,
+        });
+      return withOwnerCommandAuthorization(async (command) => {
+        await authorizeOperation(
+          evaluate,
+          options.operationCatalog,
+          binding,
+          settlementScopeId,
+          "cancel",
+          command,
+        );
+      }, () => store.cancelScope(namespace, settlementScopeId, reason));
+    },
   } as const;
   const deliveries: CopilotzEngineDatabaseScope["deliveries"] = {
     get: deliveryInNamespace,
     list: (listOptions) => store.listDeliveries(listOptions),
   } as const;
-  const recover: CopilotzEngineDatabaseScope["recover"] = (recovery = {}) =>
-    coordinator.recover({ ...recovery, databaseSchema });
+  const recover: CopilotzEngineDatabaseScope["recover"] = async (
+    recovery = {},
+  ) => {
+    await options.operationCatalog.reconcile({
+      namespace: recovery.namespace,
+      limit: recovery.limit,
+    });
+    await resumeSettled({
+      namespace: recovery.namespace,
+      limit: recovery.limit,
+    });
+    return await coordinator.recover({ ...recovery, databaseSchema });
+  };
   let progressiveMaintenanceAfter: string | undefined;
   let openStreamReconcileAfter: string | undefined;
+  const recoverCatalog = async (
+    maintenanceOptions: { limit?: number } = {},
+  ) => {
+    const recoveredBodies = await maintainProgressiveBodies(
+      {
+        ...assets.catalog,
+        async recordFailure(content) {
+          const stream = (await engine.session.query<{
+            namespace: string;
+            operation_id: string;
+            stream_id: string;
+          }>(
+            `SELECT namespace,operation_id,stream_id FROM ${
+              createOperationCatalogTables(databaseSchema).operationStreams
+            }
+            WHERE body_id=$1`,
+            [content.bodyId],
+          )).rows[0];
+          return stream
+            ? await options.operationCatalog.acceptStreamFailure({
+              namespace: stream.namespace,
+              operationId: stream.operation_id,
+              streamId: stream.stream_id,
+              content,
+            })
+            : await assets.catalog.recordFailure(content);
+        },
+      },
+      assets.storeForCopy,
+      {
+        limit: maintenanceOptions.limit,
+        ...(progressiveMaintenanceAfter
+          ? { after: progressiveMaintenanceAfter }
+          : {}),
+      },
+    );
+    progressiveMaintenanceAfter = recoveredBodies.after;
+    const openStreams = await options.operationCatalog.listOpenStreams({
+      ...(openStreamReconcileAfter
+        ? { afterReplayKey: openStreamReconcileAfter }
+        : {}),
+      limit: maintenanceOptions.limit,
+    });
+    let reconciledStreams = 0;
+    for (const stream of openStreams) {
+      openStreamReconcileAfter = stream.replayKey;
+      const observed = await readLogicalHead(
+        assets.catalog,
+        stream.bodyId,
+        assets.storeForCopy,
+      );
+      const logical = observed?.body, physical = observed?.head;
+      if (!logical?.terminal) continue;
+      if (
+        !physical || physical.state === "aborted" ||
+        physical.byteLength < logical.terminal.length
+      ) {
+        if (
+          await options.operationCatalog.markStreamUnavailable({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            outcome: logical.terminal.outcome,
+            reason: logical.terminal.reason,
+            availabilityReason: "missing",
+          })
+        ) reconciledStreams++;
+        continue;
+      }
+      const common = {
+        namespace: stream.namespace,
+        operationId: stream.operationId,
+        streamId: stream.streamId,
+      };
+      const terminal = logical.terminal;
+      if (terminal.outcome === "completed") {
+        if (
+          physical.state !== "ready" || physical.digest !== terminal.digest ||
+          physical.byteLength !== terminal.length
+        ) continue;
+        if (
+          await options.operationCatalog.sealStream({
+            ...common,
+            body: { ...physical, bodyId: stream.bodyId },
+          })
+        ) reconciledStreams++;
+      } else {
+        const body = {
+          ...physical,
+          state: "incomplete" as const,
+          bodyId: stream.bodyId,
+          byteLength: terminal.length,
+        };
+        if (
+          await options.operationCatalog.terminateStream({
+            ...common,
+            body,
+            outcome: terminal.outcome,
+            reason: terminal.reason ?? "abandoned",
+          })
+        ) reconciledStreams++;
+      }
+    }
+    if (
+      openStreams.length < (maintenanceOptions.limit ?? 1_000)
+    ) openStreamReconcileAfter = undefined;
+    await resumeSettled({ limit: maintenanceOptions.limit });
+    const reconciled = await options.operationCatalog.reconcile({
+      limit: maintenanceOptions.limit,
+    });
+    return {
+      reconciledStreams,
+      reconciled,
+      progressiveBodies: recoveredBodies,
+    };
+  };
   const maintenance: CopilotzEngineDatabaseScope["maintenance"] = async (
     maintenanceOptions = {},
   ) => {
@@ -493,162 +1041,10 @@ export function createDatabaseScope(
       now: maintenanceOptions.now,
       limit: maintenanceOptions.limit,
     });
-    // Catalog-owned published lanes are reconciled before generic progressive
-    // maintenance can settle unknown staging. Publication changes an expired
-    // writer from disposable staging into a replay obligation.
-    const openStreams = await options.operationCatalog.listOpenStreams({
-      ...(openStreamReconcileAfter
-        ? { afterReplayKey: openStreamReconcileAfter }
-        : {}),
-      limit: maintenanceOptions.limit,
-    });
-    let reconciledStreams = 0;
-    for (const stream of openStreams) {
-      openStreamReconcileAfter = stream.replayKey;
-      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
-      const intendedOutcome = stream.state === "terminating"
-        ? stream.outcome
-        : undefined;
-      if (!head) {
-        const transitioned = await options.operationCatalog
-          .markStreamUnavailable({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: intendedOutcome === "completed"
-              ? "abandoned"
-              : intendedOutcome ?? "abandoned",
-            availability: "missing",
-            capture: stream.capture ?? "truncated",
-          });
-        if (transitioned) reconciledStreams += 1;
-        continue;
-      }
-      if (head.state === "aborted") {
-        const transitioned = await options.operationCatalog
-          .markStreamUnavailable({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: intendedOutcome === "completed"
-              ? "abandoned"
-              : intendedOutcome ?? "abandoned",
-            availability: "purged",
-            capture: stream.capture ?? "truncated",
-          });
-        if (transitioned) reconciledStreams += 1;
-        continue;
-      }
-      if (head.state === "ready") {
-        const transitioned = await options.operationCatalog.sealStream({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-          body: head,
-        });
-        if (transitioned) reconciledStreams += 1;
-        else if (intendedOutcome && intendedOutcome !== "completed") {
-          const unavailable = await options.operationCatalog
-            .markStreamUnavailable({
-              namespace: stream.namespace,
-              operationId: stream.operationId,
-              streamId: stream.streamId,
-              outcome: intendedOutcome,
-              availability: "missing",
-              capture: stream.capture ?? "truncated",
-            });
-          if (unavailable) reconciledStreams += 1;
-        }
-        continue;
-      }
-      if (head.state === "incomplete") {
-        const outcome = intendedOutcome === "completed"
-          ? undefined
-          : intendedOutcome ?? "abandoned";
-        const transitioned = outcome
-          ? await options.operationCatalog.terminateStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: head,
-            outcome,
-            capture: stream.capture ?? "truncated",
-          })
-          : await options.operationCatalog.markStreamUnavailable({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            outcome: "abandoned",
-            availability: "missing",
-            capture: "truncated",
-          });
-        if (transitioned) reconciledStreams += 1;
-        continue;
-      }
-      if (head.writerLeaseRemainingMs > 0) continue;
-      const outcome = intendedOutcome ??
-        (head.state === "sealing" ? "completed" : "abandoned");
-      const capture = outcome === "completed"
-        ? "complete"
-        : stream.capture ?? "truncated";
-      if (
-        !await options.operationCatalog.beginStreamTerminalization({
-          namespace: stream.namespace,
-          operationId: stream.operationId,
-          streamId: stream.streamId,
-          outcome,
-          capture,
-        })
-      ) continue;
-      const writer = await streamBodyStore.reserve({
-        bodyId: head.bodyId,
-        mediaType: head.mediaType,
-        expectedGeneration: head.writerGeneration,
-      });
-      if (outcome === "completed") {
-        const ready = await streamBodyStore.seal({
-          writer,
-          expectedByteLength: head.byteLength,
-        });
-        if (
-          await options.operationCatalog.sealStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: ready,
-          })
-        ) reconciledStreams += 1;
-      } else {
-        const incomplete = await streamBodyStore.terminate({
-          writer,
-          expectedByteLength: head.byteLength,
-        });
-        if (
-          await options.operationCatalog.terminateStream({
-            namespace: stream.namespace,
-            operationId: stream.operationId,
-            streamId: stream.streamId,
-            body: incomplete,
-            outcome,
-            capture,
-          })
-        ) reconciledStreams += 1;
-      }
-    }
-    if (
-      openStreams.length < (maintenanceOptions.limit ?? 1_000)
-    ) openStreamReconcileAfter = undefined;
-    await advanceDeferred({ limit: maintenanceOptions.limit });
-    const reconciled = await options.operationCatalog.reconcile({
-      limit: maintenanceOptions.limit,
-    });
-    const progressiveBodies = await maintainProgressiveBodies(streamBodyStore, {
-      limit: maintenanceOptions.limit,
-      ...(progressiveMaintenanceAfter
-        ? { after: progressiveMaintenanceAfter }
-        : {}),
-    });
-    progressiveMaintenanceAfter = progressiveBodies.after;
+    const { reconciledStreams, reconciled, progressiveBodies } =
+      await recoverCatalog(
+        maintenanceOptions,
+      );
     const assetMaintenance = await assets.maintainBodies({
       now: maintenanceOptions.now,
       orphanAfterMs: maintenanceOptions.assetOrphanAfterMs,
@@ -672,44 +1068,55 @@ export function createDatabaseScope(
       engine.assetStorage?.adapter?.deployment.readyGarbageCollection ?? true;
     for (const stream of expired) {
       if (
-        stream.availability === "retained" &&
-        !await options.operationCatalog.markStreamPurgePending({
+        stream.cleanupState !== "pending" &&
+        !await options.operationCatalog.beginStreamCleanup({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
         })
       ) continue;
-      const head = await streamBodyStore.head({ bodyId: stream.bodyId });
+      const logical = await assets.catalog.read(stream.bodyId);
+      const physicalStore = logical
+        ? assets.storeForCopy(logical.copy)
+        : streamBodyStore;
+      const head = logical
+        ? await physicalStore.head({ bodyId: logical.copy.key })
+        : null;
       let retired = head === null;
-      if (head?.state === "ready" && readyGarbageCollection) {
+      if (
+        head && logical?.terminal &&
+        physicalStore.conditionalDelete &&
+        (head.state !== "ready" || readyGarbageCollection)
+      ) {
         const retirement = await assets.retireUnownedReadyBody({
-          store: streamBodyStore,
+          store: physicalStore,
           body: head,
         });
-        retired = retirement.status !== "blocked";
-      } else if (head?.state === "incomplete" || head?.state === "aborted") {
-        retired = await streamBodyStore.maintenance.delete({
-          bodyId: head.bodyId,
-          expectedState: head.state,
-          expectedMaintenanceVersion: head.maintenanceVersion,
-          idleForMs: 0,
-        });
+        if (retirement.status === "owned" && retirement.ownerType === "asset") {
+          await options.operationCatalog.retainStream({
+            namespace: stream.namespace,
+            operationId: stream.operationId,
+            streamId: stream.streamId,
+            retention: "canonical",
+            assetId: retirement.ownerId,
+          });
+          continue;
+        }
+        retired = retirement.status === "deleted";
       }
       if (!retired) {
         observationRetirementBlocked += 1;
-        // Purge is monotonic. A losing concurrent worker must never restore
-        // retained after another worker deleted the Body. Leaving the row
-        // purge_pending is crash-safe and makes the exact-CAS retirement
-        // retryable on the next maintenance pass.
+        // Keep cleanup pending until deletion is confirmed. A failed CAS may
+        // mean another worker won; the next pass checks the physical head.
         continue;
       }
-      // A graph-owned Ready Body remains under Asset authority. Other retained
-      // terminal Bodies were removed with exact state/version CAS above.
+      // Deletion was confirmed by exact state/version CAS or a missing head.
       if (
         await options.operationCatalog.pruneStream({
           namespace: stream.namespace,
           operationId: stream.operationId,
           streamId: stream.streamId,
+          availabilityReason: head === null ? "missing" : "deleted",
         })
       ) prunedCatalogEntries += 1;
     }
@@ -740,6 +1147,14 @@ export function createDatabaseScope(
     return result;
   };
   const publicScope: CopilotzEngineDatabaseScope = {
+    authorization: createAuthorizationOwner({
+      session: engine.session,
+      databaseSchema,
+      owner: options.owner,
+      registration: engine.authorization,
+      collections: options.registry.collections,
+      operations: options.operationCatalog,
+    }),
     databaseSchema,
     content: { assets, preparer: options.preparer, resolver } as const,
     collections,
@@ -748,28 +1163,33 @@ export function createDatabaseScope(
         const follower = await createContentStreamRuntime({
           namespace,
           store: streamBodyStore,
+          catalog: assets.catalog,
+          storeForCopy: assets.storeForCopy,
           createId: engine.createId,
           bodyPrefix: streamBodyPrefix,
         }).follow(input);
         return follower.body;
       },
       async readCommittedRange(input: ReadBodyRangeInput) {
-        if (streamBodyStore.readRange) {
-          return await streamBodyStore.readRange(input);
+        const logical = await assets.catalog.read(input.bodyId);
+        if (!logical) return null;
+        const limit = logical.terminal?.length ?? logical.committedOffset;
+        if (input.end > limit) return null;
+        let copy = logical.copy;
+        try {
+          return await assets.storeForCopy(copy).readRange({
+            ...input,
+            bodyId: copy.key,
+          });
+        } catch (error) {
+          const next = await assets.catalog.read(input.bodyId);
+          if (!next || next.copy.key === copy.key) throw error;
+          copy = next.copy;
+          return await assets.storeForCopy(copy).readRange({
+            ...input,
+            bodyId: copy.key,
+          });
         }
-        // Compatibility fallback for third-party stores compiled before finite
-        // range reads. Never attach their polling follower: wait until an
-        // immutable terminal Body, then perform one bounded replay read.
-        const head = await streamBodyStore.head({ bodyId: input.bodyId });
-        if (head?.state !== "ready" && head?.state !== "incomplete") {
-          return null;
-        }
-        const bytes = await readBodyBytes(streamBodyStore, {
-          bodyId: input.bodyId,
-        });
-        const start = Math.min(input.offset, bytes.byteLength);
-        const end = Math.min(input.end, bytes.byteLength);
-        return bytes.slice(start, end);
       },
     } as const,
     operations: options.operationCatalog,
@@ -779,7 +1199,182 @@ export function createDatabaseScope(
     maintenance,
   } as const;
 
+  const closeContentAlarms = options.owner.registerAlarmSource({
+    name: "content",
+    nextDeadline: (transaction) => assets.catalog.nextDeadline(transaction),
+    wake: async () => {
+      await recoverCatalog({ limit: 100 });
+      await assets.maintainBodies({
+        limit: 100,
+        isBodyRetained: (bodyId) =>
+          options.operationCatalog.hasStreamBody(bodyId),
+      });
+      await runAlarmCommand("alarm.content.refresh", {}, (_input, context) => {
+        invalidateOwnerAlarm(context.transaction, databaseSchema, "content");
+      });
+    },
+  });
+  const runAlarmCommand = createSchemaCommandRunner(
+    engine.session,
+    databaseSchema,
+  );
+  const collectionAlarms = registerCollectionAlarms({
+    authorization: engine.authorization,
+    aliases: options.registry.collections,
+    owner: options.owner,
+    session: engine.session,
+    schema: databaseSchema,
+    definitions: Object.values(options.registry.collections).filter(
+      isKernelCollection,
+    ),
+    collections,
+    now: options.now,
+    onDiagnostic: engine.execution?.onDiagnostic,
+  });
+  const closeDeliveryAlarms = registerDeliveryAlarms(
+    options.owner,
+    store,
+    options.executor,
+  );
+  const closeReconciliationAlarms = options.owner.registerAlarmSource({
+    name: "reconciliation",
+    async wake(deadlines) {
+      for (const deadline of deadlines) {
+        const operationId =
+          (deadline.payload as { operationId?: string } | null)?.operationId;
+        const settled = await options.operationCatalog.reconcile({
+          namespace: deadline.namespace ?? undefined,
+          operationId,
+          limit: 1000,
+        });
+        if (settled) continue;
+        await resumeSettled({
+          namespace: deadline.namespace ?? undefined,
+          operationId,
+          limit: 1000,
+        });
+        await runAlarmCommand(
+          "alarm.reconciliation.complete",
+          {},
+          (_input, context) =>
+            completeOwnerDeadline(
+              context.transaction,
+              databaseSchema,
+              deadline,
+            ),
+        );
+      }
+    },
+  });
+  let pushSubscription: OwnerPushSubscription | undefined;
+  let pushedHead: string | undefined;
+  const activate = async () => {
+    pushSubscription ??= await attachOwnerPush(
+      engine.session,
+      databaseSchema,
+      (frame) => {
+        const lost = pushedHead !== undefined &&
+          BigInt(frame.headSeq) >
+            BigInt(pushedHead) +
+              (frame.kind === "change" && frame.change.event ? 1n : 0n);
+        if (lost || frame.kind === "reset") {
+          options.eventHub.reset(
+            Object.assign(
+              new Error("Owner push reset; reattach from the consumed cursor."),
+              { code: "observation_reset_required" },
+            ),
+          );
+        }
+        if (
+          pushedHead === undefined || BigInt(frame.headSeq) > BigInt(pushedHead)
+        ) pushedHead = frame.headSeq;
+        if (frame.kind === "change" && frame.change.event) {
+          publicScope.authorization.notice({
+            namespace: frame.change.namespace,
+            collection: frame.change.event.subject?.type,
+            id: frame.change.event.subject?.id,
+          });
+          void options.eventHub.publish(frame.change.event);
+        }
+      },
+    );
+    pushedHead ??= pushSubscription.cursor;
+    try {
+      await activateDatabaseOwner(options.owner, async () => {
+        await createSchemaCommandRunner(engine.session, databaseSchema)(
+          "owner.invalidateAttempts",
+          {},
+          async (_input, { transaction, caller }) => {
+            invalidateOwnerAlarm(transaction, databaseSchema, "content");
+            await transaction.query(
+              `UPDATE ${store.tables.event_deliveries}
+          SET lease_expires_at=NOW(), updated_at=NOW()
+          WHERE status='leased' AND owner_epoch < $1`,
+              [caller.epoch],
+            );
+            await transaction.query(
+              `INSERT INTO ${store.tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
+            SELECT 'schema','deliveries',d.id,e.namespace,
+              CASE WHEN d.status='leased' THEN d.lease_expires_at ELSE d.available_at END,
+              jsonb_build_object('deliveryId',d.id)
+            FROM ${store.tables.event_deliveries} d JOIN ${store.tables.events} e ON e.id=d.event_id
+            WHERE (d.status IN ('pending','retry_wait') AND d.attempts<d.max_attempts)
+              OR (d.status='leased' AND d.lease_expires_at IS NOT NULL)
+            ON CONFLICT (owner,source,key) DO UPDATE SET due_at=EXCLUDED.due_at,namespace=EXCLUDED.namespace,payload=EXCLUDED.payload,revision=EXCLUDED.revision`,
+            );
+          },
+        );
+        // Retained declarations still need a cutover/declaration seed. The
+        // migration API does not yet attest that this seed completed.
+        await collectionAlarms.seed();
+        while (
+          (await store.recoverExpiredDeliveries({ limit: 1000 })).length ===
+            1000
+        ) { /* recover every exhausted attempt */ }
+        do {
+          await recoverCatalog({ limit: 1000 });
+        } while (openStreamReconcileAfter !== undefined);
+        while (
+          await options.operationCatalog.reconcile({ limit: 1000 })
+        ) { /* bounded pages across all namespaces */ }
+        for (;;) {
+          const pending = await engine.session.query(
+            `SELECT 1 FROM ${store.tables.open_actions} AS action
+          JOIN ${
+              createOperationCatalogTables(databaseSchema).operations
+            } AS child
+          ON child.namespace=action.namespace AND child.operation_id=action.child_operation_id
+          WHERE action.state='awaiting' AND action.owner_delivery_id IS NULL
+            AND child.state IN ('completed','failed','cancelled') LIMIT 1`,
+          );
+          if (!pending.rows.length) break;
+          await resumeSettled({ limit: 1000 });
+        }
+      });
+    } catch (error) {
+      pushSubscription?.close();
+      pushSubscription = undefined;
+      throw error;
+    }
+  };
+  const publishActivation = async () => {
+    for (const publish of activationPublications.splice(0)) await publish();
+  };
   return ({
+    owner: options.owner,
+    activate,
+    closePush() {
+      pushSubscription?.close();
+      pushSubscription = undefined;
+    },
+    publishActivation,
+    closeAlarms() {
+      closeContentAlarms();
+      collectionAlarms.close();
+      closeDeliveryAlarms();
+      closeReconciliationAlarms();
+    },
+    deferPublication,
     public: publicScope,
     store,
     coordinator,
@@ -788,7 +1383,7 @@ export function createDatabaseScope(
     transients: options.transients,
     operationCatalog: options.operationCatalog,
     settleActionOwners,
-    advanceDeferred,
+    resumeSettled,
     onScopeCancellation,
   } as const);
 }

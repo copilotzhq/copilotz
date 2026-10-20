@@ -1,3 +1,4 @@
+import { externalEffect } from "@copilotz/copilotz/actions";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
@@ -86,13 +87,17 @@ export const applyPatchAction: ActionDefinition<
     },
     required: ["path", "operations"],
   },
-  execute: async ({ path, operations }: ApplyPatchParams) => {
-    const result = await applyWorkspacePatch(path, operations);
-    return {
-      relativePath: result.relativePath,
-      snapshotId: result.snapshotId,
-      applied: result.applied,
-      summary: summarizePatchOperations(operations),
-    };
-  },
+  execute: (
+    { path, operations }: ApplyPatchParams,
+    context: ActionContext,
+  ) =>
+    externalEffect(context, "filesystem.apply-patch", async () => {
+      const result = await applyWorkspacePatch(path, operations);
+      return {
+        relativePath: result.relativePath,
+        snapshotId: result.snapshotId,
+        applied: result.applied,
+        summary: summarizePatchOperations(operations),
+      };
+    }),
 });

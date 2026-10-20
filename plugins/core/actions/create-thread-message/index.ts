@@ -18,7 +18,7 @@ import {
   type ActionTransactionContext,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { decodeContent } from "@copilotz/copilotz/content";
+import { decodeGeneratedContent } from "@copilotz/copilotz/content";
 import { asRecord, requiredText } from "../../shared/validation.ts";
 export const CREATE_THREAD_MESSAGE_ACTION_ID =
   "copilotz.core.thread-message.create";
@@ -306,7 +306,7 @@ export async function createThreadMessage(
   const senderExternalId = optionalText(existingSender?.externalId) ??
     optionalText(sender.externalId) ?? optionalText(sender.id) ?? "";
   const existingParticipantIds = stringArray(thread.participantIds);
-  const content = decodeContent(data.content ?? []);
+  const content = decodeGeneratedContent(data.content ?? []);
   await context.transaction(async (tx) => {
     const collections = tx.collections;
     if (!collections.message) {

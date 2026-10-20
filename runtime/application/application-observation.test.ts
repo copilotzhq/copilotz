@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals } from "@std/assert";
 import { createCopilotzApplication } from "./application.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -7,14 +8,15 @@ import {
   encodeOperationReplayCursor,
   type StreamOutput,
 } from "../streams/index.ts";
-import type { SqlExecutor, SqlNotification } from "../events/index.ts";
+import type { SqlExecutor } from "../events/index.ts";
 
-Deno.test("attachment pages consumed lanes once and coalesces byte notifications", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "observation_incremental";
+Deno.test("attachment pages consumed lanes once and repairs progress without notifications", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const schema = `observation_incremental_${crypto.randomUUID().slice(0, 8)}`;
   const namespace = "tenant";
   const operationId = "operation";
-  const notifications = new Set<(notice: SqlNotification) => void>();
   const listings: Array<{ at: number; after?: string; rows: number }> = [];
   const query: SqlExecutor["query"] = async (sql, params) => {
     const at = performance.now();
@@ -33,15 +35,6 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
       query,
       transaction: db.transaction,
       close: db.close,
-      listen(_channel, handler) {
-        notifications.add(handler);
-        return Promise.resolve({
-          close() {
-            notifications.delete(handler);
-            return Promise.resolve();
-          },
-        });
-      },
     },
     databaseSchema: schema,
     namespace,
@@ -49,15 +42,18 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
   });
   try {
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace,
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation",
-        createdAt: new Date().toISOString(),
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace,
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation",
+          createdAt: new Date().toISOString(),
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "placeholder",
@@ -70,14 +66,14 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     await db.query(
       `INSERT INTO "${schema}"."copilotz_operation_streams" (
          namespace, operation_id, stream_ordinal, stream_id, semantic_stream_id,
-         body_id, descriptor, state, outcome, availability, capture,
-         asset_retention, committed_offset, terminal_at, created_at, updated_at
+         body_id, descriptor, state, outcome, availability,
+         asset_retention, terminal_at, created_at, updated_at
        ) SELECT $1, $2, lane, 'lane-' || lane, 'lane-' || lane, 'body-' || lane,
           jsonb_set($3::jsonb, '{streamId}', to_jsonb('lane-' || lane)),
           CASE WHEN lane = 1002 THEN 'open' ELSE 'terminal' END,
           CASE WHEN lane = 1002 THEN NULL ELSE 'completed' END,
-          'retained', CASE WHEN lane = 1002 THEN NULL ELSE 'complete' END,
-          'observation', 0, CASE WHEN lane = 1002 THEN NULL ELSE NOW() END,
+          'retained',
+          'observation', CASE WHEN lane = 1002 THEN NULL ELSE NOW() END,
           NOW(), NOW()
        FROM generate_series(1, 1002) AS lane`,
       [namespace, operationId, JSON.stringify(descriptor)],
@@ -96,23 +92,7 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     assertEquals(first.value?.type, "stream.output");
     assertEquals((first.value as StreamOutput).streamOrdinal, "1002");
     const started = performance.now();
-    for (let index = 0; index < 100; index++) {
-      for (const notify of notifications) {
-        notify({
-          channel: "copilotz_operations",
-          payload: JSON.stringify({
-            databaseSchema: schema,
-            namespace,
-            operationId,
-            selectionKeys: [],
-            kind: "stream-offset",
-            streamId: "lane-1002",
-            committedOffset: 0,
-          }),
-        });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+
     await new Promise((resolve) => setTimeout(resolve, 300));
     const elapsed = performance.now() - started;
     await attachment.detach("test_complete");
@@ -142,7 +122,7 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     assert(iterations.length <= Math.ceil(elapsed / 250) + 1);
     console.log(
       JSON.stringify({
-        notifications: 100,
+        injectedNotifications: 0,
         iterations: iterations.length,
         streamListingQueries: listings.length,
         streamListingRows: 1002,
@@ -150,6 +130,7 @@ Deno.test("attachment pages consumed lanes once and coalesces byte notifications
     );
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });
@@ -250,8 +231,10 @@ Deno.test("attachment byte readers wake while the outer loop is coalescing", asy
 });
 
 Deno.test("attachment final pass includes a stream committed during the terminal status read", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
-  const schema = "observation_terminal_race";
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim() || ":memory:",
+  });
+  const schema = `observation_terminal_race_${crypto.randomUUID().slice(0, 8)}`;
   let inject = false;
   let injected = false;
   let streamListings = 0;
@@ -277,10 +260,10 @@ Deno.test("attachment final pass includes a stream committed during the terminal
       await db.query(
         `INSERT INTO "${schema}"."copilotz_operation_streams" (
         namespace, operation_id, stream_ordinal, stream_id, semantic_stream_id,
-        body_id, descriptor, state, outcome, availability, capture,
-        asset_retention, committed_offset, terminal_at, created_at, updated_at
+        body_id, descriptor, state, outcome, availability, availability_reason,
+        asset_retention, terminal_at, created_at, updated_at
       ) VALUES ('tenant','operation',1,'late-stream','late-stream','late-body',$1::jsonb,
-        'terminal','completed','missing','complete','observation',0,NOW(),NOW(),NOW())`,
+        'terminal','completed','purged','missing','observation',NOW(),NOW(),NOW())`,
         [JSON.stringify(descriptor)],
       );
       await db.query(`UPDATE "${schema}"."copilotz_operations"
@@ -296,21 +279,27 @@ Deno.test("attachment final pass includes a stream committed during the terminal
   });
   try {
     const catalog = createOperationCatalog(db, schema);
-    await db.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant",
-        operationId: "operation",
-        eventId: "operation",
-        position: "1",
-        correlationId: "correlation",
-        createdAt: new Date().toISOString(),
-      })
+    await createSchemaCommandRunner(db, schema)(
+      "test.catalog",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant",
+          operationId: "operation",
+          eventId: "operation",
+          position: "1",
+          correlationId: "correlation",
+          createdAt: new Date().toISOString(),
+        }),
     );
     // Keep initial statusFor active; the race is injected only after attach's
     // topology read. A durable terminal transition remains authoritative.
     await db.query(`INSERT INTO "${schema}"."events" (
-      id,schema_version,type,namespace,payload,metadata,correlation_id
-    ) VALUES ('operation',5,'test.root','tenant','{}','{}','correlation')`);
+      seq,id,schema_version,type,namespace,payload,metadata,correlation_id
+    ) VALUES (1,'operation',5,'test.root','tenant','{}','{}','correlation')`);
+    await db.query(
+      `UPDATE "${schema}".owner_epochs SET last_seq=1 WHERE owner='schema'`,
+    );
     await db.query(`INSERT INTO "${schema}"."event_deliveries" (
       id,event_id,consumer_id,status,attempts,available_at,created_at,updated_at,settlement_scope_id
     ) VALUES ('pending','operation','consumer','pending',0,NOW(),NOW(),NOW(),'operation')`);
@@ -331,6 +320,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
     assertEquals(streamListings, 3);
   } finally {
     await application.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });

@@ -1,9 +1,13 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import {
+  createTestApplication as createCopilotzApplication,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
+
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals } from "@std/assert";
 import { type ActionContext, defineAction } from "../runtime/actions/index.ts";
 import { definePlugin } from "../runtime/plugins/index.ts";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
+
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { serverPlugin } from "../plugins/server/plugin.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
@@ -23,6 +27,7 @@ Deno.test({
     let release!: () => void;
     const finish = new Promise<void>((resolve) => release = resolve);
     let executions = 0;
+    let retainedAssetId = "";
     const plugins = [
       definePlugin({
         id: "test.reconnect",
@@ -49,10 +54,16 @@ Deno.test({
               const prepared = await stream.close({
                 assetId: "retained-answer",
               });
-              await context.content.materialize(prepared);
+              const [adopted] = await context.content.materialize([prepared], {
+                origin: {
+                  type: "test.reconnect.result",
+                  id: "retained-answer",
+                },
+              });
+              retainedAssetId = adopted.assetId;
               await stream.retain({
                 retention: "canonical",
-                assetId: "retained-answer",
+                assetId: adopted.assetId,
               });
               return "complete";
             },
@@ -65,6 +76,7 @@ Deno.test({
           server: {
             default: fixtureServerFacade({
               authenticate: () => ({ actor: { id: "owner" } }),
+              evaluate: () => ({ assets: { read: [retainedAssetId] } }),
             }),
           },
         },
@@ -155,7 +167,7 @@ Deno.test({
       const before = await database.query(
         `SELECT id, data FROM "${schema}".nodes WHERE type = 'asset' ORDER BY id`,
       );
-      const stored = await reconnect.assets.get("retained-answer");
+      const stored = await reconnect.assets.get(retainedAssetId);
       assertEquals(new Uint8Array(await stored.arrayBuffer()), bytes);
       assertEquals(
         (await database.query(

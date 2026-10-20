@@ -1,7 +1,11 @@
 import type { ActionInvocationMetadata } from "@copilotz/copilotz/actions";
 /** Shared contracts for the semantic Server facade plugin. @module */
 
-import type { CollectionFilter } from "@copilotz/copilotz/collections";
+export type {
+  ServerCollectionMutationConstraints,
+  ServerCollectionMutationPolicy,
+  ServerConstraints,
+} from "@copilotz/copilotz/engine";
 
 export const SERVER_RESOURCE_NAMESPACE = "server";
 export const SERVER_RESOURCE_ALIAS = "default";
@@ -26,24 +30,6 @@ export type ServerCollectionExposure = Readonly<
     operations?: boolean | ServerPatternPolicy;
   }
 >;
-
-/** Trusted policy applied to one durable collection mutation. */
-export type ServerCollectionMutationPolicy = Readonly<{
-  /** Fields accepted from the caller. `id` is implicit for member writes. */
-  fields?: readonly string[];
-  /** Exact values enforced on the mutation input. */
-  input?: Readonly<Record<string, unknown>>;
-  /** Existing-record scope. This is also checked against the resulting record. */
-  filter?: CollectionFilter;
-}>;
-
-/** Mutation policy is deliberately separate from read collection filters. */
-export type ServerCollectionMutationConstraints = Readonly<{
-  create?: ServerCollectionMutationPolicy;
-  update?: ServerCollectionMutationPolicy;
-  delete?: ServerCollectionMutationPolicy;
-  commands?: Readonly<Record<string, ServerCollectionMutationPolicy>>;
-}>;
 
 export type ServerExposureOptions = Readonly<{
   actions?: boolean | ServerPatternPolicy;
@@ -78,6 +64,7 @@ export type ServerEndpointDescriptor = Readonly<{
 }>;
 
 export type ServerAuthorizedScope = Readonly<{
+  authority?: import("@copilotz/copilotz/engine").AuthenticatedAuthority;
   actor?: Readonly<
     { id: string; externalId?: string; name?: string; email?: string }
   >;
@@ -110,29 +97,6 @@ export type ServerAuthenticate = (
   | ServerAuthorizedScope
   | Response
   | Promise<ServerAuthorizedScope | Response>;
-export type ServerConstraints = Readonly<{
-  /** Host-selected conversation group for bounded HTTP admission. */
-  admission?: Readonly<{ key: string; threadId?: string }>;
-  actionMetadata?: ActionInvocationMetadata;
-  collections?: Readonly<
-    Record<string, import("@copilotz/copilotz/collections").CollectionFilter>
-  >;
-  /** Explicit write policy; read filters never authorize mutations. */
-  collectionMutations?: Readonly<
-    Record<string, ServerCollectionMutationConstraints>
-  >;
-  operations?: Readonly<{ metadata: Readonly<Record<string, unknown>> }>;
-}>;
-export type ServerAuthorize = (
-  request: Request,
-  context:
-    & ServerAuthenticationContext
-    & Readonly<{
-      scope: ServerAuthorizedScope;
-      read: import("../authoring/http-adapter/index.ts").HttpReadServices;
-    }>,
-) => ServerConstraints | Response | Promise<ServerConstraints | Response>;
-
 export type ServerFacadeResource = Readonly<{
   basePath: string;
   /** Maximum raw bytes accepted by the generic asset upload endpoint. */
@@ -143,7 +107,7 @@ export type ServerFacadeResource = Readonly<{
     channels: boolean | ServerPatternPolicy;
   }>;
   authenticate?: ServerAuthenticate;
-  authorize?: ServerAuthorize;
+  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
@@ -152,7 +116,7 @@ export type DefineServerFacadeInput = Readonly<{
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
   authenticate?: ServerAuthenticate;
-  authorize?: ServerAuthorize;
+  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
 }>;
 
 export {
@@ -170,5 +134,4 @@ export {
 export type {
   ServerActionRequest,
   ServerCollectionMutationRequest,
-  ServerInvokeRequest,
 } from "@copilotz/copilotz/engine";

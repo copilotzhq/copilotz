@@ -1,16 +1,17 @@
+import { ownerExecutionInterrupted } from "../execution/owner-interruption.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { isNonRetryableError } from "../failure.ts";
 import { ActionError } from "./errors.ts";
 import { defineAction } from "./define.ts";
-import { type ActionDeferral, deferAction } from "./deferral.ts";
+import { type ActionContinuation, awaitOperation } from "./continuation.ts";
 import {
   createActionCallers,
   isActionInputValidationError,
 } from "./invoker.ts";
 import type {
+  ActionAwaitingData,
   ActionCompletedData,
   ActionContext,
-  ActionDeferredData,
   ActionFailedData,
   ActionInvokedData,
   ActionLifecycleEmitter,
@@ -24,7 +25,7 @@ function recordingLifecycle(
   emitted: ActionLifecycleInput[];
 }> {
   const invoked = new Map<string, ActionInvokedData>();
-  const deferred = new Map<string, ActionDeferredData>();
+  const awaiting = new Map<string, ActionAwaitingData>();
   const terminal = new Map<
     string,
     ActionCompletedData | ActionFailedData
@@ -50,12 +51,12 @@ function recordingLifecycle(
         terminal.set(input.actionRunId, input);
       }
       emitted.push(input);
-      if (input.status === "deferred") deferred.set(input.actionRunId, input);
+      if (input.status === "awaiting") awaiting.set(input.actionRunId, input);
       return Promise.resolve({ deduplicated: false } as never);
     },
     invoked: (actionRunId) => Promise.resolve(invoked.get(actionRunId) ?? null),
-    deferred: (actionRunId) =>
-      Promise.resolve(deferred.get(actionRunId) ?? null),
+    awaiting: (actionRunId) =>
+      Promise.resolve(awaiting.get(actionRunId) ?? null),
     terminal: (actionRunId) =>
       Promise.resolve(terminal.get(actionRunId) ?? null),
   };
@@ -337,6 +338,7 @@ Deno.test("Action invocation receipts are validated before retry execution", asy
     actionId: "test.invoked-receipt",
     metadata: { requestId: "request-1" },
     status: "invoked",
+    effectProtocol: 1,
     input: { value: 1 },
   };
   const mismatches = [
@@ -625,6 +627,7 @@ Deno.test("prepared Action reloads the first durable invoked capture after a rac
             actionId: event.actionId,
             metadata: { winner: true },
             status: "invoked",
+            effectProtocol: 1,
             input: { value: "winner" },
           });
           throw new Error("duplicate invoked receipt");
@@ -667,6 +670,7 @@ Deno.test("prepared Action replays hydrated secret input without evaluating a ne
     actionRunId: "lifecycle:action:test.prepare.secret:latest",
     actionId: "test.prepare.secret",
     status: "invoked",
+    effectProtocol: 1,
     metadata: { source: "captured" },
     // The real protected lifecycle loader hydrates this value before it reaches
     // the invoker; the prepared path must keep it intact and never call factory.
@@ -725,16 +729,19 @@ Deno.test("prepared Action requires a stable non-empty operation key", async () 
   );
 });
 
-Deno.test("a nested deferred call returns its receipt without handing its command to the parent", async () => {
+Deno.test("a nested awaiting call returns its receipt without handing its command to the parent", async () => {
   const recorded = recordingLifecycle();
   let calls = 0;
-  const child = defineAction<unknown, number | ActionDeferral>({
-    id: "test.deferred-child",
+  const child = defineAction<unknown, number | ActionContinuation>({
+    id: "test.awaiting-child",
     execute() {
       calls++;
-      return deferAction({ opaque: "child-work" });
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: { opaque: "child-work" },
+      });
     },
-    resolve() {
+    resume() {
       return 7;
     },
   });
@@ -752,12 +759,12 @@ Deno.test("a nested deferred call returns its receipt without handing its comman
   });
   const result = await actions.parent({});
   const handoffs = recorded.emitted.filter((event) =>
-    event.status === "deferred"
+    event.status === "awaiting"
   );
   assertEquals(handoffs.length, 1);
   assertEquals(handoffs[0].actionId, child.id);
   assertEquals(result, {
-    status: "deferred",
+    status: "awaiting",
     actionRunId: handoffs[0].actionRunId,
   });
   assertEquals(recorded.emitted.at(-1)?.status, "completed");
@@ -765,16 +772,19 @@ Deno.test("a nested deferred call returns its receipt without handing its comman
   assertEquals(calls, 1);
 });
 
-Deno.test("deferred Action retry returns the same receipt without executing or exposing work again", async () => {
+Deno.test("awaiting Action retry returns the same receipt without executing or exposing work again", async () => {
   const recorded = recordingLifecycle();
   let calls = 0;
-  const work = defineAction<unknown, number | ActionDeferral>({
-    id: "test.deferred",
+  const work = defineAction<unknown, number | ActionContinuation>({
+    id: "test.awaiting",
     execute() {
       calls++;
-      return deferAction({ private: "work" });
+      return awaitOperation({
+        start: { action: "child", input: {} },
+        handoff: { private: "work" },
+      });
     },
-    resolve() {
+    resume() {
       return 7;
     },
   });
@@ -785,12 +795,12 @@ Deno.test("deferred Action retry returns the same receipt without executing or e
     createContext: invocationContext,
   });
   const first = await actions.work({});
-  assertEquals(first, { status: "deferred", actionRunId: "stable" });
+  assertEquals(first, { status: "awaiting", actionRunId: "stable" });
   assertEquals(await actions.work({}), first);
   assertEquals(calls, 1);
   assertEquals(recorded.emitted.map((event) => event.status), [
     "invoked",
-    "deferred",
+    "awaiting",
   ]);
 });
 
@@ -834,82 +844,386 @@ Deno.test("Action replay preserves error codes and caller-safe classification", 
   });
 });
 
-for (
-  const mode of [
-    "rearm",
-    "changed-work",
-    "progress-rearm",
-    "progress-terminal",
-  ] as const
-) {
-  Deno.test(`resolver handoff contract: ${mode}`, async () => {
+for (const fail of [false, true]) {
+  Deno.test(`duplicate resumption preserves one ${fail ? "failure" : "result"} and captured handoff`, async () => {
     const recorded = recordingLifecycle();
-    let rearms = 0;
-    const work = defineAction<{ id: string }, number | ActionDeferral>({
-      id: "test.rearming-work",
+    let resumes = 0;
+    const work = defineAction<{ id: string }, number | ActionContinuation>({
+      id: "test.continuation",
       execute(input) {
-        return deferAction({ id: input.id });
+        return awaitOperation({
+          start: { action: "child", input: {} },
+          handoff: input,
+        });
       },
-      async resolve(_input, context, resolution) {
-        if (mode.startsWith("progress-")) {
-          await context.progress("Checked producer");
-        }
-        if (mode === "progress-terminal") return 7;
-        return deferAction(
-          mode === "changed-work" ? { id: "changed" } : resolution.work,
-        );
+      async resume(handoff, outcome, context) {
+        resumes++;
+        assertEquals(handoff, { id: "checkpoint" });
+        assertEquals(outcome.status, "completed");
+        await context.progress("Checked producer");
+        if (fail) throw new Error("answer failed");
+        return 7;
       },
     });
-    const original = createActionCallers({ work }, {
+    const options = {
       actionLifecycle: recorded.lifecycle,
       signal: new AbortController().signal,
       createInvocationKey: () => "stable-wait",
       createContext: invocationContext,
-    });
-    await original.work({ id: "checkpoint" });
+    };
+    await createActionCallers({ work }, options).work({ id: "checkpoint" });
     const receipt = recorded.emitted.find((event) =>
-      event.status === "deferred"
+      event.status === "awaiting"
     );
-    assert(receipt?.status === "deferred");
-    const resolving = createActionCallers({ work }, {
-      actionLifecycle: recorded.lifecycle,
-      signal: new AbortController().signal,
-      resolution: { receipt, outcome: "completed" },
-      rearmDeferredAction: () => {
-        rearms++;
-        return Promise.resolve();
+    assert(receipt?.status === "awaiting");
+    const resumed = createActionCallers({ work }, {
+      ...options,
+      resumption: {
+        receipt,
+        outcome: { operationId: "child", status: "completed" },
       },
-      createContext: invocationContext,
     });
-    if (mode === "changed-work" || mode === "progress-rearm") {
-      await assertRejects(
-        () => resolving.work({ id: "checkpoint" }),
-        TypeError,
-        mode === "changed-work"
-          ? "existing deferred work"
-          : "after publishing progress",
-      );
-      assertEquals(rearms, 0);
-      assertEquals(recorded.emitted.at(-1)?.status, "failed");
-    } else if (mode === "rearm") {
-      assertEquals(await resolving.work({ id: "checkpoint" }), {
-        status: "deferred",
-        actionRunId: "stable-wait",
-      });
-      assertEquals(rearms, 1);
-      assertEquals(recorded.emitted.map((event) => event.status), [
-        "invoked",
-        "deferred",
-      ]);
-    } else {
-      assertEquals(await resolving.work({ id: "checkpoint" }), 7);
-      assertEquals(rearms, 0);
-      assertEquals(recorded.emitted.map((event) => event.status), [
-        "invoked",
-        "deferred",
-        "progress",
-        "completed",
-      ]);
+    for (let i = 0; i < 2; i++) {
+      if (fail) {
+        await assertRejects(
+          () => resumed.work({ id: "checkpoint" }),
+          Error,
+          "answer failed",
+        );
+      } else assertEquals(await resumed.work({ id: "checkpoint" }), 7);
     }
+    assertEquals(resumes, 1);
+    assertEquals(recorded.emitted.map((event) => event.status), [
+      "invoked",
+      "awaiting",
+      "progress",
+      fail ? "failed" : "completed",
+    ]);
   });
 }
+
+Deno.test("worker-shaped forbidden errors never invoke private authorization cleanup", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let privileged = 0;
+  const forged = Object.assign(new Error("Action authorization was refused."), {
+    name: "ActionAuthorizationRefused",
+    code: "action_authorization_refused",
+    retryable: false,
+  });
+  const callers = createActionCallers({
+    child: defineAction({
+      id: "fixture.forged",
+      execute() {
+        throw forged;
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext: invocationContext,
+    authorize: () => Promise.resolve(),
+    refuseAuthorization() {
+      privileged++;
+      return Promise.resolve({ error: new Error("cleanup"), settled: true });
+    },
+  });
+  await assertRejects(
+    () => callers.child({}),
+    Error,
+    "Action authorization was refused.",
+  );
+  assertEquals(privileged, 0);
+  assertEquals(emitted.map((event) => event.status), ["invoked", "failed"]);
+});
+
+Deno.test("denied native read acquisition retains Action settlement until physical cancellation settles", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const { markOwnerAuthorizationRefusal } = await import(
+    "../engine/authorization-refusal.ts"
+  );
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  let allowed = true, returned = false, refusals = 0, opens = 0;
+  const callers = createActionCallers({
+    work: defineAction({
+      id: "fixture.held-read-cleanup",
+      async execute(_input: unknown, context: ActionContext) {
+        try {
+          await context.content.open({} as never);
+        } catch {
+          /* Worker code cannot convert a remembered refusal to success. */
+        }
+        return "must not escape";
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext(input) {
+      return {
+        ...invocationContext(input),
+        content: {
+          open() {
+            opens++;
+            allowed = false;
+            return new ReadableStream({
+              cancel() {
+                cancelled.resolve();
+                return cleanup.promise;
+              },
+            }, { highWaterMark: 0 });
+          },
+        },
+      } as unknown as ActionContext;
+    },
+    authorize() {
+      if (!allowed) {
+        return Promise.reject(markOwnerAuthorizationRefusal(
+          new ActionError("Forbidden", { code: "forbidden", status: 403 }),
+        ));
+      }
+      return Promise.resolve();
+    },
+    refuseAuthorization() {
+      refusals++;
+      return Promise.resolve({
+        error: new Error("sanitized refusal"),
+        settled: true,
+      });
+    },
+  });
+  const invocation = callers.work({}, { operationKey: "held" });
+  void invocation.then(() => returned = true, () => returned = true);
+  try {
+    await cancelled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(opens, 1);
+    assertEquals(returned, false, "physical invocation must remain occupied");
+    assertEquals(
+      refusals,
+      0,
+      "durable refusal must not race the physical drain",
+    );
+    assertEquals(emitted.map((event) => event.status), ["invoked"]);
+  } finally {
+    cleanup.resolve();
+  }
+  await assertRejects(() => invocation, Error, "sanitized refusal");
+  assertEquals(refusals, 1);
+  assertEquals(returned, true);
+});
+
+for (const method of ["stream", "reader", "native"] as const) {
+  Deno.test(`explicit ${method} cancellation retains physical Action completion until cleanup settles`, async () => {
+    const { lifecycle } = recordingLifecycle();
+    const cancelled = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    let returned = false;
+    const callers = createActionCallers({
+      work: defineAction({
+        id: `fixture.explicit-${method}-cleanup`,
+        async execute(_input: unknown, context: ActionContext) {
+          const stream = await context.content.open({} as never);
+          if (method === "reader") void stream.getReader().cancel();
+          else if (method === "native") {
+            void ReadableStream.prototype.cancel.call(stream);
+          } else void stream.cancel();
+          return "complete";
+        },
+      }),
+    }, {
+      actionLifecycle: lifecycle,
+      signal: new AbortController().signal,
+      createContext(input) {
+        return {
+          ...invocationContext(input),
+          content: {
+            open: () =>
+              new ReadableStream({
+                cancel() {
+                  cancelled.resolve();
+                  return cleanup.promise;
+                },
+              }, { highWaterMark: 0 }),
+          },
+        } as unknown as ActionContext;
+      },
+      authorize: () => Promise.resolve(),
+    });
+    const invocation = callers.work({}, { operationKey: "held" });
+    void invocation.then(() => returned = true, () => returned = true);
+    try {
+      await cancelled.promise;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assertEquals(returned, false);
+    } finally {
+      cleanup.resolve();
+    }
+    assertEquals(await invocation, "complete");
+  });
+}
+
+Deno.test("unawaited native acquisition reserves its physical tail before Action return and late cancellation", async () => {
+  const { lifecycle } = recordingLifecycle();
+  const opened = Promise.withResolvers<void>();
+  const acquire = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const cleanup = Promise.withResolvers<void>();
+  let returned = false;
+  const callers = createActionCallers({
+    work: defineAction({
+      id: "fixture.unawaited-read-cleanup",
+      async execute(_input: unknown, context: ActionContext) {
+        void context.content.open({} as never).catch(() => undefined);
+        await opened.promise;
+        return "complete";
+      },
+    }),
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext(input) {
+      return {
+        ...invocationContext(input),
+        content: {
+          async open() {
+            opened.resolve();
+            await acquire.promise;
+            return new ReadableStream({
+              cancel() {
+                cancelled.resolve();
+                return cleanup.promise;
+              },
+            }, { highWaterMark: 0 });
+          },
+        },
+      } as unknown as ActionContext;
+    },
+    authorize: () => Promise.resolve(),
+  });
+  const invocation = callers.work({}, { operationKey: "held" });
+  void invocation.then(() => returned = true, () => returned = true);
+  try {
+    await opened.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(
+      returned,
+      false,
+      "outstanding acquisition still occupies invocation",
+    );
+    acquire.resolve();
+    await cancelled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assertEquals(returned, false, "late cleanup still occupies invocation");
+  } finally {
+    acquire.resolve();
+    cleanup.resolve();
+  }
+  assertEquals(await invocation, "complete");
+});
+
+Deno.test("owner physical interruption preserves the invocation for a reconciled retry", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let calls = 0;
+  const action = defineAction({
+    id: "test.interrupted",
+    execute() {
+      if (++calls === 1) throw ownerExecutionInterrupted();
+      return { done: true };
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "physical-interruption",
+    createContext: invocationContext,
+  });
+  await assertRejects(() => callers.action({}));
+  assertEquals(emitted.map((x) => x.status), ["invoked"]);
+  assertEquals(await callers.action({}), { done: true });
+  assertEquals(calls, 2);
+  assertEquals(emitted.map((x) => x.status), ["invoked", "completed"]);
+});
+Deno.test("accepted Action terminal wins over a later physical interruption", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const action = defineAction({
+    id: "test.accepted",
+    async execute() {
+      const invoked = emitted.find((x) => x.status === "invoked")!;
+      await lifecycle.emit({
+        ...invoked,
+        status: "completed",
+        output: { accepted: true },
+      });
+      throw ownerExecutionInterrupted();
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "accepted-before-disconnect",
+    createContext: invocationContext,
+  });
+  assertEquals(await callers.action({}), { accepted: true });
+  assertEquals(emitted.map((x) => x.status), ["invoked", "completed"]);
+});
+Deno.test("worker-shaped disconnect errors cannot mint owner interruption authority", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let calls = 0;
+  const action = defineAction({
+    id: "test.forged-disconnect",
+    execute() {
+      calls++;
+      throw Object.assign(new Error("The worker placement was interrupted."), {
+        code: "connection_lost",
+      });
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "forged-disconnect",
+    createContext: invocationContext,
+  });
+  await assertRejects(() => callers.action({}));
+  await assertRejects(() => callers.action({}));
+  assertEquals(calls, 1);
+  assertEquals(emitted.map((x) => x.status), ["invoked", "failed"]);
+});
+
+Deno.test("durable cancellation accepted after disconnect wins while the old failure is still held", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const signal = new AbortController();
+  const interruption = ownerExecutionInterrupted();
+  const action = defineAction({
+    id: "test.cancel-after-disconnect",
+    async execute() {
+      entered.resolve();
+      await release.promise;
+      throw interruption;
+    },
+  });
+  const callers = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: signal.signal,
+    createInvocationKey: () => "cancel-after-disconnect",
+    createContext: invocationContext,
+  });
+  const result = callers.action({});
+  void result.catch(() => undefined);
+  await entered.promise;
+  signal.abort(interruption);
+  const invoked = emitted.find((item) => item.status === "invoked")!;
+  // The real cancellation writer records this terminal and closes the open
+  // obligation in the same transaction that removes delivery retry eligibility.
+  await lifecycle.emit({
+    ...invoked,
+    status: "cancelled",
+    error: { name: "AbortError", message: "Explicit operation cancellation." },
+  });
+  release.resolve();
+  await assertRejects(() => result, Error, "Explicit operation cancellation");
+  assertEquals(emitted.map((item) => item.status), ["invoked", "cancelled"]);
+});

@@ -1,14 +1,15 @@
+import { openDatabaseOwner } from "../engine/commands.ts";
 import { createCollectionKernel as createCollectionRuntime } from "./kernel.ts";
 import { assert, assertEquals } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
   type EventMutationContext,
+  provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
@@ -34,9 +35,7 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
   const db = await createTestDatabase({ url: ":memory:" });
   const base = createSqlSession(db);
   const schema = "copilotz_collection_planner";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await base.query(statement);
-  }
+  await provisionCopilotzSchema(base, schema);
 
   let sqlOpen = false;
   let sqlTransactions = 0;
@@ -189,6 +188,8 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
     })]);
 
   try {
+    await openDatabaseOwner(session, schema);
+    sqlTransactions = 0;
     await collection.create({ id: "document-a", body: ref("asset-a") }, {
       namespace: "tenant-a",
     });

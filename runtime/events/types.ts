@@ -15,8 +15,13 @@ export type EventBodyRef = Readonly<{
 export type DurableEvent<TPayload = unknown> = Readonly<{
   durable: true;
   id: string;
+  /** Trusted owner admission, independent of client metadata. */
+  ownerIngress?:
+    import("../actions/protected-action-types.ts").ProtectedActionIngress;
   /** Database-assigned monotonic position, serialized without precision loss. */
   position: string;
+  /** Gap-free owner sequence; namespaces interleave within one database schema. */
+  seq: string;
   schemaVersion: number;
   type: string;
   namespace: string;
@@ -82,7 +87,7 @@ export type DurableEventDraft<TPayload = unknown> = {
   createdAt?: string;
   /** Runtime-owned completion scope inherited by this mutation's deliveries. */
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
   /** Transient write authority; never part of an immutable event or retry key. */
   deliveryLease?: DeliveryLease;

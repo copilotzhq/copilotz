@@ -1,3 +1,5 @@
+import type { OwnerIngressProof } from "./ingress/authority.ts";
+import type { ViewMap } from "../views/index.ts";
 import type {
   CopilotzEngine,
   CreateCopilotzEngineOptions,
@@ -42,10 +44,17 @@ export type CreateCopilotzApplicationOptions =
     /** Default tenant namespace used when run/connect omit one. */
     namespace?: string;
     databaseSchema?: string;
+    /** Trusted owner-local data commands; never sent to workers or HTTP routes. */
+    /** Trusted owner-only Collection authorization callbacks. */
+    authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
+
+    /** Explicit pre-provisioned schemas to activate before factory readiness. */
+    databaseScopes?: readonly string[];
     plugins?: readonly AnyCopilotzPlugin[];
     collections?: CollectionMap;
     actions?: import("../actions/types.ts").ActionMap;
     processors?: ProcessorMap;
+    views?: ViewMap;
     resources?: PluginResources;
     adapters?: PluginAdapters;
     /** Canonical asset body policy shared by every database scope. */
@@ -54,6 +63,7 @@ export type CreateCopilotzApplicationOptions =
     onDeliveryDiagnostic?: DeliveryDiagnosticSink;
     engine?: Omit<
       CreateCopilotzEngineOptions,
+      | "authorization"
       | "session"
       | "registry"
       | "defaultDatabaseSchema"
@@ -71,6 +81,7 @@ export type CopilotzComposition = Pick<
   | "collections"
   | "actions"
   | "processors"
+  | "views"
   | "resources"
   | "adapters"
   | "assets"
@@ -211,7 +222,7 @@ type ApplicationUnresolvedReadOptions =
 export type ApplicationActions<TActions extends ActionMap = ActionMap> =
   Readonly<
     {
-      [K in keyof TActions as K extends "serverInvoke" ? never : K]: (
+      [K in keyof TActions]: (
         input: ActionInput<TActions[K]>,
         options?: ApplicationActionOptions,
       ) => Promise<ActionOutput<TActions[K]>>;
@@ -361,9 +372,14 @@ export type InternalCopilotzApplication =
       input: ApplicationSendInput,
       schema: ActionSchema,
       ownerId: string,
+      ingress?: OwnerIngressProof,
+      completion?:
+        import("./ingress/inline-collection.ts").InlineCollectionCompletion,
+      inline?: boolean,
     ): Promise<ApplicationSendHandle>;
     /** Internal-only transport interruption used by persistence recovery. */
     interruptActiveSends(error: unknown): void;
+    interruptPersistence(error: unknown): void;
     /** Gives the Gateway ownership of durable lease recovery for this runtime. */
     startRecovery(): Promise<void>;
   }>;

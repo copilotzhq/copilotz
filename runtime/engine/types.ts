@@ -1,3 +1,5 @@
+import type { OwnerIngressProof } from "../application/ingress/authority.ts";
+import type { OwnerAlarmScheduler } from "./alarms.ts";
 import type { DeliveryScopeOutstanding } from "../events/store.ts";
 import type {
   AuthorizeContent,
@@ -79,7 +81,7 @@ export type EngineContextSeed = Readonly<{
   /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
   executionIncarnationId?: string;
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
   idempotencyKey: string;
   createMutationIdentity: EngineMutationIdentityFactory;
@@ -95,7 +97,22 @@ export type CopilotzEngineExecutionOptions = Omit<
   | "createContext"
 >;
 
+/** Owner-local proof adapter. Evidence is never trusted merely because a worker sent it. */
+export type EffectNoStartVerifier = (
+  reference: Readonly<
+    {
+      databaseSchema: string;
+      namespace: string;
+      actionRunId: string;
+      step: string;
+    }
+  >,
+  evidence: import("../actions/types.ts").ActionEffectEvidence,
+  options: Readonly<{ signal: AbortSignal }>,
+) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
+  authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
+  verifyEffectNotStarted?: EffectNoStartVerifier;
   session: SqlSession;
   registry: PluginRegistry;
   defaultDatabaseSchema?: string;
@@ -116,6 +133,8 @@ export type CreateCopilotzEngineOptions = Readonly<{
   authorizeContent?: AuthorizeContent;
   createId?: () => string;
   now?: () => Date;
+  /** One platform alarm per database owner. */
+  alarmScheduler?: OwnerAlarmScheduler;
   random?: () => number;
   digest?: (bytes: Uint8Array) => Promise<`sha256:${string}`>;
   assets?: BodyStorageOptions;
@@ -152,6 +171,7 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
 }>;
 
 export type CopilotzEngineDatabaseScope = Readonly<{
+  authorization: import("../authorization/owner.ts").AuthorizationOwner;
   databaseSchema: string;
   content: Readonly<{
     assets: DatabaseAssetRepository;
@@ -189,6 +209,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
 }>;
 
 export type CopilotzEngine = Readonly<{
+  authorization: import("../authorization/owner.ts").AuthorizationOwner;
   databaseSchema: string;
   operations: OperationCatalog;
   databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;
@@ -196,8 +217,19 @@ export type CopilotzEngine = Readonly<{
   execution: Readonly<{
     ownership: DeliveryExecutorOwnership;
     workload: string;
-    liveWorkload: string;
-    /** Register these closures in a worker created within this runtime. */
+    createWorkerWorkloads:
+      import("../execution/workload.ts").OwnerExecutionFactory;
+    lookupReceipt(
+      identity:
+        import("../../dependencies/oxian-hypervisor.ts").WorkerCallContext[
+          "fence"
+        ]["identity"],
+      input: unknown,
+    ): Promise<boolean>;
+    resolveAuthority(
+      schema: string,
+    ): Promise<Readonly<{ epoch: number; signal: AbortSignal }>>;
+    /** Portable handlers for the current worker connection. */
     workloads: Readonly<Record<string, DeliveryWorkload>>;
     dispatchWork(input: ExecutionWorkInput): Promise<ExecutionWorkHandle>;
     /** Waits until output already relayed for one durable causal scope settles. */
@@ -230,6 +262,10 @@ export type CopilotzEngine = Readonly<{
       draft: DurableEventDraft,
       schema: ActionSchema,
       ownerId: string,
+      ingress?: OwnerIngressProof,
+      completion?:
+        import("../application/ingress/inline-collection.ts").InlineCollectionCompletion,
+      inlineAction?: boolean,
     ): Promise<CoordinatedMutationResult<void>>;
     emit(input: EphemeralEventInput): Promise<EphemeralEvent>;
     subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
@@ -237,7 +273,6 @@ export type CopilotzEngine = Readonly<{
       filter: CopilotzEventFilter & {
         namespace: string;
         timeoutMs?: number;
-        pollIntervalMs?: number;
       },
       signal?: AbortSignal,
     ): Promise<CopilotzEvent>;
@@ -260,6 +295,7 @@ export type CopilotzEngine = Readonly<{
       metadata?: Readonly<Record<string, unknown>>;
       correlationId?: string;
       afterPosition?: string;
+      afterSeq?: string;
       order?: "asc" | "desc";
       limit?: number;
     }): Promise<readonly DurableEvent[]>;
@@ -285,7 +321,7 @@ export type CopilotzEngine = Readonly<{
       eventId?: string;
       consumerId?: string;
       settlementScopeId?: string;
-      /** Runtime-owned work group for an outstanding deferred Action. */
+      /** Action lineage carried by durable execution. */
       actionScopeId?: string;
       status?: EventDelivery["status"];
       limit?: number;
@@ -314,15 +350,17 @@ export type CopilotzEngine = Readonly<{
   shutdown(reason?: string): Promise<void>;
   bindTransient(
     processor: Processor,
-    options?: Readonly<{
-      namespace?: string;
-      afterPosition?: string;
-      signal?: AbortSignal;
-    }>,
   ): Promise<() => void>;
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  collectionInvocation?: Readonly<{
+    owner: Parameters<
+      typeof import("../authorization/invocation.ts").bindProcessorCollectionInvocation
+    >[1];
+    invocation: import("../authorization/intent.ts").CollectionPolicyInvocation;
+  }>;
+  operations: import("../actions/types.ts").RuntimeOperations;
   base: EngineContextSeed;
   registry: PluginRegistry;
   assets: DatabaseAssetRepository;
@@ -332,22 +370,25 @@ export type CreateProcessorContextOptions = Readonly<{
   eventHub: CopilotzEventHub;
   publishOutput?: (output: RuntimeOutputDescriptor) => Promise<void>;
   publishLocalStream?: (output: StreamOutput) => Promise<void>;
+  createEffectClient?:
+    import("../actions/invoker.ts").CreateActionCallersOptions[
+      "createEffectClient"
+    ];
+  authorizeAction?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["authorize"];
+  refuseActionAuthorization?:
+    import("../actions/invoker.ts").CreateActionCallersOptions[
+      "refuseAuthorization"
+    ];
+  prepareActionInput?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["prepareInput"];
   actionLifecycle: ActionLifecycleEmitter;
-  actionResolution?:
-    import("../actions/invoker.ts").CreateActionCallersOptions["resolution"];
+  actionResumption?:
+    import("../actions/invoker.ts").CreateActionCallersOptions["resumption"];
   now?: () => Date;
   streamBodyStore: BodyStore;
   streamBodyPrefix: string;
   operationCatalog: OperationCatalog;
-  deferredWaits?: Readonly<{
-    signal(waitKey: string): Promise<number>;
-    registerAction(
-      actionRunId: string,
-      waitKey: string,
-      timeoutMs?: number,
-    ): Promise<void>;
-    rearmAction(actionRunId: string): Promise<void>;
-  }>;
   protectedEventResolver?: ProtectedEventResolver;
 }>;
 

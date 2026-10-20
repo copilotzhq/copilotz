@@ -6,7 +6,6 @@ import {
 
 import { openApi } from "./openapi.ts";
 import type { PluginRegistry } from "@copilotz/copilotz/plugins";
-import { SERVER_INVOKE_ACTION_ID } from "../../actions/invoke-action/index.ts";
 import type {
   ServerCollectionExposure,
   ServerEndpointDescriptor,
@@ -113,7 +112,6 @@ export function compileServerRoutes(
 
   for (const [alias, action] of Object.entries(registry.actions)) {
     if (
-      action.id === SERVER_INVOKE_ACTION_ID ||
       !enabled(facade.expose.actions, action.id)
     ) continue;
     const path = canonicalActionPath(action.id);
@@ -351,11 +349,11 @@ export function compileServerRoutes(
     keys.add(collisionKey);
     return ({ endpoint: value, segments } as const);
   });
-  const document = openApi(facade.basePath, routes);
+
   return ({
     basePath: facade.basePath,
     routes,
-    openApi: document,
+    openApi: openApi(facade.basePath, routes),
     match(method, pathname) {
       const normalizedMethod = method.toUpperCase();
       const normalizedPath = pathname.replace(/\/+$/, "") || "/";

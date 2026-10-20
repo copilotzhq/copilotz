@@ -1,5 +1,5 @@
-import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
-import { createWorker } from "../../dependencies/oxian-worker.ts";
+import { remoteClaimSession } from "./remote-admission.ts";
+import { localDispatcher } from "./local.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
   COPILOTZ_DELIVERY_WORKLOAD,
@@ -9,20 +9,12 @@ import {
   type DeliveryExecutionHandle,
   type DeliveryExecutor,
   type DeliveryExecutorOwnership,
-  type DeliveryInProcessTransport,
   type DeliveryRecoveryDispatch,
-  type DeliveryWorkload,
   type ExecutionWorkTarget,
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
-import { relayCopilotzWorkHandle } from "./protocol.ts";
+import { createOwnerWorkerWorkloads } from "./owner-capability-worker.ts";
 import { reportDeliveryDiagnostic } from "./diagnostics.ts";
-import { isStreamOutputDescriptor } from "../streams/index.ts";
-
-const RECOVERY_MINIMUM_DELAY_MS = 1_000;
-const PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS = 1_000;
-const MAX_PLACEMENT_FAILURE_DIAGNOSTICS = 10_000;
-const SCOPE_PROGRESS_POLL_MS = 250;
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -38,27 +30,36 @@ function assertWorkload(value: string): string {
   return workload;
 }
 
-/** Creates the Copilotz delivery dispatcher and optional embedded Oxian worker. */
+/** Registration is inert and detached before any asynchronous placement. */
+function captureRegistration<T extends object>(value: T): T {
+  return { ...value };
+}
+function captureTarget(
+  value: ExecutionWorkTarget | undefined,
+): ExecutionWorkTarget | undefined {
+  if (value === undefined) return undefined;
+  const captured = captureRegistration(value);
+  if (
+    Reflect.ownKeys(captured).length !== 1 ||
+    typeof captured.workerId !== "string" || !captured.workerId.trim()
+  ) {
+    throw new TypeError("Execution target requires only a workerId.");
+  }
+  return Object.freeze({ workerId: captured.workerId });
+}
+
+/** Creates a direct local dispatcher or uses the injected remote dispatcher. */
 export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
+  options = captureRegistration(options);
+  const capturedTarget = captureTarget(options.target);
+  const capturedTargets = Object.entries(
+    captureRegistration(options.workloadTargets ?? {}),
+  )
+    .map(([name, value]) => [name, captureTarget(value)!] as const);
   if (!options.store && !options.resolveStore) {
     throw new TypeError("Delivery executor requires a store resolver.");
-  }
-  if (options.dispatcher && options.hypervisor) {
-    throw new TypeError(
-      "Configure either a delivery dispatcher or Hypervisor, not both.",
-    );
-  }
-  if (options.dispatcher && options.transport) {
-    throw new TypeError(
-      "An injected dispatcher already owns Worker placement and cannot receive a local transport.",
-    );
-  }
-  if (options.hypervisor && !options.transport) {
-    throw new TypeError(
-      "An injected Hypervisor requires its declared in-process transport.",
-    );
   }
   const workload = assertWorkload(
     options.workload ?? COPILOTZ_DELIVERY_WORKLOAD,
@@ -82,146 +83,66 @@ export function createDeliveryExecutor(
     }
     return store;
   };
-  const handler = createDeliveryWorkload({
-    store: options.store,
-    resolveStore: options.resolveStore,
-    registry: options.registry,
-    createContext: options.createContext,
-    resolveDeferredAction: options.resolveDeferredAction,
-    leaseMs: options.leaseMs,
-    heartbeatMs: options.heartbeatMs,
-    scheduler: options.scheduler,
-    workerId,
-    onDiagnostic: options.onDiagnostic,
-  });
   if (Object.prototype.hasOwnProperty.call(options.workloads ?? {}, workload)) {
     throw new TypeError(
       `Additional workload '${workload}' conflicts with durable deliveries.`,
     );
   }
-  const additionalWorkloads = options.workloads ?? {};
-  const localWorkloadWorkers = options.localWorkloadWorkers ?? {};
-  if (options.dispatcher && Object.keys(localWorkloadWorkers).length > 0) {
-    throw new TypeError(
-      "Local workload workers cannot be attached to an injected dispatcher.",
-    );
-  }
-  for (const name of Object.keys(localWorkloadWorkers)) {
-    if (!Object.prototype.hasOwnProperty.call(additionalWorkloads, name)) {
-      throw new TypeError(
-        `Local workload worker '${name}' has no registered workload.`,
-      );
-    }
-  }
-  const primaryAdditional = Object.fromEntries(
-    Object.entries(additionalWorkloads).filter(([name]) =>
-      !Object.prototype.hasOwnProperty.call(localWorkloadWorkers, name)
-    ),
-  );
-  const hostedWorkloads = {
-    ...primaryAdditional,
-    [workload]: handler,
-  } as const;
-
-  let dispatcher: DeliveryDispatcher;
-  let ownership: DeliveryExecutorOwnership;
-  const attachedWorkers: ReturnType<typeof createWorker>[] = [];
-  let privateHypervisor: ReturnType<typeof createHypervisor> | undefined;
-  let target = options.target;
-  const workloadTargets = new Map<string, ExecutionWorkTarget>(
-    Object.entries(options.workloadTargets ?? {}),
-  );
-  let localCapacity: number | undefined;
-  const transport: DeliveryInProcessTransport | undefined = options.dispatcher
+  const additionalWorkloads = captureRegistration(options.workloads ?? {});
+  const localCapacity = options.dispatcher
     ? undefined
-    : options.transport ?? ({
-      type: "in-process" as const,
-      config: {
-        topic: `copilotz.execution.${crypto.randomUUID()}`,
-      } as const,
-    } as const);
-
-  const startWorker = (
-    config: Readonly<{
-      id: string;
-      capacity: number;
-      workloads: Readonly<Record<string, DeliveryWorkload>>;
-    }>,
-  ): void => {
-    const worker = createWorker({
-      id: config.id,
-      transport: transport!,
-      capacity: config.capacity,
-      workloads: config.workloads,
-    });
-    attachedWorkers.push(worker);
-    void worker.closed.catch(() => undefined);
-  };
-
-  const attachLocalWorkers = (): void => {
-    startWorker({
-      id: workerId,
-      capacity: localCapacity!,
-      workloads: hostedWorkloads,
-    });
-    target = { workerId };
-    const workerIds = new Set([workerId]);
-    let index = 0;
-    for (const [name, config] of Object.entries(localWorkloadWorkers)) {
-      if (workloadTargets.has(name)) {
-        throw new TypeError(
-          `Workload '${name}' cannot configure both a target and local worker.`,
-        );
-      }
-      const isolatedWorkerId = config.workerId?.trim() ||
-        `${workerId}-workload-${++index}`;
-      if (workerIds.has(isolatedWorkerId)) {
-        throw new TypeError(
-          `Execution worker ID '${isolatedWorkerId}' is duplicated.`,
-        );
-      }
-      workerIds.add(isolatedWorkerId);
-      startWorker({
-        id: isolatedWorkerId,
-        capacity: positiveCapacity(config.capacity),
-        workloads: { [name]: additionalWorkloads[name] },
-      });
-      workloadTargets.set(name, { workerId: isolatedWorkerId });
-    }
-  };
-
-  if (options.dispatcher) {
-    dispatcher = options.dispatcher;
-    ownership = "injected_dispatcher";
-  } else if (options.hypervisor) {
-    localCapacity = positiveCapacity(options.capacity);
-    attachLocalWorkers();
-    dispatcher = options.hypervisor;
-    ownership = "shared_hypervisor";
-  } else {
-    localCapacity = positiveCapacity(options.capacity);
-    privateHypervisor = createHypervisor({
-      transports: [transport!],
-    });
-    attachLocalWorkers();
-    dispatcher = privateHypervisor;
-    ownership = "private_hypervisor";
-  }
-  const ready = Promise.all(
-    attachedWorkers.map((worker) => worker.ready),
-  ).then(() => undefined);
-  void ready.catch(() => {});
-
-  const retryScheduler = options.scheduler ?? ({
-    schedule(callback: () => void, delayMs: number): unknown {
-      return setTimeout(callback, delayMs);
-    },
-    cancel(handle: unknown): void {
-      clearTimeout(handle as ReturnType<typeof setTimeout>);
-    },
-  } as const);
+    : positiveCapacity(options.capacity);
+  const target = capturedTarget;
+  const workloadTargets = new Map(capturedTargets);
+  const resolvedEvents = new Map<string, DurableEvent>();
+  const resolvedEvent = (schema: string, id: string) =>
+    resolvedEvents.get(`${schema}\0${id}`);
+  const localWorkloads = options.dispatcher
+    ? {}
+    : options.createWorkerWorkloads?.({
+      registry: options.registry,
+      workerId,
+      localExecution: true,
+      onDiagnostic: options.onDiagnostic,
+      resolvedEvent,
+    }) ?? {
+      ...additionalWorkloads,
+      [workload]: createDeliveryWorkload({
+        ...options,
+        workerId,
+        localExecution: true,
+        resolvedEvent,
+      }),
+    };
+  const local = options.dispatcher
+    ? undefined
+    : localDispatcher(localWorkloads, localCapacity!, workerId);
+  const dispatcher = options.dispatcher ?? local!;
+  const ownership: DeliveryExecutorOwnership = options.dispatcher
+    ? "injected_dispatcher"
+    : "local";
 
   let closed = false;
+  let shutdownPromise: Promise<void> | undefined;
+  // Delivery/recovery producers only; non-delivery WorkHandles and external
+  // settleOutputs calls retain their existing lifetimes.
+  const admittedTasks = new Set<Promise<unknown>>();
+  const settlementTasks = new Set<Promise<unknown>>();
+  const trackTask = <T>(
+    tasks: Set<Promise<unknown>>,
+    task: Promise<T>,
+  ): Promise<T> => {
+    tasks.add(task);
+    void task.finally(() => tasks.delete(task)).catch(() => undefined);
+    return task;
+  };
+  const admitTask = <T>(run: () => Promise<T>): Promise<T> => {
+    if (closed) {
+      return Promise.reject(new Error("Delivery executor is shut down."));
+    }
+    // Register the whole call before its first await, including store lookup.
+    return trackTask(admittedTasks, run());
+  };
   const active = new Map<string, DeliveryExecutionHandle>();
   const activeOutputScopes = new Map<
     string,
@@ -229,19 +150,9 @@ export function createDeliveryExecutor(
   >();
   const dispatchTasks = new Map<string, Promise<DeliveryExecutionHandle>>();
   const scheduled = new Map<string, string | EventDelivery>();
-  const retryTimers = new Map<
-    string,
-    Readonly<{ handle: unknown; dueAtMs: number }>
-  >();
-  const recoveryTimers = new Map<
-    string,
-    Readonly<{ handle: unknown; dueAtMs: number }>
-  >();
-  const continuousRecoverySchemas = new Set<string>();
-  const lastPlacementFailureDiagnosticAt = new Map<string, number>();
   let scheduling = false;
   let capacityBlocked = false;
-  let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
+  let pumpQueued = false;
   const deliveryKey = (
     delivery: string | EventDelivery,
     databaseSchema = defaultDatabaseSchema,
@@ -254,27 +165,6 @@ export function createDeliveryExecutor(
     namespace: string,
     settlementScopeId: string,
   ): string => `${databaseSchema}\u0000${namespace}\u0000${settlementScopeId}`;
-  const shouldReportPlacementAttempt = (
-    key: string,
-    nowMs: number,
-  ): boolean => {
-    const previous = lastPlacementFailureDiagnosticAt.get(key);
-    return previous === undefined ||
-      nowMs - previous >= PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS;
-  };
-  const recordPlacementFailureDiagnostic = (
-    key: string,
-    nowMs: number,
-  ): void => {
-    if (
-      !lastPlacementFailureDiagnosticAt.has(key) &&
-      lastPlacementFailureDiagnosticAt.size >= MAX_PLACEMENT_FAILURE_DIAGNOSTICS
-    ) {
-      const oldest = lastPlacementFailureDiagnosticAt.keys().next().value;
-      if (oldest) lastPlacementFailureDiagnosticAt.delete(oldest);
-    }
-    lastPlacementFailureDiagnosticAt.set(key, nowMs);
-  };
   const trackOutputScope = (
     delivery: EventDelivery,
     event: DurableEvent,
@@ -294,18 +184,22 @@ export function createDeliveryExecutor(
       if (tasks.size === 0) activeOutputScopes.delete(key);
     }).catch(() => undefined);
   };
-  const schedulePump = (delayMs = 0): void => {
-    if (closed || scheduling || scheduleTimer !== undefined) return;
-    scheduleTimer = setTimeout(() => {
-      scheduleTimer = undefined;
-      void pumpScheduled();
-    }, delayMs);
+  const schedulePump = (): void => {
+    if (closed || pumpQueued) return;
+    pumpQueued = true;
+    queueMicrotask(() => {
+      pumpQueued = false;
+      void trackTask(admittedTasks, pumpScheduled()).catch(() => undefined);
+    });
   };
   const pumpScheduled = async (): Promise<void> => {
     if (closed || scheduling) return;
     scheduling = true;
     try {
       for (const [id, delivery] of scheduled) {
+        // An alarm may commit/consume the next retry while the previous Work
+        // handle is still draining. Retain the wake until completion re-pumps.
+        if (active.has(id) || dispatchTasks.has(id)) continue;
         if (
           localCapacity !== undefined &&
           active.size + dispatchTasks.size >= localCapacity
@@ -364,53 +258,35 @@ export function createDeliveryExecutor(
             queuedCount: scheduled.size,
           });
         }
+        // Consume only this selected queue entry before awaiting placement. A
+        // later alarm for the same key owns a new entry and must survive it.
+        scheduled.delete(id);
         try {
           const handle = await dispatchDelivery(delivery, {
             origin: "scheduled",
           });
-          scheduled.delete(id);
           void handle.done.finally(() => schedulePump()).catch(() => undefined);
         } catch {
-          // Placement does not claim the durable delivery. Keep it queued and
-          // retry after another operation can release worker capacity.
-          break;
+          // A placement failure is durable owner work, never a second timer.
+          const schema = typeof delivery === "string"
+            ? defaultDatabaseSchema
+            : delivery.databaseSchema;
+          const deliveryId = typeof delivery === "string"
+            ? delivery
+            : delivery.id;
+          if (!closed) {
+            await trackTask(
+              admittedTasks,
+              resolveStore(schema).then((store) =>
+                store.deferDeliveryPlacement(deliveryId, 1000)
+              ),
+            );
+          }
         }
       }
     } finally {
       scheduling = false;
-      if (!closed && scheduled.size > 0) schedulePump(10);
     }
-  };
-
-  const cancelRetryTimer = (key: string): void => {
-    const timer = retryTimers.get(key);
-    if (!timer) return;
-    retryTimers.delete(key);
-    retryScheduler.cancel(timer.handle);
-  };
-
-  const scheduleRetry = (delivery: EventDelivery): void => {
-    if (closed || delivery.status !== "retry_wait") return;
-    const key = deliveryKey(delivery);
-    const parsed = Date.parse(delivery.availableAt);
-    const dueAtMs = Number.isFinite(parsed) ? parsed : Date.now();
-    const existing = retryTimers.get(key);
-    if (existing && existing.dueAtMs <= dueAtMs) return;
-    if (existing) retryScheduler.cancel(existing.handle);
-    const handle = retryScheduler.schedule(() => {
-      retryTimers.delete(key);
-      if (closed || active.has(key) || dispatchTasks.has(key)) return;
-      scheduled.set(key, delivery);
-      schedulePump();
-    }, Math.max(0, dueAtMs - Date.now()));
-    retryTimers.set(key, { handle, dueAtMs } as const);
-  };
-
-  const cancelRecoveryTimer = (databaseSchema: string): void => {
-    const timer = recoveryTimers.get(databaseSchema);
-    if (!timer) return;
-    recoveryTimers.delete(databaseSchema);
-    retryScheduler.cancel(timer.handle);
   };
 
   /**
@@ -461,14 +337,16 @@ export function createDeliveryExecutor(
         work.metadata,
         Promise.resolve(undefined),
       ]).catch(() => undefined);
-      const current = settledDelivery(delivery, reported) ??
-        await store.getDelivery(delivery.id);
+      const current =
+        (options.dispatcher
+          ? undefined
+          : settledDelivery(delivery, reported)) ??
+          await store.getDelivery(delivery.id);
       if (!current) {
         throw new Error(
           `Delivery '${delivery.id}' disappeared after execution.`,
         );
       }
-      scheduleRetry(current);
       return ({
         event,
         delivery: current,
@@ -477,9 +355,11 @@ export function createDeliveryExecutor(
     })();
     trackOutputScope(delivery, event, done);
     // Do not include this callback in `done`: settlement drains that promise.
+    // Shutdown owns a separate drain; the callback must not await shutdown.
     // Maintenance retries missed wakes after a crash or temporary failure.
-    void done.then((result) => options.onDeliverySettled?.(result)).catch(() =>
-      undefined
+    trackTask(
+      settlementTasks,
+      done.then((result) => options.onDeliverySettled?.(result)),
     );
 
     return ({
@@ -500,38 +380,58 @@ export function createDeliveryExecutor(
     databaseSchema?: string;
     origin?: "direct" | "scheduled" | "recovery";
   }>;
-  const dispatchDelivery = async (
+  const dispatchAdmittedDelivery = async (
     deliveryInput: string | EventDelivery,
     dispatchOptions: DispatchOptions = {},
   ): Promise<DeliveryExecutionHandle> => {
-    if (closed) throw new Error("Delivery executor is shut down.");
     const requestedSchema = typeof deliveryInput === "string"
       ? dispatchOptions.databaseSchema?.trim() || defaultDatabaseSchema
       : deliveryInput.databaseSchema;
-    const store = await resolveStore(requestedSchema);
-    const delivery = typeof deliveryInput === "string"
-      ? await store.getDelivery(deliveryInput)
-      : deliveryInput;
-    if (!delivery) {
-      throw new Error(`Delivery '${deliveryInput}' was not found.`);
-    }
-    const key = deliveryKey(delivery);
-    cancelRetryTimer(key);
+    // Join in-flight work before the first await, so a concurrent caller never
+    // starts a second dispatch while the first is still reading the delivery.
+    const key = deliveryKey(deliveryInput, requestedSchema);
     const existing = active.get(key);
     if (existing) return existing;
     const dispatching = dispatchTasks.get(key);
     if (dispatching) return await dispatching;
 
     const task = (async () => {
-      await ready;
+      const store = await resolveStore(requestedSchema);
+      const delivery = typeof deliveryInput === "string"
+        ? await store.getDelivery(deliveryInput)
+        : deliveryInput;
+      if (!delivery) {
+        throw new Error(`Delivery '${deliveryInput}' was not found.`);
+      }
       const event = await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
-      const attemptId = createAttemptId();
+      if (!options.dispatcher) {
+        resolvedEvents.set(`${delivery.databaseSchema}\0${delivery.id}`, event);
+      }
+      const remoteSession = options.dispatcher && delivery.leaseOwner
+        ? remoteClaimSession(delivery.leaseOwner)
+        : undefined;
+      // The remote workload consumes and verifies the durable preclaim before
+      // execution. Routing this immutable admission result needs no extra read.
+      const preclaim = delivery.leaseOwner
+        ? remoteSession
+          ? delivery.status === "leased" &&
+              Date.parse(delivery.leaseExpiresAt ?? "") > Date.now()
+            ? delivery
+            : null
+          : !options.dispatcher
+          ? await store.readLocalClaim(delivery.id, delivery.leaseOwner)
+          : null
+        : null;
+      const attemptId = preclaim?.leaseOwner ?? createAttemptId();
       if (!attemptId.trim()) {
         throw new TypeError("Delivery dispatch attempt IDs must be non-empty.");
       }
+      const authority = await store.executionAuthority();
+      authority.signal.throwIfAborted();
       const metadata: DeliveryDispatchMetadata = {
         schema: "copilotz.delivery.dispatch.v1",
+        ownerEpoch: authority.epoch,
         databaseSchema: delivery.databaseSchema,
         deliveryId: delivery.id,
         eventId: event.id,
@@ -541,8 +441,7 @@ export function createDeliveryExecutor(
         idempotencyKey: delivery.id,
       } as const;
       const placementNowMs = Date.now();
-      const reportPlacement = options.onDiagnostic !== undefined &&
-        shouldReportPlacementAttempt(key, placementNowMs);
+      const reportPlacement = options.onDiagnostic !== undefined;
       if (reportPlacement) {
         reportDeliveryDiagnostic(options.onDiagnostic, {
           phase: "placement_requested",
@@ -564,7 +463,11 @@ export function createDeliveryExecutor(
       try {
         dispatched = await dispatcher.dispatch({
           workload,
-          ...(target ? { target } : {}),
+          ...(remoteSession && preclaim
+            ? { target: { workerId: remoteSession.identity.workerId } }
+            : target
+            ? { target }
+            : {}),
           metadata,
         });
       } catch (error) {
@@ -585,11 +488,9 @@ export function createDeliveryExecutor(
             queuedCount: scheduled.size,
             origin: dispatchOptions.origin ?? "direct",
           });
-          recordPlacementFailureDiagnostic(key, placementNowMs);
         }
         throw error;
       }
-      lastPlacementFailureDiagnosticAt.delete(key);
       reportDeliveryDiagnostic(options.onDiagnostic, {
         phase: "placement_accepted",
         timestampMs: Date.now(),
@@ -606,38 +507,24 @@ export function createDeliveryExecutor(
         queuedCount: scheduled.size,
         origin: dispatchOptions.origin ?? "direct",
       });
-      const work = relayCopilotzWorkHandle(dispatched, {
-        onEventFrame: (output) => {
-          if (isStreamOutputDescriptor(output)) return;
-          reportDeliveryDiagnostic(options.onDiagnostic, {
-            phase: "gateway_event_frame_received",
-            timestampMs: Date.now(),
-            ...(output.durable ? { eventId: output.id } : {}),
-            deliveryId: delivery.id,
-            consumerId: delivery.consumerId,
-            dispatchAttemptId: attemptId,
-            operationId: dispatched.operationId,
-            workerId: target?.workerId ?? workerId,
-            databaseSchema: delivery.databaseSchema,
-            namespace: output.namespace,
-          });
-        },
-        onOutput: options.onOutput
-          ? (output) =>
-            options.onOutput!(output, {
-              databaseSchema: delivery.databaseSchema,
-              settlementScopeId: delivery.settlementScopeId,
-            })
-          : undefined,
-      });
+      const work = dispatched;
       const handle = createHandle(delivery, event, store, attemptId, work);
       active.set(key, handle);
-      if (continuousRecoverySchemas.has(delivery.databaseSchema)) {
-        refreshRecoverySchedule(delivery.databaseSchema);
-      }
       // Register first, then attach cleanup. A fast embedded operation may
       // already be settled when createHandle returns.
-      void handle.done.finally(() => {
+      void handle.done.then((result) => {
+        // An availability wake may have raced the successful claim. Terminal
+        // deliveries never become runnable again; discard that stale wake now.
+        // Retry waits keep their queued wake until this handle finishes draining.
+        if (
+          ["succeeded", "cancelled", "dead_letter"].includes(
+            result.delivery.status,
+          )
+        ) {
+          scheduled.delete(key);
+        }
+      }).finally(() => {
+        resolvedEvents.delete(`${delivery.databaseSchema}\0${delivery.id}`);
         if (active.get(key)?.operationId === work.operationId) {
           active.delete(key);
         }
@@ -649,23 +536,30 @@ export function createDeliveryExecutor(
     try {
       return await task;
     } finally {
+      // The event cache uses the same schema-and-ID key.
+      if (!active.has(key)) resolvedEvents.delete(key);
       if (dispatchTasks.get(key) === task) {
         dispatchTasks.delete(key);
+        // A consumed wake may also be waiting on a placement that rejected
+        // before producing an active handle. Admission/authority checks still
+        // run through the ordinary dispatcher path.
+        schedulePump();
       }
     }
   };
 
-  const dispatchRecoverable = async (
+  const dispatchDelivery = (
+    deliveryInput: string | EventDelivery,
+    dispatchOptions: DispatchOptions = {},
+  ): Promise<DeliveryExecutionHandle> =>
+    admitTask(() => dispatchAdmittedDelivery(deliveryInput, dispatchOptions));
+
+  const dispatchAdmittedRecoverable = async (
     listOptions: Parameters<DeliveryExecutor["dispatchRecoverable"]>[0] = {},
   ): Promise<DeliveryRecoveryDispatch> => {
     const databaseSchema = listOptions.databaseSchema?.trim() ||
       defaultDatabaseSchema;
-    const continuous = listOptions.namespace === undefined &&
-      listOptions.consumerIds === undefined;
-    if (options.continuousRecovery === true && continuous) {
-      continuousRecoverySchemas.add(databaseSchema);
-    }
-    try {
+    {
       const store = await resolveStore(databaseSchema);
       const { databaseSchema: _databaseSchema, ...filters } = listOptions;
       await store.recoverExpiredDeliveries({
@@ -705,66 +599,31 @@ export function createDeliveryExecutor(
         handles: handles,
         failures: failures,
       } as const);
-    } finally {
-      if (continuous) refreshRecoverySchedule(databaseSchema);
     }
   };
 
-  function refreshRecoverySchedule(requestedDatabaseSchema: string): void {
-    const databaseSchema = requestedDatabaseSchema.trim();
-    if (closed || !continuousRecoverySchemas.has(databaseSchema)) return;
-    void resolveStore(databaseSchema).then((store) =>
-      store.nextRecoveryDelayMs()
-    ).then((delay) => {
-      if (closed) return;
-      if (delay === null) {
-        cancelRecoveryTimer(databaseSchema);
-        return;
-      }
-      const dueAtMs = Date.now() + Math.max(RECOVERY_MINIMUM_DELAY_MS, delay);
-      const existing = recoveryTimers.get(databaseSchema);
-      if (existing && existing.dueAtMs <= dueAtMs) return;
-      if (existing) retryScheduler.cancel(existing.handle);
-      const handle = retryScheduler.schedule(() => {
-        recoveryTimers.delete(databaseSchema);
-        if (closed) return;
-        // dispatchRecoverable rearms the schema in its own finally block.
-        void dispatchRecoverable({ databaseSchema }).catch(() => undefined);
-      }, Math.max(0, dueAtMs - Date.now()));
-      recoveryTimers.set(databaseSchema, { handle, dueAtMs } as const);
-    }).catch(() => undefined);
-  }
+  const dispatchRecoverable = (
+    listOptions: Parameters<DeliveryExecutor["dispatchRecoverable"]>[0] = {},
+  ): Promise<DeliveryRecoveryDispatch> =>
+    admitTask(() => dispatchAdmittedRecoverable(listOptions));
 
   return ({
     ownership,
     workload,
-    workloads: hostedWorkloads,
+    workloads: createOwnerWorkerWorkloads({
+      registry: options.registry,
+      workloads: [workload, ...Object.keys(additionalWorkloads)],
+    }),
     scheduleDelivery(delivery) {
       if (closed) throw new Error("Delivery executor is shut down.");
       const id = deliveryKey(delivery);
-      if (active.has(id) || dispatchTasks.has(id) || scheduled.has(id)) return;
-      cancelRetryTimer(id);
-      scheduled.set(id, delivery);
-      if (
-        continuousRecoverySchemas.has(
-          typeof delivery === "string"
-            ? defaultDatabaseSchema
-            : delivery.databaseSchema,
-        )
-      ) {
-        refreshRecoverySchedule(
-          typeof delivery === "string"
-            ? defaultDatabaseSchema
-            : delivery.databaseSchema,
-        );
-      }
+      if (!scheduled.has(id)) scheduled.set(id, delivery);
       schedulePump();
     },
     async dispatchWork(input) {
       if (closed) {
         throw new Error("Delivery executor is shut down.");
       }
-      await ready;
       const workloadTarget = workloadTargets.get(input.workload);
       const dispatched = await dispatcher.dispatch({
         ...input,
@@ -776,14 +635,7 @@ export function createDeliveryExecutor(
           ? { target }
           : {}),
       });
-      const databaseSchema = typeof input.metadata?.databaseSchema === "string"
-        ? input.metadata.databaseSchema.trim() || defaultDatabaseSchema
-        : defaultDatabaseSchema;
-      return relayCopilotzWorkHandle(dispatched, {
-        onOutput: options.onOutput
-          ? (output) => options.onOutput!(output, { databaseSchema })
-          : undefined,
-      });
+      return dispatched;
     },
     dispatchDelivery,
     dispatchRecoverable,
@@ -826,51 +678,40 @@ export function createDeliveryExecutor(
       if (!tasks?.size || signal?.aborted) return Promise.resolve(false);
       return new Promise<boolean>((resolve) => {
         const finish = () => {
-          clearTimeout(timer);
           signal?.removeEventListener("abort", finish);
           resolve(true);
         };
-        // Work elsewhere can change the scope too, so this only shortens a
-        // poll interval instead of replacing it.
-        const timer = setTimeout(finish, SCOPE_PROGRESS_POLL_MS);
         signal?.addEventListener("abort", finish, { once: true });
         for (const task of tasks.keys()) void task.then(finish, finish);
       });
     },
-    async shutdown(reason = "copilotz_delivery_executor_shutdown") {
-      if (closed) return;
+    shutdown(reason = "copilotz_delivery_executor_shutdown") {
+      if (shutdownPromise) return shutdownPromise;
       closed = true;
-      if (scheduleTimer !== undefined) clearTimeout(scheduleTimer);
-      scheduleTimer = undefined;
-      for (const timer of retryTimers.values()) {
-        retryScheduler.cancel(timer.handle);
-      }
-      retryTimers.clear();
-      for (const timer of recoveryTimers.values()) {
-        retryScheduler.cancel(timer.handle);
-      }
-      recoveryTimers.clear();
-      scheduled.clear();
-      const pending = await Promise.allSettled([...dispatchTasks.values()]);
-      const handles = new Map(active);
-      for (const result of pending) {
-        if (result.status === "fulfilled") {
-          handles.set(result.value.deliveryId, result.value);
+      // Share the complete drain with every caller, including callers arriving
+      // during cleanup. Defer cleanup until the shared promise is installed.
+      shutdownPromise = Promise.resolve().then(async () => {
+        scheduled.clear();
+        // Admission is closed. These producers finish at handle creation or the
+        // end of a recovery read, never at handle.done or callback completion.
+        await Promise.allSettled([...admittedTasks]);
+        const pending = await Promise.allSettled([...dispatchTasks.values()]);
+        const handles = new Map(active);
+        for (const result of pending) {
+          if (result.status === "fulfilled") {
+            handles.set(result.value.deliveryId, result.value);
+          }
         }
-      }
-      const cancellations = [...handles.values()].map((handle) =>
-        handle.cancel(reason).catch(() => undefined)
-      );
-      await Promise.all(cancellations);
-      await Promise.all(
-        attachedWorkers.map((worker) =>
-          worker.stop(reason).catch(() => undefined)
-        ),
-      );
-      await Promise.allSettled(
-        attachedWorkers.map((worker) => worker.closed),
-      );
-      await privateHypervisor?.shutdown(reason);
+        const cancellations = [...handles.values()].map((handle) =>
+          handle.cancel(reason).catch(() => undefined)
+        );
+        await Promise.all(cancellations);
+        await local?.drain();
+        // Timer/resource errors must not skip cancellation: a delivery may need
+        // it to finish. Only then drain the callbacks, independently of done.
+        await Promise.allSettled([...settlementTasks]);
+      });
+      return shutdownPromise;
     },
   } as const);
 }

@@ -2,6 +2,7 @@
 
 export { defineCollection, relation } from "./definition.ts";
 export type {
+  CollectionAlarmDefinition,
   CollectionCommandDefinition,
   CollectionDefinition,
   CollectionDefinitionInput,

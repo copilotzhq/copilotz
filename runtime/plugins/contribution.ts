@@ -1,4 +1,5 @@
 /** Generic, synchronous authoring contributions. No plugin semantics live here. @module */
+import type { ViewMap } from "../views/index.ts";
 import type { ActionMap } from "../actions/types.ts";
 import type {
   AnyCopilotzPlugin,
@@ -7,18 +8,22 @@ import type {
   ProcessorMap,
 } from "./types.ts";
 
+type EmptyMap = Readonly<Record<never, never>>;
+
 export const contribution = Symbol.for("copilotz.composition.contribution");
 
 export interface ContributionResult<
   T = unknown,
   A extends ActionMap = ActionMap,
   P extends readonly AnyCopilotzPlugin[] = readonly [],
+  V extends ViewMap = EmptyMap,
 > {
   value: T;
   plugins?: P;
   actions?: A;
   collections?: CollectionMap;
   processors?: ProcessorMap;
+  views?: V;
   resources?: PluginNamespaceMap;
   adapters?: PluginNamespaceMap;
 }
@@ -27,10 +32,11 @@ export interface CompositionContribution<
   T = unknown,
   A extends ActionMap = ActionMap,
   P extends readonly AnyCopilotzPlugin[] = readonly [],
+  V extends ViewMap = EmptyMap,
 > {
   [contribution](
     location: { namespace: string; alias: string },
-  ): ContributionResult<T, A, P>;
+  ): ContributionResult<T, A, P, V>;
 }
 
 export function isContribution(
@@ -38,21 +44,25 @@ export function isContribution(
 ): value is CompositionContribution<
   unknown,
   ActionMap,
-  readonly AnyCopilotzPlugin[]
+  readonly AnyCopilotzPlugin[],
+  ViewMap
 > {
   return value !== null && typeof value === "object" &&
     typeof (value as CompositionContribution<
         unknown,
         ActionMap,
-        readonly AnyCopilotzPlugin[]
+        readonly AnyCopilotzPlugin[],
+        ViewMap
       >)[contribution] === "function";
 }
 
 export type ResolvedNamespaces<T extends PluginNamespaceMap> = {
   readonly [N in keyof T]: {
-    readonly [K in keyof T[N]]: T[N][K] extends
-      CompositionContribution<infer V, ActionMap, readonly AnyCopilotzPlugin[]>
-      ? V
+    readonly [K in keyof T[N]]: T[N][K] extends {
+      [contribution](
+        location: { namespace: string; alias: string },
+      ): { value: infer V };
+    } ? V
       : T[N][K];
   };
 };
@@ -62,9 +72,18 @@ export function resolveContributions(input: {
   actions?: ActionMap;
   collections?: CollectionMap;
   processors?: ProcessorMap;
+  views?: ViewMap;
   resources?: PluginNamespaceMap;
   adapters?: PluginNamespaceMap;
-}) {
+}): {
+  actions: ActionMap;
+  collections: CollectionMap;
+  processors: ProcessorMap;
+  views: ViewMap;
+  resources: Record<string, Record<string, unknown>>;
+  adapters: Record<string, Record<string, unknown>>;
+  plugins: AnyCopilotzPlugin[];
+} {
   const copy = (map: PluginNamespaceMap = {}) =>
     Object.fromEntries(
       Object.entries(map).map(([name, values]) => [name, { ...values }]),
@@ -73,6 +92,7 @@ export function resolveContributions(input: {
     actions: { ...input.actions },
     collections: { ...input.collections },
     processors: { ...input.processors },
+    views: { ...input.views },
     resources: copy(input.resources),
     adapters: copy(input.adapters),
     plugins: [] as AnyCopilotzPlugin[],
@@ -123,7 +143,22 @@ export function resolveContributions(input: {
           }
           output.plugins.push(...result.plugins);
         }
-        for (const kind of ["actions", "collections", "processors"] as const) {
+        if (
+          result.views !== undefined && (
+            !result.views || typeof result.views !== "object" ||
+            Array.isArray(result.views)
+          )
+        ) {
+          throw new TypeError("Contribution views must be an alias map.");
+        }
+        for (
+          const kind of [
+            "actions",
+            "collections",
+            "processors",
+            "views",
+          ] as const
+        ) {
           merge(output[kind], result[kind] ?? {}, kind);
         }
         for (const kind of ["resources", "adapters"] as const) {
@@ -152,12 +187,20 @@ export function resolveContributions(input: {
   return output;
 }
 
-type ActionsOf<T, Alias extends PropertyKey> = T extends
-  CompositionContribution<unknown, infer A, readonly AnyCopilotzPlugin[]>
-  ? string extends keyof A ? { readonly [K in Alias]: A[string] } : A
-  : {};
+type ContributionReturn<T> = T extends {
+  [contribution](location: { namespace: string; alias: string }): infer R;
+} ? R
+  : EmptyMap;
+
+type ActionsOf<T, Alias extends PropertyKey> = "actions" extends
+  keyof ContributionReturn<T>
+  ? NonNullable<ContributionReturn<T>["actions"]> extends
+    infer A extends ActionMap
+    ? string extends keyof A ? { readonly [K in Alias]: A[string] } : A
+  : EmptyMap
+  : EmptyMap;
 type Intersection<T> = (T extends unknown ? (value: T) => void : never) extends
-  (value: infer I) => void ? I : {};
+  (value: infer I) => void ? I : EmptyMap;
 export type ContributionActions<T extends PluginNamespaceMap> =
   & Intersection<
     {
@@ -166,10 +209,15 @@ export type ContributionActions<T extends PluginNamespaceMap> =
       }[keyof T[N]];
     }[keyof T]
   >
-  & {};
+  & EmptyMap;
 
-type PluginsOf<T> = T extends
-  CompositionContribution<unknown, ActionMap, infer P> ? P[number] : never;
+type PluginsOf<T> = 0 extends (1 & T) ? AnyCopilotzPlugin
+  : "plugins" extends keyof ContributionReturn<T>
+    ? NonNullable<ContributionReturn<T>["plugins"]> extends
+      readonly AnyCopilotzPlugin[]
+      ? NonNullable<ContributionReturn<T>["plugins"]>[number]
+    : never
+  : never;
 type NamespacePlugins<T extends PluginNamespaceMap> = {
   [N in keyof T]-?: { [K in keyof T[N]]-?: PluginsOf<T[N][K]> }[keyof T[N]];
 }[keyof T];
@@ -178,3 +226,21 @@ export type ContributionPlugins<T extends PluginNamespaceMap> =
   [Extract<NamespacePlugins<T>, AnyCopilotzPlugin>] extends [never]
     ? readonly []
     : readonly Extract<NamespacePlugins<T>, AnyCopilotzPlugin>[];
+
+/** Exact View maps emitted by declarations retain their aliases and definition types. */
+type ViewsOf<T, Alias extends PropertyKey> = "views" extends
+  keyof ContributionReturn<T>
+  ? NonNullable<ContributionReturn<T>["views"]> extends infer V extends ViewMap
+    ? string extends keyof V ? { readonly [K in Alias]: V[string] } : V
+  : EmptyMap
+  : EmptyMap;
+
+export type ContributionViews<T extends PluginNamespaceMap> =
+  & Intersection<
+    {
+      [N in keyof T]-?: {
+        [K in keyof T[N]]-?: ViewsOf<T[N][K], K>;
+      }[keyof T[N]];
+    }[keyof T]
+  >
+  & EmptyMap;

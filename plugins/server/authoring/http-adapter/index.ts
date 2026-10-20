@@ -8,7 +8,6 @@ import type {
 } from "@copilotz/copilotz/collections";
 import type {
   ServerAuthorizedScope,
-  ServerConstraints,
   ServerEndpointDescriptor,
   ServerHttpMethod,
 } from "../../shared/contracts.ts";
@@ -41,8 +40,14 @@ export type HttpHandlerContext = Readonly<{
   params: Readonly<Record<string, string>>;
   input: unknown;
   scope: ServerAuthorizedScope;
-  /** Enforced policy; handlers may tighten it but cannot remove it from services. */
-  constraints: ServerConstraints;
+  sessions: Readonly<
+    {
+      create(
+        input: Readonly<{ id: string; principal: string; expiresAt: string }>,
+      ): Promise<void>;
+      revoke(id?: string): Promise<void>;
+    }
+  >;
   read: HttpReadServices;
   invoke(
     actionId: string,

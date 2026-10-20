@@ -228,6 +228,7 @@ function fakeProcessorInvocation(
     durable: true,
     id: "retry-event",
     position: "1",
+    seq: "1",
     schemaVersion: 1,
     type: CORE_MESSAGE_INPUT_EVENT,
     namespace: context.namespace,

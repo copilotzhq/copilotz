@@ -12,79 +12,13 @@ import {
   defineAction,
   type RuntimeActionCallers,
   secret,
-  type SecretAdapter,
 } from "./index.ts";
-import { base64ToBytes, bytesToBase64 } from "../content/index.ts";
+import { testSecretAdapter } from "../testing/secret-adapter.ts";
 
 const SCHEMA = "protected_action_lifecycle";
 const NAMESPACE = "protected-action-test";
 const INPUT_SECRET = "input-secret-needle-7182";
 const OUTPUT_SECRET = "output-secret-needle-9451";
-
-function buffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.slice().buffer as ArrayBuffer;
-}
-
-async function testSecretAdapter(): Promise<SecretAdapter> {
-  const encryptionKey = await crypto.subtle.generateKey(
-    { name: "AES-GCM", length: 256 },
-    false,
-    ["encrypt", "decrypt"],
-  );
-  const commitmentKey = await crypto.subtle.generateKey(
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return createSecretAdapter({
-    async seal({ plaintext, additionalAuthenticatedData }) {
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const ciphertext = new Uint8Array(
-        await crypto.subtle.encrypt(
-          {
-            name: "AES-GCM",
-            iv: buffer(iv),
-            additionalData: buffer(additionalAuthenticatedData),
-          },
-          encryptionKey,
-          buffer(plaintext),
-        ),
-      );
-      const committed = new Uint8Array(
-        additionalAuthenticatedData.byteLength + plaintext.byteLength,
-      );
-      committed.set(additionalAuthenticatedData);
-      committed.set(plaintext, additionalAuthenticatedData.byteLength);
-      const commitment = bytesToBase64(
-        new Uint8Array(
-          await crypto.subtle.sign(
-            "HMAC",
-            commitmentKey,
-            buffer(committed),
-          ),
-        ),
-      );
-      return Object.freeze({
-        ciphertext,
-        commitment,
-        envelope: Object.freeze({ iv: bytesToBase64(iv), keyVersion: "test" }),
-      });
-    },
-    async open({ ciphertext, additionalAuthenticatedData, envelope }) {
-      return new Uint8Array(
-        await crypto.subtle.decrypt(
-          {
-            name: "AES-GCM",
-            iv: buffer(base64ToBytes(String(envelope.iv))),
-            additionalData: buffer(additionalAuthenticatedData),
-          },
-          encryptionKey,
-          buffer(ciphertext),
-        ),
-      );
-    },
-  });
-}
 
 const protectedAction = defineAction({
   id: "test.protected-action",
@@ -237,6 +171,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
   const tables = createCoreTableNames(schema);
   const adapter = await testSecretAdapter();
   let seals = 0;
+  let opens = 0;
   let release!: () => void;
   let started!: () => void;
   const blocked = new Promise<void>((resolve) => {
@@ -258,7 +193,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     database: db,
     namespace: NAMESPACE,
     databaseSchema: schema,
-    engine: { maxAttempts: 1, execution: { heartbeatMs: 60_000 } },
+    engine: { maxAttempts: 1 },
     adapters: {
       secrets: {
         default: createSecretAdapter({
@@ -266,8 +201,9 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
             seals++;
             return adapter.seal(input);
           },
-          open() {
-            throw new Error("Recovery must not decrypt input.");
+          open(input) {
+            opens++;
+            return adapter.open(input);
           },
         }),
       },
@@ -295,6 +231,7 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     const done = sent.done.then(() => "completed", () => "failed");
     await sent.outputs.cancel();
     await entered;
+    const capturedOpens = opens;
     assertEquals(seals, 1);
     await db.query(
       `UPDATE ${tables.event_deliveries} SET lease_expires_at = NOW() - INTERVAL '1 second' WHERE settlement_scope_id = $1 AND status = 'leased'`,
@@ -302,7 +239,8 @@ Deno.test("delivery recovery reuses sealed Action input without opening or resea
     );
     await app.maintenance();
     assertEquals(await done, "failed");
-    assertEquals(seals, 1, "recovery did not reseal redacted input");
+    assertEquals(seals, 1, "recovery did not rewrap the owner key");
+    assertEquals(opens, capturedOpens, "recovery did not open the owner key");
     const receipts = (await db.query<{ body: unknown }>(
       `SELECT body FROM ${tables.event_bodies} WHERE body ->> 'schema' = 'copilotz.action.lifecycle.protected.v1'`,
     )).rows.map((row) => protectedActionLifecycleBody(row.body)!);
@@ -433,6 +371,77 @@ Deno.test("protected Actions reject secret metadata and progress with bounded du
     );
   } finally {
     await application.shutdown();
+    await db.close();
+  }
+});
+
+Deno.test("continuation captures encrypt child secrets before either operation is observable", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  let executions = 0;
+  const child = defineAction({
+    ...protectedAction,
+    execute(input: { visible: string; token: string }) {
+      executions++;
+      return protectedAction.execute(input, undefined as never);
+    },
+  });
+  const parent = defineAction({
+    id: "test.protected-parent",
+    inputSchema: protectedAction.inputSchema,
+    execute(
+      input: { visible: string; token: string },
+      context: import("./types.ts").ActionContext,
+    ) {
+      return context.awaitOperation({
+        start: {
+          action: "child",
+          input,
+        },
+        handoff: { captured: true },
+      });
+    },
+    resume(handoff, outcome) {
+      assertEquals(handoff, { captured: true });
+      assertEquals(outcome.status, "completed");
+      return true;
+    },
+  });
+  const app = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: SCHEMA,
+    adapters: { secrets: { default: await testSecretAdapter() } },
+    plugins: [
+      definePlugin({
+        id: "test.protected-continuation",
+        version: "1.0.0",
+        actions: { child, parent },
+        processors: {
+          start: defineProcessor<ProcessorContext>({
+            id: "test.start",
+            on: [{ eventType: "test.start" }],
+            async handle(_event, context) {
+              await (context.actions as RuntimeActionCallers).parent({
+                visible: "visible-input",
+                token: INPUT_SECRET,
+              });
+            },
+          }),
+        },
+      }),
+    ],
+  });
+  try {
+    const sent = await app.send({ type: "test.start" });
+    await sent.outputs.cancel();
+    await sent.done;
+    assertEquals(executions, 1);
+    const tables = createCoreTableNames(SCHEMA);
+    const bodies = await db.query(`SELECT body FROM ${tables.event_bodies}`);
+    assertEquals(JSON.stringify(bodies.rows).includes(INPUT_SECRET), false);
+    assertEquals(JSON.stringify(bodies.rows).includes(OUTPUT_SECRET), false);
+  } finally {
+    await app.close();
     await db.close();
   }
 });

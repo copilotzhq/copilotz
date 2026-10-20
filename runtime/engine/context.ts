@@ -1,7 +1,11 @@
-import type { CollectionDefinition } from "../collections/index.ts";
-import { openProgressiveBodyFollower } from "../content/progressive.ts";
+import { createOwnerContentStreamRuntime } from "../streams/stream.ts";
+import { bindProcessorCollectionInvocation } from "../authorization/invocation.ts";
 import {
-  ContentStreamOwnershipLostError,
+  snapshotControl,
+  withSnapshotControl,
+} from "../collections/snapshot-control.ts";
+import type { CollectionDefinition } from "../collections/index.ts";
+import {
   createContentStreamRuntime,
   type StreamOutput,
   type StreamTerminalStatus,
@@ -13,7 +17,7 @@ import {
   type ActionTransactionOptions,
   createActionCallers,
 } from "../actions/index.ts";
-import { createActionInvocationContext } from "../actions/host.ts";
+import { createActionInvocationContext } from "../actions/execution-context.ts";
 import type { ProcessorContext } from "../plugins/index.ts";
 import type {
   CreateProcessorContextOptions,
@@ -81,16 +85,63 @@ export function createProcessorContext(
     options.base.createMutationIdentity(
       requiredText(operationKey, "Mutation operation key"),
     );
-  const catalogedStreams = new Set<string>();
+  const catalogedStreams = new Map<string, string>();
+  const bodyIdFor = (streamId: string) =>
+    operationStreamBodyId({
+      namespace,
+      streamId,
+      bodyPrefix: options.streamBodyPrefix,
+    });
+  const membership = (bodyId: string) => {
+    const streamId = catalogedStreams.get(bodyId);
+    return streamId && settlementScopeId
+      ? { namespace, operationId: settlementScopeId, streamId }
+      : undefined;
+  };
   const settlementScopeId = options.base.settlementScopeId;
   const localStreams = new Map<
     string,
     Readonly<{ settle(status: StreamTerminalStatus): void }>
   >();
 
-  const streams = createContentStreamRuntime({
+  const streams = createOwnerContentStreamRuntime({
     namespace,
     store: options.streamBodyStore,
+    catalog: {
+      ...options.assets.catalog,
+      checkpoint(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamCheckpoint({
+            ...stream,
+            content,
+          })
+          : options.assets.catalog.checkpoint(content);
+      },
+      sealIntent(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamSealIntent({
+            ...stream,
+            content,
+          })
+          : options.assets.catalog.sealIntent(content);
+      },
+      sealAccepted(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamSeal({ ...stream, content })
+          : options.assets.catalog.sealAccepted(content);
+      },
+      recordFailure(content) {
+        const stream = membership(content.bodyId);
+        return stream
+          ? options.operationCatalog.acceptStreamFailure({ ...stream, content })
+          : options.assets.catalog.recordFailure(content);
+      },
+    },
+    producerId: settlementScopeId,
+    storeForCopy: options.assets.storeForCopy,
     bodyPrefix: options.streamBodyPrefix,
     incarnationId: options.base.executionIncarnationId,
     signal: options.base.signal,
@@ -135,16 +186,7 @@ export function createProcessorContext(
         const outputWithAuthority: StreamOutput = {
           ...descriptor,
           payload: lazyBodyFollower(async () => {
-            const follower = await openProgressiveBodyFollower(
-              options.streamBodyStore,
-              {
-                bodyId: operationStreamBodyId({
-                  namespace,
-                  streamId: output.id,
-                  bodyPrefix: options.streamBodyPrefix,
-                }),
-              },
-            );
+            const follower = await streams.follow({ id: output.id });
             return follower.body;
           }),
           terminal,
@@ -163,11 +205,7 @@ export function createProcessorContext(
         namespace,
         operationId: settlementScopeId,
         semanticStreamId,
-        bodyId: operationStreamBodyId({
-          namespace,
-          streamId: output.id,
-          bodyPrefix: options.streamBodyPrefix,
-        }),
+        bodyId: bodyIdFor(output.id),
         descriptor,
         ...(options.base.source?.kind === "delivery" &&
             options.base.executionIncarnationId
@@ -184,7 +222,7 @@ export function createProcessorContext(
           `Operation stream '${output.id}' cannot open after its operation settled.`,
         );
       }
-      catalogedStreams.add(output.id);
+      catalogedStreams.set(bodyIdFor(output.id), output.id);
       // The catalog is itself a durable reconnect publication boundary.
       publication.established();
       await options.publishOutput?.(
@@ -195,55 +233,13 @@ export function createProcessorContext(
       );
       publication.established();
     },
-    async onAppend(stream, result) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.commitStreamOffset({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          committedOffset: result.endOffset,
-        })
-      ) {
-        throw new ContentStreamOwnershipLostError(stream.id);
-      }
-    },
-    async onTerminalizing(stream, input) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      const terminalizing = await options.operationCatalog
-        .beginStreamTerminalization({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          outcome: input.outcome,
-          capture: input.capture,
-        });
-      if (!terminalizing) {
-        const current = await options.operationCatalog.getStream(
-          namespace,
-          settlementScopeId,
-          stream.id,
-        );
-        // Cancellation/supersession may win among non-completed outcomes, but
-        // a Ready seal and an incomplete freeze are different physical
-        // settlements. Never let a producer cross that cataloged boundary.
-        if (
-          current?.state === "terminating" &&
-          (current.outcome === "completed") === (input.outcome === "completed")
-        ) return;
-        throw new Error(
-          `Operation stream '${stream.id}' could not begin terminalization.`,
-        );
-      }
-    },
-    async onSeal(stream, body) {
+    onSeal(stream, body) {
       const local = localStreams.get(stream.id);
       if (local) {
         local.settle(
           {
             outcome: "completed",
             availability: "retained",
-            capture: "complete",
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -251,26 +247,15 @@ export function createProcessorContext(
         localStreams.delete(stream.id);
         return;
       }
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.sealStream({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          body,
-        })
-      ) {
-        throw new Error(`Operation stream '${stream.id}' could not be sealed.`);
-      }
     },
-    async onTerminate(stream, body, input) {
+    onTerminate(stream, body, input) {
       const local = localStreams.get(stream.id);
       if (local) {
         local.settle(
           {
             outcome: input.outcome,
             availability: "retained",
-            capture: input.capture,
+            ...(input.reason ? { reason: input.reason } : {}),
             offset: body.byteLength,
             terminalAt: (options.now?.() ?? new Date()).toISOString(),
           } as const,
@@ -278,34 +263,23 @@ export function createProcessorContext(
         localStreams.delete(stream.id);
         return;
       }
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
-      if (
-        !await options.operationCatalog.terminateStream({
-          namespace,
-          operationId: settlementScopeId,
-          streamId: stream.id,
-          body,
-          outcome: input.outcome,
-          capture: input.capture,
-        })
-      ) {
-        throw new Error(
-          `Operation stream '${stream.id}' could not be terminated.`,
-        );
-      }
     },
     async onDiscard(stream) {
       localStreams.delete(stream.id);
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
+      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+        return;
+      }
       await options.operationCatalog.discardStream({
         namespace,
         operationId: settlementScopeId,
         streamId: stream.id,
       });
-      catalogedStreams.delete(stream.id);
+      catalogedStreams.delete(bodyIdFor(stream.id));
     },
     async onRetain(stream, input) {
-      if (!settlementScopeId || !catalogedStreams.has(stream.id)) return;
+      if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+        return;
+      }
       await options.operationCatalog.retainStream({
         namespace,
         operationId: settlementScopeId,
@@ -313,9 +287,79 @@ export function createProcessorContext(
         ...input,
       });
     },
+  }, async (stream, input) => {
+    if (!settlementScopeId || !catalogedStreams.has(bodyIdFor(stream.id))) {
+      return;
+    }
+    // Successful seal intent already records the operation projection in its
+    // own command. Failure revocation still uses its separate transition.
+    if (input.outcome === "completed") return;
+    const terminalizing = await options.operationCatalog
+      .beginStreamTerminalization({
+        namespace,
+        operationId: settlementScopeId,
+        streamId: stream.id,
+        outcome: input.outcome,
+        ...(input.reason ? { reason: input.reason } : {}),
+      });
+    if (!terminalizing) {
+      const current = await options.operationCatalog.getStream(
+        namespace,
+        settlementScopeId,
+        stream.id,
+      );
+      // Cancellation/supersession may win among non-completed outcomes, but
+      // a completed seal intent and a failed logical prefix are distinct.
+      // Never let a producer cross that cataloged boundary.
+      if (
+        current?.state === "terminating" &&
+        current.outcome !== "completed"
+      ) return;
+      throw new Error(
+        `Operation stream '${stream.id}' could not begin terminalization.`,
+      );
+    }
   });
 
   const content: ProcessorContext["content"] = {
+    openCapture(input) {
+      const identity = mutation(`content.capture:${input.operationKey}`);
+      const capture = createContentStreamRuntime({
+        namespace,
+        store: options.streamBodyStore,
+        catalog: options.assets.catalog,
+        storeForCopy: options.assets.storeForCopy,
+        producerId: settlementScopeId ??
+          (options.base.event.durable
+            ? options.base.event.id
+            : options.base.event.correlationId),
+        bodyPrefix: options.streamBodyPrefix,
+        incarnationId: options.base.executionIncarnationId,
+        signal: options.base.signal,
+        onOpen(_opened, publication) {
+          publication.established();
+        },
+      });
+      return capture.open({
+        ...input,
+        id: `capture:${identity.deduplicationId ?? input.operationKey}`,
+      });
+    },
+    capture(input, captureOptions) {
+      const identity = mutation(
+        `content.capture:${captureOptions.operationKey}`,
+      );
+      return options.assets.capture({
+        namespace,
+        content: input,
+        operationKey: identity.deduplicationId ?? captureOptions.operationKey,
+        producer: settlementScopeId ??
+          (options.base.event.durable
+            ? options.base.event.id
+            : options.base.event.correlationId),
+        origin: captureOptions.origin,
+      });
+    },
     authorize: (ref) =>
       options.resolver.authorize(ref, {
         namespace,
@@ -377,19 +421,6 @@ export function createProcessorContext(
     options.base.idempotencyKey,
     "Processor operation key",
   );
-  const deferredWaits: NonNullable<
-    CreateProcessorContextOptions["deferredWaits"]
-  > = options.deferredWaits ?? {
-    signal: (_waitKey: string) => Promise.resolve(0),
-    registerAction: () =>
-      Promise.reject(
-        new Error("Durable Action waits require a delivery runtime."),
-      ),
-    rearmAction: () =>
-      Promise.reject(
-        new Error("Durable Action rearming requires a delivery runtime."),
-      ),
-  };
   let transactionIndex = 0;
 
   const transaction = async <T>(
@@ -453,7 +484,8 @@ export function createProcessorContext(
   const readSnapshot: ProcessorContext["readSnapshot"] = async (execute) => {
     return await options.collections.readSnapshot(
       { namespace },
-      async ({ collections: byName }) => {
+      async (snapshotScope) => {
+        const { collections: byName } = snapshotScope;
         const snapshotCollections = Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
@@ -468,7 +500,10 @@ export function createProcessorContext(
           ),
         );
         return await execute(
-          { collections: snapshotCollections } as const,
+          withSnapshotControl(
+            { collections: snapshotCollections } as const,
+            snapshotControl(snapshotScope),
+          ),
         );
       },
     );
@@ -490,7 +525,11 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
-    resolution: options.actionResolution,
+    authorize: options.authorizeAction,
+    prepareInput: options.prepareActionInput,
+    refuseAuthorization: options.refuseActionAuthorization,
+    createEffectClient: options.createEffectClient,
+    resumption: options.actionResumption,
     content: {
       ...content,
       // This runtime-owned key is content-addressed, not Processor-run-addressed.
@@ -503,23 +542,22 @@ export function createProcessorContext(
     },
     signal: options.base.signal,
     invocationScope: processorOperationKey,
-    createInvocationKey: (actionId) =>
-      `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
+    // Named calls replay by logical key even when a retry skips earlier work.
+    // Only unnamed calls use the invocation ordinal. The invoker appends the
+    // normalized explicit key to this stable prefix.
+    createInvocationKey: (actionId, operationKey) =>
+      operationKey
+        ? `${encodeURIComponent(processorOperationKey)}:action:named:${
+          encodeURIComponent(actionId)
+        }`
+        : `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: contextIdentity,
-    rearmDeferredAction: (actionRunId) =>
-      deferredWaits.rearmAction(actionRunId),
     createContext({ frame, actions: nestedActions, progress }) {
       return createActionInvocationContext({
         host: context,
         frame,
         actions: nestedActions,
         progress,
-        registerDeferredWait: (waitKey, timeoutMs) =>
-          deferredWaits.registerAction(
-            frame.actionRunId,
-            waitKey,
-            timeoutMs,
-          ),
       });
     },
   });
@@ -528,6 +566,7 @@ export function createProcessorContext(
     namespace,
     databaseSchema,
     operationKey: processorOperationKey,
+    operations: options.operations,
     identity: contextIdentity,
     resources: options.registry.resources,
     adapters: options.registry.adapters,
@@ -537,11 +576,16 @@ export function createProcessorContext(
     collections,
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
-    signalDeferredWait: (waitKey: string) => deferredWaits.signal(waitKey),
     now: options.now ?? (() => new Date()),
     transaction,
     readSnapshot,
   }, options.protectedEventResolver);
-  const context: ProcessorContext = contextValue;
+  const context: ProcessorContext = options.collectionInvocation
+    ? bindProcessorCollectionInvocation(
+      contextValue,
+      options.collectionInvocation.owner,
+      options.collectionInvocation.invocation,
+    )
+    : contextValue;
   return context;
 }

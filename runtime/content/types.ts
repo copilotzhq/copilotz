@@ -19,7 +19,6 @@ export type AssetManifestEntry = Readonly<{
   mediaType: string;
   byteLength: number;
   digest: `sha256:${string}`;
-  location: AssetBodyLocation;
   idempotencyKey?: string;
   origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
@@ -68,7 +67,7 @@ export interface AssetRecord {
   byteLength: number;
   digest: `sha256:${string}`;
   state: AssetState;
-  location: AssetBodyLocation;
+  bodyId: string;
   origin?: AssetOrigin;
   createdAt: string;
   readyAt?: string;
@@ -101,6 +100,22 @@ export interface ContentRef {
   metadata?: Record<string, unknown>;
 }
 
+/** Data-only pointer to catalog-protected generated output, before a domain
+ * record adopts it. These immutable claims support equivalence checks, but are
+ * not authority: the owner resolves the descriptor and verifies provenance.
+ * Semantic metadata and physical locations remain in the owner catalog. */
+export type PendingContentRef = Readonly<{
+  type: "content.pending";
+  pendingRef: string;
+  mediaType: string;
+  byteLength: number;
+  digest: `sha256:${string}`;
+}>;
+
+/** Producer outputs may refer to pending content; persisted domain content may not. */
+export type GeneratedContentSequence =
+  readonly (ContentRef | PendingContentRef)[];
+
 /** Ordered canonical content owned by a message, tool, event, or document. */
 export type ContentSequence = readonly ContentRef[];
 
@@ -114,6 +129,8 @@ export type PreparedAsset = Readonly<{
   /** Ready Body-backed candidates come from protected workflow settlement. */
   readyBody?: import("./body-store.ts").ReadyBodyHead;
   location?: AssetBodyLocation;
+  logicalBodyId?: string;
+  pendingAdoption?: Readonly<{ pendingRef: string; ownerId: string }>;
   byteLength: number;
   digest: `sha256:${string}`;
   idempotencyKey?: string;
@@ -128,14 +145,12 @@ export type PreparedContent = Readonly<{
 }>;
 
 /** Canonical refs may be supplied directly when every body already exists. */
-export type DurableContentInput = ContentSequence | PreparedContent;
+export type DurableContentInput = GeneratedContentSequence | PreparedContent;
 
 /** One new Asset whose durable body and graph metadata are ready for adoption. */
 export type AssetAdoptionPlan = Readonly<{
   /** Database bodies join the graph transaction; ready bodies need no write. */
   kind: "database" | "ready";
-  /** Ready-body GC requires a live preflight protection deadline. */
-  protectionRequired: boolean;
   candidate: PreparedAsset;
   asset: AssetRecord;
 }>;
@@ -281,6 +296,7 @@ export type ContentErrorCode =
   | "asset_not_ready"
   | "asset_not_found"
   | "asset_storage_unavailable"
+  | "content_missing"
   | "content_invalid"
   | "content_unauthorized";
 
@@ -300,3 +316,11 @@ export type ContentJsonValue =
   | { [key: string]: ContentJsonValue };
 /** Decoded body value shared by Actions and Collections. */
 export type ContentBodyValue = ContentJsonValue | Uint8Array;
+
+/** Final reference and Asset semantics captured before physical sealing. */
+export type PendingContentDescriptor = Readonly<{
+  reference: Readonly<Omit<ContentRef, "assetId" | "mediaType">>;
+  asset: Readonly<
+    { origin?: AssetOrigin; metadata: Readonly<Record<string, unknown>> }
+  >;
+}>;

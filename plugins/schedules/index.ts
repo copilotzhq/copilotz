@@ -4,10 +4,7 @@
  * @module
  */
 
-export {
-  runScheduledJobNowAction,
-  tickScheduledJobsAction,
-} from "./actions/index.ts";
+export { runScheduledJobNowAction } from "./actions/index.ts";
 export { scheduledJobCollection } from "./collections/index.ts";
 export * from "./authoring/index.ts";
 export { getNextScheduledRunAt } from "./shared/model.ts";
@@ -25,7 +22,6 @@ export type {
   ScheduledJobRunNowResult,
   ScheduledJobSchedule,
   ScheduledJobStatus,
-  ScheduledJobTickInput,
-  ScheduledJobTickItem,
-  ScheduledJobTickResult,
 } from "./shared/contracts.ts";
+
+export { scheduledJobDelegationDigest } from "@copilotz/copilotz/authoring";

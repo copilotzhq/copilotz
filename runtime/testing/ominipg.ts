@@ -20,10 +20,12 @@ export async function createTestDatabase(
     session: managed.session,
     query: managed.session.query,
     transaction: managed.session.transaction,
+    ...(managed.session.withReadSnapshot
+      ? { withReadSnapshot: managed.session.withReadSnapshot }
+      : {}),
     ...(managed.session.readSnapshot
       ? { readSnapshot: managed.session.readSnapshot }
       : {}),
-    ...(managed.session.listen ? { listen: managed.session.listen } : {}),
     close: managed.close,
   } as const);
 }

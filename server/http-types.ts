@@ -37,11 +37,21 @@ export const HTTP_OBSERVATION = "copilotz.output-stream";
 /** Framework-neutral request-bound channel output. */
 export type HttpObservation = Readonly<{
   type: typeof HTTP_OBSERVATION;
+  authorizePublication?(publish: () => Promise<void>): Promise<void>;
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
   operationId?: string;
   threadId?: string;
   replayCursor?: string;
+  /** Current committed owner frontier, maintained by owner push. */
+  heartbeat?(streamIds?: readonly string[]): Readonly<
+    {
+      headSeq: string;
+      payloadPositions: readonly Readonly<
+        { streamId: string; committedOffset: number }
+      >[];
+    }
+  >;
   /** Thread feeds track one durable Event position per operation. */
   compositeCursor?: boolean;
   /** Durable prefixes captured before attaching a thread observation. */

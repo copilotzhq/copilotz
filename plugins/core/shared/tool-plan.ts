@@ -8,7 +8,9 @@ import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
   type ContentInput,
   type ContentSequence,
+  type GeneratedContentSequence,
   isContentRef,
+  isPendingContentRef,
 } from "@copilotz/copilotz/content";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type {
@@ -396,6 +398,22 @@ export async function ensureToolPlanBranchLayout(
   }
   return migrated;
 }
+/** Result bodies belong to the stage result, including refs nested in tool JSON. */
+function terminalOutputContent(
+  terminal: ToolTerminal,
+): GeneratedContentSequence {
+  const refs: GeneratedContentSequence[number][] = [];
+  const visit = (value: unknown): void => {
+    if (isContentRef(value) || isPendingContentRef(value)) refs.push(value);
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  if (terminal.status === "completed") visit(terminal.output);
+  return refs;
+}
+
 function terminalContent(value: ToolTerminal): ContentInput {
   return {
     type: "json",
@@ -429,6 +447,7 @@ async function stageResult(
       branchIndex,
       stageIndex,
       content: terminalContent(terminal),
+      outputContent: terminalOutputContent(terminal),
       metadata: {},
     }, { operationKey, identity: { deduplicationId: operationKey } })
   );
@@ -466,7 +485,7 @@ async function readTerminal(
   }>,
 ): Promise<{ terminal: ToolTerminal; stageIndex: number }> {
   const item = await context.collections.toolPlanStageResult?.get({ id }, {
-    content: true,
+    content: { fields: ["content"] },
   });
   if (!item) throw new Error(`Tool stage result '${id}' was not found.`);
   if (
@@ -538,9 +557,40 @@ async function readTerminal(
   ) {
     throw new Error("Tool stage result Ask receipt is invalid.");
   }
+  const captured = terminalOutputContent(value as ToolTerminal),
+    owned = Array.isArray(item.outputContent) ? item.outputContent : [];
+  const replacements = new Map<string, unknown>();
+  captured.forEach((ref, index) => {
+    if (isPendingContentRef(ref)) {
+      const canonical = owned[index];
+      if (!isContentRef(canonical)) {
+        throw new Error(
+          "Tool result pending content has no adopted owner reference.",
+        );
+      }
+      replacements.set(ref.pendingRef, canonical);
+    }
+  });
+  const resolve = (source: unknown): unknown => {
+    if (isPendingContentRef(source)) {
+      const canonical = replacements.get(source.pendingRef);
+      if (!canonical) {
+        throw new Error("Tool result content adoption is missing.");
+      }
+      return canonical;
+    }
+    if (Array.isArray(source)) return source.map(resolve);
+    if (source && typeof source === "object") {
+      return Object.fromEntries(
+        Object.entries(source).map(([key, item]) => [key, resolve(item)]),
+      );
+    }
+    return source;
+  };
   return {
     terminal: {
       ...(value as ToolTerminal),
+      ...(value.output === undefined ? {} : { output: resolve(value.output) }),
       ...(askResult ? { askResult: structuredClone(askResult) } : {}),
     },
     stageIndex: Number(item.stageIndex),
@@ -967,6 +1017,7 @@ export async function projectAndAdvanceToolPlan(
         branchIndex: metadata.planIndex,
         stageIndex: metadata.stageIndex,
         content: terminalContent(terminal),
+        outputContent: terminalOutputContent(terminal),
         metadata: {},
       }, { operationKey: resultKey, identity: { deduplicationId: resultKey } });
       await branches.commands.settleStage({

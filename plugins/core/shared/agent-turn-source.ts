@@ -1,3 +1,4 @@
+import { canonicalJson } from "@copilotz/copilotz/content/codec";
 /** Verifies an immutable private source reference using the existing history batch. */
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { encodeContent, isContentRef } from "@copilotz/copilotz/content/codec";
@@ -11,16 +12,9 @@ export async function agentTurnSourceDigest(
   source: NonNullable<CoreAgentTurnMetadata["sourceHistory"]>,
 ): Promise<string> {
   // PostgreSQL JSON objects may reorder keys; arrays retain their exact order.
-  const text = JSON.stringify(source, (_key, value) => {
-    const canonical = isContentRef(value) ? encodeContent(value) : value;
-    return canonical && typeof canonical === "object" &&
-        !Array.isArray(canonical)
-      ? Object.fromEntries(
-        Object.entries(canonical).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0
-        ),
-      )
-      : canonical;
+  const text = canonicalJson(source, {
+    objectOrder: true,
+    transform: (value) => isContentRef(value) ? encodeContent(value) : value,
   });
   return await digestContent(new TextEncoder().encode(text));
 }

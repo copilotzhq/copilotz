@@ -7,14 +7,10 @@
 export {
   runScheduledJobNow,
   SCHEDULED_JOB_RUN_NOW_INPUT_EVENT,
-  SCHEDULED_JOBS_TICK_INPUT_EVENT,
-  scheduleTick,
 } from "./inputs/index.ts";
 export type {
   ScheduledJobRunNowInputEnvelope,
   ScheduledJobRunNowRequest,
-  ScheduledJobsTickInputEnvelope,
-  ScheduledJobsTickRequest,
 } from "./inputs/index.ts";
 export {
   createScheduledJob,

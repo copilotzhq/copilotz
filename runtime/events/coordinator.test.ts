@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertExists } from "@std/assert";
+import { awaitEventPublication } from "./coordinator.ts";
+import {
+  createOwnerCommands,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
+import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
@@ -8,19 +13,17 @@ import {
   defineProcessor,
 } from "../plugins/index.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
 } from "./index.ts";
 
 async function createStore() {
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "copilotz_coordinator";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   return {
     db,
     session,
@@ -281,6 +284,113 @@ Deno.test("a rejected placement is retried from the queue without a recovery swe
     assertEquals(calls, 1);
   } finally {
     clearTimeout(deadline);
+    await executor.shutdown();
+    await fixture.db.close();
+  }
+});
+
+Deno.test("joined events publish only after confirmed outer commit", async () => {
+  const fixture = await createStore();
+  const registry = await createPluginRegistry();
+  const published: string[] = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry,
+    createContext: createTestProcessorContext,
+    workerId: "commit-gate-test",
+  });
+  const coordinator = createEventCoordinator({
+    store: fixture.store,
+    registry,
+    executor,
+    publish: (event) => {
+      assert(event.durable);
+      published.push(event.id);
+    },
+  });
+  try {
+    const committed = await createSchemaCommandRunner(
+      fixture.session,
+      fixture.store.databaseSchema,
+    )("test.mutation", {}, async (_input, { transaction }) => {
+      const result = await coordinator.commitMutation({
+        draft: { type: "note.created", namespace: "notes", payload: {} },
+        transaction,
+      });
+      assertEquals(published, []);
+      return result;
+    });
+    await Promise.all([
+      awaitEventPublication(committed),
+      awaitEventPublication(committed),
+    ]);
+    assertEquals(published, [committed.event.id]);
+
+    let rolledBack!: typeof committed;
+    await assertRejects(() =>
+      createSchemaCommandRunner(fixture.session, fixture.store.databaseSchema)(
+        "test.mutation",
+        {},
+        async (_input, { transaction }) => {
+          rolledBack = await coordinator.commitMutation({
+            draft: { type: "note.created", namespace: "notes", payload: {} },
+            transaction,
+          });
+          throw new Error("rollback");
+        },
+      )
+    );
+    assertEquals(published, [committed.event.id]);
+    assertEquals(await fixture.store.getEvent(rolledBack.event.id), null);
+
+    let uncertain!: typeof committed;
+    let loseAcknowledgement = false;
+    const schema = fixture.store.databaseSchema;
+    const uncertainOwner = createOwnerCommands({
+      session: {
+        query: fixture.session.query,
+        async transaction(operation) {
+          const result = await fixture.session.transaction(operation);
+          if (loseAcknowledgement) {
+            throw new Error("commit acknowledgement lost");
+          }
+          return result;
+        },
+      },
+      schema,
+      handlers: {
+        append: {
+          authorize() {},
+          async execute(_input: Record<never, never>, { transaction }) {
+            uncertain = await coordinator.commitMutation({
+              draft: { type: "note.created", namespace: "notes", payload: {} },
+              transaction,
+              body: { id: "uncertain-body", json: { text: "recorded" } },
+            });
+            return uncertain;
+          },
+        },
+      },
+    });
+    const current = await fixture.session.query<{ epoch: string }>(
+      `SELECT epoch FROM ${fixture.store.tables.owner_epochs}`,
+    );
+    await uncertainOwner.acquire(Number(current.rows[0].epoch));
+    loseAcknowledgement = true;
+    await assertRejects(() =>
+      uncertainOwner.execute("append", {
+        principal: "runtime",
+        epoch: uncertainOwner.epoch!,
+      }, { input: {} })
+    );
+    assertEquals(uncertainOwner.state, "stopped");
+    assertEquals(published, [committed.event.id]);
+    assertEquals(
+      fixture.store.recentEventBody?.(uncertain.event.id, "uncertain-body"),
+      undefined,
+    );
+    assertExists(await fixture.store.getEvent(uncertain.event.id));
+  } finally {
     await executor.shutdown();
     await fixture.db.close();
   }

@@ -1,12 +1,74 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-import { createEphemeralEvent } from "../events/index.ts";
+import {
+  createEphemeralEvent,
+  provisionCopilotzSchema,
+} from "../events/index.ts";
+import { createContentCatalog } from "../content/catalog.ts";
+import { createTestDatabase } from "../testing/ominipg.ts";
 import { createMemoryBodyStore } from "../content/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import type { StreamOutput } from "../streams/index.ts";
 import type { CreateProcessorContextOptions } from "./types.ts";
 import { createProcessorContext } from "./context.ts";
 
+async function createStreamFixture() {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const databaseSchema = `context_streams_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
+  try {
+    await provisionCopilotzSchema(db, databaseSchema);
+    return {
+      databaseSchema,
+      catalog: createContentCatalog(db, databaseSchema),
+      async [Symbol.asyncDispose]() {
+        try {
+          await db.query(`DROP SCHEMA "${databaseSchema}" CASCADE`);
+        } finally {
+          await db.close();
+        }
+      },
+    };
+  } catch (error) {
+    await db.close();
+    throw error;
+  }
+}
+
+async function assertUnpublishedReservation(
+  catalog: ReturnType<typeof createContentCatalog>,
+  bodyStore: ReturnType<typeof createMemoryBodyStore>,
+  bodyId: string,
+) {
+  const logical = await catalog.read(bodyId);
+  assertExists(logical);
+  assertEquals(logical.revocation, "revoked");
+  assertEquals(logical.committedOffset, 0);
+  assertEquals(logical.terminal, {
+    outcome: "failed",
+    reason: "abandoned",
+    length: 0,
+  });
+  const head = await bodyStore.head({ bodyId: logical.copy.key });
+  assertExists(head);
+  assertEquals(head.state, "open");
+  assertEquals(head.byteLength, 0);
+  // Publication refusal retires writer authority; the catalog owns copy cleanup.
+  await assertRejects(() =>
+    catalog.renew({
+      bodyId,
+      writerId: logical.writerId,
+      generation: logical.generation,
+      deadline: new Date(Date.now() + 60_000).toISOString(),
+    })
+  );
+}
+
 Deno.test("scoped streams without an operation require a local authority", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published = 0;
   const event = createEphemeralEvent({
@@ -17,7 +79,7 @@ Deno.test("scoped streams without an operation require a local authority", async
   });
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event,
       signal: new AbortController().signal,
       settlementScopeId: "missing-operation",
@@ -45,7 +107,7 @@ Deno.test("scoped streams without an operation require a local authority", async
       published += 1;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -63,20 +125,21 @@ Deno.test("scoped streams without an operation require a local authority", async
     "require a local output authority",
   );
   assertEquals(published, 0);
-  assertEquals(
-    await bodyStore.head({
-      bodyId: "content-streams/tenant-a/unowned-stream",
-    }),
-    null,
+  await assertUnpublishedReservation(
+    catalog,
+    bodyStore,
+    "content-streams/tenant-a/unowned-stream",
   );
 });
 
 Deno.test("Processor/unscoped streams do not invent Action provenance", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-completed",
         namespace: "tenant-a",
@@ -106,7 +169,7 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
       published = output;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -132,18 +195,19 @@ Deno.test("Processor/unscoped streams do not invent Action provenance", async ()
   assertEquals(await stream.terminal, {
     outcome: "completed",
     availability: "retained",
-    capture: "complete",
     offset: 4,
     terminalAt: "2026-09-01T12:00:00.000Z",
   });
 });
 
 Deno.test("unscoped streams publish an exact local failed prefix", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-failed",
         namespace: "tenant-a",
@@ -173,7 +237,7 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
       published = output;
       return Promise.resolve();
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -192,23 +256,24 @@ Deno.test("unscoped streams publish an exact local failed prefix", async () => {
     appendId: "local-failed:1",
     bytes: new TextEncoder().encode("partial"),
   });
-  await writer.abort({ outcome: "failed", capture: "truncated" });
+  await writer.abort({ outcome: "failed" });
 
   assertEquals(await new Response(stream.payload).text(), "partial");
   assertEquals(await stream.terminal, {
     outcome: "failed",
     availability: "retained",
-    capture: "truncated",
     offset: 7,
     terminalAt: "2026-09-01T12:01:00.000Z",
   });
 });
 
 Deno.test("unscoped streams reject publication without a local authority", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-without-authority",
         namespace: "tenant-a",
@@ -234,7 +299,7 @@ Deno.test("unscoped streams reject publication without a local authority", async
       }),
       withScope: () => ({}),
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -251,20 +316,21 @@ Deno.test("unscoped streams reject publication without a local authority", async
     Error,
     "require a local output authority",
   );
-  assertEquals(
-    await bodyStore.head({
-      bodyId: "content-streams/tenant-a/local-without-authority",
-    }),
-    null,
+  await assertUnpublishedReservation(
+    catalog,
+    bodyStore,
+    "content-streams/tenant-a/local-without-authority",
   );
 });
 
 Deno.test("unscoped observed publication rejection retains an exact terminal", async () => {
+  await using fixture = await createStreamFixture();
+  const { catalog, databaseSchema } = fixture;
   const bodyStore = createMemoryBodyStore();
   let published: StreamOutput | undefined;
   const context = createProcessorContext({
     base: {
-      databaseSchema: "public",
+      databaseSchema,
       event: createEphemeralEvent({
         type: "test.context.local-publication-rejection",
         namespace: "tenant-a",
@@ -294,7 +360,7 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
       published = output;
       return Promise.reject(new Error("local publication relay failed"));
     },
-    assets: {},
+    assets: { catalog },
     preparer: {},
     resolver: {},
     eventHub: {},
@@ -316,9 +382,9 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
   assertExists(published);
   assertEquals(await new Response(published.payload).text(), "");
   assertEquals(await published.terminal, {
-    outcome: "abandoned",
+    outcome: "failed",
+    reason: "abandoned",
     availability: "retained",
-    capture: "truncated",
     offset: 0,
     terminalAt: "2026-09-01T12:02:00.000Z",
   });
@@ -326,6 +392,121 @@ Deno.test("unscoped observed publication rejection retains an exact terminal", a
     (await bodyStore.head({
       bodyId: "content-streams/tenant-a/local-publication-rejection",
     }))?.state,
-    "incomplete",
+    "open",
   );
+});
+
+Deno.test("explicit Processor Action keys survive reordered delivery retries", async () => {
+  const { defineAction } = await import("../actions/define.ts");
+  const terminal = new Map<
+    string,
+    import("../actions/types.ts").ActionLifecycleInput
+  >();
+  const invoked: string[] = [];
+  const captures = new Map<
+    string,
+    import("../actions/types.ts").ActionInvokedData
+  >();
+  let executions = 0;
+  const action = defineAction({
+    id: "test.stable-tool",
+    execute(input: unknown) {
+      executions++;
+      return input;
+    },
+  });
+  const other = defineAction({
+    id: "test.stable-tool.other",
+    execute(input: unknown) {
+      executions++;
+      return input;
+    },
+  });
+  const lifecycle = {
+    emit(event: import("../actions/types.ts").ActionLifecycleInput) {
+      if (event.status === "invoked") {
+        if (captures.has(event.actionRunId)) {
+          return Promise.resolve({ deduplicated: true });
+        }
+        invoked.push(event.actionRunId);
+        captures.set(event.actionRunId, event);
+      }
+      if (["completed", "failed", "cancelled"].includes(event.status)) {
+        terminal.set(event.actionRunId, event);
+      }
+      return Promise.resolve({ deduplicated: false });
+    },
+    invoked: (id: string) => Promise.resolve(captures.get(id) ?? null),
+    terminal: (id: string) => Promise.resolve(terminal.get(id) ?? null),
+  };
+  const make = (key: string) =>
+    createProcessorContext({
+      base: {
+        databaseSchema: "public",
+        event: createEphemeralEvent({
+          type: "test",
+          namespace: "space",
+          correlationId: "correlation",
+          payload: {},
+        }),
+        signal: new AbortController().signal,
+        idempotencyKey: key,
+        createMutationIdentity: () => ({
+          deduplicationId: "unused",
+          correlationId: "correlation",
+        }),
+      },
+      registry: createPluginRegistry({ actions: { action, other } }),
+      streamBodyStore: createMemoryBodyStore(),
+      streamBodyPrefix: "",
+      operationCatalog: {},
+      collections: { vectors: () => ({}), withScope: () => ({}) },
+      assets: {},
+      preparer: {},
+      resolver: {},
+      eventHub: {},
+      actionLifecycle: lifecycle,
+    } as unknown as CreateProcessorContextOptions);
+  const caller = (context: ReturnType<typeof make>, alias = "action") =>
+    context.actions[alias] as (
+      input: unknown,
+      options?: { operationKey: string },
+    ) => Promise<unknown>;
+  const first = make("delivery:one");
+  await caller(first)({ phase: "message" }, { operationKey: "message" });
+  await caller(first)({ phase: "tool" }, { operationKey: "tool" });
+  await caller(first)({ phase: "tool" }, { operationKey: " tool " });
+  const retry = make("delivery:one");
+  await caller(retry)({ phase: "tool" }, { operationKey: "tool" });
+  await caller(retry)({ phase: "message" }, { operationKey: "message" });
+  assertEquals(
+    executions,
+    2,
+    "explicit keys cannot acquire a new identity when order changes",
+  );
+  await caller(make("delivery:two"))({ phase: "tool" }, {
+    operationKey: "tool",
+  });
+  assertEquals(
+    executions,
+    3,
+    "different deliveries retain separate identities",
+  );
+  const unnamed = make("delivery:unnamed");
+  await caller(unnamed)({});
+  await caller(unnamed)({}, { operationKey: "interleaved" });
+  await caller(unnamed)({});
+  const unnamedRetry = make("delivery:unnamed");
+  await caller(unnamedRetry)({});
+  await caller(unnamedRetry)({});
+  assertEquals(executions, 6, "named calls do not consume unnamed ordinals");
+  const isolated = make("delivery:isolated");
+  await caller(isolated)({}, { operationKey: "key" });
+  await caller(isolated, "other")({}, { operationKey: "key" });
+  assertEquals(
+    executions,
+    8,
+    "Distinct Action IDs retain separate identities for the same key",
+  );
+  assertEquals(new Set(invoked).size, 8);
 });

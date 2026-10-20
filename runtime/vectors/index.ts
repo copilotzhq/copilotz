@@ -1,16 +1,22 @@
+import { compileCollectionFilters } from "../collections/query.ts";
+import { queryCollectionRows } from "../collections/read-rows.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 /** Optional pgvector storage for collection-owned vector projections. @module */
 import {
   createCoreTableNames,
   quoteEventIdentifier,
   validateEventSchemaName,
 } from "../events/schema.ts";
-import type { SqlExecutor, SqlSession } from "../events/session.ts";
+import type { SqlExecutor } from "../events/session.ts";
 import {
   type CollectionPredicate,
   compileCollectionPredicate,
 } from "../collections/predicate.ts";
 import { mapNode, type NodeRow } from "../collections/reducer.ts";
-import type { CollectionRecord } from "../collections/types.ts";
+import type {
+  CollectionFilter,
+  CollectionRecord,
+} from "../collections/types.ts";
 
 export type VectorProfile = Readonly<
   {
@@ -93,14 +99,17 @@ function field(value: string): string {
 }
 /** Explicit host setup. Base runtime provisioning never requires the extension. */
 export async function provisionVectorStorage(
-  session: SqlSession,
+  session: SqlExecutor,
   schema = "public",
 ): Promise<void> {
   const table = vectorTable(schema);
   const nodes = createCoreTableNames(schema).nodes;
-  await session.transaction(async (tx) => {
-    await tx.query("CREATE EXTENSION IF NOT EXISTS vector");
-    await tx.query(`CREATE TABLE IF NOT EXISTS ${table} (
+  await createSchemaCommandRunner(session, schema)(
+    "schema.vectors",
+    {},
+    async (_input, { transaction: tx }) => {
+      await tx.query("CREATE EXTENSION IF NOT EXISTS vector");
+      await tx.query(`CREATE TABLE IF NOT EXISTS ${table} (
       namespace TEXT NOT NULL, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES ${nodes}(id) ON DELETE CASCADE,
       field TEXT NOT NULL, profile TEXT NOT NULL, dimensions INTEGER NOT NULL,
       source_field TEXT NOT NULL, source_revision TEXT NOT NULL,
@@ -108,7 +117,8 @@ export async function provisionVectorStorage(
       PRIMARY KEY(namespace, owner_type, owner_id, field, profile),
       CHECK(vector_dims(value) = dimensions)
     )`);
-  });
+    },
+  );
 }
 export async function projectVector(
   executor: SqlExecutor,
@@ -168,7 +178,7 @@ export async function searchVectors(
   executor: SqlExecutor,
   schema: string,
   namespace: string,
-  input: VectorSearch,
+  input: VectorSearch & { authorizationFilter?: CollectionFilter },
 ): Promise<readonly VectorMatch[]> {
   const value = validateVector(input.profile, input.values);
   field(input.field);
@@ -185,10 +195,17 @@ export async function searchVectors(
     vectorProfileKey(input.profile),
     value,
   ];
-  const predicate = compileCollectionPredicate(input.filter, params);
+  const predicate = [
+    compileCollectionPredicate(input.filter, params),
+    ...compileCollectionFilters(
+      input.authorizationFilter ? [input.authorizationFilter] : [],
+      params,
+    ),
+  ].join(" AND ");
   const limitParameter = params.push(limit);
   // The subquery applies the same bounded predicates as Collection reads. No candidate cap precedes authorization.
-  const result = await executor.query<NodeRow & { distance: number }>(
+  const result = await queryCollectionRows<NodeRow & { distance: number }>(
+    executor,
     `SELECT owner.*, (vectors.value ${operator} $5::vector) AS distance
     FROM (SELECT * FROM ${
       createCoreTableNames(schema).nodes
@@ -200,7 +217,7 @@ export async function searchVectors(
     ORDER BY distance, owner.id LIMIT $${limitParameter}`,
     params,
   );
-  return result.rows.map((row) => ({
+  return result.map((row) => ({
     record: mapNode(row),
     distance: Number(row.distance),
   }));

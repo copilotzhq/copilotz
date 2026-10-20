@@ -15,17 +15,17 @@ async function runOriginFixture(url: string) {
     // Canonical receipts and unrelated history are inserted together. Every
     // receipt belongs to exactly one operation, independently of correlation.
     await db.query(`INSERT INTO ${tables.events} (
-      id, schema_version, type, namespace, subject_type, subject_id, payload,
+      seq, id, schema_version, type, namespace, subject_type, subject_id, payload,
       metadata, correlation_id, deduplication_id
-    ) SELECT 'event-' || n, 5,
+    ) SELECT n, 'event-' || n, 5,
        CASE WHEN n <= 300 THEN 'test.action.invoked' ELSE 'test.noise' END,
        'tenant-a', 'test.action', 'run-' || n, '{}', '{}', 'shared-correlation',
        CASE WHEN n <= 300 THEN 'run-' || n || ':action:invoked' ELSE NULL END
       FROM generate_series(1, 7500) AS n`);
     await db.query(`INSERT INTO ${tables.events} (
-      id, schema_version, type, namespace, subject_type, subject_id,
+      seq, id, schema_version, type, namespace, subject_type, subject_id,
       payload, metadata, correlation_id
-    ) SELECT 'other-' || n,5,'test.noise','tenant-a','test.action','other-run-' || n,
+    ) SELECT 7500+n, 'other-' || n,5,'test.noise','tenant-a','test.action','other-run-' || n,
       '{}','{}','shared-correlation' FROM generate_series(1,50000) AS n`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
       namespace, operation_id, event_id, event_position, event_ordinal, created_at
@@ -155,11 +155,11 @@ async function runOriginFixture(url: string) {
     // A matching origin committed after a miss is visible to a fresh lookup.
     // An earlier non-invoked event of the same subject must not win.
     await db.query(`INSERT INTO ${tables.events} (
-      id, schema_version, type, namespace, subject_type, subject_id,
+      seq, id, schema_version, type, namespace, subject_type, subject_id,
       payload, metadata, correlation_id
-    ) VALUES ('late-progress',5,'test.action.progress','tenant-a','test.action','late','{}','{}','shared-correlation'),
-      ('late-origin',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation'),
-      ('late-origin-2',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation')`);
+    ) VALUES (57501,'late-progress',5,'test.action.progress','tenant-a','test.action','late','{}','{}','shared-correlation'),
+      (57502,'late-origin',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation'),
+      (57503,'late-origin-2',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation')`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
       namespace, operation_id, event_id, event_position, event_ordinal, created_at
     ) SELECT namespace, 'operation-a', id, position, position, created_at
@@ -176,11 +176,11 @@ async function runOriginFixture(url: string) {
     // A noncanonical duplicate cannot override it; both namespace and envelope
     // coordinates must still match before that identity suppresses fallback.
     await db.query(`INSERT INTO ${tables.events} (
-      id, schema_version, type, namespace, subject_type, subject_id,
+      seq, id, schema_version, type, namespace, subject_type, subject_id,
       payload, metadata, correlation_id, deduplication_id
-    ) VALUES ('late-canonical',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation','late:action:invoked'),
-      ('mismatch-canonical',5,'test.action.progress','tenant-a','test.action','mismatch','{}','{}','shared-correlation','mismatch:action:invoked'),
-      ('mismatch-origin',5,'test.action.invoked','tenant-a','test.action','mismatch','{}','{}','shared-correlation',NULL)`);
+    ) VALUES (57504,'late-canonical',5,'test.action.invoked','tenant-a','test.action','late','{}','{}','shared-correlation','late:action:invoked'),
+      (57505,'mismatch-canonical',5,'test.action.progress','tenant-a','test.action','mismatch','{}','{}','shared-correlation','mismatch:action:invoked'),
+      (57506,'mismatch-origin',5,'test.action.invoked','tenant-a','test.action','mismatch','{}','{}','shared-correlation',NULL)`);
     await db.query(`INSERT INTO ${tables.operationEvents} (
       namespace, operation_id, event_id, event_position, event_ordinal, created_at
     ) SELECT namespace, 'operation-a', id, position, position, created_at

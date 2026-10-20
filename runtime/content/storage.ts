@@ -1,5 +1,4 @@
 import {
-  bodyProtectionMs,
   createFixedBodyStoreAdapter,
   createMemoryBodyStore,
   DEFAULT_MAX_DATABASE_ASSET_BYTES,
@@ -38,14 +37,6 @@ function deploymentContract(
   ) {
     throw new TypeError("BodyStore deployment capability is invalid.");
   }
-  if (
-    !Number.isSafeInteger(input.minimumProtectionMs) ||
-    input.minimumProtectionMs < 0
-  ) {
-    throw new TypeError(
-      "BodyStore deployment minimumProtectionMs must be a non-negative integer.",
-    );
-  }
   return ({ ...input } as const);
 }
 
@@ -82,26 +73,17 @@ export function createBodyStorageRuntime(
       DEFAULT_MAX_DATABASE_ASSET_BYTES,
       "assets.storage.config.maxBytes",
     );
-    bodyProtectionMs(config.config?.protectionMs);
   } else if (config.type === "memory") {
-    const minimumProtectionMs = bodyProtectionMs(
-      config.config?.protectionMs,
-    );
     writer = createMemoryBodyStore({
       backendId: config.config?.backendId,
-      protectionMs: config.config?.protectionMs,
     });
     prefix = config.config?.prefix ?? "";
     deployment = {
       durability: "ephemeral",
       reach: "process",
-      minimumProtectionMs,
       readyGarbageCollection: true,
     };
   } else if (config.type === "s3") {
-    const minimumProtectionMs = bodyProtectionMs(
-      config.config.protectionMs,
-    );
     writer = createS3BodyStore(config.config);
     prefix = config.config.prefix ?? "";
     const readyGarbageCollection = s3BodyStoreReadyGarbageCollection(
@@ -110,7 +92,6 @@ export function createBodyStorageRuntime(
     deployment = {
       durability: "durable",
       reach: "cluster",
-      minimumProtectionMs: readyGarbageCollection ? minimumProtectionMs : 0,
       readyGarbageCollection,
     };
   } else if (config.type === "custom") {
@@ -119,7 +100,6 @@ export function createBodyStorageRuntime(
     deployment = config.config.deployment ?? {
       durability: "ephemeral",
       reach: "process",
-      minimumProtectionMs: 0,
       readyGarbageCollection: false,
     };
     if (!deployment.readyGarbageCollection) {

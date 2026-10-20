@@ -2,6 +2,7 @@
 import { assertEquals } from "@std/assert";
 
 import * as copilotz from "../../index.ts";
+import * as nodeAdapters from "../../runtime/adapters/node/index.ts";
 import * as denoAdapters from "../../runtime/adapters/deno/index.ts";
 import * as application from "../../runtime/application/public.ts";
 import * as engine from "../../runtime/engine/index.ts";
@@ -10,6 +11,7 @@ import * as collections from "../../runtime/collections/index.ts";
 import * as content from "../../runtime/content/index.ts";
 import * as streams from "../../runtime/streams/index.ts";
 import * as events from "../../runtime/events/index.ts";
+import * as views from "../../runtime/views/index.ts";
 import * as plugins from "../../runtime/plugins/index.ts";
 import * as persistence from "../../runtime/persistence/index.ts";
 import * as server from "../../server/index.ts";
@@ -112,6 +114,7 @@ Deno.test("package root exposes runtime APIs without feature plugins", () => {
       ["streams", streams],
       ["events", events],
       ["plugins", plugins],
+      ["views", views],
       ["engine", engine],
       ["persistence", persistence],
     ] as const
@@ -129,6 +132,7 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertFunctions(persistence, ["createCopilotzPersistence"]);
   assertFunctions(coreCli, ["createInteractiveCli", "startInteractiveCli"]);
   assertFunctions(denoAdapters, ["listen"]);
+  assertFunctions(nodeAdapters, ["listen"]);
   for (
     const moved of [
       "createPersistentTerminalService",
@@ -201,7 +205,7 @@ Deno.test("package subpaths expose cohesive owner APIs", () => {
   assertFunctions(schedules, [
     "createScheduledJob",
     "getNextScheduledRunAt",
-    "scheduleTick",
+    "runScheduledJobNow",
   ]);
   assertEquals(typeof schedules.schedulesPlugin, "object");
   assertFunctions(coreSchedules, [

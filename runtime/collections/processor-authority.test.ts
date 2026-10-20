@@ -10,10 +10,10 @@ import {
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import {
@@ -67,9 +67,7 @@ Deno.test("static processor uses frozen event body and captures input in a child
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "phase_5_authority";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   const store = createEventStore({ session, schema });
   const seen: Array<Readonly<{ title: string; fetched: boolean }>> = [];
   const sideEffects: string[] = [];

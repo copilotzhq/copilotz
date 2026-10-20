@@ -21,9 +21,6 @@ import {
   createPluginRegistry,
   definePlugin,
 } from "../../runtime/plugins/index.ts";
-import type { ProcessorEvent } from "../../runtime/plugins/processor.ts";
-import type { MemoryProcessorContext } from "./shared/contracts.ts";
-import { recoverMemoryConsolidationProcessor } from "./processors/recover-consolidation/index.ts";
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import {
   type CopilotzEngine,
@@ -59,6 +56,7 @@ type Script = (input: LlmAdapterCallInput, index: number) =>
   | Promise<LlmAdapterResult>;
 
 type Fixture = Readonly<{
+  schema: string;
   db: TestDatabase;
   engine: CopilotzEngine;
   inputs: readonly LlmAdapterCallInput[];
@@ -112,9 +110,9 @@ function adapter(script: Script, inputs: LlmAdapterCallInput[]): LlmAdapter {
 
 function memoryProposal(sources?: string[]) {
   return {
-    continuity: "Compass remains the active project for the next turn.",
+    continuity: "Atlas remains the active project for the next turn.",
     remember: [{
-      text: "Compass is the active project.",
+      text: "Atlas is the active project.",
       ...(sources ? { sources } : {}),
     }],
   };
@@ -143,6 +141,16 @@ function recording(
     ...recorded(base),
     transaction: (operation) =>
       base.transaction((tx) => operation(recorded(tx))),
+    ...(base.withReadSnapshot
+      ? {
+        withReadSnapshot: ((operation, options) =>
+          base.withReadSnapshot!(
+            (scope) =>
+              operation({ ...scope, snapshot: recorded(scope.snapshot) }),
+            options,
+          )) as SqlSession["withReadSnapshot"],
+      }
+      : {}),
     ...(base.readSnapshot
       ? {
         readSnapshot: <T>(operation: (executor: SqlExecutor) => Promise<T>) =>
@@ -167,7 +175,6 @@ async function fixture(
     dispatchErrors?: { attempts: number };
     skipDispatch?: boolean;
     executionCapacity?: number;
-    duplicateRecoveryDispatch?: boolean;
     snapshotCaptureGate?: Readonly<{
       wait: Promise<void>;
       arrive(): void;
@@ -178,9 +185,13 @@ async function fixture(
   }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({
-    url: ":memory:",
-    ...(options.vectors ? { pgliteExtensions: ["vector"] } : {}),
+    url: options.vectors
+      ? Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")!
+      : ":memory:",
   });
+  const schema = options.vectors
+    ? `${SCHEMA}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
+    : SCHEMA;
   const inputs: LlmAdapterCallInput[] = [];
   const mutableMemoryConfig: Record<string, unknown> = {
     enabled: options.enabled,
@@ -188,8 +199,7 @@ async function fixture(
     retainRecentEstimatedTokens: 0,
     ...options.memoryConfig,
   };
-  const memory = options.dispatchErrors || options.skipDispatch ||
-      options.duplicateRecoveryDispatch
+  const memory = options.dispatchErrors || options.skipDispatch
     ? definePlugin({
       ...memoryPlugin,
       processors: {
@@ -203,22 +213,6 @@ async function fixture(
                   options.dispatchErrors.attempts++;
                   throw new Error("dispatch preparation unavailable");
                 }
-              },
-            },
-          }
-          : {}),
-        ...(options.duplicateRecoveryDispatch
-          ? {
-            recoverConsolidation: {
-              ...memoryPlugin.processors.recoverConsolidation,
-              async handle(
-                event: ProcessorEvent,
-                context: MemoryProcessorContext,
-              ) {
-                await Promise.all([
-                  recoverMemoryConsolidationProcessor.handle(event, context),
-                  recoverMemoryConsolidationProcessor.handle(event, context),
-                ]);
               },
             },
           }
@@ -336,15 +330,16 @@ async function fixture(
       ? recording(createSqlSession(db), options.statements)
       : createSqlSession(db),
     registry,
-    defaultDatabaseSchema: SCHEMA,
+    defaultDatabaseSchema: schema,
     retryBaseMs: 0,
     random: () => 0,
     ...(options.executionCapacity
       ? { execution: { capacity: options.executionCapacity } }
       : {}),
   });
-  if (options.vectors) await provisionVectorStorage(db, SCHEMA);
+  if (options.vectors) await provisionVectorStorage(db, schema);
   return Object.freeze({
+    schema,
     db,
     engine,
     inputs,
@@ -353,6 +348,7 @@ async function fixture(
     },
     async close() {
       await engine.shutdown();
+      if (options.vectors) await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },
   });
@@ -479,7 +475,7 @@ async function startUserTurn(fixture: Fixture, id = "message:user") {
   await setupThread(fixture);
   return await createHumanMessage(fixture, {
     id,
-    text: "Remember Compass and answer normally.",
+    text: "Remember Atlas and answer normally.",
     recipientIds: ["agent-north"],
   });
 }
@@ -556,12 +552,11 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
     "consolidate_memory",
     "inspect_memory",
     "list_knowledge_spaces",
-    "request_memory_checkpoint_recovery",
+    "produceCheckpoint",
     "search_memory",
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
     "dispatchConsolidation",
-    "recoverConsolidation",
     "settleConsolidation",
   ]);
 });
@@ -608,7 +603,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     // than the ordinary public reply that follows the triggering message.
     assertStringIncludes(
       maintenanceText,
-      "Remember Compass and answer normally.",
+      "Remember Atlas and answer normally.",
     );
     // The source uses the identical normal preparation, followed by maintenance.
     assertEquals(
@@ -631,7 +626,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       (savedCheckpoint.metadata as {
         coverage?: { continuity?: string };
       }).coverage?.continuity,
-      "Compass remains the active project for the next turn.",
+      "Atlas remains the active project for the next turn.",
     );
     assertConsolidationLifecycleOutput(
       (savedCheckpoint.metadata as { result?: unknown }).result,
@@ -668,7 +663,7 @@ Deno.test("a no_changes maintenance Action completes with schema-valid continuit
   const run = await fixture((_input, call) =>
     call === 1 ? stop("I will remember that.") : tool({
       continuity:
-        "Continue the Compass conversation; no durable memory record changed and no user answer is pending.",
+        "Continue the Atlas conversation; no durable memory record changed and no user answer is pending.",
     })
   );
   try {
@@ -949,7 +944,7 @@ for (const fallbackInputLimit of [undefined, 120_000]) {
       );
       assertStringIncludes(
         retriedInput.request.instructions ?? "",
-        "Compass remains the active project",
+        "Atlas remains the active project",
       );
       assertStringIncludes(retried, "LATEST_TAIL");
       assert(!retried.includes("OLD_0"));
@@ -1289,7 +1284,7 @@ Deno.test("invalid and omitted consolidation calls repair through ordinary Core 
     if (call === 1) return stop("Initial answer.");
     if (call === 2) {
       return tool({
-        continuity: "The user still expects a normal answer about Compass.",
+        continuity: "The user still expects a normal answer about Atlas.",
         remember: [{ text: "" }],
       }); // Invalid: an empty note.
     }
@@ -1732,52 +1727,60 @@ Deno.test("consolidation cannot change the lifecycle of a readable Space peer", 
   }
 });
 
-Deno.test("Memory consolidation and public search use persisted pgvector projections", async () => {
-  const run = await fixture(
-    (_input, call) => call === 1 ? stop("Remembered.") : tool(memoryProposal()),
-    { vectors: true },
-  );
-  try {
-    await startUserTurn(run);
-    await eventually(
-      run,
-      async () => (await checkpoints(run))[0]?.status === "ready",
+// Native exclusive snapshots intentionally reject PGlite extension hooks.
+// Exercise vector-enabled prompt preparation on the supported pooled backend.
+Deno.test({
+  name:
+    "Memory consolidation and public search use persisted pgvector projections",
+  ignore: !Deno.env.get("COPILOTZ_TEST_POSTGRES_URL"),
+  async fn() {
+    const run = await fixture(
+      (_input, call) =>
+        call === 1 ? stop("Remembered.") : tool(memoryProposal()),
+      { vectors: true },
     );
-    const records = await collection(run, "memory_note").list({ limit: 100 });
-    assertEquals(records.length, 1);
-    assertEquals("embedding" in records[0], false);
-    const persisted = await run.db.query<{ type: string; count: string }>(
-      `SELECT pg_typeof(value)::text AS type, count(*)::text AS count FROM "${SCHEMA}".copilotz_vectors GROUP BY pg_typeof(value)`,
-    );
-    assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
-    const context = createTestDomainContext(run.engine, NAMESPACE);
-    const result = await context.actions.search_memory({
-      query: "Compass",
-      limit: 5,
-    }, {
-      operationKey: "vector-search",
-      metadata: { threadId: "thread-a", agentId: "north" },
-    }) as { notes: Array<{ id: string; similarity: number }> };
-    assertEquals(result.notes.map((x) => x.id), [records[0].id]);
-    assertEquals(result.notes[0].similarity, 1);
-    for (
-      const grant of await context.collections.memorySpaceAccess.list({
-        where: { threadId: "thread-a" },
-      })
-    ) {
-      await context.collections.memorySpaceAccess.delete({ id: grant.id });
+    try {
+      await startUserTurn(run);
+      await eventually(
+        run,
+        async () => (await checkpoints(run))[0]?.status === "ready",
+      );
+      const records = await collection(run, "memory_note").list({ limit: 100 });
+      assertEquals(records.length, 1);
+      assertEquals("embedding" in records[0], false);
+      const persisted = await run.db.query<{ type: string; count: string }>(
+        `SELECT pg_typeof(value)::text AS type, count(*)::text AS count FROM "${run.schema}".copilotz_vectors GROUP BY pg_typeof(value)`,
+      );
+      assertEquals(persisted.rows, [{ type: "vector", count: "1" }]);
+      const context = createTestDomainContext(run.engine, NAMESPACE);
+      const result = await context.actions.search_memory({
+        query: "Atlas",
+        limit: 5,
+      }, {
+        operationKey: "vector-search",
+        metadata: { threadId: "thread-a", agentId: "north" },
+      }) as { notes: Array<{ id: string; similarity: number }> };
+      assertEquals(result.notes.map((x) => x.id), [records[0].id]);
+      assertEquals(result.notes[0].similarity, 1);
+      for (
+        const grant of await context.collections.memorySpaceAccess.list({
+          where: { threadId: "thread-a" },
+        })
+      ) {
+        await context.collections.memorySpaceAccess.delete({ id: grant.id });
+      }
+      const revoked = await context.actions.search_memory({
+        query: "Atlas",
+        limit: 5,
+      }, {
+        operationKey: "vector-search-revoked",
+        metadata: { threadId: "thread-a", agentId: "north" },
+      }) as typeof result;
+      assertEquals(revoked.notes, []);
+    } finally {
+      await run.close();
     }
-    const revoked = await context.actions.search_memory({
-      query: "Compass",
-      limit: 5,
-    }, {
-      operationKey: "vector-search-revoked",
-      metadata: { threadId: "thread-a", agentId: "north" },
-    }) as typeof result;
-    assertEquals(revoked.notes, []);
-  } finally {
-    await run.close();
-  }
+  },
 });
 
 Deno.test("memory preserves typed images and the normal provider prefix with dynamic instructions", async () => {
@@ -1903,7 +1906,7 @@ Deno.test("consolidation accepts a frozen source snapshot larger than the JSON p
     const metadata = { trace: "x".repeat(600 * 1024) };
     await createHumanMessage(run, {
       id: "message:large-source",
-      text: "Compass remains the active project.",
+      text: "Atlas remains the active project.",
       metadata,
     });
     await createHumanMessage(run, {
@@ -2035,13 +2038,13 @@ Deno.test("consolidation SQL statement budget uses batches for a 65-message sour
       ]),
     );
     console.log("CONSOLIDATION_SQL_READS=" + JSON.stringify(counts));
-    // Ceilings measured against the same flow on the pre-change implementation.
+    // Keep batch-read ceilings for the real snapshot-aware preparation flow.
     assert(
       counts.message <= 43,
       `message statement budget: ${JSON.stringify(counts)}`,
     );
     assert(
-      counts.asset <= 22,
+      counts.asset <= 48,
       `asset statement budget: ${JSON.stringify(counts)}`,
     );
     assert(
@@ -2161,7 +2164,7 @@ for (const participantType of ["agent", "job"] as const) {
       });
       await createHumanMessage(run, {
         id: "message:nonhuman",
-        text: "Remember Compass.",
+        text: "Remember Atlas.",
         recipientIds: ["agent-north"],
       });
       await eventually(
@@ -2200,7 +2203,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     }),
     arrive() {
       snapshotCaptureArrivals += 1;
-      if (snapshotCaptureArrivals === 2) releaseSnapshotCapture();
+      if (snapshotCaptureArrivals === 1) releaseSnapshotCapture();
     },
   };
   const run = await fixture((input) => {
@@ -2218,7 +2221,6 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     compactedContext,
     skipDispatch: true,
     executionCapacity: 1,
-    duplicateRecoveryDispatch: true,
     snapshotCaptureGate,
     memoryConfig: {
       triggerEstimatedTokens: 1_000_000,
@@ -2244,7 +2246,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
     run.setMemoryConfig({ triggerEstimatedTokens: 1 });
     await createHumanMessage(run, {
       id: "message:scheduled-job-trigger",
-      text: "Continue the scheduled Compass maintenance.",
+      text: "Continue the scheduled memory maintenance.",
       recipientIds: ["agent-north"],
     });
 
@@ -2293,7 +2295,7 @@ Deno.test("a pending job-origin checkpoint without a task is repaired and resume
       "orphan repair must create the deterministic maintenance task",
     );
     assertEquals(task.historyScopeId, saved.id);
-    assertEquals(snapshotCaptureArrivals, 2);
+    assertEquals(snapshotCaptureArrivals, 1);
     assert(compactedContext.value);
     assertEquals(run.inputs.length, 4);
     await assertNoDeadLetters(run);

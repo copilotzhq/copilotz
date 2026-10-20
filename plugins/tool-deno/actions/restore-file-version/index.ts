@@ -1,3 +1,4 @@
+import { externalEffect } from "@copilotz/copilotz/actions";
 import type { ActionContext } from "@copilotz/copilotz/actions";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 /**
@@ -35,11 +36,15 @@ export const restoreFileVersionAction: ActionDefinition<
     },
     required: ["path"],
   },
-  execute: async ({ path, snapshotId }: RestoreFileVersionParams) => {
-    const result = await restoreWorkspaceFileVersion(path, snapshotId);
-    return {
-      relativePath: result.relativePath,
-      restoredFromSnapshotId: result.restoredFromSnapshotId,
-    };
-  },
+  execute: (
+    { path, snapshotId }: RestoreFileVersionParams,
+    context: ActionContext,
+  ) =>
+    externalEffect(context, "filesystem.restore-file-version", async () => {
+      const result = await restoreWorkspaceFileVersion(path, snapshotId);
+      return {
+        relativePath: result.relativePath,
+        restoredFromSnapshotId: result.restoredFromSnapshotId,
+      };
+    }),
 });

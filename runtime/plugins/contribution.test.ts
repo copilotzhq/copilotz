@@ -1,3 +1,5 @@
+import type { CompositionContribution, ContributionResult } from "./index.ts";
+import { defineView } from "../views/index.ts";
 import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
 import { defineAction } from "../actions/define.ts";
 import { contribution, createPluginRegistry, definePlugin } from "./index.ts";
@@ -203,4 +205,212 @@ Deno.test("Skills at the root preserve Core and application type inference", asy
   assertStrictEquals(registry.actions.appAction, execute);
   assertStrictEquals(registry.actions.ask, corePlugin.actions.ask);
   assertEquals(registry.resources.skills.planning.name, "planning");
+});
+
+Deno.test("contributed Views retain exact aliases, item and output types at plugin and root boundaries", () => {
+  const board = defineView({
+    id: "board.context",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: { title: string }) => item.title,
+  });
+  const summary = defineView({
+    id: "board.summary",
+    shows: { list: "board" },
+    renderer: "text",
+    modes: ["context"],
+    render: (items: readonly { title: string }[]) => items.length,
+  });
+  let expanded = 0;
+  const resource = {
+    [contribution]() {
+      expanded += 1;
+      return { value: { kind: "board" as const }, views: { board } };
+    },
+  };
+  const adapter = {
+    [contribution]() {
+      return { value: { format: "summary" as const }, views: { summary } };
+    },
+  };
+  const resources = { display: { main: resource } };
+  const adapters = { display: { summary: adapter } };
+  const plugin = definePlugin({
+    id: "display",
+    version: "1",
+    resources,
+    adapters,
+  });
+  const pluginView: typeof board = plugin.views.board;
+  const registry = createPluginRegistry({ plugins: [plugin] });
+  const root = createPluginRegistry({ resources, adapters });
+  const rootBoard: typeof board = root.views.board;
+  const rootSummary: typeof summary = root.views.summary;
+  const noPhantomActions: keyof typeof root.actions extends never ? true
+    : false = true;
+  const exactViewAliases: string extends keyof typeof root.views ? false
+    : true = true;
+  assertEquals([noPhantomActions, exactViewAliases], [true, true]);
+  const kind: "board" = root.resources.display.main.kind;
+  const format: "summary" = root.adapters.display.summary.format;
+  assertEquals([kind, format], ["board", "summary"]);
+  assertEquals(expanded, 2);
+  assertStrictEquals(pluginView, board);
+  assertStrictEquals(registry.views.board, board);
+  assertStrictEquals(rootBoard, board);
+  assertStrictEquals(rootSummary, summary);
+  assertStrictEquals(root.resolveView("board", "context", "text"), board);
+  assertStrictEquals(resources.display.main, resource);
+  assertStrictEquals(adapters.display.summary, adapter);
+});
+
+Deno.test("contribution dependencies include Views without losing other primitive inference", () => {
+  const board = defineView({
+    id: "board.context",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: string) => item,
+  });
+  const dependency = definePlugin({
+    id: "display-base",
+    version: "1",
+    views: { board },
+    actions: { run: execute },
+  });
+  const declaration = {
+    [contribution]() {
+      return { value: "ready" as const, plugins: [dependency] as const };
+    },
+  };
+  const registry = createPluginRegistry({
+    resources: { display: { main: declaration } },
+  });
+  const typed: typeof board = registry.views.board;
+  const ready: "ready" = registry.resources.display.main;
+  assertStrictEquals(typed, board);
+  assertStrictEquals(registry.actions.run, execute);
+  assertEquals(ready, "ready");
+});
+
+Deno.test("contributed View collisions and malformed maps fail before rendering", () => {
+  const board = defineView({
+    id: "board.context",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: () => "board",
+  });
+  const resource = {
+    [contribution]() {
+      return { value: true, views: { board } };
+    },
+  };
+  assertThrows(
+    () =>
+      definePlugin({
+        id: "collision",
+        version: "1",
+        views: { board },
+        resources: { display: { main: resource } },
+      }),
+    TypeError,
+    "views.board",
+  );
+  for (const views of [[], null, { invalid: {} }]) {
+    assertThrows(
+      () =>
+        definePlugin({
+          id: "invalid",
+          version: "1",
+          resources: {
+            display: {
+              main: {
+                [contribution]() {
+                  return { value: true, views };
+                },
+              },
+            },
+          },
+        }),
+      TypeError,
+      "views",
+    );
+  }
+});
+
+Deno.test("annotated contributions without Views do not claim nonexistent Views", () => {
+  type EmptyMap = Readonly<Record<never, never>>;
+  const result: ContributionResult<string, EmptyMap> = { value: "plain" };
+  const resource: CompositionContribution<string, EmptyMap, readonly []> = {
+    [contribution]() {
+      return result;
+    },
+  };
+  const registry = createPluginRegistry({
+    resources: { plain: { example: resource } },
+  });
+  assertEquals(registry.resources.plain.example, "plain");
+  assertEquals(registry.views, {});
+  // @ts-expect-error Three-argument declarations do not contribute Views.
+  assertEquals(registry.views.example, undefined);
+});
+
+Deno.test("actual Skill and Tool declarations retain their no-View composition types", async () => {
+  const { defineSkill } = await import("../../plugins/skills/index.ts");
+  const { defineTool } = await import(
+    "../../plugins/core/authoring/define-tool/index.ts"
+  );
+  const registry = createPluginRegistry({
+    resources: {
+      skills: {
+        planning: defineSkill({ root: "https://skills.test/planning/" }),
+      },
+      tools: {
+        echo: defineTool({
+          id: "example.echo",
+          name: "Echo",
+          description: "Return text",
+          execute: (input: string) => input,
+        }),
+      },
+    },
+  });
+  assertEquals(registry.resources.skills.planning.name, "planning");
+  assertEquals(registry.resources.tools.echo.action, "echo");
+  assertEquals(registry.actions.echo.id, "example.echo");
+  assertEquals(registry.views, {});
+  // @ts-expect-error A Skill resource does not create a matching View alias.
+  assertEquals(registry.views.planning, undefined);
+  // @ts-expect-error A Tool resource does not create a matching View alias.
+  assertEquals(registry.views.echo, undefined);
+});
+
+Deno.test("explicitly annotated View contributions retain their exact View map", () => {
+  type EmptyMap = Readonly<Record<never, never>>;
+  const board = defineView({
+    id: "annotated.board",
+    shows: "board",
+    renderer: "text",
+    modes: ["context"],
+    render: (item: string) => item,
+  });
+  const resource: CompositionContribution<
+    string,
+    EmptyMap,
+    readonly [],
+    { board: typeof board }
+  > = {
+    [contribution]() {
+      return { value: "board", views: { board } };
+    },
+  };
+  const registry = createPluginRegistry({
+    resources: { display: { main: resource } },
+  });
+  const typed: typeof board = registry.views.board;
+  assertStrictEquals(typed, board);
+  // @ts-expect-error Explicit contributions use their declared View aliases.
+  assertEquals(registry.views.main, undefined);
 });

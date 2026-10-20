@@ -1,15 +1,12 @@
+import { recordTestContentTerminal } from "../testing/content-catalog.ts";
+import { type OwnerChange, stageOwnerChange } from "../events/push.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
-import {
-  createEventStore,
-  provisionCopilotzSchema,
-  type SqlExecutor,
-  type SqlSession,
-} from "../events/index.ts";
+import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createStreamOutputDescriptor } from "./observation.ts";
 import {
   createOperationCatalog,
-  OPERATION_CHANGE_CHANNEL,
   type OperationChangeDetail,
   operationStreamBodyId,
   provisionOperationCatalog,
@@ -29,81 +26,40 @@ Deno.test("operation stream Body ids honor the trusted schema storage prefix", (
   );
 });
 
-function notificationSession(database: SqlSession): SqlSession {
-  const handlers = new Set<
-    (notification: { channel: string; payload?: string }) => void
-  >();
-  // A bare `SELECT pg_notify($1, $2)` is simulated. A statement that embeds
-  // pg_notify runs for real and records one notification per returned row.
-  const notification = async (
-    executor: SqlExecutor,
-    sql: string,
-    params: unknown[] | undefined,
-    queue: Array<readonly [string, string]>,
+async function pushFixture() {
+  const session = await createTestDatabase({ url: ":memory:" });
+  await provisionCopilotzSchema(session, SCHEMA);
+  await provisionOperationCatalog(session, SCHEMA);
+  const catalog = createOperationCatalog(session, SCHEMA);
+  const send = async (
+    operationId: string,
+    kind: OwnerChange["kind"] = "operation",
+    namespace = "scope",
   ) => {
-    const bare = /^\s*SELECT pg_notify\(\$1, \$2\)\s*$/.test(sql);
-    const [, _channel, payload] = sql.match(/pg_notify\(\$(\d+), \$(\d+)\)/) ??
-      [];
-    const result = bare ? { rows: [{}] } : await executor.query(sql, params);
-    for (const row of result.rows as Record<string, unknown>[]) {
-      const encoded = row.notification_payload ?? row.payload;
-      queue.push([
-        OPERATION_CHANGE_CHANNEL,
-        typeof encoded === "string"
-          ? encoded
-          : String(params?.[Number(payload) - 1] ?? ""),
-      ]);
-    }
-    return (bare ? { rows: [] } : result) as never;
+    await createSchemaCommandRunner(session, SCHEMA)(
+      "test.push",
+      {},
+      (_input, { transaction }) => {
+        stageOwnerChange(transaction, SCHEMA, {
+          namespace,
+          operationId,
+          selectionKeys: [],
+          kind,
+          seq: "0",
+        });
+      },
+    );
   };
-  const deliver = (queue: readonly (readonly [string, string])[]) => {
-    for (const [channel, payload] of queue) {
-      for (const handler of handlers) handler({ channel, payload });
-    }
-  };
-  const query: SqlExecutor["query"] = async (sql, params) => {
-    if (sql.includes("pg_notify")) {
-      const queue: Array<readonly [string, string]> = [];
-      const result = await notification(database, sql, params, queue);
-      deliver(queue);
-      return result;
-    }
-    return await database.query(sql, params);
-  };
-  return {
-    query,
-    async transaction(operation) {
-      const queue: Array<readonly [string, string]> = [];
-      const value = await database.transaction((transaction) =>
-        operation({
-          query: (sql, params) =>
-            sql.includes("pg_notify")
-              ? notification(transaction, sql, params, queue)
-              : transaction.query(sql, params),
-        })
-      );
-      deliver(queue);
-      return value;
-    },
-    listen(_channel, handler) {
-      handlers.add(handler);
-      return Promise.resolve({
-        close() {
-          handlers.delete(handler);
-          return Promise.resolve();
-        },
-      });
-    },
-  };
+  return { session, catalog, send };
 }
 
 Deno.test("operation catalog opens streams with exact metadata and wakes cross-catalog observers", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   try {
     await provisionCopilotzSchema(database, SCHEMA);
-    await provisionOperationCatalog(database, SCHEMA);
-    await validateOperationCatalog(database, SCHEMA);
-    const notified = notificationSession(database);
+    const notified = database;
+    await provisionOperationCatalog(notified, SCHEMA);
+    await validateOperationCatalog(notified, SCHEMA);
     const writer = createOperationCatalog(notified, SCHEMA);
     const observer = createOperationCatalog(notified, SCHEMA);
     const operationId = "operation-a";
@@ -116,16 +72,19 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     );
     const watch = await observer.watch(operationId);
     const change = watch.wait({ timeoutMs: 2_000 });
-    await notified.transaction((transaction) =>
-      writer.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-        metadata: { operationMetadata: { threadId: "thread-a" } },
-      })
+    await createSchemaCommandRunner(notified, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        writer.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+          metadata: { operationMetadata: { threadId: "thread-a" } },
+        }),
     );
     assertEquals(await change, true);
     assertEquals(hints.at(-1)?.kind, "event");
@@ -149,22 +108,12 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
     assertExists(replayIdentity);
     assertEquals(hints.at(-1)?.kind, "stream");
     assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
-    await writer.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 5,
+    await recordTestContentTerminal(notified, SCHEMA, "tenant-a", {
+      bodyId: "body-a",
+      byteLength: 5,
+      digest: `sha256:${"a".repeat(64)}`,
+      mediaType: "text/plain",
     });
-    assertEquals(hints.at(-1)?.kind, "stream-offset");
-    assertEquals(hints.at(-1)?.streamId, descriptor.streamId);
-    assertEquals(hints.at(-1)?.committedOffset, 5);
-    await writer.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 2,
-    });
-    assertEquals(hints.at(-1)?.committedOffset, 5);
     await writer.sealStream({
       namespace: "tenant-a",
       operationId,
@@ -176,6 +125,7 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
         mediaType: "text/plain",
         digest: `sha256:${"a".repeat(64)}`,
         maintenanceVersion: 1,
+        versionToken: "test-version",
       },
     });
     assertEquals(hints.at(-1)?.kind, "stream");
@@ -244,15 +194,18 @@ Deno.test("operation catalog opens streams with exact metadata and wakes cross-c
       })).map((stream) => stream.streamId),
       [descriptor.streamId],
     );
-    await notified.transaction((transaction) =>
-      writer.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-b",
-        eventId: "operation-b",
-        position: "2",
-        correlationId: "correlation-b",
-        createdAt: "2026-08-31T12:00:01.000Z",
-      })
+    await createSchemaCommandRunner(notified, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        writer.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-b",
+          eventId: "operation-b",
+          position: "2",
+          correlationId: "correlation-b",
+          createdAt: "2026-08-31T12:00:01.000Z",
+        }),
     );
     const secondIdentity = await writer.openStream({
       namespace: "tenant-a",
@@ -283,15 +236,18 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
     await provisionCopilotzSchema(database, SCHEMA);
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-incarnation",
-        eventId: "operation-incarnation",
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-incarnation",
+          eventId: "operation-incarnation",
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = (streamId: string) =>
       createStreamOutputDescriptor({
@@ -310,12 +266,19 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       bodyId: "body-old",
       descriptor: descriptor("physical-old"),
     });
-    await catalog.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId: "operation-incarnation",
-      streamId: "physical-old",
-      committedOffset: 11,
-    });
+    await recordTestContentTerminal(
+      database,
+      SCHEMA,
+      "tenant-a",
+      {
+        bodyId: "body-old",
+        byteLength: 11,
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "text/plain",
+      },
+      "cancelled",
+      "superseded",
+    );
     await catalog.openStream({
       namespace: "tenant-a",
       operationId: "operation-incarnation",
@@ -323,15 +286,6 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       bodyId: "body-new",
       descriptor: descriptor("physical-new"),
     });
-    assertEquals(
-      await catalog.commitStreamOffset({
-        namespace: "tenant-a",
-        operationId: "operation-incarnation",
-        streamId: "physical-old",
-        committedOffset: 12,
-      }),
-      false,
-    );
 
     const streams = await catalog.listStreams({
       namespace: "tenant-a",
@@ -366,14 +320,10 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
         streamId: "physical-old",
         body: {
           bodyId: "body-old",
-          state: "incomplete",
-          byteLength: 12,
-          mediaType: "text/plain",
-          digest: `sha256:${"d".repeat(64)}`,
-          maintenanceVersion: 2,
+          byteLength: 11,
         },
-        outcome: "superseded",
-        capture: "truncated",
+        outcome: "cancelled",
+        reason: "superseded",
       }),
       true,
     );
@@ -383,10 +333,10 @@ Deno.test("a recovered execution supersedes its old physical lane without byte s
       "physical-old",
     );
     assertEquals(fenced?.state, "terminal");
-    assertEquals(fenced?.outcome, "superseded");
-    // The physical write was visible before catalog ownership was checked, so
-    // the frozen terminal prefix and replay boundary include that raced byte.
-    assertEquals(fenced?.committedOffset, 12);
+    assertEquals(fenced?.outcome, "cancelled");
+    assertEquals(fenced?.reason, "superseded");
+    // A raced physical byte is tentative until the owner accepts its checkpoint.
+    assertEquals(fenced?.committedOffset, 11);
     assertEquals(
       await catalog.hasOpenStreams(
         "tenant-a",
@@ -417,15 +367,18 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
     const operationId = "operation-retained-failure";
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId,
-        eventId: operationId,
-        position: "1",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId,
+          eventId: operationId,
+          position: "1",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "failed-stream",
@@ -442,19 +395,18 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
       bodyId: "failed-body",
       descriptor,
     });
-    await catalog.commitStreamOffset({
-      namespace: "tenant-a",
-      operationId,
-      streamId: descriptor.streamId,
-      committedOffset: 7,
-    });
+    await recordTestContentTerminal(database, SCHEMA, "tenant-a", {
+      bodyId: "failed-body",
+      byteLength: 7,
+      digest: `sha256:${"c".repeat(64)}`,
+      mediaType: "text/plain",
+    }, "failed");
     assertEquals(
       await catalog.beginStreamTerminalization({
         namespace: "tenant-a",
         operationId,
         streamId: descriptor.streamId,
         outcome: "failed",
-        capture: "truncated",
       }),
       true,
     );
@@ -482,27 +434,21 @@ Deno.test("operation stream terminalization is crash-resumable and retains gener
         streamId: descriptor.streamId,
         body: {
           bodyId: "failed-body",
-          state: "incomplete",
           byteLength: 7,
-          mediaType: "text/plain",
-          digest: `sha256:${"c".repeat(64)}`,
-          maintenanceVersion: 2,
         },
         outcome: "failed",
-        capture: "truncated",
       }),
       true,
     );
     assertEquals(await terminal, {
       outcome: "failed",
       availability: "retained",
-      capture: "truncated",
       offset: 7,
       terminalAt: (await catalog.getStream(
         "tenant-a",
         operationId,
         descriptor.streamId,
-      ))!.terminalAt,
+      ))!.terminalAt!,
     });
     await assertRejects(
       () =>
@@ -531,15 +477,18 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
     await provisionCopilotzSchema(database, SCHEMA);
     await provisionOperationCatalog(database, SCHEMA);
     const catalog = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      catalog.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "detached:event-a:consumer-a",
-        eventId: "event-child-a",
-        position: "2",
-        correlationId: "correlation-a",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        catalog.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "detached:event-a:consumer-a",
+          eventId: "event-child-a",
+          position: "2",
+          correlationId: "correlation-a",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     assertEquals(
       await catalog.listEventIds({
@@ -578,151 +527,79 @@ Deno.test("detached settlement scopes cannot create orphan reconnect rows", asyn
   }
 });
 
-Deno.test("operation catalog coalesces notification bursts into one catalog rescan", async () => {
-  let notify!: (notification: { channel: string; payload?: string }) => void;
-  const query: SqlExecutor["query"] = () => Promise.resolve({ rows: [] });
-  const session: SqlSession = {
-    query,
-    transaction: async <T>(
-      operation: (transaction: SqlExecutor) => Promise<T>,
-    ) => await operation(session),
-    listen: (
-      _channel: string,
-      handler: typeof notify,
-    ) => {
-      notify = handler;
-      return Promise.resolve({ close: () => Promise.resolve() });
-    },
-  };
-  const catalog = createOperationCatalog(session, "public");
-  const watch = await catalog.watch("operation-burst");
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "operation-burst",
-      selectionKeys: [],
-    }),
-  });
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "operation-burst",
-      selectionKeys: [],
-    }),
-  });
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "operation-burst",
-      selectionKeys: [],
-    }),
-  });
-  assertEquals(await watch.wait({ timeoutMs: 100 }), true);
-  assertEquals(await watch.wait({ timeoutMs: 100 }), false);
-  watch.close();
+Deno.test("operation catalog coalesces committed push bursts into one catalog read", async () => {
+  const f = await pushFixture();
+  const watch = await f.catalog.watch("operation-burst");
+  try {
+    await f.send("operation-burst");
+    await f.send("operation-burst");
+    await f.send("operation-burst");
+    assertEquals(await watch.wait({ timeoutMs: 100 }), true);
+    assertEquals(await watch.wait({ timeoutMs: 100 }), false);
+  } finally {
+    watch.close();
+    await f.session.close();
+  }
 });
 
-Deno.test("operation catalog change listeners are safe and removable", async () => {
-  let notify!: (notification: { channel: string; payload?: string }) => void;
-  const query: SqlExecutor["query"] = () => Promise.resolve({ rows: [] });
-  const session: SqlSession = {
-    query,
-    transaction: async <T>(
-      operation: (transaction: SqlExecutor) => Promise<T>,
-    ) => await operation(session),
-    listen: (
-      _channel: string,
-      handler: typeof notify,
-    ) => {
-      notify = handler;
-      return Promise.resolve({ close: () => Promise.resolve() });
-    },
-  };
-  const catalog = createOperationCatalog(session, "public");
+Deno.test("operation catalog failed observers reset without harming removable peers", async () => {
+  const f = await pushFixture();
   const received: string[] = [];
-  const receivedBySecond: string[] = [];
-  const remove = await catalog.onChange((operationId) => {
-    received.push(operationId);
-    if (operationId === "operation-change-failure") {
-      throw new Error("consumer failure");
+  const second: string[] = [];
+  let resets = 0;
+  const remove = await f.catalog.onChange((id, detail) => {
+    if (detail.kind === "reset") {
+      resets++;
+      return;
     }
+    if (!id) return;
+    received.push(id);
+    if (id === "operation-failure") throw new Error("consumer failure");
   });
-  const removeSecond = await catalog.onChange((operationId) => {
-    receivedBySecond.push(operationId);
+  const removeSecond = await f.catalog.onChange((id) => {
+    if (id) second.push(id);
   });
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "operation-change",
-      selectionKeys: [],
-    }),
-  });
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "operation-change-failure",
-      selectionKeys: [],
-    }),
-  });
-  assertEquals(received, ["operation-change", "operation-change-failure"]);
-  assertEquals(receivedBySecond, [
-    "operation-change",
-    "operation-change-failure",
-  ]);
-  remove();
-  removeSecond();
-  remove();
-  notify({
-    channel: OPERATION_CHANGE_CHANNEL,
-    payload: JSON.stringify({
-      schema: "public",
-      namespace: "tenant-a",
-      operationId: "after-remove",
-      selectionKeys: [],
-    }),
-  });
-  assertEquals(received, ["operation-change", "operation-change-failure"]);
+  try {
+    await f.send("operation-change");
+    await f.send("operation-failure");
+    assertEquals(received, ["operation-change", "operation-failure"]);
+    assertEquals(second, ["operation-change", "operation-failure"]);
+    assertEquals(resets, 1);
+    remove();
+    removeSecond();
+    remove();
+    await f.send("after-remove");
+    assertEquals(received, ["operation-change", "operation-failure"]);
+  } finally {
+    remove();
+    removeSecond();
+    await f.session.close();
+  }
 });
 
-Deno.test("post-commit notification failure does not fail a stream catalog mutation", async () => {
+Deno.test("postcommit observer failure does not roll back a stream catalog mutation", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   try {
     await provisionCopilotzSchema(database, SCHEMA);
     await provisionOperationCatalog(database, SCHEMA);
-    const session = {
-      query: <T extends Record<string, unknown>>(
-        sql: string,
-        params?: unknown[],
-      ) => {
-        if (sql.includes("pg_notify")) {
-          return Promise.reject(new Error("notification unavailable"));
-        }
-        return database.query<T>(sql, params);
-      },
-      transaction: database.transaction,
-      listen: () => Promise.resolve({ close: () => Promise.resolve() }),
-    };
+    const session = database;
     const writer = createOperationCatalog(session, SCHEMA);
     const reader = createOperationCatalog(database, SCHEMA);
-    await database.transaction((transaction) =>
-      reader.indexEvent(transaction, {
-        namespace: "tenant-a",
-        operationId: "operation-notify-failure",
-        eventId: "operation-notify-failure",
-        position: "1",
-        correlationId: "correlation-notify-failure",
-        createdAt: "2026-08-31T12:00:00.000Z",
-      })
+    const remove = await reader.onChange((_id, detail) => {
+      if (detail.kind === "stream") throw new Error("push failure");
+    });
+    await createSchemaCommandRunner(database, SCHEMA)(
+      "test.index",
+      {},
+      (_input, { transaction }) =>
+        reader.indexEvent(transaction, {
+          namespace: "tenant-a",
+          operationId: "operation-notify-failure",
+          eventId: "operation-notify-failure",
+          position: "1",
+          correlationId: "correlation-notify-failure",
+          createdAt: "2026-08-31T12:00:00.000Z",
+        }),
     );
     const descriptor = createStreamOutputDescriptor({
       id: "stream-notify-failure",
@@ -746,6 +623,7 @@ Deno.test("post-commit notification failure does not fail a stream catalog mutat
       })).length,
       1,
     );
+    remove();
   } finally {
     await database.close();
   }
@@ -827,15 +705,18 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
       operationId: string,
       retention: "canonical" | "observation" | "aborted",
     ) => {
-      await database.transaction((transaction) =>
-        catalog.indexEvent(transaction, {
-          namespace: "tenant-a",
-          operationId,
-          eventId: operationId,
-          position: operationId.endsWith("a") ? "10" : "11",
-          correlationId: `${operationId}:correlation`,
-          createdAt: "2026-08-31T12:00:00.000Z",
-        })
+      await createSchemaCommandRunner(database, SCHEMA)(
+        "test.index",
+        {},
+        (_input, { transaction }) =>
+          catalog.indexEvent(transaction, {
+            namespace: "tenant-a",
+            operationId,
+            eventId: operationId,
+            position: operationId.endsWith("a") ? "10" : "11",
+            correlationId: `${operationId}:correlation`,
+            createdAt: "2026-08-31T12:00:00.000Z",
+          }),
       );
       const descriptor = createStreamOutputDescriptor({
         id: `${operationId}:stream`,
@@ -857,11 +738,17 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
           namespace: "tenant-a",
           operationId,
           streamId: descriptor.streamId,
-          outcome: "abandoned",
-          availability: "purged",
-          capture: "truncated",
+          outcome: "failed",
+          reason: "abandoned",
+          availabilityReason: "deleted",
         });
       } else {
+        await recordTestContentTerminal(database, SCHEMA, "tenant-a", {
+          bodyId: `${operationId}:body`,
+          byteLength: 1,
+          digest: `sha256:${"b".repeat(64)}`,
+          mediaType: "text/plain",
+        });
         await catalog.sealStream({
           namespace: "tenant-a",
           operationId,
@@ -873,6 +760,7 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
             mediaType: "text/plain",
             digest: `sha256:${"b".repeat(64)}`,
             maintenanceVersion: 1,
+            versionToken: "test-version",
           },
         });
         await catalog.retainStream({
@@ -905,7 +793,7 @@ Deno.test("terminal metadata pruning removes replay rows but never observation o
   }
 });
 
-Deno.test("operation catalog watch uses a bounded fallback without notification capability", async () => {
+Deno.test("operation catalog waits are bounded without database notifications", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   try {
     await provisionCopilotzSchema(database, SCHEMA);
@@ -922,44 +810,78 @@ Deno.test("operation catalog watch uses a bounded fallback without notification 
   }
 });
 
-Deno.test("settlement watches ignore byte and Event hints but retain legacy wakes", async () => {
-  let notify!: (notification: { channel: string; payload?: string }) => void;
-  const session: SqlSession = {
-    query: () => Promise.resolve({ rows: [] }),
-    transaction: (operation) => operation(session),
-    listen(_channel, handler) {
-      notify = handler;
-      return Promise.resolve({ close: () => Promise.resolve() });
-    },
-  };
-  const catalog = createOperationCatalog(session, "public");
-  const watch = await catalog.watch("operation", {
-    namespace: "tenant-a",
+Deno.test("settlement watches filter bytes and events while committed lifecycle changes wake them", async () => {
+  const f = await pushFixture();
+  const watch = await f.catalog.watch("operation", {
+    namespace: "scope",
     kind: "operation",
   });
-  const hint = (kind?: string, namespace = "tenant-a") =>
-    notify({
-      channel: OPERATION_CHANGE_CHANNEL,
-      payload: JSON.stringify({
-        schema: "public",
-        namespace,
-        operationId: "operation",
-        selectionKeys: [],
-        kind,
-      }),
-    });
   try {
-    hint("event");
-    hint("stream");
-    for (let i = 0; i < 1000; i++) hint("stream-offset");
-    hint("operation", "tenant-b");
-    // An aborted wait returns immediately unless a hint was incorrectly queued.
+    await f.send("operation", "event");
+    await f.send("operation", "stream");
+    await f.send("operation", "stream-offset");
+    await f.send("operation", "operation", "other");
     assertEquals(await watch.wait({ signal: AbortSignal.abort() }), false);
-    hint("operation");
-    assertEquals(await watch.wait({ signal: AbortSignal.abort() }), true);
-    hint();
+    await f.send("operation");
     assertEquals(await watch.wait({ signal: AbortSignal.abort() }), true);
   } finally {
     watch.close();
+    await f.session.close();
+  }
+});
+
+Deno.test("overlapping operation settlement shares the drain and rereads work admitted during it", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  const draining = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let drains = 0;
+  try {
+    await provisionCopilotzSchema(database, SCHEMA);
+    await provisionOperationCatalog(database, SCHEMA);
+    const catalog = createOperationCatalog(database, SCHEMA, {
+      async beforeTerminal() {
+        drains++;
+        draining.resolve();
+        await release.promise;
+      },
+    });
+    const store = createEventStore({
+      session: database,
+      schema: SCHEMA,
+      indexOperationEventSql: (input, param) =>
+        catalog.indexEventSql(input, param),
+    });
+    const root = await store.append({
+      namespace: "scope",
+      type: "test.root",
+      payload: {},
+    });
+    const input = { namespace: "scope", operationId: root.event.id };
+    const first = catalog.reconcile(input);
+    await draining.promise;
+    const second = catalog.reconcile(input);
+    const added = await store.append({
+      namespace: "scope",
+      type: "test.added",
+      payload: {},
+      settlementScopeId: root.event.id,
+    }, ["consumer"]);
+    release.resolve();
+    assertEquals(await Promise.all([first, second]), [0, 0]);
+    assertEquals(drains, 1);
+    assertEquals(
+      (await catalog.get("scope", root.event.id))?.state,
+      "running",
+    );
+    await store.claimDelivery({ id: added.deliveries[0].id, owner: "attempt" });
+    await store.succeedDelivery(added.deliveries[0].id, "attempt");
+    assertEquals(await catalog.reconcile(input), 1);
+    assertEquals(
+      (await catalog.get("scope", root.event.id))?.state,
+      "completed",
+    );
+  } finally {
+    release.resolve();
+    await database.close();
   }
 });

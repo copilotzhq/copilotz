@@ -1,4 +1,5 @@
-import { ACTION_RESOLVER_CONSUMER } from "../actions/deferred-work.ts";
+import { remoteClaimSession, remoteSessionKey } from "./remote-admission.ts";
+import { ACTION_CONTINUATION_CONSUMER } from "../actions/continuation-work.ts";
 import type { EventDelivery } from "../events/index.ts";
 import { isNonRetryableError } from "../failure.ts";
 import { readViews } from "../collections/read-view.ts";
@@ -8,7 +9,6 @@ import type {
   DeliveryContextBase,
   DeliveryDispatchMetadata,
   DeliveryWorkload,
-  DeliveryWorkloadScheduler,
 } from "./types.ts";
 import {
   reportDeliveryDiagnostic,
@@ -16,7 +16,6 @@ import {
 } from "./diagnostics.ts";
 
 const DEFAULT_LEASE_MS = 120_000;
-const DEFAULT_HEARTBEAT_MS = 30_000;
 
 function boundedPositive(
   value: number | undefined,
@@ -30,23 +29,16 @@ function boundedPositive(
   return resolved;
 }
 
-function createDefaultScheduler(): DeliveryWorkloadScheduler {
-  return ({
-    schedule(callback, delayMs) {
-      return setTimeout(callback, delayMs);
-    },
-    cancel(handle) {
-      clearTimeout(handle as ReturnType<typeof setTimeout>);
-    },
-  } as const);
-}
-
 function requiredMetadataString(
   metadata: Readonly<Record<string, unknown>>,
   key: keyof DeliveryDispatchMetadata,
 ): string {
   const value = metadata[key];
-  if (typeof value !== "string" || !value.trim()) {
+  if (
+    typeof value !== "string" || !value.trim() || value !== value.trim() ||
+    value.length > 1024 ||
+    [...value].some((character) => character.charCodeAt(0) < 32)
+  ) {
     throw new TypeError(`Delivery dispatch metadata requires '${key}'.`);
   }
   return value;
@@ -59,8 +51,17 @@ export function parseDeliveryDispatchMetadata(
   if (schema !== "copilotz.delivery.dispatch.v1") {
     throw new TypeError(`Unsupported delivery dispatch schema '${schema}'.`);
   }
+  if (
+    !Number.isSafeInteger(metadata.ownerEpoch) ||
+    Number(metadata.ownerEpoch) < 1
+  ) {
+    throw new TypeError(
+      "Delivery dispatch metadata requires a positive owner epoch.",
+    );
+  }
   return ({
     schema,
+    ownerEpoch: Number(metadata.ownerEpoch),
     databaseSchema: requiredMetadataString(metadata, "databaseSchema"),
     deliveryId: requiredMetadataString(metadata, "deliveryId"),
     eventId: requiredMetadataString(metadata, "eventId"),
@@ -104,21 +105,11 @@ export function createDeliveryWorkload(
   options: CreateDeliveryWorkloadOptions,
 ): DeliveryWorkload {
   if (!options.store && !options.resolveStore) {
-    throw new TypeError("Delivery workload requires a store resolver.");
+    throw new TypeError("Delivery workload requires a store continuation.");
   }
   const leaseMs = boundedPositive(options.leaseMs, DEFAULT_LEASE_MS, "leaseMs");
-  const heartbeatMs = boundedPositive(
-    options.heartbeatMs,
-    DEFAULT_HEARTBEAT_MS,
-    "heartbeatMs",
-  );
-  if (heartbeatMs >= leaseMs) {
-    throw new TypeError("heartbeatMs must be less than leaseMs.");
-  }
-  const scheduler = options.scheduler ?? createDefaultScheduler();
-
   const deliver: DeliveryWorkload = async (
-    { metadata: rawMetadata, signal: dispatchSignal },
+    { metadata: rawMetadata, signal: rawDispatchSignal },
   ) => {
     const metadata = parseDeliveryDispatchMetadata(rawMetadata);
     const store = options.resolveStore
@@ -127,11 +118,43 @@ export function createDeliveryWorkload(
     if (store.databaseSchema !== metadata.databaseSchema) {
       throw new TypeError("Delivery dispatch database schema mismatch.");
     }
-    const delivery = await store.claimDelivery({
-      id: metadata.deliveryId,
-      owner: metadata.dispatchAttemptId,
-      leaseMs,
-    });
+    const authority = await store.executionAuthority();
+    if (authority.epoch !== metadata.ownerEpoch) {
+      throw new Error("Delivery dispatch belongs to a stale owner epoch.");
+    }
+    const dispatchSignal = AbortSignal.any([
+      rawDispatchSignal,
+      authority.signal,
+    ]);
+    dispatchSignal.throwIfAborted();
+    const localClaim = options.localExecution &&
+        metadata.consumerId === "processor:copilotz.server.action-request"
+      ? await store.readLocalClaim(
+        metadata.deliveryId,
+        metadata.dispatchAttemptId,
+        true,
+      )
+      : null;
+    const remoteFence = remoteClaimSession(metadata.dispatchAttemptId);
+    if (
+      remoteFence && (!options.remoteSession ||
+        remoteSessionKey(remoteFence) !==
+          remoteSessionKey(options.remoteSession))
+    ) {
+      throw new Error("Delivery preclaim belongs to another worker session.");
+    }
+    const delivery = remoteFence
+      ? await store.readRemoteClaim(
+        metadata.deliveryId,
+        metadata.dispatchAttemptId,
+        true,
+      )
+      : localClaim ?? await store.claimDelivery({
+        id: metadata.deliveryId,
+        owner: metadata.dispatchAttemptId,
+        leaseMs,
+        ...(options.localExecution ? { localExecution: true } : {}),
+      });
     if (!delivery) {
       const current = await store.getDelivery(metadata.deliveryId);
       reportDeliveryDiagnostic(options.onDiagnostic, {
@@ -173,46 +196,48 @@ export function createDeliveryWorkload(
       dispatchSignal.addEventListener("abort", relayAbort, { once: true });
     }
 
-    let heartbeatHandle: unknown;
-    let heartbeatStopped = false;
-    const stopHeartbeat = () => {
-      heartbeatStopped = true;
-      if (heartbeatHandle !== undefined) scheduler.cancel(heartbeatHandle);
-    };
-    const heartbeat = () => {
-      heartbeatHandle = scheduler.schedule(() => {
-        void store.heartbeatDelivery({
-          id: delivery.id,
-          owner: metadata.dispatchAttemptId,
-          leaseMs,
-        }).then((renewed) => {
-          if (!renewed) {
-            abort.abort(new Error(`Delivery '${delivery.id}' lost its lease.`));
-            return;
-          }
-          if (!heartbeatStopped) heartbeat();
-        }).catch((error) => abort.abort(error));
-      }, heartbeatMs);
-    };
-    heartbeat();
+    let untrackAttempt: (() => void) | undefined;
 
     try {
       const mismatch = deliveryMismatch(delivery, metadata);
       if (mismatch) {
         throw new TypeError(`Invalid delivery dispatch: ${mismatch}.`);
       }
-      const event = await store.getEvent(delivery.eventId);
+      const event =
+        options.resolvedEvent?.(metadata.databaseSchema, delivery.id) ??
+          await store.getEvent(delivery.eventId);
       if (!event) throw new Error(`Event '${delivery.eventId}' was not found.`);
       if (event.namespace !== metadata.namespace) {
         throw new TypeError("Invalid delivery dispatch: namespace mismatch.");
       }
-      const resolver = delivery.consumerId === ACTION_RESOLVER_CONSUMER
-        ? options.resolveDeferredAction
+      if (!options.localExecution) {
+        if (!options.trackAttempt) {
+          throw new TypeError(
+            "Remote delivery requires accepted session liveness.",
+          );
+        }
+        untrackAttempt = options.trackAttempt({
+          store,
+          heartbeat: {
+            id: delivery.id,
+            owner: metadata.dispatchAttemptId,
+            ownerEpoch: metadata.ownerEpoch,
+            namespace: event.namespace,
+            eventId: event.id,
+            operationId: delivery.settlementScopeId,
+            leaseMs,
+          },
+          signal: abort.signal,
+          revoke: (reason) => abort.abort(reason),
+        });
+      }
+      const continuation = delivery.consumerId === ACTION_CONTINUATION_CONSUMER
+        ? options.executeContinuation
         : undefined;
-      const processor = resolver
+      const processor = continuation
         ? undefined
         : options.registry.processorForConsumer(delivery.consumerId);
-      if (!resolver && !processor) {
+      if (!continuation && !processor) {
         throw new Error(
           `No processor is registered for consumer '${delivery.consumerId}'.`,
         );
@@ -271,8 +296,8 @@ export function createDeliveryWorkload(
         namespace: metadata.namespace,
       });
       abort.signal.throwIfAborted();
-      if (resolver) {
-        await resolver(base);
+      if (continuation) {
+        await continuation(base);
       } else {
         const context = await options.createContext(base);
         abort.signal.throwIfAborted();
@@ -303,10 +328,16 @@ export function createDeliveryWorkload(
         }
       }
       abort.signal.throwIfAborted();
-      const settled = await store.succeedDelivery(
-        delivery.id,
-        metadata.dispatchAttemptId,
-      );
+      const current =
+        delivery.consumerId === "processor:copilotz.server.action-request"
+          ? await store.getDelivery(delivery.id)
+          : null;
+      const settled = current?.status === "succeeded"
+        ? current
+        : await store.succeedDelivery(
+          delivery.id,
+          metadata.dispatchAttemptId,
+        );
       if (!settled) {
         throw new Error(`Delivery '${delivery.id}' could not be settled.`);
       }
@@ -327,7 +358,10 @@ export function createDeliveryWorkload(
       return {
         metadata: {
           ...statusMetadata(delivery.id, "succeeded"),
-          delivery: JSON.parse(JSON.stringify(settled)),
+          delivery:
+            settled as unknown as import("../../dependencies/oxian-worker.ts").WorkerWorkContext[
+              "metadata"
+            ],
         },
       };
     } catch (error) {
@@ -362,7 +396,7 @@ export function createDeliveryWorkload(
       if (!abort.signal.aborted) {
         abort.abort(new Error(`Delivery '${delivery.id}' execution ended.`));
       }
-      stopHeartbeat();
+      untrackAttempt?.();
       dispatchSignal.removeEventListener("abort", relayAbort);
     }
   };
@@ -370,3 +404,22 @@ export function createDeliveryWorkload(
   // Each delivery reads through a view of its own; see read-view.ts.
   return async (call) => await readViews.run(async () => await deliver(call));
 }
+
+export type OwnerExecutionOptions = Readonly<{
+  resolvedEvent?: (
+    schema: string,
+    id: string,
+  ) => import("../events/types.ts").DurableEvent | undefined;
+  registry: import("../plugins/index.ts").PluginRegistry;
+  /** Trusted owner placement; never supplied by a worker. */
+  localExecution?: boolean;
+  remoteSession?: import("./remote-admission.ts").RemoteFence;
+  trackAttempt?: import("./types.ts").DeliveryAttemptTracker;
+  publish?: import("../engine/types.ts").RuntimeOutputPublisher;
+  workerId: string;
+  onDiagnostic?:
+    import("./types.ts").CreateDeliveryWorkloadOptions["onDiagnostic"];
+}>;
+export type OwnerExecutionFactory = (
+  options: OwnerExecutionOptions,
+) => Readonly<Record<string, DeliveryWorkload>>;

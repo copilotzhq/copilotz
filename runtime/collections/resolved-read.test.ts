@@ -2,10 +2,10 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
+  provisionCopilotzSchema,
 } from "../events/index.ts";
 import { createDeliveryExecutor } from "../execution/index.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
@@ -30,9 +30,7 @@ Deno.test("scoped resolved reads preserve records, page boundaries, reference se
   const db = await createTestDatabase({ url: ":memory:" });
   const session = createSqlSession(db);
   const schema = "resolved_collection";
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   const store = createEventStore({ session, schema });
   const registry = await createPluginRegistry();
   const executor = createDeliveryExecutor({

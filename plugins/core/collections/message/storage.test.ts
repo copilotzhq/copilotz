@@ -1,8 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import {
-  provisionCopilotzSchema,
-  type SqlExecutor,
-} from "../../../../runtime/events/index.ts";
+import { provisionCopilotzSchema } from "../../../../runtime/events/index.ts";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { provisionCoreHistoryIndexes } from "./storage.ts";
 
@@ -35,45 +32,49 @@ Deno.test("Core history provisioning is explicit and repeatable without changing
     await assertRejects(
       () => provisionCoreHistoryIndexes(db, "history_storage"),
       Error,
-      "unexpected definition",
+      "differs from its declaration",
     );
   } finally {
     await db.close();
   }
 });
 
-Deno.test("Core history provisioning refuses to accept a failed concurrent index build", async () => {
-  const statements: string[] = [];
-  const executor: SqlExecutor = {
-    query(sql) {
-      statements.push(sql);
-      if (sql.includes("information_schema.columns")) {
-        // Reuse a real provisioned fixture for schema validation below.
-        throw new Error("Unexpected schema query");
-      }
-      return Promise.resolve({ rows: [{ valid: false }] } as never);
-    },
-  };
+Deno.test("Core history provisioning rejects an invalid index without analyzing it", async () => {
   const db = await createTestDatabase({ url: ":memory:" });
-  try {
-    await provisionCopilotzSchema(db, "history_invalid");
-    await assertRejects(
-      () =>
-        provisionCoreHistoryIndexes(
-          {
-            query: (sql, params) =>
-              sql.includes("information_schema.columns") ||
-                sql.includes("SELECT version")
-                ? db.query(sql, params)
-                : executor.query(sql, params),
+  const statements: string[] = [];
+  const session = {
+    query: db.query,
+    transaction: <T>(
+      run: (
+        tx: import("../../../../runtime/events/session.ts").SqlExecutor,
+      ) => Promise<T>,
+    ) =>
+      db.transaction((tx) =>
+        run({
+          query(sql, params) {
+            statements.push(sql);
+            if (sql.includes("pg_index")) {
+              return Promise.resolve(
+                {
+                  rows: [{
+                    name: "core_message_thread_created_idx",
+                    valid: false,
+                  }],
+                } as never,
+              );
+            }
+            return tx.query(sql, params);
           },
-          "history_invalid",
-          { concurrently: true },
-        ),
+        })
+      ),
+  };
+  try {
+    await provisionCopilotzSchema(session, "history_invalid");
+    await assertRejects(
+      () => provisionCoreHistoryIndexes(session, "history_invalid"),
       Error,
       "invalid",
     );
-    assertEquals(statements[0].includes("CREATE INDEX CONCURRENTLY"), true);
     assertEquals(statements.some((sql) => sql.startsWith("ANALYZE")), false);
   } finally {
     await db.close();

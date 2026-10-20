@@ -1,3 +1,10 @@
+import { registerRemoteAdmission } from "../execution/remote-admission.ts";
+import { hostDatabaseScopes } from "./database-scopes.ts";
+import {
+  captureOwnerSessionAuthority,
+  createOwnerCapabilityHost,
+  type OwnerCapabilityHost,
+} from "../execution/owner-capabilities.ts";
 import {
   createHypervisor,
   type Hypervisor,
@@ -40,8 +47,25 @@ export type CreateCopilotzGatewayOptions =
   & Readonly<{
     /** Creates a Gateway-owned Hypervisor when no dispatcher is injected. */
     transports?: readonly HypervisorTransport[];
-    /** Advanced app-owned placement. Copilotz never closes it. */
-    dispatcher?: DeliveryDispatcher;
+    /** Trusted host binding before recovery. The caller owns the returned dispatcher. */
+    dispatcher?: (
+      binding: Readonly<{
+        workerCalls: NonNullable<HypervisorOptions["workerCalls"]>;
+        lifecycle: NonNullable<HypervisorLifecycleCallbacks>;
+      }>,
+    ) =>
+      | (
+        & DeliveryDispatcher
+        & Readonly<
+          { sessions: import("../execution/types.ts").OwnerSessionSource }
+        >
+      )
+      | Promise<
+        & DeliveryDispatcher
+        & Readonly<
+          { sessions: import("../execution/types.ts").OwnerSessionSource }
+        >
+      >;
     target?: ExecutionWorkTarget;
     workloadTargets?: Readonly<Record<string, ExecutionWorkTarget>>;
     admit?: HypervisorOptions["admit"];
@@ -61,6 +85,9 @@ type GatewayFetchFallback = (request: Request) => Promise<Response>;
  */
 export type InternalCopilotzGateway = Readonly<{
   application: InternalCopilotzApplication;
+  /** Register with an application-owned Hypervisor before its workers connect. */
+  workerCalls: NonNullable<HypervisorOptions["workerCalls"]>;
+  workerLifecycle: HypervisorLifecycleCallbacks;
   transports: readonly HypervisorTransport[];
   hypervisor?: Hypervisor;
   send(input: ApplicationSendInput): Promise<ApplicationSendHandle>;
@@ -107,6 +134,24 @@ export async function createCopilotzGateway(
   options: CreateCopilotzGatewayOptions = {},
   lifecycle: HypervisorLifecycleCallbacks = {},
 ): Promise<InternalCopilotzGateway> {
+  if (
+    options.dispatcher !== undefined && typeof options.dispatcher !== "function"
+  ) {
+    throw new TypeError(
+      "dispatcher must be a trusted worker-capability binding callback.",
+    );
+  }
+  options = {
+    ...options,
+    target: options.target && { ...options.target },
+    workloadTargets: options.workloadTargets && Object.fromEntries(
+      Object.entries(options.workloadTargets).map((
+        [name, target],
+      ) => [name, { ...target }]),
+    ),
+    transports: options.transports && [...options.transports],
+  };
+  options.signal?.throwIfAborted();
   if (options.dispatcher && options.transports) {
     throw new TypeError("Configure either dispatcher or transports, not both.");
   }
@@ -120,6 +165,9 @@ export async function createCopilotzGateway(
     );
   }
 
+  hostDatabaseScopes(
+    options.databaseScopes,
+  );
   const persistence = await openCopilotzPersistence(options);
   const transports = options.dispatcher
     ? ([] as const)
@@ -128,43 +176,134 @@ export async function createCopilotzGateway(
     Promise.resolve(
       new Response("Copilotz Gateway is initializing.", { status: 503 }),
     );
-  const hypervisor = options.dispatcher ? undefined : createHypervisor({
-    transports,
-    admit: options.admit,
-    assign: options.assign,
-    sessions: options.sessions,
-    signal: options.signal,
-    config: options.hypervisorConfig,
-    fallback: (request) => fetchFallback(request),
-  }, lifecycle);
-  const dispatcher = options.dispatcher ?? hypervisor!;
+  // The callbacks are registered before application recovery constructs the owner.
+  let ownerCapabilities: OwnerCapabilityHost | undefined;
+  let closed = false;
+  const capabilitiesReady = Promise.withResolvers<void>();
+  void capabilitiesReady.promise.catch(() => undefined);
+  const workerCalls: NonNullable<HypervisorOptions["workerCalls"]> = {
+    admit: (context) => {
+      if (closed) throw new Error("Copilotz owner is closed.");
+      return ownerCapabilities?.workerCalls.admit(context);
+    },
+    admitUnassigned: (context) => {
+      if (closed) throw new Error("Copilotz owner is closed.");
+      return ownerCapabilities?.workerCalls.admitUnassigned?.(context);
+    },
+    maxConcurrent: 1024,
+    maxPerConnection: 128,
+    maxRequestBytes: 1024 * 1024,
+    maxResponseBytes: 1024 * 1024,
+    timeoutMs: 120_000,
+  };
+  const workerLifecycle: HypervisorLifecycleCallbacks = {
+    async onReady(event) {
+      if (closed) throw new Error("Copilotz owner is closed.");
+      if (!event.workerCalls) {
+        throw new Error(
+          "Copilotz workers require negotiated owner capabilities.",
+        );
+      }
+      // Application construction does not wait for worker readiness. Once the
+      // host is installed, recovery can route to this already-connected peer.
+      await capabilitiesReady.promise;
+      if (closed) throw new Error("Copilotz owner is closed.");
+      await lifecycle.onReady?.(event);
+    },
+    async onDisconnect(event) {
+      await ownerCapabilities?.lifecycle?.onDisconnect?.(event);
+      await lifecycle.onDisconnect?.(event);
+    },
+    async onComplete(event) {
+      await ownerCapabilities?.lifecycle?.onComplete?.(event);
+      await lifecycle.onComplete?.(event);
+    },
+  };
+  Object.freeze(workerCalls);
+  Object.freeze(workerLifecycle);
+  let hypervisor: Hypervisor | undefined;
   let application: InternalCopilotzApplication | undefined;
+  let releaseRemoteAdmission: (() => void) | undefined;
 
   try {
-    application = await createCopilotzApplication({
-      namespace: options.namespace,
-      databaseSchema: options.databaseSchema,
-      plugins: options.plugins,
-      collections: options.collections,
-      actions: options.actions,
-      processors: options.processors,
-      resources: options.resources,
-      adapters: options.adapters,
-      assets: options.assets,
-      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
-      database: persistence.database,
-      engine: {
-        ...(options.engine ?? {}),
-        execution: {
-          dispatcher,
-          target: options.target,
-          workloadTargets: options.workloadTargets,
-          continuousRecovery: true,
+    const dispatcher = options.dispatcher
+      ? await options.dispatcher(Object.freeze({
+        workerCalls,
+        lifecycle: workerLifecycle,
+      }))
+      : (hypervisor = createHypervisor({
+        transports,
+        workerCalls,
+        admit: options.admit,
+        assign: options.assign,
+        sessions: options.sessions,
+        signal: options.signal,
+        config: options.hypervisorConfig,
+        fallback: (request) => fetchFallback(request),
+      }, { ...lifecycle, ...workerLifecycle }));
+    options.signal?.throwIfAborted();
+    if (!dispatcher || typeof dispatcher.dispatch !== "function") {
+      throw new TypeError(
+        "dispatcher callback must return a delivery dispatcher.",
+      );
+    }
+    const sessions = captureOwnerSessionAuthority(dispatcher.sessions);
+    releaseRemoteAdmission = registerRemoteAdmission(dispatcher, {
+      ...sessions,
+      ...(dispatcher.sessions.list
+        ? { list: dispatcher.sessions.list.bind(dispatcher.sessions) }
+        : {}),
+    });
+    application = await createCopilotzApplication(
+      {
+        namespace: options.namespace,
+        databaseSchema: options.databaseSchema,
+        databaseScopes: options.databaseScopes,
+        authorization: options.authorization,
+        plugins: options.plugins,
+        collections: options.collections,
+        actions: options.actions,
+        processors: options.processors,
+        views: options.views,
+        resources: options.resources,
+        adapters: options.adapters,
+        assets: options.assets,
+        onDeliveryDiagnostic: options.onDeliveryDiagnostic,
+        database: persistence.database,
+        engine: {
+          ...(options.engine ?? {}),
+          execution: {
+            dispatcher,
+            target: options.target,
+            workloadTargets: options.workloadTargets,
+          },
         },
       },
-    });
+      undefined,
+      async (engine) => {
+        await ownerCapabilities?.close("persistence_owner_replaced");
+        ownerCapabilities = createOwnerCapabilityHost({
+          onDiagnostic: options.onDeliveryDiagnostic,
+          registry: engine.plugins,
+          sessions,
+          createWorkloads: engine.execution.createWorkerWorkloads,
+          resolveAuthority: engine.execution.resolveAuthority,
+          lookupReceipt: engine.execution.lookupReceipt,
+        });
+        capabilitiesReady.resolve();
+      },
+    );
+    options.signal?.throwIfAborted();
   } catch (error) {
+    closed = true;
+    capabilitiesReady.reject(error);
+    await ownerCapabilities?.close("copilotz_gateway_initialization_failed")
+      .catch(() => undefined);
+    await application?.shutdown("copilotz_gateway_initialization_failed").catch(
+      () => undefined,
+    );
     await settleAll([
+      () => releaseRemoteAdmission?.(),
       () => hypervisor?.shutdown("copilotz_gateway_initialization_failed"),
       () => persistence.close("copilotz_gateway_initialization_failed"),
     ], "Copilotz Gateway initialization cleanup failed.").catch(() =>
@@ -182,30 +321,59 @@ export async function createCopilotzGateway(
     // Gateway owns durable recovery, so it must also sweep an already-ready
     // database before serving work.
     await application.startRecovery();
+    options.signal?.throwIfAborted();
   } catch (error) {
+    closed = true;
     stopObservingPersistence();
+    await ownerCapabilities!.close("copilotz_gateway_recovery_failed").catch(
+      () => undefined,
+    );
+    await application.shutdown("copilotz_gateway_recovery_failed").catch(() =>
+      undefined
+    );
     await settleAll([
-      () => application!.shutdown("copilotz_gateway_recovery_failed"),
+      () => releaseRemoteAdmission?.(),
       () => hypervisor?.shutdown("copilotz_gateway_recovery_failed"),
       () => persistence.close("copilotz_gateway_recovery_failed"),
     ], "Copilotz Gateway recovery cleanup failed.").catch(() => undefined);
     throw error;
   }
+
   let shutdownTask: Promise<void> | undefined;
   const shutdown = (reason = "copilotz_gateway_shutdown"): Promise<void> => {
     if (shutdownTask) return shutdownTask;
+    closed = true;
     stopObservingPersistence();
-    shutdownTask = settleAll([
-      () => application!.shutdown(reason),
-      () => hypervisor?.shutdown(reason),
-      () => persistence.close(reason),
-    ], "Copilotz Gateway shutdown failed.");
+    shutdownTask = (async () => {
+      const failures: unknown[] = [];
+      // Resource cleanup retains the database generation until it settles.
+      for (
+        const operation of [
+          () => releaseRemoteAdmission?.(),
+          () => ownerCapabilities!.close(reason),
+          () => application!.shutdown(reason),
+          () => hypervisor?.shutdown(reason),
+          () => persistence.close(reason),
+        ]
+      ) {
+        try {
+          await operation();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Copilotz Gateway shutdown failed.");
+      }
+    })();
     shutdownTask.catch(() => undefined);
     return shutdownTask;
   };
 
   return ({
     application,
+    workerCalls,
+    workerLifecycle,
     transports,
     ...(hypervisor ? { hypervisor } : {}),
     async send(input) {

@@ -1,9 +1,12 @@
 export {
+  type NodeIndexDefinition,
   provisionCollectionIndexes,
+  provisionNodeIndex,
   validateCollectionIndexes,
 } from "./indexes.ts";
 export { defineCollection, relation } from "./definition.ts";
 export type {
+  CollectionAlarmDefinition,
   CollectionCommandDefinition,
   CollectionDefinition,
   CollectionDefinitionInput,

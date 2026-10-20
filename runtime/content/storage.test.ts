@@ -5,7 +5,7 @@ import { digestContent } from "./digest.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 
 Deno.test("custom BodyStore deployment is conservative unless explicitly declared", async () => {
-  const undeclaredStore = createMemoryBodyStore({ protectionMs: 0 });
+  const undeclaredStore = createMemoryBodyStore({});
   const conservative = createBodyStorageRuntime({
     storage: {
       type: "custom",
@@ -17,7 +17,6 @@ Deno.test("custom BodyStore deployment is conservative unless explicitly declare
   assertEquals(conservative.adapter.deployment, {
     durability: "ephemeral",
     reach: "process",
-    minimumProtectionMs: 0,
     readyGarbageCollection: false,
   });
   const bytes = new TextEncoder().encode("conservative");
@@ -26,19 +25,18 @@ Deno.test("custom BodyStore deployment is conservative unless explicitly declare
     bytes,
     mediaType: "text/plain",
     digest: await digestContent(bytes),
-    protectedUntil: "2000-01-01T00:00:00.000Z",
   });
   assertEquals(
     await conservative.writer.maintenance.delete({
       bodyId: head.bodyId,
       expectedState: "ready",
-      expectedMaintenanceVersion: head.maintenanceVersion,
+      expectedVersionToken: head.versionToken,
       idleForMs: 0,
     }),
     false,
   );
 
-  const declaredStore = createMemoryBodyStore({ protectionMs: 5_000 });
+  const declaredStore = createMemoryBodyStore({});
   const declared = createBodyStorageRuntime({
     storage: {
       type: "custom",
@@ -47,7 +45,6 @@ Deno.test("custom BodyStore deployment is conservative unless explicitly declare
         deployment: {
           durability: "durable",
           reach: "cluster",
-          minimumProtectionMs: 5_000,
           readyGarbageCollection: true,
         },
       },
@@ -57,7 +54,6 @@ Deno.test("custom BodyStore deployment is conservative unless explicitly declare
   assertEquals(declared.adapter.deployment, {
     durability: "durable",
     reach: "cluster",
-    minimumProtectionMs: 5_000,
     readyGarbageCollection: true,
   });
 });
@@ -69,7 +65,6 @@ Deno.test("scope-aware BodyStore adapters remain available to content and stream
     deployment: {
       durability: "durable" as const,
       reach: "cluster" as const,
-      minimumProtectionMs: 0,
       readyGarbageCollection: true,
     },
     forScope(scope: { namespace: string }) {
@@ -105,12 +100,11 @@ Deno.test("scope-aware BodyStore adapters remain available to content and stream
 
 Deno.test("built-in BodyStore deployments expose their actual Ready GC capability", () => {
   const memory = createBodyStorageRuntime({
-    storage: { type: "memory", config: { protectionMs: 321 } },
+    storage: { type: "memory", config: {} },
   });
   assertEquals(memory.adapter?.deployment, {
     durability: "ephemeral",
     reach: "process",
-    minimumProtectionMs: 321,
     readyGarbageCollection: true,
   });
 
@@ -124,14 +118,12 @@ Deno.test("built-in BodyStore deployments expose their actual Ready GC capabilit
         bucket: "bodies",
         accessKeyId: "unused",
         secretAccessKey: "unused",
-        protectionMs: 60_000,
       },
     },
   });
   assertEquals(object.adapter?.deployment, {
     durability: "durable",
     reach: "cluster",
-    minimumProtectionMs: 0,
     readyGarbageCollection: false,
   });
 
@@ -145,7 +137,6 @@ Deno.test("built-in BodyStore deployments expose their actual Ready GC capabilit
         bucket: "bodies",
         accessKeyId: "unused",
         secretAccessKey: "unused",
-        protectionMs: 60_000,
         provider: "gcs",
       },
     },
@@ -153,7 +144,6 @@ Deno.test("built-in BodyStore deployments expose their actual Ready GC capabilit
   assertEquals(gcs.adapter?.deployment, {
     durability: "durable",
     reach: "cluster",
-    minimumProtectionMs: 60_000,
     readyGarbageCollection: true,
   });
 });

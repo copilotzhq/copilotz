@@ -1,6 +1,7 @@
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { compileCollectionPredicate } from "./predicate.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import type {
   CollectionAggregateQuery,
   CollectionAggregateRow,
@@ -103,7 +104,12 @@ function appendFilter(
   }
   for (const [field, value] of Object.entries(filter.where ?? {})) {
     const safe = path(field, "Aggregate where field");
-    const index = params.push(value);
+    // Match list equality: JSON text comparisons bind scalar text on all drivers.
+    const index = params.push(
+      typeof value === "boolean" || typeof value === "number"
+        ? String(value)
+        : value,
+    );
     filters.push(
       safe === "id" ? `id = $${index}` : `${text(safe)} = $${index}::text`,
     );
@@ -148,6 +154,8 @@ export async function aggregateCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionAggregateQuery,
+  /** Trusted internal source check, supplied by the owner, never wire/policy SQL. */
+  sourceCheck?: string,
 ): Promise<readonly CollectionAggregateRow[]> {
   if (!query || typeof query !== "object" || Array.isArray(query)) {
     throw new TypeError("Aggregate query must be an object.");
@@ -258,21 +266,44 @@ export async function aggregateCollectionRecords(
     );
   }
   const capacity = limit(query.limit);
-  const result = await executor.query<Record<string, unknown>>(
-    `SELECT ${select.join(", ")} FROM ${tables.nodes} WHERE ${
+  if (sourceCheck !== undefined) {
+    if (output.has("__collection_source_rejected")) {
+      throw new TypeError("Reserved aggregate output alias.");
+    }
+    // Window over all scoped groups BEFORE capacity+1: an unsafe row may not be
+    // hidden by metric FILTER, grouping or a truncated result. Empty input is safe.
+    select.push(
+      `COALESCE(BOOL_OR(BOOL_OR(NOT __collection_source_safe)) OVER (), FALSE) AS __collection_source_rejected`,
+    );
+  }
+  // Retain unsafe rows for the rejection flag, but never evaluate their values
+  // in metric/bucket expressions: SQL errors can otherwise disclose raw data.
+  const source = sourceCheck === undefined
+    ? `${tables.nodes} WHERE ${filters.join(" AND ")}`
+    : `(SELECT id,namespace,created_at,updated_at,
+               CASE WHEN __collection_source_safe THEN data ELSE NULL END AS data,
+               __collection_source_safe
+          FROM (SELECT id,namespace,created_at,updated_at,data,
+                       (${sourceCheck}) IS TRUE AS __collection_source_safe
+                  FROM ${tables.nodes} WHERE ${
       filters.join(" AND ")
-    }${grouping.length ? ` GROUP BY ${grouping.join(", ")}` : ""} LIMIT ${
-      capacity + 1
-    }`,
+    }) AS checked
+       ) AS guarded`;
+  const rows = await queryCollectionRows<Record<string, unknown>>(
+    executor,
+    `SELECT ${select.join(", ")} FROM ${source}${
+      grouping.length ? ` GROUP BY ${grouping.join(", ")}` : ""
+    } LIMIT ${capacity + 1}`,
     params,
+    { sourceChecked: sourceCheck !== undefined },
   );
-  if (result.rows.length > capacity) {
+  if (rows.length > capacity) {
     throw new RangeError(
       `Aggregate result exceeds its ${capacity}-group capacity; narrow the query or request a larger limit.`,
     );
   }
   const metrics = new Set(entries.map(([alias]) => alias));
-  return (result.rows.map((row) => (Object.fromEntries(
+  return (rows.map((row) => (Object.fromEntries(
     Object.entries(row).map((
       [key, value],
     ) => [key, metrics.has(key) ? metricValue(value) : groupValue(value)]),

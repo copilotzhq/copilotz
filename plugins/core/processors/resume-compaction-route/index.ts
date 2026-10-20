@@ -1,4 +1,4 @@
-/** Resumes the original recipient after a deferred context checkpoint settles. @module */
+/** Resumes the original recipient after a awaiting context checkpoint settles. @module */
 
 import { parseActionLifecycleEvent } from "@copilotz/copilotz/actions";
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";

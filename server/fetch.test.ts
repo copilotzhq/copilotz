@@ -22,7 +22,6 @@ function completedTerminal(offset: number) {
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
     availability: "retained" as const,
-    capture: "complete" as const,
     offset,
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));
@@ -256,6 +255,7 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
       durable: true,
       id: `${operationId}:event`,
       position,
+      seq: position,
       schemaVersion: 1,
       type: "message.created",
       namespace: "tenant-a",
@@ -315,6 +315,7 @@ Deno.test("direct operation multipart advances global and operation event positi
     durable: true,
     id: "event-two",
     position: "2",
+    seq: "2",
     schemaVersion: 1,
     type: "message.created",
     namespace: "tenant-a",

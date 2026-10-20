@@ -1,8 +1,13 @@
+import type { AuthorizationIntent } from "../runtime/authorization/evaluator.ts";
+import { testAuthority } from "../runtime/testing/authority.ts";
 import { createHttpReads } from "./reads.ts";
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import {
+  createTestApplication as createCopilotzApplication,
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../runtime/testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { createCopilotz } from "../index.ts";
 import {
   ActionError,
   createSecretAdapter,
@@ -23,7 +28,6 @@ import {
 } from "../plugins/server/index.ts";
 import { threadCollection } from "../plugins/core/collections/thread/index.ts";
 import { participantCollection } from "../plugins/core/collections/participant/index.ts";
-import { createCopilotzApplication } from "../runtime/application/index.ts";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "./facade.ts";
 import { CopilotzHttpError, createCopilotzClient } from "../client/index.ts";
@@ -130,7 +134,7 @@ const notes = defineCollection({
         additionalProperties: false,
       } as const,
       mutate: ({ input }) => ({
-        set: { label: (input as { label: string }).label },
+        set: { label: (input as unknown as { label: string }).label },
       }),
     },
   },
@@ -279,7 +283,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
                   actor: { id: request.headers.get("x-user") ?? "owner" },
                 };
               },
-              authorize(_request, context) {
+              evaluate(_request, context) {
                 return {
                   operations: {
                     metadata: { actorId: context.scope.actor!.id },
@@ -444,7 +448,7 @@ Deno.test("authorization predicates intersect requested collection filters befor
                 endpoints.push(context.endpoint);
                 return { namespace: "tenant-a" };
               },
-              authorize(_request, context) {
+              evaluate(_request, context) {
                 return context.endpoint.kind === "collection"
                   ? {
                     collections: {
@@ -528,9 +532,10 @@ Deno.test("authorization predicates intersect requested collection filters befor
   }
 });
 
-Deno.test("authentication chooses the database scope and can return an early HTTP response", async () => {
+Deno.test("F4 authentication routes directory then tenant reads freshly without merging identities", async () => {
   const database = await createTestDatabase({ url: ":memory:" });
   const schema = "server_authenticated_tenant";
+  const lookups: string[] = [];
   await provisionCopilotzSchema(database, schema);
   await provisionOperationCatalog(database, schema);
   const application = await createCopilotzApplication({
@@ -544,11 +549,37 @@ Deno.test("authentication chooses the database scope and can return an early HTT
         resources: {
           server: {
             default: fixtureServerFacade({
-              authenticate(request, context) {
+              async authenticate(request, context) {
                 assertEquals(context.endpoint.kind, "collection");
-                return request.headers.has("authorization")
-                  ? { namespace: "tenant-a", databaseSchema: schema }
-                  : new Response(null, { status: 401 });
+                if (!request.headers.has("authorization")) {
+                  return new Response(null, { status: 401 });
+                }
+                const directory = await context.lookup({
+                  namespace: "tenant-a",
+                  databaseSchema: "server_authenticated_default",
+                });
+                const route = await directory.get(
+                  "serverNotes",
+                  "login-route",
+                ) as unknown as { label: string };
+                lookups.push("directory");
+                const tenant = await context.lookup({
+                  namespace: "tenant-a",
+                  databaseSchema: route.label,
+                });
+                const local = await tenant.get(
+                  "serverNotes",
+                  "same",
+                ) as unknown as { label: string };
+                lookups.push(local.label);
+                const alternate = await tenant.list("serverNotes", {
+                  where: { id: "same" },
+                });
+                assertEquals(
+                  (alternate[0] as unknown as { label: string }).label,
+                  local.label,
+                );
+                return { namespace: "tenant-a", databaseSchema: route.label };
               },
             }),
           },
@@ -567,6 +598,8 @@ Deno.test("authentication chooses the database scope and can return an early HTT
     await application.collections.withScope({ namespace: "tenant-a" })
       .serverNotes
       .create({ id: "same", label: "default" });
+    await application.collections.withScope({ namespace: "tenant-a" })
+      .serverNotes.create({ id: "login-route", label: schema });
     const client = browser(handler, {
       authorization: "Bearer test",
       "x-database-schema": "server_authenticated_default",
@@ -576,6 +609,21 @@ Deno.test("authentication chooses the database scope and can return an early HTT
         data: { label: string };
       }).data.label,
       "tenant",
+    );
+    assertEquals(lookups, ["directory", "tenant"]);
+    await tenant.collections.withScope({ namespace: "tenant-a" }).serverNotes
+      .update({ id: "same", set: { label: "changed" } });
+    assertEquals(
+      (await client.collections.get("serverNotes", "same") as {
+        data: { label: string };
+      }).data.label,
+      "changed",
+    );
+    assertEquals(lookups, ["directory", "tenant", "directory", "changed"]);
+    assertEquals(
+      (await application.collections.withScope({ namespace: "tenant-a" })
+        .serverNotes.get({ id: "same" }))?.label,
+      "default",
     );
     await assertRejects(
       () => browser(handler).collections.get("serverNotes", "same"),
@@ -708,14 +756,12 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
   });
   const worker = await createCopilotz({
     role: "worker",
-    database,
     namespace: "tenant-a",
     databaseSchema: "server_gateway_test",
     plugins,
     id: workerId,
     transport,
     capacity: 4,
-    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await worker.ready;
@@ -805,6 +851,7 @@ Deno.test("the embedded application serves the composed facade", async () => {
 });
 
 Deno.test("collection mutations are opt-in, policy-bound, and durably replayable", async () => {
+  const collectionIntents: AuthorizationIntent[] = [];
   const application = await createCopilotzApplication({
     namespace: "tenant-a",
     databaseSchema: "server_collection_mutation_test",
@@ -825,7 +872,10 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
                 actions: false,
                 channels: false,
               },
-              authorize() {
+              evaluate(_request, { intent }) {
+                if (intent.kind === "collection") {
+                  collectionIntents.push(intent);
+                }
                 return {
                   operations: { metadata: { threadId: "thread-1" } },
                   collectionMutations: {
@@ -904,6 +954,12 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
       CopilotzHttpError,
       "Idempotency key was reused with different input.",
     );
+    // A client's HTTP mutation is a direct call, never an executing Processor.
+    assert(collectionIntents.length > 0);
+    assertEquals(
+      collectionIntents.filter((intent) => intent.invocation !== undefined),
+      [],
+    );
   } finally {
     await application.close();
   }
@@ -924,7 +980,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
               authenticate() {
                 return { actor: { id: "participant-a" } };
               },
-              authorize() {
+              evaluate() {
                 return {
                   operations: { metadata: { threadId: "thread-1" } },
                   collectionMutations: {
@@ -932,7 +988,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
                       commands: {
                         patchSystemMetadata: {
                           fields: ["namespace", "set", "unset"],
-                          input: { namespace: "compass" },
+                          input: { namespace: "atlas" },
                           filter: {
                             contains: { participantIds: ["participant-a"] },
                           },
@@ -964,13 +1020,11 @@ Deno.test("thread observation discovers and receives a generic metadata command 
   assert(participant);
   await participant.create({ namespace: "tenant-a" }, {
     id: "participant-a",
-    namespace: "tenant-a",
     externalId: "user-a",
     participantType: "human",
   }, { identity: { deduplicationId: "seed-participant-a" } });
   await thread.create({ namespace: "tenant-a" }, {
     id: "thread-1",
-    namespace: "tenant-a",
     metadata: { public: {}, system: {} },
     participantIds: ["participant-a"],
   }, {
@@ -979,8 +1033,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
   const read = await createHttpReads(application, {
     namespace: "tenant-a",
     databaseSchema,
-  }, {
-    collections: { thread: { where: { id: "thread-1" } } },
+    authority: testAuthority(databaseSchema, "tenant-a", "fixture-host"),
   });
   const operations = await createHttpOperations(
     application,
@@ -988,8 +1041,8 @@ Deno.test("thread observation discovers and receives a generic metadata command 
       namespace: "tenant-a",
       databaseSchema,
       actor: { id: "participant-a" },
+      authority: testAuthority(databaseSchema, "tenant-a", "fixture-host"),
     },
-    { operations: { metadata: { threadId: "thread-1" } } },
     read,
   );
   const controller = new AbortController();
@@ -1004,7 +1057,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
       "thread",
       "thread-1",
       "patchSystemMetadata",
-      { namespace: "compass", set: { teamProfileId: "profile-1" } },
+      { namespace: "atlas", set: { teamProfileId: "profile-1" } },
       { idempotencyKey: "thread-command-1" },
     );
     await client.operations.result(receipt.operationId);
@@ -1172,7 +1225,7 @@ Deno.test("HTTP Collection mutations disclose schema and relation validation but
               operations: { include: ["create", "update", "command:crash"] },
             },
           },
-          authorize: () => ({
+          evaluate: () => ({
             collectionMutations: {
               card: { create: {}, update: {}, commands: { crash: {} } },
             },
@@ -1330,5 +1383,60 @@ Deno.test("host and HTTP Action failures never copy protected error text into in
     } finally {
       await app.close();
     }
+  }
+});
+
+Deno.test("F4 cancellation reauthorizes in the owner command after its HTTP metadata read", async () => {
+  const gate = Promise.withResolvers<void>();
+  let cancellationChecks = 0;
+  const application = await createCopilotzApplication({
+    namespace: "tenant",
+    databaseSchema: "owner_cancel_race",
+    actions: {
+      pending: defineAction({
+        id: "fixture.pending",
+        execute: async () => {
+          await gate.promise;
+          return "done";
+        },
+      }),
+    },
+    plugins: [
+      defineFixturePlugin({
+        ...serverPlugin,
+        resources: {
+          server: {
+            default: fixtureServerFacade({
+              evaluate(request) {
+                if (request.method === "DELETE" && ++cancellationChecks > 1) {
+                  return new Response(null, { status: 403 });
+                }
+                return {};
+              },
+            }),
+          },
+        },
+      }),
+    ],
+  });
+  const client = browser(createServerFacadeFetchHandler(application));
+  try {
+    const receipt = await client.actions.submit("fixture.pending", {}, {
+      idempotencyKey: "pending",
+    });
+    await assertRejects(
+      () => client.operations.cancel(receipt.operationId),
+      CopilotzHttpError,
+    );
+    assert(cancellationChecks >= 2);
+    const status = await client.operations.get(receipt.operationId) as {
+      data: { state: string };
+    };
+    assert(["accepted", "running"].includes(status.data.state));
+    gate.resolve();
+    assertEquals(await client.operations.result(receipt.operationId), "done");
+  } finally {
+    gate.resolve();
+    await application.close();
   }
 });

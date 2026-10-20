@@ -88,6 +88,18 @@ omitting them uses the application's defaults. The result never exposes the
 engine, raw Collections, deliveries or configuration. Use `collections.<alias>`
 reads for Collection state and `attach` or `observe` for Events.
 
+### Trusted host commands
+
+Embedded and Gateway hosts can register fixed-scope SQL callbacks using
+`hostCommands` and invoke them with
+`app.hostCommands.invoke(name, input,
+{ idempotencyKey })`. The callbacks
+receive a command-lifetime query handle, not a session. `databaseScopes`
+requests recovery of explicitly configured schemas before startup resolves.
+These options are rejected by Workers and are never published as HTTP routes.
+See [Trusted Host Commands](host-commands.md) for the complete authorization,
+scope, receipt and query-lifetime contract.
+
 ### Trusted host calls
 
 Use `app.actions.<alias>` when a script, test, seed or admin task already knows
@@ -224,7 +236,7 @@ chat readers inspect model failure separately.
 
 Prerequisites: the Notes application from
 [Persist and recover](getting-started/part-2-verify-and-recover/07-persist-and-recover.md),
-with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.87.3`.
+with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.89.0`.
 
 ### Create `operations.ts`
 

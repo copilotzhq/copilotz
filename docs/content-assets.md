@@ -160,7 +160,7 @@ This builds on the files from
 [Chapter 18](getting-started/part-4-release-to-users/18-handle-files-and-large-content.md):
 `notes-plugin.ts` with its declared `body` field, and `notes-files.ts` with
 `notesFilesPlugin` and the `NoteFileReader` contract. It needs Deno 2.9+ or Node
-24+ and `@copilotz/copilotz@^0.87.3`; no credential or file access.
+24+ and `@copilotz/copilotz@^0.89.0`; no credential or file access.
 
 Create `body-report.ts`, a pure definition module. Whenever a note with a body
 is created, an Action reads that body back with a bounded Collection read and
@@ -370,3 +370,10 @@ the body is fetched.
 - [Actions](actions.md) covers invocation keys, validation and lifecycle Events.
 - [Streams](streams.md) covers bodies produced or consumed progressively.
 - [Runtime adapters](runtime-adapters.md) covers body store backends.
+
+Newly captured inline JSON uses deterministic recursively key-sorted JSON bytes.
+Array order, scalar values, Unicode strings, and finite JSON numbers retain
+their JSON meaning. Unsupported values are refused. The same preparation code
+verifies owner-bound parent captures after a retained JSON/JSONB round trip.
+Existing canonical references retain their accepted bytes and digest without
+recapture.

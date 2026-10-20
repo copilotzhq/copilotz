@@ -1,3 +1,4 @@
+import { createOwnerEffectClient } from "./effect-commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
@@ -33,7 +34,6 @@ async function fixture(maxAttempts = 1) {
     indexOperationEvent: (tx, input) => catalog.indexEvent(tx, input),
     indexOperationEventSql: (input, param) =>
       catalog.indexEventSql(input, param),
-    lockSettlementScope: (tx, scope) => catalog.lockScope(tx, scope),
     settleActionOwners: (tx, delivery) =>
       recoverDeliveryActions(
         {
@@ -210,8 +210,7 @@ Deno.test("final lease recovery atomically fails Actions and registers continuat
       operationId: f.root.event.id,
       streamId: "stream",
       outcome: "failed",
-      availability: "missing",
-      capture: "truncated",
+      availabilityReason: "missing",
     });
     for (const delivery of continuations) {
       assertExists(
@@ -302,6 +301,102 @@ Deno.test("retryable lease loss preserves the Action and fences the old attempt"
     });
     await f.store.succeedDelivery(f.delivery.id, "second");
     assertEquals((await first.terminal("retry"))?.status, "completed");
+  } finally {
+    await f.db.close();
+  }
+});
+
+Deno.test("effect authority binds exact delivery attempt and supports local non-expiring authority", async () => {
+  const f = await fixture();
+  try {
+    await f.lifecycle("first").emit({
+      ...f.receipt("effect-run"),
+      status: "invoked",
+      effectProtocol: 1,
+      deduplicationId: "effect-run:action:invoked",
+    });
+    const create = (
+      namespace = "tenant",
+      actionRunId = "effect-run",
+      leaseOwner = "first",
+    ) =>
+      createOwnerEffectClient({
+        session: f.db,
+        schema: f.store.databaseSchema,
+        namespace,
+        actionRunId,
+        writer: { deliveryId: f.delivery.id, leaseOwner },
+      });
+    await assertRejects(
+      () => create("other").begin("send"),
+      Error,
+      "inactive Action attempt",
+    );
+    await assertRejects(
+      () => create("tenant", "other").begin("send"),
+      Error,
+      "inactive Action attempt",
+    );
+    await assertRejects(
+      () => create("tenant", "effect-run", "other").begin("send"),
+      Error,
+      "inactive Action attempt",
+    );
+    await f.db.query(
+      `UPDATE ${f.store.tables.event_deliveries} SET lease_expires_at=NULL WHERE id=$1`,
+      [f.delivery.id],
+    );
+    const client = create();
+    assertEquals(await client.begin("send"), { status: "proceed" });
+    await f.db.query(
+      `UPDATE ${f.store.tables.event_deliveries} SET lease_owner='replacement' WHERE id=$1`,
+      [f.delivery.id],
+    );
+    await assertRejects(
+      () => client.confirm("send", null),
+      Error,
+      "inactive Action attempt",
+    );
+    assertEquals(
+      await create("tenant", "effect-run", "replacement").begin("send"),
+      { status: "indeterminate" },
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+
+Deno.test("exhausted delivery recovery preserves external ambiguity in its atomic Action terminal", async () => {
+  const f = await fixture();
+  try {
+    const lifecycle = f.lifecycle("first");
+    await lifecycle.emit({
+      ...f.receipt("effect-run"),
+      status: "invoked",
+      effectProtocol: 1,
+      deduplicationId: "effect-run:action:invoked",
+    });
+    await createOwnerEffectClient({
+      session: f.db,
+      schema: f.store.databaseSchema,
+      namespace: "tenant",
+      actionRunId: "effect-run",
+      writer: { deliveryId: f.delivery.id, leaseOwner: "first" },
+    }).begin("send");
+    await f.expire();
+    assertEquals((await f.store.recoverExpiredDeliveries()).length, 1);
+    const terminal = await lifecycle.terminal("effect-run");
+    assertEquals(terminal?.status, "failed");
+    assertExists(terminal);
+    if (terminal.status !== "failed") {
+      throw new Error("Expected failed terminal");
+    }
+    assertEquals(terminal.error.code, "effect_indeterminate");
+    assertEquals(
+      (await f.db.query(`SELECT * FROM ${f.store.tables.open_actions}`)).rows
+        .length,
+      0,
+    );
   } finally {
     await f.db.close();
   }

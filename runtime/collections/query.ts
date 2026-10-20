@@ -3,7 +3,9 @@ import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
+import { queryCollectionRows } from "./read-rows.ts";
 import type {
+  CollectionFilter,
   CollectionGraphRelation,
   CollectionQuery,
   CollectionRecord,
@@ -71,22 +73,33 @@ async function resolveCursorAnchor(
   namespace: string,
   boundary: "after" | "before",
   cursor: string,
+  sourceCheck?: string,
 ): Promise<CursorAnchorRow> {
   const params = [...filterParams, cursor];
   // Text preserves PostgreSQL's microseconds across the driver round trip;
   // decoding timestamptz as a JavaScript Date would truncate them.
-  const result = await executor.query<CursorAnchorRow>(
+  const rows = await queryCollectionRows<CursorAnchorRow>(
+    executor,
     `SELECT id${
       order.expression === "id"
         ? ""
-        : `, (${order.expression})::text AS order_value`
+        : `, (${
+          sourceCheck === undefined
+            ? order.expression
+            : `CASE WHEN (${sourceCheck}) IS TRUE THEN (${order.expression}) ELSE NULL END`
+        })::text AS order_value`
+    }${
+      sourceCheck === undefined
+        ? ""
+        : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
     }
        FROM ${table}
       WHERE ${filters.join(" AND ")} AND id = $${params.length}
       LIMIT 1`,
     params,
+    { sourceChecked: sourceCheck !== undefined },
   );
-  const anchor = result.rows[0];
+  const anchor = rows[0];
   if (!anchor) {
     throw new RangeError(
       `Collection '${definition.name}' ${boundary} cursor '${cursor}' does not match the current query scope in namespace '${namespace}'.`,
@@ -202,7 +215,8 @@ export async function queryCollectionRelations(
   if (types.length) {
     filters.push(`edge.type = ANY($${params.push([...types])}::text[])`);
   }
-  const result = await executor.query<EdgeRow>(
+  const result = await queryCollectionRows<EdgeRow>(
+    executor,
     `SELECT edge.*, source.type AS source_type, target.type AS target_type
        FROM ${tables.edges} edge
        JOIN ${tables.nodes} source
@@ -216,7 +230,7 @@ export async function queryCollectionRelations(
       LIMIT ${relationLimit(query.limit)}`,
     params,
   );
-  return (result.rows.map((row) => {
+  return (result.map((row) => {
     const data = jsonRecord(row.data);
     return ({
       id: row.id,
@@ -239,10 +253,133 @@ export async function queryCollectionRecords(
   definition: CollectionDefinition,
   namespace: string,
   query: CollectionQuery = {},
+  /** Trusted fixed source check, never caller-authored SQL. */
+  sourceCheck?: string,
+  readRelated?: (
+    collection: string,
+    id: string,
+  ) => Promise<CollectionRecord | null>,
 ): Promise<readonly CollectionRecord[]> {
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
-  for (const predicate of [query, ...(query.all ?? [])]) {
+  filters.push(
+    ...compileCollectionFilters([query, ...(query.all ?? [])], params),
+  );
+  if (query.text?.trim() && definition.search?.enabled) {
+    const index = params.push(`%${query.text.trim()}%`);
+    filters.push(`content ILIKE $${index}`);
+  }
+  const order = collectionOrder(query, definition);
+  const scopeFilters = [...filters];
+  const scopeParams = [...params];
+  for (
+    const [boundary, cursor] of [
+      ["after", cursorValue(query.after)],
+      ["before", cursorValue(query.before)],
+    ] as const
+  ) {
+    if (!cursor) continue;
+    const anchor = await resolveCursorAnchor(
+      executor,
+      tables.nodes,
+      scopeFilters,
+      scopeParams,
+      order,
+      definition,
+      namespace,
+      boundary,
+      cursor,
+      sourceCheck,
+    );
+    filters.push(cursorFilter(params, order, boundary, anchor));
+  }
+  const limit = boundedLimit(query.limit);
+  const orderBy = order.expression === "id"
+    ? `id ${order.direction}`
+    : `(${order.expression}) ${order.direction}, id ${order.direction}`;
+  const rows = await queryCollectionRows<NodeRow>(
+    executor,
+    `SELECT ${`id, namespace, data${
+      sourceCheck === undefined
+        ? ""
+        : `, (${sourceCheck}) IS NOT TRUE AS __collection_source_rejected`
+    }`} FROM ${tables.nodes}
+     WHERE ${filters.join(" AND ")}
+     ORDER BY ${orderBy}
+     LIMIT ${limit}`,
+    params,
+    { sourceChecked: sourceCheck !== undefined },
+  );
+  const records = rows.map(mapNode);
+  if (!query.include?.length) return records;
+
+  const hydrated = [];
+  for (const value of records) {
+    const extra: Record<string, unknown> = {};
+    for (const name of query.include) {
+      const relation = definition.relations?.[name];
+      if (!relation) {
+        throw new TypeError(
+          `Unknown relation '${name}' on '${definition.name}'.`,
+        );
+      }
+      if (relation.type === "belongsTo") {
+        const parentId = value[relation.foreignKey];
+        extra[name] = typeof parentId === "string"
+          ? await (readRelated
+            ? readRelated(relation.collection, parentId)
+            : loadCollectionRecord(
+              executor,
+              tables,
+              namespace,
+              relation.collection,
+              parentId,
+            ))
+          : null;
+      } else {
+        const edgeType = relation.edgeType ?? `has_${relation.collection}`;
+        const invert = relation.edge === "child-to-parent";
+        const edges = await queryCollectionRows<{ related_id: string }>(
+          executor,
+          invert
+            ? `SELECT source_node_id AS related_id FROM ${tables.edges}
+               WHERE namespace = $1 AND target_node_id = $2 AND type = $3
+               ORDER BY source_node_id`
+            : `SELECT target_node_id AS related_id FROM ${tables.edges}
+               WHERE namespace = $1 AND source_node_id = $2 AND type = $3
+               ORDER BY target_node_id`,
+          [namespace, value.id, edgeType],
+        );
+        const related = [];
+        for (const edge of edges) {
+          const record = await (readRelated
+            ? readRelated(relation.collection, edge.related_id)
+            : loadCollectionRecord(
+              executor,
+              tables,
+              namespace,
+              relation.collection,
+              edge.related_id,
+            ));
+          if (record !== null) {
+            related.push(record);
+          }
+        }
+        extra[name] = related;
+      }
+    }
+    hydrated.push({ ...value, ...extra } as const);
+  }
+  return hydrated;
+}
+
+/** Shared SQL predicates for bounded Collection and vector candidate reads. */
+export function compileCollectionFilters(
+  predicates: readonly CollectionFilter[],
+  params: unknown[],
+): string[] {
+  const filters: string[] = [];
+  for (const predicate of predicates) {
     if (predicate.filter !== undefined) {
       filters.push(compileCollectionPredicate(predicate.filter, params));
     }
@@ -278,95 +415,5 @@ export async function queryCollectionRecords(
       );
     }
   }
-  if (query.text?.trim() && definition.search?.enabled) {
-    const index = params.push(`%${query.text.trim()}%`);
-    filters.push(`content ILIKE $${index}`);
-  }
-  const order = collectionOrder(query, definition);
-  const scopeFilters = [...filters];
-  const scopeParams = [...params];
-  for (
-    const [boundary, cursor] of [
-      ["after", cursorValue(query.after)],
-      ["before", cursorValue(query.before)],
-    ] as const
-  ) {
-    if (!cursor) continue;
-    const anchor = await resolveCursorAnchor(
-      executor,
-      tables.nodes,
-      scopeFilters,
-      scopeParams,
-      order,
-      definition,
-      namespace,
-      boundary,
-      cursor,
-    );
-    filters.push(cursorFilter(params, order, boundary, anchor));
-  }
-  const limit = boundedLimit(query.limit);
-  const orderBy = order.expression === "id"
-    ? `id ${order.direction}`
-    : `(${order.expression}) ${order.direction}, id ${order.direction}`;
-  const result = await executor.query<NodeRow>(
-    `SELECT * FROM ${tables.nodes}
-     WHERE ${filters.join(" AND ")}
-     ORDER BY ${orderBy}
-     LIMIT ${limit}`,
-    params,
-  );
-  const records = result.rows.map(mapNode);
-  if (!query.include?.length) return records;
-
-  const hydrated = [];
-  for (const value of records) {
-    const extra: Record<string, unknown> = {};
-    for (const name of query.include) {
-      const relation = definition.relations?.[name];
-      if (!relation) {
-        throw new TypeError(
-          `Unknown relation '${name}' on '${definition.name}'.`,
-        );
-      }
-      if (relation.type === "belongsTo") {
-        const parentId = value[relation.foreignKey];
-        extra[name] = typeof parentId === "string"
-          ? await loadCollectionRecord(
-            executor,
-            tables,
-            namespace,
-            relation.collection,
-            parentId,
-          )
-          : null;
-      } else {
-        const edgeType = relation.edgeType ?? `has_${relation.collection}`;
-        const invert = relation.edge === "child-to-parent";
-        const edges = await executor.query<{ related_id: string }>(
-          invert
-            ? `SELECT source_node_id AS related_id FROM ${tables.edges}
-               WHERE namespace = $1 AND target_node_id = $2 AND type = $3
-               ORDER BY source_node_id`
-            : `SELECT target_node_id AS related_id FROM ${tables.edges}
-               WHERE namespace = $1 AND source_node_id = $2 AND type = $3
-               ORDER BY target_node_id`,
-          [namespace, value.id, edgeType],
-        );
-        extra[name] = (await Promise.all(
-          edges.rows.map((edge) =>
-            loadCollectionRecord(
-              executor,
-              tables,
-              namespace,
-              relation.collection,
-              edge.related_id,
-            )
-          ),
-        )).filter((item) => item !== null);
-      }
-    }
-    hydrated.push({ ...value, ...extra } as const);
-  }
-  return hydrated;
+  return filters;
 }

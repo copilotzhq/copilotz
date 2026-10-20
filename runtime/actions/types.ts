@@ -1,8 +1,10 @@
 import type {
-  ActionDeferral,
-  ActionResolution,
-  DeferredAction,
-} from "./deferral.ts";
+  ActionContinuation,
+  AwaitingAction,
+  AwaitOperationInput,
+  OperationOutcome,
+  OperationStart,
+} from "./continuation.ts";
 import type { VectorReader, VectorTransaction } from "../vectors/index.ts";
 import type { ActionContentDeclaration } from "./content.ts";
 import type { ExtendedJSONSchema } from "../../dependencies/json-schema-to-ts.ts";
@@ -15,7 +17,11 @@ import type {
   SnapshotCollection,
   TransactionCollection,
 } from "../collections/kernel.ts";
-import type { ContentStreamRuntime } from "../streams/index.ts";
+import type {
+  ContentStreamOpenInput,
+  ContentStreamRuntime,
+  ContentStreamWriter,
+} from "../streams/index.ts";
 import type {
   AssetOrigin,
   AssetRecord,
@@ -23,6 +29,7 @@ import type {
   ContentRef,
   ContentSequence,
   DurableContentInput,
+  GeneratedContentSequence,
   PreparedContent,
   PublishAssetInput,
   ResolvedContent,
@@ -81,6 +88,13 @@ export type RuntimeActionCallerMap = Readonly<
 /** Runtime-native durable content operations available to Actions. */
 export type RuntimeContent = Readonly<{
   authorize?(ref: ContentRef): Promise<void>;
+  openCapture(
+    input: ContentStreamOpenInput & { operationKey: string },
+  ): Promise<ContentStreamWriter>;
+  capture(
+    input: ContentInput | readonly ContentInput[] | PreparedContent,
+    options: { operationKey: string; origin?: AssetOrigin },
+  ): Promise<GeneratedContentSequence>;
   prepare(
     input: ContentInput | readonly ContentInput[],
     options: { operationKey: string; origin?: AssetOrigin },
@@ -100,6 +114,13 @@ export type RuntimeContent = Readonly<{
   open(ref: ContentRef): Promise<ReadableStream<Uint8Array>>;
 }>;
 
+/** Admit independent public work once per namespace-scoped operation key. */
+export type RuntimeOperations = Readonly<{
+  start(
+    input: Omit<OperationStart, "operationId"> & { operationKey: string },
+  ): Promise<string>;
+}>;
+
 export type RuntimeStreams = ContentStreamRuntime;
 
 export type RuntimeIdentity = Readonly<{
@@ -107,12 +128,61 @@ export type RuntimeIdentity = Readonly<{
   correlationId?: string;
   deduplicationId?: string;
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
 }>;
 
 /** Caller-owned, JSON-safe data carried by one Action invocation. */
 export type ActionInvocationMetadata = Readonly<Record<string, unknown>>;
+
+/** JSON effect data; confirmation accepts only secret-free outcomes. */
+export type ActionEffectOutcome =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ActionEffectOutcome[]
+  | { readonly [key: string]: ActionEffectOutcome };
+/** Opaque evidence verified against current owner dispatch facts. */
+export type ActionEffectEvidence = Readonly<
+  { source: string; reference: string }
+>;
+export type ActionEffectOptions = Readonly<{ signal?: AbortSignal }>;
+export type ActionEffectState =
+  | Readonly<{ status: "none" }>
+  | Readonly<{ status: "indeterminate" }>
+  | Readonly<{ status: "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionEffectBegin =
+  | Readonly<{ status: "proceed" | "not_started" }>
+  | Readonly<{ status: "replay"; outcome: ActionEffectOutcome }>;
+export type ActionReconcileResult =
+  | Readonly<{ status: "confirmed"; outcome: ActionEffectOutcome }>
+  | Readonly<{ status: "not_started"; evidence: ActionEffectEvidence }>
+  | Readonly<{ status: "indeterminate" }>;
+/** Invocation-bound effect capability. Only a fresh begin's proceed permits one
+ * external dispatch. A closed step is never reopened; use a new deterministic
+ * step after owner-verified not_started when another dispatch is intended. */
+export type ActionEffect = Readonly<{
+  begin(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectBegin>;
+  inspect(
+    step: string,
+    options?: ActionEffectOptions,
+  ): Promise<ActionEffectState>;
+  confirm(
+    step: string,
+    outcome: ActionEffectOutcome,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+  notStarted(
+    step: string,
+    evidence: ActionEffectEvidence,
+    options?: ActionEffectOptions,
+  ): Promise<void>;
+}>;
 
 export type ActionCallOptions = Readonly<{
   operationKey?: string;
@@ -121,7 +191,7 @@ export type ActionCallOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
-/** Values captured together by a deferred Action invocation. */
+/** Values captured together by a awaiting Action invocation. */
 export type ActionPreparedCall<I = unknown> = Readonly<{
   input: I;
   metadata?: ActionInvocationMetadata;
@@ -178,6 +248,7 @@ export interface RuntimeContext<
   readonly vectors: VectorReader;
   readonly content: RuntimeContent;
   readonly streams: RuntimeStreams;
+  readonly operations: RuntimeOperations;
   readonly signal: AbortSignal;
   now(): Date;
   transaction<T>(
@@ -197,8 +268,6 @@ export interface RuntimeContext<
       }>,
     ) => T | Promise<T>,
   ): Promise<T>;
-  /** Wake exact-key durable Action waiters in this runtime namespace. */
-  signalDeferredWait(waitKey: string): Promise<number>;
 }
 
 /** Runtime context for one Action invocation and its durable lifecycle. */
@@ -214,13 +283,11 @@ export interface ActionContext<
     parentRunId?: string;
     metadata: ActionInvocationMetadata;
   }>;
+  readonly effect: ActionEffect;
   /** Persists one self-contained `<actionId>.progress` lifecycle Event. */
   progress(value: unknown): Promise<void>;
-  /** Register an exact-key wake condition before returning deferAction(). */
-  registerDeferredWait(
-    waitKey: string,
-    options?: Readonly<{ timeoutMs?: number }>,
-  ): Promise<void>;
+  /** Declare a durable continuation and release this execution slot. */
+  awaitOperation(input: AwaitOperationInput): ActionContinuation;
 }
 
 type ActionSchemaExtensions = Readonly<{
@@ -260,14 +327,18 @@ export type ActionDefinition<
     input: TInput,
     context: TContext,
   ): TOutput | Promise<TOutput>;
-  resolve?(
-    input: TInput,
+  reconcile?(
+    step: string,
     context: TContext,
-    resolution: ActionResolution,
+  ): ActionReconcileResult | Promise<ActionReconcileResult>;
+  resume?(
+    handoff: unknown,
+    outcome: OperationOutcome,
+    context: TContext,
   ):
-    | Exclude<TOutput, ActionDeferral>
-    | ActionDeferral
-    | Promise<Exclude<TOutput, ActionDeferral> | ActionDeferral>;
+    | Exclude<TOutput, ActionContinuation>
+    | ActionContinuation
+    | Promise<Exclude<TOutput, ActionContinuation> | ActionContinuation>;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: TInput;
     output: TOutput;
@@ -281,7 +352,10 @@ export type AnyActionDefinition = Readonly<{
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;
   execute: (...args: never[]) => unknown;
-  resolve?: (...args: never[]) => unknown;
+  resume?: (...args: never[]) => unknown;
+  reconcile?: (
+    ...args: never[]
+  ) => ActionReconcileResult | Promise<ActionReconcileResult>;
   readonly [actionDefinitionTypes]?: Readonly<{
     input: unknown;
     output: unknown;
@@ -299,7 +373,7 @@ export type ActionInput<A extends AnyActionDefinition> = ActionDefinitionTypes<
   A
 >["input"];
 
-type ActionCallResult<T> = T extends ActionDeferral ? DeferredAction : T;
+type ActionCallResult<T> = T extends ActionContinuation ? AwaitingAction : T;
 export type ActionOutput<A extends AnyActionDefinition> = ActionCallResult<
   ActionDefinitionTypes<
     A
@@ -314,7 +388,7 @@ export type ActionCaller<A extends AnyActionDefinition> = (
   options?: ActionCallOptions,
 ) => Promise<ActionOutput<A>>;
 
-/** A runtime-bound Action caller, including deferred input capture. */
+/** A runtime-bound Action caller, including awaiting input capture. */
 export type BoundActionCaller<A extends AnyActionDefinition> =
   & ActionCaller<A>
   & Readonly<{
@@ -336,7 +410,7 @@ export type ActionCallers<TActions extends ActionMap = ActionMap> = Readonly<
 
 export type ActionStatus =
   | "invoked"
-  | "deferred"
+  | "awaiting"
   | "progress"
   | "completed"
   | "failed"
@@ -360,11 +434,17 @@ type ActionEventBase<I> = Readonly<{
 
 export type ActionInvokedData<I = unknown> =
   & ActionEventBase<I>
-  & Readonly<{ status: "invoked" }>;
+  & Readonly<{ status: "invoked"; effectProtocol?: 1 }>;
 
-export type ActionDeferredData<I = unknown> =
+export type ActionAwaitingData<I = unknown> =
+  & AwaitOperationInput
   & ActionEventBase<I>
-  & Readonly<{ status: "deferred"; work: unknown; progressIndex: number }>;
+  & Readonly<
+    {
+      status: "awaiting";
+      progressIndex: number;
+    }
+  >;
 
 export type ActionCompletedData<I = unknown, O = unknown> =
   & ActionEventBase<I>
@@ -390,7 +470,7 @@ export type ActionFailedData<I = unknown> =
 
 export type ActionEventData<I = unknown, O = unknown, P = unknown> =
   | ActionInvokedData<I>
-  | ActionDeferredData<I>
+  | ActionAwaitingData<I>
   | ActionProgressData<I, P>
   | ActionCompletedData<I, O>
   | ActionFailedData<I>;
@@ -400,7 +480,7 @@ type ActionLifecycleEnvelope = Readonly<{
   correlationId?: string;
   deduplicationId: string;
   settlementScopeId?: string;
-  /** Runtime-owned work group for an outstanding deferred Action. */
+  /** Action lineage carried by durable execution. */
   actionScopeId?: string;
 }>;
 
@@ -418,7 +498,7 @@ export type ActionLifecycleEmitter = Readonly<{
     input: ActionLifecycleInput<I, O, P>,
   ): Promise<CoordinatedMutationResult<void> | DurableEvent>;
   invoked(actionRunId: string): Promise<ActionInvokedData | null>;
-  deferred?(actionRunId: string): Promise<ActionDeferredData | null>;
+  awaiting?(actionRunId: string): Promise<ActionAwaitingData | null>;
   terminal(
     actionRunId: string,
   ): Promise<ActionCompletedData | ActionFailedData | null>;

@@ -1,3 +1,6 @@
+import { awaitEventPublication } from "../events/coordinator.ts";
+import { readActionEffectInventory } from "./effect-commands.ts";
+import { createOperationCatalogTables } from "../streams/catalog.ts";
 import type {
   EventCoordinator,
   EventDelivery,
@@ -32,7 +35,7 @@ export async function recoverDeliveryActions(
   return await recoverActions(options, transaction, delivery);
 }
 
-/** Explicit cancellation settles every live Action, including deferred ones. */
+/** Explicit cancellation settles every live Action, including awaiting ones. */
 export async function cancelScopeActions(
   options: RecoveryOptions,
   transaction: SqlExecutor,
@@ -44,7 +47,32 @@ export async function cancelScopeActions(
     scope.operationId,
     scope.reason,
   );
-  return await recoverActions(options, transaction, undefined, scope);
+  const operations =
+    createOperationCatalogTables(options.store.databaseSchema).operations;
+  const children = await transaction.query<{ operation_id: string }>(
+    `SELECT operation_id FROM ${operations} WHERE namespace = $1 AND parent_operation_id = $2
+      AND state IN ('accepted','running') ORDER BY operation_id`,
+    [scope.namespace, scope.operationId],
+  );
+  const flushes: (() => Promise<void>)[] = [];
+  for (const child of children.rows) {
+    await transaction.query(
+      `UPDATE ${options.store.tables.event_deliveries} SET status = 'cancelled', lease_owner = NULL,
+      lease_expires_at = NULL, settled_at = NOW(), updated_at = NOW()
+      WHERE settlement_scope_id = $1 AND status IN ('pending','leased','retry_wait')`,
+      [child.operation_id],
+    );
+    flushes.push(
+      await cancelScopeActions(options, transaction, {
+        ...scope,
+        operationId: child.operation_id,
+      }),
+    );
+  }
+  flushes.push(await recoverActions(options, transaction, undefined, scope));
+  return async () => {
+    for (const flush of flushes) await flush();
+  };
 }
 
 async function recoverActions(
@@ -74,7 +102,7 @@ async function recoverActions(
         ? "action.namespace = $1 AND action.scope_id = $2"
         : "action.owner_delivery_id = $1"
     }
-    ORDER BY action.namespace, action.action_run_id FOR UPDATE OF action`,
+    ORDER BY action.namespace, action.action_run_id`,
     scope ? [scope.namespace, scope.operationId] : [delivery!.id],
   );
   const committed: Awaited<ReturnType<typeof coordinator.commitMutation>>[] =
@@ -119,19 +147,28 @@ async function recoverActions(
         ...(delivery ? { sourceDeliveryId: delivery.id } : {}),
       },
     });
+    const effects = await readActionEffectInventory(transaction, {
+      schema: store.databaseSchema,
+      namespace: row.namespace,
+      actionRunId: row.action_run_id,
+    });
+    const indeterminate = effects.some((effect) => effect.status === "begun");
     const cancelled = Boolean(scope) || delivery?.status === "cancelled";
     const abandoned = delivery?.status === "succeeded";
     await lifecycle.emit({
       ...invoked,
       status: cancelled ? "cancelled" : "failed",
       error: {
+        ...(indeterminate ? { code: "effect_indeterminate" } : {}),
         name: cancelled
           ? "AbortError"
-          : abandoned
-          ? "ActionAbandoned"
-          : "ActionDeliveryExhausted",
+          : indeterminate
+          ? "ActionEffectError"
+          : "ActionFailed",
         message: cancelled
           ? "The owning delivery was cancelled."
+          : indeterminate
+          ? "An external effect has no confirmed outcome; the Action cannot be blindly replayed."
           : abandoned
           ? "The owning delivery finished without completing this Action."
           : "The owning delivery permanently failed before completing this Action.",
@@ -151,6 +188,6 @@ async function recoverActions(
     });
   }
   return async () => {
-    for (const result of committed) await coordinator.flushCommitted(result);
+    for (const result of committed) await awaitEventPublication(result);
   };
 }

@@ -1,3 +1,4 @@
+import { recordTestContentTerminal } from "../../../../runtime/testing/content-catalog.ts";
 import {
   createBundledSkill as defineSkill,
   createInlineSkill,
@@ -162,6 +163,7 @@ type TextFixtureOptions = Readonly<{
   executionCapacity?: number;
   processors?: Readonly<Record<string, AnyProcessor>>;
   additionalAgents?: readonly AgentResource[];
+  actions?: import("@copilotz/copilotz/actions").ActionMap;
 }>;
 async function createFixture(
   handler: AdapterHandler,
@@ -195,7 +197,7 @@ async function createFixture(
     id: `test.core-llm.${mode}`,
     version: "1.0.0",
     processors: fixtureOptions.processors ?? {},
-    actions: { contract_tool: contractToolAction },
+    actions: { contract_tool: contractToolAction, ...fixtureOptions.actions },
     resources: {
       agents: Object.fromEntries([
         agentResource,
@@ -481,7 +483,7 @@ async function waitForMessages(
 async function waitForActionStatus(
   fixture: Fixture,
   actionId: string,
-  status: "deferred" | "completed" | "failed" | "cancelled",
+  status: "awaiting" | "completed" | "failed" | "cancelled",
 ) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -711,7 +713,7 @@ for (const cancelWaiting of [false, true]) {
       ? "cancelling a pending compaction prevents a later wake from resuming it"
       : "a pending compaction yields its slot and resumes only its recipient",
     async () => {
-      const waitKey = "test.compaction:checkpoint-a";
+      let producerOperationId = "";
       let largeNorthContextCount = 0;
       let checkpointReady = false;
       let releaseCount = 0;
@@ -735,7 +737,7 @@ for (const cancelWaiting of [false, true]) {
           return {
             status: "pending",
             checkpointId: "checkpoint-a",
-            waitKey,
+            start: { action: "checkpointProducer", input: {} },
           };
         },
         async checkCompact() {
@@ -747,10 +749,37 @@ for (const cancelWaiting of [false, true]) {
       const releaseCheckpoint = defineProcessor<CoreProcessorContext>({
         id: "test.pending-compaction.release",
         on: [{ eventType: "test.compaction.checkpoint-ready" }],
-        async handle(_event, processorContext) {
+        async handle() {
           releaseCount += 1;
           checkpointReady = true;
-          await processorContext.signalDeferredWait(waitKey);
+          await recordTestContentTerminal(
+            fixture.db,
+            databaseSchema,
+            NAMESPACE,
+            {
+              bodyId: "checkpoint-body",
+              mediaType: "text/plain",
+              byteLength: 0,
+              digest:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              versionToken: "fixture-generation-1",
+            },
+          );
+          await fixture.engine.operations.sealStream({
+            namespace: NAMESPACE,
+            operationId: producerOperationId,
+            streamId: "checkpoint-producer",
+            body: {
+              bodyId: "checkpoint-body",
+              mediaType: "text/plain",
+              byteLength: 0,
+              digest:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              versionToken: "fixture-generation-1",
+              maintenanceVersion: 1,
+              state: "ready",
+            },
+          });
         },
       });
       const compactableNorth = {
@@ -791,6 +820,33 @@ for (const cancelWaiting of [false, true]) {
           databaseSchema,
           executionCapacity: 1,
           processors: { releaseCheckpoint },
+          actions: {
+            checkpointProducer: defineAction({
+              id: "test.checkpoint-producer",
+              async execute(
+                _input: unknown,
+                context: import("@copilotz/copilotz/actions").ActionContext,
+              ) {
+                producerOperationId = context.identity.settlementScopeId!;
+                await fixture.engine.operations.openStream({
+                  namespace: NAMESPACE,
+                  operationId: producerOperationId,
+                  semanticStreamId: "checkpoint-producer",
+                  bodyId: "checkpoint-body",
+                  descriptor: {
+                    type: "stream.output",
+                    namespace: NAMESPACE,
+                    streamId: "checkpoint-producer",
+                    mediaType: "text/plain",
+                    kind: "text",
+                    role: "output",
+                    metadata: {},
+                  },
+                });
+                return {};
+              },
+            }),
+          },
           additionalAgents: [{ ...agent(), id: "south", name: "South" }],
         },
       );
@@ -805,7 +861,7 @@ for (const cancelWaiting of [false, true]) {
         await waitForActionStatus(
           fixture,
           "copilotz.core.context.compact",
-          "deferred",
+          "awaiting",
         );
         await waitForMessages(fixture, 2); // The second recipient still runs.
 
@@ -869,7 +925,7 @@ for (const cancelWaiting of [false, true]) {
             NAMESPACE,
             "copilotz.core.context.compact",
           )).map((event) => event.status),
-          ["invoked", "deferred", cancelWaiting ? "cancelled" : "completed"],
+          ["invoked", "awaiting", cancelWaiting ? "cancelled" : "completed"],
         );
       } finally {
         await fixture.close();

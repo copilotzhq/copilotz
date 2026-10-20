@@ -102,7 +102,11 @@ async function waitForIdle(
         `Tool-plan workflow dead-lettered: ${JSON.stringify(failures)}`,
       );
     }
-    if (settlement.unsettled === 0) {
+    const operation = await engine.operations.get(NAMESPACE, rootEventId);
+    if (
+      operation &&
+      ["completed", "failed", "cancelled"].includes(operation.state)
+    ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -460,7 +464,7 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
     }),
     finish: defineTool("finish", finish, {
       name: "Parallel Finish",
-      description: "Finishes one branch after jq",
+      description: "Finishes one branch after its root Tool",
     }),
   };
   const testAgent = agent("a", Object.keys(tools));
@@ -486,7 +490,9 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
                   "root",
                   "finish",
                   String(index),
-                  true,
+                  // Fanout exercises Tool scheduling. The bounded jq runtime
+                  // deliberately refuses overlapping evaluations.
+                  false,
                 )),
               attempts: [{ status: "completed" }],
               finishReason: "tool_calls",
@@ -507,7 +513,9 @@ Deno.test("47 pipeline branches settle independently and project once", async ()
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
   const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
-  const schema = `${SCHEMA}_bulk_${crypto.randomUUID().replaceAll("-", "")}`;
+  const schema = `${SCHEMA}_bulk_${
+    crypto.randomUUID().replaceAll("-", "").slice(0, 16)
+  }`;
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
@@ -734,7 +742,7 @@ Deno.test("in-flight legacy plan migrates its running cursor and prior jq result
     session: createSqlSession(db),
     registry,
     defaultDatabaseSchema: `${SCHEMA}_legacy_${
-      crypto.randomUUID().replaceAll("-", "")
+      crypto.randomUUID().replaceAll("-", "").slice(0, 16)
     }`,
     retryBaseMs: 0,
     random: () => 0,
@@ -1493,3 +1501,146 @@ Deno.test("a trailing jq result retains its real Action provenance", async () =>
     await db.close();
   }
 });
+
+for (const generated of [false, true]) {
+  Deno.test(`${generated ? "pending" : "canonical"} tool-produced nested content belongs to its stage result without execution retention`, async () => {
+    let producedId = "";
+    let pendingRef = "";
+    let nextTranscript = "";
+    const produce = defineAction({
+      id: "test.produce-content",
+      async execute(_input: Record<string, never>, context) {
+        if (generated) {
+          const [pending] = await context.content.capture("tool body", {
+            operationKey: "body",
+          });
+          assert("pendingRef" in pending);
+          pendingRef = pending.pendingRef;
+          return { nested: { content: [pending], duplicate: pending } };
+        }
+        const asset = await context.content.publish({
+          mediaType: "text/plain",
+          body: new TextEncoder().encode("tool body"),
+        }, { operationKey: "body" });
+        producedId = asset.id;
+        return {
+          nested: {
+            content: [{
+              assetId: asset.id,
+              kind: "text",
+              role: "body",
+              mediaType: asset.mediaType,
+            }],
+          },
+        };
+      },
+    });
+    const testAgent = agent("a", ["produce"]);
+    let calls = 0;
+    const plugin = definePlugin({
+      id: "test.tool-content-owner",
+      version: "1.0.0",
+      actions: { produce },
+      resources: {
+        agents: { a: testAgent },
+        tools: {
+          produce: defineTool("produce", produce, {
+            name: "Produce",
+            description: "Produce content",
+          }),
+        },
+        llmConnections: { testModel: { adapter: "test" } },
+      },
+      adapters: {
+        llm: {
+          test: adapterFrom((input) => {
+            if (calls > 0) {
+              nextTranscript = JSON.stringify(input.request.messages);
+            }
+            return ++calls === 1
+              ? {
+                content: [],
+                toolCalls: [{
+                  id: "produce-call",
+                  action: "produce",
+                  input: {},
+                }],
+                attempts: [{ status: "completed" }],
+                finishReason: "tool_calls",
+              }
+              : { content: "done", attempts: [{ status: "completed" }] };
+          }),
+        },
+      },
+    });
+    const db = await createTestDatabase({ url: ":memory:" });
+    const registry = await createPluginRegistry({
+      plugins: [corePlugin, plugin],
+    });
+    const schema = "tool_content_owner";
+    const engine = await createCopilotzEngine({
+      session: db,
+      registry,
+      defaultDatabaseSchema: schema,
+      retryBaseMs: 0,
+      random: () => 0,
+    });
+    try {
+      await waitForIdle(engine, await startRun(engine, [testAgent]));
+      if (generated) {
+        assert(pendingRef);
+        const adopted = await db.query<{ asset_id: string }>(
+          `SELECT asset_id FROM "${schema}".content_adoptions WHERE namespace=$1 AND pending_ref=$2`,
+          [NAMESPACE, pendingRef],
+        );
+        assertEquals(adopted.rows.length, 1);
+        producedId = adopted.rows[0].asset_id;
+      }
+      assert(producedId);
+      assertEquals(nextTranscript.includes("content.pending"), false);
+      assertEquals(nextTranscript.includes("pendingRef"), false);
+      const owners = await db.query<{ id: string; type: string }>(
+        `SELECT n.id, n.type FROM "${schema}".nodes n JOIN "${schema}".edges e ON e.source_node_id=n.id WHERE e.target_node_id=$1 AND e.type='has_asset'`,
+        [producedId],
+      );
+      assertEquals(owners.rows.length, 1);
+      assertEquals(owners.rows[0].type, "toolPlanStageResult");
+      const result = await engine.collections.get("toolPlanStageResult")!.get({
+        namespace: NAMESPACE,
+      }, { id: owners.rows[0].id });
+      assertEquals(
+        (result!.outputContent as { assetId: string }[])[0].assetId,
+        producedId,
+      );
+      const resolved = await engine.content.assets.read(NAMESPACE, producedId);
+      assertEquals(new TextDecoder().decode(resolved.bytes), "tool body");
+      if (generated) {
+        const repeated = await engine.content.assets.materialize({
+          namespace: NAMESPACE,
+          content: [{
+            type: "content.pending",
+            pendingRef,
+            mediaType: resolved.asset.mediaType,
+            byteLength: resolved.asset.byteLength,
+            digest: resolved.asset.digest,
+          }],
+          origin: resolved.asset.origin,
+        });
+        assertEquals(repeated[0].assetId, producedId);
+        assertEquals(
+          (result!.outputContent as { assetId: string }[]).map((ref) =>
+            ref.assetId
+          ),
+          [producedId, producedId],
+        );
+      }
+      const executionOwners = await db.query(
+        `SELECT id FROM "${schema}".nodes WHERE type='@copilotz/action-content'`,
+      );
+      assertEquals(executionOwners.rows, []);
+    } finally {
+      await engine.shutdown();
+      await db.close();
+    }
+  });
+}

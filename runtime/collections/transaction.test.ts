@@ -1,3 +1,4 @@
+import { eventDataRef, readEventBody } from "../events/body-store.ts";
 import {
   type BoundCollection,
   createCollectionKernel as createCollectionRuntime,
@@ -8,12 +9,12 @@ import { type CollectionRecord, defineCollection, relation } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
-  createCoreSchemaStatements,
   createEventCoordinator,
   createEventStore,
   createSqlSession,
   type EventCoordinator,
   type EventStore,
+  provisionCopilotzSchema,
   type SqlSession,
 } from "../events/index.ts";
 import {
@@ -127,9 +128,7 @@ async function count(
 async function createFixture(url: string, schema: string): Promise<Fixture> {
   const db = await createTestDatabase({ url });
   const session = createSqlSession(db);
-  for (const statement of createCoreSchemaStatements(schema)) {
-    await session.query(statement);
-  }
+  await provisionCopilotzSchema(session, schema);
   const store = createEventStore({ session, schema });
   const observed: Fixture["observed"] = { noteAtJobCreated: null };
   const processor = defineProcessor({
@@ -546,6 +545,23 @@ async function runSuite(url: string, schema: string): Promise<void> {
     assertEquals(snapshotEvent?.metadata, {
       nested: { value: "original" },
     });
+    assert(snapshotEvent);
+    assertEquals(
+      (await readEventBody<{ intent: unknown }>(
+        { transaction: session, tables: store.tables },
+        snapshotEvent.namespace,
+        eventDataRef(snapshotEvent.payload),
+      )).intent,
+      {
+        operation: "create",
+        input: ["object", [
+          ["externalId", ["string", "ext-snapshot"]],
+          ["id", ["string", "job-snapshot"]],
+          ["title", ["string", "Original"]],
+        ]],
+      },
+      "persisted tagged receipt intent keeps its historical representation",
+    );
 
     await jobs.create({
       id: "job-conditional",

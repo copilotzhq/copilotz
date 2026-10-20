@@ -1,5 +1,7 @@
+import { isCallerSafeActionStatus } from "./errors.ts";
+import { awaitOperation } from "./continuation.ts";
 import type {
-  ActionDeferredData,
+  ActionAwaitingData,
   ActionEventData,
   ActionInvokedData,
   ActionLifecycleAppender,
@@ -13,7 +15,7 @@ import { durableActionMetadata, durableActionValue } from "./value.ts";
 
 const ACTION_STATUSES = new Set<ActionStatus>([
   "invoked",
-  "deferred",
+  "awaiting",
   "progress",
   "completed",
   "failed",
@@ -37,11 +39,10 @@ function safeError(error: SerializedActionError): SerializedActionError {
   const code = optionalText(error.code);
   if (
     error.callerSafe &&
-    (!code || !Number.isInteger(error.status) || error.status! < 400 ||
-      error.status! > 499)
+    (!code || !isCallerSafeActionStatus(error.status, code, message))
   ) {
     throw new TypeError(
-      "Caller-safe Action errors require a code and 4xx status.",
+      "Caller-safe Action errors require an approved status and code.",
     );
   }
   return {
@@ -67,15 +68,24 @@ function eventData(input: ActionLifecycleInput): ActionEventData {
   };
   switch (input.status) {
     case "invoked":
-      return ({ ...base, status: "invoked" } as const);
-    case "deferred":
+      return ({
+        ...base,
+        status: "invoked",
+        ...(input.effectProtocol === 1 ? { effectProtocol: 1 as const } : {}),
+      } as const);
+    case "awaiting":
       if (
         !Number.isSafeInteger(input.progressIndex) || input.progressIndex < 0
-      ) throw new TypeError("Deferred progress index must be non-negative.");
+      ) throw new TypeError("Awaiting progress index must be non-negative.");
       return {
         ...base,
-        status: "deferred",
-        work: durableActionValue(input.work),
+        status: "awaiting",
+        ...awaitOperation({
+          handoff: input.handoff,
+          ...(input.start
+            ? { start: input.start }
+            : { operationId: input.operationId }),
+        }),
         progressIndex: input.progressIndex,
       };
     case "progress": {
@@ -121,7 +131,7 @@ export function createActionLifecycleEmitter(
   const originMetadata = structuredClone(input.metadata ?? {});
   const load = async (
     actionRunId: string,
-    suffix: "invoked" | "deferred" | "terminal",
+    suffix: "invoked" | "awaiting" | "terminal",
   ): Promise<ActionEventData | null> => {
     const id = requireText(actionRunId, "Action run id");
     if (!input.load) return null;
@@ -175,12 +185,12 @@ export function createActionLifecycleEmitter(
       }
       return data;
     },
-    async deferred(actionRunId): Promise<ActionDeferredData | null> {
-      const data = await load(actionRunId, "deferred");
+    async awaiting(actionRunId): Promise<ActionAwaitingData | null> {
+      const data = await load(actionRunId, "awaiting");
       if (!data) return null;
-      if (data.status !== "deferred") {
+      if (data.status !== "awaiting") {
         throw new Error(
-          `Action deferred receipt '${actionRunId}' is inconsistent.`,
+          `Action awaiting receipt '${actionRunId}' is inconsistent.`,
         );
       }
       return data;

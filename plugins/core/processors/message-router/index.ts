@@ -4,7 +4,7 @@ import {
 } from "../../shared/agent-turn-source.ts";
 import { collectContextContributions } from "../../shared/contributions.ts";
 import { coreEvent } from "../../shared/events/index.ts";
-import { ContextCompactionDeferredError } from "../../shared/context-compaction.ts";
+import { ContextCompactionAwaitingError } from "../../shared/context-compaction.ts";
 /** Routes canonical Messages into agent LLM calls. @module */
 import { ContextInputLimitError, prepareLlmCall } from "@copilotz/copilotz/llm";
 import { isContentByteLimitError } from "@copilotz/copilotz/content";
@@ -47,7 +47,10 @@ import {
   mapMessageRecord,
   mapParticipantRecord,
 } from "../../shared/projections.ts";
-import type { ConversationThread } from "../../shared/contracts.ts";
+import type {
+  ConversationMessage,
+  ConversationThread,
+} from "../../shared/contracts.ts";
 import {
   asRecord,
   collectionEventRecord,
@@ -268,10 +271,13 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       }
       // A projected Tool result retains an outer ask under its durable cursor;
       // use it when the Message itself is not an ask-question/answer Message.
-      const ask = agentAskMetadata(asRecord(record.metadata)) ??
-        toolAction?.ask ?? branchResult?.ask;
+      const directAsk = agentAskMetadata(asRecord(record.metadata));
+      const ask = directAsk ?? toolAction?.ask ?? branchResult?.ask;
+      const initialAsk = directAsk?.phase === "question" && !toolCursor
+        ? directAsk
+        : undefined;
       // Ask output has a directional recipient for durable conversation shape,
-      // but only its deferred Tool-plan barrier may resume the requester.
+      // but only its Tool-plan continuation may resume the requester.
       if (ask && (ask.phase === "progress" || ask.phase === "answer")) {
         return;
       }
@@ -452,8 +458,87 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                           : {}),
                       },
                     );
+                  let routedAskQuestion: ConversationMessage | undefined;
+                  if (initialAsk && snapshot.active) {
+                    if (
+                      initialAsk.questionMessageId !== String(record.id) ||
+                      initialAsk.origin.threadId !== String(record.threadId) ||
+                      coreEvent(event).threadId !== String(record.threadId)
+                    ) {
+                      throw new Error(
+                        "Initial Ask question has a different trigger.",
+                      );
+                    }
+                    routedAskQuestion = snapshot.messages.find((message) =>
+                      message.id === initialAsk.questionMessageId
+                    );
+                    // A certified history boundary may omit the still-active
+                    // task. Select only its already-bound point, under the same
+                    // snapshot, branch and recipient visibility predicates.
+                    if (
+                      !routedAskQuestion && (afterMessageId || historyPolicy)
+                    ) {
+                      const point = await loadCoreThreadMessageSnapshot(
+                        { collections } as typeof context,
+                        String(record.threadId),
+                        record,
+                        {
+                          ...(agentTurn
+                            ? {
+                              historyScopeId: agentTurn.id,
+                              internalOnly: Boolean(scopedSnapshot) ||
+                                agentTurn.history === "scope",
+                            }
+                            : {}),
+                          viewerIds: [recipientId],
+                          range: {
+                            startMessageId: initialAsk.questionMessageId,
+                            endMessageId: initialAsk.questionMessageId,
+                          },
+                        },
+                      );
+                      if (point.active && point.messages.length === 1) {
+                        routedAskQuestion = point.messages[0];
+                      }
+                    }
+                    const currentAsk = agentAskMetadata(
+                      routedAskQuestion?.metadata,
+                    );
+                    if (
+                      !routedAskQuestion || !currentAsk || !participant ||
+                      !agent || !sender || sender.participantType !== "agent" ||
+                      routedAskQuestion.namespace !== context.namespace ||
+                      routedAskQuestion.threadId !== String(record.threadId) ||
+                      routedAskQuestion.id !== String(record.id) ||
+                      currentAsk.phase !== "question" ||
+                      currentAsk.askId !== initialAsk.askId ||
+                      currentAsk.questionMessageId !== routedAskQuestion.id ||
+                      currentAsk.toolActionRunId !==
+                        initialAsk.toolActionRunId ||
+                      currentAsk.toolCallId !== initialAsk.toolCallId ||
+                      currentAsk.origin.threadId !==
+                        routedAskQuestion.threadId ||
+                      currentAsk.askedParticipantId !== recipientId ||
+                      currentAsk.askedParticipantId !==
+                        initialAsk.askedParticipantId ||
+                      currentAsk.askedAgentId !== agent.id ||
+                      currentAsk.askedAgentId !== initialAsk.askedAgentId ||
+                      currentAsk.askingParticipantId !==
+                        routedAskQuestion.sender.id ||
+                      currentAsk.askingParticipantId !==
+                        initialAsk.askingParticipantId ||
+                      currentAsk.askingAgentId !== initialAsk.askingAgentId ||
+                      currentAsk.askingAgentId !== participantAgentId(sender) ||
+                      !routedAskQuestion.recipientIds.includes(recipientId)
+                    ) {
+                      throw new Error(
+                        "Initial Ask question does not match its routed identity.",
+                      );
+                    }
+                  }
                   return {
                     snapshot,
+                    routedAskQuestion,
                     contributions,
                     resolved,
                     source,
@@ -569,8 +654,8 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 );
                 if (
                   result && typeof result === "object" &&
-                  (result as { status?: unknown }).status === "deferred"
-                ) throw new ContextCompactionDeferredError();
+                  (result as { status?: unknown }).status === "awaiting"
+                ) throw new ContextCompactionAwaitingError();
               };
               let request;
               let preparedHistory:
@@ -582,6 +667,9 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   participant,
                   thread: snapshot.thread,
                   ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                  ...(captured.routedAskQuestion
+                    ? { routedAskQuestion: captured.routedAskQuestion }
+                    : {}),
                   history: [
                     ...(captured.source?.messages ?? []),
                     ...snapshot.messages,
@@ -789,7 +877,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
             signal: context.signal,
           });
         } catch (error) {
-          if (error instanceof ContextCompactionDeferredError) continue;
+          if (error instanceof ContextCompactionAwaitingError) continue;
           if (
             (agentTurn?.sourceHistory || agentTurn?.sourceHistoryRef) &&
             !isSettledActionError(error)

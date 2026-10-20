@@ -15,10 +15,12 @@ import type { CopilotzEvent, DurableEventDraft } from "./types.ts";
 export type CoordinatedMutationOptions<T> =
   & Omit<
     CommitEventMutationOptions<T>,
-    "consumers"
+    "consumers" | "onCommitted"
   >
   & Readonly<{
-    /** When false, insert deliveries but do not publish or dispatch yet. */
+    /** Explicit runtime obligations for child/resume events. */
+    consumers?: CommitEventMutationOptions<T>["consumers"];
+    /** When false, return without waiting for the committed publication. */
     dispatch?: boolean;
     /** Prepared JSON body used for precommit matching. Not persisted. */
     matchData?: unknown;
@@ -56,15 +58,13 @@ export type CreateEventCoordinatorOptions = Readonly<{
   executor: DeliveryExecutor;
   publish?: EventPublisher;
   onDispatchFailure?: (failure: DeliveryDispatchFailure) => void;
+  deferPublication?(publish: () => Promise<void>): Promise<void>;
 }>;
 
 export type EventCoordinator = Readonly<{
   commitMutation<T>(
     options: CoordinatedMutationOptions<T>,
   ): Promise<CoordinatedMutationResult<T>>;
-  flushCommitted(
-    result: CommitEventMutationResult<unknown>,
-  ): Promise<EventDispatchReport>;
   append(
     draft: DurableEventDraft,
     options?: { maxAttempts?: number },
@@ -76,6 +76,13 @@ export type EventCoordinator = Readonly<{
     limit?: number;
   }): Promise<DeliveryRecoveryDispatch>;
 }>;
+
+/** Wait for publication already registered at the command's outer commit gate. */
+export function awaitEventPublication(
+  result: CommitEventMutationResult<unknown>,
+): Promise<EventDispatchReport> {
+  return result.publication ?? Promise.resolve(EMPTY_DISPATCH);
+}
 
 /** Coordinates the post-commit publication and Oxian dispatch boundary. */
 export function createEventCoordinator(
@@ -91,9 +98,12 @@ export function createEventCoordinator(
 
   const dispatch = async (
     result: CommitEventMutationResult<unknown>,
+    remotePreclaim = false,
   ): Promise<EventDispatchReport> => {
     const actionable = result.deliveries.filter((delivery) =>
-      delivery.status === "pending"
+      delivery.status === "pending" ||
+      (delivery.status === "leased" && (!delivery.leaseExpiresAt ||
+        (remotePreclaim && !result.deduplicated)))
     );
     // A processor may commit another event while occupying the only embedded
     // worker slot. Placement must not be awaited in that call stack: the
@@ -103,7 +113,8 @@ export function createEventCoordinator(
       result.event.metadata.sourceDeliveryId,
       result.event.metadata.sourceStreamId,
       result.event.metadata.sourceLiveDispatchId,
-    ].some((value) => typeof value === "string" && value.trim().length > 0);
+    ].some((value) => typeof value === "string" && value.trim().length > 0) ||
+      result.event.metadata.sourceOwnerAlarm === true;
     if (workerOriginated) {
       for (const delivery of actionable) {
         options.executor.scheduleDelivery(delivery);
@@ -150,13 +161,45 @@ export function createEventCoordinator(
   ): Promise<CoordinatedMutationResult<T>> => {
     // Durable filters are synchronous so the complete obligation set is known
     // before entering the database transaction.
-    const enableDispatch = mutation.dispatch !== false;
-    const consumers = options.registry.durableConsumers(
+    const enableDispatch = mutation.transaction === undefined &&
+      mutation.dispatch !== false;
+    const consumers = mutation.consumers ?? options.registry.durableConsumers(
       mutation.draft,
       mutation.matchData,
     );
+    const publication = Promise.withResolvers<EventDispatchReport>();
+    void publication.promise.catch(() => undefined);
+    let publishError: unknown;
     const committed = await options.store.commitMutation({
+      async onCommitted(result) {
+        const publish = async () => {
+          if (!result.deduplicated) {
+            try {
+              await options.publish?.(result.event, {
+                settlementScopeId: result.settlementScopeId,
+                actionScopeId: result.actionScopeId,
+              });
+            } catch (error) {
+              publishError = error;
+            }
+          }
+          try {
+            publication.resolve(
+              await dispatch(result, !!mutation.initialRemoteClaim),
+            );
+          } catch (error) {
+            publication.reject(error);
+          }
+        };
+        if (options.deferPublication) await options.deferPublication(publish);
+        else await publish();
+        await publication.promise;
+      },
       draft: mutation.draft,
+      eventId: mutation.eventId,
+      ingress: mutation.ingress,
+      initialLocalClaim: mutation.initialLocalClaim,
+      initialRemoteClaim: mutation.initialRemoteClaim,
       body: mutation.body,
       statement: mutation.statement,
       mutate: mutation.mutate,
@@ -170,48 +213,20 @@ export function createEventCoordinator(
     if (!enableDispatch) {
       return ({
         ...committed,
+        publication: publication.promise,
         dispatch: EMPTY_DISPATCH,
       } as const);
     }
-    let publishError: unknown;
-    if (!committed.deduplicated) {
-      try {
-        await options.publish?.(committed.event, {
-          settlementScopeId: committed.settlementScopeId,
-          actionScopeId: committed.actionScopeId,
-        });
-      } catch (error) {
-        publishError = error;
-      }
-    }
-    const dispatched = await dispatch(committed);
-    return ({
+    return {
       ...committed,
-      dispatch: dispatched,
+      publication: publication.promise,
+      dispatch: await publication.promise,
       ...(publishError === undefined ? {} : { publishError }),
-    } as const);
-  };
-
-  const flushCommitted = async (
-    result: CommitEventMutationResult<unknown>,
-  ): Promise<EventDispatchReport> => {
-    options.store.confirmCommitted?.(result.event.id);
-    if (!result.deduplicated) {
-      try {
-        await options.publish?.(result.event, {
-          settlementScopeId: result.settlementScopeId,
-          actionScopeId: result.actionScopeId,
-        });
-      } catch {
-        // Publication cannot roll back already committed domain state.
-      }
-    }
-    return await dispatch(result);
+    };
   };
 
   return ({
     commitMutation,
-    flushCommitted,
     append(draft, appendOptions = {}) {
       return commitMutation({
         draft,

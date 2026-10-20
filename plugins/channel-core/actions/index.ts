@@ -13,3 +13,5 @@ export type {
   ChannelActionContext,
   ChannelActionResources,
 } from "./ingress/index.ts";
+
+export { channelDeliverAction } from "./deliver/index.ts";

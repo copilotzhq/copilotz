@@ -2,20 +2,9 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzApplication } from "../application/application.ts";
-import {
-  createCoreTableNames,
-  createEventStore,
-  createSqlSession,
-  type SqlExecutor,
-} from "../events/index.ts";
+import { createCoreTableNames, type SqlExecutor } from "../events/index.ts";
 import { definePlugin, defineProcessor } from "../plugins/index.ts";
 import { defineAction } from "./define.ts";
-import {
-  type ActionInputRetention,
-  composeActionInputRetention,
-  retainActionInputContent,
-} from "./content-retention.ts";
-
 const POSTGRES_URL = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")?.trim();
 
 type Statement = Readonly<{ text: string; params: readonly unknown[] }>;
@@ -45,28 +34,9 @@ function recording(db: Awaited<ReturnType<typeof createTestDatabase>>) {
         transactions++;
         return db.transaction((transaction) => operation(wrap(transaction)));
       },
-      ...(db.listen ? { listen: db.listen } : {}),
       close: db.close,
     },
   } as const;
-}
-
-function retentionPlan(
-  overrides: Partial<ActionInputRetention> = {},
-): ActionInputRetention {
-  return {
-    namespace: "tenant",
-    actionId: "test.retention",
-    actionRunId: "run-a",
-    refs: [{ assetId: "asset-a", mediaType: "image/png" }, {
-      assetId: "asset-b",
-      mediaType: "image/png",
-    }],
-    assetIds: ["asset-a", "asset-b"],
-    ownerId: "action-content:owner-a",
-    edgeIds: ["action-content-edge:a", "action-content-edge:b"],
-    ...overrides,
-  };
 }
 
 async function receiptScenarios(url: string) {
@@ -84,6 +54,16 @@ async function receiptScenarios(url: string) {
     id: "test.plain",
     execute: (input: { value: number }) => input.value,
   });
+  const openEffect = defineAction({
+    id: "test.open-effect",
+    async execute(
+      _input: unknown,
+      context: import("./types.ts").ActionContext,
+    ) {
+      await context.effect.begin("send");
+      return "unconfirmed";
+    },
+  });
   const withContent = defineAction({
     id: "test.with-content",
     content: { input: ["content"] },
@@ -96,7 +76,7 @@ async function receiptScenarios(url: string) {
     plugins: [definePlugin({
       version: "1.0.0",
       id: "test.receipts",
-      actions: { plain, withContent },
+      actions: { plain, withContent, openEffect },
       processors: {
         go: defineProcessor({
           id: "test.receipts.go",
@@ -150,7 +130,30 @@ async function receiptScenarios(url: string) {
         "a fresh run reads no receipts before claiming it",
       );
 
-      // An input Asset is retained by the statement that writes the receipt.
+      assertEquals(
+        recorder.statements.filter(({ text }) =>
+          /SELECT step,status|effect\.scope/.test(text)
+        ).length,
+        0,
+        "a fresh successful Action performs no effect inventory or scope receipt query",
+      );
+      run = async () => {
+        const error = await assertRejects(async () =>
+          await captured.actions!.openEffect(null)
+        );
+        assertEquals((error as { code?: string }).code, "effect_indeterminate");
+      };
+      await send("open-effect");
+      const terminal = await db.query(
+        `SELECT body FROM ${tables.event_bodies} WHERE body->>'actionId'='test.open-effect' AND body->>'status'='completed'`,
+      );
+      assertEquals(
+        terminal.rows.length,
+        0,
+        "an unresolved own effect cannot publish success",
+      );
+
+      // Inline content records only execution history; it creates no domain records.
       run = async () => {
         assertEquals(
           await captured.actions!.withContent({
@@ -166,192 +169,32 @@ async function receiptScenarios(url: string) {
       };
       recorder.reset();
       await send("fresh-content");
-      const retaining = recorder.statements.filter(({ text }) =>
-        text.includes("retention_state")
+      const records = await db.query(
+        `SELECT id FROM ${tables.nodes}`,
       );
-      assertEquals(retaining.length, 1, "retention is part of the receipt");
-      assert(
-        retaining[0].text.includes("inserted_event") &&
-          retaining[0].text.includes("retention_edges"),
+      assertEquals(records.rows, []);
+      const edges = await db.query(`SELECT id FROM ${tables.edges}`);
+      assertEquals(edges.rows, []);
+      const receipts = await db.query<
+        { body: { actionId?: string; input?: unknown } }
+      >(
+        `SELECT body FROM ${tables.event_bodies}`,
       );
-      assertEquals(
-        recorder.statements.filter(({ text, params }) =>
-          !text.includes("retention_edges") &&
-          params.some((value) =>
-            typeof value === "string" &&
-            value.startsWith("action-content-edge:")
-          )
-        ).length,
-        0,
-        "no other statement writes retention",
+      const contentReceipts = receipts.rows.filter(({ body }) =>
+        body.actionId === withContent.id
       );
-      const owned = await db.query<{ target: string }>(
-        `SELECT e.target_node_id AS target FROM "${schema}".edges e
-           JOIN "${schema}".nodes n ON n.id = e.source_node_id
-          WHERE n.type = '@copilotz/action-content'`,
-      );
-      assertEquals(owned.rows.length, 1);
+      assertEquals(contentReceipts.length, 2);
+      for (const { body } of contentReceipts) {
+        assertEquals(body.input, {
+          content: [{
+            kind: "image",
+            role: "body",
+            mediaType: "image/png",
+            value: Array.from(bytes),
+          }],
+        });
+      }
     }
-
-    // The retention fragment on its own, against every way it can refuse.
-    const session = createSqlSession(db);
-    const store = createEventStore({ session, schema });
-    const asset = (id: string, data: Record<string, unknown>) =>
-      db.query(
-        `INSERT INTO ${tables.nodes} (id, namespace, type, name, data)
-         VALUES ($1, $2, 'asset', 'asset', $3::jsonb)`,
-        [id, namespace, JSON.stringify(data)],
-      );
-    await asset("asset-a", { state: "ready", mediaType: "image/png" });
-    await asset("asset-b", { state: "ready", mediaType: "image/png" });
-    await asset("asset-pending", { state: "pending", mediaType: "image/png" });
-    await asset("asset-text", { state: "ready", mediaType: "text/plain" });
-    const retain = (
-      plan: ActionInputRetention,
-      deduplicationId = `${plan.actionRunId}:action:invoked`,
-    ) =>
-      store.commitMutation({
-        draft: {
-          type: "test.retention.invoked",
-          namespace,
-          payload: {},
-          deduplicationId,
-        },
-        consumers: [],
-        statement: (param, statementTables) =>
-          composeActionInputRetention(plan, statementTables, param),
-      });
-    const nodesOf = (ownerId: string) =>
-      db.query<{ data: unknown }>(
-        `SELECT data FROM ${tables.nodes} WHERE id = $1`,
-        [ownerId],
-      ).then((result) => result.rows);
-    const edgesOf = (ownerId: string) =>
-      db.query<{ target_node_id: string }>(
-        `SELECT target_node_id FROM ${tables.edges}
-          WHERE source_node_id = $1 ORDER BY target_node_id`,
-        [ownerId],
-      ).then((result) => result.rows.map((row) => row.target_node_id));
-    const eventsWith = (deduplicationId: string) =>
-      db.query(
-        `SELECT 1 FROM ${tables.events} WHERE deduplication_id = $1`,
-        [deduplicationId],
-      ).then((result) => result.rows.length);
-
-    recorder.reset();
-    const stored = await retain(retentionPlan());
-    assertEquals(stored.deduplicated, false);
-    assertEquals(recorder.transactions, 0);
-    assertEquals(await edgesOf("action-content:owner-a"), [
-      "asset-a",
-      "asset-b",
-    ]);
-    assertEquals((await nodesOf("action-content:owner-a")).length, 1);
-
-    // A retry of the same receipt finds it and changes nothing.
-    assertEquals((await retain(retentionPlan())).deduplicated, true);
-    assertEquals((await edgesOf("action-content:owner-a")).length, 2);
-
-    const refused = async (plan: ActionInputRetention, message: string) => {
-      const error = await assertRejects(() => retain(plan));
-      assertEquals((error as Error).message, message);
-      assertEquals(
-        await eventsWith(`${plan.actionRunId}:action:invoked`),
-        0,
-        "a refused receipt is not written",
-      );
-      assertEquals((await nodesOf(plan.ownerId)).length, 0);
-    };
-    const unavailable =
-      "Action input Asset is unavailable for durable retention.";
-    await refused(
-      retentionPlan({
-        actionRunId: "run-missing",
-        ownerId: "action-content:owner-missing",
-        refs: [{ assetId: "asset-nowhere", mediaType: "image/png" }],
-        assetIds: ["asset-nowhere"],
-        edgeIds: ["action-content-edge:missing"],
-      }),
-      unavailable,
-    );
-    await refused(
-      retentionPlan({
-        actionRunId: "run-pending",
-        ownerId: "action-content:owner-pending",
-        refs: [{ assetId: "asset-pending", mediaType: "image/png" }],
-        assetIds: ["asset-pending"],
-        edgeIds: ["action-content-edge:pending"],
-      }),
-      unavailable,
-    );
-    await refused(
-      retentionPlan({
-        actionRunId: "run-type",
-        ownerId: "action-content:owner-type",
-        refs: [{ assetId: "asset-text", mediaType: "image/png" }],
-        assetIds: ["asset-text"],
-        edgeIds: ["action-content-edge:type"],
-      }),
-      unavailable,
-    );
-    // Two references to one Asset must each match its media type.
-    await refused(
-      retentionPlan({
-        actionRunId: "run-twice",
-        ownerId: "action-content:owner-twice",
-        refs: [
-          { assetId: "asset-a", mediaType: "image/png" },
-          { assetId: "asset-a", mediaType: "image/jpeg" },
-        ],
-        assetIds: ["asset-a"],
-        edgeIds: ["action-content-edge:twice"],
-      }),
-      unavailable,
-    );
-    // An owner identity that holds something else is a conflict.
-    await db.query(
-      `INSERT INTO ${tables.nodes} (id, namespace, type, name, data, source_type, source_id)
-       VALUES ('action-content:owner-taken', $1, '@copilotz/action-content',
-               'test.retention', '{"assetIds":["asset-b"]}'::jsonb, 'action', 'run-taken')`,
-      [namespace],
-    );
-    const conflict = await assertRejects(() =>
-      retain(retentionPlan({
-        actionRunId: "run-taken",
-        ownerId: "action-content:owner-taken",
-        refs: [{ assetId: "asset-a", mediaType: "image/png" }],
-        assetIds: ["asset-a"],
-        edgeIds: ["action-content-edge:taken"],
-      }))
-    );
-    assertEquals(
-      (conflict as Error).message,
-      "Action content retention identity conflicts with existing data.",
-    );
-    assertEquals(await eventsWith("run-taken:action:invoked"), 0);
-
-    // The statement writes the same rows as the transactional retention path.
-    const legacyPlan = retentionPlan({
-      actionRunId: "run-legacy",
-      ownerId: "action-content:owner-legacy",
-      edgeIds: ["action-content-edge:la", "action-content-edge:lb"],
-    });
-    await session.transaction((transaction) =>
-      retainActionInputContent({ transaction, tables }, legacyPlan)
-    );
-    const shape = (ownerId: string) =>
-      db.query(
-        `SELECT n.type, n.name, n.data, n.source_type,
-                (SELECT jsonb_agg(jsonb_build_array(e.type, e.data, e.weight, e.target_node_id)
-                                  ORDER BY e.target_node_id)
-                   FROM ${tables.edges} e WHERE e.source_node_id = n.id) AS edges
-           FROM ${tables.nodes} n WHERE n.id = $1`,
-        [ownerId],
-      ).then((result) => result.rows);
-    assertEquals(
-      await shape("action-content:owner-legacy"),
-      await shape("action-content:owner-a"),
-    );
   } finally {
     await app.shutdown();
     await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
@@ -359,12 +202,11 @@ async function receiptScenarios(url: string) {
   }
 }
 
-Deno.test("PGlite receipts claim runs and retain input Assets in their own statement", () =>
+Deno.test("PGlite receipts claim runs without writing domain records", () =>
   receiptScenarios(":memory:"));
 
 Deno.test({
-  name:
-    "PostgreSQL receipts claim runs and retain input Assets in their own statement",
+  name: "PostgreSQL receipts claim runs without writing domain records",
   ignore: !POSTGRES_URL,
   sanitizeOps: false,
   sanitizeResources: false,

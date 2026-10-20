@@ -8,6 +8,9 @@ export const SERVER_ACTION_REQUEST_EVENT_TYPE =
   "copilotz.server.action.requested";
 export const SERVER_ACTION_REQUEST_SCHEMA = "copilotz.server.action-request.v1";
 export const SERVER_ACTION_METADATA_SCHEMA = "copilotz.server.action.v1";
+/** Delivery consumer of the platform relay that applies client HTTP mutations. */
+export const SERVER_COLLECTION_MUTATION_RELAY_CONSUMER =
+  "processor:copilotz.server.collection-mutation-request";
 export const SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE =
   "copilotz.server.collection.mutation.requested";
 export const SERVER_COLLECTION_MUTATION_REQUEST_SCHEMA =
@@ -34,11 +37,6 @@ export type ServerCollectionMutationRequest = Readonly<{
     current?: CollectionFilter;
     next?: CollectionFilter;
   }>;
-}>;
-
-export type ServerInvokeRequest = Readonly<{
-  requestId: string;
-  actionAlias: string;
 }>;
 
 export function serverActionRequestSchema(
@@ -84,10 +82,8 @@ export function parseServerActionRequest(value: unknown): ServerActionRequest {
     schema: SERVER_ACTION_REQUEST_SCHEMA,
     requestId: input.requestId.trim(),
     actionAlias: input.actionAlias.trim(),
-    input: structuredClone(input.input),
-    actionMetadata: structuredClone(
-      input.actionMetadata as Record<string, unknown>,
-    ),
+    input: input.input,
+    actionMetadata: input.actionMetadata as Record<string, unknown>,
   } as const);
 }
 
@@ -179,13 +175,35 @@ export function parseServerCollectionMutationRequest(
     ...(typeof input.command === "string"
       ? { command: input.command.trim() }
       : {}),
-    input: structuredClone(input.input),
+    input: input.input,
     ...(input.condition !== undefined
       ? {
-        condition: structuredClone(
-          input.condition as Record<string, unknown>,
-        ) as ServerCollectionMutationRequest["condition"],
+        condition: input
+          .condition as ServerCollectionMutationRequest["condition"],
       }
       : {}),
   } as const);
+}
+
+/** Same named root identity used by Processor Action callers. */
+export function serverActionRunId(
+  deliveryId: string,
+  actionId: string,
+  requestId: string,
+): string {
+  return `${encodeURIComponent(deliveryId)}:action:named:${
+    encodeURIComponent(actionId)
+  }:server:${requestId}:invoke`;
+}
+export function serverActionInvocationMetadata(
+  request: ServerActionRequest,
+): ActionInvocationMetadata {
+  return {
+    ...request.actionMetadata,
+    copilotzServer: {
+      schema: SERVER_ACTION_METADATA_SCHEMA,
+      requestId: request.requestId,
+      actionAlias: request.actionAlias,
+    },
+  };
 }

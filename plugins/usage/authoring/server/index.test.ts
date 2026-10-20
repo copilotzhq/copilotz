@@ -1,8 +1,9 @@
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import { createTestApplication as createCopilotzApplication } from "../../../../runtime/testing/server-authorization.test.ts";
+import { defineTestServerFacade as fixtureServerFacade } from "../../../../runtime/testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { assertEquals } from "@std/assert";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { createCopilotzApplication } from "../../../../runtime/application/index.ts";
+
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { createServerFacadeFetchHandler } from "../../../../server/facade.ts";
 import { serverPlugin } from "../../../server/index.ts";
@@ -43,7 +44,7 @@ Deno.test("Usage HTTP analytics keeps known zero distinct from unknown and inter
                 }
                 return { namespace: "tenant-a", actor: { id: "reader" } };
               },
-              authorize() {
+              evaluate() {
                 return {
                   collections: { usage: { where: { threadId: "thread-a" } } },
                 };

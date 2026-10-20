@@ -1,3 +1,8 @@
+import { createActionInvocationContext } from "./execution-context.ts";
+import {
+  snapshotControl,
+  withSnapshotControl,
+} from "../collections/snapshot-control.ts";
 import type { VectorReader } from "../vectors/index.ts";
 import type {
   CollectionDefinition,
@@ -21,15 +26,7 @@ import type {
 import type { ContentStreamRuntime } from "../streams/index.ts";
 import type { PluginRegistry } from "../plugins/index.ts";
 import { createActionLifecycleEmitter } from "./lifecycle.ts";
-import {
-  protectedEventResolverFrom,
-  withProtectedEventResolver,
-} from "./protected-context.ts";
-import {
-  type ActionInvocationFrame,
-  actionTransactionIdentity,
-  createActionCallers,
-} from "./invoker.ts";
+import { createActionCallers } from "./invoker.ts";
 import type {
   ActionCallers,
   ActionContext,
@@ -37,12 +34,13 @@ import type {
   ActionLifecycleLoader,
   ActionTransactionContext,
   ActionTransactionOptions,
-  RuntimeActionCallers,
   RuntimeContext,
 } from "./types.ts";
 
 export type ActionContentHandle = Readonly<{
   authorize?(ref: ContentRef): Promise<void>;
+  capture: import("./types.ts").RuntimeContent["capture"];
+  openCapture: import("./types.ts").RuntimeContent["openCapture"];
   resolver:
     & Pick<ContentResolver, "getMany">
     & Partial<Pick<ContentResolver, "authorize">>;
@@ -77,8 +75,8 @@ export type ActionHostContext = Readonly<{
   vectors: VectorReader;
   content: ActionContentHandle;
   streams: ContentStreamRuntime;
+  operations: RuntimeContext["operations"];
   signal: AbortSignal;
-  signalDeferredWait(waitKey: string): Promise<number>;
   now(): Date;
   transaction: ActionContext["transaction"];
   readSnapshot: ActionContext["readSnapshot"];
@@ -91,12 +89,15 @@ export type ActionContextBindings = Readonly<{
   plugins: PluginRegistry;
   collections: CollectionRuntime;
   transaction?: CollectionRuntime["transaction"];
+  createEffectClient?:
+    import("./invoker.ts").CreateActionCallersOptions["createEffectClient"];
   actionLifecycle: Readonly<{
     append: ActionLifecycleAppender;
     load: ActionLifecycleLoader;
   }>;
   now?: () => Date;
   content(namespace: string): ActionContentHandle;
+  operations: RuntimeContext["operations"];
 }>;
 
 function scopedCollections(bindings: ActionContextBindings): ScopedCollections {
@@ -138,115 +139,6 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;
   throw new DOMException("This operation was aborted.", "AbortError");
-}
-
-type ActionInvocationHost = Pick<
-  RuntimeContext,
-  | "namespace"
-  | "databaseSchema"
-  | "resources"
-  | "adapters"
-  | "collections"
-  | "vectors"
-  | "content"
-  | "streams"
-  | "signal"
-  | "signalDeferredWait"
-  | "now"
-  | "transaction"
-  | "readSnapshot"
->;
-
-/** Reserved stream metadata injected by the generic Action invocation host. */
-const SOURCE_ACTION_RUN_ID_METADATA_KEY = "sourceActionRunId";
-
-/** Adds invocation lifecycle state to the shared runtime context. */
-export function createActionInvocationContext(
-  options: Readonly<{
-    host: ActionInvocationHost;
-    frame: ActionInvocationFrame;
-    actions: RuntimeActionCallers;
-    progress(value: unknown): Promise<void>;
-    registerDeferredWait(
-      waitKey: string,
-      timeoutMs?: number,
-    ): Promise<void>;
-  }>,
-): ActionContext {
-  const { frame, host } = options;
-  let transactionIndex = 0;
-  const streams: ContentStreamRuntime = {
-    ...host.streams,
-    open(input, openOptions) {
-      return host.streams.open({
-        ...input,
-        metadata: {
-          ...input.metadata,
-          [SOURCE_ACTION_RUN_ID_METADATA_KEY]: frame.actionRunId,
-        },
-      }, openOptions);
-    },
-  } as const;
-  const content = {
-    ...host.content,
-    prepare(
-      input: Parameters<typeof host.content.prepare>[0],
-      prepareOptions: Parameters<typeof host.content.prepare>[1],
-    ) {
-      return host.content.prepare(input, {
-        ...prepareOptions,
-        operationKey: `${frame.operationKey}/${prepareOptions.operationKey}`,
-      });
-    },
-    publish(
-      input: Parameters<typeof host.content.publish>[0],
-      publishOptions: Parameters<typeof host.content.publish>[1],
-    ) {
-      return host.content.publish(input, {
-        ...publishOptions,
-        operationKey: `${frame.operationKey}/${publishOptions.operationKey}`,
-      });
-    },
-  } as const;
-  return (withProtectedEventResolver({
-    ...host,
-    action: {
-      id: frame.actionId,
-      runId: frame.actionRunId,
-      metadata: frame.metadata,
-      ...(frame.parentActionRunId
-        ? { parentRunId: frame.parentActionRunId }
-        : {}),
-    } as const,
-    operationKey: frame.operationKey,
-    identity: { ...(frame.identity ?? {}) } as const,
-    actions: options.actions,
-    content,
-    streams,
-    signal: frame.signal,
-    progress: options.progress,
-    registerDeferredWait: (waitKey, waitOptions) =>
-      options.registerDeferredWait(waitKey, waitOptions?.timeoutMs),
-    transaction: (
-      execute: Parameters<ActionContext["transaction"]>[0],
-      transactionOptions: ActionTransactionOptions = {},
-    ) => {
-      const localKey = transactionOptions.operationKey?.trim() ||
-        `transaction:${++transactionIndex}`;
-      const identity = actionTransactionIdentity(
-        frame.identity,
-        transactionOptions.identity,
-      );
-      return host.transaction(execute as never, {
-        ...transactionOptions,
-        operationKey: `${frame.operationKey}/${localKey}`,
-        ...(identity ? { identity } : {}),
-        signal: transactionOptions.signal ?? frame.signal,
-      }) as never;
-    },
-    readSnapshot: (execute: Parameters<ActionContext["readSnapshot"]>[0]) =>
-      host.readSnapshot(execute as never),
-  }, protectedEventResolverFrom(host))) as ActionContext;
 }
 
 /** Builds the direct Action host for one trusted namespace and database scope. */
@@ -301,7 +193,8 @@ export function createActionContext(
   const readSnapshot: ActionHostContext["readSnapshot"] = async (execute) =>
     await bindings.collections.readSnapshot(
       { namespace },
-      async ({ collections: byName }) => {
+      async (snapshotScope) => {
+        const { collections: byName } = snapshotScope;
         const snapshotCollections = Object.fromEntries(
           Object.entries(bindings.plugins.collections).map(
             ([alias, definition]) => {
@@ -317,13 +210,17 @@ export function createActionContext(
           ),
         );
         return await execute(
-          ({ collections: snapshotCollections } as const) as never,
+          withSnapshotControl(
+            { collections: snapshotCollections } as const,
+            snapshotControl(snapshotScope),
+          ) as never,
         );
       },
     );
 
   const actions = createActionCallers(bindings.plugins.actions, {
     actionLifecycle: lifecycle,
+    createEffectClient: bindings.createEffectClient,
     content: {
       ...content,
       authorize: content.authorize ?? (async (ref) => {
@@ -341,10 +238,6 @@ export function createActionContext(
         frame,
         actions: nestedActions,
         progress,
-        registerDeferredWait: () =>
-          Promise.reject(
-            new Error("Durable Action waits require a delivery runtime."),
-          ),
       });
     },
   });
@@ -359,10 +252,8 @@ export function createActionContext(
     vectors: bindings.collections.vectors(namespace),
     content,
     streams: content.stream,
+    operations: bindings.operations,
     signal,
-    // Direct host executions cannot own durable waiters, so terminal
-    // notifications are harmless no-ops; registration still rejects below.
-    signalDeferredWait: () => Promise.resolve(0),
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
     readSnapshot,

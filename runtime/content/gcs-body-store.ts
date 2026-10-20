@@ -3,20 +3,24 @@ import type {
   AbortBodyInput,
   AppendBodyInput,
   AppendResult,
-  BodyProtection,
   BodyStore,
   BodyStoreAdapter,
+  FenceBodyInput,
   IncompleteBodyHead,
   PutBodyInput,
   ReadBodyRangeInput,
   ReadyBodyHead,
-  RenewBodyInput,
   ReserveBodyInput,
   TerminateBodyInput,
   WriterCapability,
 } from "./body-store.ts";
 import { createContentError } from "./errors.ts";
 import { digestContent } from "./digest.ts";
+import {
+  BODY_READ_MAX_BYTES,
+  captureBodyPut,
+  captureBodyRange,
+} from "./body-store-operations.ts";
 
 /** Fetch-native bearer-token configuration for the GCS JSON API. */
 export type GcsBodyStoreConfig = Readonly<{
@@ -102,6 +106,50 @@ function timeout(value: number | undefined, fallback: number): number {
 async function discard(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
 }
+async function boundedJson(
+  response: Response,
+  maximum: number,
+): Promise<unknown> {
+  const declared = response.headers.get("content-length");
+  const reader = response.body?.getReader();
+  let completed = false;
+  try {
+    if (
+      declared !== null &&
+      (!/^\d+$/.test(declared) || Number(declared) > maximum)
+    ) throw new Error("response exceeds metadata bound");
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (reader) {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) {
+          completed = true;
+          break;
+        }
+        total += next.value.length;
+        if (total > maximum) throw new Error("response exceeds metadata bound");
+        chunks.push(new Uint8Array(next.value));
+      }
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (cause) {
+    throw createContentError(
+      "asset_storage_unavailable",
+      "GCS metadata response is invalid or exceeds its byte bound.",
+      { cause },
+    );
+  } finally {
+    if (reader && !completed) await reader.cancel().catch(() => undefined);
+    reader?.releaseLock();
+  }
+}
 function verifiedStream(
   stream: ReadableStream<Uint8Array>,
   expected: number,
@@ -158,7 +206,7 @@ export function createGcsMetadataAccessTokenProvider(
           `GCS metadata token request failed (${response.status}).`,
         );
       }
-      const body = await response.json() as {
+      const body = await boundedJson(response, 16 * 1024) as {
         access_token?: unknown;
         expires_in?: unknown;
       };
@@ -264,7 +312,7 @@ export function createGcsBodyStore(
         `GCS object metadata request failed (${response.status}).`,
       );
     }
-    const meta = await response.json() as ObjectMetadata;
+    const meta = await boundedJson(response, 64 * 1024) as ObjectMetadata;
     if (!meta || typeof meta !== "object" || Array.isArray(meta)) malformed();
     const size = asSize(meta.size),
       digest = stringMeta(meta.metadata, "copilotz-sha256");
@@ -273,10 +321,6 @@ export function createGcsBodyStore(
     const maintenanceVersion = Number(
       stringMeta(meta.metadata, "copilotz-maintenance-version") ?? "1",
     );
-    const protectedUntil = stringMeta(
-      meta.metadata,
-      "copilotz-protected-until",
-    );
     const generation = validGeneration(meta.generation);
     if (
       meta.name !== key(bodyId) || size === undefined ||
@@ -284,8 +328,6 @@ export function createGcsBodyStore(
       /[\r\n]/.test(mediaType) || !Number.isSafeInteger(maintenanceVersion) ||
       maintenanceVersion < 1 || !generation ||
       !validGeneration(meta.metageneration) ||
-      (protectedUntil !== undefined &&
-        !Number.isFinite(Date.parse(protectedUntil))) ||
       meta.contentEncoding !== undefined
     ) malformed();
     return ({
@@ -297,7 +339,7 @@ export function createGcsBodyStore(
         mediaType,
         digest: digest!.toLowerCase() as `sha256:${string}`,
         maintenanceVersion,
-        ...(protectedUntil ? { protectedUntil } : {}),
+        versionToken: `${generation}:${meta.metageneration}`,
         etag: generation,
         ...(typeof meta.updated === "string" &&
             Number.isFinite(Date.parse(meta.updated))
@@ -375,7 +417,8 @@ export function createGcsBodyStore(
     }
     return verifiedStream(response.body, end - offset);
   };
-  const readRange = async (input: ReadBodyRangeInput) => {
+  const readRange = async (raw: ReadBodyRangeInput) => {
+    const input = captureBodyRange(raw);
     // Preserve finite-range semantics, including existence checks for empty ranges.
     const inspected = await requiredInspection(input.bodyId);
     const stream = await mediaStream(inspected, input.offset, input.end);
@@ -384,7 +427,9 @@ export function createGcsBodyStore(
   const store: BodyStore = {
     kind: "object",
     backendId,
-    async put(input) {
+    conditionalDelete: false,
+    async put(raw) {
+      const input = captureBodyPut(raw);
       key(input.bodyId);
       validateMediaType(input.mediaType);
       const actual = await digestContent(input.bytes);
@@ -394,10 +439,6 @@ export function createGcsBodyStore(
           "Input bytes do not match the declared body digest.",
         );
       }
-      if (
-        input.protectedUntil !== undefined &&
-        !Number.isFinite(Date.parse(input.protectedUntil))
-      ) throw new TypeError("GCS protectedUntil must be an ISO timestamp.");
       const boundary = `copilotz-${crypto.randomUUID()}`;
       const payload =
         `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${
@@ -409,9 +450,6 @@ export function createGcsBodyStore(
               "copilotz-sha256": input.digest,
               "copilotz-media-type": input.mediaType,
               "copilotz-maintenance-version": "1",
-              ...(input.protectedUntil
-                ? { "copilotz-protected-until": input.protectedUntil }
-                : {}),
             },
           })
         }\r\n--${boundary}\r\nContent-Type: ${input.mediaType}\r\n\r\n`;
@@ -451,6 +489,24 @@ export function createGcsBodyStore(
         );
       }
       validate(input, inspected.head);
+      // Metadata alone is not proof of an exact immutable retry. Bind every
+      // bounded read to the inspected generation and verify the owned bytes.
+      for (let offset = 0; offset < input.bytes.length;) {
+        const end = Math.min(input.bytes.length, offset + BODY_READ_MAX_BYTES);
+        const stream = await mediaStream(inspected, offset, end);
+        const retained = new Uint8Array(
+          await new Response(stream).arrayBuffer(),
+        );
+        if (
+          !retained.every((byte, index) => byte === input.bytes[offset + index])
+        ) {
+          throw createContentError(
+            "asset_corrupted",
+            "Stored GCS bytes do not match the declared canonical content.",
+          );
+        }
+        offset = end;
+      }
       return inspected.head;
     },
     async head({ bodyId }) {
@@ -472,7 +528,7 @@ export function createGcsBodyStore(
     reserve(_input: ReserveBodyInput): Promise<WriterCapability> {
       unsupported();
     },
-    renew(_input: RenewBodyInput): Promise<BodyProtection> {
+    fence(_input: FenceBodyInput): Promise<WriterCapability> {
       unsupported();
     },
     append(_input: AppendBodyInput): Promise<AppendResult> {
@@ -507,7 +563,6 @@ export function createGcsBodyStoreAdapter(
   return createFixedBodyStoreAdapter(createGcsBodyStore(config, options), {
     durability: "durable",
     reach: "cluster",
-    minimumProtectionMs: 0,
     readyGarbageCollection: false,
   });
 }

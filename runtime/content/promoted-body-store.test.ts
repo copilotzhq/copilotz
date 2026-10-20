@@ -1,408 +1,331 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   createFixedBodyStoreAdapter,
   createMemoryBodyStore,
-  readBodyBytes,
 } from "./body-store.ts";
-import type {
-  BodyMaintenanceDeleteInput,
-  BodyStore,
-  BodyStoreAdapter,
-  ReadyBodyHead,
-  WriterCapability,
-} from "./body-store.ts";
-import { digestContent } from "./digest.ts";
 import {
   createPromotedBodyStore,
   createPromotedBodyStoreAdapter,
+  promotedReadyStore,
+  promoteLogicalBody,
 } from "./promoted-body-store.ts";
-
-const encoder = new TextEncoder();
-
-async function appendText(
-  store: BodyStore,
-  bodyId: string,
-  value: string,
-): Promise<Readonly<{ writer: WriterCapability; bytes: Uint8Array }>> {
-  const bytes = encoder.encode(value);
-  const writer = await store.reserve({ bodyId, mediaType: "text/plain" });
-  const appended = await store.append({
-    writer,
+import { createTestDatabase } from "../testing/ominipg.ts";
+import { provisionCopilotzSchema } from "../events/schema.ts";
+import { createContentCatalog, openLogicalBody } from "./catalog.ts";
+import { digestContent } from "./digest.ts";
+async function fixture() {
+  const db = await createTestDatabase({
+      url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    }),
+    schema = "content_promotion_test";
+  if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+  }
+  await provisionCopilotzSchema(db, schema);
+  const catalog = createContentCatalog(db, schema),
+    staging = createMemoryBodyStore({ backendId: "memory:staging" }),
+    ready = createMemoryBodyStore({ backendId: "memory:ready" });
+  const data = new Uint8Array(1024 * 1024 + 20).fill(7),
+    digest = await digestContent(data),
+    identity = { bodyId: "logical-a", writerId: "writer-a", generation: 1 };
+  await catalog.reserve({
+    ...identity,
+    namespace: "namespace-a",
+    copy: {
+      key: "staging-key",
+      backendKind: staging.kind,
+      backendId: staging.backendId,
+    },
+  });
+  const head = await staging.put({
+    bodyId: "staging-key",
+    bytes: data,
+    mediaType: "application/octet-stream",
+    digest,
+  });
+  await catalog.checkpoint({
+    ...identity,
     expectedOffset: 0,
-    appendId: "append-1",
-    bytes,
+    offset: data.length,
   });
-  assertEquals(appended.endOffset, bytes.byteLength);
-  return Object.freeze({ writer, bytes });
+  await catalog.sealIntent({ ...identity, length: data.length, digest });
+  await catalog.sealAccepted({ ...identity, head });
+  return {
+    db,
+    catalog,
+    staging,
+    ready,
+    data,
+    head,
+    storeFor: (copy: { backendId: string }) =>
+      copy.backendId === ready.backendId ? ready : staging,
+  };
 }
-
-async function sealText(
-  store: BodyStore,
-  bodyId: string,
-  value: string,
-): Promise<Readonly<{ writer: WriterCapability; head: ReadyBodyHead }>> {
-  const { writer, bytes } = await appendText(store, bodyId, value);
-  const head = await store.seal({
-    writer,
-    expectedByteLength: bytes.byteLength,
-    expectedDigest: await digestContent(bytes),
-  });
-  return Object.freeze({ writer, head });
-}
-
-async function bodyText(store: BodyStore, bodyId: string): Promise<string> {
-  return new TextDecoder().decode(await readBodyBytes(store, { bodyId }));
-}
-
-function durableAdapter(
-  store: BodyStore,
-  input: Readonly<{ protectionMs?: number; readyGc?: boolean }> = {},
-): BodyStoreAdapter {
-  return createFixedBodyStoreAdapter(store, {
-    durability: "durable",
-    reach: "cluster",
-    minimumProtectionMs: input.protectionMs ?? 0,
-    readyGarbageCollection: input.readyGc ?? true,
-  });
-}
-
-Deno.test("promoted store stages progressive bytes and returns canonical Ready", async () => {
-  const staging = createMemoryBodyStore({
-    backendId: "database:staging",
-    protectionMs: 0,
-  });
-  const ready = createMemoryBodyStore({
-    backendId: "gcs:ready",
-    protectionMs: 0,
-  });
-  const store = createPromotedBodyStore({ staging, ready });
-  const { writer, bytes } = await appendText(store, "body-a", "hello");
-
-  assertEquals((await store.head({ bodyId: "body-a" }))?.state, "open");
-  assertEquals(
-    new TextDecoder().decode(
-      await store.readRange!({
-        bodyId: "body-a",
-        offset: 1,
-        end: 4,
-      }),
-    ),
-    "ell",
-  );
-  const sealed = await store.seal({
-    writer,
-    expectedByteLength: bytes.byteLength,
-    expectedDigest: await digestContent(bytes),
-  });
-
-  assertEquals(sealed.bodyId, "body-a");
-  assertEquals(store.backendId, "gcs:ready");
-  assertEquals(await staging.head({ bodyId: "body-a" }), null);
-  const canonicalHead = await ready.head({ bodyId: "body-a" });
-  assertEquals(canonicalHead?.state, "ready");
-  if (canonicalHead?.state !== "ready") {
-    throw new Error("Expected canonical Ready head.");
-  }
-  assertEquals(canonicalHead.digest, sealed.digest);
-  assertEquals(await bodyText(store, "body-a"), "hello");
-});
-
-Deno.test("promoted store retains incomplete bodies in durable staging without canonical adoption", async () => {
-  const staging = createMemoryBodyStore({
-    backendId: "database:staging",
-    protectionMs: 0,
-  });
-  const ready = createMemoryBodyStore({
-    backendId: "gcs:ready",
-    protectionMs: 0,
-  });
-  const store = createPromotedBodyStore({ staging, ready });
-  const { writer, bytes } = await appendText(
-    store,
-    "body-incomplete",
-    "rejected",
-  );
-  const head = await store.terminate!({
-    writer,
-    expectedByteLength: bytes.byteLength,
-    expectedDigest: await digestContent(bytes),
-  });
-
-  assertEquals(head.state, "incomplete");
-  assertEquals(
-    (await staging.head({ bodyId: head.bodyId }))?.state,
-    "incomplete",
-  );
-  assertEquals(await ready.head({ bodyId: head.bodyId }), null);
-  assertEquals(await bodyText(store, head.bodyId), "rejected");
-  await assertRejects(() =>
-    store.put({
-      bodyId: head.bodyId,
-      bytes,
-      mediaType: head.mediaType,
-      digest: head.digest,
-    })
-  );
-  assertEquals(
-    await store.maintenance.delete({
-      bodyId: head.bodyId,
-      expectedState: "incomplete",
-      expectedMaintenanceVersion: head.maintenanceVersion,
+Deno.test("promoted physical adapter reads and maintenance have no promotion or cleanup effects", async () => {
+  const f = await fixture();
+  try {
+    const store = createPromotedBodyStore({
+      staging: f.staging,
+      ready: f.ready,
+    });
+    assertEquals(store.backendId, f.staging.backendId);
+    await store.head({ bodyId: "staging-key" });
+    await new Response(await store.read({ bodyId: "staging-key" }))
+      .arrayBuffer();
+    await store.maintenance.list({
+      states: ["ready"],
       idleForMs: 0,
-    }),
-    true,
-  );
-});
-
-Deno.test("seal retry promotes durable staged Ready after pre-publish crash", async () => {
-  const staging = createMemoryBodyStore({ protectionMs: 0 });
-  const canonical = createMemoryBodyStore({
-    backendId: "gcs:ready",
-    protectionMs: 0,
-  });
-  let failPut = true;
-  const ready: BodyStore = Object.freeze({
-    ...canonical,
-    put(input) {
-      if (failPut) {
-        failPut = false;
-        return Promise.reject(new Error("simulated pre-publish crash"));
-      }
-      return canonical.put(input);
-    },
-  });
-  const store = createPromotedBodyStore({ staging, ready });
-  const { writer, bytes } = await appendText(store, "body-crash", "recover");
-  const seal = {
-    writer,
-    expectedByteLength: bytes.byteLength,
-    expectedDigest: await digestContent(bytes),
-  } as const;
-
-  await assertRejects(() => store.seal(seal), Error, "pre-publish crash");
-  assertEquals((await staging.head({ bodyId: "body-crash" }))?.state, "ready");
-  assertEquals(await canonical.head({ bodyId: "body-crash" }), null);
-
-  const recovered = await store.seal(seal);
-  assertEquals(recovered.state, "ready");
-  assertEquals(await staging.head({ bodyId: "body-crash" }), null);
-  assertEquals(await bodyText(canonical, "body-crash"), "recover");
-});
-
-Deno.test("Ready-before-cleanup residue is recovered without republishing bytes", async () => {
-  const baseStaging = createMemoryBodyStore({ protectionMs: 0 });
-  let failCleanup = true;
-  const staging: BodyStore = Object.freeze({
-    ...baseStaging,
-    maintenance: Object.freeze({
-      ...baseStaging.maintenance,
-      delete(input: BodyMaintenanceDeleteInput) {
-        if (input.expectedState === "ready" && failCleanup) {
-          failCleanup = false;
-          return Promise.reject(new Error("simulated cleanup crash"));
-        }
-        return baseStaging.maintenance.delete(input);
-      },
-    }),
-  });
-  const canonical = createMemoryBodyStore({
-    backendId: "gcs:ready",
-    protectionMs: 0,
-  });
-  let puts = 0;
-  const ready: BodyStore = Object.freeze({
-    ...canonical,
-    put(input) {
-      puts += 1;
-      return canonical.put(input);
-    },
-  });
-  const store = createPromotedBodyStore({ staging, ready });
-
-  await sealText(store, "body-residue", "durable");
-  assertEquals(puts, 1);
-  assertEquals(
-    (await baseStaging.head({ bodyId: "body-residue" }))?.state,
-    "ready",
-  );
-
-  assertEquals((await store.head({ bodyId: "body-residue" }))?.state, "ready");
-  assertEquals(puts, 1);
-  assertEquals(await baseStaging.head({ bodyId: "body-residue" }), null);
-});
-
-Deno.test("competing promoters accept only an exact canonical winner", async () => {
-  const staging = createMemoryBodyStore({ protectionMs: 0 });
-  const ready = createMemoryBodyStore({
-    backendId: "gcs:ready",
-    protectionMs: 0,
-  });
-  const staged = await sealText(staging, "body-race", "same bytes");
-  const left = createPromotedBodyStore({ staging, ready });
-  const right = createPromotedBodyStore({ staging, ready });
-
-  const [leftHead, rightHead] = await Promise.all([
-    left.head({ bodyId: staged.head.bodyId }),
-    right.head({ bodyId: staged.head.bodyId }),
-  ]);
-  assertEquals(leftHead?.state, "ready");
-  assertEquals(rightHead?.state, "ready");
-  if (leftHead?.state !== "ready" || rightHead?.state !== "ready") {
-    throw new Error("Expected competing promoters to return Ready heads.");
+      limit: 10,
+    });
+    assertEquals(await f.ready.head({ bodyId: "staging-key" }), null);
+    assertEquals(
+      (await f.staging.head({ bodyId: "staging-key" }))?.state,
+      "ready",
+    );
+    assertEquals(promotedReadyStore(store), f.ready);
+  } finally {
+    await f.db.close();
   }
-  assertEquals(leftHead.digest, staged.head.digest);
-  assertEquals(rightHead.digest, staged.head.digest);
-  assertEquals(await staging.head({ bodyId: staged.head.bodyId }), null);
-
-  const conflictingStaging = createMemoryBodyStore({ protectionMs: 0 });
-  const conflictingReady = createMemoryBodyStore({ protectionMs: 0 });
-  const conflict = await sealText(
-    conflictingStaging,
-    "body-conflict",
-    "staged",
-  );
-  const winnerBytes = encoder.encode("winner");
-  await conflictingReady.put({
-    bodyId: "body-conflict",
-    bytes: winnerBytes,
-    mediaType: "text/plain",
-    digest: await digestContent(winnerBytes),
-    ifAbsent: true,
-  });
-  const conflicted = createPromotedBodyStore({
-    staging: conflictingStaging,
-    ready: conflictingReady,
-  });
-  await assertRejects(
-    () => conflicted.head({ bodyId: "body-conflict" }),
-    Error,
-    "conflicts with staged canonical bytes",
-  );
-  assertEquals(
-    (await conflictingStaging.head({ bodyId: conflict.head.bodyId }))?.state,
-    "ready",
-  );
-  assertEquals(await bodyText(conflictingReady, "body-conflict"), "winner");
 });
-
-Deno.test("active staging wins reads and follows over a raced Ready object", async () => {
-  const staging = createMemoryBodyStore({ protectionMs: 0 });
-  const ready = createMemoryBodyStore({ protectionMs: 0 });
-  await appendText(staging, "body-active", "live");
-  const stale = encoder.encode("stale");
-  await ready.put({
-    bodyId: "body-active",
-    bytes: stale,
-    mediaType: "text/plain",
-    digest: await digestContent(stale),
-    ifAbsent: true,
-  });
-  const store = createPromotedBodyStore({ staging, ready });
-
-  assertEquals((await store.head({ bodyId: "body-active" }))?.state, "open");
-  assertEquals(
-    new TextDecoder().decode(
-      await store.readRange!({
-        bodyId: "body-active",
-        offset: 0,
-        end: 4,
+Deno.test("owner promotion switches only verified targets and leaves old-copy retirement separate", async () => {
+  const f = await fixture();
+  try {
+    assertEquals(
+      await promoteLogicalBody({
+        ...f,
+        bodyId: "logical-a",
+        target: f.ready,
+        targetKey: "target-a",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
       }),
-    ),
-    "live",
-  );
-  assertEquals(
-    new TextDecoder().decode(
-      await readBodyBytes(
-        { read: (input) => store.follow(input) },
-        { bodyId: "body-active" },
-      ),
-    ),
-    "live",
-  );
-  await assertRejects(() => store.read({ bodyId: "body-active" }));
+      true,
+    );
+    assertEquals((await f.catalog.read("logical-a"))?.copy.key, "target-a");
+    assertEquals(
+      (await f.staging.head({ bodyId: "staging-key" }))?.state,
+      "ready",
+    );
+  } finally {
+    await f.db.close();
+  }
 });
-
-Deno.test("maintenance surfaces active staging and promotes but never GC-deletes residue", async () => {
-  const baseStaging = createMemoryBodyStore({ protectionMs: 0 });
-  let retainResidue = true;
-  const staging: BodyStore = Object.freeze({
-    ...baseStaging,
-    maintenance: Object.freeze({
-      ...baseStaging.maintenance,
-      delete(input: BodyMaintenanceDeleteInput) {
-        if (input.expectedState === "ready" && retainResidue) {
-          return Promise.resolve(false);
-        }
-        return baseStaging.maintenance.delete(input);
-      },
-    }),
-  });
-  const ready = createMemoryBodyStore({ protectionMs: 0 });
-  await appendText(staging, "body-open", "partial");
-  await sealText(staging, "body-ready", "complete");
-  const store = createPromotedBodyStore({ staging, ready });
-
-  const page = await store.maintenance.list({
-    states: ["open", "ready"],
-    idleForMs: 0,
-    limit: 10,
-  });
-  assertEquals(
-    page.bodies.map((head) => [head.bodyId, head.state]),
-    [["body-open", "open"], ["body-ready", "ready"]],
-  );
-  const canonical = await ready.head({ bodyId: "body-ready" });
-  assertEquals(canonical?.state, "ready");
-  assertEquals(
-    (await baseStaging.head({ bodyId: "body-ready" }))?.state,
-    "ready",
-  );
-  if (!canonical) throw new Error("Expected promoted Ready head.");
-  assertEquals(
-    await store.maintenance.delete({
-      bodyId: canonical.bodyId,
+Deno.test("active immutable read survives copy switch and immediate old-copy deletion without replay", async () => {
+  const f = await fixture();
+  try {
+    const reader = (await openLogicalBody(f.catalog, "logical-a", f.storeFor))
+      .getReader();
+    const first = await reader.read();
+    assertEquals(first.value?.length, 1024 * 1024);
+    await promoteLogicalBody({
+      ...f,
+      bodyId: "logical-a",
+      target: f.ready,
+      targetKey: "target-a",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    await f.staging.maintenance.delete({
+      bodyId: "staging-key",
       expectedState: "ready",
-      expectedMaintenanceVersion: canonical.maintenanceVersion,
+      expectedVersionToken: f.head.versionToken,
       idleForMs: 0,
+    });
+    const second = await reader.read();
+    assertEquals(second.value?.length, 20);
+    assertEquals((await reader.read()).done, true);
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("expired promotion target is orphaned and never selected", async () => {
+  const f = await fixture();
+  try {
+    assertEquals(
+      await promoteLogicalBody({
+        ...f,
+        bodyId: "logical-a",
+        target: f.ready,
+        targetKey: "late",
+        expiresAt: new Date(0).toISOString(),
+      }),
+      false,
+    );
+    assertEquals((await f.catalog.read("logical-a"))?.copy.key, "staging-key");
+    assertEquals(
+      (await f.catalog.read("logical-a"))?.promotionTarget,
+      undefined,
+    );
+    assertEquals((await f.ready.head({ bodyId: "late" }))?.state, "ready");
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("promotion reconciles an acknowledged-lost upload and verifies its exact winner", async () => {
+  const f = await fixture();
+  try {
+    const target = {
+      ...f.ready,
+      async put(input: Parameters<typeof f.ready.put>[0]) {
+        await f.ready.put(input);
+        throw new Error("lost response");
+      },
+    };
+    assertEquals(
+      await promoteLogicalBody({
+        ...f,
+        bodyId: "logical-a",
+        target,
+        targetKey: "unknown",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      }),
+      true,
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("missing promotion source does not switch the catalog", async () => {
+  const f = await fixture();
+  try {
+    await f.staging.maintenance.delete({
+      bodyId: "staging-key",
+      expectedState: "ready",
+      expectedVersionToken: f.head.versionToken,
+      idleForMs: 0,
+    });
+    assertEquals(
+      await promoteLogicalBody({
+        ...f,
+        bodyId: "logical-a",
+        target: f.ready,
+        targetKey: "missing",
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+      }),
+      false,
+    );
+    assertEquals((await f.catalog.read("logical-a"))?.copy.key, "staging-key");
+    assertEquals(
+      (await f.catalog.read("logical-a"))?.promotionTarget,
+      undefined,
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+Deno.test("promoted adapter requires durable cluster stores and caches trusted scopes", () => {
+  const staging = createMemoryBodyStore(), ready = createMemoryBodyStore();
+  assertThrows(() => createPromotedBodyStore({ staging, ready: staging }));
+  const adapter = (store: typeof staging, readyGarbageCollection = true) =>
+    createFixedBodyStoreAdapter(store, {
+      durability: "durable",
+      reach: "cluster",
+      readyGarbageCollection,
+    });
+  const composed = createPromotedBodyStoreAdapter({
+      staging: adapter(staging),
+      ready: adapter(ready, false),
     }),
-    false,
-  );
-  assertEquals((await ready.head({ bodyId: "body-ready" }))?.state, "ready");
-
-  retainResidue = false;
-  await store.head({ bodyId: "body-ready" });
-  assertEquals(await baseStaging.head({ bodyId: "body-ready" }), null);
+    scope = { namespace: "namespace-a", databaseSchema: "schema_a" };
+  assertEquals(composed.forScope(scope), composed.forScope(scope));
+  assertEquals(composed.deployment, adapter(ready, false).deployment);
+  assertEquals(composed.forScope(scope).conditionalDelete, true);
 });
 
-Deno.test("promoted adapter caches scoped stores and exposes Ready guarantees", () => {
-  const staging = createMemoryBodyStore({ backendId: "database:staging" });
-  const ready = createMemoryBodyStore({ backendId: "gcs:ready" });
-  const adapter = createPromotedBodyStoreAdapter({
-    staging: durableAdapter(staging),
-    ready: durableAdapter(ready, { protectionMs: 77, readyGc: true }),
-  });
-  const scope = { namespace: "tenant-a", databaseSchema: "tenant_a" };
+Deno.test("active stream follower survives a disappearing copy with no duplicate delivery", async () => {
+  const f = await fixture();
+  try {
+    const { createContentStreamRuntime } = await import("../streams/stream.ts");
+    const runtime = createContentStreamRuntime({
+      namespace: "namespace-a",
+      store: f.staging,
+      catalog: f.catalog,
+      storeForCopy: f.storeFor,
+      onOpen(_s, p) {
+        p.established();
+      },
+    });
+    const writer = await runtime.open({
+      id: "switching",
+      mediaType: "application/octet-stream",
+      role: "attachment",
+    });
+    await writer.append({
+      appendId: "first",
+      bytes: f.data.slice(0, 1024 * 1024),
+    });
+    await writer.append({ appendId: "last", bytes: f.data.slice(1024 * 1024) });
+    await writer.close({ assetId: "unused" });
+    const bodyId = "content-streams/namespace-a/switching",
+      old = (await f.staging.head({ bodyId }))!,
+      reader = (await runtime.follow({ id: writer.id })).body.getReader();
+    assertEquals((await reader.read()).value?.length, 1024 * 1024);
+    await promoteLogicalBody({
+      ...f,
+      bodyId,
+      target: f.ready,
+      targetKey: "follow-target",
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    });
+    await f.staging.maintenance.delete({
+      bodyId,
+      expectedState: "ready",
+      expectedVersionToken: old.versionToken,
+      idleForMs: 0,
+    });
+    assertEquals((await reader.read()).value?.length, 20);
+    assertEquals((await reader.read()).done, true);
+  } finally {
+    await f.db.close();
+  }
+});
 
-  assertEquals(adapter.forScope(scope), adapter.forScope(scope));
-  assertEquals(adapter.deployment, {
-    durability: "durable",
-    reach: "cluster",
-    minimumProtectionMs: 77,
-    readyGarbageCollection: true,
-  });
-  assertThrows(
-    () =>
-      createPromotedBodyStoreAdapter({
-        staging: createFixedBodyStoreAdapter(staging, {
-          durability: "ephemeral",
-          reach: "process",
-          minimumProtectionMs: 0,
-          readyGarbageCollection: true,
-        }),
-        ready: durableAdapter(ready),
+Deno.test("configured staging-ready stream completion promotes through the owner catalog", async () => {
+  const f = await fixture();
+  try {
+    const { createContentStreamRuntime } = await import("../streams/stream.ts");
+    const store = createPromotedBodyStore({
+        staging: f.staging,
+        ready: f.ready,
       }),
-    TypeError,
-    "staging must be durable and cluster-reachable",
-  );
+      runtime = createContentStreamRuntime({
+        namespace: "namespace-a",
+        store,
+        catalog: f.catalog,
+        onOpen(_s, p) {
+          p.established();
+        },
+      });
+    const writer = await runtime.open({
+      id: "configured",
+      mediaType: "text/plain",
+      role: "body",
+    });
+    await writer.append({
+      appendId: "one",
+      bytes: new TextEncoder().encode("promoted"),
+    });
+    const pending = await writer.close({ assetId: "unused" }),
+      logical =
+        (await f.catalog.read("content-streams/namespace-a/configured"))!;
+    assertEquals(logical.copy.backendId, f.ready.backendId);
+    assertEquals(
+      (await f.ready.head({ bodyId: logical.copy.key }))?.state,
+      "ready",
+    );
+    assertEquals(
+      (await f.staging.head({
+        bodyId: "content-streams/namespace-a/configured",
+      }))?.state,
+      "ready",
+    );
+    assertEquals(
+      (await f.catalog.resolvePending("namespace-a", pending)).body.bodyId,
+      logical.bodyId,
+    );
+    assertEquals(
+      await new Response((await runtime.follow({ id: writer.id })).body).text(),
+      "promoted",
+    );
+  } finally {
+    await f.db.close();
+  }
 });

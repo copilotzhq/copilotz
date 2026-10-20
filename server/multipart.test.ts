@@ -21,7 +21,6 @@ function completedTerminal(
   return Promise.resolve(Object.freeze({
     outcome: "completed" as const,
     availability: "retained" as const,
-    capture: "complete" as const,
     offset,
     terminalAt: "2026-09-01T12:00:00.000Z",
   }));
@@ -176,6 +175,7 @@ Deno.test("multipart reports oversized output as a non-retryable observation fai
     durable: true,
     id: "safe-event",
     position: "1",
+    seq: "1",
     schemaVersion: 1,
     data: { value: "safe" },
   }) as ApplicationOutput;
@@ -195,6 +195,7 @@ Deno.test("multipart reports oversized output as a non-retryable observation fai
           durable: true,
           id: "oversized-event",
           position: "2",
+          seq: "2",
           schemaVersion: 1,
           data: { value: "x".repeat(2048) },
         } as ApplicationOutput);
@@ -352,8 +353,8 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
     }),
     terminal: Promise.resolve(Object.freeze({
       outcome: "cancelled",
+      reason: "superseded",
       availability: "retained",
-      capture: "truncated",
       offset: 7,
       terminalAt: "2026-09-01T12:00:00.000Z",
     })),
@@ -386,6 +387,19 @@ Deno.test("multipart keeps retained stream failure in-band and round-trips termi
   assertEquals(
     terminal?.kind === "stream-error" && terminal.terminal.outcome,
     "cancelled",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" && terminal.terminal.reason,
+    "superseded",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" && terminal.terminal.code,
+    "stream_cancelled",
+  );
+  assertEquals(
+    terminal?.kind === "stream-error" &&
+      Object.hasOwn(terminal.terminal, "capture"),
+    false,
   );
   assertEquals(terminal?.kind === "stream-error" && terminal.offset, 7);
   assertEquals(
@@ -468,6 +482,7 @@ Deno.test("multipart truncation rejects the observation after its last applied d
     "content-type: application/json; charset=utf-8",
     `content-length: ${new TextEncoder().encode(descriptor).byteLength}`,
     "x-copilotz-frame: output",
+    "x-copilotz-position: 1",
     "x-copilotz-cursor: checkpoint",
     "",
     descriptor,
@@ -1134,14 +1149,14 @@ Deno.test("bounded observation lifetime detaches server readers before a blocked
   );
 });
 
-Deno.test("observation lifetime overrides can only shorten the five-minute ceiling", () => {
+Deno.test("observation lifetime overrides can only shorten the 15-minute ceiling", () => {
   const source: HttpObservation = {
     type: HTTP_OBSERVATION,
     outputs: new ReadableStream(),
     done: Promise.resolve(),
     cancel: () => Promise.resolve(),
   };
-  for (const renewAfterMs of [0, -1, 300001, Number.POSITIVE_INFINITY, 1.5]) {
+  for (const renewAfterMs of [0, -1, 900001, Number.POSITIVE_INFINITY, 1.5]) {
     assertThrows(
       () => applicationOutputsMultipartResponse(source, { renewAfterMs }),
       RangeError,
@@ -1206,4 +1221,51 @@ Deno.test("lifetime renewal interrupts pending lane terminals and source complet
       lane ? ["output", "observation-renew"] : ["observation-renew"],
     );
   }
+});
+
+Deno.test("multipart heartbeat samples one coherent owner frontier per frame", async () => {
+  let samples = 0;
+  let tick: (() => void) | undefined;
+  let output!: ReadableStreamDefaultController<ApplicationOutput>;
+  const interval = globalThis.setInterval;
+  globalThis.setInterval = ((callback: () => void) => {
+    tick = callback;
+    return 0;
+  }) as unknown as typeof setInterval;
+  let response: Response;
+  try {
+    response = applicationOutputsMultipartResponse({
+      type: HTTP_OBSERVATION,
+      outputs: new ReadableStream({
+        start(controller) {
+          output = controller;
+        },
+      }),
+      done: Promise.resolve(),
+      cancel: () => Promise.resolve(),
+      heartbeat() {
+        samples++;
+        return {
+          headSeq: String(samples),
+          payloadPositions: [{ streamId: "held", committedOffset: samples }],
+        };
+      },
+    });
+  } finally {
+    globalThis.setInterval = interval;
+  }
+  const frames = Array.fromAsync(decodeObservation(response));
+  tick!();
+  output.close();
+  const heartbeat = (await frames).find((frame) =>
+    frame.kind === "output" && frame.output.type === "observation.heartbeat"
+  );
+  assertEquals(samples, 1);
+  assertEquals(heartbeat?.kind, "output");
+  if (heartbeat?.kind !== "output") throw new Error("Missing heartbeat");
+  assertEquals(heartbeat.output.headSeq, "1");
+  assertEquals(heartbeat.output.payloadPositions, [{
+    streamId: "held",
+    committedOffset: 1,
+  }]);
 });

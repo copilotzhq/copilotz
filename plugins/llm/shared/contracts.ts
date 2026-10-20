@@ -1,6 +1,12 @@
-import type { ContentInput, ContentSequence } from "@copilotz/copilotz/content";
+import { captureJsonValue } from "@copilotz/copilotz/content/codec";
+import type {
+  ContentInput,
+  ContentSequence,
+  GeneratedContentSequence,
+} from "@copilotz/copilotz/content";
 import type {
   ActionContentEntry,
+  ActionContext,
   ActionInvocationMetadata,
   RuntimeCollections,
   RuntimeIdentity,
@@ -55,8 +61,7 @@ export type LlmConnectionExecution = Readonly<{
 
 /**
  * The deliberately narrow, trusted runtime view available to a credential
- * resolver. It permits tenant/user-scoped collection lookups without handing
- * a credential policy the ability to invoke Actions or publish content.
+ * resolver. Scoped child Actions keep credential work on the current invocation.
  */
 export type LlmConnectionContext = Readonly<{
   namespace: string;
@@ -69,6 +74,7 @@ export type LlmConnectionContext = Readonly<{
     metadata: ActionInvocationMetadata;
   }>;
   collections: RuntimeCollections;
+  actions: ActionContext["actions"];
   signal: AbortSignal;
   now(): Date;
 }>;
@@ -222,6 +228,11 @@ export type LlmNativeReasoning = Readonly<{
   reasoningTokens?: number;
 }>;
 
+/** Generated blocks still awaiting atomic adoption by their domain record. */
+export type LlmGeneratedNativeReasoning =
+  & Omit<LlmNativeReasoning, "blocks">
+  & Readonly<{ blocks: GeneratedContentSequence }>;
+
 /** Resolved native state passed to an LLM Adapter. */
 export type LlmAdapterNativeReasoning = Readonly<{
   schema: "copilotz.llm-native-reasoning.v1";
@@ -355,9 +366,9 @@ export type LlmCallOutput = Readonly<{
   /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
   providerModel: string;
-  content: ContentSequence;
-  reasoning?: ContentSequence;
-  nativeReasoning?: LlmNativeReasoning;
+  content: GeneratedContentSequence;
+  reasoning?: GeneratedContentSequence;
+  nativeReasoning?: LlmGeneratedNativeReasoning;
   toolCalls?: readonly LlmToolCall[];
   usage?: LlmUsage;
   attempts?: readonly LlmAttemptUsage[];
@@ -572,68 +583,12 @@ function plainDataEntries(
   return entries;
 }
 
-function canonicalJson(
-  value: unknown,
-  path: string,
-  active = new Set<object>(),
-): LlmJsonValue {
-  if (
-    value === null || typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${path} must contain only finite JSON numbers.`);
-    }
-    return value;
-  }
-  if (typeof value !== "object") {
-    throw new TypeError(`${path} must contain only JSON-safe values.`);
-  }
-  if (active.has(value)) {
-    throw new TypeError(`${path} must not contain cycles.`);
-  }
-  active.add(value);
-  try {
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
-        throw new TypeError(`${path} must be a plain JSON array.`);
-      }
-      for (const key of Reflect.ownKeys(value)) {
-        if (typeof key !== "string") {
-          throw new TypeError(`${path} must not contain symbol fields.`);
-        }
-        if (key === "length") continue;
-        if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length) {
-          throw new TypeError(`${path} must not contain tagged array fields.`);
-        }
-      }
-      return (Array.from({ length: value.length }, (_, index) => {
-        const descriptor = Object.getOwnPropertyDescriptor(
-          value,
-          String(index),
-        );
-        if (!descriptor?.enumerable || !("value" in descriptor)) {
-          throw new TypeError(`${path} must be a dense data array.`);
-        }
-        return canonicalJson(descriptor.value, `${path}[${index}]`, active);
-      }));
-    }
-    const entries = plainDataEntries(value, path)
-      .map(([key, child]) =>
-        [
-          key,
-          canonicalJson(child, `${path}.${key}`, active),
-        ] as const
-      )
-      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
-    return (Object.fromEntries(entries));
-  } finally {
-    active.delete(value);
-  }
-}
+const canonicalJson = (value: unknown, path: string): LlmJsonValue =>
+  captureJsonValue(value, {
+    label: path,
+    rejectPrototypeKey: true,
+    plainArrays: true,
+  }) as LlmJsonValue;
 
 const BUILTIN_PROVIDERS = new Set<LlmBuiltinProvider>([
   "openai",

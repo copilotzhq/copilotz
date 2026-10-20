@@ -8,7 +8,7 @@ import {
   type ActionContext,
   type ActionDefinition,
   defineAction,
-} from "@copilotz/copilotz/actions";
+} from "@copilotz/copilotz/authoring";
 import type {
   ScheduledJobRunNowInput,
   ScheduledJobRunNowResult,

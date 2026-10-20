@@ -109,6 +109,7 @@ Deno.test("Channel exports expose transport helpers and Resource/Adapter composi
       "buildWhatsAppMediaCarouselMessage",
       "buildWhatsAppReplyButtonsMessage",
       "channelBindingCollection",
+      "channelDeliverAction",
       "channelEgressAction",
       "channelEgressProcessor",
       "channelIngress",

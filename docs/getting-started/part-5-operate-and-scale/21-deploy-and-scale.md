@@ -114,8 +114,10 @@ async function printOutputs(
   }
 }
 
+// The Gateway and Worker in this example share a process. Cross-process
+// workers require Oxian reverse-call support for owner capabilities.
 // Host-owned persistence. A private in-memory database keeps this fixture
-// self-contained; every role below reads and writes this one connection.
+// self-contained; the Gateway owner alone writes through this connection.
 const persistence = await createCopilotzPersistence({
   database: { url: ":memory:" },
 });
@@ -136,10 +138,9 @@ try {
   });
   try {
     // Executes the Notes Processor and Action. Same plugin, same namespace,
-    // same persistence, same transport record.
+    // same owner capabilities and transport record.
     const worker = await createCopilotz({
       role: "worker",
-      persistence,
       namespace,
       databaseSchema,
       plugins: [notesPlugin],

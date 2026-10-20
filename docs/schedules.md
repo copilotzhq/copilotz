@@ -1,6 +1,6 @@
 ---
 title: "Schedules"
-description: "Store recurring jobs as durable state, let the host decide when time passes, and react to stable due occurrences with your own plugin."
+description: "Store recurring jobs as durable state, wake from the database owner’s durable alarm, and react to stable due occurrences with your own plugin."
 section: Operate
 order: 20
 status: stable
@@ -25,9 +25,9 @@ Recurring work needs three contracts that a timer does not provide:
   last occurrence must survive restarts and be changed safely.
 - **Stable occurrences.** Each due run needs an identity, so a claim happens
   once per cron slot and a retried handler can resolve to work already recorded.
-- **Host-owned time.** A CLI, a server, a platform cron trigger, a browser tab
-  and a test keep time differently. The library cannot safely start a background
-  clock for all of them.
+- **One durable owner wake.** Schedule changes and the next wake commit
+  together. Restart or takeover re-arms the earliest pending deadline. An idle
+  owner has no scheduled wake and produces no clock events.
 
 The scheduler should also not interpret the job's meaning. The plugin that
 scheduled the work owns what it does.
@@ -35,8 +35,9 @@ scheduled the work owns what it does.
 ## The solution
 
 Compose `schedulesPlugin` from `@copilotz/copilotz/schedules`. It contributes a
-`scheduled_job` Collection and two Actions reached through input envelopes. It
-runs **no timer**: every claim happens because the host sent an input.
+`scheduled_job` Collection with an owner-alarm declaration and a manual-run
+Action. The owner invokes the Collection’s `due` command at the persisted time;
+applications do not send periodic clock inputs.
 
 ### Jobs
 
@@ -81,247 +82,103 @@ delivery, not to one Action invocation. Within one delivery, call each helper at
 most once per key. Make independent changes to the same job through separately
 admitted operations. See [Actions](./actions.md) for how write keys are scoped.
 
-### Ticks and manual runs
+### Automatic occurrences and manual runs
 
-The host builds inputs with two functions and passes them to `app.send`. Both
-also accept `namespace`, `correlationId`, `causationId` and `deduplicationId`.
+Active jobs register their exact `nextRunAt` in the owner's indexed deadline
+queue. A due wake reads only due entries, invokes the ordinary `due` Collection
+command, and updates the next deadline in the same transaction as the resulting
+`scheduled_job.due` Event. Pausing, cancelling or deleting a job removes its
+pending scheduled deadline atomically.
 
-- `scheduleTick({ checkedAt?, limit? })` claims active jobs whose `nextRunAt` is
-  at or before `checkedAt` (the application clock's now when omitted). `limit`
-  is 1–1000, default 10, and caps the claims in this tick, earliest first. It
-  does not bound the lookup: the tick still reads every active job before
-  filtering.
-- `runScheduledJobNow({ id, scheduledFor? })` claims one **manual** occurrence
-  for `scheduledFor` (default now). It never moves `nextRunAt`. It works on an
-  `active` or `paused` job and fails on a `cancelled` one.
+Every due Event contains `data.record`, the updated job. Its `lastOccurrence` is
+`{ id, mode, scheduledFor }`. Scheduled identity is `<job-id>:<due-time-ms>`;
+`scheduledFor` remains the original due instant even after downtime. The next
+cron slot is calculated strictly after the owner's current check time. Missed
+intermediate slots are skipped rather than emitted as a catch-up burst.
 
-Every claim appends one durable `scheduled_job.due` Event. Its `data.record` is
-the job after the claim: `record.payload` is your opaque payload and
-`record.lastOccurrence` is `{ id, mode, scheduledFor }`. Scheduled occurrence
-IDs are `<jobId>:<epoch ms>`; manual ones are `<jobId>:manual:<epoch ms>`.
+`runScheduledJobNow({ id, scheduledFor? })` builds a manual input envelope for
+`app.send`. It accepts `namespace`, `correlationId`, `causationId` and
+`deduplicationId`. A manual run works on an active or paused job, rejects a
+cancelled job, and does not change the next scheduled time. Manual identity is
+`<job-id>:manual:<scheduled-for-ms>`. Retry the complete same input identity to
+reuse its recorded operation; separately admitted manual requests are separate
+requests even if they have the same occurrence identity.
 
-When claiming one job fails, the tick records that failure and moves on to the
-next job. Invalid tick input, a failure while reading the jobs, or a failure in
-other work can still reject the operation. The tick's
-`copilotz.schedules.tick.completed` Event carries a `ScheduledJobTickResult` in
-`data.output`: counts plus `jobs[]` items with status `claimed`, `skipped`
-(another tick won, or the job stopped being due) or `failed` with an `error`. A
-fulfilled `done` therefore does not mean every job was claimed; inspect
-`failed`. `claimed` means the due Event was committed, not that your downstream
-work succeeded; that is your Processor's own delivery.
+### Reacting to an occurrence
 
-### Occurrence semantics
+Install a durable Processor for `scheduled_job.due`. Validate the payload's
+discriminator and fields before executing it. The Schedules plugin keeps that
+payload opaque and grants it no additional authority. Use the occurrence ID as a
+stable key for the resulting work; external effects also require the external
+provider's idempotency or reconciliation contract.
 
-- **Atomic claims.** A scheduled claim succeeds only while the job is still
-  `active` and its `nextRunAt` equals the candidate's slot. The claim then moves
-  `nextRunAt` to the next run after `checkedAt`. A second tick cannot claim the
-  same slot.
-- **Missed ticks coalesce.** Time passes while no clock runs, but nothing is
-  claimed until a tick arrives. A late tick claims one occurrence, for the
-  stored `nextRunAt`, and schedules the next run after the check time. There is
-  no backfill of every missed slot.
-- **Pause and cancel.** Ticks ignore `paused` and `cancelled` jobs. Resuming
-  recomputes `nextRunAt` from now, so slots missed while paused are not
-  replayed. Cancelling clears `nextRunAt`.
-- **Manual runs are separate claims.** Two separately admitted manual requests
-  for the same `scheduledFor` each emit a due Event with the same occurrence ID.
-  For a safe retry, resend the complete request with the same `correlationId`
-  and `deduplicationId`; admission then returns the original operation.
-- **Handlers run at least once.** Key the work by the occurrence ID, as in the
-  example below. External services need their own idempotency key.
+The optional `content` belongs to the Scheduled Job's domain record. Ordinary
+content ownership and deletion apply. A job's due Event keeps plain references
+and does not create a second retention owner.
 
-### Worked example
+### Protected domain delegation
 
-Before you start, build `notes-plugin.ts` and `digest-plugin.ts` from
-[Chapter 19: Schedule Recurring Work](./getting-started/part-5-operate-and-scale/19-schedule-recurring-work.md).
-This probe reuses them unchanged. You also need Deno 2.9+, or Node 24+ with
-`@copilotz/copilotz@^0.87.3` and its PGlite dependency installed as shown in the
-[Quickstart](./quickstart.md).
+Only an actual Scheduled Job owner-alarm occurrence supplies protected Action
+source `ingress` with `kind: "scheduled-occurrence"`, `scheduleId`,
+`occurrenceId`, `scheduledFor`, and `scheduleVersion`. The owner atomically
+binds this evidence to the exact due Event/body and selected durable deadline
+revision. Direct Collection commands, manual runs, metadata flags and generic
+owner Events do not mint it. A stale deadline cannot mint proof or replace a
+newly scheduled wake, including when an update retains the same due time.
 
-The probe adds one small pause Action. It then sends ticks with explicit check
-times against the private in-memory database, so nothing waits for a real
-minute.
+Import `scheduledJobDelegationDigest` from `/schedules` to bind a domain-owned
+delegation to `{ databaseSchema, namespace, record }`. It returns `sha256:<hex>`
+over canonical, recursively key-sorted JSON with the domain tag
+`copilotz.scheduled-job.delegation.v1`. The record projection includes `id`,
+`spaceId`, `status`, `schedule`, `payload`, `content` and `metadata`; omitted
+`spaceId` and `content` become null. Array order is retained. Unsupported
+values, accessors, non-finite numbers and values beyond the bound are refused.
 
-Create `schedule-probe.ts`:
+An owner policy must separately retain the original authorized delegation and
+recheck its current permissions, active state, scope and exact digest before
+using a protected credential. An occurrence proves execution timing, not an
+end-user identity or permission. Excluded `name`, `createdAt`, `updatedAt`,
+`nextRunAt`, `nextRunAtMs` and `lastOccurrence` must never serve as
+authorization inputs. Changing payload, creator metadata, Space, schedule or
+status cannot expand a retained delegation; revoked or cancelled delegation
+remains denied.
 
-```ts
-// Runtime factory, definitions and typed contexts.
-import {
-  createCopilotz,
-  defineAction,
-  definePlugin,
-  defineProcessor,
-  isStreamOutput,
-} from "@copilotz/copilotz";
-import type {
-  ActionCallers,
-  ActionContext,
-  ApplicationOutput,
-  ProcessorContext,
-} from "@copilotz/copilotz";
-// Schedule helpers, input envelopes and result types.
-import {
-  runScheduledJobNow,
-  scheduleTick,
-  updateScheduledJob,
-} from "@copilotz/copilotz/schedules";
-import type {
-  ScheduledJob,
-  ScheduledJobTickResult,
-} from "@copilotz/copilotz/schedules";
-// Chapter 19's digest job and its plugin.
-import { DIGEST_JOB_ID, digestPlugin } from "./digest-plugin.ts";
+### Owner lifecycle
 
-// Pauses the digest job through the Collection-owned update helper.
-const pauseDigest = defineAction({
-  id: "notes.digest.pause",
-  inputSchema: {
-    type: "object",
-    properties: {},
-    additionalProperties: false,
-  } as const,
-  async execute(
-    _input: Record<string, never>,
-    context: ActionContext,
-  ): Promise<ScheduledJob> {
-    return await updateScheduledJob(
-      { id: DIGEST_JOB_ID, patch: { status: "paused" } },
-      context,
-    );
-  },
-});
+Each database-schema owner has one persisted earliest-next-wake covering job
+occurrences, delivery availability, retry backoff, remote leases, reconciliation
+and registered content deadlines. On startup it restores retained deadlines,
+recovers old attempts, then activates and re-arms. It never creates a global
+fan-out clock Event or scans all active jobs on each wake.
 
-// Turns a pause request into one Action call per delivery.
-const pauseOnRequest = defineProcessor<
-  ProcessorContext<
-    ProcessorContext["resources"],
-    ProcessorContext["adapters"],
-    ActionCallers<{ pauseDigest: typeof pauseDigest }>
-  >
->({
-  id: "notes.digest.pause-on-request",
-  on: [{ eventType: "notes.digest.pause.requested" }],
-  async handle(event, context) {
-    if (!event.durable) return;
-    await context.actions.pauseDigest({}, { operationKey: "pause-request" });
-  },
-});
+The default server adapter uses one cancellable timer for the persisted wake. An
+engine host can provide `alarmScheduler` with `schedule(callback, delayMs)` and
+`cancel(handle)` to map the same owner lifecycle to its platform. The injected
+`now` clock and alarm scheduler must describe the same timeline. Shutdown drains
+owner wake handlers and delivery callbacks before closing persistence.
 
-const probePlugin = definePlugin({
-  id: "@team-notes/schedule-probe",
-  version: "1.0.0",
-  plugins: [digestPlugin],
-  actions: { pauseDigest },
-  processors: { pauseOnRequest },
-});
+### Updating older applications
 
-// Sends one input, drains outputs alongside settlement, and returns the tick
-// result (if any) and the next run times seen on due Events.
-type App = Awaited<ReturnType<typeof createCopilotz>>;
-type DueData = { record: ScheduledJob };
-type TickData = { output: ScheduledJobTickResult };
+Remove periodic schedule-input senders and their namespace fan-out. Install the
+Schedules plugin in the owner runtime and keep its owner alive, or map the
+owner's alarm scheduler to the deployment platform. Job records, cron rules,
+manual-run input identities and `scheduled_job.due` consumers remain valid.
+There is one runtime and one alarm path, with no legacy tick mode.
 
-async function run(app: App, input: Parameters<App["send"]>[0]) {
-  const handle = await app.send(input);
-  let tick: ScheduledJobTickResult | undefined;
-  const due: string[] = [];
-  const outputs: ReadableStream<ApplicationOutput> = handle.outputs;
-  const drain = (async () => {
-    for await (const output of outputs) {
-      if (isStreamOutput(output)) {
-        await output.payload.cancel();
-        continue;
-      }
-      if (!output.durable) continue;
-      if (output.type === "scheduled_job.due") {
-        const { record } = output.data as DueData;
-        due.push(`${record.lastOccurrence?.id} next=${record.nextRunAt}`);
-      } else if (output.type === "copilotz.schedules.tick.completed") {
-        tick = (output.data as TickData).output;
-      }
-    }
-  })();
-  const [drained, settled] = await Promise.allSettled([drain, handle.done]);
-  if (drained.status === "rejected") throw drained.reason;
-  if (settled.status === "rejected") throw settled.reason;
-  return { tick, due };
-}
+For messages and Agent routing, compose `coreSchedulesPlugin` from
+`@copilotz/copilotz/schedules/core`; it consumes typed due payloads without
+changing the base plugin's scheduling rules.
 
-// No database option: the private in-memory default.
-const app = await createCopilotz({
-  namespace: "team-notes",
-  plugins: [probePlugin],
-});
-try {
-  await run(app, { type: "notes.digest.configure.requested", payload: {} });
-  // Ten minutes late: one coalesced claim, next run after the check time.
-  const late = new Date(Date.now() + 10 * 60_000).toISOString();
-  const first = await run(app, scheduleTick({ checkedAt: late }));
-  console.log("late tick", first.tick?.claimed, first.due);
-  // The same check time again: the slot was already claimed.
-  const second = await run(app, scheduleTick({ checkedAt: late }));
-  console.log("repeat tick", second.tick?.claimed);
-  // Paused: ticks skip it, manual runs still claim and keep nextRunAt.
-  await run(app, { type: "notes.digest.pause.requested", payload: {} });
-  const paused = await run(app, scheduleTick({ checkedAt: late }));
-  console.log("paused tick", paused.tick?.claimed);
-  const manual = await run(
-    app,
-    runScheduledJobNow({
-      id: DIGEST_JOB_ID,
-      scheduledFor: "2026-10-06T09:00:00Z",
-    }),
-  );
-  console.log("paused manual", manual.due);
-} finally {
-  await app.close();
-}
-```
+### Current-policy refusal
 
-Run `deno run -A schedule-probe.ts` or `node schedule-probe.ts`. Expect
-`late tick 1` with one `notes-digest:<ms>` occurrence whose `next=` is after the
-late check time, `repeat tick 0`, `paused tick 0`, and one
-`notes-digest:manual:1791277200000` occurrence whose `next=` equals the late
-tick's. The digest Processor saves one reminder per claimed occurrence.
+A protected Collection policy runs for the actual owner's selected alarm read
+and declared command. A permanent current-policy denial consumes only that
+selected deadline key/revision. It creates no due Event and does not mutate the
+job or stop unrelated alarms. A replacement deadline revision survives. A job
+left active after refusal requires an explicit authorized resume/rearm; its
+record alone does not cause repeated unauthorized wakes. Database and provider
+failures remain retryable work rather than being consumed as denials.
 
-### Core scheduled messages (optional)
-
-`coreSchedulesPlugin` from `@copilotz/copilotz/schedules/core` connects generic
-jobs to Core conversations. It already includes its Core and Schedules plugin
-dependencies. Add agent resources and a model connection only if you want agents
-to reply to the scheduled messages. Its payload type is
-`CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE` (`copilotz.core.scheduled-message`), and
-`scheduledMessageJob` builds a typed job input. On each due occurrence it sends
-a public message to the job's recipients.
-
-It also contributes the `scheduled_jobs` Tool (create, get, list, update, pause,
-resume, cancel, run_now). An agent can use it only when granted, by appending
-`"scheduled_jobs"` to that agent's `capabilities.tools`. Treat the grant as
-letting the model create recurring messages on someone's behalf: only grant it
-to agents serving trusted actors, and authorize who may reach those agents. The
-`caller` recipient requires trusted Core Tool provenance.
-
-For Space-scoped jobs only, dispatch reads the live job again before sending and
-skips the job if its Space ownership, target thread or active status changed.
-Jobs without a Space do not get these checks. Do not read the generic rule
-"manual runs work on paused jobs" as a promise that a paused Core job still
-delivers a message; check the dispatch result.
-
-## What this unlocks
-
-- Recurring work that survives restarts, with one claim per cron slot.
-- Any host clock: a serial CLI loop, a server timer, a platform cron trigger
-  calling an HTTP route, or a test with fixed `checkedAt` values.
-- Retry-safe handlers keyed by stable occurrence IDs.
-- Plugin-owned scheduled behaviour behind an opaque, discriminated payload.
-
-## Next steps
-
-- Tutorial:
-  [Chapter 19: Schedule Recurring Work](./getting-started/part-5-operate-and-scale/19-schedule-recurring-work.md)
-  builds the digest plugin and a serial host clock.
-- [Actions](./actions.md) explains operation keys and retry identity.
-- [Events, Deliveries, and Recovery](./events-deliveries-recovery.md) covers how
-  due Events are delivered and retried.
-- [Agent capabilities](./agent-capabilities.md) covers Tool grants for
-  `scheduled_jobs`.
+The existing process-local diagnostic sink receives `owner_alarm_refused` after
+conditional deadline completion, with only schema, namespace, timestamp and the
+fixed `forbidden` status. It contains no record ID, payload or callback error.

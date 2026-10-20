@@ -12,7 +12,6 @@ import {
   mapThreadRecord,
 } from "../../../../core/index.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-
 function query(
   context: HttpHandlerContext,
 ): import("@copilotz/copilotz/core/client").ThreadQuery {
@@ -41,21 +40,8 @@ function query(
     });
   }
 }
-function membership(context: HttpHandlerContext) {
-  if (!context.scope.actor) {
-    throw Object.assign(new Error("Authentication required."), {
-      status: 401,
-      code: "unauthorized",
-    });
-  }
-  // An application can authorize historical identities or administrative access.
-  // The read service has already intersected this explicit policy with every query.
-  if (context.constraints.collections?.thread) return {};
-  return { contains: { participantIds: [context.scope.actor.id] } };
-}
 async function thread(context: HttpHandlerContext, id: string) {
   const values = await context.read.list("thread", {
-    ...membership(context),
     where: { id },
     limit: 1,
   });
@@ -67,7 +53,10 @@ async function thread(context: HttpHandlerContext, id: string) {
   }
   return values[0];
 }
-async function project(context: HttpHandlerContext, value: CollectionRecord) {
+async function project(
+  context: HttpHandlerContext,
+  value: CollectionRecord,
+) {
   const participants = await Promise.all(
     (value.participantIds as string[]).map((id) =>
       context.read.get("participant", id)
@@ -80,194 +69,199 @@ async function project(context: HttpHandlerContext, value: CollectionRecord) {
   );
 }
 
-export const coreHttpAdapter: HttpAdapter = createHttpAdapter({
-  routes: [
-    {
-      id: "core.threads.list",
-      method: "GET",
-      path: "/threads",
-      async handler(context) {
-        const input = query(context);
-        const limit = input.limit ?? 100;
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 999) {
-          throw Object.assign(new Error("Thread limit must be 1 to 999."), {
-            status: 400,
-            code: "invalid_query",
+/** Core conversation routes use ordinary authorized participant reads. */
+export function createCoreHttpAdapter(): HttpAdapter {
+  return createHttpAdapter({
+    routes: [
+      {
+        id: "core.threads.list",
+        method: "GET",
+        path: "/threads",
+        async handler(context) {
+          const input = query(context);
+          const limit = input.limit ?? 100;
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 999) {
+            throw Object.assign(new Error("Thread limit must be 1 to 999."), {
+              status: 400,
+              code: "invalid_query",
+            });
+          }
+          const records = await context.read.list("thread", {
+            ...input,
+            limit: limit + 1,
+            order: { field: "updatedAt", direction: input.order ?? "desc" },
+            ...(input.status ? { where: { status: input.status } } : {}),
           });
-        }
-        const records = await context.read.list("thread", {
-          ...input,
-          limit: limit + 1,
-          order: { field: "updatedAt", direction: input.order ?? "desc" },
-          ...(input.status ? { where: { status: input.status } } : {}),
-          all: [membership(context)],
-        });
-        return Response.json({
-          data: await Promise.all(
-            records.slice(0, limit).map((value) => project(context, value)),
-          ),
-          pageInfo: {
-            hasMore: records.length > limit,
-            next: records.length > limit ? records[limit - 1]?.id : undefined,
-          },
-        });
-      },
-    },
-    {
-      id: "core.threads.get",
-      method: "GET",
-      path: "/threads/:id",
-      async handler(context) {
-        return await project(
-          context,
-          await thread(context, context.params.id),
-        );
-      },
-    },
-    {
-      id: "core.threads.messages",
-      method: "GET",
-      path: "/threads/:id/messages",
-      async handler(context) {
-        await thread(context, context.params.id);
-        // Capture before the read. Live discovery replays every overlapping operation,
-        // including ones that start and settle while history is being projected.
-        const checkpoint = await context.operations.checkpoint(
-          context.params.id,
-        );
-        const input = query(context);
-        const limit = input.limit ?? 100;
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 999) {
-          throw Object.assign(new Error("History limit must be 1 to 999."), {
-            status: 400,
-            code: "invalid_query",
+          return Response.json({
+            data: await Promise.all(
+              records.slice(0, limit).map((value) => project(context, value)),
+            ),
+            pageInfo: {
+              hasMore: records.length > limit,
+              next: records.length > limit ? records[limit - 1]?.id : undefined,
+            },
           });
-        }
-        const records = await context.read.query("message", "history", {
-          ...input,
-          threadId: context.params.id,
-          content: true,
-          viewerParticipantIds: [context.scope.actor!.id],
-          limit,
-          overfetch: true,
-        });
-        const page = records.slice(0, limit);
-        const senderIds = [
-          ...new Set(page.map((record) => String(record.senderId))),
-        ];
-        const senders = new Map(
-          await Promise.all(senderIds.map(async (id) =>
-            [
-              id,
-              await context.read.get("participant", id),
-            ] as const
-          )),
-        );
-        const messages = page.map((record) => {
-          const sender = senders.get(String(record.senderId));
-          if (!sender) throw new Error("Message sender was not found.");
-          return mapMessageRecord(
-            record as CollectionRecord,
-            mapParticipantRecord(sender),
+        },
+      },
+      {
+        id: "core.threads.get",
+        method: "GET",
+        path: "/threads/:id",
+        async handler(context) {
+          return await project(
+            context,
+            await thread(context, context.params.id),
           );
-        });
-        const actionRunIds = page.flatMap(
-          (record, index) => {
-            const metadata = record.metadata as Record<string, unknown>;
-            const workflow = metadata.copilotzWorkflow as
-              | Record<string, unknown>
-              | undefined;
-            // Only returned Agent content replaces its LLM lanes. A tool result
-            // or public status need not contain that tool's progressive output.
-            if (
-              messages[index].sender.participantType !== "agent" ||
-              !Array.isArray(record.content) || !record.content.length
-            ) return [];
-            const run = workflow?.llmAttemptId;
-            return typeof run === "string" ? [run] : [];
-          },
-        );
-        const coveredCheckpoint = await context.operations.checkpoint(
-          context.params.id,
-          { checkpoint, actionRunIds },
-        );
-        return Response.json({
-          data: messages.map((message) => mapHistoryContent(message, "encode")),
-          pageInfo: {
-            checkpoint: coveredCheckpoint,
-            hasMore: records.length > limit,
-            next: records.length > limit ? messages.at(-1)?.id : undefined,
-          },
-        });
+        },
       },
-    },
-    {
-      id: "core.threads.message-asset",
-      method: "GET",
-      path: "/threads/:id/messages/:messageId/assets/:assetId",
-      async handler(context) {
-        await thread(context, context.params.id);
-        const [message] = await context.read.query("message", "history", {
-          threadId: context.params.id,
-          messageId: context.params.messageId,
-          // Retained revisions remain readable through the authorized all-history view.
-          view: "all",
-          viewerParticipantIds: [context.scope.actor!.id],
-        });
-        const refs = message
-          ? [
-            ...(Array.isArray(message.content) ? message.content : []),
-            ...(Array.isArray(
-                (message.metadata as Record<string, unknown>)?.llmReasoning,
-              )
-              ? (message.metadata as Record<string, unknown>)
-                .llmReasoning as unknown[]
-              : []),
-            ...(Array.isArray(
-                ((message.metadata as Record<string, unknown>)
-                  ?.llmNativeReasoning as Record<string, unknown> | undefined)
-                  ?.blocks,
-              )
-              ? ((message.metadata as Record<string, unknown>)
-                .llmNativeReasoning as Record<string, unknown>)
-                .blocks as unknown[]
-              : []),
-          ]
-          : [];
-        if (
-          !refs.some((ref) =>
-            ref && typeof ref === "object" &&
-            (ref as Record<string, unknown>).assetId ===
-              context.params.assetId
-          )
-        ) {
-          throw Object.assign(new Error("Message content was not found."), {
-            status: 404,
-            code: "message_content_not_found",
+      {
+        id: "core.threads.messages",
+        method: "GET",
+        path: "/threads/:id/messages",
+        async handler(context) {
+          await thread(context, context.params.id);
+          // Capture before the read. Live discovery replays every overlapping operation,
+          // including ones that start and settle while history is being projected.
+          const checkpoint = await context.operations.checkpoint(
+            context.params.id,
+          );
+          const input = query(context);
+          const limit = input.limit ?? 100;
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 999) {
+            throw Object.assign(new Error("History limit must be 1 to 999."), {
+              status: 400,
+              code: "invalid_query",
+            });
+          }
+          const records = await context.read.query("message", "history", {
+            ...input,
+            threadId: context.params.id,
+            content: true,
+            viewerParticipantIds: [context.scope.actor!.id],
+            limit,
+            overfetch: true,
           });
-        }
-        return await context.content.get(context.params.assetId);
+          const page = records.slice(0, limit);
+          const senderIds = [
+            ...new Set(page.map((record) => String(record.senderId))),
+          ];
+          const senderRows = await Promise.all(
+            senderIds.map((id) => context.read.get("participant", id)),
+          );
+          const senders = new Map(
+            senderRows.flatMap((sender) =>
+              sender ? [[String(sender.id), sender] as const] : []
+            ),
+          );
+          const messages = page.map((record) => {
+            const sender = senders.get(String(record.senderId));
+            if (!sender) throw new Error("Message sender was not found.");
+            return mapMessageRecord(
+              record as CollectionRecord,
+              mapParticipantRecord(sender),
+            );
+          });
+          const actionRunIds = page.flatMap(
+            (record, index) => {
+              const metadata = record.metadata as Record<string, unknown>;
+              const workflow = metadata.copilotzWorkflow as
+                | Record<string, unknown>
+                | undefined;
+              // Only returned Agent content replaces its LLM lanes. A tool result
+              // or public status need not contain that tool's progressive output.
+              if (
+                messages[index].sender.participantType !== "agent" ||
+                !Array.isArray(record.content) || !record.content.length
+              ) return [];
+              const run = workflow?.llmAttemptId;
+              return typeof run === "string" ? [run] : [];
+            },
+          );
+          const coveredCheckpoint = await context.operations.checkpoint(
+            context.params.id,
+            { checkpoint, actionRunIds },
+          );
+          return Response.json({
+            data: messages.map((message) =>
+              mapHistoryContent(message, "encode")
+            ),
+            pageInfo: {
+              checkpoint: coveredCheckpoint,
+              hasMore: records.length > limit,
+              next: records.length > limit ? messages.at(-1)?.id : undefined,
+            },
+          });
+        },
       },
-    },
-    {
-      id: "core.threads.observe",
-      method: "POST",
-      path: "/threads/:id/observe",
-      responseMediaType: "multipart/mixed",
-      inputSchema: {
-        type: "object",
-        properties: { checkpoint: { type: "string" } },
-        additionalProperties: false,
+      {
+        id: "core.threads.message-asset",
+        method: "GET",
+        path: "/threads/:id/messages/:messageId/assets/:assetId",
+        async handler(context) {
+          await thread(context, context.params.id);
+          const [message] = await context.read.query("message", "history", {
+            threadId: context.params.id,
+            messageId: context.params.messageId,
+            // Retained revisions remain readable through the authorized all-history view.
+            view: "all",
+            viewerParticipantIds: [context.scope.actor!.id],
+          });
+          const refs = message
+            ? [
+              ...(Array.isArray(message.content) ? message.content : []),
+              ...(Array.isArray(
+                  (message.metadata as Record<string, unknown>)?.llmReasoning,
+                )
+                ? (message.metadata as Record<string, unknown>)
+                  .llmReasoning as unknown[]
+                : []),
+              ...(Array.isArray(
+                  ((message.metadata as Record<string, unknown>)
+                    ?.llmNativeReasoning as Record<string, unknown> | undefined)
+                    ?.blocks,
+                )
+                ? ((message.metadata as Record<string, unknown>)
+                  .llmNativeReasoning as Record<string, unknown>)
+                  .blocks as unknown[]
+                : []),
+            ]
+            : [];
+          if (
+            !refs.some((ref) =>
+              ref && typeof ref === "object" &&
+              (ref as Record<string, unknown>).assetId ===
+                context.params.assetId
+            )
+          ) {
+            throw Object.assign(new Error("Message content was not found."), {
+              status: 404,
+              code: "message_content_not_found",
+            });
+          }
+          return await context.content.get(context.params.assetId);
+        },
       },
-      async handler(context) {
-        await thread(context, context.params.id);
-        return await context.operations.observe({
-          threadId: context.params.id,
-          checkpoint: (context.input as { checkpoint?: string }).checkpoint,
-        });
+      {
+        id: "core.threads.observe",
+        method: "POST",
+        path: "/threads/:id/observe",
+        responseMediaType: "multipart/mixed",
+        inputSchema: {
+          type: "object",
+          properties: { checkpoint: { type: "string" } },
+          additionalProperties: false,
+        },
+        async handler(context) {
+          await thread(context, context.params.id);
+          return await context.operations.observe({
+            threadId: context.params.id,
+            checkpoint: (context.input as { checkpoint?: string }).checkpoint,
+          });
+        },
       },
-    },
-  ],
-});
+    ],
+  });
+}
 
+export const coreHttpAdapter: HttpAdapter = createCoreHttpAdapter();
 export default coreHttpAdapter;

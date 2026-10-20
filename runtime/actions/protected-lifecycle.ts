@@ -1,3 +1,5 @@
+import type { SqlExecutor } from "../events/session.ts";
+import type { OperationStart } from "./continuation.ts";
 /** Internal protected representation of one Action lifecycle Event Body. @module */
 
 import type { ActionEventData, AnyActionDefinition } from "./types.ts";
@@ -23,6 +25,7 @@ export type ProtectedActionLifecycleBody = Readonly<{
   protected: Readonly<{
     input?: ProtectedValueRef;
     output?: ProtectedValueRef;
+    start?: ProtectedValueRef;
   }>;
 }>;
 
@@ -58,12 +61,7 @@ export function actionDefinitionById(
   return definition;
 }
 
-export function actionDefinitionHasSecrets(
-  action: AnyActionDefinition,
-): boolean {
-  return actionSchemaHasSecrets(action.inputSchema) ||
-    actionSchemaHasSecrets(action.outputSchema);
-}
+export { actionDefinitionHasSecrets } from "./secret.ts";
 
 /** Whether the Action's input carries values that are stored sealed. */
 export function actionInputHasSecrets(action: AnyActionDefinition): boolean {
@@ -85,16 +83,20 @@ export function protectedActionLifecycleBody(
   const protectedFields = record(input.protected);
   if (
     Reflect.ownKeys(protectedFields).some((key) =>
-      key !== "input" && key !== "output"
+      key !== "input" && key !== "output" && key !== "start"
     ) ||
     (protectedFields.input === undefined &&
-      protectedFields.output === undefined)
+      protectedFields.output === undefined &&
+      protectedFields.start === undefined)
   ) throw new TypeError("Protected Action lifecycle references are invalid.");
   const data = durableActionValue(input.data) as ActionEventData;
   return ({
     schema: PROTECTED_ACTION_LIFECYCLE_SCHEMA,
     data,
     protected: {
+      ...(protectedFields.start !== undefined
+        ? { start: protectedValueRef(protectedFields.start) }
+        : {}),
       ...(protectedFields.input !== undefined
         ? { input: protectedValueRef(protectedFields.input) }
         : {}),
@@ -113,7 +115,7 @@ export function publicActionLifecycleData(value: unknown): unknown {
 function coordinates(
   namespace: string,
   data: ActionEventData,
-  slot: "input" | "output",
+  slot: "input" | "output" | "start",
 ) {
   return ({
     namespace,
@@ -129,7 +131,9 @@ export async function prepareActionLifecycleBody(
     data: ActionEventData;
     action: AnyActionDefinition;
     protectedValues?: ProtectedValueRuntime;
+    transaction?: SqlExecutor;
     existingInput?: ProtectedValueRef;
+    awaitedAction?: AnyActionDefinition;
   }>,
 ): Promise<PreparedActionLifecycleBody> {
   const data = input.data;
@@ -147,11 +151,28 @@ export async function prepareActionLifecycleBody(
   }
 
   const prepared: PreparedProtectedValue[] = [];
+  let startRef: ProtectedValueRef | undefined;
+  if (
+    data.status === "awaiting" && data.start && input.awaitedAction &&
+    actionInputHasSecrets(input.awaitedAction)
+  ) {
+    if (!input.protectedValues) {
+      throw new Error("Awaited Action requires a configured Secret Adapter.");
+    }
+    const value = await input.protectedValues.prepare(
+      coordinates(input.namespace, data, "start"),
+      data.start,
+      input.transaction,
+    );
+    prepared.push(value);
+    startRef = value.ref;
+  }
   let inputRef = input.existingInput;
   if (inputSplit.secret && !inputRef) {
     const value = await input.protectedValues!.prepare(
       coordinates(input.namespace, input.data, "input"),
       data.input,
+      input.transaction,
     );
     prepared.push(value);
     inputRef = value.ref;
@@ -160,10 +181,11 @@ export async function prepareActionLifecycleBody(
     throw new Error("Protected Action input reference is unexpected.");
   }
   let outputRef: ProtectedValueRef | undefined;
-  if (data.status === "completed" && outputSplit?.secret) {
+  if (data.status === "completed" && outputSplit?.secret && !outputRef) {
     const value = await input.protectedValues!.prepare(
       coordinates(input.namespace, data, "output"),
       data.output,
+      input.transaction,
     );
     prepared.push(value);
     outputRef = value.ref;
@@ -171,12 +193,15 @@ export async function prepareActionLifecycleBody(
 
   const publicData = ({
     ...data,
+    ...(data.status === "awaiting" && data.start && startRef
+      ? { start: { ...data.start, input: null } }
+      : {}),
     input: inputSplit.publicValue,
     ...(data.status === "completed"
       ? { output: outputSplit!.publicValue }
       : {}),
   } as const) as ActionEventData;
-  if (!inputRef && !outputRef) {
+  if (!inputRef && !outputRef && !startRef) {
     return ({
       body: publicData,
       publicData,
@@ -188,6 +213,7 @@ export async function prepareActionLifecycleBody(
       schema: PROTECTED_ACTION_LIFECYCLE_SCHEMA,
       data: publicData,
       protected: {
+        ...(startRef ? { start: startRef } : {}),
         ...(inputRef ? { input: inputRef } : {}),
         ...(outputRef ? { output: outputRef } : {}),
       } as const,
@@ -204,6 +230,7 @@ export async function hydrateActionLifecycleBody(
     body: ActionEventData | ProtectedActionLifecycleBody;
     action: AnyActionDefinition;
     protectedValues?: ProtectedValueRuntime;
+    transaction?: SqlExecutor;
   }>,
 ): Promise<ActionEventData> {
   const protectedBody = protectedActionLifecycleBody(input.body);
@@ -219,6 +246,7 @@ export async function hydrateActionLifecycleBody(
     const plaintext = await input.protectedValues.open(
       coordinates(input.namespace, data, "input"),
       protectedBody.protected.input,
+      input.transaction,
     );
     hydratedInput = rehydrateSecretActionValue(
       input.action.inputSchema,
@@ -233,6 +261,7 @@ export async function hydrateActionLifecycleBody(
       const plaintext = await input.protectedValues.open(
         coordinates(input.namespace, data, "output"),
         protectedBody.protected.output,
+        input.transaction,
       );
       hydratedOutput = rehydrateSecretActionValue(
         input.action.outputSchema,
@@ -243,8 +272,17 @@ export async function hydrateActionLifecycleBody(
   } else if (protectedBody.protected.output) {
     throw new Error("Only completed Actions may own a protected output.");
   }
+  const start =
+    data.status === "awaiting" && data.start && protectedBody.protected.start
+      ? await input.protectedValues.open(
+        coordinates(input.namespace, data, "start"),
+        protectedBody.protected.start,
+        input.transaction,
+      ) as OperationStart
+      : undefined;
   return ({
     ...data,
+    ...(start ? { start } : {}),
     input: hydratedInput,
     ...(data.status === "completed" ? { output: hydratedOutput } : {}),
   } as const) as ActionEventData;
@@ -260,5 +298,6 @@ export function samePreparedActionLifecycleBody(
   if (!left || !right) return sameActionValue(leftValue, rightValue);
   return sameActionValue(left.data, right.data) &&
     left.protected.input?.commitment === right.protected.input?.commitment &&
-    left.protected.output?.commitment === right.protected.output?.commitment;
+    left.protected.output?.commitment === right.protected.output?.commitment &&
+    left.protected.start?.commitment === right.protected.start?.commitment;
 }

@@ -31,3 +31,6 @@ discovery.
 
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.
+
+Standard channel delivery uses the durable external-effect protocol. Confirmed
+results replay; uncertain sends require reconciliation.

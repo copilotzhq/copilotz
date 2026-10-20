@@ -277,7 +277,11 @@ function errorResponse(
     : "internal_error";
   const availability = code === "persistence_unavailable" ||
     code === "persistence_indeterminate";
-  const message = (status < 500 || availability) && error instanceof Error
+  const safeAuthenticationFailure = status === 503 &&
+    code === "auth_unavailable" &&
+    error instanceof Error && error.message === "Authentication is unavailable";
+  const message = (status < 500 || availability || safeAuthenticationFailure) &&
+      error instanceof Error
     ? error.message
     : "Internal application error.";
   const response = responseHeaders(options);

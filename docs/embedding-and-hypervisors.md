@@ -1,6 +1,6 @@
 ---
 title: "Deployment Topologies"
-description: "Place the same plugins in one embedded process, or split them into a Gateway and Workers that share persistence and an admitted transport."
+description: "Place the same plugins in one embedded process, or split them into a Gateway and Workers using owner capabilities over an admitted transport."
 section: Operate
 order: 40
 status: stable
@@ -24,9 +24,9 @@ A split deployment needs explicit answers to four questions:
 
 - **Who accepts and who executes?** One role must admit requests and record
   operations; others execute deliveries.
-- **What is the source of truth?** Every role must read and write the same
-  persisted Events, records and operations, with the same namespace, schema and
-  plugin IDs.
+- **What is the source of truth?** One owner per database schema writes
+  persisted Events, records and operations. Workers receive its capabilities;
+  namespaces select data within that owner.
 - **How does work move?** The accepting process needs a transport to place
   deliveries on executing processes, and remote executors must be admitted, not
   simply allowed to connect.
@@ -48,6 +48,17 @@ role; a role never adds Core, agents or HTTP on its own.
 
 No role exposes its internal application, engine, database scopes or Hypervisor.
 A Worker has no `send` or `fetch`: callers always go through a Gateway.
+
+The Gateway activates the schema owner before admission: it acquires the epoch,
+invalidates stale delivery attempts, and recovers the operation catalog. Storage
+commands serialize behind a locking epoch fence; provider work remains
+concurrent. Workers execute through this owner and do not open a database or
+application. Configure storage and `engine` settings on the Gateway.
+
+The owner-capability connection uses in-process or WebSocket transport. Workers
+can run in separate Node processes or browsers; only the owner opens storage.
+Use the portable `/worker` entry in browser bundles. Embedded placement is a
+trusted same-process convenience, not isolation from hostile plugin code.
 
 Roles depend on two Oxian libraries in different ways. **Ominipg** is the
 durable store: Events, delivery obligations and records live there, and recovery
@@ -71,10 +82,11 @@ lifecycle observation when you create it:
   callbacks. Copilotz awaits them as part of the recovery cycle, so keep them
   fast and non-throwing; a slow or failing hook delays or disturbs recovery.
 
-A role receives either `persistence` or its own `database`, never both, and a
-role given `persistence` rejects `databaseRecovery` and `databaseLifecycle`.
-Roles never close a shared persistence; the host closes it once, after every
-role. An open database you inject is never closed or replaced by Copilotz,
+An embedded application or Gateway receives either `persistence` or its own
+`database`, never both, and a role given `persistence` rejects
+`databaseRecovery` and `databaseLifecycle`. Workers use the colocated Gateway
+owner. Roles never close a shared persistence; the host closes it once, after
+every role. An open database you inject is never closed or replaced by Copilotz,
 because it cannot be reconnected; pass a connector when you want reconnection.
 
 During an outage, new admissions wait up to `waitMs` and then fail with
@@ -93,7 +105,7 @@ and catalog changes with [Upgrading](upgrading.md).
 This needs `notes-plugin.ts` from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md) and
 the project setup from [Getting Started](getting-started.md#before-you-start)
-with `@copilotz/copilotz@^0.87.3`.
+with `@copilotz/copilotz@^0.89.0`.
 
 `topology.ts` runs a Gateway and a Worker in one process over an explicit
 in-process transport, sharing one persistence the host owns. It is the same file
@@ -144,7 +156,7 @@ async function printOutputs(
 }
 
 // Host-owned persistence. A private in-memory database keeps this fixture
-// self-contained; every role below reads and writes this one connection.
+// self-contained; the Gateway owner alone writes through this connection.
 const persistence = await createCopilotzPersistence({
   database: { url: ":memory:" },
 });
@@ -165,10 +177,9 @@ try {
   });
   try {
     // Executes the Notes Processor and Action. Same plugin, same namespace,
-    // same persistence, same transport record.
+    // same owner capabilities and transport record.
     const worker = await createCopilotz({
       role: "worker",
-      persistence,
       namespace,
       databaseSchema,
       plugins: [notesPlugin],
@@ -236,34 +247,58 @@ process. A local `file://` PGlite directory is likewise opened by one connection
 in one process, and cannot be shared across processes or hosts. Separate Gateway
 and Worker processes need:
 
-- **A shared PostgreSQL server.** Each process opens its own connection with the
-  same namespace and schema. Add a durable Asset body backend if you configured
-  body references.
-- **The same plugins in every role.** Workers need the plugins they execute; the
-  Gateway needs them to admit and route.
-- **A host-owned WebSocket Hypervisor.** `gateway.fetch` is a plain Fetch
-  handler: it serves the facade and cannot upgrade WebSocket connections. The
-  public Gateway also hides its Hypervisor. To host remote Workers:
-  1. install the public Oxian package, `jsr:@oxian/oxian-js`, next to Copilotz;
-  2. create your own Hypervisor with `createHypervisor` from
-     `@oxian/oxian-js/hypervisor`, configured with a
-     `{ type: "websocket", config: { path } }` transport, an `admit` callback
-     implementing your host's registration and resume credential policy, and a
-     `fallback` that delegates ordinary requests to `gateway.fetch`;
-  3. pass that Hypervisor to the Gateway as `dispatcher` instead of
-     `transports`. An injected dispatcher owns admission, so the Gateway then
-     rejects `transports`, `admit`, `assign`, `sessions` and `hypervisorConfig`;
-  4. serve it with `listen({ hypervisor })` from
-     `@copilotz/copilotz/adapters/deno`;
-  5. give each Worker `{ type: "websocket", config: { url } }` with `activate`,
-     `register` and `handshake` callbacks that follow the same credential
-     policy;
-  6. shut the Hypervisor down yourself after the Gateway closes; Copilotz never
-     closes an injected dispatcher.
+- **Owner-only persistence.** A Gateway may use PostgreSQL or its own durable
+  PGlite directory. Workers receive no database connection or credentials.
+- **Matching declarations.** Workers execute their plugins; the owner validates
+  their registered Actions, Collections, Processors and Views.
+- **Authenticated WebSocket admission.** Configure Gateway `transports` with
+  `{ type: "websocket", config: { path: "/workers" } }` and an `admit` callback
+  implementing the host's registration/resume policy. Never expose an unguarded
+  Worker endpoint.
+- **A public host adapter.** On Node, `await listen(app, options)` from
+  `@copilotz/copilotz/adapters/node` serves both HTTP and worker WebSockets. On
+  Deno, the same adapter name from `/adapters/deno` returns the listener
+  synchronously. Both resolve the existing owner's transport internally; no
+  owner, session or Hypervisor is exposed on the application handle.
+- **Portable workers.** Import `createCopilotz` from
+  `@copilotz/copilotz/worker`, with role `worker`, matching declarations and the
+  admitted WebSocket URL. Supply `activate`, `register` and `handshake`
+  callbacks according to the host's credential policy. Await `worker.ready`
+  before reporting readiness.
 
-  The registration and resume credential protocol belongs to Oxian; see the
-  [`@oxian/oxian-js` package documentation](https://jsr.io/@oxian/oxian-js).
-  Never expose a Worker endpoint without admission.
+Advanced hosts can own placement explicitly with the Gateway's trusted
+`dispatcher({ workerCalls, lifecycle })` callback. Construct the caller-owned
+Hypervisor with exactly those frozen owner bindings before workers connect, and
+return it. The callback runs once before recovery; returning an existing unbound
+dispatcher object is a configuration error. Copilotz revokes its bindings on
+initialization failure and close but never shuts down caller-owned placement.
+The caller cleans up its own construction failures/cancellation and closes that
+Hypervisor after the application. Serve a caller-owned Hypervisor through
+`listen({ hypervisor })`; the host also supplies its HTTP fallback. The bindings
+carry capability admission and lifecycle only, never persistence.
+
+The returned dispatcher must expose its actual accepted session authority as
+`sessions`, with `assertCurrent` and `subscribe`. A pinned Oxian Hypervisor can
+be returned directly. Copilotz captures these methods before activation and
+rejects missing subscriptions at startup. It renews remote delivery attempts
+only after Oxian accepts a strictly advancing heartbeat sequence for their
+current worker identity, connection and session generation. Each bounded batch
+rechecks session and durable invocation authority after the owner fence; an
+expired attempt cannot be revived. The preaccept `onHeartbeat` callback is not
+renewal evidence. Caller-owned dispatchers must forward their actual session
+authority rather than creating a second registry.
+
+The former execution `heartbeatMs` and `scheduler` options and exported
+`DeliveryWorkloadScheduler` type have been removed. Remove these options from
+advanced executor/workload configuration. Remote delivery renewal now follows
+the transport's accepted heartbeats, without a per-delivery owner timer.
+Embedded execution continues to use local attempts without lease deadlines or
+remote session requirements. Quiet stream writers remain valid for their
+invocation lifetime; bounded reader and snapshot timeouts still apply. Session
+liveness does not impose an execution-progress timeout.
+
+The registration and resume protocol belongs to Oxian; see the
+[`@oxian/oxian-js` package documentation](https://jsr.io/@oxian/oxian-js).
 
 The HTTP API is separate from Worker hosting. The Gateway's facade serves `/api`
 only when its plugins include the authenticated server definition from
@@ -274,6 +309,12 @@ otherwise ordinary routes answer `404`. See [Server](server.md).
 
 ### Shutdown and recovery
 
+Application `close()` also closes listeners created by `listen(app)`. Closing a
+listener alone closes its connections, leaves the owner alive, and permits a
+replacement listener. A listener whose asynchronous startup races application
+close is shut down before it can be returned. Explicit `listen({ hypervisor })`
+listeners and caller-owned Hypervisors remain the host's responsibility.
+
 `close()` stops a role without waiting for every delivery. A graceful host first
 stops admitting new requests, awaits the operations it already accepted within
 its grace period, then closes Workers, listeners and the Gateway, any host-owned
@@ -282,19 +323,41 @@ recorded, and deliveries that are pending, retryable or under an expired lease
 are picked up by a Worker later. Report a Worker host ready only after
 `worker.ready` resolves.
 
+### Interrupted placement and logical replay
+
+A trusted worker-connection loss does not create a failed or cancelled Action
+receipt. The owner retires that exact connection/session/stream assignment and
+waits for its admitted calls and resource cleanup. A replacement must obtain
+fresh owner authority; a late completion from the retired assignment cannot
+settle its successor.
+
+- Before execution admission, no Action or effect has started.
+- After a database commit whose reply was lost, the same logical Action or
+  Processor command can recover its exact receipt after current authorization; a
+  new worker placement does not change the logical mutation identity.
+- After an external effect has begun without confirmation, the replacement
+  checks the durable effect inventory before user code runs. It requires the
+  declared reconciliation protocol or reports an indeterminate outcome; it never
+  blindly redispatches the external effect.
+- An already accepted terminal Action receipt remains authoritative even if its
+  response was lost. Explicit caller cancellation and accepted worker business
+  failures retain their semantic outcomes.
+
+Only the owner transport lifecycle classifies physical interruption. A worker
+error message or a `connection_lost` error code cannot request replay authority.
+
 ## Reference
 
 - **Capacity** is configured per Worker with `capacity` (default 8). Add
   capacity by running more Workers; Copilotz does not autoscale or start a
   Worker per request.
-- **Connections** multiply with processes: each one opens its own pool, polling
-  and observers. Size PostgreSQL `max_connections` for the total and measure
-  your own workload; see [Observation Performance](observation-performance.md).
-- **Host limits**: `listen({ hypervisor })` is the Deno adapter; hosting
-  WebSocket Workers this way is Deno-only. Having a `fetch` handler does not by
-  itself make a browser or Workers-style runtime a supported database-backed
-  Gateway host; check [Runtime Adapters](runtime-adapters.md) for each runtime's
-  capabilities.
+- **Connections** belong to owners, never workers. Size PostgreSQL
+  `max_connections` for the owner pools and measure your own workload; see
+  [Observation Performance](observation-performance.md).
+- **Host limits**: Node and Deno adapters host worker WebSockets. Having a
+  `fetch` handler does not by itself make a browser or Workers-style runtime a
+  supported database-backed Gateway host; check
+  [Runtime Adapters](runtime-adapters.md) for each runtime's capabilities.
 - **HTTP policy**: once composed, the facade behind `fallback` enforces the same
   authentication and exposure as an embedded `app.fetch`. Worker admission
   protects only the Worker endpoint.

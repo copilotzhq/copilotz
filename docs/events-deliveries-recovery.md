@@ -299,10 +299,10 @@ messages.
 Core hosts should call `provisionCoreHistoryIndexes` from
 `@copilotz/copilotz/core` once per physical schema after provisioning the Event
 schema. This installs the chronological Message index and its statistics;
-existing PostgreSQL schemas can use `{ concurrently: true }` outside a
-transaction. See [history performance](./history-performance.md) for the access
-path, explicit provisioning CLI, and native regression benchmark. This is
-explicit provisioning, never request-time DDL.
+provisioning runs in the schema owner transaction before admitting work. See
+[history performance](./history-performance.md) for the access path, explicit
+provisioning CLI, and native regression benchmark. This is explicit
+provisioning, never request-time DDL.
 
 ### Upgrade to indexed observations
 

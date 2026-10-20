@@ -10,11 +10,15 @@ export type CopilotzEventFilter = Readonly<{
   metadata?: Readonly<Record<string, unknown>>;
   /** Durable database position must be strictly greater than this cursor. */
   afterPosition?: string;
+  /** Owner-scoped consumed sequence, independent of database row positions. */
+  afterSeq?: string;
 }>;
 
 export type CopilotzEventHub = Readonly<{
   publish(event: CopilotzEvent): Promise<void>;
   subscribe(filter?: CopilotzEventFilter): ReadableStream<CopilotzEvent>;
+  /** Reject current observers while allowing a new cursor-based attachment. */
+  reset(reason: Error): void;
   close(reason?: unknown): void;
 }>;
 
@@ -22,9 +26,12 @@ export type WaitForCopilotzEventOptions = Readonly<{
   hub: CopilotzEventHub;
   filter?: CopilotzEventFilter;
   loadDurable?: () => Promise<readonly CopilotzEvent[]>;
+  /** Required with durable replay; attachment must precede the initial read. */
+  attachDurable?: () => Promise<
+    Readonly<{ wait(): Promise<void>; close(): void }>
+  >;
   signal?: AbortSignal;
   timeoutMs?: number;
-  pollIntervalMs?: number;
 }>;
 
 function record(value: unknown): Readonly<Record<string, unknown>> | null {
@@ -72,6 +79,12 @@ export function matchesCopilotzEvent(
   if (filter.durable !== undefined && event.durable !== filter.durable) {
     return false;
   }
+  if (filter.afterSeq !== undefined) {
+    if (!event.durable || !/^(0|[1-9][0-9]*)$/.test(filter.afterSeq)) {
+      return false;
+    }
+    if (BigInt(event.seq) <= BigInt(filter.afterSeq)) return false;
+  }
   if (filter.afterPosition !== undefined) {
     if (!event.durable) return false;
     try {
@@ -112,10 +125,21 @@ export function createCopilotzEventHub(): CopilotzEventHub {
       for (const [id, controller] of subscribers) {
         if (!matchesCopilotzEvent(event, filters.get(id))) continue;
         try {
+          if ((controller.desiredSize ?? 0) <= 0) {
+            throw Object.assign(
+              new Error(
+                "Owner push overflow; replay from the applied checkpoint.",
+              ),
+              { code: "observation_reset_required" },
+            );
+          }
           controller.enqueue(structuredClone(event));
-        } catch {
+        } catch (error) {
           subscribers.delete(id);
           filters.delete(id);
+          try {
+            controller.error(error);
+          } catch { /* detached */ }
         }
       }
       return Promise.resolve();
@@ -137,6 +161,15 @@ export function createCopilotzEventHub(): CopilotzEventHub {
           filters.delete(id);
         },
       }, { highWaterMark: 256 });
+    },
+    reset(reason) {
+      for (const controller of subscribers.values()) {
+        try {
+          controller.error(reason);
+        } catch { /* detached */ }
+      }
+      subscribers.clear();
+      filters.clear();
     },
     close(reason) {
       if (closed) return;
@@ -173,67 +206,103 @@ export async function waitForCopilotzEvent(
   options: WaitForCopilotzEventOptions,
 ): Promise<CopilotzEvent> {
   const filter = options.filter ?? {};
-  const pollIntervalMs = positiveDuration(
-    options.pollIntervalMs,
-    25,
-    "Event poll interval",
-  );
+  if (Boolean(options.loadDurable) !== Boolean(options.attachDurable)) {
+    throw new TypeError("Durable replay requires an attached repair source.");
+  }
   const timeoutMs = options.timeoutMs === undefined
     ? undefined
     : positiveDuration(options.timeoutMs, 1, "Event wait timeout");
-  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
-  const reader = options.hub.subscribe(filter).getReader();
-  let live = reader.read();
-  const abortError = () => {
-    const reason = options.signal?.reason;
-    return reason instanceof Error
-      ? reason
-      : new Error(String(reason ?? "Event wait cancelled."));
-  };
+  let reader = options.hub.subscribe(filter).getReader();
+  const readLive = () =>
+    reader.read().then(
+      (result) => ({ kind: "live" as const, result }),
+      (error: unknown) => ({ kind: "reset" as const, error }),
+    );
+  let live = readLive();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() =>
+        reject(
+          new Error(`Timed out waiting for event after ${timeoutMs}ms.`),
+        ), timeoutMs);
+    }
+  });
+  const abortError = () =>
+    options.signal?.reason ?? new Error("Event wait cancelled.");
   let abortListener: (() => void) | undefined;
-  const aborted = options.signal
-    ? new Promise<{ kind: "abort" }>((resolve) => {
-      abortListener = () => resolve({ kind: "abort" });
-      options.signal!.addEventListener("abort", abortListener, { once: true });
-    })
-    : undefined;
-
+  const aborted = new Promise<never>((_resolve, reject) => {
+    if (!options.signal) return;
+    abortListener = () => reject(abortError());
+    options.signal.addEventListener("abort", abortListener, { once: true });
+    if (options.signal.aborted) abortListener();
+  });
+  let durable:
+    | Awaited<ReturnType<NonNullable<typeof options.attachDurable>>>
+    | undefined;
+  const cancelled = Promise.race([timeout, aborted]);
+  // Always observe rejection, including while an attachment is still pending.
+  cancelled.catch(() => undefined);
   try {
-    while (true) {
-      if (options.signal?.aborted) throw abortError();
-      if (deadline !== undefined && Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for event after ${timeoutMs}ms.`);
+    if (options.signal?.aborted) throw abortError();
+    if (options.attachDurable) {
+      const attachment = options.attachDurable();
+      try {
+        durable = await Promise.race([attachment, cancelled]);
+      } catch (error) {
+        void attachment.then((watch) => watch.close(), () => {});
+        throw error;
       }
-      const replay = await options.loadDurable?.() ?? [];
+    }
+    const waitRepair = () =>
+      durable?.wait().then(
+        () => ({ kind: "repair" as const }),
+        (error: unknown) => ({ kind: "failure" as const, error }),
+      );
+    let repair = waitRepair();
+    while (true) {
+      const replay = await Promise.race([
+        options.loadDurable?.() ?? [],
+        cancelled,
+      ]);
       const existing = replay.find((event) =>
         matchesCopilotzEvent(event, filter)
       );
       if (existing) return existing;
-
-      const remaining = deadline === undefined
-        ? pollIntervalMs
-        : Math.max(1, Math.min(pollIntervalMs, deadline - Date.now()));
       const outcome = await Promise.race([
-        live.then((result) => ({ kind: "live" as const, result })),
-        new Promise<{ kind: "poll" }>((resolve) =>
-          setTimeout(() => resolve({ kind: "poll" }), remaining)
-        ),
-        ...(aborted ? [aborted] : []),
+        live,
+        cancelled,
+        ...(repair ? [repair] : []),
       ]);
-      if (outcome.kind === "abort") throw abortError();
-      if (outcome.kind === "poll") continue;
-      if (outcome.result.done) {
-        throw new Error("Event hub closed while waiting for an event.");
+      if (outcome.kind === "repair") {
+        repair = waitRepair();
+      } else if (outcome.kind === "failure") {
+        throw outcome.error;
+      } else if (outcome.kind === "reset") {
+        if (
+          !durable ||
+          (outcome.error as { code?: string })?.code !==
+            "observation_reset_required"
+        ) throw outcome.error;
+        await reader.cancel().catch(() => undefined);
+        reader = options.hub.subscribe(filter).getReader();
+        live = readLive();
+      } else {
+        if (outcome.result.done) {
+          throw new Error("Event hub closed while waiting for an event.");
+        }
+        if (matchesCopilotzEvent(outcome.result.value, filter)) {
+          return outcome.result.value;
+        }
+        live = readLive();
       }
-      if (matchesCopilotzEvent(outcome.result.value, filter)) {
-        return outcome.result.value;
-      }
-      live = reader.read();
     }
   } finally {
+    clearTimeout(timer);
     if (abortListener) {
       options.signal?.removeEventListener("abort", abortListener);
     }
+    durable?.close();
     await reader.cancel().catch(() => undefined);
   }
 }

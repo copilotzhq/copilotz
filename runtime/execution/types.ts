@@ -21,6 +21,7 @@ export const COPILOTZ_DELIVERY_WORKLOAD = "copilotz.delivery.v1";
 
 export type DeliveryDispatchMetadata = Readonly<{
   schema: "copilotz.delivery.dispatch.v1";
+  ownerEpoch: number;
   databaseSchema: string;
   deliveryId: string;
   eventId: string;
@@ -30,6 +31,24 @@ export type DeliveryDispatchMetadata = Readonly<{
   idempotencyKey: string;
 }>;
 
+/** Accepted transport state only; no registry mutation capability. */
+export type OwnerSessionSource = Readonly<
+  & Pick<Hypervisor["sessions"], "subscribe" | "assertCurrent">
+  & Partial<Pick<Hypervisor["sessions"], "list">>
+>;
+export type OwnerSessionAuthority = Readonly<{
+  subscribe: NonNullable<OwnerSessionSource["subscribe"]>;
+  assertCurrent: OwnerSessionSource["assertCurrent"];
+}>;
+export type DeliveryAttemptRegistration = Readonly<{
+  store: Pick<EventStore, "heartbeatDeliveries">;
+  heartbeat: import("../events/store.ts").DeliveryAttemptHeartbeat;
+  signal: AbortSignal;
+  revoke(reason: Error): void;
+}>;
+export type DeliveryAttemptTracker = (
+  attempt: DeliveryAttemptRegistration,
+) => () => void;
 export type DeliveryDispatcher = Dispatcher;
 export type DeliveryHypervisor = Hypervisor;
 export type DeliveryInProcessTransport = Extract<
@@ -42,11 +61,6 @@ export type ExecutionWorkHandle = WorkHandle;
 export type ExecutionWorkTarget = NonNullable<
   WorkInput["target"]
 >;
-
-export type LocalWorkloadWorkerOptions = Readonly<{
-  workerId?: string;
-  capacity?: number;
-}>;
 
 export type DeliveryContextBase = Readonly<{
   databaseSchema: string;
@@ -79,11 +93,6 @@ export type DeliveryContextFactory = (
   base: DeliveryContextBase,
 ) => ProcessorContext | Promise<ProcessorContext>;
 
-export type DeliveryWorkloadScheduler = Readonly<{
-  schedule(callback: () => void, delayMs: number): unknown;
-  cancel(handle: unknown): void;
-}>;
-
 /**
  * Why a delivery's handler failed, safe to log: the error's name and a message
  * of at most 500 characters with common credential shapes masked. It never
@@ -108,7 +117,8 @@ export type DeliveryDiagnostic = Readonly<{
     | "worker_handler_started"
     | "worker_handler_settled"
     | "gateway_event_frame_received"
-    | "recovery_selected";
+    | "recovery_selected"
+    | "owner_alarm_refused";
   timestampMs: number;
   eventId?: string;
   deliveryId?: string;
@@ -137,15 +147,20 @@ export type DeliveryDiagnosticSink = (
 ) => void | Promise<void>;
 
 export type CreateDeliveryWorkloadOptions = Readonly<{
+  /** Owner-resolved immutable event for colocated placement. */
+  resolvedEvent?: (schema: string, id: string) => DurableEvent | undefined;
+  /** Trusted placement selected by an owner-created executor. */
+  localExecution?: boolean;
+  remoteSession?: import("./remote-admission.ts").RemoteFence;
+  /** Owner-only registration with the accepted transport heartbeat producer. */
+  trackAttempt?: DeliveryAttemptTracker;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
   /** Internal runtime consumer, independent of plugin registration. */
-  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
+  executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   leaseMs?: number;
-  heartbeatMs?: number;
-  scheduler?: DeliveryWorkloadScheduler;
   workerId?: string;
   onDiagnostic?: DeliveryDiagnosticSink;
 }>;
@@ -177,40 +192,26 @@ export type DeliveryRecoveryDispatch = Readonly<{
 }>;
 
 export type CreateDeliveryExecutorOptions = Readonly<{
+  /** Owner registration; never passed to a worker. */
+  createWorkerWorkloads?: import("./workload.ts").OwnerExecutionFactory;
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
   defaultDatabaseSchema?: string;
   registry: PluginRegistry;
   createContext: DeliveryContextFactory;
   /** Internal runtime consumer, independent of plugin registration. */
-  resolveDeferredAction?: (base: DeliveryContextBase) => Promise<void>;
+  executeContinuation?: (base: DeliveryContextBase) => Promise<void>;
   /** Dispatch to an externally hosted workload. The executor never closes it. */
   dispatcher?: DeliveryDispatcher;
-  /** Bind Copilotz Workers to an application-owned in-process Hypervisor. */
-  hypervisor?: DeliveryHypervisor;
-  /**
-   * In-process event-fabric rendezvous shared by Copilotz Workers and their
-   * Hypervisor. Required with an injected Hypervisor; optional for a private
-   * Hypervisor, which otherwise receives a unique topic.
-   */
-  transport?: DeliveryInProcessTransport;
   target?: Readonly<{ workerId: string }>;
   workload?: string;
   /** Additional application/runtime workloads hosted beside deliveries. */
   workloads?: Readonly<Record<string, DeliveryWorkload>>;
-  /** Additional workloads that should not consume durable-delivery slots. */
-  localWorkloadWorkers?: Readonly<
-    Record<string, LocalWorkloadWorkerOptions>
-  >;
   /** Per-workload routing used with an injected dispatcher/hypervisor. */
   workloadTargets?: Readonly<Record<string, ExecutionWorkTarget>>;
   workerId?: string;
   capacity?: number;
   leaseMs?: number;
-  heartbeatMs?: number;
-  /** Enables Gateway-owned continuous recovery after an unfiltered sweep. */
-  continuousRecovery?: boolean;
-  scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
   /** Disabled by default; receives allowlisted process-local delivery timing. */
   onDiagnostic?: DeliveryDiagnosticSink;
@@ -227,8 +228,7 @@ export type CreateDeliveryExecutorOptions = Readonly<{
 }>;
 
 export type DeliveryExecutorOwnership =
-  | "private_hypervisor"
-  | "shared_hypervisor"
+  | "local"
   | "injected_dispatcher";
 
 export type DeliveryExecutor = Readonly<{

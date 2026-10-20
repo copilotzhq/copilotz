@@ -127,6 +127,8 @@ Deno.test("send retains a settlement notification arriving during its status rea
   let firstRead = true;
   const notified: boolean[] = [];
   const unsubscribe = await application.operations.onChange((id, detail) => {
+    // Checkpoint/heartbeat hints have no operation identity to look up.
+    if (!id || detail.namespace !== "tenant-a") return;
     void originalGet(detail.namespace, id).then((state) => {
       if (state?.state === "completed") committed.resolve();
     }).catch(committed.reject);

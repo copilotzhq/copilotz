@@ -1,3 +1,18 @@
+import { testAuthority } from "../runtime/testing/authority.ts";
+import { createAuthorizationOwner } from "../runtime/authorization/owner.ts";
+import {
+  openDatabaseOwner,
+  releaseDatabaseOwner,
+} from "../runtime/engine/commands.ts";
+import {
+  captureOperationConstraints,
+  matchesOperationConstraints,
+} from "../runtime/authorization/metadata.ts";
+import {
+  CONTENT_CHUNK_BYTES,
+  createContentCatalog,
+} from "../runtime/content/catalog.ts";
+import { digestCatalogPrefix } from "../runtime/content/prefix-digest.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
   ApplicationOperationAttachInput,
@@ -125,7 +140,11 @@ function testRead(): HttpReadServices {
 }
 
 function testScope(): ServerAuthorizedScope {
-  return { namespace: "tenant", databaseSchema: "test" };
+  return {
+    namespace: "tenant",
+    databaseSchema: "test",
+    authority: testAuthority("test", "tenant"),
+  };
 }
 
 function pause(milliseconds: number): Promise<void> {
@@ -224,10 +243,48 @@ async function createOperations(
   constraints: ServerConstraints = {},
   read: HttpReadServices = testRead(),
 ) {
+  const owner = {
+    async operation(_authority: unknown, id: string) {
+      const status = await application.operationStatus({
+        operationId: id,
+        namespace: "tenant",
+        databaseSchema: "test",
+      });
+      if (
+        !status ||
+        !matchesOperationConstraints(
+          status.metadata ?? {},
+          captureOperationConstraints(
+            constraints.operations ?? { metadata: {} },
+          ),
+        )
+      ) {
+        throw Object.assign(new Error("Operation was not found."), {
+          status: 404,
+          code: "operation_not_found",
+        });
+      }
+      return {
+        ...status,
+        metadata: { operationMetadata: status.metadata ?? {} },
+      };
+    },
+    async observe(
+      _authority: unknown,
+      input: { operationIds?: readonly string[] },
+    ) {
+      for (const id of input.operationIds ?? []) {
+        await owner.operation(_authority, id);
+      }
+      return { publish: <T>(send: () => Promise<T>) => send(), close() {} };
+    },
+  };
   return await createHttpOperations(
-    application,
+    {
+      ...application,
+      authorization: owner,
+    } as unknown as InternalCopilotzApplication,
     testScope(),
-    constraints,
     read,
   );
 }
@@ -276,7 +333,10 @@ function checkpointApplication(
   );
   return testApplication({
     attach: () => Promise.resolve(closedAttachment("unused")),
-    operationStatus: () => Promise.resolve(null),
+    operationStatus: ({ operationId }) =>
+      Promise.resolve(
+        records.find((record) => record.operationId === operationId) ?? null,
+      ),
     operations: {
       list() {
         return Promise.resolve(records);
@@ -291,6 +351,29 @@ function checkpointApplication(
     },
   });
 }
+
+Deno.test("history checkpoints retain terminal coverage after byte loss", async () => {
+  const operationId = "history-operation";
+  const operations = await createOperations(checkpointApplication({
+    [operationId]: [{
+      ...terminalStream(operationId, 1, "covered-run"),
+      availability: "purged",
+      availabilityReason: "missing",
+    }],
+  }));
+  const checkpoint = await operations.checkpoint("thread", {
+    checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
+    actionRunIds: ["covered-run"],
+  });
+  assertEquals(
+    decodeOperationReplayCursor(checkpoint).operationStreamPositions
+      ?.[operationId],
+    {
+      highWatermark: 1,
+      offsets: {},
+    },
+  );
+});
 
 Deno.test("history checkpoint bounds sparse coverage and replays deferred lanes", async () => {
   const coveredOrdinals = new Set([
@@ -494,7 +577,8 @@ Deno.test("history checkpoint propagates unrelated stream catalog errors", async
   });
   const application = testApplication({
     attach: () => Promise.resolve(closedAttachment("unused")),
-    operationStatus: () => Promise.resolve(null),
+    operationStatus: ({ operationId }) =>
+      Promise.resolve({ ...operation(operationId, {}), metadata: {} }),
     operations: {
       list() {
         return Promise.resolve([operation(operationId, {
@@ -536,6 +620,9 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
   const schema = `http_observe_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   await provisionOperationCatalog(db, schema);
+  const owner = await openDatabaseOwner(db, schema);
+  owner.activate();
+  const authorities: ReturnType<typeof createAuthorizationOwner>[] = [];
   const rawCatalog = createOperationCatalog(db, schema);
   const bodies = createMemoryBodyStore();
   const counts = {
@@ -557,9 +644,12 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     async onChange(listener, input) {
       counts.subscriptions++;
       await delaySubscription;
-      const remove = options.suppressHints
-        ? () => undefined
-        : await rawCatalog.onChange(listener, input);
+      const remove = await rawCatalog.onChange((id, detail) => {
+        if (
+          !options.suppressHints || detail.kind === "heartbeat" ||
+          detail.kind === "checkpoint" || detail.kind === "reset"
+        ) listener(id, detail);
+      }, input);
       return () => {
         counts.removed++;
         remove();
@@ -607,6 +697,16 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     createContext: createTestProcessorContext,
   });
   const coordinator = createEventCoordinator({
+    publish(event) {
+      if (!event.durable) return;
+      for (const authority of authorities) {
+        authority.notice({
+          namespace: event.namespace,
+          collection: event.subject?.type,
+          id: event.subject?.id,
+        });
+      }
+    },
     store: events,
     registry,
     executor,
@@ -624,6 +724,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     operations,
     events: {
       ...events,
+      outstanding: events.scopeOutstanding,
       async resolve(namespace: string, id: string) {
         const event = await events.getEvent(id);
         return event?.namespace === namespace
@@ -670,10 +771,35 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
   const scope: ServerAuthorizedScope = {
     namespace: "tenant",
     databaseSchema: schema,
+    authority: testAuthority(schema, "tenant"),
   };
   const create = async (constraints: ServerConstraints = {}) => {
-    const read = await createHttpReads(application, scope, constraints);
-    return await createHttpOperations(application, scope, constraints, read);
+    const authorization = createAuthorizationOwner({
+      session: db,
+      databaseSchema: schema,
+      owner,
+      collections: { thread: threadDefinition },
+      operations,
+      registration: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate: () => ({
+              collections: { thread: {} },
+              operations: { metadata: {} },
+              ...constraints,
+            }),
+          },
+        },
+        collections: { thread: { id: "fixture", revision: "1" } },
+        actions: {},
+      },
+    });
+    authorities.push(authorization);
+    const selected = { ...application, authorization };
+    const read = await createHttpReads(selected, scope);
+    return await createHttpOperations(selected, scope, read);
   };
   const selected: Awaited<ReturnType<typeof createHttpOperations>>[] = [];
   const observations: Awaited<
@@ -754,15 +880,43 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     async stream(operationId: string, bytes: Uint8Array) {
       const streamId = `stream-${operationId}`;
       const bodyId = `body-${operationId}`;
+      const contentCatalog = createContentCatalog(db, schema);
+      const identity = {
+        bodyId,
+        writerId: `fixture:${operationId}`,
+        generation: 1,
+      };
+      await contentCatalog.reserve({
+        ...identity,
+        namespace: "tenant",
+        copy: {
+          key: bodyId,
+          backendKind: bodies.kind,
+          backendId: bodies.backendId,
+        },
+      });
       const writer = await bodies.reserve({
         bodyId,
         mediaType: "application/octet-stream",
+        reservationId: `fixture:${operationId}`,
+        generation: 1,
       });
-      await bodies.append({
-        writer,
+      for (
+        let offset = 0;
+        offset < bytes.byteLength;
+        offset += CONTENT_CHUNK_BYTES
+      ) {
+        await bodies.append({
+          writer,
+          expectedOffset: offset,
+          appendId: `initial:${offset}`,
+          bytes: bytes.slice(offset, offset + CONTENT_CHUNK_BYTES),
+        });
+      }
+      await contentCatalog.checkpoint({
+        ...identity,
         expectedOffset: 0,
-        appendId: "initial",
-        bytes,
+        offset: bytes.byteLength,
       });
       await operations.openStream({
         namespace: "tenant",
@@ -779,22 +933,24 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
           metadata: {},
         },
       });
-      await operations.commitStreamOffset({
-        namespace: "tenant",
-        operationId,
-        streamId,
-        committedOffset: bytes.length,
-      });
       await operations.retainStream({
         namespace: "tenant",
         operationId,
         streamId,
         retention: "observation",
       });
+      const digest = await digestCatalogPrefix(bodies, bodyId, bytes.length);
+      await contentCatalog.sealIntent({
+        ...identity,
+        length: bytes.length,
+        digest,
+      });
       const body = await bodies.seal({
         writer,
         expectedByteLength: bytes.length,
+        expectedDigest: digest,
       });
+      await contentCatalog.sealAccepted({ ...identity, head: body });
       await operations.sealStream({
         namespace: "tenant",
         operationId,
@@ -815,6 +971,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
       );
       await readers.close();
       await executor.shutdown();
+      releaseDatabaseOwner(owner);
       await db.close();
     },
   };
@@ -1046,7 +1203,7 @@ Deno.test("120 completed operations paginate discovery and retire replay state w
   }
 });
 
-Deno.test("missed selection hints recover through the five-second safety head batch", async () => {
+Deno.test("a lost final selection push repairs from heartbeat head mismatch without later traffic", async () => {
   const f = await observationFixture({ suppressHints: true });
   try {
     await f.thread();
@@ -1062,7 +1219,7 @@ Deno.test("missed selection hints recover through the five-second safety head ba
         ),
       6000,
     );
-    assert(performance.now() - began < 5750);
+    assert(performance.now() - began < 2500);
     assert(f.counts.heads.some((batch) => batch.length === 1));
     await observation.cancel();
     await observation.done;
@@ -1085,7 +1242,7 @@ Deno.test("thread access revocation closes observation using the scoped collecti
       "Revoked observation did not close.",
     );
     assertEquals(f.counts.removed, 1);
-    assert(f.counts.resources.length >= 1);
+    assertEquals(f.counts.resources.length, 0, "revocation uses owner notices");
   } finally {
     await f.close();
   }
@@ -1163,7 +1320,7 @@ Deno.test("late shared operation readers are released when an explicit observati
   }
 });
 
-Deno.test("1000 distinct idle observations share batched selection heads and scoped existence reads", async () => {
+Deno.test("1000 distinct idle observations share selection heads without authorization polling", async () => {
   const f = await observationFixture();
   try {
     const ids = Array.from({ length: 1000 }, (_, index) => `thread-${index}`);
@@ -1183,10 +1340,16 @@ Deno.test("1000 distinct idle observations share batched selection heads and sco
       0,
       "idle selections must not re-read operation associations",
     );
-    assert(f.counts.heads.length >= 1 && f.counts.heads.length <= 2);
-    assert(f.counts.heads.every((batch) => batch.length === 1000));
-    assert(f.counts.resources.length >= 18 && f.counts.resources.length <= 24);
-    assert(f.counts.resources.every((batch) => batch.length === 1000));
+    assertEquals(
+      f.counts.heads.length,
+      0,
+      "matching heartbeat heads must not trigger safety scans",
+    );
+    assertEquals(
+      f.counts.resources.length,
+      0,
+      "idle authority must not poll records",
+    );
     await Promise.all(views.map((view) => view.observation.cancel()));
     await Promise.all(views.map((view) => view.observation.done));
     assertEquals(f.counts.removed, 1);

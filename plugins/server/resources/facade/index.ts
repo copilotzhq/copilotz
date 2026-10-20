@@ -123,11 +123,11 @@ export function defineServerFacade(
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" &&
-      key !== "authenticate" && key !== "authorize" &&
+      key !== "authenticate" &&
       key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
-  for (const key of ["authenticate", "authorize"] as const) {
+  for (const key of ["authenticate"] as const) {
     if (input[key] !== undefined && typeof input[key] !== "function") {
       throw new TypeError(`Server ${key} must be a function.`);
     }
@@ -157,7 +157,6 @@ export function defineServerFacade(
         | ServerPatternPolicy,
     } as const,
     ...(input.authenticate ? { authenticate: input.authenticate } : {}),
-    ...(input.authorize ? { authorize: input.authorize } : {}),
   } as const);
 }
 
@@ -165,7 +164,6 @@ export type {
   DefineServerFacadeInput,
   ServerAuthenticate,
   ServerAuthenticationContext,
-  ServerAuthorize,
   ServerAuthorizedScope,
   ServerCollectionExposure,
   ServerCollectionMutationConstraints,

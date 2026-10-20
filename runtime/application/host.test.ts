@@ -1,10 +1,16 @@
-import { defineServerFacade, serverPlugin } from "../../server/index.ts";
+import {
+  createTestCopilotz as createTypedCopilotz,
+  defineTestServerFacade as defineServerFacade,
+} from "../testing/server-authorization.test.ts";
+import { serverPlugin } from "../../server/index.ts";
+import { createCopilotz as createProductionCopilotz } from "../../create-copilotz.ts";
+import { withRetainedAuthority } from "../authorization/binding.ts";
+import { testAuthority } from "../testing/authority.ts";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import {
   type ActionContext,
   type ApplicationOutput,
   type CopilotzApplication,
-  createCopilotz as createTypedCopilotz,
   type CreateCopilotzOptions,
   defineAction,
   defineCollection,
@@ -102,6 +108,67 @@ async function history(
   await attachment.drained;
   return outputs;
 }
+
+Deno.test("trusted host calls preserve narrower caller authority and retained host provenance", async () => {
+  const f = fixture();
+  const app = await createProductionCopilotz({
+    namespace: "host",
+    plugins: [f.plugin],
+    authorization: {
+      policies: {
+        fixture: { revision: "1", sources: [], evaluate: () => ({}) },
+      },
+      actions: { echo: { id: "fixture", revision: "1" } },
+      collections: { notes: { id: "fixture", revision: "1" } },
+    },
+  });
+  try {
+    const options = { idempotencyKey: "trusted" };
+    assertEquals(await app.actions.echo({ value: "one" }, options), {
+      echoed: "one",
+      namespace: "host",
+    });
+    assertEquals(await app.actions.echo({ value: "one" }, options), {
+      echoed: "one",
+      namespace: "host",
+    });
+    assertEquals(f.calls(), 1);
+    const note = await app.collections.notes.create({ text: "host" });
+    assertEquals(
+      (await app.collections.notes.get({ id: note.id }))?.text,
+      "host",
+    );
+    const restricted = (run: () => Promise<unknown>) =>
+      withRetainedAuthority(
+        testAuthority("public", "host"),
+        new AbortController().signal,
+        run,
+      );
+    for (
+      const run of [
+        () => app.actions.echo({ value: "one" }, options),
+        () => app.collections.notes.create({ text: "denied" }),
+        () => app.collections.notes.get({ id: note.id }),
+      ]
+    ) {
+      const error = await assertRejects(() => restricted(run));
+      assertEquals((error as { code?: string }).code, "forbidden");
+    }
+    assertEquals(f.calls(), 1);
+    assertEquals((await app.collections.notes.list()).length, 1);
+    // Idiomatic optional fields are absent, not refused.
+    assertEquals(
+      (await app.collections.notes.list({
+        after: undefined,
+        limit: 10,
+        where: undefined,
+      })).length,
+      1,
+    );
+  } finally {
+    await app.close();
+  }
+});
 
 Deno.test("host maps enumerate exactly the caller-facing aliases, including with the Server plugin", async () => {
   const f = fixture();
@@ -527,7 +594,6 @@ Deno.test("Gateway host API dispatches Actions and mutations to a Worker", async
   const worker = await createTypedCopilotz({
     role: "worker",
     namespace: "split",
-    database,
     plugins: [workerFixture.plugin],
     transport,
     id: "host-worker",
@@ -649,7 +715,7 @@ Deno.test("host and HTTP calls keep distinct outcomes when keys and correlations
       server: {
         default: defineServerFacade({
           expose: { actions: { include: ["host.echo"] } },
-          authorize() {
+          evaluate() {
             authorized++;
             return {};
           },

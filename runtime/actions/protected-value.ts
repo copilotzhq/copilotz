@@ -1,20 +1,38 @@
+import {
+  ensureOwnerDataKey,
+  ownerDataCipher,
+  readOwnerDataKey,
+} from "./owner-data-key.ts";
+import { createSchemaCommandRunner } from "../engine/commands.ts";
+import {
+  createPromotedBodyStore,
+  promoteConfiguredLogicalBody,
+  promotedReadyStore,
+} from "../content/promoted-body-store.ts";
+import {
+  assertSchemaCommandTransaction,
+  schemaCommandContext,
+} from "../engine/commands.ts";
 /** BodyStore-backed encrypted values owned by Action lifecycle records. @module */
 
 import {
   assetBodySchemaPrefix,
   type BodyStorageRuntime,
   type BodyStore,
-  type BodyStoreDeployment,
-  type BodyStoreKind,
   createDatabaseBodyStore,
   digestContent,
-  readBodyBytes,
 } from "../content/index.ts";
+import { createContentCatalog, openLogicalBody } from "../content/catalog.ts";
 import {
-  bodyProtectionUntil,
-  DEFAULT_BODY_PROTECTION_MS,
-} from "../content/body-store.ts";
-import type { EventMutationContext, SqlSession } from "../events/index.ts";
+  databaseBodyStoreReader,
+  databaseBodyStoreWriter,
+  provisionDatabaseBodyStore,
+} from "../content/database-body-store.ts";
+import type {
+  EventMutationContext,
+  SqlExecutor,
+  SqlSession,
+} from "../events/index.ts";
 import { snapshotEventData } from "../events/types.ts";
 import {
   createSecretAdapter,
@@ -22,6 +40,7 @@ import {
   secretEnvelope,
 } from "./secret-adapter.ts";
 import { durableActionValue, sameActionValue } from "./value.ts";
+import { protectedValueReadCheck } from "./protected-value-read.ts";
 
 export const PROTECTED_VALUE_REF_SCHEMA =
   "copilotz.action.protected-value.v1" as const;
@@ -39,30 +58,27 @@ export type ProtectedValueRef = Readonly<{
   schema: typeof PROTECTED_VALUE_REF_SCHEMA;
   ownerNodeId: string;
   bodyId: string;
-  storeKind: BodyStoreKind;
-  backendId: string;
   byteLength: number;
   digest: `sha256:${string}`;
   mediaType: typeof PROTECTED_VALUE_MEDIA_TYPE;
   commitment: string;
   envelope: Readonly<Record<string, unknown>>;
-  protectedUntil: string;
 }>;
 
 export type PreparedProtectedValue = Readonly<{
   ref: ProtectedValueRef;
-  /** Default database storage is adopted atomically with the owning Event. */
-  databaseBytes?: Uint8Array;
 }>;
 
 export type ProtectedValueRuntime = Readonly<{
   prepare(
     coordinates: ProtectedValueCoordinates,
     value: unknown,
+    transaction?: SqlExecutor,
   ): Promise<PreparedProtectedValue>;
   open(
     coordinates: ProtectedValueCoordinates,
     ref: ProtectedValueRef,
+    transaction?: SqlExecutor,
   ): Promise<unknown>;
   adopt(
     context: EventMutationContext,
@@ -83,13 +99,6 @@ type CreateProtectedValueRuntimeOptions = Readonly<{
   adapter: SecretAdapter;
   createId?: () => string;
 }>;
-
-const DATABASE_DEPLOYMENT: BodyStoreDeployment = {
-  durability: "durable",
-  reach: "cluster",
-  minimumProtectionMs: DEFAULT_BODY_PROTECTION_MS,
-  readyGarbageCollection: true,
-} as const;
 
 function requiredText(value: unknown, label: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
@@ -117,7 +126,7 @@ function bodyKey(
   ].filter(Boolean).join("/");
 }
 
-function additionalAuthenticatedData(
+export function additionalAuthenticatedData(
   databaseSchema: string,
   coordinates: ProtectedValueCoordinates,
 ): Uint8Array {
@@ -138,27 +147,20 @@ function reference(value: unknown): ProtectedValueRef {
     "schema",
     "ownerNodeId",
     "bodyId",
-    "storeKind",
-    "backendId",
     "byteLength",
     "digest",
     "mediaType",
     "commitment",
     "envelope",
-    "protectedUntil",
   ]);
   if (
     Reflect.ownKeys(input).some((key) =>
       typeof key !== "string" || !exact.has(key)
     ) || input.schema !== PROTECTED_VALUE_REF_SCHEMA ||
-    (input.storeKind !== "memory" &&
-      input.storeKind !== "object" && input.storeKind !== "database") ||
     input.mediaType !== PROTECTED_VALUE_MEDIA_TYPE ||
     !Number.isSafeInteger(input.byteLength) || Number(input.byteLength) < 0 ||
     typeof input.digest !== "string" ||
-    !/^sha256:[0-9a-f]{64}$/.test(input.digest) ||
-    typeof input.protectedUntil !== "string" ||
-    !Number.isFinite(Date.parse(input.protectedUntil))
+    !/^sha256:[0-9a-f]{64}$/.test(input.digest)
   ) {
     throw new TypeError("Protected value reference is invalid.");
   }
@@ -170,14 +172,11 @@ function reference(value: unknown): ProtectedValueRef {
     schema: PROTECTED_VALUE_REF_SCHEMA,
     ownerNodeId: requiredText(input.ownerNodeId, "Protected owner node id"),
     bodyId: requiredText(input.bodyId, "Protected body id"),
-    storeKind: input.storeKind,
-    backendId: requiredText(input.backendId, "Protected backend id"),
     byteLength: Number(input.byteLength),
     digest: input.digest as `sha256:${string}`,
     mediaType: PROTECTED_VALUE_MEDIA_TYPE,
     commitment,
     envelope: secretEnvelope(input.envelope),
-    protectedUntil: new Date(input.protectedUntil).toISOString(),
   } as const);
 }
 
@@ -192,10 +191,6 @@ function nodeData(ref: ProtectedValueRef): Readonly<Record<string, unknown>> {
     byteLength: ref.byteLength,
     digest: ref.digest,
     mediaType: ref.mediaType,
-    location: {
-      kind: ref.storeKind,
-      backendId: ref.backendId,
-    } as const,
   } as const);
 }
 
@@ -204,26 +199,22 @@ async function insertOwner(
   databaseSchema: string,
   namespace: string,
   ref: ProtectedValueRef,
-  databaseBytes?: Uint8Array,
 ): Promise<void> {
-  await context.transaction.query(
-    "SELECT pg_advisory_xact_lock_shared(hashtext($1), hashtext($2))",
-    [databaseSchema, "body-ownership"],
+  assertSchemaCommandTransaction(context.transaction, databaseSchema);
+  const catalog = createContentCatalog(context.transaction, databaseSchema);
+  const body = await catalog.read(ref.bodyId);
+  if (
+    !body || body.namespace !== namespace ||
+    body.terminal?.outcome !== "completed" ||
+    body.terminal.length !== ref.byteLength ||
+    body.terminal.digest !== ref.digest
+  ) throw new Error("Protected body catalog is inconsistent.");
+  const retired = await context.transaction.query(
+    `SELECT 1 FROM ${context.tables.content_copies} WHERE copy_key=$1 AND state IN ('retiring','retired')`,
+    [body.copy.key],
   );
-  if (databaseBytes) {
-    const store = createDatabaseBodyStore({
-      session: context.transaction,
-      schema: databaseSchema,
-      backendId: ref.backendId,
-    });
-    await store.put({
-      bodyId: ref.bodyId,
-      bytes: databaseBytes,
-      mediaType: ref.mediaType,
-      digest: ref.digest,
-      ifAbsent: true,
-      protectedUntil: ref.protectedUntil,
-    });
+  if (retired.rows.length) {
+    throw new Error("Protected body has entered irreversible retirement.");
   }
   const expected = nodeData(ref);
   await context.transaction.query(
@@ -267,27 +258,123 @@ export function createProtectedValueRuntime(
     "Protected database schema",
   );
   const adapter = createSecretAdapter(options.adapter);
+  const keyCommand = createSchemaCommandRunner(options.session, databaseSchema);
+  const dataCipher = async (transaction?: SqlExecutor, create = false) => {
+    const executor = transaction ?? options.session;
+    let key = await readOwnerDataKey(executor, databaseSchema);
+    if (!key && create) {
+      key = transaction
+        ? await ensureOwnerDataKey(transaction, databaseSchema, adapter)
+        : await keyCommand(
+          "protected.key",
+          {},
+          (_input, command) =>
+            ensureOwnerDataKey(command.transaction, databaseSchema, adapter),
+        );
+    }
+    if (!key) {
+      throw new Error("Owner data key is missing; run the offline migration.");
+    }
+    return await ownerDataCipher(databaseSchema, key, adapter);
+  };
   const createId = options.createId ?? (() => crypto.randomUUID());
+  const databaseStore = createDatabaseBodyStore({
+    session: options.session,
+    schema: databaseSchema,
+  });
   const storeFor = (namespace: string): BodyStore =>
     options.storage.adapter?.forScope({ namespace, databaseSchema }) ??
-      options.storage.writer ?? createDatabaseBodyStore({
-        session: options.session,
-        schema: databaseSchema,
+      options.storage.writer ?? databaseStore;
+  const staging = new Map<string, BodyStore>();
+  const stagingFor = (namespace: string): BodyStore => {
+    let store = staging.get(namespace);
+    if (store) return store;
+    const configured = storeFor(namespace);
+    const target = configured.kind === "database"
+      ? promotedReadyStore(configured)
+      : configured;
+    const database = configured.kind === "database"
+      ? configured
+      : databaseStore;
+    store = target
+      ? createPromotedBodyStore({ staging: database, ready: target })
+      : database;
+    staging.set(namespace, store);
+    return store;
+  };
+  const catalog = createContentCatalog(options.session, databaseSchema);
+  const physicalStore = (namespace: string, backendId: string): BodyStore => {
+    const configured = storeFor(namespace);
+    const staged = stagingFor(namespace);
+    const target = promotedReadyStore(staged);
+    const store = staged.backendId === backendId
+      ? staged
+      : configured.backendId === backendId
+      ? configured
+      : target?.backendId === backendId
+      ? target
+      : options.storage.readers.get(backendId);
+    if (!store) throw new Error("Protected value body backend is unavailable.");
+    return store;
+  };
+  const readerFor = (
+    namespace: string,
+    backendId: string,
+    transaction?: SqlExecutor,
+    checkRead?: () => Promise<void>,
+  ): Pick<BodyStore, "readRange"> =>
+    databaseBodyStoreReader(
+      physicalStore(namespace, backendId),
+      transaction,
+      checkRead
+        ? (schema) => {
+          if (schema !== databaseSchema) {
+            throw new Error("Protected body reader belongs to another scope.");
+          }
+          return checkRead();
+        }
+        : undefined,
+    );
+  const scheduled = new WeakMap<SqlExecutor, Set<string>>();
+  const promote = (
+    namespace: string,
+    bodyId: string,
+    transaction?: SqlExecutor,
+  ): Promise<void> => {
+    if (!promotedReadyStore(stagingFor(namespace))) return Promise.resolve();
+    const publish = async () => {
+      // C's existing reserve/upload/finish protocol keeps failed targets tracked
+      // and leaves the committed database copy readable until promotion succeeds.
+      await promoteConfiguredLogicalBody({
+        catalog,
+        bodyId,
+        storeFor: (copy) => physicalStore(namespace, copy.backendId),
       });
-  const deployment = options.storage.adapter?.deployment ??
-    DATABASE_DEPLOYMENT;
-  const readerFor = (namespace: string, backendId: string): BodyStore => {
-    const current = storeFor(namespace);
-    if (current.backendId === backendId) return current;
-    const reader = options.storage.readers.get(backendId);
-    if (!reader) {
-      throw new Error("Protected value body backend is unavailable.");
+    };
+    if (transaction) {
+      const command = schemaCommandContext(transaction, databaseSchema);
+      let bodies = scheduled.get(command.transaction);
+      if (!bodies) {
+        bodies = new Set();
+        scheduled.set(command.transaction, bodies);
+      }
+      if (!bodies.has(bodyId)) {
+        bodies.add(bodyId);
+        command.afterCommit(publish);
+      }
+      return Promise.resolve();
     }
-    return reader;
+    return publish();
   };
 
   return ({
-    async prepare(coordinates, value) {
+    async prepare(coordinates, value, transaction) {
+      if (transaction) {
+        assertSchemaCommandTransaction(transaction, databaseSchema);
+      }
+      const captureCatalog = transaction
+        ? createContentCatalog(transaction, databaseSchema)
+        : catalog;
       const namespace = requiredText(
         coordinates.namespace,
         "Protected namespace",
@@ -297,7 +384,7 @@ export function createProtectedValueRuntime(
       const aad = additionalAuthenticatedData(databaseSchema, coordinates);
       let sealed;
       try {
-        sealed = await adapter.seal({
+        sealed = await (await dataCipher(transaction, true)).seal({
           plaintext: plaintext.slice(),
           additionalAuthenticatedData: aad.slice(),
         });
@@ -327,71 +414,100 @@ export function createProtectedValueRuntime(
         namespace,
         createId(),
       );
-      const store = storeFor(namespace);
-      const protectedUntil = bodyProtectionUntil(Math.max(
-        DEFAULT_BODY_PROTECTION_MS,
-        deployment.minimumProtectionMs,
-      ));
-      const databaseBytes = !options.storage.adapter &&
-          !options.storage.writer && store.kind === "database"
-        ? ciphertext
-        : undefined;
-      const head = databaseBytes
-        ? ({
-          bodyId,
-          state: "ready" as const,
-          byteLength: ciphertext.byteLength,
-          mediaType: PROTECTED_VALUE_MEDIA_TYPE,
-          digest,
-          maintenanceVersion: 1,
-          protectedUntil,
-        } as const)
-        : await store.put({
-          bodyId,
-          bytes: ciphertext,
-          mediaType: PROTECTED_VALUE_MEDIA_TYPE,
-          digest,
-          ifAbsent: true,
-          protectedUntil,
-        });
+      const configuredStore = transaction
+        ? stagingFor(namespace)
+        : storeFor(namespace);
+      const store = transaction
+        ? databaseBodyStoreWriter(configuredStore, transaction)
+        : configuredStore;
+      const logicalBodyId = `protected:${namespace}:${ownerNodeId}`;
+      const identity = {
+        bodyId: logicalBodyId,
+        writerId: ownerNodeId,
+        generation: 1,
+      };
+      await captureCatalog.reserve({
+        ...identity,
+        namespace,
+        copy: {
+          key: bodyId,
+          backendKind: store.kind,
+          backendId: store.backendId,
+          collectable: store.conditionalDelete,
+        },
+      });
+      if (store.kind === "database") await provisionDatabaseBodyStore(store);
+      const head = await store.put({
+        bodyId,
+        bytes: ciphertext,
+        mediaType: PROTECTED_VALUE_MEDIA_TYPE,
+        digest,
+        ifAbsent: true,
+      });
+      await captureCatalog.checkpoint({
+        ...identity,
+        expectedOffset: 0,
+        offset: head.byteLength,
+      });
+      await captureCatalog.sealIntent({
+        ...identity,
+        length: head.byteLength,
+        digest: head.digest,
+      });
+      await captureCatalog.sealAccepted({ ...identity, head });
       const ref = reference({
         schema: PROTECTED_VALUE_REF_SCHEMA,
         ownerNodeId,
-        bodyId,
-        storeKind: store.kind,
-        backendId: store.backendId,
+        bodyId: logicalBodyId,
         byteLength: head.byteLength,
         digest: head.digest,
         mediaType: PROTECTED_VALUE_MEDIA_TYPE,
         commitment,
         envelope,
-        protectedUntil: head.protectedUntil ?? protectedUntil,
       });
+      await promote(namespace, logicalBodyId, transaction);
       return ({
         ref,
-        ...(databaseBytes ? { databaseBytes: databaseBytes.slice() } : {}),
       } as const);
     },
-    async open(coordinates, rawRef) {
-      const ref = reference(rawRef);
+    async open(coordinates, rawRef, transaction) {
       const namespace = requiredText(
         coordinates.namespace,
         "Protected namespace",
       );
-      const store = readerFor(namespace, ref.backendId);
-      const head = await store.head({ bodyId: ref.bodyId });
+      const checkRead = transaction
+        ? protectedValueReadCheck(transaction, { databaseSchema, namespace })
+        : undefined;
+      if (checkRead) await checkRead();
+      else if (transaction) {
+        assertSchemaCommandTransaction(transaction, databaseSchema);
+      }
+      const readCatalog = transaction
+        ? createContentCatalog(transaction, databaseSchema)
+        : catalog;
+      const ref = reference(rawRef);
+      const logical = await readCatalog.read(ref.bodyId);
       if (
-        !head || head.state !== "ready" || head.byteLength !== ref.byteLength ||
-        head.digest !== ref.digest || head.mediaType !== ref.mediaType ||
-        store.kind !== ref.storeKind
+        !logical || logical.namespace !== namespace ||
+        logical.terminal?.outcome !== "completed" ||
+        logical.terminal.length !== ref.byteLength ||
+        logical.terminal.digest !== ref.digest
       ) throw new Error("Protected value body is inconsistent.");
-      const ciphertext = await readBodyBytes(store, { bodyId: ref.bodyId });
+      const stream = await openLogicalBody(
+        readCatalog,
+        ref.bodyId,
+        (copy) => readerFor(namespace, copy.backendId, transaction, checkRead),
+        ref.byteLength,
+      );
+      const ciphertext = new Uint8Array(
+        await new Response(stream).arrayBuffer(),
+      );
       if (await digestContent(ciphertext) !== ref.digest) {
         throw new Error("Protected value body integrity check failed.");
       }
       let plaintext: Uint8Array;
       try {
-        plaintext = await adapter.open({
+        plaintext = await (await dataCipher(transaction)).open({
           ciphertext: ciphertext.slice(),
           additionalAuthenticatedData: additionalAuthenticatedData(
             databaseSchema,
@@ -405,6 +521,13 @@ export function createProtectedValueRuntime(
       if (!(plaintext instanceof Uint8Array)) {
         throw new Error("Secret recovery failed.");
       }
+      if (checkRead) await checkRead();
+      else if (transaction) {
+        assertSchemaCommandTransaction(transaction, databaseSchema);
+      }
+      // Policy snapshots only read. Capture and ordinary owner reads retain the
+      // existing durable promotion path; policy evaluation never schedules writes.
+      if (!checkRead) await promote(namespace, ref.bodyId, transaction);
       try {
         return durableActionValue(
           JSON.parse(new TextDecoder().decode(plaintext)),
@@ -414,19 +537,13 @@ export function createProtectedValueRuntime(
       }
     },
     adopt(context, namespace, prepared) {
+      assertSchemaCommandTransaction(context.transaction, databaseSchema);
       const ref = reference(prepared.ref);
-      const deadline = Date.parse(ref.protectedUntil);
-      if (!Number.isFinite(deadline) || deadline <= Date.now()) {
-        throw new Error(
-          "Protected value body protection expired before adoption.",
-        );
-      }
       return insertOwner(
         context,
         databaseSchema,
         namespace,
         ref,
-        prepared.databaseBytes?.slice(),
       );
     },
     project(context, namespace, rawRef) {
@@ -435,7 +552,6 @@ export function createProtectedValueRuntime(
         databaseSchema,
         namespace,
         reference(rawRef),
-        undefined,
       );
     },
   } as const);

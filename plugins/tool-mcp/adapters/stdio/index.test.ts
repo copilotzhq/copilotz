@@ -15,6 +15,7 @@ Deno.test("stdio connector resolves the SDK and closes a real MCP session", asyn
     "../../../../scripts/fixtures/mcp-echo-server.ts",
     import.meta.url,
   );
+  const dependencyCache = Deno.env.get("DENO_DIR");
   const connection = await connectMcp({
     id: "echo",
     name: "Echo",
@@ -22,6 +23,9 @@ Deno.test("stdio connector resolves the SDK and closes a real MCP session", asyn
       type: "stdio",
       command: Deno.execPath(),
       args: ["run", "-A", fileURLToPath(serverPath)],
+      // The SDK intentionally filters inherited environment. Share the test
+      // dependency cache without forwarding credentials or unrelated settings.
+      ...(dependencyCache ? { env: { DENO_DIR: dependencyCache } } : {}),
     },
   });
   try {

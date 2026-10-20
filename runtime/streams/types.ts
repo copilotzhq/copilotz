@@ -1,14 +1,11 @@
-import type { ProgressiveBodyFollower } from "../content/progressive.ts";
-import type {
-  BodyStore,
-  IncompleteBodyHead,
-  ReadyBodyHead,
-} from "../content/body-store.ts";
+import type { ContentCatalog, ContentCopy } from "../content/catalog.ts";
+import type { BodyStore, ReadyBodyHead } from "../content/body-store.ts";
 import type {
   AssetOrigin,
   ContentKind,
   ContentRole,
-  PreparedContent,
+  PendingContentDescriptor,
+  PendingContentRef,
 } from "../content/types.ts";
 import type { CopilotzEvent, ResolvedCopilotzEvent } from "../events/index.ts";
 
@@ -48,43 +45,30 @@ export type StreamOutput =
 export type StreamTerminalOutcome =
   | "completed"
   | "failed"
-  | "cancelled"
-  | "superseded"
-  | "abandoned";
+  | "cancelled";
 
-export type StreamTerminalAvailability =
-  | "retained"
-  | "purge_pending"
-  | "purged"
-  | "missing";
-
-export type StreamCapture = "complete" | "truncated";
+export type StreamTerminalAvailability = "retained" | "purged";
 
 /** Generic immutable terminal boundary for one progressive stream lane. */
 export type StreamTerminalStatus = Readonly<{
   outcome: StreamTerminalOutcome;
   availability: StreamTerminalAvailability;
-  capture: StreamCapture;
+  /** Why bytes are unavailable; never changes the logical outcome or reason. */
+  availabilityReason?: string;
+  /** Cause of the logical outcome, independent of byte availability. */
+  reason?: string;
   offset: number;
   terminalAt: string;
 }>;
 
 /** Transport-facing in-band boundary used for non-completed stream outcomes. */
-export type StreamErrorOutput = Readonly<{
-  type: "stream.error";
-  streamId: string;
-  offset: number;
-  code:
-    | "stream_failed"
-    | "stream_cancelled"
-    | "stream_superseded"
-    | "stream_abandoned"
-    | "stream_unavailable";
-  outcome: StreamTerminalOutcome;
-  availability: StreamTerminalAvailability;
-  capture: StreamCapture;
-  terminalAt: string;
-}>;
+export type StreamErrorOutput =
+  & StreamTerminalStatus
+  & Readonly<{
+    type: "stream.error";
+    streamId: string;
+    code: "stream_failed" | "stream_cancelled" | "stream_unavailable";
+  }>;
 
 export type RuntimeOutputDescriptor = CopilotzEvent | StreamOutputDescriptor;
 /** Application-facing event outputs retain their immutable envelope and add data. */
@@ -145,6 +129,7 @@ export type ContentStreamAppendResult = Readonly<{
 }>;
 
 export type ContentStreamCloseInput = Readonly<{
+  descriptor?: PendingContentDescriptor;
   assetId: string;
   origin?: AssetOrigin;
   metadata?: Readonly<Record<string, unknown>>;
@@ -154,8 +139,6 @@ export type ContentStreamAbortInput = Readonly<{
   reason?: string;
   /** Runtime-neutral terminal outcome; omission means an ordinary failure. */
   outcome?: Exclude<StreamTerminalOutcome, "completed">;
-  /** Whether the retained prefix is the complete intended capture. */
-  capture?: StreamCapture;
 }>;
 export type ContentStreamRetentionInput =
   | Readonly<{
@@ -181,7 +164,7 @@ export type ContentStreamWriter = Readonly<
     close(
       input: ContentStreamCloseInput,
       options?: { signal?: AbortSignal },
-    ): Promise<PreparedContent>;
+    ): Promise<PendingContentRef>;
     abort(
       input?: ContentStreamAbortInput,
       options?: { signal?: AbortSignal },
@@ -202,12 +185,26 @@ export type ContentStreamRuntime = Readonly<{
   follow(
     input: ContentStreamFollowInput,
     options?: { signal?: AbortSignal },
-  ): Promise<ProgressiveBodyFollower>;
+  ): Promise<
+    Readonly<
+      {
+        bodyId: string;
+        offset: number;
+        mediaType: string;
+        body: ReadableStream<Uint8Array>;
+      }
+    >
+  >;
 }>;
 
 export type CreateContentStreamRuntimeOptions = Readonly<{
   namespace: string;
   store: BodyStore;
+  catalog: ContentCatalog;
+  producerId?: string;
+  checkpointIntervalMs?: number;
+  protectionMs?: number;
+  storeForCopy?: (copy: ContentCopy) => BodyStore;
   /** Internal storage-root prefix. */
   bodyPrefix?: string;
   /** Makes every physical lane unique to one execution/recovery attempt. */
@@ -231,7 +228,8 @@ export type CreateContentStreamRuntimeOptions = Readonly<{
     stream: ContentStreamOpened,
     input: Readonly<{
       outcome: StreamTerminalOutcome;
-      capture: StreamCapture;
+      /** Cause of the logical outcome, independent of byte availability. */
+      reason?: string;
     }>,
   ): void | Promise<void>;
   onSeal?(
@@ -241,10 +239,11 @@ export type CreateContentStreamRuntimeOptions = Readonly<{
   /** Records a retained, immutable, non-adoptable committed prefix. */
   onTerminate?(
     stream: ContentStreamOpened,
-    body: IncompleteBodyHead,
+    body: Readonly<{ bodyId: string; byteLength: number }>,
     input: Readonly<{
       outcome: Exclude<StreamTerminalOutcome, "completed">;
-      capture: StreamCapture;
+      /** Cause of the logical outcome, independent of byte availability. */
+      reason?: string;
     }>,
   ): void | Promise<void>;
   /** Cleans catalog staging only when descriptor publication never succeeded. */

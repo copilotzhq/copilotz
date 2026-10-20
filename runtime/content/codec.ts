@@ -2,8 +2,8 @@
 import { assertJsonValue } from "../json.ts";
 import { base64ToBytes, bytesToBase64, parseDataUrl } from "./encoding.ts";
 import { canonicalizeContentRefs } from "./input.ts";
-import { isContentRef } from "./schema.ts";
-import type { ContentInput, ContentRef } from "./types.ts";
+import { capturePendingContentRef, isContentRef } from "./schema.ts";
+import type { ContentInput, ContentRef, PendingContentRef } from "./types.ts";
 
 type MediaInput = Extract<ContentInput, { bytes: Uint8Array }>;
 /** Canonical JSON media representation. Encoders never emit data URLs or bytes. */
@@ -113,6 +113,50 @@ export function decodeContent(
   return Array.isArray(input) ? (input.map(part)) : part(input);
 }
 
+/** Generated inputs preserve catalog pointers until the owner Collection
+ * transaction adopts them. Ordinary decodeContent still rejects these pointers. */
+export function decodeGeneratedContent(
+  input: unknown,
+):
+  | ContentInput
+  | PendingContentRef
+  | readonly (ContentInput | PendingContentRef)[] {
+  assertJsonValue(input, {
+    label: "Generated content",
+    maxDepth: 64,
+    maxNodes: 20000,
+    allowBytes: true,
+    omitUndefinedProperties: true,
+  });
+  const candidate = (value: unknown): ContentInput | PendingContentRef => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const type = Object.getOwnPropertyDescriptor(value, "type");
+      if (type && "value" in type && type.value === "content.pending") {
+        return capturePendingContentRef(value);
+      }
+    }
+    return part(value);
+  };
+  if (!Array.isArray(input)) return candidate(input);
+  // Never dispatch a caller-owned map, iterator or Array species constructor.
+  const descriptors = Object.getOwnPropertyDescriptors(input as object);
+  const length: unknown = descriptors.length?.value;
+  if (
+    typeof length !== "number" || !Number.isSafeInteger(length) || length < 0 ||
+    length > 20000 ||
+    Reflect.ownKeys(descriptors).length !== length + 1
+  ) throw new TypeError("Invalid generated content sequence.");
+  const output: (ContentInput | PendingContentRef)[] = [];
+  for (let i = 0; i < length; i++) {
+    const descriptor = descriptors[String(i)];
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError("Invalid generated content sequence.");
+    }
+    output.push(candidate(descriptor.value));
+  }
+  return output;
+}
+
 /** Encode media once for durable JSON ingress; preserves sequence ordering and metadata. */
 export function encodeContent(input: ContentInput): ContentWireInput;
 export function encodeContent(
@@ -135,5 +179,19 @@ export function encodeContent(
   return Array.isArray(input) ? (input.map(encode)) : encode(input);
 }
 
-export { isContentRef } from "./schema.ts";
-export type { ContentJsonValue, ContentRef } from "./types.ts";
+export {
+  capturePendingContentRef,
+  generatedContentSequenceSchema,
+  isContentRef,
+  isPendingContentRef,
+  pendingContentRefSchema,
+} from "./schema.ts";
+export type {
+  ContentJsonValue,
+  ContentRef,
+  GeneratedContentSequence,
+  PendingContentRef,
+} from "./types.ts";
+
+export { canonicalJson, orderedJson } from "../data-only-json.ts";
+export { captureJsonValue } from "../json.ts";

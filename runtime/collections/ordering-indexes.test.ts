@@ -44,9 +44,7 @@ async function verify(url: string) {
       Error,
       "indexes missing",
     );
-    await provisionCollectionIndexes(db, schema, [definition], {
-      concurrently: url !== ":memory:",
-    });
+    await provisionCollectionIndexes(db, schema, [definition]);
     await provisionCollectionIndexes(db, schema, [definition]);
     await validateCollectionIndexes(db, schema, [definition]);
     await Promise.all([

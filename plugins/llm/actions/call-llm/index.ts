@@ -1,3 +1,4 @@
+import { captureJsonValue } from "@copilotz/copilotz/content/codec";
 /** Provider-neutral durable LLM Action. @module */
 
 import {
@@ -20,9 +21,11 @@ import type {
   ContentInput,
   ContentRef,
   ContentSequence,
+  GeneratedContentSequence,
+  PendingContentRef,
   PreparedContent,
 } from "@copilotz/copilotz/content";
-import { adoptPreparedBody } from "@copilotz/copilotz/content";
+import { isPendingContentRef } from "@copilotz/copilotz/content";
 import {
   type LlmAdapter,
   type LlmAdapterAttempt,
@@ -199,7 +202,13 @@ type SettledStream = Readonly<{
   lane: string;
   mediaType: string;
   writer: OpenWriter;
-  prepared: PreparedContent;
+  prepared: PendingContentRef;
+}>;
+
+type PreparedResultContent = Readonly<{
+  content: PreparedContent;
+  reasoning?: PreparedContent;
+  nativeReasoning?: PreparedContent;
 }>;
 
 type StreamFrameBatch = {
@@ -249,52 +258,8 @@ function exactKeys(
   }
 }
 
-function canonicalJson(
-  value: unknown,
-  path: string,
-  active = new WeakSet<object>(),
-): unknown {
-  if (
-    value === null || typeof value === "string" ||
-    typeof value === "boolean"
-  ) return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`${path} must contain only finite numbers.`);
-    }
-    return Object.is(value, -0) ? 0 : value;
-  }
-  if (!value || typeof value !== "object") {
-    throw new TypeError(`${path} must contain only JSON-safe values.`);
-  }
-  if (active.has(value)) {
-    throw new TypeError(`${path} must not contain cycles.`);
-  }
-  active.add(value);
-  try {
-    if (Array.isArray(value)) {
-      if (
-        Object.keys(value).length !== value.length ||
-        Object.keys(value).some((key, index) => key !== String(index))
-      ) throw new TypeError(`${path} must be a dense JSON array.`);
-      return (value.map((child, index) =>
-        canonicalJson(child, `${path}[${index}]`, active)
-      ));
-    }
-    const record = plainRecord(value, path);
-    const result: Record<string, unknown> = {};
-    for (const key of Object.getOwnPropertyNames(record).sort()) {
-      const descriptor = Object.getOwnPropertyDescriptor(record, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) {
-        throw new TypeError(`${path}.${key} must be an enumerable data field.`);
-      }
-      result[key] = canonicalJson(descriptor.value, `${path}.${key}`, active);
-    }
-    return result;
-  } finally {
-    active.delete(value);
-  }
-}
+const canonicalJson = (value: unknown, path: string) =>
+  captureJsonValue(value, { label: path, normalizeNegativeZero: true });
 
 function jsonObject(value: unknown, path: string): LlmJsonObject {
   const result = canonicalJson(value, path);
@@ -465,6 +430,7 @@ function connectionContext(context: LlmActionContext): LlmConnectionContext {
     identity: context.identity,
     action: context.action,
     collections: context.collections,
+    actions: context.actions,
     signal: context.signal,
     now: context.now,
   } as const);
@@ -2166,38 +2132,99 @@ async function settleInvocation(
 
 async function abortWriters(
   state: StreamState,
-  reason: unknown,
+  _reason: unknown,
   outcome: "failed" | "cancelled" = "failed",
 ): Promise<void> {
-  const message = reason instanceof Error ? reason.message : String(reason);
+  const reason = outcome === "cancelled" ? "cancelled" : "provider_error";
   const writers = [...state.writers.values()];
   state.writers.clear();
   await Promise.all(writers.map(async (opening) => {
     const writer = await opening.catch(() => undefined);
-    await writer?.abort({ reason: message, outcome }).catch(() => undefined);
+    await writer?.abort({ reason, outcome }).catch(() => undefined);
   }));
+}
+
+/** Release bounded owner handles after the final retention/adoption decision. */
+async function disposeWriters(
+  writers: readonly OpenWriter[],
+): Promise<readonly unknown[]> {
+  const outcomes = await Promise.allSettled(writers.map(async (writer) => {
+    await writer[Symbol.asyncDispose]();
+  }));
+  return outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+}
+
+function finalizationFailure(
+  primary: unknown,
+  cleanup: readonly unknown[],
+): unknown {
+  return cleanup.length
+    ? new AggregateError(
+      [primary, ...cleanup],
+      "LLM finalization and stream disposal failed.",
+    )
+    : primary;
 }
 
 async function settleWriters(
   state: StreamState,
   signal: AbortSignal,
+  final: PreparedResultContent,
 ): Promise<readonly SettledStream[]> {
   const writers = [...state.writers.entries()];
   state.writers.clear();
   let failure: unknown;
+  let failed = false;
+  const cleanupFailures: unknown[] = [];
+  const opened: OpenWriter[] = [];
   const settled: SettledStream[] = [];
   for (const [key, opening] of writers) {
     let writer: OpenWriter | undefined;
     try {
       writer = await opening;
-      if (failure !== undefined) {
-        await writer.abort({ reason: "Another LLM output stream failed." });
+      opened.push(writer);
+      if (failed) {
+        try {
+          await writer.abort({ reason: "related_stream_failed" });
+        } catch (error) {
+          cleanupFailures.push(error);
+        }
         continue;
       }
-      const prepared = await writer.close({ assetId: `stream:${writer.id}` }, {
-        signal,
-      });
       const [lane, mediaType] = JSON.parse(key) as [string, string];
+      const target = lane === "content"
+        ? final.content
+        : lane === "reasoning"
+        ? final.reasoning
+        : undefined;
+      const candidate =
+        target?.content.length === 1 && target.assets.length === 1
+          ? target.assets[0]
+          : undefined;
+      const uniqueLane = writers.filter(([other]) =>
+        (JSON.parse(other) as [string, string])[0] === lane
+      ).length === 1;
+      // The final descriptor is immutable once sealed. Byte equivalence is
+      // checked against the returned digest before forwarding a pending pointer.
+      const descriptor = target && candidate && uniqueLane &&
+          target.content[0].assetId === candidate.id &&
+          candidate.mediaType === mediaType &&
+          candidate.byteLength === writer.offset()
+        ? {
+          reference: (({ assetId: _id, mediaType: _media, ...reference }) =>
+            reference)(target.content[0]),
+          asset: {
+            ...(candidate.origin ? { origin: candidate.origin } : {}),
+            metadata: candidate.metadata ?? {},
+          },
+        }
+        : undefined;
+      const prepared = await writer.close({
+        assetId: `stream:${writer.id}`,
+        ...(descriptor ? { descriptor } : {}),
+      }, { signal });
       settled.push(
         {
           key,
@@ -2208,13 +2235,25 @@ async function settleWriters(
         } as const,
       );
     } catch (error) {
-      failure ??= error;
-      await writer?.abort({
-        reason: error instanceof Error ? error.message : String(error),
-      }).catch(() => undefined);
+      if (!failed) failure = error;
+      else cleanupFailures.push(error);
+      failed = true;
+      try {
+        await writer?.abort({
+          outcome: signal.aborted ? "cancelled" : "failed",
+          reason: signal.aborted ? "cancelled" : "seal_failed",
+        });
+      } catch (error) {
+        cleanupFailures.push(error);
+      }
     }
   }
-  if (failure !== undefined) throw failure;
+  if (failed) {
+    throw finalizationFailure(failure, [
+      ...cleanupFailures,
+      ...await disposeWriters(opened),
+    ]);
+  }
   return settled;
 }
 
@@ -2506,12 +2545,24 @@ function matchingSettledStream(
   lane: "content" | "reasoning",
   prepared: PreparedContent,
   streams: readonly SettledStream[],
-): { stream: SettledStream; prepared: PreparedContent } | undefined {
+):
+  | { stream: SettledStream; prepared: PendingContentRef }
+  | undefined {
   const candidates = streams.filter((stream) => stream.lane === lane);
   if (candidates.length !== 1) return undefined;
   const stream = candidates[0];
-  const adopted = adoptPreparedBody(prepared, stream.prepared);
-  return adopted ? { stream, prepared: adopted } : undefined;
+  if (isPendingContentRef(stream.prepared)) {
+    const candidate = prepared.assets[0];
+    if (
+      prepared.content.length !== 1 || prepared.assets.length !== 1 ||
+      prepared.content[0].assetId !== candidate.id ||
+      candidate.mediaType !== stream.prepared.mediaType ||
+      candidate.byteLength !== stream.prepared.byteLength ||
+      candidate.digest !== stream.prepared.digest
+    ) return undefined;
+    return { stream, prepared: stream.prepared };
+  }
+  return undefined;
 }
 
 async function retainSettledStream(
@@ -2531,31 +2582,44 @@ async function retainSettledStream(
   await stream.writer.retain({ retention: "observation" });
 }
 
-async function materializeResultContent(
+async function prepareResultContent(
   result: LlmAdapterResult,
+  attemptIndex: number,
+  context: LlmActionContext,
+): Promise<PreparedResultContent> {
+  const content = await context.content.prepare(result.content, {
+    operationKey: `attempt:${attemptIndex}:content`,
+  });
+  const reasoning = result.reasoning === undefined
+    ? undefined
+    : await context.content.prepare(result.reasoning, {
+      operationKey: `attempt:${attemptIndex}:reasoning`,
+    });
+  const nativeReasoning = result.nativeReasoning === undefined
+    ? undefined
+    : await context.content.prepare(result.nativeReasoning.blocks, {
+      operationKey: `attempt:${attemptIndex}:native-reasoning`,
+    });
+  return { content, reasoning, nativeReasoning };
+}
+
+async function materializeResultContent(
+  final: PreparedResultContent,
   attemptIndex: number,
   streams: readonly SettledStream[],
   context: LlmActionContext,
 ): Promise<
   Readonly<{
-    content: ContentSequence;
-    reasoning?: ContentSequence;
-    nativeReasoning?: ContentSequence;
+    content: GeneratedContentSequence;
+    reasoning?: GeneratedContentSequence;
+    nativeReasoning?: GeneratedContentSequence;
   }>
 > {
-  const contentPrepared = await context.content.prepare(result.content, {
-    operationKey: `attempt:${attemptIndex}:content`,
-  });
-  const reasoningPrepared = result.reasoning === undefined
-    ? undefined
-    : await context.content.prepare(result.reasoning, {
-      operationKey: `attempt:${attemptIndex}:reasoning`,
-    });
-  const nativeReasoningPrepared = result.nativeReasoning === undefined
-    ? undefined
-    : await context.content.prepare(result.nativeReasoning.blocks, {
-      operationKey: `attempt:${attemptIndex}:native-reasoning`,
-    });
+  const {
+    content: contentPrepared,
+    reasoning: reasoningPrepared,
+    nativeReasoning: nativeReasoningPrepared,
+  } = final;
   const contentStream = matchingSettledStream(
     "content",
     contentPrepared,
@@ -2581,24 +2645,40 @@ async function materializeResultContent(
       );
     }
   }
-  const content = await context.content.materialize(
+  const materialize = (
+    value: PreparedContent | PendingContentRef,
+    lane: string,
+  ): Promise<GeneratedContentSequence> =>
+    isPendingContentRef(value)
+      ? Promise.resolve([value])
+      : context.content.capture(value, {
+        operationKey: `attempt:${attemptIndex}:capture:${lane}`,
+      });
+  const content = await materialize(
     contentStream?.prepared ?? contentPrepared,
+    "content",
   );
   const reasoning = reasoningPrepared === undefined
     ? undefined
-    : await context.content.materialize(
+    : await materialize(
       reasoningStream?.prepared ?? reasoningPrepared,
+      "reasoning",
     );
   const nativeReasoning = nativeReasoningPrepared === undefined
     ? undefined
-    : await context.content.materialize(nativeReasoningPrepared);
-  if (contentStream && content.length === 1) {
+    : await materialize(nativeReasoningPrepared, "native-reasoning");
+  if (
+    contentStream && content.length === 1 && !isPendingContentRef(content[0])
+  ) {
     await retainSettledStream(
       contentStream.stream,
       { retention: "canonical", assetId: content[0].assetId },
     );
   }
-  if (reasoningStream && reasoning?.length === 1) {
+  if (
+    reasoningStream && reasoning?.length === 1 &&
+    !isPendingContentRef(reasoning[0])
+  ) {
     await retainSettledStream(
       reasoningStream.stream,
       { retention: "canonical", assetId: reasoning[0].assetId },
@@ -2614,9 +2694,9 @@ async function materializeResultContent(
 function outputFor(
   selected: ResolvedModel,
   result: LlmAdapterResult,
-  content: ContentSequence,
-  reasoning: ContentSequence | undefined,
-  nativeReasoning: ContentSequence | undefined,
+  content: GeneratedContentSequence,
+  reasoning: GeneratedContentSequence | undefined,
+  nativeReasoning: GeneratedContentSequence | undefined,
   attempts: readonly LlmAttemptUsage[],
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
@@ -2865,31 +2945,58 @@ async function executeLlmCall(
 
     let resultAccounted = false;
     try {
-      const settledStreams = await settleWriters(streams, attemptSignal);
-      appendDurableAttempts(
-        attempts,
-        candidate,
-        context,
-        result.attempts,
-        "completed",
+      const finalContent = await prepareResultContent(result, index, context);
+      const settledStreams = await settleWriters(
+        streams,
+        attemptSignal,
+        finalContent,
       );
-      resultAccounted = true;
-      const { content, reasoning, nativeReasoning } =
-        await materializeResultContent(
-          result,
-          index,
-          settledStreams,
+      let output: LlmCallOutput;
+      try {
+        appendDurableAttempts(
+          attempts,
+          candidate,
           context,
+          result.attempts,
+          "completed",
         );
-      return outputFor(
-        candidate,
-        result,
-        content,
-        reasoning,
-        nativeReasoning,
-        attempts,
+        resultAccounted = true;
+        const { content, reasoning, nativeReasoning } =
+          await materializeResultContent(
+            finalContent,
+            index,
+            settledStreams,
+            context,
+          );
+        output = outputFor(
+          candidate,
+          result,
+          content,
+          reasoning,
+          nativeReasoning,
+          attempts,
+        );
+      } catch (error) {
+        throw finalizationFailure(
+          error,
+          await disposeWriters(settledStreams.map((stream) => stream.writer)),
+        );
+      }
+      const cleanup = await disposeWriters(
+        settledStreams.map((stream) => stream.writer),
       );
+      if (cleanup.length) {
+        throw new AggregateError(cleanup, "LLM stream disposal failed.");
+      }
+      return output;
     } catch (error) {
+      // Final normalization now happens before close; failure must also drain
+      // writers which have not yet reached settleWriters.
+      await abortWriters(
+        streams,
+        error,
+        isAbort(error, context.signal) ? "cancelled" : "failed",
+      );
       if (!resultAccounted) {
         appendDurableAttempts(
           attempts,
@@ -2938,6 +3045,7 @@ export type {
   LlmCallPreparation,
   LlmCallPreparationCandidate,
   LlmCost,
+  LlmGeneratedNativeReasoning,
   LlmMessage,
   LlmNativeReasoning,
   LlmNativeReasoningInput,

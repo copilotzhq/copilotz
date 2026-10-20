@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   assert,
   assertEquals,
@@ -9,6 +10,8 @@ import type {
   ContentInput,
   ContentRef,
   DurableContentInput,
+  GeneratedContentSequence,
+  PendingContentRef,
   PreparedContent,
   ResolvedContent,
 } from "@copilotz/copilotz/content";
@@ -100,6 +103,8 @@ type OpenedStream = {
   aborted: boolean;
   abortInput?: ContentStreamAbortInput;
   retentions: ContentStreamRetentionInput[];
+  disposeCalls: number;
+  disposed: boolean;
 };
 
 type FixtureOptions = Readonly<{
@@ -112,13 +117,38 @@ type FixtureOptions = Readonly<{
   signal?: AbortSignal;
   onAppend?: () => void;
   failStreamRetention?: boolean;
-  preparedAssets?: boolean;
+  onClose?: (stream: OpenedStream) => void | Promise<void>;
+  onAbort?: (stream: OpenedStream) => void | Promise<void>;
+  onDispose?: (stream: OpenedStream) => void | Promise<void>;
+  onCapture?: () => void | Promise<void>;
 }>;
 
 function fixtureDigest(bytes: Uint8Array): `sha256:${string}` {
-  return `sha256:${
-    [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("")
-  }`;
+  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+function pending(
+  pendingRef: string,
+  mediaType: string,
+  bytes: Uint8Array,
+): PendingContentRef {
+  return Object.freeze({
+    type: "content.pending",
+    pendingRef,
+    mediaType,
+    byteLength: bytes.byteLength,
+    digest: fixtureDigest(bytes),
+  });
+}
+
+function pendingId(
+  value: GeneratedContentSequence[number] | undefined,
+): string {
+  assert(
+    value && "pendingRef" in value,
+    "Fresh generated output must remain pending until domain adoption.",
+  );
+  return value.pendingRef;
 }
 
 function fixtureBytes(value: ContentInput): Uint8Array | undefined {
@@ -137,6 +167,7 @@ function fixture(options: FixtureOptions) {
     operationKey: string;
     input: ContentInput | readonly ContentInput[];
   }> = [];
+  const captured: PreparedContent[] = [];
   const materialized: DurableContentInput[] = [];
   const opened: OpenedStream[] = [];
   const resolvedRequests: ContentRef[][] = [];
@@ -165,7 +196,7 @@ function fixture(options: FixtureOptions) {
         ? "application/json"
         : "text/plain";
       const assetId = `prepared:${prepareOptions.operationKey}:${index}`;
-      if (options.preparedAssets) {
+      {
         const bytes = fixtureBytes(value);
         if (bytes) {
           assets.push(Object.freeze({
@@ -205,6 +236,38 @@ function fixture(options: FixtureOptions) {
     collections: Object.freeze({}),
     content: Object.freeze({
       prepare,
+      openCapture(
+        input: ContentStreamOpenInput & { operationKey: string },
+      ): Promise<ContentStreamWriter> {
+        return context.streams.open(input);
+      },
+      async capture(
+        input: ContentInput | readonly ContentInput[] | PreparedContent,
+        captureOptions: { operationKey: string },
+      ): Promise<GeneratedContentSequence> {
+        const batch =
+          typeof input === "object" && input !== null && "content" in input &&
+            "assets" in input
+            ? input as PreparedContent
+            : await prepare(
+              input as ContentInput | readonly ContentInput[],
+              captureOptions,
+            );
+        captured.push(batch);
+        await options.onCapture?.();
+        return batch.content.map((value, index) => {
+          const asset = batch.assets.find((asset) =>
+            asset.id === value.assetId
+          );
+          return asset
+            ? pending(
+              `capture:${captureOptions.operationKey}:${index}`,
+              asset.mediaType,
+              asset.body,
+            )
+            : value;
+        });
+      },
       materialize(input: DurableContentInput) {
         materialized.push(input);
         const batch = input as PreparedContent;
@@ -246,6 +309,8 @@ function fixture(options: FixtureOptions) {
           closed: false,
           aborted: false,
           retentions: [],
+          disposeCalls: 0,
+          disposed: false,
         };
         opened.push(record);
         const writer: ContentStreamWriter = Object.freeze({
@@ -263,46 +328,26 @@ function fixture(options: FixtureOptions) {
               endOffset: bytes.byteLength,
             });
           },
-          close({ assetId }: { assetId: string }) {
+          async close() {
+            await options.onClose?.(record);
             record.closed = true;
-            const bytes = new Uint8Array(record.appends.flatMap((item) => [
-              ...item,
-            ]));
-            const digest = fixtureDigest(bytes);
-            return Promise.resolve(Object.freeze({
-              content: Object.freeze([
-                ref(assetId, input.kind ?? "text", input.mediaType),
-              ]),
-              assets: options.preparedAssets
-                ? Object.freeze([Object.freeze({
-                  id: assetId,
-                  namespace: "tenant-a",
-                  mediaType: input.mediaType,
-                  body: new Uint8Array(),
-                  readyBody: Object.freeze({
-                    bodyId: `stream-body:${input.id}`,
-                    state: "ready" as const,
-                    byteLength: bytes.byteLength,
-                    mediaType: input.mediaType,
-                    digest,
-                    maintenanceVersion: 1,
-                  }),
-                  location: Object.freeze({
-                    kind: "memory" as const,
-                    backendId: "fixture",
-                    key: `stream-body:${input.id}`,
-                  }),
-                  byteLength: bytes.byteLength,
-                  digest,
-                  idempotencyKey: `stream:${input.id}`,
-                })])
-                : Object.freeze([]),
-            }));
+            const bytes = new Uint8Array(
+              record.appends.flatMap((item) => [...item]),
+            );
+            return Promise.resolve(
+              pending(
+                `pending:stream-body:${input.id}`,
+                input.mediaType,
+                bytes,
+              ),
+            );
           },
           abort(input?: ContentStreamAbortInput) {
-            record.aborted = true;
-            record.abortInput = input;
-            return Promise.resolve();
+            if (record.closed) return Promise.resolve();
+            return Promise.resolve(options.onAbort?.(record)).then(() => {
+              record.aborted = true;
+              record.abortInput = input;
+            });
           },
           retain(input: ContentStreamRetentionInput) {
             if (options.failStreamRetention) {
@@ -311,9 +356,11 @@ function fixture(options: FixtureOptions) {
             record.retentions.push(Object.freeze({ ...input }));
             return Promise.resolve();
           },
-          [Symbol.asyncDispose]() {
-            record.aborted = true;
-            return Promise.resolve();
+          async [Symbol.asyncDispose]() {
+            record.disposeCalls++;
+            await options.onDispose?.(record);
+            record.disposed = true;
+            if (!record.closed) record.aborted = true;
           },
         });
         return Promise.resolve(writer);
@@ -352,6 +399,7 @@ function fixture(options: FixtureOptions) {
     context,
     prepared,
     materialized,
+    captured,
     opened,
     resolvedRequests: () => resolvedRequests.map((values) => [...values]),
     inputFollowerCancelled: () => inputFollowerCancelled,
@@ -379,7 +427,7 @@ function resolved(
       byteLength: input.bytes.byteLength,
       digest: "sha256:test",
       state: "ready",
-      location: { kind: "memory", key: contentRef.assetId },
+      bodyId: `logical:${contentRef.assetId}`,
       createdAt: "2026-08-23T00:00:00.000Z",
     }) as AssetRecord,
     bytes: input.bytes,
@@ -506,7 +554,7 @@ Deno.test("llm.call rejects a changed prepared transcript or limit before provid
   try {
     await assertRejects(
       async () =>
-        callLlmAction.execute({
+        await callLlmAction.execute({
           ...input,
           preparation,
           request: {
@@ -527,7 +575,7 @@ Deno.test("llm.call rejects a changed prepared transcript or limit before provid
     );
     await assertRejects(
       async () =>
-        callLlmAction.execute({
+        await callLlmAction.execute({
           ...input,
           preparation,
           models: [{
@@ -732,7 +780,7 @@ Deno.test("resolved credentials never enter durable Action lifecycle data", asyn
     namespace: "tenant-a",
     append(input) {
       lifecycleData.push(structuredClone(input.data));
-      return Promise.resolve(undefined as never);
+      return Promise.resolve({ deduplicated: false } as never);
     },
   });
   const actions = createActionCallers({ callLlm: callLlmAction }, {
@@ -780,6 +828,7 @@ Deno.test("llm.call reuses one dynamic credential resolver across fallback Model
 
   const originalFetch = globalThis.fetch;
   let resolverCalls = 0;
+  const resolverContexts: LlmConnectionContext[] = [];
   let providerCalls = 0;
   const seen: Array<Readonly<Record<string, unknown>>> = [];
   globalThis.fetch = (_input, init) => {
@@ -814,6 +863,7 @@ Deno.test("llm.call reuses one dynamic credential resolver across fallback Model
             execution: LlmConnectionExecution,
           ) {
             resolverCalls += 1;
+            resolverContexts.push(context);
             seen.push({
               namespace: context.namespace,
               operationKey: context.operationKey,
@@ -845,6 +895,8 @@ Deno.test("llm.call reuses one dynamic credential resolver across fallback Model
       }],
     }, test.context);
     assertEquals(resolverCalls, 1);
+    assertEquals(resolverContexts[0].actions, test.context.actions);
+    assertEquals(resolverContexts[0].signal, test.context.signal);
     assertEquals(providerCalls, 2);
     assertEquals(seen, [{
       namespace: "tenant-a",
@@ -1384,7 +1436,10 @@ Deno.test("llm.call owns exact ordered candidate attempts", async () => {
     ],
   );
   assertEquals(output.attempts?.[3].startedAt, "2026-08-23T00:00:01.000Z");
-  assertEquals(output.content[0].assetId, "prepared:attempt:3:content:0");
+  assertEquals(
+    pendingId(output.content[0]),
+    "capture:attempt:3:capture:content:0",
+  );
 });
 
 Deno.test("llm.call propagates Model fallback availability and aggregates every provider attempt", async () => {
@@ -1683,10 +1738,13 @@ Deno.test("llm.call consumes prepared content without asset reads and uses expli
   assertEquals(output.toolCalls, [
     { id: "call-a", action: "search", input: { q: "x" } },
   ]);
-  assertEquals(output.content[0].assetId, "prepared:attempt:0:content:0");
   assertEquals(
-    output.reasoning?.[0].assetId,
-    "prepared:attempt:0:reasoning:0",
+    pendingId(output.content[0]),
+    "capture:attempt:0:capture:content:0",
+  );
+  assertEquals(
+    pendingId(output.reasoning?.[0]),
+    "capture:attempt:0:capture:reasoning:0",
   );
   assertEquals(output.usage?.cost, { amount: 0.01, currency: "USD" });
   assertEquals(test.prepared.map((item) => item.operationKey), [
@@ -1844,7 +1902,7 @@ Deno.test("llm.call does not resolve an attachment-only request", async () => {
   assert(!("file_data" in (part ?? {})));
 });
 
-Deno.test("llm.call publishes frames only through Streams and materializes them", async () => {
+Deno.test("llm.call publishes frames through Streams and captures final pending content", async () => {
   const emptyInput = {
     ...baseInput,
     models: [{ connection: "primary", model: "model-a" }] as const,
@@ -1923,10 +1981,17 @@ Deno.test("llm.call publishes frames only through Streams and materializes them"
   assertEquals(test.opened[0].appends.length, 1);
   assertEquals(test.opened[1].appends.length, 1);
   assert(test.opened.every((stream) => stream.closed && !stream.aborted));
-  assertEquals(test.materialized.length, 1);
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
+  assertEquals(test.materialized.length, 0);
+  assertEquals(test.captured.length, 1);
   assertEquals(test.progressCalls(), 0);
-  assertEquals(output.content[0].assetId, "prepared:attempt:0:content:0");
-  assert(!output.content[0].assetId.startsWith("stream:"));
+  assertEquals(
+    pendingId(output.content[0]),
+    "capture:attempt:0:capture:content:0",
+  );
+  assert(!pendingId(output.content[0]).startsWith("pending:stream-body:"));
 });
 
 Deno.test("llm.call gives every lane and media tuple an injective stream identity", async () => {
@@ -2026,7 +2091,6 @@ Deno.test("llm.call reuses an exactly equivalent content stream Body", async () 
         },
       },
     },
-    preparedAssets: true,
   });
 
   const output = await callLlmAction.execute({
@@ -2034,20 +2098,24 @@ Deno.test("llm.call reuses an exactly equivalent content stream Body", async () 
     stream: { id: "equivalent" },
   }, test.context);
 
-  assertEquals(test.materialized.length, 1);
-  const batch = test.materialized[0] as PreparedContent;
-  assertEquals(batch.content[0].assetId, "prepared:attempt:0:content:0");
-  assertEquals(batch.assets[0].id, "prepared:attempt:0:content:0");
+  assertEquals(test.materialized.length, 0);
   assertEquals(
-    batch.assets[0].readyBody?.bodyId,
-    "stream-body:equivalent:provider-attempt:0:content:text%2Fplain%3B%20charset%3Dutf-8",
+    test.captured.length,
+    0,
+    "Equivalent bytes reuse the existing sealed pending body.",
   );
-  assertEquals(batch.assets[0].body.byteLength, 0);
-  assertEquals(output.content, batch.content);
-  assertEquals(test.opened[0].retentions, [{
-    assetId: "prepared:attempt:0:content:0",
-    retention: "canonical",
-  }]);
+  assertEquals(output.content, [pending(
+    "pending:stream-body:equivalent:provider-attempt:0:content:text%2Fplain%3B%20charset%3Dutf-8",
+    "text/plain; charset=utf-8",
+    encoder.encode("hello"),
+  )]);
+  assertEquals(
+    test.opened[0].retentions,
+    [],
+    "Canonical retention starts at domain adoption.",
+  );
+  assertEquals(test.opened[0].disposeCalls, 1);
+  assert(test.opened[0].disposed && !test.opened[0].aborted);
 });
 
 Deno.test("llm.call retains a non-equivalent stream as an observation Body", async () => {
@@ -2078,7 +2146,6 @@ Deno.test("llm.call retains a non-equivalent stream as an observation Body", asy
         },
       },
     },
-    preparedAssets: true,
   });
 
   const output = await callLlmAction.execute({
@@ -2086,10 +2153,17 @@ Deno.test("llm.call retains a non-equivalent stream as an observation Body", asy
     stream: { id: "different" },
   }, test.context);
 
-  assertEquals(test.materialized.length, 1);
-  const final = test.materialized[0] as PreparedContent;
+  assertEquals(test.materialized.length, 0);
+  assertEquals(test.captured.length, 1);
+  const final = test.captured[0];
   assertEquals(final.content[0].assetId, "prepared:attempt:0:content:0");
-  assertEquals(output.content, final.content);
+  assertEquals(output.content, [
+    pending(
+      "capture:attempt:0:capture:content:0",
+      final.assets[0].mediaType,
+      final.assets[0].body,
+    ),
+  ]);
   assertEquals(test.opened[0].retentions, [{ retention: "observation" }]);
 });
 
@@ -2156,6 +2230,10 @@ Deno.test("llm.call never falls back after publishing visible output", async () 
   assertEquals(backupCalls, 0);
   assertEquals(test.opened.length, 1);
   assert(test.opened[0].aborted);
+  assertEquals(test.opened[0].abortInput, {
+    outcome: "failed",
+    reason: "provider_error",
+  });
 });
 
 Deno.test("llm.call aborts and settles both invocation branches before fallback", async () => {
@@ -2323,7 +2401,10 @@ Deno.test("llm.call cancellation does not await non-cooperative result or frames
     "caller cancelled",
   ));
   assert(cancellationRequested);
-  assertEquals(test.opened[0]?.abortInput?.outcome, "cancelled");
+  assertEquals(test.opened[0]?.abortInput, {
+    outcome: "cancelled",
+    reason: "cancelled",
+  });
 });
 
 Deno.test("llm.call observes result rejection before acquiring a locked frame reader", async () => {
@@ -3181,6 +3262,9 @@ Deno.test("llm.call settles every opened writer when stream retention fails", as
   assertEquals(backupCalls, 0);
   assertEquals(test.opened.length, 2);
   assert(test.opened.every((stream) => stream.closed && !stream.aborted));
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
   assertEquals(test.progressValues(), [{
     schema: "copilotz.llm.attempt-accounting.v1",
     attempts: [{
@@ -3273,7 +3357,11 @@ Deno.test("llm.call replays matching custom native state and assetizes accepted 
     model: "custom-model",
     reasoningTokens: 0,
     blocks: [
-      ref("prepared:attempt:0:native-reasoning:0", "json", "application/json"),
+      pending(
+        "capture:attempt:0:capture:native-reasoning:0",
+        "application/json",
+        test.captured[1].assets[0].body,
+      ),
     ],
   });
 });
@@ -3341,7 +3429,13 @@ Deno.test("llm.call strips foreign native state before fallback and replays it o
   assertEquals(fallbackAssistant?.nativeReasoning?.blocks, [
     { opaque: "previous" },
   ]);
-  assertEquals(output.content, [ref("prepared:attempt:1:content:0")]);
+  assertEquals(output.content, [
+    pending(
+      "capture:attempt:1:capture:content:0",
+      test.captured[0].assets[0].mediaType,
+      test.captured[0].assets[0].body,
+    ),
+  ]);
 });
 
 Deno.test("callLlm accepts plain strings as text message content", async () => {
@@ -3406,7 +3500,7 @@ Deno.test("callLlm accepts plain strings as text message content", async () => {
     },
   });
   const explicit = (value: string) => ({
-    kind: "text",
+    kind: "text" as const,
     role: "body",
     mediaType: "text/plain; charset=utf-8",
     value,
@@ -3432,10 +3526,10 @@ Deno.test("callLlm accepts plain strings as text message content", async () => {
   );
   const sent = durable.find((data) => data.status === "invoked");
   assert(sent);
-  assertEquals(
-    JSON.stringify(sent.input).includes("You title chat rooms."),
-    false,
-  );
+  assertEquals((sent.input as LlmCallInput).request.messages, [
+    { role: "system", content: [explicit("You title chat rooms.")] },
+    { role: "user", content: [explicit("Name this: "), explicit("a chat")] },
+  ]);
 
   // Shapes that are not text or entries are still rejected, as before.
   await assertRejects(
@@ -3542,4 +3636,242 @@ Deno.test("dynamic connection options are preflighted without resolving credenti
   );
   assertEquals(providerCalls, 0);
   assertEquals(resolverCalls, 0);
+});
+
+function finalizationFixture(options: Partial<FixtureOptions> = {}) {
+  let backupCalls = 0;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        { content: "normalized answer", attempts: [{ status: "completed" }] },
+        new ReadableStream({
+          start(controller) {
+            for (const lane of ["content", "reasoning", "tool-calls"]) {
+              controller.enqueue({
+                lane,
+                mediaType: "text/plain",
+                bytes: encoder.encode(`${lane} prefix`),
+              });
+            }
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupCalls++;
+      return invocation({
+        content: "backup",
+        attempts: [{ status: "completed" }],
+      });
+    },
+  };
+  const test = fixture({
+    llmConnections: {
+      primary: { adapter: "primary" },
+      backup: { adapter: "backup" },
+    },
+    adapters: { primary, backup },
+    ...options,
+  });
+  return {
+    ...test,
+    backupCalls: () => backupCalls,
+    run: async () =>
+      await callLlmAction.execute({
+        ...baseInput,
+        models: [{ connection: "primary", model: "model-a" }, {
+          connection: "backup",
+          model: "model-b",
+        }],
+        stream: { id: "finalize" },
+      }, test.context),
+  };
+}
+
+Deno.test("llm.call disposes every sealed lane only after final capture and retention", async () => {
+  const test = finalizationFixture({
+    onDispose(stream) {
+      assert(stream.closed && !stream.aborted);
+      assertEquals(stream.retentions, [{ retention: "observation" }]);
+      assertEquals(test.captured.length, 1);
+    },
+  });
+  const output = await test.run();
+  assertEquals(
+    pendingId(output.content[0]),
+    "capture:attempt:0:capture:content:0",
+  );
+  assertEquals(test.opened.length, 3);
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call capture failure disposes all sealed writers and preserves the primary error", async () => {
+  const primary = new Error("synthetic capture failure");
+  const test = finalizationFixture({
+    onCapture() {
+      throw primary;
+    },
+  });
+  assertStrictEquals(await assertRejects(test.run), primary);
+  assertEquals(test.opened.length, 3);
+  assert(
+    test.opened.every((stream) =>
+      stream.closed && !stream.aborted && stream.disposed &&
+      stream.disposeCalls === 1
+    ),
+  );
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call partial seal failure aborts remaining lanes and disposes all opened writers", async () => {
+  const primary = new Error("synthetic seal failure");
+  const test = finalizationFixture({
+    onClose(stream) {
+      if (stream.input.metadata?.lane === "reasoning") throw primary;
+    },
+  });
+  assertStrictEquals(await assertRejects(test.run), primary);
+  const [sealed, failed, related] = test.opened;
+  assert(sealed.closed && !sealed.aborted);
+  assertEquals(failed.abortInput, { outcome: "failed", reason: "seal_failed" });
+  assertEquals(related.abortInput, { reason: "related_stream_failed" });
+  assert(!failed.closed && !related.closed);
+  assert(
+    test.opened.every((stream) => stream.disposed && stream.disposeCalls === 1),
+  );
+  assertEquals(test.captured.length, 0);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call preserves primary and cleanup failures and awaits every disposer", async () => {
+  const primary = new Error("synthetic capture failure");
+  const cleanup = new Error("synthetic disposal failure");
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const test = finalizationFixture({
+    onCapture() {
+      throw primary;
+    },
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+      if (stream.input.metadata?.lane === "reasoning") {
+        entered.resolve();
+        return release.promise;
+      }
+    },
+  });
+  let completed = false;
+  const result = assertRejects(test.run, AggregateError).then((error) => {
+    completed = true;
+    return error;
+  });
+  try {
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(completed, false);
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+    release.resolve();
+    assertEquals((await result).errors, [primary, cleanup]);
+    assertEquals(test.backupCalls(), 0);
+  } finally {
+    release.resolve();
+    await result;
+  }
+});
+
+Deno.test("llm.call does not release successful output when final disposal fails", async () => {
+  const cleanup = new Error("synthetic disposal failure");
+  const test = finalizationFixture({
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+    },
+  });
+  const failure = await assertRejects(
+    test.run,
+    AggregateError,
+    "LLM stream disposal failed",
+  );
+  assertEquals(failure.errors, [cleanup]);
+  assertEquals(test.captured.length, 1);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call partial seal and abort failures preserve all errors and still dispose", async () => {
+  const seal = new Error("synthetic seal failure"),
+    abort = new Error("synthetic abort failure"),
+    cleanup = new Error("synthetic disposal failure");
+  const test = finalizationFixture({
+    onClose(stream) {
+      if (stream.input.metadata?.lane === "reasoning") throw seal;
+    },
+    onAbort() {
+      throw abort;
+    },
+    onDispose(stream) {
+      if (stream.input.metadata?.lane === "content") throw cleanup;
+    },
+  });
+  const failure = await assertRejects(test.run, AggregateError);
+  assertEquals(failure.errors, [seal, abort, abort, cleanup]);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assertEquals(test.captured.length, 0);
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call preserves an undefined seal rejection while disposing every opened writer", async () => {
+  const test = finalizationFixture({
+    onClose() {
+      return Promise.reject(undefined);
+    },
+  });
+  let rejected = false;
+  await test.run().then(() => {
+    throw new Error("must reject");
+  }, (error) => {
+    rejected = true;
+    assertEquals(error, undefined);
+  });
+  assert(rejected);
+  assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  assert(test.opened.every((stream) => stream.disposed));
+  assertEquals(test.backupCalls(), 0);
+});
+
+Deno.test("llm.call holds sealed handles until delayed final capture physically completes", async () => {
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  const test = finalizationFixture({
+    onCapture() {
+      entered.resolve();
+      return release.promise;
+    },
+  });
+  let completed = false;
+  const result = test.run().then((output) => {
+    completed = true;
+    return output;
+  });
+  try {
+    await entered.promise;
+    assertEquals(completed, false);
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [0, 0, 0]);
+    assert(test.opened.every((stream) => stream.closed && !stream.aborted));
+    release.resolve();
+    const output = await result;
+    assertEquals(
+      pendingId(output.content[0]),
+      "capture:attempt:0:capture:content:0",
+    );
+    assertEquals(test.opened.map((stream) => stream.disposeCalls), [1, 1, 1]);
+  } finally {
+    release.resolve();
+    await result;
+  }
 });

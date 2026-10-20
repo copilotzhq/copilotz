@@ -1,3 +1,4 @@
+import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type { SqlExecutor, SqlSession } from "../events/index.ts";
 import {
   createCoreTableNames,
@@ -175,7 +176,6 @@ export async function provisionCollectionIndexes(
   session: SqlSession,
   schemaName: string,
   definitions: readonly CollectionDefinition[],
-  options: Readonly<{ concurrently?: boolean }> = {},
 ): Promise<void> {
   const schema = validateEventSchemaName(schemaName);
   const expected = await plans(definitions);
@@ -187,26 +187,84 @@ export async function provisionCollectionIndexes(
       if (stored.has(plan.name)) continue;
       await executor.query(
         `CREATE ${plan.unique ? "UNIQUE " : ""}INDEX ${
-          options.concurrently ? "CONCURRENTLY " : ""
-        }${quoteEventIdentifier(plan.name)} ON ${table} USING ${plan.method} (${
+          quoteEventIdentifier(plan.name)
+        } ON ${table} USING ${plan.method} (${
           plan.keys.map((key) => `(${key})`).join(", ")
         }) WHERE ${plan.predicate}`,
       );
     }
     await existing(executor, schema, expected);
   };
-  if (options.concurrently) {
-    // PostgreSQL requires concurrent builds outside a transaction. The host
-    // runs one explicit provisioning operation; failures may leave an invalid
-    // index, which validation reports for explicit operator repair.
-    await apply(session);
-  } else {
-    await session.transaction(async (transaction) => {
-      await transaction.query(
-        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-        [schema, "copilotz-collection-indexes"],
-      );
-      await apply(transaction);
-    });
+  await createSchemaCommandRunner(session, schema)("schema.collectionIndexes", {
+    indexes: expected.map((plan) => plan.name),
+  }, async (_input, { transaction }) => {
+    await apply(transaction);
+  });
+}
+
+export type NodeIndexDefinition = Readonly<{
+  name: string;
+  fields: readonly (
+    | "namespace"
+    | "type"
+    | "id"
+    | "created_at"
+    | "updated_at"
+    | Readonly<{ data: string }>
+  )[];
+}>;
+
+/** Installs a typed record access path through the schema's provisioning owner. */
+export async function provisionNodeIndex(
+  session: SqlExecutor,
+  schemaName: string,
+  definition: NodeIndexDefinition,
+): Promise<void> {
+  const schema = validateEventSchemaName(schemaName);
+  const name = validateEventSchemaName(definition.name);
+  if (!definition.fields.length || definition.fields.length > 16) {
+    throw new TypeError("An index requires between one and sixteen fields.");
   }
+  const native = new Set([
+    "namespace",
+    "type",
+    "id",
+    "created_at",
+    "updated_at",
+  ]);
+  const keys = definition.fields.map((field) => {
+    if (typeof field === "string") {
+      if (!native.has(field)) {
+        throw new TypeError("Unknown record index column.");
+      }
+      return quoteEventIdentifier(field);
+    }
+    if (!field || typeof field.data !== "string" || !field.data.length) {
+      throw new TypeError("A data index field must be nonempty.");
+    }
+    return `(data ->> ${literal(field.data)})`;
+  });
+  const plan: IndexPlan = {
+    name,
+    keys,
+    method: "btree",
+    unique: false,
+    predicate: "",
+  };
+  const table = createCoreTableNames(schema).nodes;
+  await createSchemaCommandRunner(session, schema)(
+    "schema.nodeIndex",
+    definition,
+    async (_input, { transaction }) => {
+      if (!(await existing(transaction, schema, [plan])).has(name)) {
+        await transaction.query(
+          `CREATE INDEX ${
+            quoteEventIdentifier(name)
+          } ON ${table} USING btree (${keys.join(",")})`,
+        );
+      }
+      await existing(transaction, schema, [plan]);
+      await transaction.query(`ANALYZE ${table}`);
+    },
+  );
 }

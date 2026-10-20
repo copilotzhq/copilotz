@@ -1,3 +1,4 @@
+import { testEffect } from "../../runtime/testing/effects.ts";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { readFileTool, runCommandTool } from "./resources/index.ts";
 import { assertEquals, assertRejects } from "@std/assert";
@@ -34,6 +35,7 @@ Deno.test("run_command surfaces Action cancellation and terminates its child", a
     args: ["eval", "setInterval(() => {}, 1000)"],
   }, {
     signal: controller.signal,
+    effect: testEffect,
   } as ActionContext);
   setTimeout(() => controller.abort(), 25);
   const error = await assertRejects(async () => await execution);

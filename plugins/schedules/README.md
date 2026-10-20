@@ -2,13 +2,13 @@
 
 ## What it is
 
-The Schedules plugin turns host clock inputs into durable Scheduled Job due
+The Schedules plugin uses durable owner alarms to produce Scheduled Job due
 facts while keeping job payloads opaque.
 
 ## Why it exists
 
 Scheduling requires atomic claims, deterministic occurrence identities, and
-restart-safe delivery without making time a generic runtime concern.
+restart-safe delivery through the database owner’s earliest-next-wake.
 
 ## How to use it
 

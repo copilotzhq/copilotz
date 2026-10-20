@@ -56,5 +56,6 @@ export type {
   CompositionContribution,
   ContributionPlugins,
   ContributionResult,
+  ContributionViews,
   ResolvedNamespaces,
 } from "./contribution.ts";

@@ -37,7 +37,7 @@ the call and runs `execute`.
 ### A complete Action
 
 `save-note.ts` is a pure definition module: no environment reads and no
-top-level I/O. It needs only `@copilotz/copilotz@^0.87.3`. It declares the
+top-level I/O. It needs only `@copilotz/copilotz@^0.89.0`. It declares the
 `note` Collection it writes, so the file stands alone.
 
 ```ts
@@ -207,14 +207,14 @@ use `markNonRetryable` separately where that policy is needed.
 Each accepted call appends these Events to the caller's operation, so the
 caller's `done` waits for them:
 
-| Event            | Data                                                         |
-| ---------------- | ------------------------------------------------------------ |
-| `<id>.invoked`   | `actionRunId`, `actionId`, `metadata`, `input`               |
-| `<id>.deferred`  | the same, plus opaque `work`; the Action remains open        |
-| `<id>.progress`  | the same, plus `progressIndex` and `progress` (zero or more) |
-| `<id>.completed` | the same, plus `output`                                      |
-| `<id>.failed`    | the same, plus `error: { name, message, code? }`             |
-| `<id>.cancelled` | as `failed`, when the call's signal aborts                   |
+| Event            | Data                                                                        |
+| ---------------- | --------------------------------------------------------------------------- |
+| `<id>.invoked`   | `actionRunId`, `actionId`, `metadata`, `input`                              |
+| `<id>.awaiting`  | the same, plus durable `handoff` and child `start`; the Action remains open |
+| `<id>.progress`  | the same, plus `progressIndex` and `progress` (zero or more)                |
+| `<id>.completed` | the same, plus `output`                                                     |
+| `<id>.failed`    | the same, plus `error: { name, message, code? }`                            |
+| `<id>.cancelled` | as `failed`, when the call's signal aborts                                  |
 
 The types `ActionInvokedData`, `ActionProgressData`, `ActionCompletedData` and
 `ActionFailedData` describe these payloads. Caller-safe errors also record
@@ -250,24 +250,46 @@ remain valid. Rules worth knowing:
   the same transaction. The operation remains open until those continuations
   drain. A worker whose lease was lost cannot publish a late terminal.
 
-### Deferred work
+### Awaiting an operation
 
-An Action can release its worker while its work continues through ordinary
-Processors. Return `deferAction(work)` from `execute` and provide `resolve`:
+An Action may wait for a child it owns or observe an existing operation. Return
+`context.awaitOperation({ operationId, handoff })` to observe a shared producer:
+registration rejects unknown IDs, does not change ownership, and cancellation of
+one waiter leaves the producer and other waiters running. A single settlement
+resumes every live waiter, each with its own `${runId}:resume` identity. An
+already settled producer resumes immediately. Both forms reject self, ancestor,
+and transitive wait cycles. A cancelled producer supplies a `cancelled` outcome.
+
+When a domain needs shared work,
+`await context.operations.start({ action, input,
+operationKey })` admits an
+independent public operation and returns its ID. The key is scoped to the
+namespace, retries must describe the same invocation, and admission returns
+after the operation and its delivery are durable. It does not wait for execution
+or create a parent link. Observe the returned ID with
+`awaitOperation({ operationId, handoff })`.
+
+Return `context.awaitOperation({ start, handoff })` from `execute`, and declare
+`resume(handoff, outcome, context)`. `start` names a registered Action alias and
+its input. `handoff` is durable JSON used by the resumption.
 
 ```ts
-import { deferAction, defineAction } from "@copilotz/copilotz/actions";
+import { defineAction } from "@copilotz/copilotz/actions";
 
 export const buildReport = defineAction<{ reportId: string }, string>({
   id: "reports.build",
-  execute(input) {
-    return deferAction({ reportId: input.reportId });
+  execute(input, context) {
+    return context.awaitOperation({
+      start: { action: "prepareReport", input },
+      handoff: { reportId: input.reportId },
+    });
   },
-  async resolve(input, context, resolution) {
-    if (resolution.outcome !== "completed") {
+  async resume(handoff, outcome, context) {
+    if (outcome.status !== "completed") {
       throw new Error("Report preparation failed.");
     }
-    const report = await context.collections.report.get({ id: input.reportId });
+    const { reportId } = handoff as { reportId: string };
+    const report = await context.collections.report.get({ id: reportId });
     if (!report || typeof report.url !== "string") {
       throw new Error("Report is unavailable.");
     }
@@ -276,62 +298,33 @@ export const buildReport = defineAction<{ reportId: string }, string>({
 });
 ```
 
-A Processor subscribed to `reports.build.deferred` reads the opaque `work`
-payload and prepares the report. The handoff receipt and those deliveries commit
-atomically. The caller immediately receives
-`{ status: "deferred", actionRunId }`; the eventual result is the ordinary
-`reports.build.completed` or `.failed` receipt. Subscribe to that terminal to
-continue work requiring the result. Returning another Action's pending receipt
-does not defer the parent Action.
+The runtime atomically records the awaiting obligation and starts a separate
+public operation with `parent: { operationId, actionRunId }` and inherited
+observation keys. The caller receives `{ status: "awaiting", actionRunId }`, and
+the execution slot becomes available. Child deliveries, Actions, and streams
+settle independently of the parent's open obligation.
 
-`resolve` runs under a recoverable delivery after the handoff's inherited
-deliveries, nested deferred Actions and streams drain. It receives the original
-input, Action identity and metadata. Its `resolution.work` is the JSON snapshot
-captured at handoff; `resolution.outcome` describes mechanical work completion,
-failure or cancellation. The Action interprets its domain result. A caught tool
-error does not itself mean every enclosing Action failed.
+Child settlement schedules one logical `${runId}:resume` delivery. Its terminal
+receipt arbitrates duplicates and survives restart. An already-settled child
+schedules the resumption at registration. `start.operationId` may supply a
+stable child identity; it must belong to that same Action invocation. A child
+cannot be acquired from another invocation or shared by two `start` awaits.
 
-A failed or cancelled stream has a final work outcome even while recovery is
-freezing its retained prefix. It does not hold the resolver open. The operation
-still waits for the physical stream terminal before publishing its own terminal
-status. After a writer crash, run maintenance to finish that cleanup once its
-writer lease expires. An actual delivery dead letter remains visible in the
-operation's transport outcome, even when an Action handles the error and the
-conversation continues.
+`outcome` contains the child `operationId` and its `status`: `completed`,
+`failed`, or `cancelled`. The resumption decides its own result from durable
+domain data; a completed operation does not certify a successful answer. The
+original Action identity and metadata remain available in `context.action`. A
+resumption must produce a terminal result.
 
-Deferral requires a durable delivery owner. Explicit operation cancellation
-closes outstanding Actions and fences new work. Disconnecting an observer only
-stops observation.
+Cancellation closes the parent's obligations and cancels linked children. A
+cancelled child resumes its waiting parent with `cancelled`. Self and ancestor
+waits are rejected. Detached starting Processors still do not hold the
+foreground operation open; their declared children are independently observable
+operations.
 
-An Action waiting for independently owned work can call
-`context.registerDeferredWait(key, { timeoutMs })` before returning
-`deferAction(work)`. Re-read the durable result **after registration**: a
-producer may have completed just before registration. If it is already terminal,
-handle that result immediately. Otherwise, the worker slot is released while the
-Action remains open. A producer calls `context.signalDeferredWait(key)` after
-committing its result. Keys are exact and isolated by physical schema and
-namespace; a signal is a wake-up hint, so the resolver must still check the
-durable domain result.
-
-The optional timeout makes the wait eligible for a recovery check during runtime
-maintenance. It does not fail the work or retain a sleeping worker. The resolver
-receives `resolution.waitExpired` and can request an idempotent repair when the
-producer is missing. A healthy pending result can register a fresh wait, re-read
-its state, and return `deferAction(resolution.work)` again. Rearming preserves
-the original work exactly and fences previous resolver generations. A resolver
-that rearms must not publish new progress; progress remains supported when the
-resolver returns a terminal result. A resolver without a registered wait must
-finish normally.
-
-Direct host contexts cannot register durable waits. Their signal method returns
-zero because those contexts do not own a durable waiting runtime.
-
-The runtime owns delivery leases, work ownership and settlement. Plugins own the
-meaning of the work and its output. For example, Core uses this mechanism for
-Ask, but the runtime has no knowledge of agents, conversations or answers.
-
-Detached Processors use the same lifecycle in an internal operation. Their work
-does not hold the foreground operation open or appear in its observation feed.
+Awaiting requires a durable delivery. Direct host executions cannot own durable
+continuations. Plugins decide what results mean; the runtime only owns
+admission, execution authority, settlement, and resumption.
 
 ### Typing callers
 
@@ -499,6 +492,22 @@ entry, such as an Action exposed over HTTP by `serverPlugin`, whose route
 validates input against the Action's schema, rather than through generic Events
 or a custom route that forwards them to `app.send`.
 
+### Application secrets in records
+
+For secrets your application keeps in its own records, such as a connected
+account's tokens, use `createOwnerSecrets({ session, master })` from
+`copilotz/actions`, with the same master Secret Adapter.
+`seal(schema, value,
+binding)` returns an opaque string to store in the record,
+and `open` returns the value. Both use the schema owner's data key.
+
+`binding` is your context, for example `{ record: id, field: "accessToken" }`.
+It is authenticated together with the schema, so a sealed value opens only under
+the same schema and binding. Sealing provisions a missing owner key through an
+owner command; opening never creates one. Exporting an owner re-wraps its key
+and leaves every sealed value unchanged, so the secrets move with the owner's
+data.
+
 ## What this unlocks
 
 - One validated, inspectable operation shared by Processors, other Actions,
@@ -517,3 +526,60 @@ or a custom route that forwards them to `app.send`.
   explains delivery scopes, retries and operation keys.
 - Reference: [Content and Assets](content-assets.md) covers content preparation
   and references.
+
+## External effects and recovery
+
+Mutating external calls use `context.effect` inside an Action. `begin(step)` is
+keyed by the durable Action run and a bounded step name. Only `proceed` permits
+a new dispatch. `replay` carries a confirmed JSON outcome and must not dispatch.
+After dispatch, `confirm(step, safeOutcome)` records a bounded, non-secret
+result or reference. `externalEffect(context, step, callback)` performs this
+pattern for JSON-result operations.
+
+Protected outputs are stored through the Action lifecycle. Effect confirmation
+accepts only bounded, non-secret results or references. A lost confirmation
+reply must be recovered from retained effect state, never by repeating the
+provider call.
+
+A committed `begin` whose reply was lost does not grant dispatch permission. An
+interrupted begun effect invokes the Action's optional
+`reconcile(step,
+context)` hook before ordinary execution resumes. Without a
+known outcome it fails with `effect_indeterminate`. Provider exceptions,
+timeouts and cancellation are not proof that the operation did not happen.
+Reconciliation may confirm a known result, or close the step with `notStarted`
+only when the owner can verify trusted no-start evidence. A subsequent dispatch
+requires a different step name. The built-in provider adapters do not invent
+such evidence.
+
+Recovery checks each Action's retained effect steps, including steps removed by
+a newer deployment. Old attempts without the original replay contract cannot
+acquire it retroactively. Swallowing an effect error does not permit a
+successful Action terminal.
+
+Built-in channel delivery, command execution, file mutation, mutating HTTP and
+unknown MCP calls use this protocol. Read-only filesystem tools, HTTP
+GET/HEAD/OPTIONS and terminal inspection/export keep ordinary retry behavior.
+For MCP, declare host-reviewed tool names in `readOnlyTools`; provider
+annotations alone do not establish read-only safety. Do not classify a mutating
+operation as read-only merely because its provider supports idempotency.
+
+### Owner authorization and first capture
+
+Register protected Action aliases in `authorization.actions`, referencing the
+same owner policy registry used by Collections and observations. An owner policy
+returns an explicit `actions` allowlist and may supply trusted `input` fields
+and `actionMetadata`. Conflicting client fields are refused. The owner validates
+and captures the completed input once, atomically with its retained authority
+and lifecycle receipt. Replay preserves that capture and rechecks current policy
+without preparing the input again.
+
+Workers cannot configure policy or mint authority from metadata. The retained
+binding contains principal, owner and tenant scope, validity, policy revision,
+request facts, provenance, dependencies and authority basis. Delegated authority
+is attempt-bound. Mutation and result guards retain attempt fencing; an explicit
+revocation refuses new protected work while settlement of begun effects remains
+available. Secret metadata checks run at the lifecycle persistence boundary.
+
+`ownerHooks`, `protectedActions` and bootstrap route hooks have been removed.
+See [owner authorization and migration](authorization.md).

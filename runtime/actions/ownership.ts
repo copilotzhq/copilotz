@@ -1,3 +1,4 @@
+import { fail } from "./effect-client.ts";
 import type { CoreTableName } from "../events/schema.ts";
 import type { EventStatement } from "../events/store.ts";
 import type { ActionLifecycleAppendInput } from "./types.ts";
@@ -21,20 +22,41 @@ export function actionOwnershipStatement(
   writer: ActionWriter | undefined,
   tables: Readonly<Record<CoreTableName, string>>,
   param: (value: unknown) => string,
+  commandTime: string,
 ): EventStatement<void> {
   const { data, draft } = input;
-  if (data.status === "deferred" && writer?.kind !== "delivery") {
-    throw new TypeError("Deferred Actions require a durable delivery owner.");
+  if (data.status === "awaiting" && writer?.kind !== "delivery") {
+    throw new TypeError("Awaiting Actions require a durable delivery owner.");
   }
+  const effectsSettled =
+    data.status === "completed" || data.status === "awaiting"
+      ? `NOT EXISTS (SELECT 1 FROM ${tables.action_effects} WHERE namespace=${
+        param(draft.namespace)
+      } AND action_run_id=${param(data.actionRunId)} AND status='begun')`
+      : "TRUE";
+  const checkEffects = (value: { effectsSettled?: boolean }) => {
+    if (value.effectsSettled === false) {
+      fail(
+        "effect_indeterminate",
+        "An external effect has no confirmed outcome.",
+      );
+    }
+  };
   // Live/direct calls have no durable lease to recover after a crash. Their
   // receipts remain observable, but only delivery-owned work is an obligation.
   if (!writer) {
     return {
       ctes: [],
-      gate: "TRUE",
+      gate: effectsSettled,
       effects: () => [],
-      report: "NULL",
-      resolve() {},
+      report: `jsonb_build_object('effectsSettled', ${effectsSettled})`,
+      resolve(report, inserted) {
+        if (!inserted) {
+          checkEffects(
+            typeof report === "string" ? JSON.parse(report) : report,
+          );
+        }
+      },
     };
   }
   const namespace = param(draft.namespace);
@@ -56,10 +78,11 @@ export function actionOwnershipStatement(
       writer.kind === "delivery"
         ? `status = 'leased' AND lease_owner = ${
           param(writer.leaseOwner)
-        } AND lease_expires_at > NOW()`
+        } AND (lease_expires_at IS NULL OR lease_expires_at > ${
+          param(commandTime)
+        }::timestamptz) AND owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')`
         : "status IN ('dead_letter', 'cancelled', 'succeeded')"
     }
-      FOR UPDATE
     )`);
   }
   ctes.push(`action_obligation AS MATERIALIZED (
@@ -68,7 +91,6 @@ export function actionOwnershipStatement(
       AND EXISTS (SELECT 1 FROM ${
     writer && !cancellation ? "action_writer" : "event_admission"
   })
-    FOR UPDATE
   )`);
   const owner = cancellation
     ? `scope_id = ${param(writer.operationId)}`
@@ -80,11 +102,11 @@ export function actionOwnershipStatement(
     : cancellation
     ? `EXISTS (SELECT 1 FROM action_obligation WHERE ${owner})`
     : `EXISTS (SELECT 1 FROM action_obligation WHERE state IN (${
-      data.status === "deferred" ? "'invoked'" : "'invoked','resolving'"
+      data.status === "awaiting" ? "'invoked'" : "'invoked','awaiting'"
     }) AND ${owner})`;
   const gate = `${
     writer && !cancellation ? "EXISTS (SELECT 1 FROM action_writer) AND " : ""
-  }${stateGate}`;
+  }${stateGate} AND ${effectsSettled}`;
   const terminal = ["completed", "failed", "cancelled"].includes(data.status);
   return {
     ctes,
@@ -105,10 +127,16 @@ export function actionOwnershipStatement(
         } FROM ${source}
           ON CONFLICT (namespace, action_run_id) DO NOTHING
         )`]
-        : data.status === "deferred"
-        ? [`deferred_action AS (
+        : data.status === "awaiting"
+        ? [`awaiting_action AS (
           UPDATE ${tables.open_actions} AS action
-          SET state = 'deferred', owner_delivery_id = NULL, deferred_event_id = ${source}.id
+          SET state = 'awaiting', owner_delivery_id = NULL, await_event_id = ${source}.id,
+            child_operation_id = ${
+          param(
+            data.operationId ?? data.start?.operationId ??
+              `${data.actionRunId}:child`,
+          )
+        }
           FROM ${source}
           WHERE action.namespace = ${namespace} AND action.action_run_id = ${runId}
         )`]
@@ -118,34 +146,15 @@ export function actionOwnershipStatement(
           WHERE action.namespace = ${namespace} AND action.action_run_id = ${runId}
         )`]
         : [],
-    report: `jsonb_build_object('owned', ${gate})`,
+    report:
+      `jsonb_build_object('owned', ${gate}, 'effectsSettled', ${effectsSettled})`,
     resolve(report, inserted) {
       if (inserted) return;
       const value = typeof report === "string" ? JSON.parse(report) : report;
+      checkEffects(value);
       if (!(value as { owned?: boolean } | undefined)?.owned) {
         throw new ActionOwnershipLost(data.actionRunId);
       }
-    },
-  };
-}
-
-/** Compose transactional checks without adding SQL round trips. */
-export function combineActionStatements(
-  statements: readonly EventStatement<void>[],
-): EventStatement<void> {
-  return {
-    ctes: statements.flatMap((statement) => statement.ctes),
-    gate: statements.map((statement) => `(${statement.gate})`).join(" AND "),
-    effects: (source) =>
-      statements.flatMap((statement) => statement.effects(source)),
-    report: `jsonb_build_array(${
-      statements.map((statement) => statement.report).join(", ")
-    })`,
-    resolve(report, inserted) {
-      const values = typeof report === "string" ? JSON.parse(report) : report;
-      statements.forEach((statement, index) =>
-        statement.resolve(values?.[index], inserted)
-      );
     },
   };
 }

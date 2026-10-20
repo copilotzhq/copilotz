@@ -76,7 +76,7 @@ delivered cannot be retracted.
 This uses the Notes application from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md): its
 `composition.ts` and `notes-plugin.ts` must exist, with
-`@copilotz/copilotz@^0.87.3` installed. No provider or credential is involved;
+`@copilotz/copilotz@^0.89.0` installed. No provider or credential is involved;
 the script plays the provider. Create `channel-session.ts`:
 
 ```ts
@@ -198,12 +198,15 @@ The two egress modes are different contracts:
 
 | `egress`                | Ingress                                                           | Reply                                                                            |
 | ----------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `"external"`            | Webhook; provider occurrence IDs; may batch; returns provider ack | Detached Processor calls `deliver`, at least once, retried; survives the request |
+| `"external"`            | Webhook; provider occurrence IDs; may batch; returns provider ack | Detached Processor calls an effect-guarded delivery Action; survives the request |
 | `"request-observation"` | Requires an `Idempotency-Key`; at most one occurrence per request | The caller observes the operation, like a browser; no detached delivery          |
 
-External delivery is at least once. Each attempt has a stable `deliveryKey`,
-which only prevents duplicates if you forward it to a provider that honors
-idempotency. A webhook acknowledgement or ingress `done` proves admission, not
+External delivery records an effect before provider dispatch. Confirmed outcomes
+replay without another send. An interrupted or ambiguous send fails with
+`effect_indeterminate` rather than blindly retrying; reconciliation must
+establish the outcome. A stable `deliveryKey` can also be forwarded to providers
+that support idempotency, but a provider exception is not proof that nothing was
+sent. A webhook acknowledgement or ingress `done` proves admission, not
 delivery.
 
 Built-in Web, WhatsApp, Zendesk, Telegram and Discord plugins already compose
@@ -247,14 +250,14 @@ transactional rollback. Keep occurrence IDs stable across retries.
 | Reply text for a viewer          | `projectCoreReply` with a trusted scope                      |
 | Domain Events, no threads        | plain `app.send`, no Channel plugin                          |
 
-Release notes for 0.80.0 channel changes are in
-[Upgrading](upgrading.md#release-history).
+For version alignment and retained-data conversion, see
+[Upgrading](upgrading.md).
 
 ## What this unlocks
 
 - A redelivered provider occurrence with the same valid envelope is not admitted
-  twice. Processor execution and external egress can still retry, as described
-  above.
+  twice. Processor execution can retry; ambiguous external sends cannot be
+  replayed without reconciliation, as described above.
 - Voice and socket transports get interruption and supersession that cancel
   durable work instead of only hiding it.
 - Webhook replies survive host disconnects through detached delivery.

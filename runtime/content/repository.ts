@@ -46,7 +46,6 @@ function cloneOrigin(origin: AssetOrigin | undefined): AssetOrigin | undefined {
 function cloneRecord(record: AssetRecord): AssetRecord {
   return {
     ...record,
-    location: { ...record.location },
     origin: cloneOrigin(record.origin),
     metadata: cloneMetadata(record.metadata),
   };
@@ -203,7 +202,7 @@ export function createMemoryAssetRepository(
         byteLength: body.byteLength,
         digest: bodyDigest,
         state: "ready",
-        location: input.location ?? { kind: "memory" },
+        bodyId: `body:${namespace}:${id}`,
         createdAt: timestamp,
         readyAt: timestamp,
         origin: cloneOrigin(input.origin) ?? ({

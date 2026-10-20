@@ -1,11 +1,11 @@
 import { Ominipg } from "../../dependencies/ominipg.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
+import {
+  bindSnapshotSession,
+  retireSnapshotDatabase,
+} from "./snapshot-admission.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
 import { createSqlSession, type SqlSession } from "../events/index.ts";
-import type {
-  SqlNotification,
-  SqlNotificationSubscription,
-} from "../events/index.ts";
 
 type QueryResult<TRow extends Record<string, unknown>> = Readonly<{
   rows: TRow[];
@@ -22,10 +22,7 @@ export type OminipgDatabaseLike = Readonly<{
   transaction<T>(
     operation: (transaction: Readonly<{ query: Query }>) => T | Promise<T>,
   ): Promise<T>;
-  listen?(
-    channel: string,
-    handler: (notification: SqlNotification) => void,
-  ): Promise<SqlNotificationSubscription>;
+  withReadSnapshot?: SqlSession["withReadSnapshot"];
   close(): Promise<void>;
 }>;
 
@@ -58,7 +55,9 @@ export type ManagedOminipgDatabase = Readonly<{
 export function createOminipgSqlSession(
   database: OminipgDatabaseLike,
 ): SqlSession {
-  return (createSqlSession(database));
+  const session = createSqlSession(database);
+  bindSnapshotSession(session, database);
+  return session;
 }
 
 /** Opens an application-owned Ominipg database and its private SQL adapter. */
@@ -105,7 +104,9 @@ export async function openManagedOminipgDatabase(
     database: adapted,
     session,
     close() {
-      closeTask ??= database.close();
+      closeTask ??= retireSnapshotDatabase(adapted).then(() =>
+        database.close()
+      );
       return closeTask;
     },
   } as const);

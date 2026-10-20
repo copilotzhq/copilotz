@@ -2,13 +2,15 @@ import { storageFixture } from "../../plugins/core/shared/testing/storage-plugin
 import { coreEvent } from "../../plugins/core/shared/events/index.ts";
 import type { ActionCallers } from "@copilotz/copilotz/actions";
 import { defineTool } from "@copilotz/copilotz/core";
-import { defineServerFacade as fixtureServerFacade } from "@copilotz/copilotz/server";
+import {
+  createTestCopilotz as createCopilotz,
+  defineTestServerFacade as fixtureServerFacade,
+} from "../testing/server-authorization.test.ts";
 import { definePlugin as defineFixturePlugin } from "@copilotz/copilotz/plugins";
 import { message as coreMessage } from "@copilotz/copilotz/core";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createCopilotzGateway, createCopilotzWorker } from "./index.ts";
 import { serverPlugin } from "../../plugins/server/plugin.ts";
-import { createCopilotz } from "../../create-copilotz.ts";
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { listen } from "../adapters/deno/listen.ts";
@@ -62,7 +64,7 @@ function cascadingPlugin(): AnyCopilotzPlugin {
         threadId: coreEvent(event).threadId,
         senderId: "topology-agent",
         recipientIds: ["topology-user"],
-        content: persisted,
+        content: [persisted],
       }, {
         operationKey: "first-message",
         metadata: {
@@ -199,7 +201,6 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   let ready = 0;
   let started = 0;
   const gatewayDiagnostics: string[] = [];
-  const workerDiagnostics: string[] = [];
   const gateway = await createCopilotzGateway({
     namespace,
     database,
@@ -221,15 +222,10 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   });
   const worker = await createCopilotzWorker({
     namespace,
-    database,
     plugins: [storageFixture, plugin],
     id: workerId,
     transport,
     capacity: 1,
-    onDeliveryDiagnostic(diagnostic) {
-      workerDiagnostics.push(diagnostic.phase);
-    },
-    engine: { retryBaseMs: 0, random: () => 0 },
   }, {
     onReady() {
       ready += 1;
@@ -295,10 +291,16 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       "first worker reply",
     );
     assertEquals(streamOutputTransientCalls, 0);
-    assert(gatewayDiagnostics.includes("gateway_event_frame_received"));
-    assert(gatewayDiagnostics.includes("child_delivery_scheduled"));
-    assert(workerDiagnostics.includes("worker_handler_started"));
-    assert(workerDiagnostics.includes("worker_handler_settled"));
+    const durableIds = observed.filter((event) =>
+      event.type === "message.created"
+    ).map((event) => {
+      assert("id" in event);
+      return event.id;
+    });
+    assertEquals(new Set(durableIds).size, durableIds.length);
+    assert(gatewayDiagnostics.includes("placement_requested"));
+    assert(gatewayDiagnostics.includes("worker_handler_started"));
+    assert(gatewayDiagnostics.includes("worker_handler_settled"));
     assertEquals(
       (await projectMessages(gateway.application, namespace, "topology-thread"))
         .length,
@@ -335,12 +337,10 @@ Deno.test("Gateway automatically retries or terminalizes Worker delivery failure
   });
   const worker = await createCopilotzWorker({
     namespace,
-    database,
     plugins: [plugin],
     id: workerId,
     transport,
     capacity: 1,
-    engine: { retryBaseMs: 0, random: () => 0 },
   });
   try {
     await worker.ready;
@@ -522,14 +522,12 @@ Deno.test({
           bootstrap: {},
         };
       },
-      engine: { retryBaseMs: 0, random: () => 0 },
     });
     const listener = listen(gateway, { hostname: "127.0.0.1", port: 0 });
     const workerUrl = new URL(transport.config.path, listener.url);
     workerUrl.protocol = "ws:";
     const worker = await createCopilotzWorker({
       namespace,
-      database,
       plugins: [storageFixture, plugin],
       id: workerId,
       transport: {
@@ -561,7 +559,6 @@ Deno.test({
       },
       reconnectDelay: false,
       capacity: 1,
-      engine: { retryBaseMs: 0, random: () => 0 },
     });
     try {
       await worker.ready;

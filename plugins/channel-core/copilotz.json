@@ -5,14 +5,16 @@
     "actions/ingress/index.ts": "channelIngress",
     "actions/egress/index.ts": "channelEgress",
     "processors/ingress/index.ts": "channelIngress",
-    "processors/egress/index.ts": "channelEgress"
+    "processors/egress/index.ts": "channelEgress",
+    "actions/deliver/index.ts": "channelDeliver"
   },
   "include": [
     "collections/channel-binding/index.ts",
     "actions/ingress/index.ts",
     "actions/egress/index.ts",
     "processors/ingress/index.ts",
-    "processors/egress/index.ts"
+    "processors/egress/index.ts",
+    "actions/deliver/index.ts"
   ],
   "plugins": [
     {

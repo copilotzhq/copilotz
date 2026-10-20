@@ -80,6 +80,13 @@ Deno.test("GCS immutable put accepts only an exact existing winner", async () =>
         multipart = new TextDecoder().decode(init?.body as Uint8Array);
         return new Response(null, { status: 412 });
       }
+      if (url.searchParams.get("alt") === "media") {
+        assertEquals(url.searchParams.get("generation"), "12");
+        return new Response(bytes, {
+          status: 206,
+          headers: { "content-range": "bytes 0-4/5" },
+        });
+      }
       return metadata();
     },
   });
@@ -160,6 +167,7 @@ Deno.test("GCS adapter is Ready-only, no-GC, and does not rewrite cross-scope bo
       bodyId: "x",
       expectedState: "ready",
       expectedMaintenanceVersion: 1,
+      expectedVersionToken: "12:1",
       idleForMs: 0,
     }),
     false,
@@ -207,7 +215,12 @@ Deno.test("GCS range, malformed metadata, and progressive operations fail closed
   assertEquals(new URL(mediaUrl).searchParams.get("alt"), "media");
   assertEquals(new URL(mediaUrl).searchParams.get("generation"), "12");
   await assertRejects(async () =>
-    await store.reserve({ bodyId: "body", mediaType: "text/plain" })
+    await store.reserve({
+      bodyId: "body",
+      mediaType: "text/plain",
+      reservationId: "test",
+      generation: 1,
+    })
   );
   const malformed = createGcsBodyStore({
     bucket: "bucket",
@@ -216,4 +229,34 @@ Deno.test("GCS range, malformed metadata, and progressive operations fail closed
     fetch: async () => Response.json({ name: "body", size: "nope" }),
   });
   await assertRejects(() => malformed.head({ bodyId: "body" }));
+});
+
+Deno.test("GCS bounds metadata and token response bodies before decoding", async () => {
+  for (const declared of [true, false]) {
+    let cancelled = false;
+    const response = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(65537));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        declared ? { headers: { "content-length": "65537" } } : {},
+      );
+    const store = createGcsBodyStore({
+      bucket: "bucket",
+      backendId: "gcs:test",
+      getAccessToken: () => Promise.resolve("token"),
+      fetch: () => Promise.resolve(response()),
+    });
+    await assertRejects(() => store.head({ bodyId: "oversized" }));
+    assertEquals(cancelled, true);
+  }
+  const token = createGcsMetadataAccessTokenProvider({
+    fetch: () => Promise.resolve(new Response(new Uint8Array(16385))),
+  });
+  await assertRejects(() => token());
 });

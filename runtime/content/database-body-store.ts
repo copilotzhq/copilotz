@@ -1,272 +1,110 @@
 import {
-  quoteEventIdentifier,
-  type SqlExecutor,
-  validateEventSchemaName,
-} from "../events/index.ts";
-import type {
-  AbortBodyInput,
-  AppendBodyInput,
-  AppendResult,
-  BodyProtection,
-  BodyStore,
-  BodyStoreAdapter,
-  IncompleteBodyHead,
-  MutableBodyHead,
-  PutBodyInput,
-  ReadBodyRangeInput,
-  ReadyBodyHead,
-  RenewBodyInput,
-  ReserveBodyInput,
-  TerminalBodyHead,
-  TerminateBodyInput,
-  WriterCapability,
-} from "./body-store.ts";
+  assertSchemaCommandTransaction,
+  createSchemaCommandRunner,
+} from "../engine/commands.ts";
+import { type SqlExecutor, validateEventSchemaName } from "../events/index.ts";
+import type { BodyStore, BodyStoreAdapter } from "./body-store.ts";
 import {
-  bodyProtectionMs,
-  bodyProtectionUntil,
-  readBodyBytes,
-  resolveBodyProtectionUntil,
-  writerCapabilityFromHead,
-} from "./body-store.ts";
+  bodyStoreTables,
+  provisionBodyStoreSchema,
+  validateBodyStoreSchema,
+} from "./body-store-schema.ts";
+import {
+  bodyConflict,
+  bodyUnavailable,
+  captureBodyAppend,
+  createBodyStoreOperations,
+  type StoredBody,
+  type StoredVersion,
+} from "./body-store-operations.ts";
 import { digestContent } from "./digest.ts";
 import { base64ToBytes } from "./encoding.ts";
-import { createContentError } from "./errors.ts";
-
-function validateHead(expected: PutBodyInput, actual: ReadyBodyHead): void {
-  if (
-    actual.bodyId !== expected.bodyId ||
-    actual.byteLength !== expected.bytes.byteLength ||
-    actual.digest !== expected.digest || actual.mediaType !== expected.mediaType
-  ) {
-    throw createContentError(
-      "asset_conflict",
-      "Stored body conflicts with the canonical metadata.",
-    );
-  }
-}
 
 type BodyRow = {
   body_id: string;
-  state:
-    | "open"
-    | "sealing"
-    | "terminating"
-    | "ready"
-    | "incomplete"
-    | "aborted";
+  state: StoredBody["state"];
   media_type: string;
+  reservation_id: string;
+  writer_generation: string | number;
+  fenced_from: string | number | null;
   byte_length: string | number;
-  digest: string | null;
-  writer_generation: string | number | null;
-  writer_token_hash: string | null;
-  lease_expires_at: string | null;
-  protected_until: string | null;
+  digest: StoredBody["digest"];
+  version_token: string;
   maintenance_version: string | number;
-  created_at: string;
   updated_at: string;
-  ready_at: string | null;
+  parts: StoredBody["parts"];
 };
-
-type PartRow = {
-  start_offset: string | number;
-  append_id: string;
-  bytes: Uint8Array | ArrayBuffer | string;
-};
-
-type ProgressiveBodyOps = Readonly<{
-  reserve(input: ReserveBodyInput): Promise<WriterCapability>;
-  head(bodyId: string): Promise<MutableBodyHead | null>;
-  renew(input: RenewBodyInput): Promise<BodyProtection>;
-  append(input: AppendBodyInput): Promise<AppendResult>;
-  readRange(input: ReadBodyRangeInput): Promise<Uint8Array>;
-  terminate(input: TerminateBodyInput): Promise<IncompleteBodyHead>;
-  abort(input: AbortBodyInput): Promise<void>;
-}>;
-
-function asInteger(value: string | number | null, name: string): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw createContentError(
-      "asset_corrupted",
-      `Database body ${name} is invalid.`,
-    );
-  }
-  return parsed;
+function integer(value: string | number): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 0) bodyUnavailable();
+  return result;
 }
-
-function bytesFromSql(value: PartRow["bytes"]): Uint8Array {
+function bytesFromSql(value: Uint8Array | ArrayBuffer | string): Uint8Array {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (typeof value === "string") {
-    if (value.startsWith("\\x")) {
-      const hex = value.slice(2);
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-      }
-      return bytes;
-    }
-    return base64ToBytes(value);
-  }
-  return new Uint8Array();
-}
-
-function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
-  const byteLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const output = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return output;
-}
-
-function mapHead(row: BodyRow): ReadyBodyHead {
-  if (row.state !== "ready" || !row.digest) {
-    throw createContentError(
-      "asset_corrupted",
-      `Database body '${row.body_id}' is not ready.`,
+  if (value.startsWith("\\x")) {
+    return Uint8Array.from(
+      value.slice(2).match(/../g) ?? [],
+      (byte) => Number.parseInt(byte, 16),
     );
   }
-  return ({
+  return base64ToBytes(value);
+}
+function mapRow(row: BodyRow): StoredVersion {
+  const body: StoredBody = {
     bodyId: row.body_id,
-    state: "ready" as const,
-    byteLength: asInteger(row.byte_length, "byte length"),
+    state: row.state,
     mediaType: row.media_type,
-    digest: row.digest as `sha256:${string}`,
-    maintenanceVersion: asInteger(
-      row.maintenance_version,
-      "maintenance version",
-    ),
-    ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
-    etag: row.digest.slice("sha256:".length),
-    lastModified: row.updated_at,
-  } as const);
-}
-
-function mapIncompleteHead(row: BodyRow): IncompleteBodyHead {
-  if (row.state !== "incomplete" || !row.digest) {
-    throw createContentError(
-      "asset_corrupted",
-      `Database body '${row.body_id}' is not incomplete.`,
-    );
-  }
-  return ({
-    bodyId: row.body_id,
-    state: "incomplete" as const,
-    byteLength: asInteger(row.byte_length, "byte length"),
-    mediaType: row.media_type,
-    digest: row.digest as `sha256:${string}`,
-    maintenanceVersion: asInteger(
-      row.maintenance_version,
-      "maintenance version",
-    ),
-    ...(row.protected_until ? { protectedUntil: row.protected_until } : {}),
-    etag: row.digest.slice("sha256:".length),
-    lastModified: row.updated_at,
-  } as const);
-}
-
-function mapSpill(row: BodyRow): MutableBodyHead {
-  const state = row.state === "sealing"
-    ? "sealing"
-    : row.state === "terminating"
-    ? "terminating"
-    : row.state === "aborted"
-    ? "aborted"
-    : "open";
-  const byteLength = asInteger(row.byte_length, "byte length");
-  const maintenanceVersion = asInteger(
-    row.maintenance_version,
-    "maintenance version",
-  );
-  if (state === "aborted") {
-    return ({
-      bodyId: row.body_id,
-      state,
-      mediaType: row.media_type,
-      byteLength,
-      discarded: 0,
-      maintenanceVersion,
-      reservationId: row.writer_token_hash ?? "",
-    } as const);
-  }
-  return ({
-    bodyId: row.body_id,
-    state,
-    mediaType: row.media_type,
-    byteLength,
-    discarded: 0,
-    maintenanceVersion,
-    reservationId: row.writer_token_hash ?? "",
-    writerGeneration: asInteger(
-      row.writer_generation ?? 0,
-      "writer generation",
-    ),
-    writerLeaseRemainingMs: row.lease_expires_at
-      ? Math.max(0, Date.parse(row.lease_expires_at) - Date.now())
-      : 0,
-  } as const);
-}
-
-function mapAnyHead(row: BodyRow): TerminalBodyHead | MutableBodyHead {
-  return row.state === "ready"
-    ? mapHead(row)
-    : row.state === "incomplete"
-    ? mapIncompleteHead(row)
-    : mapSpill(row);
-}
-
-export function createDatabaseBodyStoreAdapter(
-  options: Readonly<{
-    session: SqlExecutor;
-    backendId?: string;
-    protectionMs?: number;
-  }>,
-): BodyStoreAdapter {
-  const backendId = options.backendId?.trim() || "database:default";
-  const protectionMs = bodyProtectionMs(options.protectionMs);
-  const stores = new Map<string, BodyStore>();
-  const storeFor = (databaseSchema: string): BodyStore => {
-    const schema = databaseSchema.trim();
-    if (!schema) {
-      throw new TypeError("BodyStore scope requires databaseSchema.");
-    }
-    const existing = stores.get(schema);
-    if (existing) return existing;
-    const created = createDatabaseBodyStore({
-      session: options.session,
-      schema,
-      backendId,
-      protectionMs,
-    });
-    stores.set(schema, created);
-    return created;
+    reservationId: row.reservation_id,
+    generation: integer(row.writer_generation),
+    fencedFrom: row.fenced_from === null ? null : integer(row.fenced_from),
+    byteLength: integer(row.byte_length),
+    digest: row.digest,
+    revision: integer(row.maintenance_version),
+    nonce: row.version_token,
+    updatedAt: new Date(row.updated_at).toISOString(),
+    parts: row.parts,
   };
-  return ({
-    deployment: {
-      durability: "durable" as const,
-      reach: "cluster" as const,
-      minimumProtectionMs: protectionMs,
-      readyGarbageCollection: true,
-    } as const,
-    forScope(scope) {
-      return storeFor(scope.databaseSchema);
-    },
-    maintenanceForScope(scope) {
-      return storeFor(scope.databaseSchema).maintenance;
-    },
-  } as const);
+  return { body, versionToken: row.version_token };
 }
-
 const provisioners = new WeakMap<BodyStore, () => Promise<void>>();
-
-/**
- * Creates a database BodyStore's tables through its own session. Returns false
- * when the store is not a database BodyStore. Call it before a transaction that
- * writes through a `provisioned` store bound to that transaction.
- */
+const writers = new WeakMap<
+  BodyStore["put"],
+  (transaction: SqlExecutor) => BodyStore
+>();
+/** Whether the physical adapter uses this runtime's owner-joinable SQL layout. */
+export function isDatabaseBodyStore(store: BodyStore): boolean {
+  return writers.has(store.put);
+}
+/** Owner-internal writer bound to the existing command, never a second session. */
+export function databaseBodyStoreWriter(
+  store: BodyStore,
+  transaction: SqlExecutor,
+): BodyStore {
+  const writer = writers.get(store.put);
+  if (store.kind === "database" && !writer) {
+    throw new Error(
+      "Database body storage cannot join this owner transaction.",
+    );
+  }
+  return writer?.(transaction) ?? store;
+}
+const readers = new WeakMap<
+  BodyStore["readRange"],
+  (
+    transaction?: SqlExecutor,
+    readAuthority?: (databaseSchema: string) => Promise<void>,
+  ) => Pick<BodyStore, "readRange">
+>();
+/** Owner-internal read view: never provisions or submits a nested command. */
+export function databaseBodyStoreReader(
+  store: BodyStore,
+  transaction?: SqlExecutor,
+  readAuthority?: (databaseSchema: string) => Promise<void>,
+): Pick<BodyStore, "readRange"> {
+  return readers.get(store.readRange)?.(transaction, readAuthority) ??
+    { readRange: store.readRange };
+}
 export async function provisionDatabaseBodyStore(
   store: BodyStore,
 ): Promise<boolean> {
@@ -275,961 +113,274 @@ export async function provisionDatabaseBodyStore(
   await provision();
   return true;
 }
-
-/**
- * SQL that stores a new immutable body inside a larger statement, with the
- * row `put` would create. `exists` holds when the body id is already taken, in
- * which case `put`'s acquire-or-verify logic must decide instead.
- */
-export function composeDatabaseBodyPut(
-  input: Readonly<{
-    schema: string;
-    param(value: unknown): string;
-    /** Prefixes the composed CTE names. */
-    label: string;
-    bodyId: string;
-    mediaType: string;
-    digest: string;
-    bytes: Uint8Array;
-  }>,
-): Readonly<{
-  exists: string;
-  effects(source: string): readonly string[];
-}> {
-  const schema = quoteEventIdentifier(
-    validateEventSchemaName(input.schema.trim()),
-  );
-  const bodies = `${schema}."content_bodies"`;
-  const parts = `${schema}."content_body_parts"`;
-  const bodyId = input.param(input.bodyId);
-  const mediaType = input.param(input.mediaType);
-  const digest = input.param(input.digest);
-  const bytes = input.param(input.bytes);
-  const protectedUntil = input.param(
-    resolveBodyProtectionUntil(undefined, bodyProtectionMs(undefined)),
-  );
-  const byteLength = input.param(input.bytes.byteLength);
-  return ({
-    exists: `EXISTS (SELECT 1 FROM ${bodies} WHERE body_id = ${bodyId}::text)`,
-    effects: (source) => [
-      `${input.label}_body AS (
-         INSERT INTO ${bodies}
-           (body_id, state, media_type, byte_length, digest, protected_until,
-            maintenance_version, updated_at, ready_at)
-         SELECT ${bodyId}::text, 'ready', ${mediaType}::text,
-                ${byteLength}::bigint, ${digest}::text,
-                ${protectedUntil}::timestamptz, 1, NOW(), NOW()
-           FROM ${source}
-         RETURNING body_id
-       )`,
-      `${input.label}_part AS (
-         INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
-         SELECT body_id, 0, 'put', ${bytes}::bytea FROM ${input.label}_body
-       )`,
-    ],
-  } as const);
+export function createDatabaseBodyStoreAdapter(
+  options: Readonly<{ session: SqlExecutor; backendId?: string }>,
+): BodyStoreAdapter {
+  const stores = new Map<string, BodyStore>();
+  const storeFor = (schema: string) => {
+    let store = stores.get(schema);
+    if (!store) {
+      store = createDatabaseBodyStore({ ...options, schema });
+      stores.set(schema, store);
+    }
+    return store;
+  };
+  return {
+    deployment: {
+      durability: "durable",
+      reach: "cluster",
+      readyGarbageCollection: true,
+    },
+    forScope(scope) {
+      return storeFor(scope.databaseSchema);
+    },
+    maintenanceForScope(scope) {
+      return storeFor(scope.databaseSchema).maintenance;
+    },
+  };
 }
-
-/** SQL BodyStore using the final content_bodies/content_body_parts layout. */
+/** Database bytes, governed exclusively by identity/generation/version CAS. */
 export function createDatabaseBodyStore(
-  options: Readonly<{
-    session: SqlExecutor;
-    schema: string;
-    backendId?: string;
-    protectionMs?: number;
-    /** The tables are known to exist; skip the per-store DDL check. */
-    provisioned?: boolean;
-  }>,
+  options: Readonly<
+    {
+      session: SqlExecutor;
+      schema: string;
+      backendId?: string;
+      provisioned?: boolean;
+    }
+  >,
 ): BodyStore {
-  const session = options.session;
-  const backendId = options.backendId?.trim() || "database:default";
-  const protectionMs = bodyProtectionMs(options.protectionMs);
-  const deadline = () => bodyProtectionUntil(protectionMs);
-  const putDeadline = (requested: string | undefined) =>
-    resolveBodyProtectionUntil(requested, protectionMs);
-  const schemaName = validateEventSchemaName(options.schema.trim());
-  const schema = quoteEventIdentifier(schemaName);
-  const bodies = `${schema}."content_bodies"`;
-  const parts = `${schema}."content_body_parts"`;
-  let ready: Promise<void> | undefined = options.provisioned
-    ? Promise.resolve()
-    : undefined;
-
-  const provision = async () => {
-    await session.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-    await session.query(
-      `CREATE TABLE IF NOT EXISTS ${bodies} (
-          body_id TEXT PRIMARY KEY,
-          state TEXT NOT NULL CHECK (state IN ('open', 'sealing', 'terminating', 'ready', 'incomplete', 'aborted')),
-          media_type TEXT NOT NULL,
-          byte_length BIGINT NOT NULL DEFAULT 0 CHECK (byte_length >= 0),
-          digest TEXT,
-          writer_generation BIGINT,
-          writer_token_hash TEXT,
-          lease_expires_at TIMESTAMPTZ,
-          protected_until TIMESTAMPTZ,
-          maintenance_version BIGINT NOT NULL DEFAULT 0,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          ready_at TIMESTAMPTZ
-        )`,
-    );
-    await session.query(
-      `CREATE TABLE IF NOT EXISTS ${parts} (
-          body_id TEXT NOT NULL REFERENCES ${bodies}(body_id) ON DELETE CASCADE,
-          start_offset BIGINT NOT NULL CHECK (start_offset >= 0),
-          append_id TEXT NOT NULL,
-          bytes BYTEA NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          PRIMARY KEY (body_id, start_offset),
-          UNIQUE (body_id, append_id)
-        )`,
-    );
-  };
-
-  const ensure = () => {
-    // IF NOT EXISTS is not atomic: a concurrent creator can win the catalog
-    // insert, after which the tables exist and one more pass finds them.
-    ready ??= provision().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "";
-      if (!message.includes("violates unique constraint")) throw error;
-      return provision();
-    });
-    return ready;
-  };
-
-  const loadBody = async (
-    bodyId: string,
-    executor: SqlExecutor = session,
-    lock: boolean = false,
-  ): Promise<BodyRow | null> => {
-    await ensure();
-    const result = await executor.query<BodyRow>(
-      `SELECT body_id, state, media_type, byte_length, digest,
-              writer_generation, writer_token_hash, lease_expires_at,
-              protected_until, maintenance_version, created_at, updated_at,
-              ready_at
-         FROM ${bodies}
-        WHERE body_id = $1
-        LIMIT 1${lock ? " FOR UPDATE" : ""}`,
-      [bodyId],
-    );
-    return result.rows[0] ?? null;
-  };
-
-  const requireBody = async (
-    bodyId: string,
-    executor: SqlExecutor = session,
-    lock: boolean = false,
-  ): Promise<BodyRow> => {
-    const row = await loadBody(bodyId, executor, lock);
-    if (!row) {
-      throw createContentError(
-        "asset_not_found",
-        "Database body was not found.",
-      );
-    }
-    return row;
-  };
-
-  const readParts = async (
-    bodyId: string,
-    executor: SqlExecutor = session,
-  ): Promise<Uint8Array> => {
-    await ensure();
-    const result = await executor.query<PartRow>(
-      `SELECT start_offset, append_id, bytes
-         FROM ${parts}
-        WHERE body_id = $1
-        ORDER BY start_offset ASC`,
-      [bodyId],
-    );
-    return concatBytes(result.rows.map((row) => bytesFromSql(row.bytes)));
-  };
-
-  const readPartsRange = async (
-    input: ReadBodyRangeInput,
-    onlyProgressive = false,
-  ): Promise<Uint8Array> => {
-    await ensure();
-    // The indexed predecessor finds the part covering start, including a single
-    // compacted immutable part. Only overlapping parts and requested bytes cross SQL.
-    const result = await session.query<{
-      body_state: BodyRow["state"];
-      byte_length: string | number;
-      start_offset: string | number | null;
-      part_length: string | number | null;
-      bytes: Uint8Array | ArrayBuffer | string | null;
-    }>(
-      `SELECT body.state AS body_state, body.byte_length, part.*
-         FROM ${bodies} AS body
-         LEFT JOIN LATERAL (
-         WITH anchor AS (
-         SELECT start_offset FROM ${parts}
-          WHERE body_id = body.body_id AND start_offset <= GREATEST($2::bigint, 0)
-          ORDER BY start_offset DESC LIMIT 1
-       ) SELECT start_offset, octet_length(bytes) AS part_length,
-           substring(bytes FROM (LEAST(GREATEST(GREATEST($2::bigint, 0) - start_offset, 0),
-               octet_length(bytes)) + 1)::integer
-             FOR GREATEST(LEAST(LEAST($3::bigint, body.byte_length) - start_offset, octet_length(bytes)) -
-               GREATEST(GREATEST($2::bigint, 0) - start_offset, 0), 0)::integer) AS bytes
-         FROM ${parts}
-        WHERE body_id = body.body_id AND body.state <> 'aborted'
-          AND LEAST($3::bigint, body.byte_length) > GREATEST($2::bigint, 0)
-          AND start_offset >= COALESCE((SELECT start_offset FROM anchor), GREATEST($2::bigint, 0))
-          AND start_offset < LEAST($3::bigint, body.byte_length)
-        ORDER BY start_offset ASC
-       ) AS part ON TRUE
-        WHERE body.body_id = $1
-        ORDER BY part.start_offset ASC`,
-      [input.bodyId, input.offset, input.end],
-    );
-    const head = result.rows[0];
-    if (!head) {
-      throw createContentError(
-        "asset_not_found",
-        "Database body was not found.",
-      );
-    }
-    if (
-      onlyProgressive &&
-      ["ready", "incomplete", "aborted"].includes(head.body_state)
-    ) {
-      throw createContentError(
-        "asset_conflict",
-        "Progressive body is not open.",
-      );
-    }
-    if (head.body_state === "aborted") {
-      throw createContentError(
-        "asset_not_found",
-        "Database body is not readable.",
-      );
-    }
-    const start = Math.max(0, input.offset);
-    const end = Math.min(input.end, asInteger(head.byte_length, "byte length"));
-    if (end <= start) return new Uint8Array();
-    const bytes = new Uint8Array(end - start);
-    let position = start;
-    for (const row of result.rows) {
-      if (
-        row.start_offset === null || row.part_length === null ||
-        row.bytes === null
-      ) continue;
-      const partStart = asInteger(row.start_offset, "part start offset");
-      const partLength = asInteger(row.part_length, "part byte length");
-      const from = Math.max(start, partStart);
-      const to = Math.min(end, partStart + partLength);
-      const part = bytesFromSql(row.bytes);
-      if (from !== position || to < from || part.byteLength !== to - from) {
-        throw createContentError(
-          "asset_corrupted",
-          "Database body range has missing or overlapping parts.",
-        );
-      }
-      bytes.set(part, from - start);
-      position = to;
-    }
-    if (position !== end) {
-      throw createContentError(
-        "asset_corrupted",
-        "Database body range is incomplete.",
-      );
-    }
-    return bytes;
-  };
-
-  const compactParts = async (
-    bodyId: string,
-    bytes: Uint8Array,
-    executor: SqlExecutor,
-  ): Promise<void> => {
-    await executor.query(`DELETE FROM ${parts} WHERE body_id = $1`, [bodyId]);
-    await executor.query(
-      `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
-       VALUES ($1, 0, 'sealed', $2)`,
-      [bodyId, bytes],
-    );
-  };
-
-  const atomically = async <T>(
-    operation: (transaction: SqlExecutor) => Promise<T>,
-  ): Promise<T> => {
-    const transactional = session as
-      & SqlExecutor
-      & Readonly<{
-        transaction?: <TResult>(
-          callback: (transaction: SqlExecutor) => Promise<TResult>,
-        ) => Promise<TResult>;
-      }>;
-    return typeof transactional.transaction === "function"
-      ? await transactional.transaction(operation)
-      : await operation(session);
-  };
-
-  const requireOwner = (row: BodyRow, reservationId: string): void => {
-    if (row.writer_token_hash !== reservationId) {
-      throw createContentError(
-        "asset_conflict",
-        "Progressive writer no longer owns this body.",
-      );
-    }
-  };
-
-  const progressive: ProgressiveBodyOps = {
-    async reserve(input) {
+  const session = options.session,
+    schemaName = validateEventSchemaName(options.schema.trim()),
+    { bodies, parts } = bodyStoreTables(schemaName);
+  const runCommand = createSchemaCommandRunner(session, schemaName);
+  let ready: Promise<void> | undefined;
+  const ensure = () =>
+    ready ??= (options.provisioned
+      ? validateBodyStoreSchema(session, schemaName)
+      : runCommand("body.provision", {}, async (_, { transaction }) =>
+        await provisionBodyStoreSchema(transaction, schemaName)))
+      .catch((error) => {
+        ready = undefined;
+        throw error;
+      });
+  const selection = `SELECT body.*,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('appendId',part.append_id,'offset',part.start_offset,'length',octet_length(part.bytes),'digest',part.part_digest) ORDER BY part.start_offset) FROM ${parts} part WHERE part.body_id=body.body_id),'[]'::jsonb) AS parts FROM ${bodies} body`;
+  const operations = createBodyStoreOperations({
+    kind: "database",
+    backendId: options.backendId?.trim() || "database:default",
+    conditionalDelete: true,
+    async load(bodyId) {
       await ensure();
-      const reservationId = crypto.randomUUID();
-      const leaseExpiresAt = deadline();
-      const inserted = await session.query<BodyRow>(
-        `INSERT INTO ${bodies}
-           (body_id, state, media_type, byte_length, writer_generation,
-            writer_token_hash, lease_expires_at, maintenance_version, updated_at)
-         VALUES ($1, 'open', $2, 0, 1, $3, $4, 1, NOW())
-         ON CONFLICT (body_id) DO NOTHING
-         RETURNING body_id, state, media_type, byte_length, digest,
-                   writer_generation, writer_token_hash, lease_expires_at,
-                   protected_until, maintenance_version, created_at, updated_at,
-                   ready_at`,
-        [input.bodyId, input.mediaType, reservationId, leaseExpiresAt],
+      const rows = await session.query<BodyRow>(
+        `${selection} WHERE body.body_id=$1`,
+        [bodyId],
       );
-      if (inserted.rows[0]) {
-        return writerCapabilityFromHead(mapSpill(inserted.rows[0]));
-      }
-      const existing = await requireBody(input.bodyId);
-      if (existing.media_type !== input.mediaType) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive body media type does not match the writer.",
+      return rows.rows[0] ? mapRow(rows.rows[0]) : null;
+    },
+    async compareAndSwap(body, previous, writes) {
+      await ensure();
+      return await runCommand("body.cas", {}, async (_, { transaction }) => {
+        const values = [
+          body.bodyId,
+          body.state,
+          body.mediaType,
+          body.reservationId,
+          body.generation,
+          body.fencedFrom,
+          body.byteLength,
+          body.digest,
+          body.nonce,
+          body.revision,
+          body.updatedAt,
+        ];
+        const mutation = previous === null
+          ? `INSERT INTO ${bodies}(body_id,state,media_type,reservation_id,writer_generation,fenced_from,byte_length,digest,version_token,maintenance_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(body_id) DO NOTHING RETURNING body_id`
+          : `UPDATE ${bodies} SET state=$2,media_type=$3,reservation_id=$4,writer_generation=$5,fenced_from=$6,byte_length=$7,digest=$8,version_token=$9,maintenance_version=$10,updated_at=$11 WHERE body_id=$1 AND version_token=$12 RETURNING body_id`;
+        const params: unknown[] = previous === null
+          ? values
+          : [...values, previous];
+        const rows = writes.map(({ part, bytes }) =>
+          `($${params.push(part.offset)}::bigint,$${
+            params.push(part.appendId)
+          }::text,$${params.push(bytes)}::bytea,$${
+            params.push(part.digest)
+          }::text)`
         );
-      }
-      if (existing.state === "ready" || existing.state === "incomplete") {
-        throw createContentError(
-          "asset_conflict",
-          "An immutable body already exists for this id.",
+        const result = await transaction.query(
+          rows.length
+            ? `WITH changed AS (${mutation}), inserted_parts AS (
+            INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+            SELECT changed.body_id,part.start_offset,part.append_id,part.bytes,part.digest
+            FROM changed,(VALUES ${
+              rows.join(",")
+            }) AS part(start_offset,append_id,bytes,digest)
+          ) SELECT body_id FROM changed`
+            : mutation,
+          params,
         );
-      }
-      if (
-        input.expectedGeneration === undefined ||
-        input.expectedGeneration !==
-          asInteger(existing.writer_generation ?? 0, "writer generation")
-      ) {
-        throw createContentError(
-          "asset_conflict",
-          "A progressive writer already owns this body.",
-        );
-      }
-      const generation = asInteger(
-        existing.writer_generation ?? 0,
-        "writer generation",
-      ) + 1;
-      const takeoverLeaseExpiresAt = deadline();
-      const claimed = await session.query<BodyRow>(
-        `UPDATE ${bodies}
-            SET writer_generation = $2,
-                writer_token_hash = $3,
-                lease_expires_at = $5,
-                maintenance_version = maintenance_version + 1,
-                updated_at = NOW()
-          WHERE body_id = $1
-            AND writer_token_hash IS NOT DISTINCT FROM $4
-            AND state IN ('open', 'sealing', 'terminating')
-            AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-          RETURNING body_id, state, media_type, byte_length, digest,
-                    writer_generation, writer_token_hash, lease_expires_at,
-                    protected_until, maintenance_version, created_at,
-                    updated_at, ready_at`,
+        if (!result.rows.length) return false;
+        return body.nonce;
+      });
+    },
+    async readRange(stored, start, end) {
+      await ensure();
+      const result = await session.query<
+        {
+          start_offset: string | number | null;
+          part_length: string | number | null;
+          bytes: Uint8Array | ArrayBuffer | string | null;
+        }
+      >(
+        `SELECT part.* FROM ${bodies} body LEFT JOIN LATERAL (
+        WITH anchor AS (SELECT start_offset FROM ${parts} WHERE body_id=body.body_id AND start_offset<=$2 ORDER BY start_offset DESC LIMIT 1)
+        SELECT start_offset,octet_length(bytes) AS part_length,
+          substring(bytes FROM (GREATEST($2::bigint-start_offset,0)+1)::integer FOR (LEAST($3::bigint-start_offset,octet_length(bytes))-GREATEST($2::bigint-start_offset,0))::integer) AS bytes
+        FROM ${parts} WHERE body_id=body.body_id AND $3::bigint>$2::bigint AND start_offset>=COALESCE((SELECT start_offset FROM anchor),$2::bigint) AND start_offset<$3::bigint ORDER BY start_offset
+      ) part ON TRUE WHERE body.body_id=$1 AND body.reservation_id=$4 AND COALESCE(body.fenced_from,body.writer_generation)=$5 AND body.byte_length>=$3 AND body.state<>'aborted' ORDER BY part.start_offset`,
         [
-          input.bodyId,
-          generation,
-          reservationId,
-          existing.writer_token_hash,
-          takeoverLeaseExpiresAt,
+          stored.body.bodyId,
+          start,
+          end,
+          stored.body.reservationId,
+          stored.body.fencedFrom ?? stored.body.generation,
         ],
       );
-      if (!claimed.rows[0]) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive writer reservation raced with another owner.",
-        );
-      }
-      return writerCapabilityFromHead(mapSpill(claimed.rows[0]));
-    },
-    async head(bodyId) {
-      const row = await loadBody(bodyId);
-      if (
-        !row || row.state === "ready" || row.state === "incomplete"
-      ) return null;
-      return mapSpill(row);
-    },
-    async renew(input) {
-      await ensure();
-      const renewed = await session.query<BodyRow>(
-        `UPDATE ${bodies}
-            SET lease_expires_at = $3,
-                maintenance_version = maintenance_version + 1,
-                updated_at = NOW()
-          WHERE body_id = $1
-            AND state = 'open'
-            AND writer_token_hash = $2
-          RETURNING body_id, state, media_type, byte_length, digest,
-                    writer_generation, writer_token_hash, lease_expires_at,
-                    protected_until, maintenance_version, created_at,
-                    updated_at, ready_at`,
-        [input.writer.bodyId, input.writer.reservationId, deadline()],
-      );
-      if (!renewed.rows[0]) {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive writer no longer owns this body.",
-        );
-      }
-      const head = mapSpill(renewed.rows[0]);
-      return ({
-        remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-      } as const);
-    },
-    async append(input) {
-      await ensure();
-      return await atomically(async (transaction) => {
-        const existing = await requireBody(
-          input.writer.bodyId,
-          transaction,
-          true,
-        );
-        requireOwner(existing, input.writer.reservationId);
-        if (existing.state !== "open") {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body is not open.",
-          );
-        }
-        if (existing.media_type !== input.writer.mediaType) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body media type does not match the writer.",
-          );
-        }
-        if (input.bytes.byteLength === 0) {
-          return ({
-            startOffset: input.expectedOffset,
-            endOffset: asInteger(existing.byte_length, "byte length"),
-            protection: {
-              remainingMs: existing.lease_expires_at
-                ? Math.max(
-                  0,
-                  Date.parse(existing.lease_expires_at) - Date.now(),
-                )
-                : 0,
-            } as const,
-          } as const);
-        }
-        const start = asInteger(existing.byte_length, "byte length");
-        const duplicate = await transaction.query<PartRow>(
-          `SELECT start_offset, append_id, bytes
-             FROM ${parts}
-            WHERE body_id = $1 AND append_id = $2
-            LIMIT 1`,
-          [input.writer.bodyId, input.appendId],
-        );
-        if (duplicate.rows[0]) {
-          const row = duplicate.rows[0];
-          const bytes = bytesFromSql(row.bytes);
-          const same = asInteger(row.start_offset, "append start offset") ===
-              input.expectedOffset &&
-            bytes.byteLength === input.bytes.byteLength &&
-            bytes.every((byte, index) => byte === input.bytes[index]);
-          if (!same) {
-            throw createContentError(
-              "asset_conflict",
-              "Progressive append id was reused with different bytes.",
-            );
-          }
-          return ({
-            startOffset: input.expectedOffset,
-            endOffset: asInteger(existing.byte_length, "byte length"),
-            protection: {
-              remainingMs: existing.lease_expires_at
-                ? Math.max(
-                  0,
-                  Date.parse(existing.lease_expires_at) - Date.now(),
-                )
-                : 0,
-            } as const,
-          } as const);
-        }
-        if (input.expectedOffset !== start) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive append expected offset does not match the body.",
-          );
-        }
-        await transaction.query(
-          `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
-           VALUES ($1, $2, $3, $4)`,
-          [input.writer.bodyId, start, input.appendId, input.bytes],
-        );
-        const updated = await transaction.query<BodyRow>(
-          `UPDATE ${bodies}
-              SET byte_length = byte_length + $2,
-                  lease_expires_at = $4,
-                  maintenance_version = maintenance_version + 1,
-                  updated_at = NOW()
-            WHERE body_id = $1
-              AND state = 'open'
-              AND writer_token_hash = $3
-            RETURNING body_id, state, media_type, byte_length, digest,
-                      writer_generation, writer_token_hash, lease_expires_at,
-                      protected_until, maintenance_version, created_at,
-                      updated_at, ready_at`,
-          [
-            input.writer.bodyId,
-            input.bytes.byteLength,
-            input.writer.reservationId,
-            deadline(),
-          ],
-        );
-        if (!updated.rows[0]) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive writer no longer owns this body.",
-          );
-        }
-        const head = mapSpill(updated.rows[0]);
-        return ({
-          startOffset: input.expectedOffset,
-          endOffset: head.byteLength,
-          protection: {
-            remainingMs: Math.max(0, head.writerLeaseRemainingMs ?? 0),
-          } as const,
-        } as const);
-      });
-    },
-    async readRange(input) {
-      return await readPartsRange(input, true);
-    },
-    async terminate(input) {
-      await ensure();
-      return await atomically(async (transaction) => {
-        const existing = await requireBody(
-          input.writer.bodyId,
-          transaction,
-          true,
-        );
-        if (existing.state === "incomplete") {
-          const terminal = mapIncompleteHead(existing);
-          if (
-            input.expectedByteLength !== undefined &&
-            input.expectedByteLength !== terminal.byteLength
-          ) {
-            throw createContentError(
-              "asset_conflict",
-              "Incomplete body length does not match terminate expectation.",
-            );
-          }
-          if (
-            input.expectedDigest && input.expectedDigest !== terminal.digest
-          ) {
-            throw createContentError(
-              "asset_conflict",
-              "Incomplete body digest does not match terminate expectation.",
-            );
-          }
-          return terminal;
-        }
-        requireOwner(existing, input.writer.reservationId);
-        if (existing.state !== "open" && existing.state !== "terminating") {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body cannot be terminated from its current state.",
-          );
-        }
-        const byteLength = asInteger(existing.byte_length, "byte length");
+      if (!result.rows.length) bodyConflict();
+      const output = new Uint8Array(end - start);
+      let cursor = start;
+      for (const row of result.rows) {
         if (
-          input.expectedByteLength !== undefined &&
-          input.expectedByteLength !== byteLength
-        ) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body length does not match terminate expectation.",
+          row.start_offset === null || row.part_length === null ||
+          row.bytes === null
+        ) continue;
+        const partStart = integer(row.start_offset),
+          partEnd = partStart + integer(row.part_length),
+          from = Math.max(start, partStart),
+          to = Math.min(end, partEnd),
+          bytes = bytesFromSql(row.bytes);
+        if (from !== cursor || to < from || bytes.length !== to - from) {
+          bodyUnavailable(
+            "Database body range has missing or overlapping parts.",
           );
         }
-        const bytes = await readParts(input.writer.bodyId, transaction);
-        if (bytes.byteLength !== byteLength) {
-          throw createContentError(
-            "asset_corrupted",
-            "Progressive body parts do not match the committed byte length.",
-          );
-        }
-        const digest = await digestContent(bytes);
-        if (input.expectedDigest && input.expectedDigest !== digest) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body digest does not match terminate expectation.",
-          );
-        }
-        await compactParts(input.writer.bodyId, bytes, transaction);
-        const terminated = await transaction.query<BodyRow>(
-          `UPDATE ${bodies}
-              SET state = 'incomplete',
-                  digest = $2,
-                  protected_until = $4,
-                  writer_generation = NULL,
-                  writer_token_hash = NULL,
-                  lease_expires_at = NULL,
-                  maintenance_version = maintenance_version + 1,
-                  updated_at = NOW(),
-                  ready_at = NOW()
-            WHERE body_id = $1
-              AND writer_token_hash = $3
-              AND state IN ('open', 'terminating')
-            RETURNING body_id, state, media_type, byte_length, digest,
-                      writer_generation, writer_token_hash, lease_expires_at,
-                      protected_until, maintenance_version, created_at,
-                      updated_at, ready_at`,
-          [
-            input.writer.bodyId,
-            digest,
-            input.writer.reservationId,
-            deadline(),
-          ],
+        output.set(bytes, from - start);
+        cursor = to;
+      }
+      if (cursor !== end) bodyUnavailable("Database body range is truncated.");
+      return output;
+    },
+    async list(input) {
+      await ensure();
+      const result = await session.query<BodyRow>(
+        `${selection} WHERE body.body_id>$1 AND left(body.body_id,length($2))=$2 ORDER BY body.body_id LIMIT $3`,
+        [input.after, input.prefix, input.limit],
+      );
+      return result.rows.map(mapRow);
+    },
+    async delete(stored) {
+      await ensure();
+      return await runCommand("body.delete", {}, async (_, { transaction }) => {
+        const result = await transaction.query(
+          `DELETE FROM ${bodies} WHERE body_id=$1 AND version_token=$2 RETURNING body_id`,
+          [stored.body.bodyId, stored.versionToken],
         );
-        if (!terminated.rows[0]) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body termination raced with another writer.",
-          );
-        }
-        return mapIncompleteHead(terminated.rows[0]);
+        return result.rows.length === 1;
       });
     },
-    async abort(input) {
-      await ensure();
-      const removed = await session.query<{ body_id: string }>(
-        `DELETE FROM ${bodies}
-          WHERE body_id = $1
-            AND state = 'open'
-            AND writer_token_hash = $2
-         RETURNING body_id`,
-        [input.writer.bodyId, input.writer.reservationId],
-      );
-      if (removed.rows[0]) return;
-      const existing = await loadBody(input.writer.bodyId);
-      if (existing && existing.state === "open") {
-        throw createContentError(
-          "asset_conflict",
-          "Progressive writer no longer owns this body.",
-        );
-      }
-    },
-  };
-
+  });
   const store: BodyStore = {
-    kind: "database",
-    backendId,
-    async put(input) {
+    ...operations,
+    append: async (raw) => {
+      const input = captureBodyAppend(raw);
       await ensure();
-      const protectedUntil = putDeadline(input.protectedUntil);
-      return await atomically(async (transaction) => {
-        const inserted = await transaction.query<BodyRow>(
-          `INSERT INTO ${bodies}
-             (body_id, state, media_type, byte_length, digest, protected_until,
-              maintenance_version, updated_at, ready_at)
-           VALUES ($1, 'ready', $2, $3, $4, $5, 1, NOW(), NOW())
-           ON CONFLICT (body_id) DO NOTHING
-           RETURNING body_id, state, media_type, byte_length, digest,
-                     writer_generation, writer_token_hash, lease_expires_at,
-                     protected_until, maintenance_version, created_at,
-                     updated_at, ready_at`,
-          [
-            input.bodyId,
-            input.mediaType,
-            input.bytes.byteLength,
-            input.digest,
-            protectedUntil,
-          ],
-        );
-        if (inserted.rows[0]) {
-          await transaction.query(
-            `INSERT INTO ${parts} (body_id, start_offset, append_id, bytes)
-             VALUES ($1, 0, 'put', $2)`,
-            [input.bodyId, input.bytes],
-          );
-          const head = mapHead(inserted.rows[0]);
-          validateHead(input, head);
-          return head;
-        }
-
-        const existing = await loadBody(input.bodyId, transaction, true);
-        if (!existing) {
-          throw createContentError(
-            "asset_storage_unavailable",
-            "Database body disappeared during acquire-or-create.",
-          );
-        }
-        if (existing.state === "ready") {
-          validateHead(input, mapHead(existing));
-          const renewed = await transaction.query<BodyRow>(
-            `UPDATE ${bodies}
-                SET protected_until = GREATEST(
-                      COALESCE(protected_until, $2::timestamptz),
-                      $2::timestamptz
-                    ),
-                    writer_generation = NULL,
-                    writer_token_hash = NULL,
-                    lease_expires_at = NULL,
-                    maintenance_version = maintenance_version + 1,
-                    updated_at = NOW()
-              WHERE body_id = $1
-                AND state = 'ready'
-              RETURNING body_id, state, media_type, byte_length, digest,
-                        writer_generation, writer_token_hash, lease_expires_at,
-                        protected_until, maintenance_version, created_at,
-                        updated_at, ready_at`,
-            [input.bodyId, protectedUntil],
-          );
-          if (!renewed.rows[0]) {
-            throw createContentError(
-              "asset_storage_unavailable",
-              "Database body renewal lost its locked row.",
-            );
-          }
-          return mapHead(renewed.rows[0]);
-        }
-        if (existing.state === "incomplete") {
-          throw createContentError(
-            "asset_conflict",
-            "An incomplete body cannot be adopted as a ready body.",
-          );
-        }
-        if (existing.media_type !== input.mediaType) {
-          throw createContentError(
-            "asset_conflict",
-            "Stored body conflicts with the canonical metadata.",
-          );
-        }
-        const bytes = await readParts(input.bodyId, transaction);
-        if (
-          bytes.byteLength !== input.bytes.byteLength ||
-          !bytes.every((byte, index) => byte === input.bytes[index])
-        ) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body bytes conflict with finalization input.",
-          );
-        }
-        await compactParts(input.bodyId, input.bytes, transaction);
-        const finalized = await transaction.query<BodyRow>(
-          `UPDATE ${bodies}
-              SET state = 'ready',
-                  digest = $2,
-                  protected_until = $3,
-                  writer_generation = NULL,
-                  writer_token_hash = NULL,
-                  lease_expires_at = NULL,
-                  maintenance_version = maintenance_version + 1,
-                  updated_at = NOW(),
-                  ready_at = NOW()
-            WHERE body_id = $1
-              AND state IN ('open', 'sealing')
-            RETURNING body_id, state, media_type, byte_length, digest,
-                      writer_generation, writer_token_hash, lease_expires_at,
-                      protected_until, maintenance_version, created_at,
-                      updated_at, ready_at`,
-          [input.bodyId, input.digest, protectedUntil],
-        );
-        if (!finalized.rows[0]) {
-          throw createContentError(
-            "asset_storage_unavailable",
-            "Database progressive body finalization lost its locked row.",
-          );
-        }
-        const head = mapHead(finalized.rows[0]);
-        validateHead(input, head);
-        return head;
-      });
-    },
-    async head({ bodyId }) {
-      const row = await loadBody(bodyId);
-      if (!row) return null;
-      return mapAnyHead(row);
-    },
-    async read({ bodyId }) {
-      const row = await requireBody(bodyId);
-      if (row.state !== "ready" && row.state !== "incomplete") {
-        throw createContentError(
-          "asset_not_found",
-          "Database body is not immutable.",
-        );
-      }
-      const bytes = await readParts(bodyId);
-      return new ReadableStream({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      });
-    },
-    async readRange(input) {
-      return await readPartsRange(input);
-    },
-    async follow(input) {
-      const row = await requireBody(input.bodyId);
-      const terminal = row.state === "ready" || row.state === "incomplete";
-      const bytes = terminal
-        ? await readBodyBytes(store, { bodyId: input.bodyId })
-        : await progressive.readRange({
-          bodyId: input.bodyId,
-          offset: Math.max(0, input.offset ?? 0),
-          end: asInteger(row.byte_length, "byte length"),
-        });
-      const offset = Math.max(0, input.offset ?? 0);
-      return new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            terminal ? bytes.subarray(offset) : bytes,
-          );
-          controller.close();
-        },
-      });
-    },
-    reserve: progressive.reserve,
-    renew: progressive.renew,
-    append: progressive.append,
-    async seal(input) {
-      await ensure();
-      return await atomically(async (transaction) => {
-        const existing = await requireBody(
-          input.writer.bodyId,
-          transaction,
-          true,
-        );
-        requireOwner(existing, input.writer.reservationId);
-        if (existing.state !== "open" && existing.state !== "sealing") {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body is not open.",
-          );
-        }
-        const byteLength = asInteger(existing.byte_length, "byte length");
-        if (
-          input.expectedByteLength !== undefined &&
-          input.expectedByteLength !== byteLength
-        ) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body length does not match seal expectation.",
-          );
-        }
-        const bytes = await readParts(input.writer.bodyId, transaction);
-        const digest = await digestContent(bytes);
-        if (input.expectedDigest && input.expectedDigest !== digest) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body digest does not match seal expectation.",
-          );
-        }
-        await compactParts(input.writer.bodyId, bytes, transaction);
-        const sealed = await transaction.query<BodyRow>(
-          `UPDATE ${bodies}
-              SET state = 'ready',
-                  digest = $2,
-                  protected_until = $4,
-                  writer_generation = NULL,
-                  writer_token_hash = NULL,
-                  lease_expires_at = NULL,
-                  maintenance_version = maintenance_version + 1,
-                  updated_at = NOW(),
-                  ready_at = NOW()
-            WHERE body_id = $1
-              AND writer_token_hash = $3
-              AND state IN ('open', 'sealing')
-            RETURNING body_id, state, media_type, byte_length, digest,
-                      writer_generation, writer_token_hash, lease_expires_at,
-                      protected_until, maintenance_version, created_at,
-                      updated_at, ready_at`,
-          [
-            input.writer.bodyId,
-            digest,
-            input.writer.reservationId,
-            deadline(),
-          ],
-        );
-        if (!sealed.rows[0]) {
-          throw createContentError(
-            "asset_conflict",
-            "Progressive body seal raced with another writer.",
-          );
-        }
-        return mapHead(sealed.rows[0]);
-      });
-    },
-    terminate: progressive.terminate,
-    abort: progressive.abort,
-    maintenance: {
-      async list(input) {
-        await ensure();
-        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
-          throw new TypeError(
-            "Body maintenance idle duration must be a non-negative integer.",
-          );
-        }
-        const states = input.states.length > 0 ? [...input.states] : [];
-        if (states.length === 0) {
-          return ({ bodies: [] as const } as const);
-        }
-        const after = input.after ?? "";
-        const result = await session.query<BodyRow>(
-          `SELECT body_id, state, media_type, byte_length, digest,
-                  writer_generation, writer_token_hash, lease_expires_at,
-                  protected_until, maintenance_version, created_at, updated_at,
-                  ready_at
-             FROM ${bodies}
-            WHERE state = ANY($1)
-              AND body_id > $2
-              AND LEFT(body_id, LENGTH($5)) = $5
-              AND updated_at <= NOW() -
-                    ($3::double precision * INTERVAL '1 millisecond')
-            ORDER BY body_id
-            LIMIT $4`,
-          [states, after, input.idleForMs, input.limit, input.prefix ?? ""],
-        );
-        const page = result.rows.map(mapAnyHead);
-        return ({
-          bodies: page,
-          ...(page.length === input.limit
-            ? { after: page[page.length - 1].bodyId }
-            : {}),
-        } as const);
-      },
-      async delete(input) {
-        await ensure();
-        if (!Number.isSafeInteger(input.idleForMs) || input.idleForMs < 0) {
-          throw new TypeError(
-            "Body maintenance idle duration must be a non-negative integer.",
-          );
-        }
-        const removed = await session.query<{ body_id: string }>(
-          `DELETE FROM ${bodies}
-            WHERE body_id = $1
-              AND state = $2
-              AND maintenance_version = $3
-              AND (protected_until IS NULL OR protected_until <= NOW())
-              AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
-              AND updated_at <= NOW() -
-                    ($4::double precision * INTERVAL '1 millisecond')
-           RETURNING body_id`,
-          [
-            input.bodyId,
-            input.expectedState,
-            input.expectedMaintenanceVersion,
-            input.idleForMs,
-          ],
-        );
-        return Boolean(removed.rows[0]);
-      },
+      return await runCommand(
+        "body.append",
+        {},
+        async (_, { transaction }) =>
+          await appendDatabaseBody(transaction, schemaName, input),
+      );
     },
   };
+  readers.set(
+    store.readRange,
+    (transaction, readAuthority) => {
+      const reader = createDatabaseBodyStore({
+        ...options,
+        session: transaction ?? session,
+        provisioned: true,
+      });
+      return {
+        async readRange(input) {
+          if (readAuthority) await readAuthority(schemaName);
+          else if (transaction) {
+            assertSchemaCommandTransaction(transaction, schemaName);
+          }
+          const result = await reader.readRange(input);
+          if (readAuthority) await readAuthority(schemaName);
+          else if (transaction) {
+            assertSchemaCommandTransaction(transaction, schemaName);
+          }
+          return result;
+        },
+      };
+    },
+  );
+  writers.set(store.put, (transaction) => {
+    assertSchemaCommandTransaction(transaction, schemaName);
+    return createDatabaseBodyStore({ ...options, session: transaction });
+  });
   provisioners.set(store, ensure);
   return store;
+}
+
+/** Physical bytes join the checkpoint transaction and its rollback boundary. */
+export async function appendDatabaseBody(
+  transaction: SqlExecutor,
+  schema: string,
+  raw: import("./body-store.ts").AppendBodyInput,
+): Promise<import("./body-store.ts").AppendResult> {
+  assertSchemaCommandTransaction(transaction, schema);
+  const { bodies, parts } = bodyStoreTables(schema);
+  const input = captureBodyAppend(raw),
+    digest = await digestContent(input.bytes);
+  const result = await transaction.query<{ version_token: string }>(
+    `
+        WITH current AS (
+          SELECT body.*,part.start_offset,part.bytes,part.part_digest
+          FROM ${bodies} body LEFT JOIN ${parts} part
+            ON part.body_id=body.body_id AND part.append_id=$6
+          WHERE body.body_id=$1 AND body.reservation_id=$2 AND body.writer_generation=$3
+            AND body.media_type=$4 AND body.state='open' AND body.fenced_from IS NULL
+        ), changed AS (
+          UPDATE ${bodies} SET byte_length=$5::bigint+octet_length($7::bytea),
+            version_token=$9,maintenance_version=maintenance_version+1,updated_at=NOW()
+          WHERE body_id=$1 AND EXISTS (SELECT 1 FROM current WHERE start_offset IS NULL AND byte_length=$5)
+          RETURNING version_token
+        ), inserted AS (
+          INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+          SELECT $1,$5,$6,$7,$8 FROM changed RETURNING body_id
+        )
+        SELECT version_token FROM changed WHERE EXISTS(SELECT 1 FROM inserted)
+        UNION ALL SELECT version_token FROM current
+          WHERE start_offset=$5 AND bytes=$7::bytea AND part_digest=$8
+            AND byte_length >= $5::bigint+octet_length($7::bytea)`,
+    [
+      input.writer.bodyId,
+      input.writer.reservationId,
+      input.writer.generation,
+      input.writer.mediaType,
+      input.expectedOffset,
+      input.appendId,
+      input.bytes,
+      digest,
+      crypto.randomUUID(),
+    ],
+  );
+  if (!result.rows.length) bodyConflict();
+  return Object.freeze({
+    startOffset: input.expectedOffset,
+    endOffset: input.expectedOffset + input.bytes.length,
+    versionToken: result.rows[0].version_token,
+  });
 }

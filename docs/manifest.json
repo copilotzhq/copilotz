@@ -172,6 +172,11 @@
           "title": "Streams",
           "slug": "streams",
           "description": "Progressive bytes from Actions, stream.output payloads, replay and retention."
+        },
+        {
+          "title": "Views",
+          "slug": "views",
+          "description": "Scoped one-shot text presentations with an authorized projector."
         }
       ]
     },
@@ -257,6 +262,11 @@
           "title": "Deployment Topologies",
           "slug": "embedding-and-hypervisors",
           "description": "Embedded processes or Gateways and Workers with shared persistence."
+        },
+        {
+          "title": "Trusted Host Commands",
+          "slug": "host-commands",
+          "description": "Fixed-scope host SQL, atomic receipts and explicit startup recovery."
         },
         {
           "title": "Runtimes and Host Capabilities",

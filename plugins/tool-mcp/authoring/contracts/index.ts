@@ -10,6 +10,8 @@ export type MCPServer = Readonly<{
   env?: Readonly<Record<string, unknown>> | null;
   metadata?: Readonly<Record<string, unknown>> | null;
   historyPolicyDefaults?: ToolHistory;
+  /** Host-reviewed read-only tool names. Provider hints alone do not grant replay. */
+  readOnlyTools?: readonly string[];
   toolPolicies?: Readonly<Record<string, ToolHistory>>;
 }>;
 

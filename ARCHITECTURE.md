@@ -36,7 +36,7 @@ start with [Architecture](docs/architecture.md); documentation changes follow
 [DOCUMENTATION.md](DOCUMENTATION.md).
 
 The runtime is extended through **plugins**. A plugin is a package of
-capabilities that contributes some combination of five primitives:
+capabilities that contributes some combination of six primitives:
 
 - **Collections** represent state and provide the operations for mutating and
   querying that state.
@@ -52,13 +52,21 @@ capabilities that contributes some combination of five primitives:
 - **Adapters** provide interchangeable implementations for variable external or
   infrastructural boundaries, such as different LLM providers, storage systems,
   search engines, or execution environments.
+- **Views** present authorized data for a selected mode and renderer. Hosts bind
+  read-only Collection access to the viewer. The built-in text renderer is pure
+  and one-shot.
 
 These primitives deliberately operate at different levels of abstraction.
 **Collections describe what is**, **actions describe what the system can do**,
-and **processors decide when those capabilities should be used**. Resources
-provide the configuration that influences those decisions, while adapters
-isolate the parts of an implementation that may vary depending on the external
-system being used.
+and **processors decide when those capabilities should be used**. **Views
+describe how authorized data is presented**. Resources provide the configuration
+that influences those decisions, while adapters isolate the parts of an
+implementation that may vary depending on the external system being used. View
+definitions, resolution, and the pure text renderer are exported from
+`@copilotz/copilotz/views`. Collection subscriptions await an owner-push
+implementation; operation observations remain available through the client. The
+package does not include a React renderer or browser component scheduler. See
+[Views](docs/views.md).
 
 Events connect these components without requiring them to know about one another
 directly. A collection mutation can emit lifecycle events such as created,
@@ -214,13 +222,12 @@ guarantee that protocol sets `readyGarbageCollection: false`; its `put` remains
 immutable and integrity-checking but need not renew protection. The built-in S3
 Adapter follows this conservative model.
 
-Body liveness uses one schema-wide advisory read/write barrier. Asset adoption
-holds the shared side through graph commit; physical Body deletion holds the
-exclusive side while it rechecks the indexed Ready Asset nodes. The graph
-transaction validates the captured protection deadline but performs no external
-BodyStore I/O. A Ready Asset node's indexed `bodyId` is the sole durable
-liveness authority. Collections have no `bodyRefs` declaration, and no
-`body_references` table exists.
+Body liveness uses owner-serialized adoption and durable retirement commands.
+Retirement rechecks domain ownership and retention deadlines before recording an
+irreversible intent. Physical deletion runs outside the command, and a later
+command confirms its outcome. Adoption rejects copies already retiring or
+retired. The graph transaction validates captured protection without external
+BodyStore I/O; domain ownership keeps referenced content alive.
 
 Asset provenance is runtime-neutral. It is one opaque provenance identity
 `{ type, id }`; semantic plugins may use values such as `thread`, while
@@ -429,10 +436,10 @@ the core to any one of them.
 The core conceptual model is:
 
 **Events describe what happened. Collections describe what is. Processors decide
-what happens next. Actions implement what can be done. Resources describe how
-the system should be configured. Adapters determine how interchangeable external
-boundaries are implemented. Plugins compose these pieces into higher-level
-behavior.**
+what happens next. Actions implement what can be done. Views present authorized
+data. Resources describe how the system should be configured. Adapters determine
+how interchangeable external boundaries are implemented. Plugins compose these
+pieces into higher-level behavior.**
 
 Resource declarations can contribute ordinary plugin dependencies. These resolve
 synchronously before owner registration; shared plugin objects register once,

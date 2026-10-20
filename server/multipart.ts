@@ -1,3 +1,4 @@
+import { AUTHORITY_ADMISSION_MS } from "../runtime/authorization/authority.ts";
 /** Lossless multipart transport for request-scoped Application outputs. @module */
 
 import type {
@@ -23,7 +24,7 @@ import {
 import { outputActionRuns } from "./output-order.ts";
 
 /** Hard ceiling for one HTTP observation, including a client that stops reading. */
-export const MAX_OBSERVATION_LIFETIME_MS = 300_000;
+export const MAX_OBSERVATION_LIFETIME_MS = AUTHORITY_ADMISSION_MS;
 
 const encoder = new TextEncoder();
 const FRAME_HEADER = "x-copilotz-frame";
@@ -44,6 +45,7 @@ type PartOptions = Readonly<{
   offset?: number;
   cursor?: string;
   maxJsonFrameBytes?: number;
+  position?: number;
 }>;
 
 class MultipartFrameCapacityError extends RangeError {
@@ -106,6 +108,7 @@ function part(
     ...(options.cursor
       ? [`${CURSOR_HEADER}: ${safeHeader(options.cursor, "Replay cursor")}`]
       : []),
+    `x-copilotz-position: ${options.position}`,
     "",
     "",
   ].join("\r\n");
@@ -162,7 +165,7 @@ export function applicationOutputsMultipartResponse(
     signal?: AbortSignal;
     /** Optional lower bound for logical JSON output envelopes. */
     maxJsonFrameBytes?: number;
-    /** Renew within this many milliseconds; may only shorten the five-minute ceiling. */
+    /** Renew within this many milliseconds; may only shorten the 15-minute ceiling. */
     renewAfterMs?: number;
   }> = {},
 ): Response {
@@ -190,7 +193,9 @@ export function applicationOutputsMultipartResponse(
       `renewAfterMs must be an integer between 1 and ${MAX_OBSERVATION_LIFETIME_MS}.`,
     );
   }
-  const partOptions = { maxJsonFrameBytes } as const;
+  const partOptions = { maxJsonFrameBytes, position: 0 };
+  let framePosition = 0;
+  const deliveredPayloadPositions = new Map<string, number>();
   const transport = new TransformStream<Uint8Array, Uint8Array>(undefined, {
     highWaterMark: 256 * 1024,
     size: (value) => value.byteLength,
@@ -277,10 +282,15 @@ export function applicationOutputsMultipartResponse(
   const writePart = (
     build: (replayCursor: string) => Uint8Array,
     mutations: readonly OperationReplayCursorMutation[] = [],
+    control = false,
   ): Promise<void> =>
     serializeFrame(async () => {
+      partOptions.position = framePosition + 1;
       const frame = build(cursorTracker.cursor(mutations));
-      await write(frame);
+      if (source.authorizePublication && !control) {
+        await source.authorizePublication(() => write(frame));
+      } else await write(frame);
+      framePosition++;
       cursorTracker.commit(mutations);
     });
   const pump = async (
@@ -307,6 +317,7 @@ export function applicationOutputsMultipartResponse(
       };
     };
     try {
+      deliveredPayloadPositions.set(output.streamId, offset);
       while (true) {
         const next = await reader.read();
         if (cancelled) return;
@@ -327,6 +338,7 @@ export function applicationOutputsMultipartResponse(
               cursor,
             }), [streamMutation("offset", toOffset)]);
           offset = toOffset;
+          deliveredPayloadPositions.set(output.streamId, offset);
         }
       }
       if (cancelled) return;
@@ -337,8 +349,11 @@ export function applicationOutputsMultipartResponse(
       if (cancelled || !terminal) return;
       const streamError = streamErrorOutput(output.streamId, terminal);
       const terminalOffset = terminal.offset;
-      if (streamError === null && terminalOffset !== offset) {
-        throw new Error("Completed stream Body ended at an invalid offset.");
+      if (
+        terminal.availability === "retained" && terminalOffset > offset ||
+        streamError === null && terminalOffset !== offset
+      ) {
+        throw new Error("Retained stream Body ended at an invalid offset.");
       }
       if (streamError) {
         await writePart(
@@ -377,6 +392,7 @@ export function applicationOutputsMultipartResponse(
             : [],
         );
       }
+      deliveredPayloadPositions.delete(output.streamId);
     } catch (error) {
       // A failed read is an interrupted observation, not a durable stream outcome.
       // Closing the transport lets clients retry their last applied checkpoint.
@@ -403,18 +419,21 @@ export function applicationOutputsMultipartResponse(
       requestRenewal();
       await renewalCleanup;
       await frameTail;
-      await writePart((cursor) =>
-        part(
-          boundary,
-          "observation-renew",
-          encoder.encode(
-            JSON.stringify({
-              type: "observation.renew",
-              reason: renewalReason,
-            }),
+      await writePart(
+        (cursor) =>
+          part(
+            boundary,
+            "observation-renew",
+            encoder.encode(
+              JSON.stringify({
+                type: "observation.renew",
+                reason: renewalReason,
+              }),
+            ),
+            { ...partOptions, cursor },
           ),
-          { ...partOptions, cursor },
-        )
+        [],
+        true,
       );
       await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)));
       await writer.close();
@@ -423,14 +442,24 @@ export function applicationOutputsMultipartResponse(
     heartbeat = setInterval(() => {
       if (heartbeatPending || cancelled) return;
       heartbeatPending = true;
-      void writePart((cursor) =>
-        part(
+      void writePart((cursor) => {
+        const heartbeat = source.heartbeat?.([
+          ...deliveredPayloadPositions.keys(),
+        ]);
+        return part(
           boundary,
           "output",
-          encoder.encode(JSON.stringify({ type: "observation.heartbeat" })),
+          encoder.encode(JSON.stringify({
+            type: "observation.heartbeat",
+            headSeq: heartbeat?.headSeq ?? "0",
+            payloadPositions: heartbeat?.payloadPositions ?? [],
+            deliveredPayloadPositions: [...deliveredPayloadPositions].map((
+              [streamId, committedOffset],
+            ) => ({ streamId, committedOffset })),
+          })),
           { ...partOptions, cursor },
-        )
-      )
+        );
+      })
         .catch((error) =>
           isRenewalError(error) ? requestRenewal() : detach(error)
         ).finally(() => {
@@ -619,6 +648,9 @@ export function applicationOutputsMultipartResponse(
       await writer.close();
     } catch (error) {
       if (isRenewalError(error) || renewalRequested) {
+        if ((error as { reason?: string })?.reason === "lifetime") {
+          renewalReason = "lifetime";
+        }
         try {
           if (!renewalRequested && isDrainingRenewalError(error)) {
             await waitForPumps(pumps);
@@ -627,6 +659,29 @@ export function applicationOutputsMultipartResponse(
         } catch (closeError) {
           await writer.abort(closeError).catch(() => undefined);
         }
+        return;
+      }
+      if ((error as { code?: string })?.code === "revoked") {
+        await writePart(
+          (cursor) =>
+            part(
+              boundary,
+              "output",
+              encoder.encode(
+                JSON.stringify({
+                  type: "observation.revoked",
+                  code: "revoked",
+                }),
+              ),
+              { ...partOptions, cursor },
+            ),
+          [],
+          true,
+        ).catch(() => undefined);
+        await source.cancel("revoked").catch(() => undefined);
+        await serializeFrame(() => write(encoder.encode(`--${boundary}--\r\n`)))
+          .catch(() => undefined);
+        await writer.close().catch(() => undefined);
         return;
       }
       if (isReplayCapacityError(error)) {

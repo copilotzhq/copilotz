@@ -221,6 +221,7 @@ async function invoke(
   id: string,
   input: unknown,
   sourceEvent: ProcessorEvent,
+  operationKey?: string,
 ): Promise<unknown> {
   const found = context.actions[id] as
     | ((input: unknown, options?: ActionCallOptions) => Promise<unknown>)
@@ -228,7 +229,10 @@ async function invoke(
   if (!found) {
     throw new Error(`Unknown Action '${id}'.`);
   }
-  return await found(input, actionOptions(context, sourceEvent, id));
+  return await found(input, {
+    ...actionOptions(context, sourceEvent, id),
+    ...(operationKey ? { operationKey } : {}),
+  });
 }
 Deno.test("built-in tools exclude optional plugin-owned skill tools", () => {
   const plugin = builtInToolsPlugin;
@@ -314,10 +318,16 @@ Deno.test("asset, skill, clock, and wait tools use typed capabilities", async ()
       }, sourceEvent) as Record<string, unknown>;
       await assertRejects(
         async () =>
-          await invoke(processor, "read_skill_resource", {
-            skill: "contract-skill",
-            path: "../secret",
-          }, sourceEvent),
+          await invoke(
+            processor,
+            "read_skill_resource",
+            {
+              skill: "contract-skill",
+              path: "../secret",
+            },
+            sourceEvent,
+            "built-in-test:read-skill-resource-invalid-path",
+          ),
         TypeError,
       );
       const clock = await invoke(processor, "get_current_time", {

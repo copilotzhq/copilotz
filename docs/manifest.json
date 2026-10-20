@@ -101,7 +101,7 @@
         {
           "title": "Ch 19: Schedule Recurring Work",
           "slug": "getting-started/part-5-operate-and-scale/19-schedule-recurring-work",
-          "description": "Turn host clock ticks into durable occurrences that save digest notes."
+          "description": "Store recurring jobs that the database owner wakes as durable, stable occurrences."
         },
         {
           "title": "Ch 20: Measure Model and Tool Usage",
@@ -111,7 +111,7 @@
         {
           "title": "Ch 21: Deploy and Scale",
           "slug": "getting-started/part-5-operate-and-scale/21-deploy-and-scale",
-          "description": "Split the app into a Gateway and Worker sharing persistence and transport."
+          "description": "Split the app into a Gateway that owns the database and a Worker that calls it over a transport."
         },
         {
           "title": "Ch 22: Organize, Share and Evolve Plugins",

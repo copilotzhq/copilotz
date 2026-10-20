@@ -269,8 +269,9 @@ resolves and what you have afterwards.
 
 - [Chapter 19: Schedule Recurring Work](getting-started/part-5-operate-and-scale/19-schedule-recurring-work.md)
   · R · Requires: 07. A timer on its own fires, but it gives no durable identity
-  to each occurrence and no record of the work that ran. Declare schedules, let
-  the host clock supply ticks, and the runtime records due work as events.
+  to each occurrence and no record of the work that ran. Store recurring jobs,
+  and the database owner's durable alarm records each due occurrence as an
+  Event.
 - [Chapter 20: Measure Model and Tool Usage](getting-started/part-5-operate-and-scale/20-measure-usage.md)
   · H, optional · Requires: 17. You cannot tell what a conversation consumed.
   Record usage and query it from a client.

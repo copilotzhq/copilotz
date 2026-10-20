@@ -38,12 +38,14 @@ export async function fixture(
   const schema = `subs_${crypto.randomUUID().replaceAll("-", "")}`;
   await provisionCopilotzSchema(db, schema);
   let statements = 0;
+  const statementsSql: { sql: string; params?: unknown[] }[] = [];
   const session = {
     query<TRow extends Record<string, unknown>>(
       sql: string,
       params?: unknown[],
     ) {
       statements++;
+      statementsSql.push({ sql, params });
       return db.query<TRow>(sql, params);
     },
     transaction: <T>(
@@ -53,6 +55,7 @@ export async function fixture(
         work({
           query(sql, params) {
             statements++;
+            statementsSql.push({ sql, params });
             return tx.query(sql, params);
           },
         })
@@ -203,6 +206,7 @@ export async function fixture(
     definitions: { entry, member },
     registration,
     intents,
+    statementsSql,
     counters: () => ({ statements, evaluations }),
     async close() {
       notices.close();

@@ -13,6 +13,7 @@ import {
 } from "../client/index.ts";
 import {
   type BrowserViewContext,
+  createBrowserPorts,
   createBrowserRuntime,
   type ReadState,
 } from "../client/web/index.ts";
@@ -150,7 +151,7 @@ Deno.test("device: real owner → WebSocket → SDK → Collection → View, Act
   });
   const renders: ReadState[] = [];
   const runtime = await createBrowserRuntime({
-    live: device,
+    ...createBrowserPorts(client),
     plugins: [{
       id: "app",
       collections: {
@@ -191,25 +192,6 @@ Deno.test("device: real owner → WebSocket → SDK → Collection → View, Act
         }),
       },
     }],
-    actions: {
-      async invoke(id, input, options) {
-        const receipt = await client.actions.submit(id, input, {
-          idempotencyKey: options.idempotencyKey,
-          signal: options.signal,
-        });
-        options.accepted(receipt.operationId);
-        await client.operations.observe({
-          operationIds: [receipt.operationId],
-          signal: options.signal,
-          onFrame() {},
-        });
-        const result = await client.operations.result(receipt.operationId);
-        return { value: result.value, seq: result.seq };
-      },
-      async cancel(id) {
-        await client.operations.cancel(id);
-      },
-    },
     renderer: {
       id: "fake",
       mount(_target, output) {

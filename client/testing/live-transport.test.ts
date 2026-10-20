@@ -23,6 +23,7 @@ export class MemorySubscriptions implements SubscriptionTransport {
   private key(read: ReadRequest) {
     return readKey({
       collection: read.collection,
+      ...(read.progressOnly ? { progressOnly: true } : {}),
       query: read.id === undefined
         ? read.query ?? {}
         : { where: { id: read.id }, limit: 1 },
@@ -33,7 +34,11 @@ export class MemorySubscriptions implements SubscriptionTransport {
     query: Parameters<SubscriptionTransport["observe"]>[1],
     options: Parameters<SubscriptionTransport["observe"]>[2],
   ) {
-    const key = this.key({ collection, query });
+    const key = this.key({
+      collection,
+      query,
+      progressOnly: options.progressOnly,
+    });
     const queue = new SubscriptionQueue<SubscriptionFrame>();
     const listeners = this.listeners.get(key) ?? new Set();
     this.listeners.set(key, listeners);

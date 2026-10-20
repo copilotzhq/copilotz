@@ -128,3 +128,12 @@ over SDK-owned layers; only the SDK decides when each read has covered the
 Action sequence. `ActionTransport` accepts decimal-string sequences as well as
 safe integers. Content selections are forwarded and resolved using the existing
 Collection content reader, with its declared fields and byte budget.
+
+For query invalidation without records, use
+`client.collections.observe(name, {}, {progressOnly:true})`. This is the same
+subscription protocol and state machine: snapshots and deltas have empty rows,
+while `collectionChanged` distinguishes mutations from unrelated owner progress.
+The owner performs no Collection row scan; normal read authorization, permission
+notices, checkpoint resume and revocation still apply. Row query/content options
+cannot be combined with progressOnly, and a progress cursor cannot resume a row
+selection. `/web` uses this mode for query-Action dependencies.

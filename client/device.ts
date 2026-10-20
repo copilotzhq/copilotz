@@ -217,7 +217,12 @@ export function createDeviceTransport(
       if (channels.size >= DEVICE_LIMITS.channels) {
         throw protocolError("Device channel capacity exceeded");
       }
-      const key = JSON.stringify([collection, query, observation.content]);
+      const key = JSON.stringify([
+        collection,
+        query,
+        observation.content,
+        observation.progressOnly,
+      ]);
       const slots = observation.signal
         ? identities.get(observation.signal) ?? new Map()
         : new Map();
@@ -256,6 +261,7 @@ export function createDeviceTransport(
           query,
           cursor: observation.checkpoint,
           content: observation.content,
+          progressOnly: observation.progressOnly,
         });
       } catch (error) {
         channel.stop(error);

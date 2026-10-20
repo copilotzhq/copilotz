@@ -16,10 +16,22 @@ export function localStorageAdapter(
   };
 }
 export function urlStorageAdapter(
-  host: { read(): URL; replace(url: URL): void },
+  host: {
+    read(): URL;
+    replace(url: URL): void;
+    events?: Pick<EventTarget, "addEventListener" | "removeEventListener">;
+  },
   parameter = "workspace",
 ): StorageAdapter {
   return {
+    ...(host.events
+      ? {
+        subscribe(listener: () => void) {
+          host.events!.addEventListener("popstate", listener);
+          return () => host.events!.removeEventListener("popstate", listener);
+        },
+      }
+      : {}),
     load(key) {
       const value = host.read().searchParams.get(`${parameter}.${key}`);
       return value === null ? undefined : JSON.parse(value) as readonly Row[];

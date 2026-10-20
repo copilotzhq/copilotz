@@ -3,6 +3,7 @@ import type { CollectionContentOptions } from "../../runtime/collections/read-op
 export type Row = Readonly<{ id: string; [field: string]: unknown }>;
 export type ReadRequest = Readonly<{
   collection: string;
+  progressOnly?: boolean;
   content?: CollectionContentOptions;
   id?: string;
   query?: Readonly<Record<string, unknown>>;

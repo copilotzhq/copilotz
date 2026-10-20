@@ -34,6 +34,8 @@ export type SubscriptionFrame =
   | Readonly<{ t: "revoked"; reason: string }>;
 export type SubscriptionOptions = Readonly<
   {
+    /** Authorize and follow Collection progress without selecting or disclosing rows. */
+    progressOnly?: boolean;
     checkpoint?: string;
     signal?: AbortSignal;
     content?: import("../collections/read-options.ts").CollectionContentOptions;

@@ -310,9 +310,22 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       await pause(100, signal);
     }
   };
+  const subscriptions: SubscriptionTransport = {
+    observe(collection, query, observation) {
+      if (!options.device) {
+        return Promise.reject(
+          new Error(
+            "An authenticated device subscription transport is required.",
+          ),
+        );
+      }
+      return options.device.observe(collection, query, observation);
+    },
+  };
   const actionPath = (id: string) =>
     `/actions/${id.split(".").map(segment).join("/")}`;
   return ({
+    subscriptions,
     actions: {
       submit: (id: string, input: unknown, options: SubmitOptions) =>
         submit(actionPath(id), input, options),
@@ -352,7 +365,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
             "An authenticated device subscription transport is required.",
           );
         }
-        return createLiveQuery(options.device, name, query, observation);
+        return createLiveQuery(subscriptions, name, query, observation);
       },
       get: (name: string, id: string) =>
         json(`/collections/${segment(name)}/${segment(id)}`),
@@ -438,6 +451,8 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
 }
 
 export type CopilotzClient = Readonly<{
+  /** Shared raw subscription capability for platform hosts. */
+  subscriptions: SubscriptionTransport;
   actions: Readonly<{
     submit(
       id: string,

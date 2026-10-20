@@ -69,6 +69,7 @@ export function createLiveQuery(
 ): LiveQuery {
   query = structuredClone(query);
   const content = structuredClone(options.content);
+  const progressOnly = options.progressOnly;
   if (
     options.checkpoint &&
     (!options.initial || options.initial.checkpoint !== options.checkpoint)
@@ -203,6 +204,7 @@ export function createLiveQuery(
           attached = await transport.observe(collection, query, {
             checkpoint: resync ? undefined : checkpoint,
             content,
+            progressOnly,
             signal,
           });
           for await (const frame of attached.frames) {

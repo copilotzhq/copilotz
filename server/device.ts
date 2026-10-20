@@ -192,6 +192,8 @@ export function attachDeviceSocket(
       frame.collection.length > 256 ||
       !frame.query || typeof frame.query !== "object" ||
       Array.isArray(frame.query) ||
+      frame.progressOnly !== undefined &&
+        typeof frame.progressOnly !== "boolean" ||
       frame.cursor !== undefined &&
         (typeof frame.cursor !== "string" || !frame.cursor ||
           frame.cursor.length > 16384)
@@ -215,6 +217,7 @@ export function attachDeviceSocket(
         frame.query as CollectionQuery,
         {
           checkpoint: frame.cursor as string | undefined,
+          progressOnly: frame.progressOnly as boolean | undefined,
           content: frame.content as SubscriptionOptions["content"],
           signal: channel.abort.signal,
         },

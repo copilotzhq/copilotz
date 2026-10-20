@@ -5,6 +5,11 @@ consolidated from the read-only chat UI source. They retain Radix behavior and
 Tailwind/CVA variants. `patterns.tsx` extends them for Views; Markdown is
 shared. Apps import `@copilotz/copilotz/web/kit` and reuse plugin Views.
 
+`Markdown` applies `markdownUrlPolicy` from `@copilotz/copilotz/web`: it drops
+unsafe links, opens links in a new tab without a referrer, and loads only
+relative, same-origin or `imageOrigins` images. Any other image renders as its
+alt text and is never fetched.
+
 Process `styles.css` with Tailwind CSS 4 and `@tailwindcss/typography`. Add the
 app's own source path to Tailwind scanning. React and React DOM must resolve to
 one copy in the host bundle (19.1.1 in this repository). Core entry points

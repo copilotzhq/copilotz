@@ -592,7 +592,11 @@ Deno.test("Cookie settings reject unsafe syntax and honor configured attributes"
   ) {
     let refused = false;
     try {
-      defineServerFacade({ sessionCookie });
+      // Cookie validation runs before authentication is ever used.
+      defineServerFacade({
+        sessionCookie,
+        authenticate: () => new Response(null, { status: 401 }),
+      });
     } catch {
       refused = true;
     }

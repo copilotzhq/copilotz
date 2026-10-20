@@ -1,3 +1,4 @@
+import { hostIngressProof } from "../application/ingress/authority.ts";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext, RuntimeContext } from "../actions/types.ts";
 import { listen } from "../adapters/deno/listen.ts";
@@ -337,11 +338,18 @@ for (
           void sent.done.catch(() => undefined);
           await sent.outputs.cancel();
         } else {
-          await store.append({
-            type: "replacement.request",
-            namespace: "replacement",
-            payload: {},
-          }, ["processor:replacement.receipt"]);
+          await store.commitMutation({
+            draft: {
+              type: "replacement.request",
+              namespace: "replacement",
+              payload: {},
+            },
+            ingress: hostIngressProof(),
+            consumers: [{
+              consumerId: "processor:replacement.receipt",
+              settlement: "inherit",
+            }],
+          });
           await gateway.application.recoverAll({ limit: 100 });
         }
         const deadline = new Promise<never>((_, reject) => {

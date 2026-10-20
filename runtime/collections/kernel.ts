@@ -1,3 +1,7 @@
+import {
+  hostIngressProof,
+  type OwnerIngressProof,
+} from "../application/ingress/authority.ts";
 import { collectionAuthorizationInput } from "../authorization/collection-input.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { afterSqlCommit } from "../events/session.ts";
@@ -1020,6 +1024,18 @@ export function createCollectionKernel(
     if (!definition) collectionPolicyRefused();
     return definition;
   };
+  const captureMutationIngress = (): OwnerIngressProof | undefined => {
+    const authority = captureCollectionInvocation();
+    // Capture before queuing: an empty command-local scope is not host evidence.
+    return !authority || authority.trustedHost || authority.authority
+      ? hostIngressProof()
+      : undefined;
+  };
+  const assertUnboundCollectionAccess = () => {
+    const authority = captureCollectionInvocation() ??
+      policyReads.getStore()?.authority;
+    if (authority && !authority.trustedHost) collectionPolicyRefused();
+  };
   const readPolicy = async <T>(
     name: string,
     namespace: string,
@@ -1046,6 +1062,7 @@ export function createCollectionKernel(
           ),
       );
     }
+    if (!registration) assertUnboundCollectionAccess();
     const relatedRead = method === "query" || method === "relations.list" ||
       (method === "list" &&
         (args as CollectionQuery)?.include?.some((relation) => {
@@ -1335,7 +1352,10 @@ export function createCollectionKernel(
     ) => {
       if (planned.authorization) return planned.authorization;
       const registration = options.policies?.get(name);
-      if (!registration) return undefined;
+      if (!registration) {
+        assertUnboundCollectionAccess();
+        return undefined;
+      }
       const call = mutationCalls.getStore();
       if (!call) collectionPolicyRefused();
       const namespace = planned.writeOptions.namespace;
@@ -1363,7 +1383,10 @@ export function createCollectionKernel(
       execute: (args: Record<string, unknown>) => Promise<T>,
     ): Promise<T> => {
       const registration = options.policies?.get(name);
-      if (!registration) return await execute(args as Record<string, unknown>);
+      if (!registration) {
+        assertUnboundCollectionAccess();
+        return await execute(args as Record<string, unknown>);
+      }
       const selectedInput = collectionAuthorizationInput(
         method,
         args,
@@ -1902,6 +1925,7 @@ export function createCollectionKernel(
        * decided (undefined).
        */
       composed?: boolean,
+      ingress?: OwnerIngressProof,
     ): Promise<CollectionMutation<TSelect>> => {
       const adopting = options.assets !== undefined &&
         plan.content.some((item) => item.adoptions.length);
@@ -1922,6 +1946,7 @@ export function createCollectionKernel(
             matchData,
             execution,
             true,
+            ingress,
           );
           if (!execution) publishAssets(plan.content);
           return result;
@@ -1954,6 +1979,8 @@ export function createCollectionKernel(
               resolved,
               matchData === undefined ? undefined : resolved.write.body,
               { transaction, pending },
+              undefined,
+              ingress,
             );
           },
         );
@@ -2034,7 +2061,7 @@ export function createCollectionKernel(
         ...(alarmEventId ? { eventId: alarmEventId } : {}),
         ...(alarmAdmission
           ? { ingress: scheduledIngressProof(alarmAdmission) }
-          : {}),
+          : { ingress }),
         ...(execution ? { transaction: execution.transaction } : {}),
         dispatch: execution ? false : true,
         ...(matchData === undefined ? {} : {
@@ -2198,6 +2225,7 @@ export function createCollectionKernel(
       plan: CollectionMutationPlan;
       matchData?: unknown;
       authorization?: ReturnType<typeof captureCollectionPolicy>;
+      ingress?: OwnerIngressProof;
     }>;
 
     const replayOperation = async (
@@ -2267,6 +2295,7 @@ export function createCollectionKernel(
       }>,
     ) => {
       try {
+        const ingress = execution ? planned.ingress : captureMutationIngress();
         const policy = mutationPolicy(planned);
         const adopted = !execution && policy ? currentCommand() : undefined;
         const joinedExecution = execution ??
@@ -2284,6 +2313,8 @@ export function createCollectionKernel(
             planned.plan,
             planned.matchData,
             joinedExecution,
+            undefined,
+            ingress,
           );
         return await (policy && !execution
           ? withOwnerCommandAuthorization(
@@ -2338,7 +2369,11 @@ export function createCollectionKernel(
         planned.plan.write.record,
         `${name} ${planned.operation}`,
       );
-      planned = { ...planned, authorization: mutationPolicy(planned, true) };
+      planned = {
+        ...planned,
+        authorization: mutationPolicy(planned, true),
+        ingress: captureMutationIngress(),
+      };
       scope.plans.push(
         {
           id: planned.id,
@@ -3785,6 +3820,7 @@ export function createCollectionKernel(
       const checks = endpoints.flatMap((endpoint) => {
         actualDefinition(endpoint.type);
         const registration = options.policies?.get(endpoint.type);
+        if (!registration) assertUnboundCollectionAccess();
         return registration
           ? [
             captureCollectionPolicy({
@@ -3833,6 +3869,7 @@ export function createCollectionKernel(
     };
     const relations: CollectionTransactionRelations = {
       upsert(relationInput, relationOptions) {
+        const ingress = captureMutationIngress();
         const order = allocateOrder();
         let protectedGraph = false;
         return registerMutation(order, () => {
@@ -3981,6 +4018,7 @@ export function createCollectionKernel(
                   order: [...order] as const,
                   async commit(transaction, pending) {
                     const result = await options.coordinator.commitMutation({
+                      ingress,
                       draft: {
                         type: "relation.upserted",
                         namespace,
@@ -4056,6 +4094,7 @@ export function createCollectionKernel(
 
     const vectors: VectorTransaction = {
       upsert(input) {
+        const ingress = captureMutationIngress();
         const order = allocateOrder();
         let protectedGraph = false;
         return registerMutation(order, () => {
@@ -4105,6 +4144,7 @@ export function createCollectionKernel(
                 }], null),
                 async commit(transaction, pending) {
                   const result = await options.coordinator.commitMutation({
+                    ingress,
                     draft: {
                       type: "vector.upserted",
                       namespace,

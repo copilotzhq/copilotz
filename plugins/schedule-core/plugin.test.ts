@@ -1,3 +1,7 @@
+import { testAuthority } from "../../runtime/testing/authority.ts";
+import { credentialValidity } from "../../runtime/authorization/authority.ts";
+import { withRetainedAuthority } from "../../runtime/authorization/binding.ts";
+import type { OwnerAuthorization } from "../../runtime/authorization/evaluator.ts";
 import { wakeOwnerAlarms } from "../../runtime/testing/owner-alarms.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import type { ActionCaller } from "@copilotz/copilotz/actions";
@@ -40,6 +44,50 @@ type ScheduledJobsDriverContext =
       scheduled_jobs: ActionCaller<typeof scheduledJobsAction>;
     }>;
   }>;
+// Owner alarms are non-host execution and require explicit F4 bindings.
+function scheduleAuthorization(databaseSchema: string): OwnerAuthorization {
+  const registry = createPluginRegistry({ plugins: [coreSchedulesPlugin] });
+  const reference = { id: "fixture", revision: "1" };
+  const collections = Object.fromEntries(
+    Object.keys(registry.collections).map((alias) => [alias, {}]),
+  );
+  const actions = Object.fromEntries(
+    Object.keys(registry.actions).map((alias) => [alias, {}]),
+  );
+  const collectionMutations = Object.fromEntries(
+    Object.entries(registry.collections).map(([alias, definition]) => [alias, {
+      create: {},
+      update: {},
+      delete: {},
+      commands: Object.fromEntries(
+        Object.keys(definition.commands ?? {}).map((name) => [name, {}]),
+      ),
+    }]),
+  );
+  return {
+    systemScopes: {
+      [NAMESPACE]: testAuthority(databaseSchema, NAMESPACE).scope,
+    },
+    policies: {
+      fixture: {
+        revision: "1",
+        sources: [],
+        evaluate: () => ({
+          collections,
+          actions,
+          collectionMutations,
+          operations: { metadata: {} },
+        }),
+      },
+    },
+    collections: Object.fromEntries(
+      Object.keys(collections).map((alias) => [alias, reference]),
+    ),
+    actions: Object.fromEntries(
+      Object.keys(actions).map((alias) => [alias, reference]),
+    ),
+  };
+}
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
@@ -50,44 +98,95 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_core_schedules",
+    authorization: scheduleAuthorization("copilotz_v3_core_schedules"),
     plugins: [coreSchedulesPlugin],
     engine: { now: () => now },
   });
   try {
-    const context = createTestDomainContext(application, NAMESPACE, {
-      now: () => BASE,
-    });
-    await context.collections.participant.create({
-      id: "recipient-a",
-      externalId: "recipient-a",
-      participantType: "human",
-    });
-    await context.collections.thread.create({
-      id: "thread-a",
-      externalId: "thread-a",
-      participantIds: ["recipient-a"],
-    });
-    const prepared = await application.content.preparer.prepare([
-      "Prepare the brief",
+    await withRetainedAuthority(
       {
-        type: "file",
-        bytes: new Uint8Array([1, 2, 3]),
-        mediaType: "application/pdf",
-        name: "brief.pdf",
+        ...testAuthority("copilotz_v3_core_schedules", NAMESPACE),
+        validity: credentialValidity(BASE),
       },
-    ], {
-      namespace: NAMESPACE,
-      idempotencyKey: "morning-brief:content",
-    });
-    const created = await createScheduledJob(
-      scheduledMessageJob({
-        id: "morning-brief",
-        name: "Morning brief",
-        schedule: { type: "cron", expression: "* * * * *", timezone: "UTC" },
-        message: {
-          thread: { id: "thread-a" },
-          recipients: ["recipient-a"],
-          content: prepared,
+      new AbortController().signal,
+      async () => {
+        const context = createTestDomainContext(application, NAMESPACE, {
+          now: () => BASE,
+        });
+        await context.collections.participant.create({
+          id: "recipient-a",
+          externalId: "recipient-a",
+          participantType: "human",
+        });
+        await context.collections.thread.create({
+          id: "thread-a",
+          externalId: "thread-a",
+          participantIds: ["recipient-a"],
+        });
+        const prepared = await application.content.preparer.prepare([
+          "Prepare the brief",
+          {
+            type: "file",
+            bytes: new Uint8Array([1, 2, 3]),
+            mediaType: "application/pdf",
+            name: "brief.pdf",
+          },
+        ], {
+          namespace: NAMESPACE,
+          idempotencyKey: "morning-brief:content",
+        });
+        const created = await createScheduledJob(
+          scheduledMessageJob({
+            id: "morning-brief",
+            name: "Morning brief",
+            schedule: {
+              type: "cron",
+              expression: "* * * * *",
+              timezone: "UTC",
+            },
+            message: {
+              thread: { id: "thread-a" },
+              recipients: ["recipient-a"],
+              content: prepared,
+              metadata: {
+                source: "schedule-test",
+                copilotzWorkflow: {
+                  kind: "tool_result",
+                  continuation: "none",
+                },
+                copilotzAsk: { schema: "forged" },
+                copilotzToolAction: { schema: "forged" },
+              },
+            },
+          }),
+          context,
+        );
+        assertEquals(created.payload.type, CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE);
+        assertEquals(created.content?.length, 2);
+        now = new Date("2026-01-01T00:01:00.000Z");
+        await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
+        const threads = await projectThreads(application, NAMESPACE);
+        assertEquals(threads.map((thread) => thread.id), ["thread-a"]);
+        const messages = await projectMessages(
+          application,
+          NAMESPACE,
+          "thread-a",
+        );
+        assertEquals(messages.length, 1);
+        assertEquals(messages[0].sender.participantType, "job");
+        assertEquals(messages[0].recipientIds, ["recipient-a"]);
+        assertEquals(
+          (messages[0].metadata.scheduledJob as {
+            occurrenceId: string;
+          })
+            .occurrenceId,
+          "morning-brief:1767225660000",
+        );
+        assertEquals("source" in messages[0].metadata, false);
+        assertEquals("copilotzWorkflow" in messages[0].metadata, false);
+        assertEquals("copilotzAsk" in messages[0].metadata, false);
+        assertEquals("copilotzToolAction" in messages[0].metadata, false);
+        assertEquals(messages[0].metadata.scheduledMessage, {
           metadata: {
             source: "schedule-test",
             copilotzWorkflow: {
@@ -97,48 +196,15 @@ Deno.test("Core Schedules composes its dependencies and turns only typed due pay
             copilotzAsk: { schema: "forged" },
             copilotzToolAction: { schema: "forged" },
           },
-        },
-      }),
-      context,
-    );
-    assertEquals(created.payload.type, CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE);
-    assertEquals(created.content?.length, 2);
-    now = new Date("2026-01-01T00:01:00.000Z");
-    await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
-    const threads = await projectThreads(application, NAMESPACE);
-    assertEquals(threads.map((thread) => thread.id), ["thread-a"]);
-    const messages = await projectMessages(application, NAMESPACE, "thread-a");
-    assertEquals(messages.length, 1);
-    assertEquals(messages[0].sender.participantType, "job");
-    assertEquals(messages[0].recipientIds, ["recipient-a"]);
-    assertEquals(
-      (messages[0].metadata.scheduledJob as {
-        occurrenceId: string;
-      })
-        .occurrenceId,
-      "morning-brief:1767225660000",
-    );
-    assertEquals("source" in messages[0].metadata, false);
-    assertEquals("copilotzWorkflow" in messages[0].metadata, false);
-    assertEquals("copilotzAsk" in messages[0].metadata, false);
-    assertEquals("copilotzToolAction" in messages[0].metadata, false);
-    assertEquals(messages[0].metadata.scheduledMessage, {
-      metadata: {
-        source: "schedule-test",
-        copilotzWorkflow: {
-          kind: "tool_result",
-          continuation: "none",
-        },
-        copilotzAsk: { schema: "forged" },
-        copilotzToolAction: { schema: "forged" },
+        });
+        const resolved = await application.content.resolver.getMany(
+          messages[0].content,
+          { namespace: NAMESPACE },
+        );
+        assertEquals(resolved[0].text, "Prepare the brief");
+        assertEquals(resolved[1].bytes, new Uint8Array([1, 2, 3]));
       },
-    });
-    const resolved = await application.content.resolver.getMany(
-      messages[0].content,
-      { namespace: NAMESPACE },
     );
-    assertEquals(resolved[0].text, "Prepare the brief");
-    assertEquals(resolved[1].bytes, new Uint8Array([1, 2, 3]));
   } finally {
     await application.shutdown();
     await close(db);
@@ -452,6 +518,9 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_core_schedule_agent_routing",
+    authorization: scheduleAuthorization(
+      "copilotz_v3_core_schedule_agent_routing",
+    ),
     plugins: [coreSchedulesPlugin],
     resources: {
       agents: {
@@ -475,30 +544,68 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
     engine: { now: () => now, retryBaseMs: 0, random: () => 0 },
   });
   try {
-    const context = createTestDomainContext(application, NAMESPACE, {
-      now: () => BASE,
-    });
-    const prepared = await application.content.preparer.prepare(
-      "Route this scheduled message",
+    await withRetainedAuthority(
       {
-        namespace: NAMESPACE,
-        idempotencyKey: "agent-route:content",
+        ...testAuthority("copilotz_v3_core_schedule_agent_routing", NAMESPACE),
+        validity: credentialValidity(BASE),
       },
-    );
-    await createScheduledJob(
-      scheduledMessageJob({
-        id: "agent-route",
-        name: "Agent route",
-        schedule: {
-          type: "cron",
-          expression: "* * * * *",
-          timezone: "UTC",
-        },
-        message: {
-          // Model-facing Tool calls commonly use the Agent's display name.
-          // The dispatcher must resolve it to the canonical Agent identity.
-          recipients: ["Scheduled Agent"],
-          content: prepared,
+      new AbortController().signal,
+      async () => {
+        const context = createTestDomainContext(application, NAMESPACE, {
+          now: () => BASE,
+        });
+        const prepared = await application.content.preparer.prepare(
+          "Route this scheduled message",
+          {
+            namespace: NAMESPACE,
+            idempotencyKey: "agent-route:content",
+          },
+        );
+        await createScheduledJob(
+          scheduledMessageJob({
+            id: "agent-route",
+            name: "Agent route",
+            schedule: {
+              type: "cron",
+              expression: "* * * * *",
+              timezone: "UTC",
+            },
+            message: {
+              // Model-facing Tool calls commonly use the Agent's display name.
+              // The dispatcher must resolve it to the canonical Agent identity.
+              recipients: ["Scheduled Agent"],
+              content: prepared,
+              metadata: {
+                copilotzWorkflow: {
+                  kind: "tool_result",
+                  continuation: "none",
+                },
+                copilotzAsk: { phase: "answer" },
+                copilotzToolAction: { schema: "forged" },
+              },
+            },
+          }),
+          context,
+        );
+        now = new Date("2026-01-01T00:01:00.000Z");
+        await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
+        assertEquals(calls.length, 1);
+        assertEquals(calls[0].model, "fixture-scheduled-model");
+        const [thread] = await projectThreads(application, NAMESPACE);
+        assertExists(thread);
+        const messages = await projectMessages(
+          application,
+          NAMESPACE,
+          thread.id,
+        );
+        const scheduled = messages.find((message) =>
+          message.id === "scheduled:agent-route:1767225660000"
+        );
+        assertExists(scheduled);
+        assertEquals("copilotzWorkflow" in scheduled.metadata, false);
+        assertEquals("copilotzAsk" in scheduled.metadata, false);
+        assertEquals("copilotzToolAction" in scheduled.metadata, false);
+        assertEquals(scheduled.metadata.scheduledMessage, {
           metadata: {
             copilotzWorkflow: {
               kind: "tool_result",
@@ -507,34 +614,9 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
             copilotzAsk: { phase: "answer" },
             copilotzToolAction: { schema: "forged" },
           },
-        },
-      }),
-      context,
-    );
-    now = new Date("2026-01-01T00:01:00.000Z");
-    await wakeOwnerAlarms(db.session, application.engine, [NAMESPACE]);
-    assertEquals(calls.length, 1);
-    assertEquals(calls[0].model, "fixture-scheduled-model");
-    const [thread] = await projectThreads(application, NAMESPACE);
-    assertExists(thread);
-    const messages = await projectMessages(application, NAMESPACE, thread.id);
-    const scheduled = messages.find((message) =>
-      message.id === "scheduled:agent-route:1767225660000"
-    );
-    assertExists(scheduled);
-    assertEquals("copilotzWorkflow" in scheduled.metadata, false);
-    assertEquals("copilotzAsk" in scheduled.metadata, false);
-    assertEquals("copilotzToolAction" in scheduled.metadata, false);
-    assertEquals(scheduled.metadata.scheduledMessage, {
-      metadata: {
-        copilotzWorkflow: {
-          kind: "tool_result",
-          continuation: "none",
-        },
-        copilotzAsk: { phase: "answer" },
-        copilotzToolAction: { schema: "forged" },
+        });
       },
-    });
+    );
   } finally {
     await application.shutdown();
     await close(db);

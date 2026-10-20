@@ -1,3 +1,4 @@
+import { defaultServerFacade } from "../../plugins/server/resources/server/default/index.ts";
 import { ActionError } from "../actions/errors.ts";
 import { coreThreadObservationKey } from "../../plugins/core/shared/events/index.ts";
 /** Native owner-policy fixtures for transport tests; no production compatibility API. */
@@ -30,7 +31,15 @@ type FixturePolicy = (
 ) => ServerConstraints | Response | Promise<ServerConstraints | Response>;
 const policies = new WeakMap<ServerFacadeResource, FixturePolicy>();
 export function defineTestServerFacade(
-  input: DefineServerFacadeInput & { evaluate?: FixturePolicy } = {},
+  input: Omit<DefineServerFacadeInput, "authenticate"> & {
+    evaluate?: FixturePolicy;
+    authenticate?: (
+      ...args: Parameters<DefineServerFacadeInput["authenticate"]>
+    ) =>
+      | Omit<ServerAuthorizedScope, "authority">
+      | Response
+      | Promise<Omit<ServerAuthorizedScope, "authority"> | Response>;
+  } = {},
 ): ServerFacadeResource {
   const { evaluate, ...options } = input;
   const facade = defineServerFacade({
@@ -148,6 +157,7 @@ function fixtureOptions<
               }),
               {
                 scope: {
+                  authority,
                   namespace: authority.scope.namespace,
                   databaseSchema: authority.scope.databaseSchema,
                   ...(facts.actor ? { actor: facts.actor } : {}),
@@ -213,9 +223,9 @@ function fixtureOptions<
         ...options.resources?.server,
         default: selected && policies.has(selected)
           ? selected
-          : selected?.authenticate
+          : selected !== defaultServerFacade
           ? selected
-          : defineTestServerFacade(selected),
+          : defineTestServerFacade({ ...selected, authenticate: undefined }),
       },
     },
   };

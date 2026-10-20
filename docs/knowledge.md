@@ -400,8 +400,12 @@ authorization**:
 - Direct Collection reads of `document` and `chunk` retain namespace isolation
   but do not apply these Knowledge scope filters.
 
-Which spaces or documents a user may reach is the host's decision: authorize the
-caller, then inject the allowed selection rather than trusting model input.
+Which spaces or documents a user may reach is the application's decision, not
+the model's. Bind the Knowledge Actions you expose in `authorization` and have
+the owner policy return the allowed `documentIds` or `knowledgeSpaceIds` as
+trusted `input` in its `actions` grant: the owner forces those fields and
+refuses a conflicting value from the caller or the model. See
+[Owner authorization](authorization.md).
 
 **Exports.** `knowledgePlugin`, `defineKnowledgeEmbeddingProvider`,
 `createDefaultKnowledgeSourceLoader`, `createDefaultKnowledgeTextExtractor`, the

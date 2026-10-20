@@ -5,9 +5,15 @@ import type {
 } from "./contracts.ts";
 import type { CollectionPolicyIntent } from "./intent.ts";
 import { authorizationRefused } from "./evaluator.ts";
-import { matchesCollectionFilter } from "../collections/predicate.ts";
+import {
+  compileCollectionPredicate,
+  matchesCollectionFilter,
+} from "../collections/predicate.ts";
 import { sameValue } from "../collections/equal.ts";
-import type { CollectionRecord } from "../collections/types.ts";
+import type {
+  CollectionFilter,
+  CollectionRecord,
+} from "../collections/types.ts";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -15,6 +21,77 @@ function record(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
+/** Validate captured policy data before any consumer can interpret a filter. */
+export function validateCollectionConstraints(
+  constraints: ServerConstraints,
+): void {
+  const filter = (value: unknown) => {
+    const input = record(value);
+    for (const [key, item] of Object.entries(input)) {
+      if (key === "filter") {
+        try {
+          compileCollectionPredicate(
+            item as NonNullable<CollectionFilter["filter"]>,
+            [],
+          );
+        } catch {
+          authorizationRefused();
+        }
+      } else if (["where", "contains", "containsAny"].includes(key)) {
+        const fields = record(item);
+        if (
+          Object.keys(fields).some((field) =>
+            !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(field)
+          )
+        ) authorizationRefused();
+        if (
+          key === "containsAny" &&
+          Object.values(fields).some((values) => !Array.isArray(values))
+        ) {
+          authorizationRefused();
+        }
+      } else {
+        authorizationRefused();
+      }
+    }
+  };
+  if (constraints.collections !== undefined) {
+    for (const value of Object.values(record(constraints.collections))) {
+      filter(value);
+    }
+  }
+  const mutation = (value: unknown) => {
+    const policy = record(value);
+    if (
+      Object.keys(policy).some((key) =>
+        !["filter", "fields", "input"].includes(key)
+      )
+    ) authorizationRefused();
+    if (Object.hasOwn(policy, "filter")) filter(policy.filter);
+    if (
+      Object.hasOwn(policy, "fields") &&
+      (!Array.isArray(policy.fields) ||
+        policy.fields.some((field) => typeof field !== "string"))
+    ) authorizationRefused();
+    if (Object.hasOwn(policy, "input")) record(policy.input);
+  };
+  if (constraints.collectionMutations !== undefined) {
+    for (
+      const value of Object.values(record(constraints.collectionMutations))
+    ) {
+      for (const [key, policy] of Object.entries(record(value))) {
+        if (key === "commands") {
+          for (const command of Object.values(record(policy))) {
+            mutation(command);
+          }
+        } else if (["create", "update", "delete"].includes(key)) {
+          mutation(policy);
+        } else authorizationRefused();
+      }
+    }
+  }
+}
+
 function inserted(
   input: Record<string, unknown>,
   trusted?: Readonly<Record<string, unknown>>,

@@ -1,3 +1,5 @@
+import { retainedAuthority } from "../authorization/authority.ts";
+import { hostIngressProof } from "../application/ingress/authority.ts";
 import {
   captureOwnerAuthorization,
   collectionAuthorizations,
@@ -11,7 +13,10 @@ import {
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/receipt-authority.ts";
-import { resolveProtectedActionSource } from "../actions/protected-action-source.ts";
+import {
+  resolveProtectedActionIngress,
+  resolveProtectedActionSource,
+} from "../actions/protected-action-source.ts";
 import { settleActionAuthorizationRefusal } from "../actions/authorization-refusal.ts";
 import { createAuthorizedActions } from "../actions/authorized-capture.ts";
 import { createOwnerEffectClient } from "../actions/effect-commands.ts";
@@ -382,9 +387,31 @@ export async function createCopilotzEngine(
             : {}),
         },
       });
+      // Resolve immutable ingress once per execution; each command still checks
+      // live authority and invocation ownership before using it.
+      const invocationIngress = base.event.durable
+        ? base.event.ownerIngress ?? await resolveProtectedActionIngress({
+          transaction: scopedStore.session,
+          databaseSchema: base.databaseSchema,
+          namespace: base.event.namespace,
+          source: {
+            eventId: base.event.id,
+            ...(base.settlementScopeId
+              ? { operationId: base.settlementScopeId }
+              : {}),
+          },
+        })
+        : undefined;
+      // Public Processor Events must not share mutable authority with the binding.
+      const invocationAuthority = invocationIngress?.authority
+        ? retainedAuthority(invocationIngress.authority)
+        : undefined;
       return createProcessorContext({
         collectionInvocation: {
           owner: {
+            ...(invocationAuthority ? { authority: invocationAuthority } : {}),
+            trustedHost: !invocationAuthority &&
+              invocationIngress?.kind === "host",
             // The Server relay applies a client's own HTTP mutation: policies
             // see a direct call, never an executing Processor grant.
             direct: base.source?.consumerId ===
@@ -558,6 +585,7 @@ export async function createCopilotzEngine(
         operations: {
           async start(input) {
             base.signal.throwIfAborted();
+            const ingress = hostIngressProof();
             if (
               typeof input.operationKey !== "string" ||
               !input.operationKey.trim() ||
@@ -632,6 +660,7 @@ export async function createCopilotzEngine(
                   namespace: base.event.namespace,
                   operationId,
                   start: input,
+                  ingress,
                   correlationId: base.event.correlationId,
                   causationId: base.event.durable
                     ? base.event.id

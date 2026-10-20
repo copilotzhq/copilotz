@@ -2,21 +2,27 @@
 
 ## What it is
 
-An immutable process-local definition of the HTTP facade's path, exposure,
-override, and authorization policy.
+A process-local definition of the HTTP facade's path, exposure and
+authentication.
 
 ## Why it exists
 
-HTTP policy belongs in application composition rather than runtime internals or
-source-directory naming conventions.
+HTTP configuration belongs in application composition. Authorization is
+evaluated by the owner through the application's
+`authorization: OwnerAuthorization`.
 
 ## How to use it
 
-Call `defineServerFacade(...)`, normally through `serverPlugin(...)`. Omitting
-exposure and guard options enables every eligible primitive in the application's
-default scope.
+Call `defineServerFacade({ authenticate, expose })` and provide the result as
+`resources.server.default`. Authentication must return a scope with retained
+`authority` or a rejecting `Response`. Server startup requires application
+authentication; the plugin's placeholder cannot serve requests. Omitted exposure
+options include every eligible primitive; startup requires bindings for exposed
+Collections and Actions and adapter-declared Collections.
 
 ## How it works
 
-The helper validates and snapshots declarative configuration while retaining the
-typed guard hook as a process-local Resource policy.
+The helper validates and snapshots declarative configuration and retains the
+process-local authentication callback. Owner policy evaluates each use. Ambient
+`app.actions` and `app.collections` calls inside handlers carry caller
+authority; startup and other host code remain trusted.

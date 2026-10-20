@@ -86,7 +86,7 @@
         {
           "title": "Ch 16: Authenticate and Isolate Tenants",
           "slug": "getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants",
-          "description": "Map verified principals to tenants and owners, and authorize each request."
+          "description": "Map verified principals to tenants, keep memberships as owner data, and let one policy decide each request."
         },
         {
           "title": "Ch 17: Connect Chat and Channels",
@@ -101,7 +101,7 @@
         {
           "title": "Ch 19: Schedule Recurring Work",
           "slug": "getting-started/part-5-operate-and-scale/19-schedule-recurring-work",
-          "description": "Turn host clock ticks into durable occurrences that save digest notes."
+          "description": "Store recurring jobs that the database owner wakes as durable, stable occurrences."
         },
         {
           "title": "Ch 20: Measure Model and Tool Usage",
@@ -111,7 +111,7 @@
         {
           "title": "Ch 21: Deploy and Scale",
           "slug": "getting-started/part-5-operate-and-scale/21-deploy-and-scale",
-          "description": "Split the app into a Gateway and Worker sharing persistence and transport."
+          "description": "Split the app into a Gateway that owns the database and a Worker that calls it over a transport."
         },
         {
           "title": "Ch 22: Organize, Share and Evolve Plugins",
@@ -236,7 +236,12 @@
         {
           "title": "HTTP Server and Client",
           "slug": "server",
-          "description": "One Fetch handler with trusted identity, explicit authorization and a portable client."
+          "description": "One Fetch handler with trusted identity, owner-evaluated authorization and a portable client."
+        },
+        {
+          "title": "Owner Authorization",
+          "slug": "authorization",
+          "description": "Versioned policies the database owner evaluates inside every command, sessions and staff access."
         },
         {
           "title": "Channels",
@@ -266,12 +271,7 @@
         {
           "title": "Deployment Topologies",
           "slug": "embedding-and-hypervisors",
-          "description": "Embedded processes or Gateways and Workers with shared persistence."
-        },
-        {
-          "title": "Trusted Host Commands",
-          "slug": "host-commands",
-          "description": "Fixed-scope host SQL, atomic receipts and explicit startup recovery."
+          "description": "One embedded process, or a Gateway that owns storage and Workers that call it."
         },
         {
           "title": "Runtimes and Host Capabilities",

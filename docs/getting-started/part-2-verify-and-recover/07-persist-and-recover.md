@@ -314,7 +314,7 @@ Switching databases does not move data: a new database starts empty, and
 operations recorded in `./data` stay there. Copilotz validates the schema at
 startup and provides no automatic data migration.
 [Chapter 21: Deploy and Scale](../part-5-operate-and-scale/21-deploy-and-scale.md)
-covers shared databases, several processes and where large content is stored.
+covers durable databases, several processes and where large content is stored.
 
 ## Check it works
 
@@ -408,4 +408,5 @@ Notes now keeps its records, Events and operations across restarts. You can:
   `cancelOperation` and the other application operations.
 - Later:
   [Chapter 21: Deploy and Scale](../part-5-operate-and-scale/21-deploy-and-scale.md)
-  moves from one local directory to a shared database and body storage.
+  moves from one local directory to a durable database that a Gateway owns, and
+  to body storage.

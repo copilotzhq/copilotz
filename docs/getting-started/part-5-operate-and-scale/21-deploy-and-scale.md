@@ -1,6 +1,6 @@
 ---
 title: "Chapter 21: Deploy and Scale"
-description: "Run the same Notes plugin as a Gateway that accepts work and a Worker that executes it, sharing one explicit persistence and transport, and learn what a real multi-process deployment must provide."
+description: "Run the same Notes plugin as a Gateway that owns the database and a Worker that executes without one over an explicit transport, and learn what a real multi-process deployment must provide."
 section: Getting Started
 order: 210
 status: stable
@@ -29,9 +29,11 @@ delivery has to see the same Events, records and operations as the process that
 accepted the request, and it must register the same plugin IDs. The split
 therefore needs three things to be explicit:
 
-- **shared persistence**: every role reads and writes one database, with the
-  same namespace and schema. The persisted operation, not a process's memory, is
-  the authority on what has happened;
+- **one owner of the data**: each database schema has one owner, a single
+  serialized writer, and the Gateway holds it. A Worker opens no database; every
+  read, write and Action call it makes goes to that owner, with the same
+  namespace and schema. The persisted operation, not a process's memory, is the
+  authority on what has happened;
 - **a transport**: the accepting process needs a way to hand deliveries to
   executing processes and receive their results;
 - **the same business definitions**: every role composes the same plugins, so
@@ -50,33 +52,37 @@ decision, so it belongs in host composition and entrypoints.
 | `"gateway"`             | Accepts and admits requests, records operations, dispatches deliveries and serves observers. Runs no plugin work. | The full application (`send`, `attach`, …, `fetch`). |
 | `"worker"`              | Connects to a Gateway over a transport and executes Processors and Actions for the deliveries it is given.        | Only `ready`, `closed` and `close(reason?)`.         |
 
+A Worker holds no database connection. It rejects `database`, `persistence`,
+`assets`, `authorization` and `databaseScopes`, and calls the Gateway's owner
+for every read, write and Action call. Its plugin code is the same as in an
+embedded application.
+
 A Worker has no `send`, no `attach` and no `fetch`. Callers always go through a
 Gateway. Choosing a role installs nothing extra: it does not add Core, agents or
 an HTTP API. Each role composes exactly the plugins you pass.
 
 `createCopilotzPersistence` from `@copilotz/copilotz/persistence` opens one
-database connection that several roles can share. A role given `persistence`
-uses it but does not own it: closing the role leaves it open, and the host
-closes it once, after the roles. You pass either `persistence` or `database` to
-a role, never both.
+database connection that the host owns and lends to an embedded or Gateway role.
+A role given `persistence` uses it but does not own it: closing the role leaves
+it open, and the host closes it once, after the roles. You pass either
+`persistence` or `database` to that role, never both.
 
 ### Create `topology.ts`
 
 `topology.ts` is an **entrypoint** that proves the split locally. It creates one
-shared in-memory persistence, a Gateway and a Worker in the same process, and
-connects them with an explicit in-process transport. Its only local import is
-`notes-plugin.ts`, the same pure definition every other chapter uses. It does
-not import `composition.ts`: that module's `file://./data` database is one
-PGlite directory meant for one connection, and opening it from two independent
-connections is unsafe. A single shared persistence object in one process avoids
-that, which is why this fixture uses its own `:memory:` database.
+host-owned in-memory persistence, a Gateway that holds it and a Worker in the
+same process, and connects them with an explicit in-process transport. Its only
+local import is `notes-plugin.ts`, the same pure definition every other chapter
+uses. It does not import `composition.ts`, so this disposable fixture keeps its
+own `:memory:` database instead of opening the `file://./data` directory that
+`app.ts` and the servers use.
 
 ```ts
 // The role-aware factory and the guard that separates byte streams from Events.
 import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
 // Type of each item a send handle streams.
 import type { ApplicationOutput } from "@copilotz/copilotz";
-// One database connection that several roles can share without owning it.
+// One database connection the host owns and lends to the Gateway.
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 // The unchanged business definitions: Collection, Action and Processor.
 import { notesPlugin } from "./notes-plugin.ts";
@@ -114,8 +120,6 @@ async function printOutputs(
   }
 }
 
-// The Gateway and Worker in this example share a process. Cross-process
-// workers require Oxian reverse-call support for owner capabilities.
 // Host-owned persistence. A private in-memory database keeps this fixture
 // self-contained; the Gateway owner alone writes through this connection.
 const persistence = await createCopilotzPersistence({
@@ -167,13 +171,13 @@ try {
       if (drained.status === "rejected") throw drained.reason;
       if (settled.status === "rejected") throw settled.reason;
 
-      // The Gateway reads the outcome back from shared persistence.
+      // The Gateway reads the outcome back from the database it owns.
       const status = await gateway.operationStatus({
         operationId: handle.operationId,
       });
       console.log(`settled operation: ${status?.state ?? "unknown"}`);
     } finally {
-      // Stop executing; this does not close the shared persistence.
+      // Stop executing; the Worker never held the database.
       await worker.close();
     }
   } finally {
@@ -190,34 +194,32 @@ Each `finally` runs even when an earlier step throws, so a failed send still
 closes the Worker, then the Gateway, then the database. If the Worker never
 becomes ready, `worker.ready` rejects and the same cleanup runs.
 
-`namespace`, `databaseSchema`, `plugins` and the persistence must match across
-roles.
+`namespace`, `databaseSchema` and `plugins` must match across roles. Only the
+Gateway receives the persistence.
 
 ### What changes for separate processes
 
-The fixture shares one in-memory database object and an in-process transport,
-which only exist inside one process. It shows the role contract; it is not a
-Cloud Run or Kubernetes configuration. Separate Gateway and Worker processes
-need:
+The fixture keeps one in-memory database and an in-process transport, which only
+exist inside one process. It shows the role contract; it is not a Cloud Run or
+Kubernetes configuration. Separate Gateway and Worker processes need:
 
-- **A shared PostgreSQL database.** Each process opens its own connection to the
-  same server with the same namespace and schema. A local PGlite directory is
-  not shared multi-host storage.
+- **A durable database for the Gateway.** PostgreSQL, or a PGlite directory that
+  only the Gateway process opens. Workers receive no database connection or
+  credentials.
 - **A real remote transport, hosted by the host.** Remote Workers connect over a
   WebSocket transport, and accepting those connections needs a runtime host
   adapter, not only a Fetch handler: `gateway.fetch` serves the HTTP facade, not
-  Worker connections. The host creates and owns an Oxian Hypervisor
-  (`createHypervisor` from `@oxian/oxian-js/hypervisor`) with the WebSocket
-  transport, an `admit` callback that checks each Worker's identity and
-  credential, and a `fallback` that delegates ordinary requests to
-  `gateway.fetch`. It passes that Hypervisor to `createCopilotz` as `dispatcher`
-  (instead of `transports`), and serves it with a host adapter such as
-  `listen({ hypervisor })` from `@copilotz/copilotz/adapters/deno`. Workers
+  Worker connections. Give the Gateway
+  `transports: [{ type: "websocket", config: { path: "/workers" } }]` and an
+  `admit` callback that checks each Worker's identity and credential, then serve
+  it with `listen` from `@copilotz/copilotz/adapters/node` or
+  `@copilotz/copilotz/adapters/deno`, which hosts both HTTP and Worker
+  connections. Workers import `createCopilotz` from `@copilotz/copilotz/worker`,
   connect with `{ type: "websocket", config: { url } }` and supply `activate`,
-  `register` and `handshake`. The host closes the Hypervisor after the Gateway.
-  The [Embedding and Hypervisors reference](../../embedding-and-hypervisors.md)
-  covers this deployment topology; do not expose a Worker endpoint without
-  admission.
+  `register` and `handshake`. Hosts that own placement themselves pass a
+  `dispatcher` callback instead, as the
+  [Deployment Topologies reference](../../embedding-and-hypervisors.md)
+  describes. Never expose a Worker endpoint without admission.
 - **The same plugins in every role.** Workers need the business plugins they
   execute. The Gateway needs them too, to admit and route.
 
@@ -226,9 +228,10 @@ concurrent deliveries, and you add capacity by running more Workers. Copilotz
 does not start a Worker per request or autoscale on load; your platform decides
 how many Worker processes run.
 
-Every process opens its own database connection pool, so connections, polling
-and observers multiply with the number of processes. Size the database for the
-total, and measure your own workload before settling on numbers.
+Only the Gateway holds database connections, so adding Workers adds execution
+capacity without adding database connections. Observers attach to the Gateway.
+Size the database for the Gateway owners, and measure your own workload before
+settling on numbers.
 
 ### Optional: serve HTTP from the Gateway
 
@@ -239,11 +242,12 @@ HTTP is a Gateway concern: a Worker has no `fetch`. The Gateway runs no durable
 plugin work, but it can serve host-local reads and observers. Its `fetch` serves
 the `/api` facade only when its plugins include `serverPlugin` with a facade
 resource, as Chapter 15's `server.ts` composes; otherwise those routes answer
-`404`. In a split deployment, the Gateway host composes the same server plugins
-and authentication with `role: "gateway"`, and serves `gateway.fetch` exactly as
-`serve.ts` serves `app.fetch`. That `fetch` is the HTTP facade only; Worker
-connections are hosted separately, as described above. Workers compose only the
-business plugins.
+`404`. In a split deployment, the Gateway host composes the same server plugins,
+authentication and `authorization` with `role: "gateway"`, and serves
+`gateway.fetch` exactly as `serve.ts` serves `app.fetch`. The owner evaluates
+the policy on the Gateway; Workers never register it. That `fetch` is the HTTP
+facade only; Worker connections are hosted separately, as described above.
+Workers compose only the business plugins.
 
 ### Before you deploy
 
@@ -268,9 +272,9 @@ These conditions are what make a deployment recoverable:
 - **Readiness.** Report a Worker host ready only after `worker.ready` resolves.
 - **Shutdown.** On `SIGTERM`, stop accepting new requests, wait for the
   operations you already accepted to settle (their `done`, as `topology.ts`
-  does) within your platform's grace period, then `close()` the Gateway and
-  Workers and finally the shared persistence. `close()` stops a role; it is not
-  an unbounded wait for every delivery to drain.
+  does) within your platform's grace period, then `close()` the Workers, the
+  Gateway and finally the persistence. `close()` stops a role; it is not an
+  unbounded wait for every delivery to drain.
 - **Recovery.** Work interrupted by a shutdown or crash stays recorded. Eligible
   deliveries — pending, retryable, or held under an expired lease — are picked
   up again by a Worker. Cancelled, dead-lettered or failed work is not resumed
@@ -309,8 +313,8 @@ Check these facts:
 - Exactly one `notes.save.invoked`, one `note.created` and one
   `notes.save.completed` appear: the Worker executed the original Processor and
   Action once.
-- The final line reports `completed`, read by the Gateway from the shared
-  persistence.
+- The final line reports `completed`, read by the Gateway from the database it
+  owns.
 - The process exits on its own, because all three resources were closed.
 
 ## What this unlocks
@@ -322,8 +326,9 @@ can:
 - add execution capacity by adding Workers with a configured `capacity`;
 - keep the database, transport and HTTP choices in host code, with business
   definitions unchanged;
-- know what a real multi-process deployment must supply: shared PostgreSQL, an
-  admitted remote transport, durable bodies and graceful shutdown.
+- know what a real multi-process deployment must supply: a durable database for
+  the Gateway, an admitted remote transport, durable bodies and graceful
+  shutdown.
 
 ## Next steps
 

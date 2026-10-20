@@ -61,7 +61,12 @@ Deno.test("compiled routes preserve frozen endpoint policy and prefer exact path
       }),
     ],
   });
-  const routes = compileServerRoutes(registry, defineServerFacade());
+  const routes = compileServerRoutes(
+    registry,
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+    }),
+  );
   const match = routes.match("GET", "/api/items/discovery")!;
   assertEquals(match.endpoint.id, "discovery");
   assertEquals(match.endpoint.metadata, { authentication: { mode: "public" } });

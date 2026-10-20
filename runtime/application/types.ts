@@ -44,7 +44,6 @@ export type CreateCopilotzApplicationOptions =
     /** Default tenant namespace used when run/connect omit one. */
     namespace?: string;
     databaseSchema?: string;
-    /** Trusted owner-local data commands; never sent to workers or HTTP routes. */
     /** Trusted owner-only Collection authorization callbacks. */
     authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
 

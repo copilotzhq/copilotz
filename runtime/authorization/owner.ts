@@ -544,15 +544,18 @@ export function createAuthorizationOwner(
     createSession,
     revokeSession,
     assertResources(resources) {
-      if (
-        !options.registration ||
-        resources.collections.some((alias) =>
-          !options.registration!.collections[alias]
-        ) ||
-        resources.actions.some((alias) => !options.registration!.actions[alias])
-      ) {
+      for (const kind of ["collections", "actions"] as const) {
+        for (const alias of resources[kind]) {
+          if (!options.registration?.[kind][alias]) {
+            throw new TypeError(
+              `Missing owner authorization binding for ${kind} '${alias}'.`,
+            );
+          }
+        }
+      }
+      if (!options.registration) {
         throw new TypeError(
-          "Exposed resources require complete owner authorization registrations.",
+          "Server requires owner authorization registrations.",
         );
       }
     },

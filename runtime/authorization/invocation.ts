@@ -219,7 +219,7 @@ export async function withOwnerCollectionInvocation<T>(
   });
   const bound: Binding = {
     ...owner,
-    root: {},
+    root: (authority as Partial<Binding>).root ?? {},
     check() {
       owner.check();
       if (!active) closed();
@@ -244,6 +244,17 @@ export async function withOwnerCollectionInvocation<T>(
     active = false;
   }
 }
+/** Execute user code with the same revocable authority as its context proxies. */
+export function withContextCollectionInvocation<T>(
+  context: object,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  const authority = contexts.get(context);
+  return authority
+    ? withOwnerCollectionInvocation(authority, run)
+    : Promise.resolve().then(run);
+}
+
 export function bindOwnerCollectionInvocation<T extends object>(
   context: T,
   owner: OwnerBinding,

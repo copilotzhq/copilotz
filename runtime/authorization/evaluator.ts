@@ -1,3 +1,4 @@
+import { validateCollectionConstraints } from "./collection-constraints.ts";
 import { checkFlow } from "./flow.ts";
 /** One owner-local policy evaluator. Policy code receives declared, tracked reads. */
 import type {
@@ -500,9 +501,16 @@ export function createOwnerEvaluator(
           ],
         );
       }
+      let captured: ServerConstraints;
+      try {
+        captured = captureHostCommandJson(constraints) as ServerConstraints;
+        validateCollectionConstraints(captured);
+      } catch {
+        authorizationRefused();
+      }
       return {
         authority,
-        constraints: captureHostCommandJson(constraints) as ServerConstraints,
+        constraints: captured,
         dependencies,
       };
     } catch (error) {

@@ -14,7 +14,12 @@ Deno.test("Server plugin composes one Resource and durable bridge", () => {
     (defineFixturePlugin({
       ...serverPlugin,
       resources: {
-        server: { default: fixtureServerFacade({ basePath: "/custom" }) },
+        server: {
+          default: fixtureServerFacade({
+            authenticate: () => new Response(null, { status: 401 }),
+            basePath: "/custom",
+          }),
+        },
       },
     }).resources.server.default as {
       basePath: string;

@@ -8,19 +8,22 @@ status: stable
 
 # Getting Started with Copilotz
 
-Copilotz is a generic application runtime built from five primitives:
+Copilotz is a generic application runtime built from six primitives:
 
 - **Collections** hold application state.
 - **Actions** are named operations with a tracked lifecycle.
 - **Processors** react to Events.
 - **Resources** are declarative configuration that plugins read.
 - **Adapters** supply host or provider implementations.
+- **Views** present authorized, read-only data.
 
 Plugins compose these primitives, and Events connect them. The runtime records
 Events and Action lifecycles and coordinates the work they trigger, so you can
-test, persist, recover and serve your application. Ordinary application code and
-process-local policy hooks run as normal code; the runtime does not record each
-of their steps.
+test, persist, recover and serve your application. Each database schema has one
+owner, a single writer that commits that work in order and authorizes it; code
+that runs elsewhere calls the owner instead of opening the database. Ordinary
+application code and process-local policy hooks run as normal code; the runtime
+does not record each of their steps.
 
 **Core** is an optional agent harness built on the same runtime. It contributes
 conversations, agents, model connections and tools as plugins and Resources of
@@ -29,7 +32,7 @@ and policy stay in your own plugins, whether a person, an HTTP client, a
 schedule or an agent calls them.
 
 This guide builds one small Notes application across 22 chapters in six parts.
-It targets **Copilotz 0.85.0**.
+It targets **Copilotz 0.89.0**.
 
 ## Choose a route
 
@@ -251,9 +254,10 @@ resolves and what you have afterwards.
   · R · Requires: 05. Only local scripts can reach the application. Serve one
   explicitly exposed Action over Fetch and call it from a client.
 - [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
-  · R · Requires: 06, 15. Every caller still shares one default data scope.
-  Authenticate each request, resolve its principal, and assign that principal a
-  trusted tenant scope of its own.
+  · R · Requires: 06, 15. Every caller still shares one default data scope and
+  every permission. Resolve each request's principal to a trusted tenant, keep
+  memberships and roles as owner data, and let one versioned policy decide what
+  each caller may do.
 - [Chapter 17: Connect Chat and Channels](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
   · H · Requires: 08, 16 (09 recommended). The assistant is reachable only from
   a terminal. Serve conversations over HTTP under the same access policy.
@@ -265,15 +269,16 @@ resolves and what you have afterwards.
 
 - [Chapter 19: Schedule Recurring Work](getting-started/part-5-operate-and-scale/19-schedule-recurring-work.md)
   · R · Requires: 07. A timer on its own fires, but it gives no durable identity
-  to each occurrence and no record of the work that ran. Declare schedules, let
-  the host clock supply ticks, and the runtime records due work as events.
+  to each occurrence and no record of the work that ran. Store recurring jobs,
+  and the database owner's durable alarm records each due occurrence as an
+  Event.
 - [Chapter 20: Measure Model and Tool Usage](getting-started/part-5-operate-and-scale/20-measure-usage.md)
   · H, optional · Requires: 17. You cannot tell what a conversation consumed.
   Record usage and query it from a client.
 - [Chapter 21: Deploy and Scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
   · R · Requires: 07 (15 for the Fetch section). One process does everything.
-  Split Gateway and Worker roles over a shared database, and choose a topology
-  for your host.
+  Split a Gateway that owns the database from Workers that execute without one,
+  and choose a topology for your host.
 
 ### Part 6 — Evolve and Reuse
 

@@ -231,7 +231,12 @@
         {
           "title": "HTTP Server and Client",
           "slug": "server",
-          "description": "One Fetch handler with trusted identity, explicit authorization and a portable client."
+          "description": "One Fetch handler with trusted identity, owner-evaluated authorization and a portable client."
+        },
+        {
+          "title": "Owner Authorization",
+          "slug": "authorization",
+          "description": "Versioned policies the database owner evaluates inside every command, sessions and staff access."
         },
         {
           "title": "Channels",

@@ -73,8 +73,10 @@ Each page below is the main reference for its topic.
 
 ### Deliver
 
-- [HTTP server and browser client](server.md): routes, policy and live
+- [HTTP server and browser client](server.md): routes, authentication and live
   observation.
+- [Owner authorization](authorization.md): versioned policies, sessions,
+  lifetimes and platform staff access.
 - [Channels](channels.md): web, WhatsApp, Telegram, Discord and Zendesk.
 
 ### Operate

@@ -26,6 +26,7 @@ import { canonicalizeContentRefs } from "../content/input.ts";
 import { assertJsonValue } from "../json.ts";
 import { errorRetryability } from "../failure.ts";
 import { createEventStoreError } from "./errors.ts";
+import { logDeadLetter } from "../execution/diagnostics.ts";
 import {
   encodeEventBody,
   EVENT_BODY_SCHEMA_VERSION,
@@ -1316,6 +1317,8 @@ export function createEventStore(
     transaction?: SqlExecutor,
   ): Promise<Output> => {
     const publications: Array<() => Promise<void>> = [];
+    // Keyed by delivery, so a retried command attempt logs a transition once.
+    const deadLetters = new Map<string, EventDelivery>();
     const result =
       await (transaction
         ? createSchemaCommandRunner(transaction, databaseSchema)
@@ -1327,6 +1330,9 @@ export function createEventStore(
               const settled = await update(context.transaction);
               if (settled) {
                 await syncDeliveryAlarms(context.transaction, [settled.id]);
+              }
+              if (settled?.status === "dead_letter") {
+                deadLetters.set(settled.id, settled);
               }
               if (
                 settled &&
@@ -1370,6 +1376,13 @@ export function createEventStore(
       if (transaction) {
         schemaCommandContext(transaction, databaseSchema).afterCommit(publish);
       } else await publish();
+    }
+    for (const delivery of deadLetters.values()) {
+      if (transaction) {
+        schemaCommandContext(transaction, databaseSchema).afterCommit(() =>
+          logDeadLetter(delivery)
+        );
+      } else logDeadLetter(delivery);
     }
     return result;
   };

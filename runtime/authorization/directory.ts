@@ -4,6 +4,13 @@ import type {
   CollectionRecord,
 } from "../collections/types.ts";
 import type { SqlExecutor } from "../events/session.ts";
+import type { CollectionDefinition } from "../collections/definition.ts";
+import { loadCollectionRecord } from "../collections/reducer.ts";
+import { queryCollectionRecords } from "../collections/query.ts";
+import {
+  createCoreTableNames,
+  validateEventSchemaName,
+} from "../events/schema.ts";
 import {
   type CommandContext,
   schemaCommandContext,
@@ -41,6 +48,50 @@ export type StaffAuthorizationSource = Readonly<{
   }>;
 }>;
 export type AuthorizationSource = string | StaffAuthorizationSource;
+
+/**
+ * Staff source for a directory Collection in the same database as the tenants
+ * it authorizes. Reads run through the evaluating command's transaction, so
+ * they are fresh for that command and need no second transaction.
+ */
+export function createDatabaseStaffSource(options: {
+  alias: string;
+  databaseSchema: string;
+  namespace: string;
+  collection: CollectionDefinition;
+}): StaffAuthorizationSource {
+  const schema = validateEventSchemaName(options.databaseSchema);
+  const tables = createCoreTableNames(schema);
+  return {
+    kind: "platform-staff",
+    alias: options.alias,
+    owner: schema,
+    namespace: options.namespace,
+    collection: options.collection.name,
+    read: {
+      get(id, signal, transaction) {
+        signal.throwIfAborted();
+        return loadCollectionRecord(
+          transaction,
+          tables,
+          options.namespace,
+          options.collection.name,
+          id,
+        );
+      },
+      list(query, signal, transaction) {
+        signal.throwIfAborted();
+        return queryCollectionRecords(
+          transaction,
+          tables,
+          options.collection,
+          options.namespace,
+          query,
+        );
+      },
+    },
+  };
+}
 export const sourceAlias = (source: AuthorizationSource): string =>
   typeof source === "string" ? source : source.alias;
 

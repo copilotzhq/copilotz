@@ -19,7 +19,10 @@ import {
   type OwnerAuthorization,
   validateOwnerAuthorization,
 } from "./evaluator.ts";
-import type { StaffAuthorizationSource } from "./directory.ts";
+import {
+  createDatabaseStaffSource,
+  type StaffAuthorizationSource,
+} from "./directory.ts";
 
 Deno.test("F4 declared directory staff reads are fresh per command, fail closed and audit in the tenant", async () => {
   const db = await createTestDatabase({
@@ -327,7 +330,6 @@ Deno.test("F4 staff reads of a same-database directory run inside the evaluating
   await provisionCopilotzSchema(db, directorySchema);
   const owner = await openDatabaseOwner(db, schema);
   const run = createSchemaCommandRunner(db, schema);
-  const directoryTables = createCoreTableNames(directorySchema);
   const grants = defineCollection({
     name: "staff_grant",
     schema: { type: "object" },
@@ -336,35 +338,12 @@ Deno.test("F4 staff reads of a same-database directory run inside the evaluating
     `INSERT INTO "${directorySchema}".nodes(id,namespace,type,name,data) VALUES('member','directory','staff_grant','member',$1::jsonb)`,
     [JSON.stringify({ allowed: true })],
   );
-  const source: StaffAuthorizationSource = {
-    kind: "platform-staff",
+  const source = createDatabaseStaffSource({
     alias: "staff",
-    owner: "directory-owner",
+    databaseSchema: directorySchema,
     namespace: "directory",
-    collection: grants.name,
-    read: {
-      get: (id, signal, transaction) => {
-        signal.throwIfAborted();
-        return loadCollectionRecord(
-          transaction,
-          directoryTables,
-          "directory",
-          grants.name,
-          id,
-        );
-      },
-      list: (query, signal, transaction) => {
-        signal.throwIfAborted();
-        return queryCollectionRecords(
-          transaction,
-          directoryTables,
-          grants,
-          "directory",
-          query,
-        );
-      },
-    },
-  };
+    collection: grants,
+  });
   const registration: OwnerAuthorization = {
     policies: {
       fixture: {

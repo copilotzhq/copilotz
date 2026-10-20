@@ -59,6 +59,7 @@ export type {
   AuthorizationSource,
   StaffAuthorizationSource,
 } from "../authorization/directory.ts";
+export { createDatabaseStaffSource } from "../authorization/directory.ts";
 
 export {
   inspectAuthorityUpgrade,

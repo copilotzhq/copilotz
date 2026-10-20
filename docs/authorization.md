@@ -76,6 +76,11 @@ no tenant command authority. The source cannot shadow a local Collection alias.
 The policy must check the staff principal, target tenant and requested operation
 against the returned grant. Declaring or reading a source alone grants nothing.
 
+For a directory Collection in the same database, use
+`createDatabaseStaffSource({ alias, databaseSchema, namespace, collection })`
+from `copilotz/engine`. It builds the source with reads that already run through
+the evaluating command's transaction.
+
 Every command reads the directory again. Repeated reads of the same source and
 query within that command retain the first result, so it finishes under the
 staff authority it read. A failed directory read refuses the command even if

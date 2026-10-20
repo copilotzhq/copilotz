@@ -160,6 +160,10 @@ async function fixture(
     async getStream() {
       return record;
     },
+    // Terminal outputs carry the owner seq of the operation's last command.
+    async resultSequence() {
+      return "1";
+    },
     async get() {
       return {
         operationId: "op",

@@ -1,3 +1,4 @@
+import { schemaCommandContext } from "../../engine/commands.ts";
 import { authorizationRefused } from "../../authorization/evaluator.ts";
 import { captureCollectionInvocation } from "../../authorization/invocation.ts";
 /** Package-private admission evidence. No wire value can create this authority. */
@@ -81,12 +82,13 @@ export async function assertOwnerIngressReplay(
   if (actual === undefined) return;
   const identity = (value: ProtectedActionIngress | undefined) => {
     if (!value?.authority) return value ?? null;
+    const { requestMetadata: _requestMetadata, ...admission } = value;
     const { validity, dependencies: _dependencies, ...authority } =
       value.authority;
     // Renewal changes only admission time and tracked dependencies. First capture
     // remains immutable; attempt/occurrence identities must still match exactly.
     return {
-      ...value,
+      ...admission,
       authority: {
         ...authority,
         scope: {
@@ -104,23 +106,9 @@ export async function assertOwnerIngressReplay(
     };
   };
   if (!sameActionValue(identity(expected), identity(actual))) {
-    const original = actual.authority, next = expected?.authority;
-    const deliveryProof = original?.scope.bindings["@credential-proof"];
     if (
-      original && next && deliveryProof &&
-      deliveryProof === next.scope.bindings["@credential-proof"] &&
-      sameActionValue(original.scope, next.scope) &&
-      sameActionValue(original.policy, next.policy)
-    ) {
-      // A cookie transition may change the principal between a committed response
-      // and its retry. The same private delivery proof can recover only this
-      // existing credential operation; the immutable ingress is never replaced.
-      const effects = await context.transaction.query(
-        `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND operation_id=$3 LIMIT 1`,
-        [original.scope.namespace, original.scope.tenant, event.id],
-      );
-      if (effects.rows.length) return;
-    }
+      await isCredentialOperationReplay(context, databaseSchema, event, token)
+    ) return;
     throw Object.assign(
       new Error("Owner ingress admission differs from its first capture."),
       { code: "event_deduplication_conflict" },
@@ -136,3 +124,69 @@ export const authorityIngressProof = (
     actor: { id: authority.principal.id },
     authority,
   });
+
+/** Exact completed credential recovery, never authority for inserting new work. */
+export async function isCredentialOperationReplay(
+  context: EventMutationContext,
+  databaseSchema: string,
+  event: EventBinding,
+  token?: OwnerIngressProof,
+): Promise<boolean> {
+  const original = event.ownerIngress?.authority;
+  const next = ownerIngressEvidence(token)?.authority;
+  const proof = original?.scope.bindings["@credential-proof"];
+  if (
+    !original || !next || !proof ||
+    proof !== next.scope.bindings["@credential-proof"] ||
+    !sameActionValue(original.scope, next.scope) ||
+    !sameActionValue(original.policy, next.policy)
+  ) return false;
+  const { commandTime } = schemaCommandContext(
+    context.transaction,
+    databaseSchema,
+  );
+  if (
+    original.flow &&
+    Date.parse(original.flow.expiresAt) <= Date.parse(commandTime)
+  ) return false;
+  const rows = await context.transaction.query<
+    { method: string; claims: { id: string; principal: string } }
+  >(
+    `SELECT effect.method,effect.claims FROM "${databaseSchema}".authorization_effects effect JOIN "${databaseSchema}".copilotz_operations operation ON operation.namespace=effect.namespace AND operation.operation_id=effect.operation_id WHERE effect.namespace=$1 AND effect.tenant=$2 AND effect.operation_id=$3 AND operation.state='completed' AND ((effect.method IN ('flow.start','session.create') AND (effect.claims->>'expiresAt')::timestamptz>$4::timestamptz) OR (effect.method='session.revoke' AND effect.claims->>'id'=$5 AND $6::timestamptz>$4::timestamptz))`,
+    [
+      original.scope.namespace,
+      original.scope.tenant,
+      event.id,
+      commandTime,
+      original.authorityBasis.kind === "session"
+        ? original.authorityBasis.id
+        : "",
+      original.validity.kind === "credential"
+        ? original.validity.expiresAt
+        : commandTime,
+    ],
+  );
+  return rows.rows.some((row) =>
+    sameActionValue(original.principal, next.principal) &&
+      sameActionValue(original.authorityBasis, next.authorityBasis) ||
+    row.method === "session.create" && next.authorityBasis.kind === "session" &&
+      next.authorityBasis.id === row.claims.id &&
+      next.principal.id === row.claims.principal ||
+    row.method === "flow.start" && next.flow?.id === row.claims.id ||
+    row.method === "session.revoke" &&
+      original.authorityBasis.kind === "session" &&
+      original.authorityBasis.id === row.claims.id &&
+      next.authorityBasis.kind === "grant" && !next.flow
+  );
+}
+
+/** Keep raw metadata separate from credential-dependent policy output. */
+export function withIngressRequestMetadata(
+  token: OwnerIngressProof | undefined,
+  metadata: Readonly<Record<string, unknown>>,
+): OwnerIngressProof | undefined {
+  const ingress = ownerIngressEvidence(token);
+  return ingress?.authority
+    ? proof({ ...ingress, requestMetadata: metadata })
+    : token;
+}

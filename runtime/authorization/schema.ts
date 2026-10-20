@@ -12,7 +12,7 @@ export function authorizationSchemaStatements(
       namespace TEXT NOT NULL, tenant TEXT NOT NULL, effect_key TEXT NOT NULL,
       run_id TEXT NOT NULL, operation_id TEXT NOT NULL, initiator TEXT NOT NULL,
       method TEXT NOT NULL, intent JSONB NOT NULL, claims JSONB NOT NULL,
-      consumed_run TEXT, PRIMARY KEY(namespace,tenant,effect_key)
+      accepted_operation TEXT, consumed_run TEXT, PRIMARY KEY(namespace,tenant,effect_key)
     )`,
     `CREATE INDEX IF NOT EXISTS authorization_effects_run ON ${prefix}.authorization_effects(namespace,tenant,run_id,ordinal)`,
     `CREATE INDEX IF NOT EXISTS authorization_effects_operation ON ${prefix}.authorization_effects(namespace,tenant,operation_id)`,
@@ -45,6 +45,7 @@ export const AUTHORIZATION_SCHEMA_COLUMNS = {
     "method",
     "intent",
     "claims",
+    "accepted_operation",
     "consumed_run",
   ],
   authorization_sessions: [

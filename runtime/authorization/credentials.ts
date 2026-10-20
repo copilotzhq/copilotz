@@ -254,7 +254,13 @@ export function createCredentialEffects(options: {
           : undefined;
         if (!target) authorizationRefused();
         await options.revoke(authority, target, command, actor);
-        claims = { ...claims, id: target };
+        claims = {
+          ...claims,
+          id: target,
+          expiresAt: authority.validity.kind === "credential"
+            ? authority.validity.expiresAt
+            : command.commandTime,
+        };
       } else {
         if (
           typeof object.kind !== "string" || !object.kind.trim() ||
@@ -336,7 +342,11 @@ export function createCredentialEffects(options: {
                 authority.authorityBasis.id === row.claims.id) ||
               (row.claims.type === "flow" &&
                 authority.flow?.id === row.claims.id);
-            if (!own) continue;
+            if (
+              !own ||
+              Date.parse(row.claims.expiresAt) <=
+                Date.parse(command.commandTime)
+            ) continue;
             if (row.claims.type === "clear") {
               // Revoking another session must not sign the caller out.
               if (
@@ -347,10 +357,6 @@ export function createCredentialEffects(options: {
               }
               continue;
             }
-            if (
-              Date.parse(row.claims.expiresAt) <=
-                Date.parse(command.commandTime)
-            ) continue;
             if (row.claims.type === "session") {
               const live = await command.transaction.query(
                 `SELECT 1 FROM "${options.schema}".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND revoked_at IS NULL AND expires_at>$4::timestamptz`,

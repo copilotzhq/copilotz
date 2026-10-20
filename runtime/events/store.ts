@@ -169,6 +169,11 @@ export type CommitEventMutationOptions<T> = {
    * Additional writes that share the event's transaction.
    */
   mutate?(context: EventMutationContext): Promise<T>;
+  /** Owner-verified normalization of derived metadata for exact credential replay. */
+  replayMetadata?(
+    event: DurableEvent,
+    context: EventMutationContext,
+  ): Promise<Readonly<Record<string, unknown>>>;
   recoverDuplicate?: (
     event: DurableEvent,
     context: EventMutationContext,
@@ -723,8 +728,20 @@ export function createEventStore(
     options: CommitEventMutationOptions<T>,
     encoded: EncodedDraft,
   ): Promise<CommitEventMutationResult<T>> => {
-    assertDuplicateMatches(event, options.draft, encoded);
     const context = { transaction: executor, tables };
+    const metadata = options.replayMetadata
+      ? await options.replayMetadata(event, context)
+      : undefined;
+    assertDuplicateMatches(
+      event,
+      options.draft,
+      metadata
+        ? {
+          ...encoded,
+          metadata: encodeJson(metadata, "metadata"),
+        }
+        : encoded,
+    );
     const value = options.recoverDuplicate
       ? await options.recoverDuplicate(event, context)
       : undefined;

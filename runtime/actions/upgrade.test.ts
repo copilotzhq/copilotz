@@ -522,7 +522,7 @@ Deno.test("linear chain stops at each missing input and resumes the exact review
       ...keys,
       authority: f.options.authority,
     });
-    assertEquals(await version(), 14);
+    assertEquals(await version(), 15);
     assertEquals(
       (await f.db.query(`SELECT * FROM ${f.store.tables.owner_data_keys}`))
         .rows,
@@ -609,7 +609,7 @@ for (const step of [11, 12]) {
       assertEquals(await version(), step + 1);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
-      assertEquals(await version(), 14);
+      assertEquals(await version(), 15);
     } finally {
       await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
       await f.db.close();
@@ -669,10 +669,50 @@ Deno.test("v13 credential upgrade preserves sessions, refuses live work and repl
     await catalog.reconcile();
     await upgradeActionLifecycle(db, schema);
     await upgradeActionLifecycle(db, schema);
-    assertEquals((await validateCopilotzSchema(db, schema)).version, 14);
+    assertEquals((await validateCopilotzSchema(db, schema)).version, 15);
     assertEquals(
       (await db.query(`SELECT * FROM ${tables.authorization_sessions}`)).rows,
       sessions,
+    );
+  } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
+  }
+});
+
+Deno.test("v14 flow admission upgrade preserves consumed identity and backfills exact operation", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  });
+  const schema = `flow_upgrade_${crypto.randomUUID().replaceAll("-", "")}`;
+  try {
+    await provisionCopilotzSchema(db, schema);
+    await provisionOperationCatalog(db, schema);
+    await db.query(
+      `ALTER TABLE "${schema}".authorization_effects DROP COLUMN accepted_operation`,
+    );
+    await db.query(
+      `UPDATE "${schema}".copilotz_schema_metadata SET version=14`,
+    );
+    await db.query(
+      `INSERT INTO "${schema}".authorization_effects(namespace,tenant,effect_key,run_id,operation_id,initiator,method,intent,claims,consumed_run) VALUES('main','tenant','flow','start-run','start-operation','{}','flow.start','{}','{}','callback-run')`,
+    );
+    await db.query(
+      `INSERT INTO "${schema}".authorization_invocations(namespace,run_id,source_event_id,authority) VALUES('main','callback-run','callback-operation','{}')`,
+    );
+    await assertRejects(() => validateCopilotzSchema(db, schema));
+    await upgradeActionLifecycle(db, schema);
+    await upgradeActionLifecycle(db, schema);
+    assertEquals((await validateCopilotzSchema(db, schema)).version, 15);
+    assertEquals(
+      (await db.query(
+        `SELECT operation_id,accepted_operation,consumed_run FROM "${schema}".authorization_effects`,
+      )).rows,
+      [{
+        operation_id: "start-operation",
+        accepted_operation: "callback-operation",
+        consumed_run: "callback-run",
+      }],
     );
   } finally {
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);

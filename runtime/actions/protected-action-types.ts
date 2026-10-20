@@ -2,6 +2,8 @@
 export type ProtectedActionIngress =
   & Readonly<
     {
+      /** Raw owner ingress metadata before policy-derived operation labels. */
+      requestMetadata?: Readonly<Record<string, unknown>>;
       authority?:
         import("../authorization/authority.ts").AuthenticatedAuthority;
     }

@@ -115,7 +115,8 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   ).join("");
   let flowCredential: string | undefined;
   let flowActionPath: string | undefined;
-  const flowOperations = new Set<string>();
+  const flowOperations = new Map<string, string>();
+  const flowSubmissions = new Map<string, string>();
   const belongsToFlow = (path: string, init: RequestInit) => {
     if (path === flowActionPath) return true;
     const operation = /^\/operations\/([^/]+)(?:\/result)?$/.exec(path)?.[1];
@@ -125,15 +126,25 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     if (path === "/operations/observe" && typeof init.body === "string") {
       const ids = JSON.parse(init.body).operationIds;
       return Array.isArray(ids) && ids.length > 0 &&
-        ids.every((id) => flowOperations.has(id));
+        ids.every((id) =>
+          flowOperations.get(id) === flowOperations.get(ids[0])
+        ) &&
+        flowOperations.has(ids[0]);
     }
     return false;
   };
   const request = async (path: string, init: RequestInit = {}) => {
     const headers = new Headers(await options.getRequestHeaders?.());
     headers.set("x-copilotz-credential-proof", credentialProof);
-    if (flowCredential && belongsToFlow(path, init)) {
-      headers.set("x-copilotz-flow", flowCredential);
+    const operation = /^\/operations\/([^/]+)(?:\/result)?$/.exec(path)?.[1];
+    const retainedFlow =
+      path === "/operations/observe" && typeof init.body === "string"
+        ? flowOperations.get(JSON.parse(init.body).operationIds?.[0])
+        : operation
+        ? flowOperations.get(decodeURIComponent(operation))
+        : undefined;
+    if (belongsToFlow(path, init) && (retainedFlow || flowCredential)) {
+      headers.set("x-copilotz-flow", retainedFlow || flowCredential!);
     }
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     let response!: Response;
@@ -167,14 +178,15 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     }
     if (response.headers.has("x-copilotz-flow")) {
       const next = response.headers.get("x-copilotz-flow") || undefined;
-      if (next !== flowCredential) flowOperations.clear();
       flowCredential = next;
       const id = response.headers.get("x-copilotz-flow-action");
       flowActionPath = next && id
         ? `/actions/${id.split(".").map(segment).join("/")}`
         : undefined;
       const operation = /^\/operations\/([^/]+)\/result$/.exec(path)?.[1];
-      if (next && operation) flowOperations.add(decodeURIComponent(operation));
+      if (next && operation) {
+        flowOperations.set(decodeURIComponent(operation), next);
+      }
     }
     return response;
   };
@@ -200,6 +212,10 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     }
     const serialized = body(input);
     const key = submitOptions.idempotencyKey;
+    const submission = JSON.stringify([method, path, key]);
+    const originalFlow = flowSubmissions.get(submission) ??
+      (path === flowActionPath ? flowCredential : undefined);
+    if (originalFlow) flowSubmissions.set(submission, originalFlow);
     for (let attempt = 0;; attempt++) {
       let responseReceived = false;
       try {
@@ -210,6 +226,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           headers: {
             "content-type": "application/json",
             "idempotency-key": key,
+            ...(originalFlow ? { "x-copilotz-flow": originalFlow } : {}),
           },
         });
         responseReceived = true;
@@ -220,9 +237,9 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         if (typeof receipt.operationId !== "string" || !receipt.operationId) {
           throw new ProtocolError("Invalid operation receipt.");
         }
-        if (
-          path === flowActionPath || response.headers.get("x-copilotz-flow")
-        ) flowOperations.add(receipt.operationId);
+        const receiptFlow = originalFlow ||
+          response.headers.get("x-copilotz-flow");
+        if (receiptFlow) flowOperations.set(receipt.operationId, receiptFlow);
         return receipt;
       } catch (error) {
         if (

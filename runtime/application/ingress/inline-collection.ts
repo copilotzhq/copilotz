@@ -90,6 +90,9 @@ export async function completeHostCollection(
         // A client's HTTP mutation is a direct call: policies see no executing
         // Action or Processor, so processor grants never cover it.
         direct: true,
+        authority: admitted.event.ownerIngress?.authority,
+        trustedHost: admitted.event.ownerIngress?.kind === "host" &&
+          !admitted.event.ownerIngress.authority,
         logicalRunId: admitted.event.id,
         scope: {
           databaseSchema: runtime.store.databaseSchema,

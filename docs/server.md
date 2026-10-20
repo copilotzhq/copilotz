@@ -134,10 +134,17 @@ Application-specific endpoints come from `createHttpAdapter({ routes })` in
 - `handler(context)` — your code; its return value is normally answered with
   `200`. `context.invoke(actionId, input, options)` runs an Action and waits for
   its result; there is no submit variant. `context.read` reads Collections under
-  the request's authority; a Collection without a binding is read unfiltered.
+  the request's authority; a Collection without a binding is forbidden.
   `context.sessions` creates and revokes owner sessions, as
-  [Owner authorization](authorization.md#sessions-and-logout) shows. Use these
-  instead of `app.actions` or `app.collections`, which run as the trusted host.
+  [Owner authorization](authorization.md#sessions-and-logout) shows. Ambient
+  `app.actions` and `app.collections` calls inside handlers also carry the
+  caller's authority. Calls from host code, such as startup or scripts, remain
+  trusted.
+
+Server startup checks exposed Collection bindings. HTTP adapters can declare
+Collection aliases in `collections` for the same check; core-http requires
+`thread`, `participant` and `message`. A missing binding names the alias in the
+startup error.
 
 Route `metadata` labels are trusted inputs that `authenticate` can read via
 `context.endpoint.metadata`, for example to reject a route by returning a
@@ -211,11 +218,12 @@ user. Hiding bytes in browser JavaScript is not a confidentiality boundary.
 
 Thread, message and agent routes belong to `coreHttpPlugin` from
 `@copilotz/copilotz/core/server`, a separate optional plugin. Its routes read
-through `context.read`, so add it to `plugins`, bind the `thread` Collection and
-return a membership filter from the policy, as
+through `context.read`, so add it to `plugins`, bind the `thread`, `message` and
+`participant` Collections and return appropriate membership filters from policy,
+as
 [Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
-shows. Without a `thread` binding, those reads are unfiltered. Runtime-only
-applications never need the plugin.
+shows. Startup refuses a missing binding and names the Collection alias.
+Runtime-only applications never need the plugin.
 
 ### Worked example: call the facade without a listener
 

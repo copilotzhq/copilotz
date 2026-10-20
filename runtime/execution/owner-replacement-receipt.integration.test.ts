@@ -1,3 +1,4 @@
+import { hostIngressProof } from "../application/ingress/authority.ts";
 import { defineAction } from "../actions/define.ts";
 import type { RuntimeContext } from "../actions/types.ts";
 import { listen } from "../adapters/deno/listen.ts";
@@ -281,11 +282,18 @@ for (const mode of ["processor", "action"] as const) {
           await worker.ready;
         }
         const store = createEventStore({ session: database, schema: "public" });
-        await store.append({
-          type: "replacement.request",
-          namespace: "replacement",
-          payload: {},
-        }, ["processor:replacement.receipt"]);
+        await store.commitMutation({
+          draft: {
+            type: "replacement.request",
+            namespace: "replacement",
+            payload: {},
+          },
+          ingress: hostIngressProof(),
+          consumers: [{
+            consumerId: "processor:replacement.receipt",
+            settlement: "inherit",
+          }],
+        });
         await gateway.application.recoverAll({ limit: 100 });
         const deadline = new Promise<never>((_, reject) => {
           timer = setTimeout(async () => {

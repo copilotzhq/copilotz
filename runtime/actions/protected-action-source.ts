@@ -30,6 +30,7 @@ async function readSourceAncestry(
   databaseSchema: string,
   namespace: string,
   operationId: string | undefined,
+  allowUncatalogued = false,
 ): Promise<readonly SourceOperation[]> {
   const tables = createOperationCatalogTables(databaseSchema);
   if (!operationId) return [];
@@ -70,10 +71,55 @@ async function readSourceAncestry(
       throw new Error("Protected Action ancestry is unavailable.");
     }
   }
+  if (!ancestors.length && allowUncatalogued) return [];
   if (!ancestors.length || ancestors.at(-1)!.next_id !== null) {
     throw new Error("Protected Action ancestry is unavailable.");
   }
   return ancestors;
+}
+
+/** Resolve invocation authority without opening protected application payloads. */
+export async function resolveProtectedActionIngress(
+  options: Readonly<{
+    transaction: SqlExecutor;
+    databaseSchema: string;
+    namespace: string;
+    source: ProtectedActionSourceBinding;
+  }>,
+): Promise<
+  import("./protected-action-types.ts").ProtectedActionIngress | undefined
+> {
+  const { transaction, databaseSchema, namespace, source } = options;
+  const chain = await readSourceAncestry(
+    transaction,
+    databaseSchema,
+    namespace,
+    source.operationId,
+    // Raw retained Events may have delivery state without a catalog operation.
+    // They stay unclassified; absence must never grant host authority.
+    true,
+  );
+  const ids = chain.map((operation) => operation.root_event_id).reverse();
+  if (!ids.includes(source.eventId)) ids.push(source.eventId);
+  const rows = (await transaction.query<{
+    id: string;
+    owner_ingress:
+      | import("./protected-action-types.ts").ProtectedActionIngress
+      | null;
+  }>(
+    `SELECT id,owner_ingress FROM ${
+      createCoreTableNames(databaseSchema).events
+    } WHERE namespace=$1 AND id=ANY($2::text[])`,
+    [namespace, ids],
+  )).rows;
+  const entries = ids.map((id) => {
+    const row = rows.find((row) => row.id === id);
+    if (!row) {
+      throw new Error("Invocation source is unavailable in this scope.");
+    }
+    return row.owner_ingress;
+  });
+  return entries.find((entry) => entry?.authority) ?? entries[0] ?? undefined;
 }
 
 export async function resolveProtectedActionSource(

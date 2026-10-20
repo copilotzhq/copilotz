@@ -12,8 +12,10 @@ Collections and Events.
 ## How to use it
 
 Compose `coreHttpPlugin` with `corePlugin` and `serverPlugin`. Supply
-authentication, authorization, and exposure policy through
-`resources.server.default`, using `defineServerFacade`.
+authentication and exposure through `resources.server.default`, using
+`defineServerFacade`. Configure authorization in the application's
+`authorization: OwnerAuthorization`. Bind `thread`, `participant` and `message`;
+Server startup names any missing binding.
 
 ## How it works
 

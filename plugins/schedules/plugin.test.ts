@@ -1,3 +1,9 @@
+import {
+  bindTestActions,
+  testAuthority,
+} from "../../runtime/testing/authority.ts";
+import { credentialValidity } from "../../runtime/authorization/authority.ts";
+import type { OwnerAuthorization } from "../../runtime/authorization/evaluator.ts";
 import { wakeOwnerAlarms } from "../../runtime/testing/owner-alarms.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 
@@ -8,7 +14,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "../../runtime/plugins/index.ts";
-import { createTestDomainContext } from "../core/shared/testing/context.ts";
+import { createTestDomainContext as unboundTestDomainContext } from "../core/shared/testing/context.ts";
 import {
   createTestDatabase,
   type TestDatabase,
@@ -25,6 +31,61 @@ import {
 const BASE = new Date("2026-01-01T00:00:00.000Z");
 const NAMESPACE = "tenant-schedules-base";
 
+// Alarm work has explicit policy; fixture setup retains its own tenant authority.
+function scheduleAuthorization(
+  schema: string,
+  namespaces = [NAMESPACE],
+): OwnerAuthorization {
+  const registry = createPluginRegistry({ plugins: [schedulesPlugin] });
+  const reference = { id: "fixture", revision: "1" };
+  const actions = Object.fromEntries(
+    Object.keys(registry.actions).map((alias) => [alias, {}]),
+  );
+  return {
+    systemScopes: Object.fromEntries(
+      namespaces.map(
+        (namespace) => [namespace, testAuthority(schema, namespace).scope],
+      ),
+    ),
+    collections: { scheduledJob: reference },
+    actions: Object.fromEntries(
+      Object.keys(actions).map((alias) => [alias, reference]),
+    ),
+    policies: {
+      fixture: {
+        revision: "1",
+        sources: [],
+        evaluate: () => ({
+          collections: { scheduledJob: {} },
+          actions,
+          collectionMutations: {
+            scheduledJob: {
+              create: {},
+              update: {},
+              delete: {},
+              commands: Object.fromEntries(
+                Object.keys(registry.collections.scheduledJob.commands ?? {})
+                  .map((name) => [name, {}]),
+              ),
+            },
+          },
+        }),
+      },
+    },
+  };
+}
+function createTestDomainContext(
+  ...args: Parameters<typeof unboundTestDomainContext>
+) {
+  const context = unboundTestDomainContext(...args);
+  return {
+    ...context,
+    collections: bindTestActions(context.collections, {
+      ...testAuthority(args[0].databaseSchema, args[1]),
+      validity: credentialValidity(args[2]?.now?.() ?? BASE),
+    }),
+  };
+}
 async function close(db: TestDatabase): Promise<void> {
   await db.close();
 }
@@ -44,6 +105,7 @@ Deno.test("base schedules turn opaque jobs into self-contained durable due event
     database: db,
     namespace: NAMESPACE,
     databaseSchema: "copilotz_v3_schedules_base",
+    authorization: scheduleAuthorization("copilotz_v3_schedules_base"),
     plugins: [
       schedulesPlugin,
       definePlugin({
@@ -153,6 +215,10 @@ Deno.test("base schedule claims remain concurrent-safe and tenant scoped", async
   const application = await createCopilotzApplication({
     database: db,
     databaseSchema: "copilotz_v3_schedules_scope",
+    authorization: scheduleAuthorization("copilotz_v3_schedules_scope", [
+      "tenant-a",
+      "tenant-b",
+    ]),
     plugins: [schedulesPlugin],
     engine: { now: () => now },
   });
@@ -259,6 +325,7 @@ Deno.test("owner restart coalesces downtime at the retained occurrence and prese
   const options = {
     database: db,
     databaseSchema: schema,
+    authorization: scheduleAuthorization(schema),
     namespace: NAMESPACE,
     plugins: [schedulesPlugin],
     engine: {

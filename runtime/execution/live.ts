@@ -1,4 +1,7 @@
-import { closeCollectionPolicyInvocation } from "../authorization/invocation.ts";
+import {
+  closeCollectionPolicyInvocation,
+  withContextCollectionInvocation,
+} from "../authorization/invocation.ts";
 import { readViews } from "../collections/read-view.ts";
 import type { CopilotzEvent } from "../events/index.ts";
 import {
@@ -183,7 +186,10 @@ async function runOne(
     );
   }
   try {
-    await processor.handle(processorEvent, context);
+    await withContextCollectionInvocation(
+      context,
+      () => processor.handle(processorEvent, context),
+    );
     options.signal.throwIfAborted();
   } finally {
     closeCollectionPolicyInvocation(context);

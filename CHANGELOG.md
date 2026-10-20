@@ -57,6 +57,10 @@ connection. There is no alternate runtime or compatibility mode.
 
 ### Fixed
 
+- Ambient host calls in Actions, Processors and HTTP handlers retain caller
+  authority. Malformed policy Collection filters are refused, and unbound
+  Collections deny non-host access; Server startup checks required bindings.
+
 - Owner commands capture their input once, and authorization and execution each
   see an independent copy. A caller or policy mutating its object can't change
   what was authorized or what runs, and returned values are detached.

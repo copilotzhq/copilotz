@@ -137,10 +137,10 @@ The registration has three maps:
 
 Startup rejects unknown aliases or revisions, any Action or Collection the
 server facade exposes without a binding, and any Collection that declares
-`ownerPolicy: "required"` without one. A Collection with no binding is
-unguarded: the facade's Collection routes refuse to expose it, but every other
-read reaches it unfiltered, including a custom route's `context.read`. Bind
-every Collection that holds data a caller must not see. Workers reject
+`ownerPolicy: "required"` without one. Server also checks adapter-declared
+Collections, including core-http's `thread`, `participant` and `message`. A
+Collection with no binding refuses reads and writes by non-host callers,
+including custom routes. Trusted host code can still access it. Workers reject
 `authorization`; only the owner evaluates policy.
 
 The former `server.authorize` hook and the `ServerAuthorize`, `CollectionPolicy`
@@ -225,17 +225,20 @@ capture instead of preparing the input again.
 ### Trusted host calls
 
 `app.actions.<alias>`, `app.collections.<alias>` and `app.send` run as the
-trusted host. The owner evaluates no policy for them, even for bound Actions and
-Collections, and the work they start runs as the trusted host too. Use them for
-seeds, administration and tests.
+trusted host when called by host code, such as startup, scripts, administration
+and tests. Host calls need no policy grant, including for unbound Collections.
 
-A caller that already holds narrower authority keeps it when the call runs
-inside `withRetainedAuthority(authority, signal, fn)` from `@copilotz/copilotz`.
-Code inside an Action, a Processor or an HTTP route handler does not carry that
-scope by itself, so a host call made there runs as the trusted host. Use the
-context instead: `context.actions` and `context.collections` in Actions and
-Processors, `context.invoke` and `context.read` in route handlers. They carry
-the caller's authority.
+Inside an Action, a Processor or an HTTP route handler, ambient `app.*` calls
+carry the caller's authority. They cannot widen it to trusted-host authority.
+The context APIs (`context.actions`, `context.collections`, `context.invoke` and
+`context.read`) carry that authority too. A Collection without an owner policy
+binding is forbidden to authenticated callers, for both reads and writes.
+Explicit `withRetainedAuthority(authority, signal, fn)` scopes from
+`@copilotz/copilotz` retain the same guarantee.
+
+Policy Collection filters accept only `where`, `contains`, `containsAny` and
+`filter`. The owner validates their shapes and nested predicates before using a
+decision, including mutation filters; malformed filters are refused.
 
 ### Sessions and logout
 

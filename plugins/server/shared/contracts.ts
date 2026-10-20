@@ -64,7 +64,7 @@ export type ServerEndpointDescriptor = Readonly<{
 }>;
 
 export type ServerAuthorizedScope = Readonly<{
-  authority?: import("@copilotz/copilotz/engine").AuthenticatedAuthority;
+  authority: import("@copilotz/copilotz/engine").AuthenticatedAuthority;
   actor?: Readonly<
     { id: string; externalId?: string; name?: string; email?: string }
   >;
@@ -106,8 +106,7 @@ export type ServerFacadeResource = Readonly<{
     collections: boolean | ServerCollectionExposure;
     channels: boolean | ServerPatternPolicy;
   }>;
-  authenticate?: ServerAuthenticate;
-  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
+  authenticate: ServerAuthenticate;
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
@@ -115,8 +114,7 @@ export type DefineServerFacadeInput = Readonly<{
   /** Defaults to 20 MiB. */
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
-  authenticate?: ServerAuthenticate;
-  /** Exact custom HTTP route IDs allowed to establish bootstrap provenance, never user identity. */
+  authenticate: ServerAuthenticate;
 }>;
 
 export {

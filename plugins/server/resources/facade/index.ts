@@ -117,7 +117,7 @@ function maxAssetUploadBytes(value: unknown): number {
 
 /** Validates one process-local Server facade declaration. */
 export function defineServerFacade(
-  input: DefineServerFacadeInput = {},
+  input: DefineServerFacadeInput,
 ): ServerFacadeResource {
   if (
     !input || typeof input !== "object" || Array.isArray(input) ||
@@ -128,7 +128,7 @@ export function defineServerFacade(
     )
   ) throw new TypeError("Server facade definition is invalid.");
   for (const key of ["authenticate"] as const) {
-    if (input[key] !== undefined && typeof input[key] !== "function") {
+    if (typeof input[key] !== "function") {
       throw new TypeError(`Server ${key} must be a function.`);
     }
   }
@@ -156,7 +156,7 @@ export function defineServerFacade(
         | boolean
         | ServerPatternPolicy,
     } as const,
-    ...(input.authenticate ? { authenticate: input.authenticate } : {}),
+    authenticate: input.authenticate,
   } as const);
 }
 

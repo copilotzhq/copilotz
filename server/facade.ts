@@ -1,3 +1,4 @@
+import { defaultServerFacade } from "../plugins/server/resources/server/default/index.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
@@ -85,7 +86,10 @@ export function createServerFacadeFetchHandler(
 ): ServerFacadeFetchHandler {
   const configuredFacade = facadeResource(application, options.facade);
   const facade = Object.freeze({ ...configuredFacade });
-  if (typeof facade.authenticate !== "function") {
+  if (
+    typeof facade.authenticate !== "function" ||
+    facade.authenticate === defaultServerFacade.authenticate
+  ) {
     throw new TypeError(
       "Server authentication and retained authority are required.",
     );
@@ -93,6 +97,9 @@ export function createServerFacadeFetchHandler(
   const routes = compileServerRoutes(application.plugins, facade);
   application.authorization.assertResources({
     collections: [
+      ...Object.values(application.plugins.adapters.http ?? {}).flatMap(
+        (adapter) => (adapter as HttpAdapter).collections ?? [],
+      ),
       ...new Set(
         routes.routes.flatMap(({ endpoint }) =>
           endpoint.collectionAlias ? [endpoint.collectionAlias] : []
@@ -296,11 +303,21 @@ export function createServerFacadeFetchHandler(
             status: 202,
             data: await submit(
               route.action,
-              route.input ? await route.input(handlerContext) : request.body,
+              route.input
+                ? await withRetainedAuthority(
+                  context.serverScope.authority,
+                  context.serverSignal,
+                  () => route.input!(handlerContext),
+                )
+                : request.body,
             ),
           };
         }
-        const result = await route.handler!(handlerContext);
+        const result = await withRetainedAuthority(
+          context.serverScope.authority,
+          context.serverSignal,
+          () => route.handler!(handlerContext),
+        );
         if (result instanceof Response) {
           return { status: result.status, data: result };
         }

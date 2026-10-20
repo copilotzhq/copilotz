@@ -70,7 +70,10 @@ grants, and there is no global default list that installation extends.
 These grants decide which tools Core shows a model and lets it call during an
 agent turn. They do not authorize other callers: host code, Processors and HTTP
 routes reach Actions through their own boundaries, described in
-[Actions](./actions.md) and [Server](./server.md).
+[Actions](./actions.md) and [Server](./server.md). Nor do they bypass the owner
+policy: an Action bound in `authorization` is authorized under the authority of
+the user whose turn it is, even when the model calls it through a granted tool.
+See [Owner authorization](./authorization.md).
 
 ### A Tool presents an Action; it does not replace it
 

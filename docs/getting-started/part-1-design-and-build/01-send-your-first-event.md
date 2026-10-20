@@ -209,6 +209,6 @@ react to without the sender knowing about it.
 - Next: [Chapter 2: React With a Processor](02-react-with-a-processor.md)
   registers code that reacts to this Event's data.
 - Reference: the [Copilotz overview](../../overview.md) explains how Events,
-  operations and the five primitives fit together.
+  operations and the runtime primitives fit together.
 - Reference: the [runtime API](../../api.md) lists the application's `send`,
   `operationStatus` and `close` methods.

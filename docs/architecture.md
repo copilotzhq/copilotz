@@ -75,10 +75,10 @@ flowchart LR
 3. **Mutation.** A Processor changes state only through Actions and Collection
    writes. An Action records `<actionId>.invoked`, then `completed`, `failed` or
    `cancelled`. A Collection write commits the record, its change Event and the
-   deliveries that Event matches together. Stable **operation keys** name each
-   Action call and write inside a delivery, so a repeated delivery receives the
-   recorded result rather than writing twice. Calls to outside services need
-   their own idempotency key.
+   deliveries that Event matches together, in one command of the schema's owner.
+   Stable **operation keys** name each Action call and write inside a delivery,
+   so a repeated delivery receives the recorded result rather than writing
+   twice. Calls to outside services need their own idempotency key.
 4. **Bodies.** Large or binary values become immutable Assets referenced from
    records. A progressive **Stream** is a generic byte body: readers follow its
    bytes while it is open, and an Action or Collection adopts the sealed content
@@ -92,6 +92,7 @@ flowchart LR
 | **Plugin definitions** | Stable IDs and contracts: Collections, Actions, Processors, Resources, Adapters. Pure modules with no environment reads or I/O on import. | `notes-plugin.ts`: `note`, `notes.save`, `notes.capture` |
 | **Host composition**   | Namespace, database, credentials, live integrations, which plugins compose.                                                               | `composition.ts`: `team-notes`, `file://./data`          |
 | **Runtime**            | Persistence, deliveries, leases and recovery, operation settlement, Action lifecycle, content adoption, execution transport.              | Created by `createCopilotz`                              |
+| **Schema owner**       | The single serialized writer for one database schema. It commits every Event, record and operation, and evaluates authorization policy.   | One per schema, inside the embedded or Gateway role      |
 
 The runtime never imports a concrete plugin. The agent harness under
 `@copilotz/copilotz/core` is a set of plugins on top of the same primitives:
@@ -219,11 +220,13 @@ time against the same `./data` directory reuses the same deduplicated operation.
 ### Placement
 
 `createCopilotz` runs embedded by default. The same plugins can run split into a
-gateway that admits and serves `fetch`, and workers that execute deliveries,
-sharing one persistence. Embedded and Gateway handles expose `actions` and
-`collections` alongside `send`; Worker handles remain lifecycle-only. Host calls
-require no Server plugin or `authorize` policy. Placement changes processes and
-transport, never plugin IDs or contracts;
+Gateway that holds the schema owner and serves `fetch`, and Workers that execute
+deliveries without a database connection, calling the owner over an admitted
+transport. Embedded and Gateway handles expose `actions` and `collections`
+alongside `send`; Worker handles remain lifecycle-only. Host calls require no
+Server plugin and run as the trusted host: the owner evaluates `authorization`
+policy for authenticated callers, not for host code. Placement changes processes
+and transport, never plugin IDs or contracts;
 [Deploy and Scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
 covers roles.
 
@@ -235,7 +238,8 @@ covers roles.
 - Answer "what happened to this request?" from one operation ID.
 - Add the agent harness or other semantic plugins without changing the runtime
   contract underneath.
-- Move from one process to gateway and workers without rewriting plugins.
+- Move from one process to a Gateway and Workers without rewriting plugins or
+  giving Workers database access.
 
 ## Next steps
 

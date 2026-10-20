@@ -50,6 +50,7 @@ the runtime only within their storage and filesystem limits.
 | **Processor**  | Code that reacts to matching Events. A durable match becomes a recorded delivery that may be retried; live Event handling is best effort without that recovery guarantee. |
 | **Resource**   | A process-local definition or policy that code looks up, such as an agent's role and capability grants.                                                                   |
 | **Adapter**    | A replaceable implementation of an outside dependency, such as a model provider, file store or channel.                                                                   |
+| **View**       | A presentation of authorized, read-only data, selected by data kind, mode and renderer, such as a text summary of a record.                                               |
 | **Plugin**     | A named, versioned package of the above. Defining it starts nothing; an application composes it with `createCopilotz`.                                                    |
 
 Every input starts an **operation** that covers the deliveries, Action calls and
@@ -62,6 +63,16 @@ modes. Stable **operation keys** name each Action call and write within a
 delivery, so a retried delivery gets the recorded result instead of a second
 write. An outside service that the Action calls still needs its own idempotency
 support.
+
+### One writer per database schema
+
+Each database schema has one **owner**: a single serialized writer that commits
+Events, records and operations in order. Processors and Actions can run in the
+same process or on Worker processes that hold no database connection; either
+way, every read, write and Action call goes to the owner. The owner also
+evaluates authorization, inside the command that does the work, so a permission
+check and the write it guards never drift apart. You write the same plugin code
+for every placement; only host composition changes.
 
 ### One small plugin
 
@@ -181,7 +192,9 @@ With these foundations you can:
 - retry and recover work without duplicating recorded writes;
 - add an agent later, granting it only the operations it needs;
 - keep tenant, database and credential choices in host code, separate from
-  reusable definitions.
+  reusable definitions;
+- scale execution onto Workers without giving them database access, and decide
+  every permission where the data is written.
 
 ## Next steps
 

@@ -8,19 +8,22 @@ status: stable
 
 # Getting Started with Copilotz
 
-Copilotz is a generic application runtime built from five primitives:
+Copilotz is a generic application runtime built from six primitives:
 
 - **Collections** hold application state.
 - **Actions** are named operations with a tracked lifecycle.
 - **Processors** react to Events.
 - **Resources** are declarative configuration that plugins read.
 - **Adapters** supply host or provider implementations.
+- **Views** present authorized, read-only data.
 
 Plugins compose these primitives, and Events connect them. The runtime records
 Events and Action lifecycles and coordinates the work they trigger, so you can
-test, persist, recover and serve your application. Ordinary application code and
-process-local policy hooks run as normal code; the runtime does not record each
-of their steps.
+test, persist, recover and serve your application. Each database schema has one
+owner, a single writer that commits that work in order and authorizes it; code
+that runs elsewhere calls the owner instead of opening the database. Ordinary
+application code and process-local policy hooks run as normal code; the runtime
+does not record each of their steps.
 
 **Core** is an optional agent harness built on the same runtime. It contributes
 conversations, agents, model connections and tools as plugins and Resources of
@@ -29,7 +32,7 @@ and policy stay in your own plugins, whether a person, an HTTP client, a
 schedule or an agent calls them.
 
 This guide builds one small Notes application across 22 chapters in six parts.
-It targets **Copilotz 0.85.0**.
+It targets **Copilotz 0.89.0**.
 
 ## Choose a route
 
@@ -273,8 +276,8 @@ resolves and what you have afterwards.
   Record usage and query it from a client.
 - [Chapter 21: Deploy and Scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
   · R · Requires: 07 (15 for the Fetch section). One process does everything.
-  Split Gateway and Worker roles over a shared database, and choose a topology
-  for your host.
+  Split a Gateway that owns the database from Workers that execute without one,
+  and choose a topology for your host.
 
 ### Part 6 — Evolve and Reuse
 

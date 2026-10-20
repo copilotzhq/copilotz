@@ -266,12 +266,7 @@
         {
           "title": "Deployment Topologies",
           "slug": "embedding-and-hypervisors",
-          "description": "Embedded processes or Gateways and Workers with shared persistence."
-        },
-        {
-          "title": "Trusted Host Commands",
-          "slug": "host-commands",
-          "description": "Fixed-scope host SQL, atomic receipts and explicit startup recovery."
+          "description": "One embedded process, or a Gateway that owns storage and Workers that call it."
         },
         {
           "title": "Runtimes and Host Capabilities",

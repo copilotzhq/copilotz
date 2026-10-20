@@ -83,8 +83,6 @@ Each page below is the main reference for its topic.
 
 - [Runtimes and Host Capabilities](runtime-adapters.md): portable declarations,
   host requirements and the exact CI coverage.
-- [Trusted Host Commands](host-commands.md): owner-local SQL, atomic receipts
-  and explicitly requested startup scopes.
 - [Testing and inspection](testing-and-inspection.md).
 - [Schedules](schedules.md) and [Usage](usage.md).
 - [Deployment Topologies](embedding-and-hypervisors.md): running in one process

@@ -58,8 +58,9 @@ response types from the browser-safe `@copilotz/copilotz/usage/client`:
 - `createUsageHttpAdapter()` mounts two read routes, by default at `/usage` and
   `/usage/attempts`, with the stable route IDs `copilotz.usage.analytics` and
   `copilotz.usage.attempts`. Behind the facade's `/api` base they become
-  `/api/usage` and `/api/usage/attempts`. Every query reads through the
-  request's trusted scope; the query cannot select another namespace or schema.
+  `/api/usage` and `/api/usage/attempts`. Every query reads the `usage`
+  Collection through the request's authority; the query cannot select another
+  namespace or schema, and the owner policy decides whether it may read at all.
 - `createUsageClient()`, from `@copilotz/copilotz/usage/client`, is a small
   Fetch client for those routes. Its default base URL is `/api/admin/usage`,
   which does **not** match this host, so the report script passes
@@ -69,20 +70,128 @@ Before you add code, you need what Chapter 17 built:
 
 - `serve-agent.ts` (or `serve-agent-node.ts`) serving the assistant with
   `agent.ts`, `composition.ts`, Core and `coreHttpPlugin`;
-- the Chapter 17 `auth.ts`, whose `http` case allows only route IDs listed in
-  the principal's `allowedHttpEndpointIds`;
-- the Chapter 17 `server.ts`, which already accepts `plugins` and `adapters`.
+- the Chapter 17 `chat-access.ts` policy, and the Chapter 17 `server.ts`, which
+  already accepts `plugins`, `adapters` and `access`.
 
-Neither `auth.ts` nor `server.ts` changes. The routes are closed by default
-deny; this chapter grants them to one trusted principal in the host.
+Neither `auth.ts` nor `server.ts` changes. The policy does: the Usage ledger is
+tenant-wide data, so this chapter binds the `usage` Collection and grants reads
+only to members with an `analyst` role.
+
+### Replace `chat-access.ts`
+
+Replace `chat-access.ts` with this complete file. Compared with Chapter 17 it
+makes three changes: the revision becomes `4`, the `collection` case starts with
+a rule for `usage`, and `collections` binds `usage` next to `thread`. Every
+Chapter 17 rule is kept.
+
+```ts
+// Type of one constraint set the policy returns.
+import type { ServerConstraints } from "@copilotz/copilotz";
+// The shape `server.ts` accepts as a host's policy.
+import type { Access } from "./auth.ts";
+
+// The Notes policy, extended for chat and usage analytics. A new revision,
+// because it grants more.
+const chatPolicy = { id: "notes", revision: "4" } as const;
+
+// Owner-evaluated authorization for the chat host. It names Core's aliases as
+// plain strings, so this module imports nothing from Core.
+export const chatAccess: Access = {
+  policy: chatPolicy,
+  authorization: {
+    policies: {
+      [chatPolicy.id]: {
+        revision: chatPolicy.revision,
+        // The only data this policy may read.
+        sources: ["member"],
+        async evaluate(
+          { authority, intent, read },
+        ): Promise<ServerConstraints> {
+          const actorId = authority.principal.id;
+          // Membership in the request's tenant, read inside the command.
+          const [membership] = await read.list("member", {
+            where: { actorId },
+            limit: 1,
+          });
+          // Not a member of this tenant: nothing is granted.
+          if (!membership) return {};
+          const roles = membership.roles as string[];
+          // Operations stay readable only by the actor who started them.
+          const ownOperations = {
+            operations: { metadata: { initiatorUserId: actorId } },
+          };
+          // A thread is visible only to its participants. Core uses the
+          // authenticated actor's ID as that actor's participant ID.
+          const memberThreads = {
+            thread: { contains: { participantIds: [actorId] } },
+          };
+
+          switch (intent.kind) {
+            case "action":
+              // Every member may chat; only editors may save notes, whether
+              // they call `notes.save` or the assistant calls it for them.
+              return {
+                ...ownOperations,
+                actions: {
+                  sendConversation: {},
+                  ...(roles.includes("editor") ? { saveNote: {} } : {}),
+                },
+              };
+            case "collection":
+              // The Usage ledger holds the whole tenant's traffic. Its own
+              // Processors record rows; only analysts may read them.
+              if (intent.resource === "usage") {
+                return intent.invocation
+                  ? { collectionMutations: { usage: { create: {} } } }
+                  : roles.includes("analyst")
+                  ? { collections: { usage: {} } }
+                  : {};
+              }
+              // Core's own Actions and Processors create threads and enroll
+              // participants on the member's behalf. Direct reads, such as
+              // the thread routes, get the membership filter and nothing else.
+              return intent.invocation
+                ? {
+                  collections: memberThreads,
+                  collectionMutations: {
+                    thread: {
+                      create: {},
+                      update: {},
+                      commands: { ensureMembership: {} },
+                    },
+                  },
+                }
+                : { collections: memberThreads };
+            default:
+              // Operation reads and observation. No thread filter here, so raw
+              // thread observation, which carries private answers, is refused.
+              return ownOperations;
+          }
+        },
+      },
+    },
+    // Bindings, keyed by alias: the two published Actions, the thread
+    // Collection behind Core's read routes, and the Usage ledger.
+    actions: { saveNote: chatPolicy, sendConversation: chatPolicy },
+    collections: { thread: chatPolicy, usage: chatPolicy },
+  },
+};
+```
+
+The Usage plugin's own Processors record a row for each model attempt and tool
+call. They run with the retained authority of the member whose turn it was, so
+the policy grants `usage` creates only when `intent.invocation` names an
+executing Processor. Direct reads, which is what the two routes make, are
+granted only to analysts. Everyone else gets `403`. Because `usage` is now
+bound, this file needs `usagePlugin` in the composition; the hosts below add it.
 
 ### Replace `serve-agent.ts`
 
 Replace `serve-agent.ts` with this complete file. Compared with Chapter 17 it
 makes four changes: it imports the Usage package, appends `usagePlugin` after
 Core's plugins, registers the Usage adapter as `adapters.http.usage`, and grants
-the two Usage route IDs to `localUser`. Every Chapter 17 declaration, grant and
-lifecycle step is kept.
+`localUser` the `analyst` role next to `editor`. Every Chapter 17 declaration
+and lifecycle step is kept.
 
 ```ts
 // Core's optional HTTP projection: the send Action and the `http.core` adapter.
@@ -97,29 +206,15 @@ import { database, namespace, runtimePlugins } from "./composition.ts";
 // The pure server definition and its principal type.
 import { createServerApp } from "./server.ts";
 import type { Principal } from "./server.ts";
+// The chat host's policy, and the host helper that writes memberships.
+import { chatAccess } from "./chat-access.ts";
+import { grantRoles } from "./auth.ts";
 
 // Local demo credential: a fixed string checked by exact match.
 const devAuthorization = "Bearer local-dev-token";
 
-// The same local demo identity as Chapter 17. As the only operator of this
-// local tenant, it may also read the tenant's Usage analytics.
-const localUser: Principal = {
-  actorId: "local-guide-user",
-  namespace,
-  allowedActionIds: ["notes.save", "copilotz.core.conversation.send"],
-  allowedHttpEndpointIds: [
-    // Core's conversation reads, each limited by Core to this actor's threads.
-    // `core.threads.observe` is deliberately not granted.
-    "core.threads.list",
-    "core.threads.get",
-    "core.threads.messages",
-    "core.threads.message-asset",
-    // Tenant-wide Usage reads. Grant these only to principals allowed to see
-    // every user's traffic in this namespace.
-    "copilotz.usage.analytics",
-    "copilotz.usage.attempts",
-  ],
-};
+// The same local demo identity as Chapter 17.
+const localUser: Principal = { actorId: "local-guide-user", namespace };
 
 const app = await createServerApp({
   // Exact match only; any other or missing header resolves to no principal.
@@ -139,6 +234,8 @@ const app = await createServerApp({
   adapters: { http: { usage: createUsageHttpAdapter() } },
   // Publish the send Action. Update, delete and edit stay unpublished.
   publicActionIds: ["copilotz.core.conversation.send"],
+  // The policy that also covers chat.
+  access: chatAccess,
 });
 
 // Set once the listener starts, so a signal can shut it down gracefully.
@@ -146,6 +243,11 @@ let server: Deno.HttpServer | undefined;
 const stop = () => void server?.shutdown();
 
 try {
+  // As the only operator of this local tenant, the demo identity may also
+  // read the tenant's Usage analytics. Grant `analyst` only to people allowed
+  // to see every user's traffic in the namespace.
+  await grantRoles(app, localUser.actorId, ["editor", "analyst"]);
+
   Deno.addSignalListener("SIGINT", stop);
   Deno.addSignalListener("SIGTERM", stop);
 
@@ -169,11 +271,11 @@ try {
 }
 ```
 
-The grant lives on the principal, not in `auth.ts`, so other authenticated
-callers in the same tenant still get `403` from both routes. In production your
-`resolvePrincipal` adds the two IDs only for users your identity system marks as
-tenant analysts. If ordinary users should see only their own usage, do not grant
-these routes; build a separate route that adds the actor filter on the server
+The role lives in the tenant's memberships, not on the principal, so other
+members of the same tenant still get `403` from both routes. In production,
+grant `analyst` only to users allowed to see every user's traffic in the tenant.
+If ordinary users should see only their own usage, do not grant them `usage`
+reads; build a separate route whose policy adds the actor filter on the server
 instead of trusting a `threadId` or `agentId` from the query string. Those IDs
 are reporting dimensions, not authorization boundaries.
 
@@ -199,29 +301,15 @@ import { database, namespace, runtimePlugins } from "./composition.ts";
 // The pure server definition and its principal type.
 import { createServerApp } from "./server.ts";
 import type { Principal } from "./server.ts";
+// The chat host's policy, and the host helper that writes memberships.
+import { chatAccess } from "./chat-access.ts";
+import { grantRoles } from "./auth.ts";
 
 // Local demo credential: a fixed string checked by exact match.
 const devAuthorization = "Bearer local-dev-token";
 
-// The same local demo identity as Chapter 17. As the only operator of this
-// local tenant, it may also read the tenant's Usage analytics.
-const localUser: Principal = {
-  actorId: "local-guide-user",
-  namespace,
-  allowedActionIds: ["notes.save", "copilotz.core.conversation.send"],
-  allowedHttpEndpointIds: [
-    // Core's conversation reads, each limited by Core to this actor's threads.
-    // `core.threads.observe` is deliberately not granted.
-    "core.threads.list",
-    "core.threads.get",
-    "core.threads.messages",
-    "core.threads.message-asset",
-    // Tenant-wide Usage reads. Grant these only to principals allowed to see
-    // every user's traffic in this namespace.
-    "copilotz.usage.analytics",
-    "copilotz.usage.attempts",
-  ],
-};
+// The same local demo identity as Chapter 17.
+const localUser: Principal = { actorId: "local-guide-user", namespace };
 
 const app = await createServerApp({
   // Exact match only; any other or missing header resolves to no principal.
@@ -237,9 +325,12 @@ const app = await createServerApp({
   // Agents, model connections and tools that Core reads.
   resources: agentResources,
   // The Usage read routes, mounted under the facade as `/api/usage`.
+  // `coreHttpPlugin` still registers `http.core` itself.
   adapters: { http: { usage: createUsageHttpAdapter() } },
   // Publish the send Action. Update, delete and edit stay unpublished.
   publicActionIds: ["copilotz.core.conversation.send"],
+  // The policy that also covers chat.
+  access: chatAccess,
 });
 
 // Set by the listener lifecycle below; the `finally` block removes them.
@@ -248,6 +339,11 @@ let fail = (_error: Error) => {};
 let server: ReturnType<typeof serve> | undefined;
 
 try {
+  // As the only operator of this local tenant, the demo identity may also
+  // read the tenant's Usage analytics. Grant `analyst` only to people allowed
+  // to see every user's traffic in the namespace.
+  await grantRoles(app, localUser.actorId, ["editor", "analyst"]);
+
   // Accepts loopback connections and forwards every request to `app.fetch`.
   const listener = serve(
     { fetch: app.fetch, hostname: "127.0.0.1", port: 8000 },
@@ -501,9 +597,9 @@ after `chat-client.ts` exits with status 0. By then the operation has completed,
 so that turn's recorded rows are already queryable. No sleep or retry is needed.
 
 Authorization stays closed for everyone else. Without the `authorization` header
-the routes answer `401`; a principal in the same tenant whose
-`allowedHttpEndpointIds` lacks the Usage IDs gets `403`. The Chapter 16 server
-tests run unchanged, with no Core, no Usage and no credential.
+the routes answer `401`; a member of the same tenant without the `analyst` role
+gets `403`. The Chapter 16 server tests run unchanged, with no Core, no Usage
+and no credential.
 
 Stop the host with Ctrl+C.
 

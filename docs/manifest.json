@@ -86,7 +86,7 @@
         {
           "title": "Ch 16: Authenticate and Isolate Tenants",
           "slug": "getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants",
-          "description": "Map verified principals to tenants and owners, and authorize each request."
+          "description": "Map verified principals to tenants, keep memberships as owner data, and let one policy decide each request."
         },
         {
           "title": "Ch 17: Connect Chat and Channels",

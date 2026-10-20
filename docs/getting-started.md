@@ -251,9 +251,10 @@ resolves and what you have afterwards.
   · R · Requires: 05. Only local scripts can reach the application. Serve one
   explicitly exposed Action over Fetch and call it from a client.
 - [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
-  · R · Requires: 06, 15. Every caller still shares one default data scope.
-  Authenticate each request, resolve its principal, and assign that principal a
-  trusted tenant scope of its own.
+  · R · Requires: 06, 15. Every caller still shares one default data scope and
+  every permission. Resolve each request's principal to a trusted tenant, keep
+  memberships and roles as owner data, and let one versioned policy decide what
+  each caller may do.
 - [Chapter 17: Connect Chat and Channels](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
   · H · Requires: 08, 16 (09 recommended). The assistant is reachable only from
   a terminal. Serve conversations over HTTP under the same access policy.

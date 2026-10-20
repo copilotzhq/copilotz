@@ -205,6 +205,7 @@ export function createEventCoordinator(
       statement: mutation.statement,
       mutate: mutation.mutate,
       recoverDuplicate: mutation.recoverDuplicate,
+      replayMetadata: mutation.replayMetadata,
       maxAttempts: mutation.maxAttempts,
       transaction: mutation.transaction,
       admission: mutation.admission,

@@ -212,6 +212,7 @@ export function createAuthorizedActions(
       kind: "action",
       resource: alias(frame.actionId)!,
       operation: firstCapture ? "capture" : "authorize",
+      sourceOperationId: resolved.ancestors[0]?.event.id ?? resolved.event.id,
       invocation: {
         kind: "action",
         id: frame.actionId,

@@ -17,7 +17,9 @@ import { authorizationRefused } from "../authorization/evaluator.ts";
 import {
   assertOwnerIngressReplay,
   authorityIngressProof,
+  hostIngressProof,
   ownerIngressEvidence,
+  withIngressRequestMetadata,
 } from "../application/ingress/authority.ts";
 import { credentialValidity } from "../authorization/authority.ts";
 import type { EventMutationContext } from "../events/store.ts";
@@ -209,5 +211,26 @@ Deno.test("renewed admission cannot replace first ingress, scope, principal or a
   );
   assertThrows(() =>
     defineServerFacade({ protectedBootstrapRoutes: ["route"] } as never)
+  );
+});
+
+Deno.test("raw credential metadata does not change trusted host ingress replay", async () => {
+  const original = hostIngressProof();
+  const admitted = withIngressRequestMetadata(original, {
+    operationMetadata: { label: "host" },
+  });
+  assertEquals(ownerIngressEvidence(admitted), { kind: "host" });
+  await assertOwnerIngressReplay(
+    {} as EventMutationContext,
+    "host",
+    {
+      id: "host-operation",
+      namespace: "main",
+      type: "requested",
+      payload: {},
+      ownerIngress: ownerIngressEvidence(admitted),
+    },
+    {},
+    original,
   );
 });

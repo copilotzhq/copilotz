@@ -60,7 +60,7 @@ Deno.test("completed flow submission replay binds result and observation request
   ]);
 });
 
-Deno.test("browser Action transport inherits SDK flow credentials and clears them after session projection", async () => {
+Deno.test("browser Action transport retains exact operation flow credentials after session projection", async () => {
   const seen: { path: string; credential: string | null }[] = [];
   const client = createCopilotzClient({
     baseUrl: "https://flow.test/api",
@@ -120,9 +120,76 @@ Deno.test("browser Action transport inherits SDK flow credentials and clears the
       { path: "/api/operations/start/result", credential: null },
       { path: "/api/actions/auth/continue", credential: "signed-flow" },
       { path: "/api/operations/continue/result", credential: "signed-flow" },
-      { path: "/api/operations/continue", credential: null },
+      { path: "/api/operations/continue", credential: "signed-flow" },
     ]);
   } finally {
     runtime.dispose();
   }
+});
+
+Deno.test("completed flow replay and observation retain only their original credential across newer flows", async () => {
+  const seen: { path: string; flow: string | null }[] = [];
+  let starts = 0;
+  const client = createCopilotzClient({
+    baseUrl: "https://flow.test/api",
+    fetch: (input, init) => {
+      const request = new Request(input, init);
+      const path = new URL(request.url).pathname;
+      seen.push({ path, flow: request.headers.get("x-copilotz-flow") });
+      if (path.endsWith("/observe")) {
+        return Promise.resolve(
+          Response.json({
+            error: { code: "forbidden", message: "end observation" },
+          }, { status: 403 }),
+        );
+      }
+      if (path.endsWith("/start")) {
+        starts++;
+        return Promise.resolve(
+          Response.json({ data: { operationId: `start-${starts}` } }, {
+            status: 202,
+            headers: {
+              "x-copilotz-flow": `flow-${starts}`,
+              "x-copilotz-flow-action": "auth.callback",
+            },
+          }),
+        );
+      }
+      if (request.method === "POST") {
+        return Promise.resolve(
+          Response.json({ data: { operationId: "callback" } }, {
+            status: 202,
+            headers: { "x-copilotz-flow": "" },
+          }),
+        );
+      }
+      return Promise.resolve(Response.json({ data: {}, seq: "1" }));
+    },
+  });
+  await client.actions.submit("auth.start", {}, { idempotencyKey: "start-1" });
+  await client.actions.submit("auth.callback", {}, {
+    idempotencyKey: "callback",
+  });
+  await client.operations.result("callback");
+  await assertRejects(
+    () =>
+      client.operations.observe({ operationIds: ["callback"], onFrame() {} }),
+    CopilotzHttpError,
+  );
+  await client.actions.submit("auth.start", {}, { idempotencyKey: "start-2" });
+  await client.actions.submit("auth.callback", {}, {
+    idempotencyKey: "callback",
+  });
+  await client.operations.result("callback");
+  await client.operations.get("unrelated");
+  assertEquals(seen.map((request) => request.flow), [
+    null,
+    "flow-1",
+    "flow-1",
+    "flow-1",
+    null,
+    "flow-1",
+    "flow-1",
+    null,
+  ]);
 });

@@ -47,6 +47,8 @@ export type AuthorizationIntent = Readonly<{
   resource: string;
   operation: string;
   input: unknown;
+  /** Owner-resolved root source, used when capturing a flow continuation. */
+  sourceOperationId?: string;
   /** Owner-resolved executing identity. Absent for direct ingress calls. */
   invocation?: Readonly<{
     kind: "action" | "processor" | "alarm";

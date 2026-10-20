@@ -17,13 +17,21 @@ import {
 } from "../runtime/authorization/authority.ts";
 import { credentialHeaders } from "./session-cookie.ts";
 
-async function fixture(now = () => new Date()) {
+async function fixture(
+  now = () => new Date(),
+  strict = false,
+  capacity?: number,
+) {
+  const held = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const executions = { callback: 0, logout: 0 };
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
   const schema = `sessions_${crypto.randomUUID().replaceAll("-", "")}`;
   let allow = true;
   let allowOperationReads = true;
+  let requestMetadata: Record<string, unknown> = {};
   const entries = defineCollection({
     name: "entries",
     schema: {
@@ -48,6 +56,7 @@ async function fixture(now = () => new Date()) {
   const logout = defineAction({
     id: "auth.logout",
     async execute(_input, ctx) {
+      executions.logout++;
       await ctx.transaction(async (tx) => {
         await tx.collections.entries.create({
           id: "logout",
@@ -74,6 +83,7 @@ async function fixture(now = () => new Date()) {
   const callback = defineAction({
     id: "auth.callback",
     async execute(input, ctx) {
+      executions.callback++;
       if ((input as { login?: boolean }).login) {
         await ctx.transaction(async (tx) => {
           await tx.sessions.create({ principal: "flow-account", maxAge: 3600 });
@@ -146,7 +156,16 @@ async function fixture(now = () => new Date()) {
       return result;
     },
   });
+  const hold = defineAction({
+    id: "auth.hold",
+    async execute() {
+      held.resolve();
+      await release.promise;
+      return {};
+    },
+  });
   const actions = {
+    hold,
     login,
     logout,
     start,
@@ -177,21 +196,48 @@ async function fixture(now = () => new Date()) {
     database: db,
     databaseSchema: schema,
     namespace: "main",
-    engine: { now },
+    engine: { now, ...(capacity ? { execution: { capacity } } : {}) },
     adapters: { secrets: { default: await testSecretAdapter() } },
     authorization: {
       policies: {
         fixture: {
           revision: "1",
           sources: [],
-          evaluate({ intent }) {
+          evaluate({ intent, authority }) {
+            if (!allowOperationReads) return {};
+            const proof = authority.scope.bindings["@credential-proof"];
+            const isSession = authority.authorityBasis.kind === "session";
+            const permitted = Object.keys(actions).filter((key) =>
+              !strict ||
+              (key === "callback"
+                ? !!authority.flow
+                : key === "logout"
+                ? isSession
+                : true)
+            );
             return {
               actions: Object.fromEntries(
-                Object.keys(actions).map((k) => [k, {}]),
+                permitted.map((k) => [k, {}]),
               ),
               collections: { entries: {} },
               collectionMutations: { entries: { create: {} } },
-              operations: allowOperationReads ? { metadata: {} } : undefined,
+              operations: allowOperationReads
+                ? {
+                  metadata: strict
+                    ? intent.kind === "action" && intent.operation === "admit"
+                      ? {
+                        recoveryProof: proof,
+                        recovery: intent.resource !== "transfer",
+                        ...(isSession
+                          ? { sessionCredential: authority.principal.id }
+                          : { anonymousCredential: authority.principal.id }),
+                      }
+                      : isSession
+                      ? {}
+                      : { recoveryProof: proof, recovery: true }
+                    : {},
+                }
+                : undefined,
               sessions: allow
                 ? {
                   create: true,
@@ -227,6 +273,7 @@ async function fixture(now = () => new Date()) {
                   authority: selected(
                     request.headers.get("x-tenant") ?? "fixture",
                   ),
+                  operationMetadata: requestMetadata,
                 };
               },
               expose: { actions: true, collections: true, channels: false },
@@ -287,9 +334,15 @@ async function fixture(now = () => new Date()) {
     submit,
     result,
     selected,
+    held: held.promise,
+    release: () => release.resolve(),
+    executions,
+    allowOperationReads: () => allowOperationReads = true,
+    metadata: (value: Record<string, unknown>) => requestMetadata = value,
     deny: () => allow = false,
     denyOperationReads: () => allowOperationReads = false,
     async close() {
+      release.resolve();
       await app.close();
       await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await db.close();
@@ -704,7 +757,7 @@ Deno.test("Credential effects roll back together and repeated Action transaction
 });
 
 Deno.test("SDK login and logout recover cookies with browser-style credential transitions", async () => {
-  const f = await fixture();
+  const f = await fixture(undefined, true);
   try {
     let cookie = "";
     const client = createCopilotzClient({
@@ -796,6 +849,232 @@ Deno.test("HTTP Actions project session effects committed by their nested Action
       })).status,
       403,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("SDK pending continuation is readable before capture and exact replay survives cookie installation", async () => {
+  let now = Date.now();
+  const f = await fixture(() => new Date(now), true, 1);
+  let cookie = "";
+  const requests: Request[] = [];
+  const responses: Response[] = [];
+  const pendingRead = Promise.withResolvers<Response>();
+  let heldOperation: string | undefined;
+  const client = createCopilotzClient({
+    baseUrl: "https://test/api",
+    fetch: async (input, init) => {
+      const headers = new Headers(init?.headers);
+      if (cookie) headers.set("cookie", cookie);
+      const request = new Request(input, { ...init, headers });
+      requests.push(request.clone());
+      const response = await f.handler(request);
+      responses.push(response.clone());
+      if (
+        heldOperation &&
+        request.url.endsWith(`/operations/${heldOperation}/result`)
+      ) pendingRead.resolve(response.clone());
+      const next = response.headers.get("set-cookie");
+      if (next) cookie = next.split(";")[0];
+      return response;
+    },
+  });
+  try {
+    const options = {
+      idempotencyKey: "start",
+      signal: AbortSignal.timeout(15000),
+    };
+    await client.actions.invoke("auth.start", {}, options);
+    const otherStart = await f.result(await f.submit("start", "other-flow"));
+    const otherFlow = otherStart.headers.get("x-copilotz-flow")!;
+    await f.submit("hold", "hold");
+    await f.held;
+    const receipt = await client.actions.submit("auth.callback", {
+      login: true,
+    }, { idempotencyKey: "callback" });
+    const callbackRequest = requests.find((request) =>
+      request.url.endsWith("/actions/auth/callback")
+    )!;
+    const flow = callbackRequest.headers.get("x-copilotz-flow")!;
+    const proof = callbackRequest.headers.get("x-copilotz-credential-proof")!;
+    const originalHeaders = {
+      "x-copilotz-flow": flow,
+      "x-copilotz-credential-proof": proof,
+    };
+    assertEquals(
+      (await f.db.query(
+        `SELECT count(*)::int AS n FROM "${f.schema}".authorization_invocations WHERE source_event_id=$1`,
+        [receipt.operationId],
+      )).rows[0].n,
+      0,
+    );
+    heldOperation = receipt.operationId;
+    const result = client.operations.result(
+      receipt.operationId,
+      AbortSignal.timeout(15000),
+    );
+    void result.catch(() => undefined);
+    const pending = await pendingRead.promise;
+    assertEquals(pending.status, 202, await pending.clone().text());
+    for (
+      const headers of [
+        { ...originalHeaders, "x-copilotz-flow": otherFlow },
+        { ...originalHeaders, "x-copilotz-credential-proof": "z".repeat(64) },
+        { ...originalHeaders, "x-tenant": "other" },
+      ]
+    ) {
+      assertEquals(
+        (await f.request(
+          `/operations/${receipt.operationId}/result`,
+          undefined,
+          headers,
+        )).status,
+        403,
+      );
+    }
+    assertEquals(
+      (await f.request("/actions/auth/callback", { login: true }, {
+        ...originalHeaders,
+        "idempotency-key": "competitor",
+      })).status,
+      403,
+    );
+    assertEquals(
+      await client.actions.submit("auth.callback", { login: true }, {
+        idempotencyKey: "callback",
+      }).then((value) => value.operationId),
+      receipt.operationId,
+    );
+    f.release();
+    assertEquals((await result).value, { continued: true });
+    assertEquals(
+      await client.actions.invoke("auth.callback", { login: true }, {
+        idempotencyKey: "callback",
+        signal: AbortSignal.timeout(15000),
+      }),
+      { continued: true },
+    );
+    assert(cookie);
+    const originalCookie = cookie;
+    assertEquals(
+      await client.actions.invoke("auth.callback", { login: true }, {
+        idempotencyKey: "callback",
+        signal: AbortSignal.timeout(15000),
+      }),
+      { continued: true },
+    );
+    assertEquals(cookie, originalCookie);
+    assertEquals(f.executions.callback, 1);
+    const replay = responses.findLast((response) =>
+      response.status === 202 && response.headers.has("set-cookie")
+    );
+    assertEquals(
+      replay?.headers.get("set-cookie")?.split(";")[0],
+      originalCookie,
+    );
+    await assertRejects(() =>
+      client.actions.submit("auth.callback", { login: false }, {
+        idempotencyKey: "callback",
+      })
+    );
+    // New identities cannot use the retired flow or session to execute a callback.
+    await assertRejects(() =>
+      client.actions.submit("auth.callback", { login: true }, {
+        idempotencyKey: "fresh",
+      })
+    );
+    assertEquals(f.executions.callback, 1);
+    now += 301_000;
+    await assertRejects(() =>
+      client.actions.submit("auth.callback", { login: true }, {
+        idempotencyKey: "callback",
+      })
+    );
+    assertEquals(f.executions.callback, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("Completed logout submission replays under proof-only recovery without an anonymous execution grant", async () => {
+  let now = Date.now();
+  const f = await fixture(() => new Date(now), true);
+  try {
+    const login = await f.result(await f.submit("login", "strict-login"));
+    let cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const ordinary = await f.submit("transfer", "ordinary", { cookie });
+    cookie =
+      (await f.result(ordinary, { cookie })).headers.get("set-cookie")!.split(
+        ";",
+      )[0];
+    const logout = await f.submit("logout", "strict-logout", { cookie });
+    assertEquals((await f.result(logout, { cookie })).status, 200);
+    const replay = await f.request("/actions/auth/logout", {}, {
+      "idempotency-key": "strict-logout",
+    });
+    assertEquals(replay.status, 202, await replay.clone().text());
+    assertEquals((await replay.json()).data.operationId, logout);
+    assert(replay.headers.get("set-cookie")?.includes("Max-Age=0"));
+    assertEquals((await f.result(logout)).status, 200);
+    assertEquals(f.executions.logout, 1);
+    assertEquals(
+      (await f.request(`/operations/${ordinary}/result`)).status,
+      404,
+    );
+    f.metadata({ callerTag: "changed" });
+    assertEquals(
+      (await f.request("/actions/auth/logout", {}, {
+        "idempotency-key": "strict-logout",
+      })).status,
+      409,
+    );
+    f.metadata({});
+    for (
+      const headers of [
+        { "idempotency-key": "fresh-logout" },
+        {
+          "idempotency-key": "strict-logout",
+          "x-copilotz-credential-proof": "z".repeat(64),
+        },
+        { "idempotency-key": "strict-logout", "x-tenant": "other" },
+      ]
+    ) {
+      assertEquals(
+        (await f.request(
+          "/actions/auth/logout",
+          {},
+          Object.fromEntries(
+            Object.entries(headers).filter((entry): entry is [string, string] =>
+              typeof entry[1] === "string"
+            ),
+          ),
+        )).status,
+        403,
+      );
+    }
+    assertEquals(
+      (await f.request("/actions/auth/logout", { changed: true }, {
+        "idempotency-key": "strict-logout",
+      })).status,
+      409,
+    );
+    f.denyOperationReads();
+    assertEquals(
+      (await f.request("/actions/auth/logout", {}, {
+        "idempotency-key": "strict-logout",
+      })).status,
+      404,
+    );
+    f.allowOperationReads();
+    now += 16 * 60 * 1000;
+    assertEquals(
+      (await f.request("/actions/auth/logout", {}, {
+        "idempotency-key": "strict-logout",
+      })).status,
+      403,
+    );
+    assertEquals(f.executions.logout, 1);
   } finally {
     await f.close();
   }

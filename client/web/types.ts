@@ -6,7 +6,7 @@ import type {
   ViewReference,
 } from "../../runtime/views/definition.ts";
 import type { CollectionCommandDefinition } from "../../runtime/collections/definition.ts";
-import type { LiveReadPort, Row } from "./live.ts";
+import type { Row } from "./reads.ts";
 export type Placement = "server" | "browser" | "both";
 export type ReadState<T = unknown> = Readonly<{
   value: T;
@@ -105,7 +105,7 @@ export interface ActionTransport {
       signal: AbortSignal;
       accepted(operationId: string): void;
     },
-  ): Promise<{ value: unknown; seq: number }>;
+  ): Promise<{ value: unknown; seq: number | string }>;
   cancel(operationId: string): Promise<void>;
 }
 export interface ClientEvent {
@@ -121,7 +121,7 @@ export interface Observation<T> {
 }
 export interface BrowserRuntimeOptions {
   plugins: readonly BrowserPlugin[];
-  live?: LiveReadPort;
+  live?: import("../live-query.ts").SubscriptionTransport;
   actions?: ActionTransport;
   storage?: Readonly<Record<string, StorageAdapter>>;
   adapters?: BrowserViewContext["adapters"];

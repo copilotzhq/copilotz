@@ -35,3 +35,6 @@ export type {
   HttpReadServices,
   HttpRoute,
 } from "../plugins/server/authoring/http-adapter/index.ts";
+
+export { attachDeviceSocket } from "./device.ts";
+export type { DeviceSessionOptions } from "./device.ts";

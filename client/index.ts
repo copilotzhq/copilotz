@@ -1,3 +1,5 @@
+export { createDeviceTransport } from "./device.ts";
+export type { DeviceTransport, DeviceTransportOptions } from "./device.ts";
 import {
   createLiveQuery,
   type LiveQuery,

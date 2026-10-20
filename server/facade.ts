@@ -1,3 +1,6 @@
+import { retainedAuthority } from "../runtime/authorization/authority.ts";
+import { attachDeviceSocket } from "./device.ts";
+import type { DeviceSocket } from "../runtime/subscriptions/device.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
 import type { FacadeContext } from "./context.ts";
@@ -31,6 +34,10 @@ import { collectionMutationResponse } from "./mutations.ts";
 
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
+  /** Host WebSocket upgrade; mounts the authenticated device binding at /device. */
+  upgradeDevice?: (
+    request: Request,
+  ) => { socket: DeviceSocket; response: Response; requestDeadline?: number };
   admit?: () => void | Promise<void>;
   responseHeaders?: Readonly<Record<string, string>>;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
@@ -583,5 +590,100 @@ export function createServerFacadeFetchHandler(
       return await authenticateHttpRequest(request, application, facade, match);
     },
   });
-  return Object.assign(fetch, { routes }) as ServerFacadeFetchHandler;
+  const handler: HttpFetchHandler = async (request) => {
+    if (
+      new URL(request.url).pathname !== `${facade.basePath}/device` ||
+      !options.upgradeDevice
+    ) return fetch(request);
+    await options.admit?.();
+    const requestHeaders = new Headers(request.headers),
+      requestUrl = request.url;
+    const { socket, response, requestDeadline } = options.upgradeDevice(
+      request,
+    );
+    attachDeviceSocket(socket, {
+      requestDeadline,
+      async authenticate(credentials) {
+        if (
+          !credentials || typeof credentials !== "object" ||
+          Array.isArray(credentials)
+        ) throw appError(403, "forbidden", "Session proof required");
+        const headers = new Headers(requestHeaders);
+        // Explicit proof changes authority; cookies on an already-open socket do not.
+        for (const [key, value] of Object.entries(credentials)) {
+          if (
+            !["authorization", "cookie", "x-api-key"].includes(
+              key.toLowerCase(),
+            ) || typeof value !== "string"
+          ) throw appError(403, "forbidden", "Invalid session proof");
+          headers.set(key, value);
+        }
+        const session = await authenticateHttpRequest(
+          new Request(requestUrl, { headers }),
+          application,
+          facade,
+          {
+            endpoint: {
+              key: "device",
+              kind: "http",
+              id: "device",
+              method: "GET",
+              path: `${facade.basePath}/device`,
+              operation: "connect",
+            },
+            params: {},
+          },
+        );
+        if (session instanceof Response) {
+          throw appError(
+            session.status,
+            "forbidden",
+            "Device authentication refused",
+          );
+        }
+        return {
+          async observe(collection, query, observation) {
+            const endpoint = routes.routes.find((route) =>
+              route.endpoint.kind === "collection" &&
+              route.endpoint.collectionAlias === collection &&
+              route.endpoint.operation === "list"
+            )?.endpoint;
+            if (!endpoint) {
+              throw appError(403, "forbidden", "Collection is not exposed");
+            }
+            const authenticated = await authenticateHttpRequest(
+              new Request(new URL(endpoint.path, requestUrl), { headers }),
+              application,
+              facade,
+              { endpoint, params: {} },
+            );
+            if (authenticated instanceof Response) {
+              throw appError(
+                authenticated.status,
+                "forbidden",
+                "Device authentication refused",
+              );
+            }
+            const read = await createHttpReads(
+              application,
+              {
+                ...authenticated.serverScope,
+                authority: retainedAuthority({
+                  ...authenticated.serverScope.authority!,
+                  requestFacts: {
+                    ...authenticated.serverScope.authority!.requestFacts,
+                    transport: "websocket",
+                  },
+                }),
+              },
+              { context: authenticated },
+            );
+            return read.observe(collection, query, observation);
+          },
+        };
+      },
+    });
+    return response;
+  };
+  return Object.assign(handler, { routes }) as ServerFacadeFetchHandler;
 }

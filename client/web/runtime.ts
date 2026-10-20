@@ -5,13 +5,14 @@ import type {
   ViewMap,
   ViewReference,
 } from "../../runtime/views/definition.ts";
+import { readKey, type ReadRequest, type Row } from "./reads.ts";
 import {
-  type LiveFrame,
-  type OrderedRow,
-  readKey,
-  type ReadRequest,
-  type Row,
-} from "./live.ts";
+  createLiveQuery,
+  type LiveQuery,
+  type OperationResult,
+} from "../live-query.ts";
+import type { SubscriptionFrame } from "../../runtime/subscriptions/types.ts";
+import type { CollectionQuery } from "../../runtime/collections/types.ts";
 import type {
   ActionHandle,
   ActionStatus,
@@ -30,10 +31,7 @@ import type {
 
 type Entry = {
   request: ReadRequest;
-  rows: Map<string, OrderedRow>;
-  seq: number;
-  checkpoint?: string;
-  status: ReadState["status"];
+  live?: LiveQuery;
   close?: () => void;
 };
 type Layer = {
@@ -42,7 +40,6 @@ type Layer = {
   record: string;
   command: string;
   input: unknown;
-  seq?: number;
 };
 type Watch = { dependencies: Set<string>; run(): void; dispose(): void };
 const clone = <T>(value: T): T => structuredClone(value);
@@ -54,21 +51,12 @@ function immutable<T>(value: T): T {
   }
   return value;
 }
-function rowsMap(rows: readonly OrderedRow[]): Map<string, OrderedRow> {
-  const result = new Map<string, OrderedRow>();
-  for (const entry of rows) {
-    if (
-      !entry.row || typeof entry.row.id !== "string" || !entry.row.id ||
-      result.has(entry.row.id) ||
-      !(typeof entry.order === "string" ||
-        typeof entry.order === "number" && Number.isFinite(entry.order))
-    ) throw new TypeError("Invalid ordered row");
-    result.set(entry.row.id, clone(entry));
-  }
-  return result;
-}
-function sequence(seq: number): void {
-  if (!Number.isSafeInteger(seq) || seq < 0) {
+function sequence(seq: number | string): void {
+  if (
+    typeof seq === "string"
+      ? !/^(0|[1-9][0-9]*)$/.test(seq)
+      : !Number.isSafeInteger(seq) || seq < 0
+  ) {
     throw new TypeError("Invalid owner sequence");
   }
 }
@@ -172,12 +160,18 @@ export async function createBrowserRuntime(
       }
       const rows = (storage ? await storage.load(name) : undefined) ??
         definition.initial ?? [];
-      rowsMap(rows.map((row, order) => ({ row, order })));
+      if (
+        rows.some((row) => typeof row.id !== "string" || !row.id) ||
+        new Set(rows.map((row) => row.id)).size !== rows.length
+      ) throw new TypeError("Invalid rows");
       local.set(name, clone(rows));
     }
   }
   const entries = new Map<string, Entry>();
-  const layers = new Map<string, Layer>();
+  const pendingLayers = new Map<
+    string,
+    { layer: Layer; result: Promise<OperationResult> }
+  >();
   const queries = new Map<
     string,
     {
@@ -249,60 +243,25 @@ export async function createBrowserRuntime(
       }
     }
   }
-  function retireAppliedLayers() {
-    for (const [id, layer] of layers) {
-      if (layer.seq === undefined) continue;
-      const reads = [...entries.values()].filter((entry) =>
-        entry.request.collection === layer.collection
-      );
-      if (
-        reads.every((entry) =>
-          entry.seq >= layer.seq! || entry.status === "denied"
-        )
-      ) layers.delete(id);
-    }
-  }
   function invalidateCollection(name: string) {
     for (const [key, entry] of entries) {
       if (entry.request.collection === name) notify(key);
     }
   }
-  function apply(entry: Entry, frame: LiveFrame, key: string) {
-    alive();
-    if (frame.kind === "snapshot") {
-      sequence(frame.seq);
-      const rows = rowsMap(frame.rows);
-      entry.rows = rows;
-      entry.seq = frame.seq;
-      entry.checkpoint = frame.checkpoint;
-      entry.status = "ready";
-    } else if (frame.kind === "delta") {
-      sequence(frame.from);
-      sequence(frame.to);
-      if (
-        entry.seq < 0 || entry.seq !== frame.from || frame.to < frame.from ||
-        entry.status === "denied"
-      ) throw new TypeError("Non-contiguous live batch; reset required");
-      const upserts = rowsMap(frame.upserts);
-      const rows = new Map(entry.rows);
-      for (const id of frame.removes) rows.delete(id);
-      for (const [id, value] of upserts) rows.set(id, value);
-      entry.rows = rows;
-      entry.seq = frame.to;
-      entry.checkpoint = frame.checkpoint;
-      entry.status = "ready";
-    } else if (frame.kind === "stale") entry.status = "stale";
-    else {
-      entry.rows.clear();
-      entry.seq = -1;
-      entry.checkpoint = undefined;
-      entry.status = frame.kind === "revoked" ? "denied" : "loading";
+  function applied(
+    entry: Entry,
+    frame: SubscriptionFrame | undefined,
+    key: string,
+  ) {
+    if (!frame && entry.live?.status === "denied") {
+      frame = { t: "revoked", reason: "authorization" };
     }
-    retireAppliedLayers();
     notify(key);
     if (
-      frame.kind === "delta" || frame.kind === "reset" ||
-      frame.kind === "revoked"
+      frame?.t === "batch" &&
+        (frame.collectionChanged ?? frame.changes.length > 0) ||
+      frame?.t === "reset" ||
+      frame?.t === "revoked"
     ) {
       for (const [queryKey, query] of queries) {
         if (
@@ -310,7 +269,7 @@ export async function createBrowserRuntime(
             entry.request.collection,
           )
         ) {
-          if (frame.kind === "revoked") {
+          if (frame?.t === "revoked") {
             query.generation++;
             query.controller.abort();
             query.value = {
@@ -324,10 +283,9 @@ export async function createBrowserRuntime(
       }
     }
     // Initial/replacement snapshots and restore are not live processor events.
-    if (frame.kind === "delta") {
+    if (frame?.t === "batch") {
       const ids = new Set([
-        ...frame.removes,
-        ...frame.upserts.map((entry) => entry.row.id),
+        ...frame.changes.map((change) => change.id),
       ]);
       for (const id of ids) {
         emit("collection.changed", entry.request.collection, id);
@@ -340,47 +298,39 @@ export async function createBrowserRuntime(
     tracking?.add(key);
     let entry = entries.get(key);
     if (!entry) {
-      entry = {
-        request: clone(request),
-        rows: new Map(),
-        seq: -1,
-        status: "loading",
-      };
+      entry = { request: clone(request) };
       entries.set(key, entry);
-    }
-    if (
-      !local.has(request.collection) && !entry.close &&
-      entry.status !== "denied"
-    ) {
-      if (!options.live) {
-        throw new TypeError(`No live-read port for '${request.collection}'`);
-      }
-      const target = entry;
-      let active = true;
-      entry.close = () => {
-        active = false;
-      };
-      try {
-        const unsubscribe = options.live.subscribe(request, (frame) => {
-          if (!active || lifetime.signal.aborted) return;
-          if (target.status === "denied") return;
-          try {
-            apply(target, frame, key);
-          } catch (error) {
-            target.status = "stale";
-            active = false;
-            notify(key);
-            throw error;
+      if (!local.has(request.collection)) {
+        if (!options.live) {
+          throw new TypeError(
+            `No live-read transport for '${request.collection}'`,
+          );
+        }
+        const target = entry;
+        const query = request.id === undefined
+          ? request.query ?? {}
+          : { where: { id: request.id }, limit: 1 };
+        target.live = createLiveQuery(
+          options.live,
+          request.collection,
+          query as CollectionQuery,
+          {
+            signal: lifetime.signal,
+            content: request.content,
+            onState: (frame) => {
+              if (!lifetime.signal.aborted) applied(target, frame, key);
+            },
+          },
+        );
+        target.close = () => target.live!.close();
+        void target.live.done.catch((error) => {
+          if (!lifetime.signal.aborted) report(error);
+        });
+        for (const [id, pending] of pendingLayers) {
+          if (pending.layer.collection === request.collection) {
+            target.live.optimistic(id, pending.layer, pending.result);
           }
-        }, { signal: lifetime.signal, checkpoint: entry.checkpoint });
-        entry.close = () => {
-          active = false;
-          unsubscribe();
-        };
-      } catch (error) {
-        active = false;
-        entry.close = undefined;
-        throw error;
+        }
       }
     }
     return [key, entry];
@@ -418,18 +368,13 @@ export async function createBrowserRuntime(
     const [, entry] = entryFor(request);
     let rows = local.has(request.collection)
       ? [...local.get(request.collection)!]
-      : [...entry.rows.values()].sort((a, b) => {
-        const order = typeof a.order === "number" && typeof b.order === "number"
-          ? a.order - b.order
-          : String(a.order).localeCompare(String(b.order));
-        return order || a.row.id.localeCompare(b.row.id);
-      }).map((entry) => entry.row);
+      : [...entry.live!.rows];
     let pending = false;
-    if (entry.status !== "denied") {
-      for (const layer of layers.values()) {
+    if (entry.live?.status !== "denied") {
+      for (const value of entry.live?.optimisticLayers.values() ?? []) {
+        const layer = value as Layer;
         if (
-          layer.collection !== request.collection ||
-          layer.seq !== undefined && entry.seq >= layer.seq
+          layer.collection !== request.collection
         ) continue;
         if (request.id !== undefined && layer.record !== request.id) continue;
         const index = rows.findIndex((row) => row.id === layer.record);
@@ -458,7 +403,9 @@ export async function createBrowserRuntime(
     return immutable(
       clone({
         value: rows,
-        status: local.has(request.collection) ? "ready" as const : entry.status,
+        status: local.has(request.collection)
+          ? "ready" as const
+          : entry.live!.status,
         pending,
       }),
     );
@@ -540,6 +487,8 @@ export async function createBrowserRuntime(
         notify(`action:${id}`);
         emit(`action.${next}`, undefined, id);
       };
+      const settlement = Promise.withResolvers<OperationResult>();
+      void settlement.promise.catch(() => {});
       if (definition.optimistic) {
         const optimistic = definition.optimistic;
         const layer = {
@@ -556,8 +505,12 @@ export async function createBrowserRuntime(
             `Unknown optimistic command '${layer.collection}.${layer.command}'`,
           );
         }
-        layers.set(id, layer);
-        invalidateCollection(layer.collection);
+        pendingLayers.set(id, { layer, result: settlement.promise });
+        for (const entry of entries.values()) {
+          if (entry.request.collection === layer.collection) {
+            entry.live?.optimistic(id, layer, settlement.promise);
+          }
+        }
       }
       const result = Promise.resolve().then(async () => {
         signal.throwIfAborted();
@@ -571,6 +524,7 @@ export async function createBrowserRuntime(
             actionContext(signal),
           );
           signal.throwIfAborted();
+          settlement.resolve({ value, seq: "0" });
           transition("completed");
           return value;
         }
@@ -589,22 +543,21 @@ export async function createBrowserRuntime(
         );
         signal.throwIfAborted();
         sequence(terminal.seq);
-        const layer = layers.get(id);
-        if (layer) {
-          layer.seq = terminal.seq;
-          retireAppliedLayers();
-          invalidateCollection(layer.collection);
-        }
+        settlement.resolve({
+          value: terminal.value,
+          seq: String(terminal.seq),
+        });
         transition("completed");
         return terminal.value;
       }).catch((cause) => {
         error = cause;
-        const layer = layers.get(id);
-        layers.delete(id);
-        if (layer) invalidateCollection(layer.collection);
+        settlement.reject(cause);
         transition(signal.aborted ? "cancelled" : "failed");
         throw cause;
-      }).finally(() => acceptOperation(undefined));
+      }).finally(() => {
+        pendingLayers.delete(id);
+        acceptOperation(undefined);
+      });
       // Handles are observable even when the caller deliberately ignores result().
       result.catch(() => {});
       const handle: ActionHandle = {
@@ -784,7 +737,6 @@ export async function createBrowserRuntime(
       entry.close?.();
       entries.delete(key);
     }
-    retireAppliedLayers();
   }
   function observe<T>(
     evaluate: (ctx: BrowserViewContext) => T,
@@ -889,7 +841,7 @@ export async function createBrowserRuntime(
       for (const watch of [...watches]) watch.dispose();
       for (const entry of entries.values()) entry.close?.();
       entries.clear();
-      layers.clear();
+      pendingLayers.clear();
       for (const query of queries.values()) query.controller.abort();
       queries.clear();
       local.clear();

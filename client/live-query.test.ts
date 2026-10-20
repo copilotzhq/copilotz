@@ -156,9 +156,12 @@ Deno.test("F6 revoked stops without reconnect and queued snapshot cannot be muta
     },
   });
   t.push(snapshot());
+  await tick();
+  assertEquals(live.rows[0].id, "a");
   t.push({ t: "revoked", reason: "permission" });
   await assertRejects(() => live.done, Error, "revoked");
-  assertEquals(live.rows[0].id, "a");
+  assertEquals(live.rows, []);
+  assertEquals(live.status, "denied");
   assertEquals(t.cursors.length, 1);
   live.close();
 });

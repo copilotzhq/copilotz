@@ -1,5 +1,5 @@
 import type { StorageAdapter } from "./types.ts";
-import type { Row } from "./live.ts";
+import type { Row } from "./reads.ts";
 /** Ports are injected so importing core never touches browser globals. */
 export function localStorageAdapter(
   storage: Pick<Storage, "getItem" | "setItem">,

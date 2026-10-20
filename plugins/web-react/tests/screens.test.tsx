@@ -1,10 +1,14 @@
+import {
+  MemorySubscriptions,
+  record,
+  tick,
+} from "../../../client/testing/live-transport.test.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   type BrowserRuntime,
   createBrowserRuntime,
-  MemoryLiveReads,
 } from "@copilotz/copilotz/web";
 import { coreWebPlugin } from "@copilotz/copilotz/core/web";
 import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
@@ -14,7 +18,7 @@ import { Button, Markdown } from "@copilotz/copilotz/web/kit";
 import { ObservedView, reactRenderer } from "../index.ts";
 
 test("React adapter server renders tracked chat/admin/usage screens in both densities", async () => {
-  const live = new MemoryLiveReads();
+  const live = new MemorySubscriptions();
   const publish = (
     collection: string,
     query: Record<string, unknown> | undefined,
@@ -37,9 +41,10 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
       ...(query ? { query } : {}),
       ...(id ? { id } : {}),
     }, {
-      kind: "snapshot",
-      rows: rows.map((row, order) => ({ row: row as { id: string }, order })),
-      seq: 1,
+      t: "snapshot",
+      complete: true,
+      rows: rows.map((row) => record(row as { id: string })),
+      sequence: "1",
       checkpoint: "1",
     });
   publish("thread", undefined, [{ id: "t", title: "A conversation" }], "t");
@@ -78,6 +83,7 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
       const output = runtime.observe(() =>
         runtime.render({ shows, value }, { mode })
       );
+      await tick();
       const html = renderToStaticMarkup(<ObservedView output={output} />);
       assert.ok(html.includes(expected), html);
       assert.ok(html.includes(`data-density="${mode}"`));
@@ -97,7 +103,7 @@ test("workspace restores panes, navigation chooses focus/context, and swap excha
       usageWebPlugin,
       uiWebPlugin("url"),
     ],
-    live: new MemoryLiveReads(),
+    live: new MemorySubscriptions(),
     show: workspaceNavigation(() => runtime),
     storage: {
       url: {
@@ -178,7 +184,7 @@ test("admin query Views render existing authorized Action results", async () => 
   const runtime = await createBrowserRuntime({
     renderer: reactRenderer,
     plugins: [adminWebPlugin],
-    live: new MemoryLiveReads(),
+    live: new MemorySubscriptions(),
     actions: {
       invoke: () =>
         Promise.resolve({

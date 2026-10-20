@@ -29,6 +29,8 @@ export type LiveQueryOptions =
         checkpoint: string;
       }
     >;
+    /** State notifications follow application; listener errors are isolated. */
+    onState?(frame?: SubscriptionFrame): void;
     /** Called with the proposed state. Throwing detaches without applying it. */
     onChange?(
       rows: readonly CollectionRecord[],
@@ -36,6 +38,7 @@ export type LiveQueryOptions =
     ): void | Promise<void>;
   }>;
 export type LiveQuery = Readonly<{
+  status: "loading" | "ready" | "stale" | "denied";
   rows: readonly CollectionRecord[];
   deltas: readonly SubscriptionDelta[];
   checkpoint: string | undefined;
@@ -51,7 +54,7 @@ export type LiveQuery = Readonly<{
   close(): void;
 }>;
 const sequence = (value: string) => {
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new TypeError("Invalid subscription sequence.");
   }
   return BigInt(value);
@@ -65,6 +68,7 @@ export function createLiveQuery(
   options: LiveQueryOptions = {},
 ): LiveQuery {
   query = structuredClone(query);
+  const content = structuredClone(options.content);
   if (
     options.checkpoint &&
     (!options.initial || options.initial.checkpoint !== options.checkpoint)
@@ -89,6 +93,21 @@ export function createLiveQuery(
   const signal = options.signal
     ? AbortSignal.any([options.signal, abort.signal])
     : abort.signal;
+  let status: LiveQuery["status"] = options.initial ? "ready" : "loading";
+  const notify = (frame?: SubscriptionFrame) => {
+    try {
+      options.onState?.(frame);
+    } catch { /* Subscriber isolation. */ }
+  };
+  const deny = () => {
+    status = "denied";
+    rows = [];
+    deltas = [];
+    checkpoint = undefined;
+    applied = undefined;
+    layers.clear();
+    closed = true;
+  };
   const settle = () => {
     for (const [id, layer] of layers) {
       if (applied && layer.seq && sequence(layer.seq) <= sequence(applied)) {
@@ -98,11 +117,21 @@ export function createLiveQuery(
   };
   const apply = async (frame: SubscriptionFrame, current: number) => {
     if (frame.t === "revoked") {
+      deny();
+      notify(frame);
       throw Object.assign(new Error("Subscription revoked."), {
         code: "revoked",
       });
     }
-    if (frame.t === "reset") return false;
+    if (frame.t === "reset") {
+      rows = [];
+      deltas = [];
+      applied = undefined;
+      checkpoint = undefined;
+      status = "loading";
+      notify(frame);
+      return false;
+    }
     if (!frame.checkpoint) {
       throw new TypeError("Subscription output has no checkpoint.");
     }
@@ -111,7 +140,11 @@ export function createLiveQuery(
       if (!frame.complete) throw new TypeError("Incomplete logical snapshot.");
       sequence(frame.sequence);
       next = structuredClone(frame.rows);
-      if (new Set(next.map((row) => row.id)).size !== next.length) {
+      if (
+        !Array.isArray(next) || next.some((row) =>
+          !row || typeof row.id !== "string" || !row.id
+        ) || new Set(next.map((row) => row.id)).size !== next.length
+      ) {
         throw new TypeError("Duplicate snapshot record.");
       }
     } else {
@@ -142,13 +175,19 @@ export function createLiveQuery(
     }
     // Handler arguments cannot mutate the retained authoritative state.
     await options.onChange?.(structuredClone(next), structuredClone(frame));
-    if (current !== generation || signal.aborted) return true;
+    if (
+      current !== generation || signal.aborted ||
+      attached?.isActive?.() === false
+    ) return true;
     rows = next;
     deltas = frame.t === "batch" ? structuredClone(frame.changes) : [];
     applied = frame.t === "snapshot" ? frame.sequence : frame.to;
     checkpoint = frame.checkpoint;
     if (frame.t === "snapshot") resync = false;
     settle();
+    status = "ready";
+    attached?.applied?.(checkpoint);
+    notify(frame);
     return true;
   };
   const connect = async () => {
@@ -163,6 +202,7 @@ export function createLiveQuery(
         try {
           attached = await transport.observe(collection, query, {
             checkpoint: resync ? undefined : checkpoint,
+            content,
             signal,
           });
           for await (const frame of attached.frames) {
@@ -181,7 +221,15 @@ export function createLiveQuery(
         } catch (error) {
           if (applying) resync = true;
           if (
+            ["revoked", "forbidden"].includes(
+              (error as { code?: string }).code ?? "",
+            ) || (error as { status?: number }).status === 403
+          ) deny();
+          else status = "stale";
+          notify();
+          if (
             applying || signal.aborted ||
+            (error as { retryable?: boolean }).retryable === false ||
             ["revoked", "forbidden"].includes(
               (error as { code?: string }).code ?? "",
             ) ||
@@ -215,6 +263,9 @@ export function createLiveQuery(
   let done = connect();
   void done.catch(() => undefined);
   return {
+    get status() {
+      return status;
+    },
     get rows() {
       return structuredClone(rows);
     },
@@ -240,14 +291,20 @@ export function createLiveQuery(
         value: structuredClone(value),
         seq: undefined as string | undefined,
       };
+      if (closed || signal.aborted) return;
       layers.set(id, layer);
+      notify();
       void result.then((result) => {
         sequence(result.seq);
         if (layers.get(id) !== layer) return;
         layer.seq = result.seq;
         settle();
+        notify();
       }).catch(() => {
-        if (layers.get(id) === layer) layers.delete(id);
+        if (layers.get(id) === layer) {
+          layers.delete(id);
+          notify();
+        }
       });
     },
     reconnect() {

@@ -90,3 +90,58 @@ admitted. Authorization changes must fence queued payload before asynchronous
 policy work. No replay cursor may reveal another principal's data or silently
 adopt a new snapshot. Shared records and frames must not be mutable by
 consumers.
+
+## Live reads end to end
+
+Baseline before LIVE: `client/live-query.ts:59` owns applied rows, checkpoint
+and optimistic settlement; `client/web/runtime.ts:247` duplicates settlement and
+`:268` duplicates frame application. `client/web/live.ts:6` defines a second
+wire shape. `client/index.ts:217` uses HTTP multipart for operation
+observations; `:343` requires an injected Collection transport. There is no
+device socket in this branch (the sockets under runtime are worker bindings).
+
+Target: owner `read.observe` → authenticated, multiplexed device WebSocket →
+`SubscriptionTransport` → `createLiveQuery` → client Collection → tracked View.
+The web runtime consumes the SDK handle directly. Delete its frame reducer,
+checkpoint/sequence fields and settlement loop, and delete `web/live.ts`'s
+second frame/port/MemoryLiveReads implementation. Tests use the actual
+SubscriptionTransport contract. Browser-local Collection commands stay local.
+
+The public Collection get/list, ReadState, observe(read), Action handles and
+View ctx stay stable. `BrowserRuntimeOptions.live` accepts
+SubscriptionTransport; SDK collections.observe remains unchanged. Expose a
+shared device transport and a portable server socket binding; the Fetch facade
+accepts the host's upgrade function at /device. Authentication reuses compiled
+Collection exposure and the existing retained-authority authentication path.
+Explicit reauthentication fences channels before rebinding; HTTP cookie changes
+alone confer no authority. Operation multipart migration is outside this
+Collection track and follows F6's explicit retirement gate.
+
+The binding negotiates version/capabilities, bounds controls, channel queues,
+logical outputs and socket buffering, fragments large JSON output, fences each
+channel generation, and renews before channel/connection deadlines. Heartbeats
+carry per-channel owner checkpoints; the client acknowledges only applied
+frames. Disconnect, renewal and overflow resume from the handle's applied
+checkpoint; absent retained history resets. No Collection polling or per-commit
+SQL is introduced. Revocation removes private rows and closes the read.
+
+Verify owner conformance unchanged, adapt WEB tests to asynchronous canonical
+frames, and add real WebSocket/application/browser-renderer integration for
+commit→delta→render, seq settlement, reconnect/replay, and revocation. Device
+unit cases exercise fragmentation, stale generations, heartbeat repair,
+reauthentication and bounded queues. Run full PGlite and Postgres suites with
+the prescribed wrapper. Risks: host upgrade APIs differ; the portable binding
+must keep host globals out of browser/core exports. Existing id-order and owner
+cache capacity restrictions remain explicit.
+
+Content selections remain part of client get/list: forward them with
+subscription options, include them in retained selection identity, and use the
+existing Collection resolver for declared fields and bounded bodies. Recheck the
+live permission gate after asynchronous body resolution. This adds body reads
+only when explicitly requested; ordinary owner pushes remain SQL-free. JSON
+logical outputs preserve typed content bodies through envelope path metadata.
+
+Query Action invalidation distinguishes a Collection mutation from empty owner
+progress. Batches carry `collectionChanged` even when the limited projection is
+unchanged; query Actions refresh on that signal, while their own result/receipt
+progress only advances optimistic settlement. This prevents feedback loops.

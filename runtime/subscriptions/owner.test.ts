@@ -1,3 +1,4 @@
+import { attachOwnerPush } from "../events/push.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { fixture, reader } from "../testing/subscriptions.ts";
 import { createCoreTableNames } from "../events/schema.ts";
@@ -23,8 +24,27 @@ Deno.test("F4 subscription admission and notice reauthorization receive the exac
     };
     assertEquals(f.intents.at(-1), expected);
     query.limit = 99;
-    await f.collections.member.update({ id: "key", set: { revision: 1 } });
-    await f.run("barrier", {}, () => undefined);
+    let noticedGate: boolean[] | undefined;
+    const watch = await attachOwnerPush(f.session, f.schema, (frame) => {
+      if (
+        frame.kind === "change" &&
+        frame.change.collectionChange?.collection === "member"
+      ) {
+        noticedGate = [sub.isActive!(), sub.canPublish!()];
+      }
+    });
+    try {
+      await f.collections.member.update({ id: "key", set: { revision: 1 } });
+      await f.run("barrier", {}, () => undefined);
+      assertEquals(
+        noticedGate,
+        [true, false],
+        "a temporary authorization hold gates publication without retiring the generation",
+      );
+      assertEquals(sub.canPublish!(), true);
+    } finally {
+      watch.close();
+    }
     assertEquals((await r.next()).t, "batch");
     assertEquals(f.intents.at(-1), expected);
     assertEquals(f.intents.length, 2);
@@ -136,6 +156,26 @@ Deno.test("F6 §6.3 contiguous empty progress and rollback never publishes", asy
       } WHERE owner='schema'`,
     );
     assertEquals(progress.to, String(sql.rows[0].last_seq));
+    assertEquals(
+      progress.collectionChanged,
+      true,
+      "mutations outside the selected window still invalidate Collection query Actions",
+    );
+    await f.run("unrelated", {}, async (_, context) => {
+      await f.store.commitMutation({
+        draft: { type: "unrelated", namespace: "main", payload: {} },
+        consumers: [],
+        transaction: context.transaction,
+      });
+    });
+    const unrelated = await r.next();
+    assert(unrelated.t === "batch");
+    assertEquals(unrelated.changes, []);
+    assertEquals(
+      unrelated.collectionChanged,
+      false,
+      "operation-only progress cannot refresh its own query Action",
+    );
     sub.detach();
   } finally {
     await f.close();

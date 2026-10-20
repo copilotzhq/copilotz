@@ -37,8 +37,39 @@ F4 policy, including declared permission sources and credential lifetime.
 
 The SDK's `client.collections.observe(name, query, options)` returns a live
 handle. Supply its authenticated `device` transport when constructing the
-client. This branch contains the in-process contract; the WebSocket device
-binding is not yet present. No HTTP polling fallback is provided.
+client. One device transport multiplexes the SDK and browser runtime's live
+reads over an authenticated WebSocket, with no polling fallback.
+
+```ts
+import { createDeviceTransport } from "@copilotz/copilotz/client";
+
+const device = createDeviceTransport({
+  url: "wss://app.example/api/device",
+  credentials: () => ({ authorization: `Bearer ${sessionProof}` }),
+});
+// After an HTTP session change: await device.reauthenticate();
+// On device teardown: device.close();
+```
+
+The server uses the existing facade authentication and Collection exposure:
+
+```ts
+const handler = createServerFacadeFetchHandler(application, {
+  upgradeDevice: (request) => Deno.upgradeWebSocket(request),
+});
+Deno.serve(handler);
+```
+
+The host supplies the WebSocket upgrade, keeping the binding portable. A host
+with a request deadline may return `requestDeadline` (epoch milliseconds)
+alongside `socket` and `response`; the binding renews the connection one second
+before it. `attachDeviceSocket(socket, { authenticate })` is the lower-level
+binding for hosts with their own session admission. An open socket
+reauthenticates explicitly; changing an HTTP cookie alone does not change a
+channel's authority. Each channel renews after five minutes, fences late output
+by generation and resumes from its applied checkpoint. Fifteen-second heartbeats
+expose channel heads and repair a lost final push. Transport buffers and logical
+fragment reassembly are bounded.
 
 ```ts
 const client = createCopilotzClient({ baseUrl: "/api", device });
@@ -59,7 +90,8 @@ notes.optimistic(
 notes.close();
 ```
 
-`rows`, `deltas`, `sequence` and `checkpoint` describe applied state. `onChange`
+`status`, `rows`, `deltas`, `sequence` and `checkpoint` describe applied state.
+`onState` notifies after application and optimistic-layer changes. `onChange`
 receives the proposed state; if it throws, the handle detaches and preserves the
 previous applied checkpoint. `optimisticLayers` retains each layer until the
 subscription applies through its operation result's `seq`, or the operation
@@ -73,10 +105,11 @@ handle using `options.initial`. A checkpoint alone cannot reconstruct a view.
 Transport failure retries are bounded; a view may implement its own supervisor.
 
 Permission notices fence queued data immediately. Revocation emits `revoked` and
-ends the channel. Changed constraints emit a `scope` reset; reconnect takes a
-new snapshot and refills the limited selection. Retention loss, owner takeover,
-credential expiry and schema/scope changes reset rather than join different
-snapshots. The SDK processes resets with a fresh snapshot.
+clears retained client rows and ends the channel. Changed constraints emit a
+`scope` reset; reconnect takes a new snapshot and refills the limited selection.
+Retention loss, owner takeover, credential expiry and schema/scope changes reset
+rather than join different snapshots. The SDK processes resets with a fresh
+snapshot.
 
 Queries currently support Collection filters, conjunctive `all`, `limit`
 (1–1000), and ascending or descending `id` order. Cursors, includes, text search
@@ -86,3 +119,12 @@ subscriptions. Each reader and replay history is limited to 64 frames / 1 MiB.
 Detached history expires after five minutes. Exceeding a reader buffer emits
 `reset: slow_consumer`; other readers continue. A complete snapshot must fit the
 logical buffer bound.
+
+The browser runtime takes this same `device` as `live`. Client Collection
+`get(id, options)` and `list(query, options)`, `observe(read)`, Action proxies
+and View `ctx` retain their APIs. Reads initially return `loading`, then notify
+their tracked Views when owner frames apply. Optimistic commands are projected
+over SDK-owned layers; only the SDK decides when each read has covered the
+Action sequence. `ActionTransport` accepts decimal-string sequences as well as
+safe integers. Content selections are forwarded and resolved using the existing
+Collection content reader, with its declared fields and byte budget.

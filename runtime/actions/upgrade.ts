@@ -1,7 +1,4 @@
-import {
-  upgradeCredentialEffects,
-  upgradeFlowAdmission,
-} from "../authorization/credentials-upgrade.ts";
+import { upgradeCredentialEffects } from "../authorization/credentials-upgrade.ts";
 import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
 import { authorityRequired, ownerKeysRequired } from "./upgrade-errors.ts";
 import {
@@ -455,7 +452,7 @@ async function finalizeRetainedDataUpgrade(
   });
 }
 
-/** Run only the next step: retained data -> v11 -> owner keys v12 -> authority v13 -> credential effects v14 -> flow admission v15.
+/** Run only the next step: retained data -> v11 -> owner keys v12 -> authority v13 -> credential effects and flow admission v14.
  * Each committed checkpoint can be resumed after missing input or a lost response.
  */
 export async function upgradeActionLifecycle(
@@ -490,7 +487,6 @@ export async function upgradeActionLifecycle(
     await upgradeAuthoritySchema(session, schema, options.authority);
   }
   await upgradeCredentialEffects(session, schema);
-  await upgradeFlowAdmission(session, schema);
   await validateCopilotzSchema(session, schema);
   await validateOperationCatalog(session, schema);
 }

@@ -61,7 +61,7 @@ export async function migrateOwnerKeys(input: {
     const version = (await tx.query<{ version: number }>(
       `SELECT version FROM ${tables.copilotz_schema_metadata} WHERE singleton`,
     )).rows[0]?.version;
-    if ([12, 13, 14, 15].includes(Number(version))) {
+    if ([12, 13, 14].includes(Number(version))) {
       const receipt = (await tx.query<
         { result: { protectedValues: number; bodies: number } }
       >(

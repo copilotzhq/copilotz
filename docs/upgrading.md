@@ -8,18 +8,18 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Current owner schema: v13
+## Current owner schema: v14
 
 Each physical database schema has one fenced owner shared by its namespaces.
-Fresh, absent-only provisioning installs **v13** and the operation catalog
+Fresh, absent-only provisioning installs **v14** and the operation catalog
 fingerprint **`stream-taxonomy-content-v1`**. Startup validates the complete
 current shape; it never upgrades an existing schema.
 
-There is one offline chain: **v5–v10 → v11 → owner keys v12 → authority v13**.
-Rehearse on a restored disposable backup. Stop admission, schedules, workers,
-owners and every physical writer, and keep them stopped through v13. Existing
-v11 or v12 schemas enter at their next step; never relabel a schema or skip a
-step.
+There is one offline chain: **v5–v10 → v11 → owner keys v12 → authority v13 →
+credential effects and flow admission v14**. Rehearse on a restored disposable
+backup. Stop admission, schedules, workers, owners and every physical writer,
+and keep them stopped through v14. Existing v11, v12 or v13 schemas enter at
+their next step; never relabel a schema or skip a step.
 
 1. Run `inspectRetainedDataDrain(session, schema)` (or the CLI `drain`).
    Deliveries, obligations, operations, streams, begun effects and physical
@@ -51,7 +51,12 @@ step.
 5. Call `upgradeActionLifecycle(session, schema, { authority })` to commit v12 →
    v13. This validates every binding, writes the accepted manifest receipt,
    invalidates old transport attachments, and fences the old owner epoch.
-   Validate the schema and catalog, then start the application.
+6. The same call then commits v13 → v14 in one transaction: private credential
+   effect storage, indexed run/operation lookup and accepted flow continuation
+   bindings. It rechecks drain, advances the owner epoch once, and preserves
+   sessions and retained authority. Starting at v13, call
+   `upgradeActionLifecycle(session, schema)` without new key or manifest inputs.
+   Validate the v14 schema and catalog, then start the application.
 
 When all reviewed inputs are already available,
 `upgradeActionLifecycle(session, schema, { plan, reviewedFingerprint,

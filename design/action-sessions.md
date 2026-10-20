@@ -99,12 +99,13 @@ isolate concurrent flows.
 Refactor existing create/revoke bodies into command-aware service operations;
 custom HTTP handlers retain their API through that same service. No alternate
 session implementation or feature flag. Owner-private credential-effect and flow
-state remain in the existing schema. Version 15 adds `accepted_operation` to
-`authorization_effects`. The offline v14-to-v15 step in
-`runtime/authorization/credentials-upgrade.ts:42` requires drained work,
-backfills already-consumed flow bindings, preserves consumed run IDs and fences
-the owner. There is no startup migration. The existing offline upgrade command
-runs it.
+state remain in the existing schema. Version 14 creates `authorization_effects`
+with `accepted_operation` and indexed run/operation lookup. The offline
+v13-to-v14 step in `runtime/authorization/credentials-upgrade.ts` requires
+drained work, creates the complete effect schema and fences the owner once in
+one transaction. Sessions and retained authority are preserved; replay preserves
+effect and flow bindings without advancing the epoch. There is no startup
+migration. The existing offline upgrade command runs it.
 
 ## Guarantees and tests
 
@@ -176,7 +177,9 @@ current flow. Independent SDK instances have different random proofs.
   reads fail.
 - `client/flow-credentials.test.ts`: exact operation and observation credentials
   survive active-flow clearing and newer flows without reaching unrelated reads.
-- `runtime/actions/upgrade.test.ts`: offline v14-to-v15 replay preserves and
-  backfills consumed identity; the full retained-data upgrade chain still works.
+- `runtime/actions/upgrade.test.ts`: offline v13-to-v14 creates exactly the
+  fresh schema, refuses undrained work, rolls back atomically, preserves
+  sessions and replays consumed flow bindings; the full retained-data upgrade
+  chain still works.
 - Existing Action session, connected-worker transaction and device suites remain
   required, followed by full PGlite and PostgreSQL suites on port 55433.

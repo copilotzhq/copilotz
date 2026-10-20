@@ -8,7 +8,7 @@ import {
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
-export const EVENT_SCHEMA_VERSION = 15;
+export const EVENT_SCHEMA_VERSION = 14;
 
 export type CoreTableName =
   | keyof typeof AUTHORIZATION_SCHEMA_COLUMNS
@@ -354,7 +354,7 @@ export async function provisionCopilotzSchema(
 /** Additive owner upgrade: semantic events and open obligations remain untouched. */
 export function createOwnerSchemaStatements(
   schemaName: string,
-  options: { version?: 11 | 13 | 14 | 15 } = {},
+  options: { version?: 11 | 13 | 14 } = {},
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [

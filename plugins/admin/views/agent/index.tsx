@@ -20,6 +20,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "agent",
   renderer: "react",
   modes: ["full", "panel", "dialog"],
+  url: true,
   render({ id }, ctx) {
     // Agents are public Resources exposed through the authorized query Action.
     const state = ctx.readAction("adminAgents", {

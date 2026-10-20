@@ -7,6 +7,7 @@ import type {
   ViewReference,
 } from "../../runtime/views/definition.ts";
 import { readKey, type ReadRequest, type Row } from "./reads.ts";
+import { urlReference } from "./storage.ts";
 import {
   createLiveQuery,
   type LiveQuery,
@@ -680,7 +681,11 @@ export async function createBrowserRuntime(
   }
   Object.freeze(collections);
   Object.freeze(actions);
-  function readAction(alias: string, input: unknown): QueryReadState {
+  function readAction(
+    alias: string,
+    input: unknown,
+    held = false,
+  ): QueryReadState {
     alive();
     const definition = actionDefinitions[alias];
     if (!definition?.query || definition.placement !== "server") {
@@ -688,6 +693,24 @@ export async function createBrowserRuntime(
     }
     const key = `query:${readKey({ collection: alias, query: { input } })}`;
     tracking?.add(key);
+    if (held && !queries.has(key)) {
+      // URL state chose this View, so its input waits for a user gesture.
+      return {
+        value: undefined,
+        status: "held",
+        pending: false,
+        refresh() {
+          alive();
+          if (rendering) {
+            throw new TypeError(
+              "Views cannot start a held query during render",
+            );
+          }
+          readAction(alias, input);
+          notify(key);
+        },
+      };
+    }
     let denied = false;
     let unavailable: ReturnType<typeof readFailure> | undefined;
     for (const name of definition.query.reads) {
@@ -803,12 +826,14 @@ export async function createBrowserRuntime(
       refresh: () => query!.refresh(),
     };
   }
-  function context(hints: ViewHints = {}): BrowserViewContext {
+  function context(hints: ViewHints = {}, held = false): BrowserViewContext {
     return {
       collections,
       actions,
       adapters: grantedAdapters,
-      readAction,
+      readAction: held
+        ? (alias, input) => readAction(alias, input, true)
+        : (alias, input) => readAction(alias, input),
       resources: immutable(clone(resources)),
       scope: immutable(clone(options.scope)),
       signal: lifetime.signal,
@@ -890,13 +915,24 @@ export async function createBrowserRuntime(
     hints: ViewHints = {},
   ): unknown {
     alive();
-    const ctx = context(hints);
-    const view = resolve(reference.shows, ctx.hints.mode, ctx.hints.renderer);
+    const mode = hints.mode ?? "full";
+    const view = resolve(
+      reference.shows,
+      mode,
+      hints.renderer ?? options.renderer?.id ?? "default",
+    );
     if (!view) {
       throw new TypeError(
-        `No View for ${JSON.stringify(reference.shows)} (${ctx.hints.mode})`,
+        `No View for ${JSON.stringify(reference.shows)} (${mode})`,
       );
     }
+    // URL state names only opted-in Views, with identifier values, and their
+    // query reads wait for a gesture unless the View declares they may run.
+    const fromUrl = (reference as { origin?: unknown }).origin === "url";
+    if (fromUrl && (!view.url || !urlReference(reference))) {
+      throw new TypeError(`View '${view.id}' cannot be opened from a URL`);
+    }
+    const ctx = context(hints, fromUrl && view.url === true);
     rendering++;
     try {
       const output = view.render(

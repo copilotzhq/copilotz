@@ -56,6 +56,14 @@ export interface ViewContext<Shown = string> extends ViewEnvironment {
   readonly hints: Readonly<{ mode: string; renderer: string }>;
   show(reference: ViewReference, hints?: ViewHints): Promise<Shown>;
 }
+/**
+ * Whether URL state may name a View. Omitted, it may not. `true`: a reference
+ * decoded from a URL may render it; its value carries identifiers and plain
+ * scalars only, and its query Action reads wait for a user gesture.
+ * `{ queries: "run" }` also starts those reads from URL state; declare it only
+ * when no query input derives from the URL value.
+ */
+export type ViewUrl = true | Readonly<{ queries: "run" }>;
 export interface ViewDefinition<
   T = unknown,
   R = unknown,
@@ -65,6 +73,7 @@ export interface ViewDefinition<
   readonly shows: ViewShows;
   readonly renderer: string;
   readonly modes: readonly string[];
+  readonly url?: ViewUrl;
   render(item: T, context: Context): R | Promise<R>;
 }
 // Method bivariance retains concrete item/result inference in heterogeneous maps.
@@ -74,7 +83,14 @@ export type AnyViewDefinition = ViewDefinition<
   ViewEnvironment
 >;
 export type ViewMap = Readonly<Record<string, AnyViewDefinition>>;
-const keys = new Set(["id", "shows", "renderer", "modes", "render"]);
+const keys = new Set(["id", "shows", "renderer", "modes", "url", "render"]);
+function isViewUrl(value: unknown): value is ViewUrl | undefined {
+  if (value === undefined || value === true) return true;
+  return !!value && typeof value === "object" && !Array.isArray(value) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
+    Object.keys(value).join() === "queries" &&
+    (value as { queries: unknown }).queries === "run";
+}
 export function viewText(value: unknown, label: string): string {
   if (
     typeof value !== "string" || !value || value !== value.trim() ||
@@ -126,7 +142,7 @@ export function isViewDefinition(value: unknown): value is AnyViewDefinition {
       new Set(candidate.modes).size !== candidate.modes.length
     ) return false;
     candidate.modes.forEach((mode) => viewText(mode, "View mode"));
-    return typeof candidate.render === "function";
+    return isViewUrl(candidate.url) && typeof candidate.render === "function";
   } catch {
     return false;
   }
@@ -147,5 +163,8 @@ export function defineView<
       ? definition.shows
       : ({ ...definition.shows }),
     modes: [...definition.modes],
+    ...(typeof definition.url === "object"
+      ? { url: { ...definition.url } }
+      : {}),
   });
 }

@@ -15,10 +15,12 @@ export type ReadFailure = Readonly<{
   status?: number;
   retryable: boolean;
 }>;
+/** `refresh()` from a user gesture also starts a `held` query read. */
 export type QueryReadState = ReadState & { refresh(): void };
 export type ReadState<T = unknown> = Readonly<{
   value: T;
-  status: "loading" | "ready" | "missing" | "stale" | "denied";
+  /** `held`: a query read from URL state that waits for a user gesture. */
+  status: "loading" | "ready" | "missing" | "stale" | "denied" | "held";
   pending: boolean;
   error?: ReadFailure;
 }>;

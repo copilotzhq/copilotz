@@ -8,7 +8,8 @@ shared. Apps import `@copilotz/copilotz/web/kit` and reuse plugin Views.
 `Markdown` applies `markdownUrlPolicy` from `@copilotz/copilotz/web`: it drops
 unsafe links, opens links in a new tab without a referrer, and loads only
 relative, same-origin or `imageOrigins` images. Any other image renders as its
-alt text and is never fetched.
+alt text and is never fetched. `ReadStatus` renders a `held` query read (a View
+opened from a URL) with a Load button that starts it.
 
 Process `styles.css` with Tailwind CSS 4 and `@tailwindcss/typography`. Add the
 app's own source path to Tailwind scanning. React and React DOM must resolve to

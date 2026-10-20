@@ -55,6 +55,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "adminQuery",
   renderer: "react",
   modes: ["full", "panel"],
+  url: true,
   render({ section, query = {} }, ctx) {
     const config = sections[section];
     if (!config) throw new TypeError("Unknown admin section");
@@ -63,6 +64,14 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
       method: "GET",
       query: { limit: "100", ...query },
     });
+    if (state.status === "held") {
+      // Opened from a URL: the query runs only after the user loads it.
+      return (
+        <Screen title={config.title} density={ctx.hints.mode}>
+          <ReadStatus state={state} />
+        </Screen>
+      );
+    }
     const response = state.value as
       | { status?: number; data?: unknown }
       | undefined;

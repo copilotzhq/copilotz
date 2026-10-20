@@ -21,6 +21,7 @@ import {
   NativeSelect,
   Notice,
   PaneBoundary,
+  ReadStatus,
   showSafely,
   Tabs,
   TabsContent,
@@ -182,4 +183,17 @@ test("Markdown links stay clickable, open a new tab and send no referrer", () =>
   assert.match(html, /href="https:\/\/example.com\/a"/);
   assert.match(html, /href="https:\/\/example.com\/auto"/);
   assert.doesNotMatch(html, /javascript:/);
+});
+
+test("a held read offers a Load button only when it can be refreshed", () => {
+  const held = { value: undefined, status: "held", pending: false } as const;
+  const html = renderToStaticMarkup(
+    <ReadStatus state={{ ...held, refresh() {} }} />,
+  );
+  assert.match(html, /Opened from a link/);
+  assert.match(html, />Load</);
+  assert.doesNotMatch(
+    renderToStaticMarkup(<ReadStatus state={held} />),
+    /Load</,
+  );
 });

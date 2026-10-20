@@ -40,6 +40,7 @@ function transport() {
       _query: unknown,
       options: { checkpoint?: string },
     ) {
+      await Promise.resolve();
       cursors.push(options.checkpoint);
       let detached = false;
       return {

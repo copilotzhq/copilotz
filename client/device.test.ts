@@ -78,12 +78,14 @@ function fixture() {
       attachDeviceSocket(socket.server, {
         heartbeatMs: 10,
         async authenticate(proof) {
+          await Promise.resolve();
           authenticated++;
           if (proof !== "session") {
             throw Object.assign(new Error("Denied"), { code: "forbidden" });
           }
           return {
             async observe(collection, _query, options) {
+              await Promise.resolve();
               cursors.push({ collection, checkpoint: options.checkpoint });
               const queue = new SubscriptionQueue<SubscriptionFrame>();
               queues.set(collection, queue);
@@ -501,6 +503,7 @@ Deno.test("device server renews the largest queued channel before a revoked cont
   const session = attachDeviceSocket(sockets.server, {
     authenticate: () => ({
       async observe(collection) {
+        await Promise.resolve();
         const queue = new SubscriptionQueue<SubscriptionFrame>();
         queues.set(collection, queue);
         return {
@@ -575,6 +578,7 @@ Deno.test("device lifetime renews upstream and stale detach cannot retire a newe
     lifetimeMs: 25,
     authenticate: () => ({
       async observe() {
+        await Promise.resolve();
         attached++;
         const queue = new SubscriptionQueue<SubscriptionFrame>();
         return {
@@ -734,6 +738,7 @@ Deno.test("device send gate fences queued owner output during permission reautho
   const session = attachDeviceSocket(sockets.server, {
     authenticate: () => ({
       async observe() {
+        await Promise.resolve();
         return {
           frames: queue,
           canPublish: () => publishable,
@@ -781,6 +786,7 @@ Deno.test("device renews channels and detaches upstream before the host request 
     requestDeadline: Date.now() + 1050,
     authenticate: () => ({
       async observe() {
+        await Promise.resolve();
         const queue = new SubscriptionQueue<SubscriptionFrame>();
         return {
           frames: queue,
@@ -844,6 +850,7 @@ Deno.test("device forwards progress-only selection without row/content substitut
   const server = attachDeviceSocket(sockets.server, {
     authenticate: () => ({
       async observe(collection, query, options) {
+        await Promise.resolve();
         selection = {
           collection,
           query,

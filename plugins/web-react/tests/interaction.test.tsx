@@ -3,7 +3,7 @@
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Window } from "npm:happy-dom@21.0.3";
+import { Window } from "happy-dom";
 import type {
   BrowserRuntime,
   BrowserViewContext,
@@ -145,9 +145,9 @@ test("DOM interactions: confirmation, failure recovery, menus, copy and pane bou
       )
     );
     assert.match(document.body.textContent, /Menu item/);
-    function Broken(): React.ReactNode {
+    const Broken = (): React.ReactNode => {
       throw new Error("Pane error");
-    }
+    };
     const errors: unknown[] = [];
     const original = console.error;
     console.error = (...args) => {

@@ -15,15 +15,12 @@ import { eventDataRef, verifiedEventBody } from "../events/body-store.ts";
 import { protectedActionLifecycleBody } from "../actions/protected-lifecycle.ts";
 import { stableStringify } from "../collections/equal.ts";
 import { captureHostCommandJson } from "../application/host-command-json.ts";
-import {
-  type AuthenticatedAuthority,
-  type AuthorityPolicy,
-  retainedAuthority,
-} from "./authority.ts";
+import type { AuthenticatedAuthority, AuthorityPolicy } from "./authority.ts";
 import {
   type AuthorityMigrationEntry,
   planAuthorityMigration,
   type RetainedInvocation,
+  retainedMigrationAuthority,
 } from "./migration.ts";
 import { authorizationSchemaStatements } from "./schema.ts";
 
@@ -188,7 +185,7 @@ async function applyAuthorityUpgrade(
     if (!entry || entry.digest !== event.digest) {
       throw new Error("Retained ingress changed after authority review.");
     }
-    const authority = retainedAuthority(entry.authority);
+    const authority = retainedMigrationAuthority(entry.authority);
     if (
       authority.scope.databaseSchema !== schema ||
       authority.scope.namespace !== event.namespace ||
@@ -382,7 +379,7 @@ export async function upgradeAuthoritySchema(
         `SELECT version FROM ${tables.copilotz_schema_metadata} WHERE singleton`,
       )).rows[0]?.version,
     );
-    if (version === 13) {
+    if (version === 13 || version === 14) {
       const receipt = (await transaction.query<{ intent: unknown }>(
         `SELECT intent FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND key='authorization-upgrade:13'`,
       )).rows[0];

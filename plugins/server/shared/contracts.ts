@@ -97,8 +97,16 @@ export type ServerAuthenticate = (
   | ServerAuthorizedScope
   | Response
   | Promise<ServerAuthorizedScope | Response>;
+export type SessionCookieOptions = Readonly<{
+  name?: string;
+  path?: string;
+  domain?: string;
+  secure?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+}>;
 export type ServerFacadeResource = Readonly<{
   basePath: string;
+  sessionCookie?: SessionCookieOptions;
   /** Maximum raw bytes accepted by the generic asset upload endpoint. */
   maxAssetUploadBytes: number;
   expose: Readonly<{
@@ -112,6 +120,7 @@ export type ServerFacadeResource = Readonly<{
 
 export type DefineServerFacadeInput = Readonly<{
   basePath?: string;
+  sessionCookie?: SessionCookieOptions;
   /** Defaults to 20 MiB. */
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;

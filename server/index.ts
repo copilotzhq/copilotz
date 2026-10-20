@@ -26,6 +26,7 @@ export type {
   ServerFacadeResource,
   ServerPatternPolicy,
   ServerRouteMatch,
+  SessionCookieOptions,
 } from "../plugins/server/index.ts";
 
 export { createHttpAdapter } from "../plugins/server/authoring/http-adapter/index.ts";

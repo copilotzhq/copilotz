@@ -440,6 +440,7 @@ Deno.test("linear chain stops at each missing input and resumes the exact review
     for (
       const table of [
         "owner_data_keys",
+        "authorization_effects",
         "authorization_sessions",
         "authorization_channels",
         "authorization_invocations",
@@ -521,7 +522,7 @@ Deno.test("linear chain stops at each missing input and resumes the exact review
       ...keys,
       authority: f.options.authority,
     });
-    assertEquals(await version(), 13);
+    assertEquals(await version(), 14);
     assertEquals(
       (await f.db.query(`SELECT * FROM ${f.store.tables.owner_data_keys}`))
         .rows,
@@ -608,10 +609,73 @@ for (const step of [11, 12]) {
       assertEquals(await version(), step + 1);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
-      assertEquals(await version(), 13);
+      assertEquals(await version(), 14);
     } finally {
       await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
       await f.db.close();
     }
   });
 }
+
+Deno.test("v13 credential upgrade preserves sessions, refuses live work and replays", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  });
+  const schema = `credential_upgrade_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
+  const tables = createCoreTableNames(schema);
+  try {
+    await provisionCopilotzSchema(db, schema);
+    await provisionOperationCatalog(db, schema);
+    await db.query(`DROP TABLE ${tables.authorization_effects}`);
+    await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=13`);
+    await db.query(
+      `INSERT INTO ${tables.authorization_sessions}(namespace,tenant,id,principal,expires_at) VALUES('main','tenant','sid','account','2099-01-01')`,
+    );
+    const sessions =
+      (await db.query(`SELECT * FROM ${tables.authorization_sessions}`)).rows;
+    const catalog = createOperationCatalog(db, schema);
+    const store = createEventStore({
+      session: db,
+      schema,
+      admitOperationEventSql: (input, param) =>
+        catalog.admitEventSql(input, param),
+      indexOperationEventSql: (input, param) =>
+        catalog.indexEventSql(input, param),
+    });
+    const event = await store.append({
+      namespace: "main",
+      type: "pending",
+      payload: {},
+    }, ["worker"]);
+    await assertRejects(() => upgradeActionLifecycle(db, schema));
+    assertEquals(
+      (await db.query(`SELECT version FROM ${tables.copilotz_schema_metadata}`))
+        .rows[0].version,
+      13,
+    );
+    assertEquals(
+      (await db.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_name='authorization_effects'",
+        [schema],
+      )).rows.length,
+      0,
+    );
+    // Remove only this synthetic pending operation before exercising the drained path.
+    await db.query(`DELETE FROM ${tables.event_deliveries} WHERE event_id=$1`, [
+      event.event.id,
+    ]);
+    await catalog.reconcile();
+    await upgradeActionLifecycle(db, schema);
+    await upgradeActionLifecycle(db, schema);
+    assertEquals((await validateCopilotzSchema(db, schema)).version, 14);
+    assertEquals(
+      (await db.query(`SELECT * FROM ${tables.authorization_sessions}`)).rows,
+      sessions,
+    );
+  } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
+  }
+});

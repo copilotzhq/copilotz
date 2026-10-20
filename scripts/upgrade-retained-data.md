@@ -1,9 +1,9 @@
 # Upgrade retained data offline
 
-Current schema: **v13**. There is one chain:
+Current schema: **v14**. There is one chain:
 
 ```text
-v5–v10 --reviewed retained data--> v11 --owner keys--> v12 --authority--> v13
+v5–v10 --reviewed retained data--> v11 --owner keys--> v12 --authority--> v13 --credential effects--> v14
 ```
 
 This is never an activation fallback. Back up and rehearse on a disposable copy.
@@ -46,7 +46,11 @@ Run commands as `deno run -A scripts/upgrade-retained-data.ts ...` with
    `{ "policies": [], "invocations": [], "events": [] }`.
 6. Run `apply --schema=SCHEMA --authority=authority.json`. The authority step
    commits v13 and its manifest receipt, clears transport attachments and fences
-   the owner epoch. Validate, then activate the application.
+   the owner epoch. The credential-effects step then adds private effect storage
+   and advances to v14. Validate, then activate the application.
+7. Starting at v13, run `apply --schema=SCHEMA` with producers stopped and work
+   drained. This additive step preserves sessions and retained authority and
+   fences the owner epoch. No new manifest or key input is required.
 
 `--owner-keys` is a trusted local TypeScript module path, resolved from the
 working directory. It must default-export `OwnerKeyUpgradeOptions`:
@@ -70,7 +74,7 @@ the same implementation and stops at v12.
 
 For a fully reviewed inventory, one `apply` can include the retained plan,
 reviewed fingerprint, decisions, key module and authority manifest and run all
-steps through v13. The manifest must describe the inventory at v12. The
+steps through v14. The manifest must describe the inventory at v12. The
 TypeScript equivalent is
 `upgradeActionLifecycle(session, schema, { plan,
 reviewedFingerprint, contentDecisions, ownerKeys, authority })`.
@@ -78,10 +82,11 @@ reviewedFingerprint, contentDecisions, ownerKeys, authority })`.
 ## Failure and retry
 
 A failed transaction rolls back only its own step. Preparation commits marker
-`0`; retained finalization commits v11; keys commit v12; authority commits v13.
-None of the intermediate versions can activate this release. Missing inputs
-raise `UpgradeStepRequiredError`, with a stable `code`, `fromVersion`, and
-`toVersion` naming the next step. Supply that input and rerun.
+`0`; retained finalization commits v11; keys commit v12; authority commits v13;
+credential effects commit v14. None of the intermediate versions can activate
+this release. Missing inputs raise `UpgradeStepRequiredError`, with a stable
+`code`, `fromVersion`, and `toVersion` naming the next step. Supply that input
+and rerun.
 
 Repeat preparation with a new output path after a lost reply or failed
 inventory. It returns the existing identity and physical versions; the CLI

@@ -1,4 +1,4 @@
-/** Version 12 owner-local authority records; no startup data conversion. */
+/** Owner-local authority and credential effects; no startup data conversion. */
 export function authorizationSchemaStatements(
   schema: string,
 ): readonly string[] {
@@ -7,6 +7,15 @@ export function authorizationSchemaStatements(
   }
   const prefix = `"${schema}"`;
   return [
+    `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_effects (
+      ordinal BIGSERIAL NOT NULL,
+      namespace TEXT NOT NULL, tenant TEXT NOT NULL, effect_key TEXT NOT NULL,
+      run_id TEXT NOT NULL, operation_id TEXT NOT NULL, initiator TEXT NOT NULL,
+      method TEXT NOT NULL, intent JSONB NOT NULL, claims JSONB NOT NULL,
+      consumed_run TEXT, PRIMARY KEY(namespace,tenant,effect_key)
+    )`,
+    `CREATE INDEX IF NOT EXISTS authorization_effects_run ON ${prefix}.authorization_effects(namespace,tenant,run_id,ordinal)`,
+    `CREATE INDEX IF NOT EXISTS authorization_effects_operation ON ${prefix}.authorization_effects(namespace,tenant,operation_id)`,
     `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_sessions (
       namespace TEXT NOT NULL, tenant TEXT NOT NULL, id TEXT NOT NULL,
       principal TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
@@ -25,6 +34,19 @@ export function authorizationSchemaStatements(
   ];
 }
 export const AUTHORIZATION_SCHEMA_COLUMNS = {
+  authorization_effects: [
+    "ordinal",
+    "namespace",
+    "tenant",
+    "effect_key",
+    "run_id",
+    "operation_id",
+    "initiator",
+    "method",
+    "intent",
+    "claims",
+    "consumed_run",
+  ],
   authorization_sessions: [
     "namespace",
     "tenant",

@@ -137,3 +137,5 @@ export type {
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "./protected-action-types.ts";
+
+export type { ActionFlows, ActionSessions } from "./session-effects.ts";

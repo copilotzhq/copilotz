@@ -53,6 +53,22 @@ export type MigratedInvocationAuthority = Readonly<{
   capture: RetainedInvocation["capture"];
 }>;
 
+/** Pre-v13 review bindings identify the credential itself, never its creator. */
+export function retainedMigrationAuthority(
+  value: unknown,
+): AuthenticatedAuthority {
+  const authority = retainedAuthority(value);
+  if (
+    authority.authorityBasis.kind === "session" &&
+    authority.authorityBasis.id !== authority.principal.id
+  ) {
+    throw new TypeError(
+      "Invalid retained authority: credential basis cannot be its creator.",
+    );
+  }
+  return authority;
+}
+
 function key(
   value: Pick<RetainedInvocation, "databaseSchema" | "namespace" | "runId">,
 ): string {
@@ -162,7 +178,7 @@ export async function planAuthorityMigration(
     if (entry.expectedDigest !== digest) {
       throw new TypeError("Retained capture changed after inventory.");
     }
-    const authority = retainedAuthority(entry.authority);
+    const authority = retainedMigrationAuthority(entry.authority);
     if (
       authority.scope.databaseSchema !== invocation.databaseSchema ||
       authority.scope.namespace !== invocation.namespace ||

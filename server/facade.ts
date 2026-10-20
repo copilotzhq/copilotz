@@ -406,7 +406,9 @@ export function createServerFacadeFetchHandler(
         );
       }
       if (endpoint.kind === "operation") {
-        if (endpoint.operation !== "observe") {
+        if (
+          endpoint.operation !== "observe" && endpoint.operation !== "result"
+        ) {
           await operations.get(context.serverParams.id);
         }
         if (endpoint.operation === "result") {

@@ -220,6 +220,8 @@ export type ActionTransactionContext<
   TCollections extends RuntimeCollections = RuntimeCollections,
 > = Readonly<{
   collections: RuntimeTransactionCollections<TCollections>;
+  sessions: import("./session-effects.ts").ActionSessions;
+  flows: import("./session-effects.ts").ActionFlows;
   relations: CollectionTransactionRelations;
   vectors: VectorTransaction;
 }>;

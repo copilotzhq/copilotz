@@ -109,15 +109,43 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
 export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   const base = options.baseUrl.replace(/\/+$/, "");
   const fetcher = options.fetch ?? globalThis.fetch;
+  const credentialProof = Array.from(
+    crypto.getRandomValues(new Uint8Array(32)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  let flowCredential: string | undefined;
+  let flowActionPath: string | undefined;
+  const flowOperations = new Set<string>();
+  const belongsToFlow = (path: string, init: RequestInit) => {
+    if (path === flowActionPath) return true;
+    const operation = /^\/operations\/([^/]+)(?:\/result)?$/.exec(path)?.[1];
+    if (operation && flowOperations.has(decodeURIComponent(operation))) {
+      return true;
+    }
+    if (path === "/operations/observe" && typeof init.body === "string") {
+      const ids = JSON.parse(init.body).operationIds;
+      return Array.isArray(ids) && ids.length > 0 &&
+        ids.every((id) => flowOperations.has(id));
+    }
+    return false;
+  };
   const request = async (path: string, init: RequestInit = {}) => {
     const headers = new Headers(await options.getRequestHeaders?.());
+    headers.set("x-copilotz-credential-proof", credentialProof);
+    if (flowCredential && belongsToFlow(path, init)) {
+      headers.set("x-copilotz-flow", flowCredential);
+    }
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     let response!: Response;
     const reading = !init.method || init.method === "GET";
     for (let attempt = 0;; attempt++) {
       init.signal?.throwIfAborted();
       try {
-        response = await fetcher(`${base}${path}`, { ...init, headers });
+        response = await fetcher(`${base}${path}`, {
+          credentials: "include",
+          ...init,
+          headers,
+        });
         if (!reading || response.status !== 503 || attempt >= 2) break;
         await response.body?.cancel();
       } catch (error) {
@@ -136,6 +164,17 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         error.code ?? "http_error",
         error.message ?? response.statusText,
       );
+    }
+    if (response.headers.has("x-copilotz-flow")) {
+      const next = response.headers.get("x-copilotz-flow") || undefined;
+      if (next !== flowCredential) flowOperations.clear();
+      flowCredential = next;
+      const id = response.headers.get("x-copilotz-flow-action");
+      flowActionPath = next && id
+        ? `/actions/${id.split(".").map(segment).join("/")}`
+        : undefined;
+      const operation = /^\/operations\/([^/]+)\/result$/.exec(path)?.[1];
+      if (next && operation) flowOperations.add(decodeURIComponent(operation));
     }
     return response;
   };
@@ -181,6 +220,9 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         if (typeof receipt.operationId !== "string" || !receipt.operationId) {
           throw new ProtocolError("Invalid operation receipt.");
         }
+        if (
+          path === flowActionPath || response.headers.get("x-copilotz-flow")
+        ) flowOperations.add(receipt.operationId);
         return receipt;
       } catch (error) {
         if (

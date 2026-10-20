@@ -1213,6 +1213,10 @@ export function createOwnerCapabilityHost(
                 if (
                   !collection &&
                   !(operation.path.length === 2 &&
+                    (root === "sessions" &&
+                        ["create", "revoke"].includes(operation.path[1]) ||
+                      root === "flows" && operation.path[1] === "start")) &&
+                  !(operation.path.length === 2 &&
                     ["relations", "vectors"].includes(root) &&
                     operation.path[1] === "upsert")
                 ) throw capabilityError("owner_plan_invalid");

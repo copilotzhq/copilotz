@@ -89,6 +89,14 @@ export async function assertOwnerIngressReplay(
       ...value,
       authority: {
         ...authority,
+        scope: {
+          ...authority.scope,
+          bindings: Object.fromEntries(
+            Object.entries(authority.scope.bindings).filter(([key]) =>
+              key !== "@credential-proof"
+            ),
+          ),
+        },
         validity: validity.kind === "credential"
           ? { kind: "credential" }
           : validity,
@@ -96,6 +104,23 @@ export async function assertOwnerIngressReplay(
     };
   };
   if (!sameActionValue(identity(expected), identity(actual))) {
+    const original = actual.authority, next = expected?.authority;
+    const deliveryProof = original?.scope.bindings["@credential-proof"];
+    if (
+      original && next && deliveryProof &&
+      deliveryProof === next.scope.bindings["@credential-proof"] &&
+      sameActionValue(original.scope, next.scope) &&
+      sameActionValue(original.policy, next.policy)
+    ) {
+      // A cookie transition may change the principal between a committed response
+      // and its retry. The same private delivery proof can recover only this
+      // existing credential operation; the immutable ingress is never replaced.
+      const effects = await context.transaction.query(
+        `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND operation_id=$3 LIMIT 1`,
+        [original.scope.namespace, original.scope.tenant, event.id],
+      );
+      if (effects.rows.length) return;
+    }
     throw Object.assign(
       new Error("Owner ingress admission differs from its first capture."),
       { code: "event_deduplication_conflict" },

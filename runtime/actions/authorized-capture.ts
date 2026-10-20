@@ -212,6 +212,11 @@ export function createAuthorizedActions(
       kind: "action",
       resource: alias(frame.actionId)!,
       operation: firstCapture ? "capture" : "authorize",
+      invocation: {
+        kind: "action",
+        id: frame.actionId,
+        runId: frame.actionRunId,
+      },
       input,
     }, command);
     const policy = decision.constraints.actions?.[alias(frame.actionId)!] ??

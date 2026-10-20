@@ -149,6 +149,7 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
       [
         "action_effects",
         "authorization_channels",
+        "authorization_effects",
         "authorization_invocations",
         "authorization_sessions",
         "content_adoptions",

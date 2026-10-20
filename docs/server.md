@@ -57,8 +57,8 @@ npx jsr add @copilotz/copilotz@^0.89.0
 npm i @electric-sql/pglite
 ```
 
-Only a Node host that opens a real listener also needs
-`npm i @hono/node-server@2.1.3`. The worked example below needs no listener.
+The public Node hosting adapter uses the Oxian listener included in Copilotz.
+The worked example below needs no listener.
 
 ### Exposure, authentication, authorization
 
@@ -316,11 +316,42 @@ bob read: 404 …
 anonymous: 401 unauthorized
 ```
 
-To serve the same app for real, use `serve.ts` (`Deno.serve` with
-`server.shutdown()` on signals) or `serve-node.ts` (`@hono/node-server` with
-`listener.close()`) from
-[Chapter 15](getting-started/part-4-release-to-users/15-expose-an-http-api.md),
-and close the app after the listener finishes.
+### Hosting
+
+Use `listen` to serve HTTP, browser subscriptions and worker WebSockets
+together:
+
+```ts
+import { listen } from "@copilotz/copilotz/adapters/deno";
+// Node: import { listen } from "@copilotz/copilotz/adapters/node";
+
+const listener = await listen(app, { hostname: "127.0.0.1", port: 8000 });
+console.log(listener.url.href);
+// Stop this listener: await listener.shutdown();
+// Close the application and all its owned listeners: await app.close();
+```
+
+Both adapters supply the native upgrade for `<facade.basePath>/device` (normally
+`/api/device`). The same facade authenticates the device handshake and
+authorizes each subscription. Gateway worker WebSockets keep their configured
+paths and admission; choose a worker path such as `/workers`, separate from the
+device path.
+
+Custom hosts can serve `app.fetch` and supply `upgradeDevice` in the embedded or
+gateway `createCopilotz` options. Its contract is
+`(request) => ({ socket, response, requestDeadline? })`; `socket` implements the
+standard WebSocket event/send/close interface, and `requestDeadline` is epoch
+milliseconds. An explicit upgrade takes precedence when using an adapter too.
+For Deno, `upgradeDevice: (request) => Deno.upgradeWebSocket(request)` is
+sufficient. No access to private application state is needed.
+
+Deno awaits recovery admission before the upgrade. Oxian 0.22's Node listener
+requires a synchronous upgrade decision, so its native handshake may precede
+recovery admission; bounded device input is released only after admission and
+facade binding succeed. A failed admission closes the connection. Custom
+deadlines flow to the existing device renewal timer. See
+[Subscriptions](subscriptions.md) for client setup, reauthentication and
+revocation.
 
 ## What this unlocks
 

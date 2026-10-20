@@ -1,9 +1,9 @@
 # Upgrade retained data offline
 
-Current schema: **v15**. There is one chain:
+Current schema: **v14**. There is one chain:
 
 ```text
-v5–v10 --reviewed retained data--> v11 --owner keys--> v12 --authority--> v13 --credential effects--> v14 --flow admission--> v15
+v5–v10 --reviewed retained data--> v11 --owner keys--> v12 --authority--> v13 --credential effects and flow admission--> v14
 ```
 
 This is never an activation fallback. Back up and rehearse on a disposable copy.
@@ -47,12 +47,12 @@ Run commands as `deno run -A scripts/upgrade-retained-data.ts ...` with
 6. Run `apply --schema=SCHEMA --authority=authority.json`. The authority step
    commits v13 and its manifest receipt, clears transport attachments and fences
    the owner epoch. The credential-effects step then adds private effect storage
-   and advances to v14. Flow admission then adds the accepted-operation binding,
-   backfills consumed flows and advances to v15. Validate, then activate.
-7. Starting at v13 or v14, run `apply --schema=SCHEMA` with producers stopped
-   and work drained. This additive step preserves sessions and retained
-   authority and fences the owner epoch. No new manifest or key input is
-   required.
+   with indexed run/operation lookup and the accepted flow continuation binding
+   in one v13 → v14 transaction. Validate, then activate.
+7. Starting at v13, run `apply --schema=SCHEMA` with producers stopped and work
+   drained. This additive step preserves sessions and retained authority and
+   fences the owner epoch. No new manifest or key input is required. Replaying
+   v14 preserves effect and flow bindings without advancing the epoch again.
 
 `--owner-keys` is a trusted local TypeScript module path, resolved from the
 working directory. It must default-export `OwnerKeyUpgradeOptions`:
@@ -76,7 +76,7 @@ the same implementation and stops at v12.
 
 For a fully reviewed inventory, one `apply` can include the retained plan,
 reviewed fingerprint, decisions, key module and authority manifest and run all
-steps through v15. The manifest must describe the inventory at v12. The
+steps through v14. The manifest must describe the inventory at v12. The
 TypeScript equivalent is
 `upgradeActionLifecycle(session, schema, { plan,
 reviewedFingerprint, contentDecisions, ownerKeys, authority })`.
@@ -85,7 +85,7 @@ reviewedFingerprint, contentDecisions, ownerKeys, authority })`.
 
 A failed transaction rolls back only its own step. Preparation commits marker
 `0`; retained finalization commits v11; keys commit v12; authority commits v13;
-credential effects commit v14; flow admission commits v15. None of the
+credential effects and flow admission commit v14 together. None of the
 intermediate versions can activate this release. Missing inputs raise
 `UpgradeStepRequiredError`, with a stable `code`, `fromVersion`, and `toVersion`
 naming the next step. Supply that input and rerun.

@@ -6,14 +6,18 @@ connection. There is no alternate runtime or compatibility mode.
 
 ### Upgrade required
 
-- Owner schema **v13** is installed only by the explicit offline chain **v5–v10
-  → v11 → owner keys v12 → authority v13**. Stop every writer, drain, then run
-  `upgradeActionLifecycle` with the reviewed plan, owner-key adapters and
-  authority manifest. No step runs at startup. See
-  [the upgrade guide](docs/upgrading.md#current-owner-schema-v13) and
-  [the offline guide](scripts/upgrade-retained-data.md).
+- Owner schema **v14** is installed only by the explicit offline chain **v5–v10
+  → v11 → owner keys v12 → authority v13 → credential effects and flow admission
+  v14**. Stop every writer, drain, then run `upgradeActionLifecycle` with the
+  reviewed plan, owner-key adapters and authority manifest. No step runs at
+  startup. See [the upgrade guide](docs/upgrading.md#current-owner-schema-v14)
+  and [the offline guide](scripts/upgrade-retained-data.md).
 - Applications with protected values configure a master Secret Adapter. Each
   owner gets its own data key, wrapped by that adapter.
+- The v13 → v14 step atomically adds private Action session effects, indexed
+  run/operation lookup and accepted flow continuation bindings. It requires
+  drained work, advances the owner epoch once, preserves sessions and is
+  idempotent.
 - The v13 authority manifest binds each authenticated ingress's actor
   (`actorBinding`) separately from its session or API-key principal.
 

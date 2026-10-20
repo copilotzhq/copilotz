@@ -379,7 +379,7 @@ export async function upgradeAuthoritySchema(
         `SELECT version FROM ${tables.copilotz_schema_metadata} WHERE singleton`,
       )).rows[0]?.version,
     );
-    if (version === 13 || version === 14 || version === 15) {
+    if (version === 13 || version === 14) {
       const receipt = (await transaction.query<{ intent: unknown }>(
         `SELECT intent FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND key='authorization-upgrade:13'`,
       )).rows[0];

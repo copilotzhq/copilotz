@@ -160,15 +160,12 @@ See [Plugins and Processors](plugins-and-processors.md) for composition and
 
 ## Collection subscriptions
 
-The generic live Collection observation API and its server projection extension
-were removed by decision D1 (2026-10-19). They polled and compared replacement
-snapshots; F6 §6 requires subscriptions ordered by owner sequence with
-contiguous delta coverage. Collection subscriptions will be rebuilt on owner
-push later. The client no longer exposes `collections.observe`, and the
-corresponding HTTP route is removed. Use one-shot Collection reads for current
-data.
+The generic live Collection observation API and its server projection were
+removed in 0.89.0. They polled and compared replacement snapshots instead of
+following the owner's commit order. The client no longer exposes
+`collections.observe`, and the corresponding HTTP route is gone. Use one-shot
+Collection reads for current data; live Collection subscriptions will return on
+owner push.
 
 Operation observations and their multipart streaming remain supported, including
-payload replay, terminal ordering, revocation and bounded renewal (F6 §5). Live
-Collection subscriptions (F6 §6: snapshot plus owner-sequence deltas) are not
-part of this release; they will be built on owner push.
+payload replay, terminal ordering, revocation and bounded renewal.

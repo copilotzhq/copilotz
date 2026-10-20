@@ -45,15 +45,22 @@ Compose the public `serverPlugin` with a **server facade**: a resource, created
 by `defineServerFacade`, that declares what the facade exposes and how each
 request is authenticated. The application returned by `createCopilotz` then has
 an `app.fetch(request)` method, a standard Fetch handler that any host can
-serve. On the facade:
+serve. Three pieces work together:
 
 - `expose.actions: { include: ["notes.save"] }` exposes only this Action.
   Without it, the facade's default exposes every registered Action, Collection
   read and Channel. `collections: false` and `channels: false` turn those
   families off.
 - `authenticate(request, context)` runs for every facade request. It returns the
-  trusted scope (`actor`, `namespace`, `databaseSchema`) or a `Response`, such
-  as a 401, to reject the request.
+  trusted scope (`actor`, `namespace`, `databaseSchema`) with an **authority
+  binding**, or a `Response`, such as a 401, to reject the request. The binding
+  records who was verified, for which tenant, for how long and under which
+  policy. It is data; it grants nothing by itself.
+- `authorization` on `createCopilotz` registers the **policy**. The database
+  owner, the single writer for the application's schema, runs it inside every
+  command a request starts and grants only what it returns. Every exposed Action
+  needs a binding to a policy, keyed by the Action's alias, or the application
+  refuses to start.
 - Clients send an `Idempotency-Key` header with each submission. The same key
   with the same input returns the original operation; the same key with
   different input is rejected.
@@ -61,20 +68,21 @@ serve. On the facade:
 `expose` selects which Actions, Collections and Channels the facade publishes.
 The facade still has its fixed routes, such as operation status and results,
 Assets and `GET /api/openapi.json`. `authenticate` runs for every matched facade
-route, those included; a path that matches no route returns 404. Which caller
-may read which operation is a request-authorization decision, and
-[Chapter 16](16-authenticate-and-isolate-tenants.md) designs it.
+route, those included; a path that matches no route returns 404. This chapter's
+policy lets every authenticated caller run `notes.save` and read any operation
+in its tenant. Which caller may read which operation is a policy decision, and
+[Chapter 16](16-authenticate-and-isolate-tenants.md) narrows it.
 
 Route exposure is not record policy. Collection routes are off here, but
 `notes.save` still writes the `note` Collection through its own input schema and
-validation. Exposing an Action means anyone who passes `authenticate` may run it
-with valid input.
+validation. Exposing an Action means anyone whom the policy grants it may run it
+with valid input; here, that is everyone who passes `authenticate`.
 
 In this chapter the host's principal resolver is a simple credential check: one
 fixed token mapped to one local demo identity.
-[Chapter 16](16-authenticate-and-isolate-tenants.md) adds a trusted-principal
-policy with per-request authorization, and shows a production host supplying the
-verification it already has.
+[Chapter 16](16-authenticate-and-isolate-tenants.md) adds tenant membership and
+roles to the policy, and shows a production host supplying the verification it
+already has.
 
 Action IDs keep their stable identity in the URL: dots become path separators,
 so `notes.save` is `POST /api/actions/notes/save`. The public client builds that
@@ -97,21 +105,30 @@ If you type-check the Node host with Deno, also add
 ### Create `server.ts`
 
 `server.ts` is a **definition module**. It exports a factory that composes the
-Notes plugin with the server facade, and it chooses no listener, no persistent
-database and no credential. Every host choice arrives as an option: the trusted
-principal resolver, the namespace and the database. Tests call the factory
-without `database` and get the private in-memory default. Its only local import
-is `notes-plugin.ts`, so the runtime track stays free of
+Notes plugin with the server facade and the policy, and it chooses no listener,
+no persistent database and no credential. Every host choice arrives as an
+option: the trusted principal resolver, the namespace and the database. Tests
+call the factory without `database` and get the private in-memory default. Its
+only local import is `notes-plugin.ts`, so the runtime track stays free of
 `@copilotz/copilotz/core`.
 
 ```ts
-// Runtime factory, plus the public type of every accepted database choice.
-import { createCopilotz } from "@copilotz/copilotz";
-import type { CopilotzDatabaseInput } from "@copilotz/copilotz";
-// The Fetch boundary: its plugin, the facade declaration and the
-// authentication callback type.
+// Runtime factory, the admission-lifetime helper, and the public types of the
+// authority binding, the owner policy and every accepted database choice.
+import { createCopilotz, credentialValidity } from "@copilotz/copilotz";
+import type {
+  AuthenticatedAuthority,
+  CopilotzDatabaseInput,
+  OwnerAuthorization,
+} from "@copilotz/copilotz";
+// The Fetch boundary: its plugin, the facade declaration and the types of the
+// authentication callback, its context and the trusted scope it returns.
 import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
-import type { ServerAuthenticate } from "@copilotz/copilotz/server";
+import type {
+  ServerAuthenticate,
+  ServerAuthenticationContext,
+  ServerAuthorizedScope,
+} from "@copilotz/copilotz/server";
 // The reusable Notes package that owns `notes.save`.
 import { notesPlugin } from "./notes-plugin.ts";
 
@@ -149,11 +166,81 @@ export const publicActions = ["notes.save"];
 // Plugins the server application composes: the Notes package and the facade.
 export const serverPlugins = [notesPlugin, serverPlugin];
 
+// The policy every request is evaluated under. The owner refuses a binding
+// whose policy ID or revision it does not know.
+const notesPolicy = { id: "notes", revision: "1" } as const;
+
+// Owner-evaluated authorization. The owner runs `evaluate` inside each command
+// a request starts, and grants only what the returned constraints name.
+const authorization: OwnerAuthorization = {
+  policies: {
+    [notesPolicy.id]: {
+      revision: notesPolicy.revision,
+      // The Collections this policy may read. This first policy reads none.
+      sources: [],
+      // Every authenticated caller may run `notes.save` (keyed by its alias)
+      // and read any operation in its tenant. Chapter 16 narrows both.
+      evaluate: () => ({
+        actions: { saveNote: {} },
+        operations: { metadata: {} },
+      }),
+    },
+  },
+  // Every exposed Action needs a binding, keyed by its alias, to a policy.
+  actions: { saveNote: notesPolicy },
+  // No Collection is exposed.
+  collections: {},
+};
+
+// Turns a verified principal into the facade's trusted scope, including the
+// authority binding the owner evaluates for every command the request runs.
+function principalScope(
+  principal: Principal,
+  context: ServerAuthenticationContext,
+): ServerAuthorizedScope {
+  const databaseSchema = principal.databaseSchema ??
+    context.defaultDatabaseSchema;
+  const authority: AuthenticatedAuthority = {
+    version: 1,
+    // The verified credential holder. Policies see this, never the request.
+    principal: { kind: "api-key", id: principal.actorId },
+    // The tenant and physical schema the binding is valid in.
+    scope: {
+      owner: "schema",
+      databaseSchema,
+      tenant: principal.namespace,
+      namespace: principal.namespace,
+      bindings: {},
+    },
+    // A 15-minute admission, renewed when the client authenticates again.
+    validity: credentialValidity(new Date()),
+    policy: notesPolicy,
+    // The facade fills in the matched endpoint, operation and parameters.
+    requestFacts: {
+      endpoint: context.endpoint.key,
+      transport: "http",
+      operation: context.endpoint.operation ?? context.endpoint.kind,
+      params: context.params,
+      input: null,
+    },
+    provenance: { ingress: "http", source: context.endpoint.key },
+    dependencies: [],
+    // What the authority rests on: here, the caller's own credential.
+    authorityBasis: { kind: "credential", id: principal.actorId },
+  };
+  return {
+    actor: { id: principal.actorId },
+    namespace: principal.namespace,
+    databaseSchema,
+    authority,
+  };
+}
+
 // Builds the Notes application with its HTTP boundary. The returned app's
 // `fetch` method is the handler a host serves.
 export function createServerApp(options: ServerAppOptions) {
   // Turns the host's principal into the facade's trusted scope, or rejects.
-  const authenticate: ServerAuthenticate = async (request) => {
+  const authenticate: ServerAuthenticate = async (request, context) => {
     const principal = await options.resolvePrincipal(request);
     // No verified principal: refuse before any route runs.
     if (!principal) {
@@ -165,13 +252,7 @@ export function createServerApp(options: ServerAppOptions) {
       );
     }
     // Scope comes only from the verified principal, never from body or query.
-    return {
-      actor: { id: principal.actorId },
-      namespace: principal.namespace,
-      ...(principal.databaseSchema
-        ? { databaseSchema: principal.databaseSchema }
-        : {}),
-    };
+    return principalScope(principal, context);
   };
 
   return createCopilotz({
@@ -180,6 +261,8 @@ export function createServerApp(options: ServerAppOptions) {
     // Pass the host's database through only when it chose one.
     ...(options.database ? { database: options.database } : {}),
     plugins: serverPlugins,
+    // The owner refuses to start if an exposed Action has no binding.
+    authorization,
     resources: {
       server: {
         // The facade served at `/api`.
@@ -202,9 +285,22 @@ export function createServerApp(options: ServerAppOptions) {
 }
 ```
 
-This chapter has no `authorize` callback. Authorization constrains Action input,
-Collection filters and operation ownership after authentication; the
-[Server reference](../../server.md) describes it, and Chapter 16 uses it.
+`principalScope` builds the binding from the verified principal only:
+
+- `principal` names the verified caller, and `scope` the tenant and physical
+  schema the binding is valid in.
+- `credentialValidity(new Date())` limits the admission to 15 minutes. A client
+  that keeps a channel open authenticates again to renew it.
+- `policy` names the policy and the exact revision this binding was written for.
+  The owner refuses a binding whose revision it does not know.
+- `requestFacts` and `provenance` record the route. The facade fills in the
+  matched endpoint, operation and parameters before the owner sees them.
+
+The policy keys `actions` by the alias `saveNote`, the name `notesPlugin`
+registers the Action under, not by its stable ID. `operations: { metadata: {} }`
+matches every operation in the tenant. The
+[Owner authorization reference](../../authorization.md) lists every constraint a
+policy can return.
 
 ### Create `serve.ts`
 
@@ -492,13 +588,16 @@ operation by the ID that `call-notes.ts` printed.
 - The host alone decides the listener, database and trusted principal, so moving
   from the development token to real verification changes the host, not the
   Notes package.
+- Every protected command is authorized by the owner, in the transaction that
+  performs it, under a policy you can version.
 
 ## Next steps
 
 - Next:
   [Chapter 16: Authenticate and Isolate Tenants](16-authenticate-and-isolate-tenants.md)
-  replaces the development token with verified principals and adds per-request
-  authorization and operation ownership.
+  adds tenant membership, roles and operation ownership to the policy.
 - Reference: [HTTP server and browser client](../../server.md) lists the
-  facade's routes, exposure options and the `authorize` callback.
+  facade's routes, exposure options and the `authenticate` callback.
+- Reference: [Owner authorization](../../authorization.md) covers policies,
+  bindings and constraints.
 - Reference: [API](../../api.md) covers `createCopilotz` and `app.fetch`.

@@ -63,6 +63,7 @@ A **leaf** is an `index.ts` file at an exact depth with a default export:
 | Processors  | `processors/<name>/index.ts`            | `processors[<alias>]`             |
 | Resources   | `resources/<namespace>/<name>/index.ts` | `resources[<namespace>][<alias>]` |
 | Adapters    | `adapters/<namespace>/<name>/index.ts`  | `adapters[<namespace>][<alias>]`  |
+| Views       | `views/<name>/index.ts`                 | `views[<alias>]`                  |
 
 Rules that follow from the build command:
 

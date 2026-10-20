@@ -1,147 +1,466 @@
-# Owner authorization
+---
+title: "Owner Authorization"
+description: "Decide what each authenticated caller may do with one versioned policy that the database owner evaluates inside every command, over declared Collection sources."
+section: Deliver
+order: 15
+status: stable
+---
 
-Authorization is a breaking owner contract in schema version 13. The gateway
-only authenticates and routes to the tenant owner. Authentication returns an
-`AuthenticatedAuthority` binding with principal, explicit owner/database/tenant/
-namespace scope, validity, policy ID and revision, immutable request facts,
-provenance, dependencies and authority basis. Creator attribution never grants
-credential authority.
+# Owner Authorization
 
-Configure `authorization.policies`, `authorization.collections` and
-`authorization.actions` on the application. Every policy has a `revision`, a
-`sources` array of local Collection aliases or explicit directory staff sources,
-and an `evaluate` function. Resource entries reference `{id, revision}`. Exposed
-resources and Collections with `ownerPolicy: "required"` need complete
-registrations before startup. Workers cannot register policy. Old `authorize`,
-`collectionPolicies`, `protectedActions`, `ownerHooks` and bootstrap route
-registrations are rejected.
+## The pain
 
-The owner evaluates `ServerConstraints` within each protected command. Policy
-receives `authority`, `intent`, `commandTime`, `signal`, and revocable read-only
-`read.get(alias, id)` and `read.list(alias, query)` capabilities. Declare all
-source aliases; arbitrary SQL and recursive owner commands are unavailable. A
-failed source read cannot be turned into a permanent permission refusal by
-catching it. Empty queries and absent records remain dependencies.
+The Notes API authenticates every request, but a valid credential is not a
+permission. Ada may save notes; a reader in the same tenant may not. An
+assistant turn that Ada started keeps calling tools after an administrator
+removed her role. A browser tab keeps a live observation open for hours after
+its user logged out. A check that runs in the HTTP process, reads a cache, or
+decides once per request cannot answer these consistently, because the decision
+and the write happen in different places and at different times.
 
-Constraints include read predicates, explicit mutation and Action allowlists,
-trusted input fields, authenticated root event types, Action metadata, operation
-metadata/explicit absent keys, explicit record-to-asset read references, session
-permissions and opaque `observationKeys` for catalog selections. Apply the
-domain's selection-key helper in policy when selecting a conversation. Filters
-run before pagination. Writes validate current and resulting scope. Action input
-is captured once; retries reauthorize the original capture.
+## The problem
 
-Collection policy also receives `intent.invocation?: {kind, id}`, where `kind`
-is `action`, `processor` or `alarm`. Only the owner supplies this executing
-identity; direct calls have no invocation. Nested Actions identify the immediate
-executing Action. Run IDs and caller metadata cannot select this grant, and
-attempt takeover still fences the call. Retained user authority remains present;
-execution identity grants nothing unless the policy explicitly allows it:
+Authorization has to hold wherever and whenever the work runs:
+
+- **Where.** The decision must be made where the data is written, in the same
+  transaction, or a concurrent change makes it stale.
+- **What it may read.** A policy that can run arbitrary SQL or start commands
+  cannot be reviewed, and nobody can tell which changes should re-check it.
+- **For how long.** Authority must expire and be revocable, including for open
+  channels and for work that is already running.
+- **On whose behalf.** An Action or Processor running for a user must be
+  distinguishable from that user calling directly.
+
+## The solution
+
+Each database schema has one **owner**: a single serialized writer. Workers and
+the HTTP gateway hold no database connection; they call the owner. The owner is
+also where authorization runs.
+
+1. **The gateway authenticates.** The server facade's `authenticate` callback
+   returns a trusted scope that includes an `authority` binding
+   (`AuthenticatedAuthority`): principal, owner, schema, tenant and namespace,
+   validity, policy ID and revision, request facts, provenance, dependencies and
+   the authority basis. The binding is data; it grants nothing by itself.
+2. **The owner authorizes.** The application declares
+   `authorization: OwnerAuthorization` on `createCopilotz`. For every protected
+   command, such as an Action admission, a Collection read or write, an
+   operation read, an observation, an Asset read or a session change, the owner
+   runs the policy that the binding names, inside that command's transaction.
+3. **The policy returns constraints.** A `ServerConstraints` object lists what
+   is granted. Anything it does not name is refused.
+
+The retained binding travels with the work it admitted. Actions, Processors and
+tool calls that run for Ada later are authorized again under the same binding
+and the current policy, by the owner, when each command runs.
+
+### Register a policy
+
+`notes-access.ts` is a **definition module**. It registers one policy that reads
+a `member` Collection and guards the `saveNote` Action.
+[Chapter 16](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+builds the same policy step by step, with the `authenticate` callback that mints
+its bindings.
 
 ```ts
-if (
-  intent.kind === "collection" && intent.resource === "participants" &&
-  intent.operation === "create" &&
-  intent.invocation?.kind === "action" &&
-  intent.invocation.id === "threads.create" &&
-  await mayCreateThreads(authority, read)
-) {
-  return { collectionMutations: { participants: { create: {} } } };
+// Defines the Collection the policy reads.
+import { defineCollection } from "@copilotz/copilotz";
+// Type of the registration that `createCopilotz` accepts as `authorization`.
+import type { OwnerAuthorization } from "@copilotz/copilotz";
+
+// Who belongs to a tenant, and with which roles. Policy data, never exposed.
+export const member = defineCollection({
+  name: "member",
+  schema: {
+    type: "object",
+    properties: {
+      id: { type: "string", readOnly: true },
+      actorId: { type: "string" },
+      roles: { type: "array", items: { type: "string" } },
+    },
+    required: ["actorId", "roles"],
+  } as const,
+  // One membership per actor in each tenant.
+  indexes: [{ fields: ["actorId"], unique: true }],
+});
+
+// Bindings name a policy and the exact revision they were written for.
+export const notesPolicy = { id: "notes", revision: "2" } as const;
+
+export const authorization: OwnerAuthorization = {
+  policies: {
+    [notesPolicy.id]: {
+      revision: notesPolicy.revision,
+      // The only data `evaluate` may read.
+      sources: ["member"],
+      async evaluate({ authority, intent, read }) {
+        // Read inside the command being authorized, in the binding's tenant.
+        const [membership] = await read.list("member", {
+          where: { actorId: authority.principal.id },
+          limit: 1,
+        });
+        if (!membership) return {};
+        // Stamped on each operation at admission; only its initiator matches.
+        const ownOperations = {
+          operations: { metadata: { initiatorUserId: authority.principal.id } },
+        };
+        if (intent.kind === "action") {
+          return (membership.roles as string[]).includes("editor")
+            ? { ...ownOperations, actions: { saveNote: {} } }
+            : {};
+        }
+        return ownOperations;
+      },
+    },
+  },
+  // Which policy guards each Action and Collection, keyed by alias.
+  actions: { saveNote: notesPolicy },
+  collections: {},
+};
+```
+
+The registration has three maps:
+
+- `policies` holds each policy by ID, with a `revision`, the `sources` it may
+  read and its `evaluate` function. Change the revision whenever `evaluate`
+  grants something different. A binding whose revision the owner no longer knows
+  fails closed for new protected work; settlement of effects that already began
+  remains available.
+- `actions` and `collections` bind registry **aliases** (the keys of a plugin's
+  `actions` and `collections` maps, such as `saveNote`), not stable IDs, to
+  `{ id, revision }`. A binding only says which policy guards the resource. The
+  owner refuses a caller whose authority names a different policy or revision
+  than the resource's binding.
+- `systemScopes` (optional) places owner-generated alarm occurrences in an
+  explicit tenant for each namespace. Namespace names are never inferred to be
+  tenant identities.
+
+Startup rejects unknown aliases or revisions, any Action or Collection the
+server facade exposes without a binding, and any Collection that declares
+`ownerPolicy: "required"` without one. A Collection with no binding is
+unguarded: the facade's Collection routes refuse to expose it, but every other
+read reaches it unfiltered, including a custom route's `context.read`. Bind
+every Collection that holds data a caller must not see. Workers reject
+`authorization`; only the owner evaluates policy.
+
+The former `server.authorize` hook and the `ServerAuthorize`, `CollectionPolicy`
+and `CollectionPolicies` types are removed. `defineServerFacade` rejects an
+`authorize` option, and `createCopilotz` rejects `collectionPolicies` and
+`protectedActions`.
+
+### What `evaluate` receives
+
+`evaluate({ authority, intent, commandTime, signal, read })` runs in the owner's
+command:
+
+- `authority` is the retained binding, validated and frozen.
+- `intent` describes the exact command. `kind` is `action`, `collection`,
+  `operation`, `observation`, `session`, `asset` or `event`, with a `resource`,
+  an `operation` and the captured `input`:
+  - Action intents name the Action by alias. `operation` is `admit` at HTTP
+    admission, `capture` when the owner captures the input, and `authorize` when
+    execution or a replay checks it again.
+  - Collection intents name the Collection by alias, and `operation` is the
+    method (`get`, `list`, `query`, `create`, `update`, `delete`, `command`, …).
+    `input` holds the method, the arguments, the phase and, for writes, the
+    `current` and proposed `next` record.
+  - Operation intents are `read` or `cancel`; observations `attach`; sessions
+    `create` or `revoke`; Asset intents `read`.
+- `commandTime` and `signal` are the command's time and cancellation.
+- `read.get(alias, id)` and `read.list(alias, query)` read only the declared
+  `sources`, in the binding's namespace, inside the command's transaction. Each
+  read is a dependency, including a missing record or an empty result; a
+  committed change to one re-authorizes the open observations that depended on
+  it. Relation includes, raw SQL and owner commands are unavailable, and a
+  failed read refuses the command even if the policy catches the error.
+
+Collection intents also carry `intent.invocation?: { kind, id }`, where `kind`
+is `action`, `processor` or `alarm`. Only the owner supplies this executing
+identity; direct calls, such as HTTP route reads, have none. Nested Actions name
+the immediate executing Action, and run IDs or caller metadata cannot select the
+grant. The user's retained authority is still present, and the invocation grants
+nothing unless the policy says so. This excerpt from
+[Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
+lets Core's own Actions and Processors write threads for a member while direct
+reads get only a membership filter:
+
+```ts
+const memberThreads = {
+  thread: { contains: { participantIds: [actorId] } },
+};
+if (intent.kind === "collection") {
+  return intent.invocation
+    ? {
+      collections: memberThreads,
+      collectionMutations: {
+        thread: { create: {}, update: {}, commands: { ensureMembership: {} } },
+      },
+    }
+    : { collections: memberThreads };
 }
 ```
 
-A platform-staff policy may declare an owner-qualified
-`StaffAuthorizationSource` in `sources`, then use its alias with the same
-`read.get` / `read.list` API:
+### What `evaluate` returns
+
+`ServerConstraints`, exported from `@copilotz/copilotz` and
+`@copilotz/copilotz/server`. Every field is a grant; omit it to refuse.
+
+| Field                 | Grants                                                                                                                                                                                                          |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `actions`             | An allowlist keyed by Action alias. Each entry may force trusted `input` fields; a conflicting caller value is refused.                                                                                         |
+| `actionMetadata`      | Trusted metadata added to the Action invocation.                                                                                                                                                                |
+| `collections`         | A read filter per Collection (`where`, `contains`, `containsAny` or `filter`), keyed by alias or name. Required for every read and applied before pagination and aggregation. `{}` allows every record.         |
+| `collectionMutations` | `create`, `update`, `delete` and named `commands`, each with optional `fields` allowlist, trusted `input` and a `filter` that the current and resulting record must match. Read filters never authorize writes. |
+| `operations`          | `{ metadata, absentMetadata? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                               |
+| `observationKeys`     | Opaque catalog keys stamped on admitted work, such as a conversation's selection key from that domain's helper.                                                                                                 |
+| `assets`              | `{ read: [assetId, …] }`: exact Assets the caller may read.                                                                                                                                                     |
+| `sessions`            | `{ create?: true, revoke?: "self" \| "tenant" }`.                                                                                                                                                               |
+| `events`              | Authenticated root Event types, including adapter-validated channel input.                                                                                                                                      |
+| `admission`           | `{ key }`: the host-selected conversation group for bounded HTTP admission. Product labels, such as a thread link, travel in `operations.metadata`.                                                             |
+
+Writes validate both the current and the resulting scope. Action input is
+captured once, atomically with its retained authority; retries re-authorize that
+capture instead of preparing the input again.
+
+### Trusted host calls
+
+`app.actions.<alias>`, `app.collections.<alias>` and `app.send` run as the
+trusted host. The owner evaluates no policy for them, even for bound Actions and
+Collections, and the work they start runs as the trusted host too. Use them for
+seeds, administration and tests.
+
+A caller that already holds narrower authority keeps it when the call runs
+inside `withRetainedAuthority(authority, signal, fn)` from `@copilotz/copilotz`.
+Code inside an Action, a Processor or an HTTP route handler does not carry that
+scope by itself, so a host call made there runs as the trusted host. Use the
+context instead: `context.actions` and `context.collections` in Actions and
+Processors, `context.invoke` and `context.read` in route handlers. They carry
+the caller's authority.
+
+### Sessions and logout
+
+A session is an owner record in the tenant. Create and revoke it from HTTP route
+handlers, which receive `context.sessions`. `session-routes.ts` is a
+**definition module**:
 
 ```ts
-sources: [{
-  kind: "platform-staff",
-  alias: "staffGrants",
-  owner: "directory-owner",
-  namespace: "directory",
-  collection: "staff_grant",
-  read: directoryStaffReads,
-}];
+// Declares application HTTP routes for the server facade.
+import { createHttpAdapter } from "@copilotz/copilotz/server";
+
+// Eight hours, after which the owner refuses the session.
+const sessionLifetimeMs = 8 * 60 * 60 * 1000;
+
+// Login and logout. `authenticate` has already verified the login request's
+// credentials; these handlers only record the outcome in the tenant owner.
+export const sessionRoutes = createHttpAdapter({
+  routes: [
+    {
+      id: "auth.login",
+      method: "POST",
+      path: "/login",
+      async handler(context) {
+        const id = crypto.randomUUID();
+        // The policy must grant `sessions.create` to this request.
+        await context.sessions.create({
+          id,
+          // The session ID is also the principal ID of every later request.
+          principal: id,
+          expiresAt: new Date(Date.now() + sessionLifetimeMs).toISOString(),
+        });
+        return Response.json({ ok: true }, {
+          headers: { "set-cookie": `sid=${id}; HttpOnly; Secure; Path=/` },
+        });
+      },
+    },
+    {
+      id: "auth.logout",
+      method: "POST",
+      path: "/logout",
+      async handler(context) {
+        // Revokes the request's own session and closes its open channels.
+        // Clear the cookie only after the revocation has committed.
+        await context.sessions.revoke();
+        return Response.json({ ok: true }, {
+          headers: { "set-cookie": "sid=; Max-Age=0; Path=/" },
+        });
+      },
+    },
+  ],
+});
 ```
 
-`directoryStaffReads` is a trusted host-bound capability with
-`get(id, signal, transaction)` and `list(query, signal, transaction)`.
-`transaction` is the evaluating command's transaction. A directory in the same
-database reads through it, read-only; on a single-connection backend such as
-PGlite it must, because a second transaction cannot start. A directory in
-another database issues its own fresh read to that owner. Either way the read is
-fresh for this command; never use a cache or a tenant role reader. It receives
-no tenant command authority. The source cannot shadow a local Collection alias.
-The policy must check the staff principal, target tenant and requested operation
-against the returned grant. Declaring or reading a source alone grants nothing.
+Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
 
-For a directory Collection in the same database, use
-`createDatabaseStaffSource({ alias, databaseSchema, namespace, collection })`
-from `copilotz/engine`. It builds the source with reads that already run through
-the evaluating command's transaction.
+- `authenticate` verifies the login request itself (a password, a one-time code,
+  an identity-provider callback) and returns a credential binding whose policy
+  grants `sessions: { create: true }` for session intents.
+- Later requests carry the session ID. `authenticate` returns a binding with
+  `principal: { kind: "session", id }` and
+  `authorityBasis: { kind: "session", id }`. The `principal` passed to
+  `sessions.create` must equal its `id`, or no binding can use the session.
+- Every protected command checks the session row in its own transaction. An
+  unknown, expired or revoked session is refused, and an admission never
+  outlives its session's `expiresAt`.
+- `context.sessions.revoke(id?)` defaults to the request's own session. The
+  policy grants `revoke: "self"` for the caller's own session or `"tenant"` for
+  any session in the tenant. The promise resolves after commit and closes that
+  session's open channels; other tenants are unaffected.
+
+### Lifetimes and open channels
+
+- `credentialValidity(now, credentialExpiresAt?)` returns an admission of at
+  most 15 minutes. API-key and device principals cannot hold a longer one. It
+  does not expire the stored credential; `authenticate` must check the current
+  credential record, and a policy that depends on it declares it as a source.
+- The owner rejects an expired binding. An owner deadline closes an idle channel
+  with a renewal control frame; the client SDK authenticates again and
+  reconnects from its last committed checkpoint. Explicit revocation closes it
+  without renewal.
+- Every publication on an open observation passes a fresh owner check, including
+  buffered payloads, and committed source changes re-authorize the affected
+  observations. Expiry uses owner alarms; nothing polls.
+- Work running on a Worker carries an attempt-bound authority (the attempt,
+  worker and owner epoch) and keeps both the executing and the initiating
+  identity. Owner alarms use occurrence identity and the namespace's
+  `systemScopes` entry.
+
+### Platform staff
+
+Support staff who act across tenants are authorized from a platform directory,
+never from tenant data. Declare a `StaffAuthorizationSource` in the policy's
+`sources`, then read it through the same `read` API. For a directory Collection
+in the same database, `createDatabaseStaffSource` from `@copilotz/copilotz`
+builds the source with reads that run, read-only, through the evaluating
+command's transaction. On a single-connection backend such as PGlite it must,
+because a second transaction cannot start.
+
+```ts
+// The Collection definer and the staff-source builder.
+import {
+  createDatabaseStaffSource,
+  defineCollection,
+} from "@copilotz/copilotz";
+// Type of the registration that `createCopilotz` accepts as `authorization`.
+import type { OwnerAuthorization } from "@copilotz/copilotz";
+
+// The platform directory's grants, stored in their own schema.
+export const staffGrant = defineCollection({
+  name: "staff_grant",
+  schema: {
+    type: "object",
+    properties: {
+      id: { type: "string", readOnly: true },
+      staffId: { type: "string" },
+      tenant: { type: "string" },
+      operations: { type: "array", items: { type: "string" } },
+    },
+    required: ["staffId", "tenant", "operations"],
+  } as const,
+});
+
+// Fresh reads of the directory for every command that evaluates the policy.
+const staffGrants = createDatabaseStaffSource({
+  alias: "staffGrants",
+  databaseSchema: "directory",
+  namespace: "directory",
+  collection: staffGrant,
+});
+
+const supportPolicy = { id: "support", revision: "1" } as const;
+
+export const authorization: OwnerAuthorization = {
+  policies: {
+    [supportPolicy.id]: {
+      revision: supportPolicy.revision,
+      sources: [staffGrants],
+      async evaluate({ authority, intent, read }) {
+        // Check the staff principal, the target tenant and the operation.
+        // Declaring or reading the source grants nothing by itself.
+        const [grant] = await read.list("staffGrants", {
+          where: {
+            staffId: authority.principal.id,
+            tenant: authority.scope.tenant,
+          },
+          limit: 1,
+        });
+        const operations = (grant?.operations ?? []) as string[];
+        return intent.kind === "operation" &&
+            operations.includes(intent.operation)
+          ? { operations: { metadata: {} } }
+          : {};
+      },
+    },
+  },
+  actions: {},
+  collections: {},
+};
+```
+
+A directory in another database supplies its own `read` capability, with
+`get(id, signal, transaction)` and `list(query, signal, transaction)`, that
+issues a fresh read to that owner. Never use a cache or a tenant role reader;
+the source receives no tenant command authority and cannot shadow a local
+Collection alias.
 
 Every command reads the directory again. Repeated reads of the same source and
-query within that command retain the first result, so it finishes under the
-staff authority it read. A failed directory read refuses the command even if
-policy catches the error. Directory and tenant reads are not one transaction.
-Successful staff-source evaluations write `authorization.staff` receipts in the
-tenant schema, in the operation's transaction, recording the principal, target
-scope, provenance, policy, operation and directory source coordinates. Refused
-transactions roll back these receipts with their effects. No new audit table or
-cross-owner change notice is required. Staff channels use the existing admission
-expiry and renewal path, capped at 15 minutes; tenant source invalidation
-remains local.
+query within one command return the first result, so the command finishes under
+the staff authority it read. A failed directory read refuses the command even if
+the policy catches the error. Directory and tenant reads are not one
+transaction. Each successful staff evaluation writes an `authorization.staff`
+receipt in the tenant schema, in the operation's transaction, recording the
+principal, target scope, provenance, policy, operation and directory source; a
+refused transaction rolls the receipt back with its effects. Staff channels use
+the same 15-minute admission and renewal path.
 
-API keys and enrolled device credentials use `credentialValidity(now)` for a
-15-minute admission/channel lifetime. This does not expire the stored device
-credential. Authentication must check the current credential record in its
-tenant owner and policies must declare that source. Owner commands reject an
-expired binding. An owner deadline closes idle channels with the lifetime
-renewal control frame; the client SDK silently reauthenticates and reconnects
-using its last committed checkpoint. Explicit revocation closes without renewal.
-Worker authority carries an exact attempt, worker and owner epoch and retains
-both executing and initiating identities. Owner alarm tasks use occurrence
-identity and an explicit namespace entry in `authorization.systemScopes`;
-namespace names are never inferred to be tenant identities.
+## Reference
 
-`application.authorization.createSession(authority, {id, principal, expiresAt})`
-and `revokeSession(authority, id)` execute in the tenant owner. Session policy
-must grant `sessions.create` or `sessions.revoke` (`self` or `tenant`).
-Protected commands validate session state in the same transaction. HTTP handlers
-expose `context.sessions.create` / `revoke`. Logout must await `revoke` before
-returning success or clearing its cookie. The revoke promise resolves after
-commit and closes that session's channels; other tenants remain independent.
+### Upgrading retained authority (v12 → v13)
 
-Committed source changes issue owner notices, which reauthorize affected open
-observations. Every publication has a fresh owner gate, including buffered
-payloads. Expiry uses owner alarms. There is no authorization polling.
+Schema v13 is installed only by the explicit offline chain in
+[Upgrading](upgrading.md#current-owner-schema-v13). Its last step converts
+retained authority:
 
-## Offline upgrade from version 11
+- Stop producers and close transports. Run `scripts/upgrade-retained-data.ts`
+  with `authority-inventory`, and review every invocation and ingress binding
+  against application policy. Supply the reviewed JSON manifest through
+  `--authority` to the `apply` command; the script's help lists the database,
+  schema and retained-content plan options.
+- The manifest declares supported policy IDs and revisions, exact invocation
+  digests, and exact ingress digests and bindings. An unclassified root needs
+  explicit `ingress` provenance; the upgrade never guesses its identity. A
+  capture without an old receipt needs an explicit `actionSchemas` snapshot.
+- Every `authenticated-server` event entry also requires `actorBinding`, exactly
+  matching the full ingress `actor` object (for example
+  `{ id: "participant-id", name: "Member" }`). The credential principal and the
+  authority basis stay separate, and the upgrade never rewrites the actor into a
+  credential identity.
+- Missing, duplicate, stale, conflicting and unknown-revision entries abort the
+  transaction. Lifecycle bodies, encrypted values and capture receipts remain
+  byte-for-byte unchanged; nothing is prepared again.
+- The upgrade locks the schema, records a manifest digest, advances the owner
+  epoch and the version marker, and invalidates retained live channels.
+  Repeating the same manifest is idempotent; a different manifest is refused.
+  Clients reattach and re-authorize after restart.
 
-Stop producers and close transports. Run `scripts/upgrade-retained-data.ts` with
-`authority-inventory` to export the retained inventory. Review every invocation
-and ingress binding against application policy, then supply the explicit JSON
-manifest through `--authority` to the `apply` command. Use the script's help for
-database, schema and existing retained-content plan options.
+## What this unlocks
 
-The manifest declares supported policy IDs/revisions, exact invocation digests,
-and exact ingress digests and bindings. An unclassified root additionally needs
-explicit `ingress` provenance; the upgrade never guesses its identity. A capture
-without an old preparation receipt needs an explicit `actionSchemas` snapshot.
-For the v12 → v13 authority upgrade, every `authenticated-server` event entry
-also requires `actorBinding`, exactly matching the full ingress `actor` object
-(for example `{id: "participant-id", name: "Member"}`). This applies to both
-retained classified ingress and explicitly reviewed unclassified ingress. The
-credential principal and authority basis remain separate (for example a session
-SID); the upgrade never rewrites the actor into a credential identity. The
-reviewed event digest binds the original source provenance. Missing, duplicate,
-stale, conflicting and unknown-revision entries abort the transaction. Lifecycle
-bodies, encrypted values and existing capture receipts remain byte-for-byte
-unchanged; preparation is never rerun.
+- One reviewable place that decides what every caller may do, evaluated where
+  the data is written.
+- Permission changes, revocations and logouts that apply to the next command, to
+  work already running and to open channels, without polling.
+- Agents and Processors acting with exactly the user's authority, plus the
+  explicit grants you give their own Actions and Processors.
+- Tenant data, sessions and audit receipts that stay inside the tenant's own
+  schema.
 
-The upgrade locks the schema, records a manifest digest, advances the owner
-epoch and version marker, and invalidates retained live channels. Repeating the
-same manifest is idempotent; a different manifest is refused. Clients reattach
-and reauthorize after restart. Unknown policy revisions fail closed for new
-protected work. Settlement of already begun effects remains available.
+## Next steps
+
+- Tutorial:
+  [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+  builds a policy, its bindings and tests.
+- Tutorial:
+  [Chapter 17: Connect Chat and Channels](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
+  extends it to Core's conversation routes.
+- Reference: [HTTP server and browser client](server.md) covers `authenticate`,
+  routes and observation.
+- Reference: [Upgrading](upgrading.md) covers the offline v13 chain.

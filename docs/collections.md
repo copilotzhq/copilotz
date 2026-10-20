@@ -38,54 +38,59 @@ code can select a scope through the application methods below.
 
 ### Declaration
 
-| Property                                       | Purpose                                                                                                                                                                                                        |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                                         | Stable name. It prefixes lifecycle Event types (`note.created`), so keep it once records are stored.                                                                                                           |
-| `schema`                                       | JSON Schema for one record, declared `as const` so `$inferSelect` and `$inferInsert` are derived from it.                                                                                                      |
-| `readOnly` fields                              | Schema metadata for schema-aware input surfaces, such as `id: { type: "string", readOnly: true }`. It is not an access rule on trusted code. The runtime generates `id` when the input omits it.               |
-| `timestamps`, `defaults`                       | `createdAt`/`updatedAt` are maintained for you; `defaults` fills missing fields.                                                                                                                               |
-| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Provisioned as physical, Collection-scoped SQL indexes. B-tree is the default; `unique` is enforced per namespace. GIN and BRIN are also supported. |
-| `relations`                                    | `relation.belongsTo`, `relation.hasMany` or `relation.hasOne`, each naming a target Collection and foreign key. Writes project them as graph edges.                                                            |
-| `commands`                                     | Named mutations. Each has `mutate({ current, input })` returning `{ set?, unset? }`, an optional `input` schema and an optional Event type.                                                                    |
-| `queries`                                      | Named reads built from `filter`, `query` or `select`, with optional input and output schemas.                                                                                                                  |
-| `content`, `search`                            | Fields stored as content references, and full-text search fields. See [Content and Assets](content-assets.md).                                                                                                 |
-| `beforeCreate`, `beforeUpdate`, `beforeDelete` | Synchronous hooks for last-moment normalisation or rejection.                                                                                                                                                  |
+| Property                                       | Purpose                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                         | Stable name. It prefixes lifecycle Event types (`note.created`), so keep it once records are stored.                                                                                                                                                                                           |
+| `schema`                                       | JSON Schema for one record, declared `as const` so `$inferSelect` and `$inferInsert` are derived from it.                                                                                                                                                                                      |
+| `readOnly` fields                              | Schema metadata for schema-aware input surfaces, such as `id: { type: "string", readOnly: true }`. It is not an access rule on trusted code. The runtime generates `id` when the input omits it; an explicit `id` must be unique across every Collection and namespace in the database schema. |
+| `timestamps`, `defaults`                       | `createdAt`/`updatedAt` are maintained for you; `defaults` fills missing fields.                                                                                                                                                                                                               |
+| `indexes`                                      | A field, a compound list, or `{ fields, unique?, type? }`. Provisioned as physical, Collection-scoped SQL indexes. B-tree is the default; `unique` is enforced per namespace. GIN and BRIN are also supported.                                                                                 |
+| `relations`                                    | `relation.belongsTo`, `relation.hasMany` or `relation.hasOne`, each naming a target Collection and foreign key. Writes project them as graph edges.                                                                                                                                            |
+| `commands`                                     | Named mutations. Each has `mutate({ current, input })` returning `{ set?, unset? }`, an optional `input` schema and an optional Event type.                                                                                                                                                    |
+| `queries`                                      | Named reads built from `filter`, `query` or `select`, with optional input and output schemas.                                                                                                                                                                                                  |
+| `content`, `search`                            | Fields stored as content references, and full-text search fields. See [Content and Assets](content-assets.md).                                                                                                                                                                                 |
+| `beforeCreate`, `beforeUpdate`, `beforeDelete` | Synchronous hooks for last-moment normalisation or rejection.                                                                                                                                                                                                                                  |
 
 Command and query names cannot reuse method names such as `create`, `list` or
 `query`.
 
 ### Owner authorization
 
-Protected Collections declare `ownerPolicy: "required"`. Register their aliases
-in `authorization.collections`, referencing a policy ID and revision in
-`authorization.policies`. Startup rejects incomplete registrations. The same
-owner evaluator protects Collection reads, named queries, mutations, Actions and
-operation observations.
+A Collection is protected when `authorization.collections` binds its alias to a
+policy ID and revision in `authorization.policies`. Declaring
+`ownerPolicy: "required"` makes that binding mandatory: startup fails without
+it. A Collection with no binding is unguarded: every read reaches it unfiltered
+and every write is allowed, which suits policy data such as memberships but not
+data a caller must not see. The same owner evaluator protects Collection reads,
+named queries, mutations, Actions and operation observations.
 
 Policies declare Collection aliases in `sources`. Their `evaluate` callback
 receives immutable retained authority, the actual command intent, command time,
 cancellation signal and bounded `read.get` / `read.list` capabilities. Reads
 must use declared sources. Missing records and empty queries are dependencies;
 committed changes re-authorize dependent observations. Reads cannot escape the
-callback, submit commands or access raw SQL.
+callback, submit commands or access raw SQL. A Collection intent also names the
+Action, Processor or alarm executing the call as `intent.invocation`, absent for
+direct calls, so a policy can grant a write to one Action on a user's behalf.
 
-Return `ServerConstraints`: `collections` predicates are intersected before
-pagination and aggregation. Mutations require explicit `collectionMutations`
-permissions with optional field allowlists, trusted input and current/resulting
-record predicates. Conflicting trusted fields and immutable updates fail.
-Nonempty relation includes are refused. Decisions and effects share an owner
-transaction; joined work keeps its attempt fences through the outer commit.
+Return `ServerConstraints`: `collections` filters (`where`, `contains`,
+`containsAny` or `filter`) are intersected before pagination and aggregation.
+Mutations require explicit `collectionMutations` permissions with optional field
+allowlists, trusted input and current/resulting record predicates. Conflicting
+trusted fields and immutable updates fail. Nonempty relation includes are
+refused. Decisions and effects share an owner transaction; joined work keeps its
+attempt fences through the outer commit.
 
-See [owner authorization and migration](authorization.md) for configuration,
-sessions, lifetimes and the version 12 offline upgrade.
+See [Owner authorization](authorization.md) for configuration, sessions,
+lifetimes and the offline v13 upgrade.
 
 ### Read and write from a host
 
 Outside an Action or Processor, use `app.collections.<alias>`. This plain,
 enumerable map uses the same registered aliases as `context.collections` and
-works on embedded and Gateway handles without a Server plugin or HTTP policy.
-Collections with an owner policy additionally require a current authorized
-invocation as described above.
+works on embedded and Gateway handles without a Server plugin. These calls run
+as the trusted host: the owner evaluates no policy for them, even for a bound
+Collection.
 
 For a registered `note` Collection,
 `await app.collections.note.create({ text }, { idempotencyKey: "seed-note-1" })`
@@ -123,9 +128,11 @@ the final options; omitted values use the application's defaults.
 Get/list/search accept Collection content and cancellation options; named
 queries, aggregates and relation reads accept cancellation via `signal`.
 
-Use direct host mutations for unprotected seeds, tests and admin changes.
-Protected Collections require the appropriate owner-controlled workflow. Use an
-Action for business rules or an atomic multi-record transaction, then call
+Use direct host mutations for seeds, tests and admin changes, and never pass
+them input an untrusted caller chose. Code that runs for a user, such as an
+Action or an HTTP route handler, uses `context.collections` or `context.read`
+instead, which carry that user's authority. Use an Action for business rules or
+an atomic multi-record transaction, then call
 `app.actions.<alias>(input, options)`. Use `app.send` plus a Processor when the
 input should trigger Event-driven orchestration. Separate host write calls are
 separate operations, not one transaction. See

@@ -1,6 +1,6 @@
 ---
 title: "HTTP Server and Client"
-description: "Serve chosen Actions, Collections and Channels through one Fetch handler with trusted identity, explicit authorization, idempotent submission and a portable client."
+description: "Serve chosen Actions, Collections and Channels through one Fetch handler with trusted identity, owner-evaluated authorization, idempotent submission and a portable client."
 section: Deliver
 order: 10
 status: stable
@@ -23,16 +23,18 @@ You need one HTTP contract that:
 
 - publishes only the Actions, Collections and Channels you choose;
 - takes actor and tenant from host verification, never from the request;
-- authorizes every matched route, including fixed operation and Asset routes;
+- authorizes everything a matched route does, including the fixed operation and
+  Asset routes, where the data is written;
 - maps a retried submission to the original operation;
 - runs on any Fetch host (Deno, Node, Workers) and has a matching client.
 
 ## The solution
 
 Compose `serverPlugin` with a facade declared by `defineServerFacade` under
-`resources.server.default`. The application from `createCopilotz` then exposes
-`app.fetch(request)`, a standard Fetch handler. The host owns the listener;
-`createCopilotzClient` from `@copilotz/copilotz/client` calls it.
+`resources.server.default`, and give `createCopilotz` an `authorization`
+registration. The application then exposes `app.fetch(request)`, a standard
+Fetch handler. The host owns the listener; `createCopilotzClient` from
+`@copilotz/copilotz/client` calls it.
 
 ### Install
 
@@ -62,13 +64,13 @@ Only a Node host that opens a real listener also needs
 
 ### Exposure, authentication, authorization
 
-The facade separates three decisions:
+Three decisions stay separate:
 
-| Option         | Decides                                                       |
-| -------------- | ------------------------------------------------------------- |
-| `expose`       | which Action, Collection and Channel **families** get routes  |
-| `authenticate` | the trusted scope for a request, or a `Response` to reject it |
-| `authorize`    | per-route constraints, or a `Response` (such as 403) to deny  |
+| Option                           | Decides                                                                          |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| facade `expose`                  | which Action, Collection and Channel **families** get routes                     |
+| facade `authenticate`            | the trusted scope and authority binding for a request, or a `Response` to reject |
+| `createCopilotz` `authorization` | what that authority may do, evaluated by the owner inside every command          |
 
 `expose.actions`, `expose.collections` and `expose.channels` each accept `true`,
 `false` or `{ include, exclude }` patterns over stable IDs. Omitting `expose`
@@ -76,38 +78,43 @@ publishes every registered Action, Collection read and Channel, so list what you
 mean. For Collections, `true` or patterns expose **reads only**; write routes
 (create, update, delete, commands) need an explicit `operations` entry, such as
 `collections: { include: ["note"], operations: { include: ["create"] } }` (or
-`operations: true`), and then a matching `collectionMutations` constraint from
-`authorize`. `expose` never removes the facade's fixed routes: operation
+`operations: true`), and then a matching `collectionMutations` grant from the
+owner policy. `expose` never removes the facade's fixed routes: operation
 status/result/cancel/observe, Assets and `GET <basePath>/openapi.json` always
-exist. `authenticate` and `authorize` run for those as well, so deny the ones
-you do not support. `basePath` defaults to `/api`; `maxAssetUploadBytes`
-defaults to 20 MiB.
+exist. `authenticate` runs for those as well, and the policy decides what they
+return. `basePath` defaults to `/api`; `maxAssetUploadBytes` defaults to 20 MiB.
 
-`authenticate` returns a `ServerAuthorizedScope`: `actor`, `namespace`, optional
-`databaseSchema`, trusted `operationMetadata` recorded on every operation the
-request starts, and host-only `context` for your policy. A namespace is a
-tenant, not an actor authorization: two users of the same tenant can still read
-each other's operations unless `authorize` constrains them.
+`authenticate(request, context)` is required: without it, `createCopilotz`
+refuses to build the facade. `context` carries the matched `endpoint` (`kind`,
+stable `id`, `key` and route `metadata`), its `params`, and the application's
+`defaultNamespace` and `defaultDatabaseSchema`. It returns a
+`ServerAuthorizedScope`:
 
-`authorize` receives the matched `endpoint` (`kind` is `action`, `operation`,
-`collection`, `channel`, `asset`, `agents`, `http` or `openapi`; `id` is the
-stable ID) and the scope. It returns `ServerConstraints`:
+- `authority`: the `AuthenticatedAuthority` binding the owner evaluates. Its
+  `scope.namespace` and `scope.databaseSchema` must equal the returned scope's;
+  the facade fills in the matched endpoint, operation and parameters as request
+  facts.
+- `actor`: the authenticated actor, recorded as `actorId` on every operation the
+  request starts and passed to Actions as trusted `httpActor` metadata.
+- `namespace` and optional `databaseSchema`: the tenant and physical schema.
+- optional trusted `operationMetadata`, `actionMetadata`, `identity` and a
+  host-only `context`.
 
-- `operations: { metadata }` — operations whose metadata does not match are
-  treated as not found (404) for get, result, cancel and observe;
-- `collections` — read filters per Collection;
-- `collectionMutations` — explicit write policy; read filters never authorize
-  writes.
+A namespace is a tenant, not a permission: two users of one tenant can still
+read each other's operations unless the policy constrains them.
 
-Pairing `operationMetadata: { initiatorUserId }` in the scope with
-`operations: { metadata: { initiatorUserId } }` in every relevant constraint is
-what gives each actor ownership of their operations. Default to deny for
-endpoint kinds you have no policy for.
-
-Both callbacks are optional by type, and that is all "optional" means: without
-them the facade adds no actor, ownership or membership policy of its own. Core
-thread routes additionally require a trusted actor where membership applies, so
-a Core-serving facade must authenticate.
+For every command a route starts, the owner runs the policy that the binding
+names and applies the `ServerConstraints` it returns: an `actions` allowlist,
+`collections` read filters, `collectionMutations` write grants, `operations`
+metadata for ownership, `assets` reads and `sessions` permissions. Every exposed
+Action and Collection needs a binding in `authorization`, keyed by alias;
+`createCopilotz` refuses to start without one. Operations whose metadata does
+not match the policy's `operations` constraint are treated as not found (404)
+for get, result, cancel and observe, so a policy that returns
+`operations: { metadata: { initiatorUserId: authority.principal.id } }` both
+stamps each new operation with its initiator and limits reads to that initiator.
+Grant nothing for endpoint kinds you have no policy for. See
+[Owner authorization](authorization.md) for the complete contract.
 
 ### Routes and identity
 
@@ -126,12 +133,15 @@ Application-specific endpoints come from `createHttpAdapter({ routes })` in
   `202` with a receipt like any submission.
 - `handler(context)` — your code; its return value is normally answered with
   `200`. `context.invoke(actionId, input, options)` runs an Action and waits for
-  its result; there is no submit variant. `context.read` offers
-  constraint-enforced Collection reads.
+  its result; there is no submit variant. `context.read` reads Collections under
+  the request's authority; a Collection without a binding is read unfiltered.
+  `context.sessions` creates and revokes owner sessions, as
+  [Owner authorization](authorization.md#sessions-and-logout) shows. Use these
+  instead of `app.actions` or `app.collections`, which run as the trusted host.
 
-Route `metadata` labels are trusted policy inputs that `authenticate` and
-`authorize` can read via `endpoint.metadata`; they grant nothing by themselves,
-including public-route exemptions.
+Route `metadata` labels are trusted inputs that `authenticate` can read via
+`context.endpoint.metadata`, for example to reject a route by returning a
+`Response`. They grant nothing by themselves, including public-route exemptions.
 
 Action and Collection mutation submissions carry an `Idempotency-Key`. External
 Channel webhooks instead use stable provider occurrence IDs; only
@@ -181,8 +191,10 @@ reporting does not bypass authentication, authorization or result-read scope.
 for 1–32 concurrently selected operations and resolves with a checkpoint for
 resuming. Each observation response has a bounded lifetime (at most five minutes
 by default) and may also renew under load; the client follows these renewal
-frames transparently. Exhausted replay capacity is different: the client rejects
-with `operation_replay_capacity_exceeded`, and you must bootstrap from a fresh
+frames transparently. Long-lived credentials are re-authorized the same way: an
+admission lasts at most 15 minutes, and the client authenticates again when it
+renews. Exhausted replay capacity is different: the client rejects with
+`operation_replay_capacity_exceeded`, and you must bootstrap from a fresh
 history read. See [Observation performance](observation-performance.md). A
 well-formed closing boundary without a terminal descriptor is not proof that the
 operation finished. Old cursor generations are rejected after the explicit
@@ -191,18 +203,19 @@ offline catalog upgrade in [Upgrading](upgrading.md).
 Raw operation observation and raw thread observation have no history privacy
 filter. An authorized observer receives every stream, including private Ask
 answers. Treat both as trusted diagnostic surfaces; end-user views should read
-Core's normal, visibility-filtered history (`core.threads.messages`) and deny
-raw observation where private data must not reach that user. Hiding bytes in
-browser JavaScript is not a confidentiality boundary.
+Core's normal, visibility-filtered history (`core.threads.messages`), and the
+policy should not grant raw observation where private data must not reach that
+user. Hiding bytes in browser JavaScript is not a confidentiality boundary.
 
 ### Core routes
 
 Thread, message and agent routes belong to `coreHttpPlugin` from
-`@copilotz/copilotz/core/server`, a separate optional plugin. Add it to
-`plugins`, then authorize its route IDs (such as `core.threads.messages`) and
-enforce thread membership as
+`@copilotz/copilotz/core/server`, a separate optional plugin. Its routes read
+through `context.read`, so add it to `plugins`, bind the `thread` Collection and
+return a membership filter from the policy, as
 [Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
-shows. Runtime-only applications never need it.
+shows. Without a `thread` binding, those reads are unfiltered. Runtime-only
+applications never need the plugin.
 
 ### Worked example: call the facade without a listener
 
@@ -220,19 +233,13 @@ import {
 // The pure server factory and principal type from Chapter 16.
 import { createServerApp } from "./server.ts";
 import type { Principal } from "./server.ts";
+// The host helper that writes memberships.
+import { grantRoles } from "./auth.ts";
 
-// Two verified users in the same tenant; only Ada may save notes.
+// Two verified users in the same tenant.
 const users: Record<string, Principal> = {
-  "token-ada": {
-    actorId: "ada",
-    namespace: "team-notes",
-    allowedActionIds: ["notes.save"],
-  },
-  "token-bob": {
-    actorId: "bob",
-    namespace: "team-notes",
-    allowedActionIds: [],
-  },
+  "token-ada": { actorId: "ada", namespace: "team-notes" },
+  "token-bob": { actorId: "bob", namespace: "team-notes" },
 };
 
 // No database option: a private in-memory database for this check.
@@ -265,6 +272,10 @@ async function status(call: () => Promise<unknown>): Promise<string> {
 }
 
 try {
+  // Both are members of the tenant; only Ada may save notes.
+  await grantRoles(app, "ada", ["editor"], { namespace: "team-notes" });
+  await grantRoles(app, "bob", [], { namespace: "team-notes" });
+
   const ada = clientFor("token-ada");
   const bob = clientFor("token-bob");
   const key = { idempotencyKey: "server-check-001" };
@@ -280,12 +291,12 @@ try {
     "conflict:",
     await status(() => ada.actions.submit("notes.save", { text: "No" }, key)),
   );
-  // Same tenant, different actor: not authorized for the Action...
+  // Same tenant, different actor: the policy grants Bob no Action...
   console.log(
     "bob save:",
     await status(() => bob.actions.submit("notes.save", { text: "Hi" }, key)),
   );
-  // ...and cannot see Ada's operation.
+  // ...and only operations he started.
   console.log(
     "bob read:",
     await status(() => bob.operations.get(first.operationId)),

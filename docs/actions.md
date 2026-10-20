@@ -112,7 +112,8 @@ returns the Action output after inherited work settles. The alias is `saveNote`;
 the durable Events still use `notes.save.invoked` and `notes.save.completed` (or
 `failed`/`cancelled`). Invalid input is rejected before those Events exist. An
 identical `idempotencyKey` restores the recorded output or failure without
-executing the Action again.
+executing the Action again. Host calls run as the trusted host: the owner
+evaluates no `authorization` policy for them, even for a bound Action.
 
 Inside an Action or Processor,
 `context.actions.saveNote(input, { operationKey })` runs within the current
@@ -477,13 +478,16 @@ does not detect secrets in general, so keep secrets out of metadata yourself.
 Secret Actions cannot record `progress`.
 
 An application with secret Actions must configure `adapters.secrets.default`
-with a Secret Adapter that the host provides. Its `seal` and `open` methods must
-perform genuine authenticated encryption with a key the host manages, binding
-the `additionalAuthenticatedData` they receive. `seal` returns the ciphertext, a
-deterministic keyed `commitment` that reveals nothing about the plaintext, and a
-secret-free `envelope` (key, version and nonce metadata) that `open` needs.
-`createSecretAdapter` validates the adapter object; it does not provide this
-cryptography.
+with the master Secret Adapter that the host provides. The runtime encrypts
+protected values with a data key per schema owner, created on first use and
+wrapped by that adapter, so moving an owner to another database re-wraps one key
+instead of re-encrypting every value. The adapter's `seal` and `open` methods
+must perform genuine authenticated encryption with a key the host manages,
+binding the `additionalAuthenticatedData` they receive. `seal` returns the
+ciphertext, a deterministic keyed `commitment` that reveals nothing about the
+plaintext, and a secret-free `envelope` (key, version and nonce metadata) that
+`open` needs. `createSecretAdapter` validates the adapter object; it does not
+provide this cryptography.
 
 The protection covers the schema-aware Action lifecycle only. A secret sent in a
 plain `app.send` payload is stored as ordinary Event data before any Action sees
@@ -496,38 +500,52 @@ or a custom route that forwards them to `app.send`.
 
 For secrets your application keeps in its own records, such as a connected
 account's tokens, use `createOwnerSecrets({ session, master })` from
-`copilotz/actions`, with the same master Secret Adapter.
-`seal(schema, value,
-binding)` returns an opaque string to store in the record,
-and `open` returns the value. Both use the schema owner's data key.
+`@copilotz/copilotz/actions`. `session` is the owner's database connection, for
+example `persistence.database` from a host-owned `createCopilotzPersistence`,
+and `master` is the same master Secret Adapter. Only an embedded or Gateway host
+has both; a Worker never does.
 
-`binding` is your context, for example `{ record: id, field: "accessToken" }`.
-It is authenticated together with the schema, so a sealed value opens only under
-the same schema and binding. Sealing provisions a missing owner key through an
-owner command; opening never creates one. Exporting an owner re-wraps its key
-and leaves every sealed value unchanged, so the secrets move with the owner's
-data.
+`account-secrets.ts` is a **host composition** helper:
 
-## What this unlocks
+```ts
+// Seals application values under the schema owner's data key.
+import { createOwnerSecrets } from "@copilotz/copilotz/actions";
+import type { OwnerSecrets, SecretAdapter } from "@copilotz/copilotz/actions";
+// The host-owned database connection the owner role also uses.
+import type { CopilotzPersistence } from "@copilotz/copilotz/persistence";
 
-- One validated, inspectable operation shared by Processors, other Actions,
-  tools and HTTP routes.
-- Safe repeats: a replayed invocation resolves to its recorded outcome, and
-  scoped keys keep writes and external effects single.
-- Clear failure handling, with typed lifecycle data for observers and tests.
+// Host composition only: it needs the owner's database and the master adapter,
+// which a Worker never holds.
+export function accountSecrets(
+  persistence: CopilotzPersistence,
+  master: SecretAdapter,
+): OwnerSecrets {
+  return createOwnerSecrets({ session: persistence.database, master });
+}
 
-## Next steps
+// Seals a connected account's access token for storage in its record. The
+// binding names the record and field, so the value opens only there.
+export function sealAccessToken(
+  secrets: OwnerSecrets,
+  accountId: string,
+  token: string,
+): Promise<string> {
+  return secrets.seal("public", token, {
+    record: accountId,
+    field: "accessToken",
+  });
+}
+```
 
-- Tutorial:
-  [Chapter 4: Share Operations as Actions](getting-started/part-1-design-and-build/04-share-operations-as-actions.md)
-  builds `notes.save` step by step.
-- Reference: [Collections](collections.md) covers the writes an Action makes.
-- Reference: [Events, Deliveries, and Recovery](events-deliveries-recovery.md)
-  explains delivery scopes, retries and operation keys.
-- Reference: [Content and Assets](content-assets.md) covers content preparation
-  and references.
+`seal(databaseSchema, plaintext, binding)` returns an opaque string to store in
+the record, and `open(databaseSchema, sealed, binding)` returns the plaintext.
+The binding is authenticated together with the schema, so a sealed value opens
+only under the same schema and binding. Sealing provisions a missing owner key
+through an owner command; opening never creates one. Exporting an owner re-wraps
+its key and leaves every sealed value unchanged, so the secrets move with the
+owner's data.
 
-## External effects and recovery
+### External effects and recovery
 
 Mutating external calls use `context.effect` inside an Action. `begin(step)` is
 keyed by the durable Action run and a bounded step name. Only `proceed` permits
@@ -567,11 +585,12 @@ operation as read-only merely because its provider supports idempotency.
 ### Owner authorization and first capture
 
 Register protected Action aliases in `authorization.actions`, referencing the
-same owner policy registry used by Collections and observations. An owner policy
-returns an explicit `actions` allowlist and may supply trusted `input` fields
-and `actionMetadata`. Conflicting client fields are refused. The owner validates
-and captures the completed input once, atomically with its retained authority
-and lifecycle receipt. Replay preserves that capture and rechecks current policy
+same owner policy registry used by Collections and observations. An Action
+without a binding is not policy-checked. An owner policy returns an explicit
+`actions` allowlist, keyed by alias, and may supply trusted `input` fields and
+`actionMetadata`. Conflicting client fields are refused. The owner validates and
+captures the completed input once, atomically with its retained authority and
+lifecycle receipt. Replay preserves that capture and rechecks current policy
 without preparing the input again.
 
 Workers cannot configure policy or mint authority from metadata. The retained
@@ -581,5 +600,27 @@ is attempt-bound. Mutation and result guards retain attempt fencing; an explicit
 revocation refuses new protected work while settlement of begun effects remains
 available. Secret metadata checks run at the lifecycle persistence boundary.
 
-`ownerHooks`, `protectedActions` and bootstrap route hooks have been removed.
-See [owner authorization and migration](authorization.md).
+A tool call or nested Action that runs for a user is authorized under that
+user's retained binding, so a bound Action the user may not run stays refused
+when an assistant calls it for that user. The former `protectedActions`
+registration and owner hooks are removed; see
+[Owner authorization](authorization.md).
+
+## What this unlocks
+
+- One validated, inspectable operation shared by Processors, other Actions,
+  tools and HTTP routes.
+- Safe repeats: a replayed invocation resolves to its recorded outcome, and
+  scoped keys keep writes and external effects single.
+- Clear failure handling, with typed lifecycle data for observers and tests.
+
+## Next steps
+
+- Tutorial:
+  [Chapter 4: Share Operations as Actions](getting-started/part-1-design-and-build/04-share-operations-as-actions.md)
+  builds `notes.save` step by step.
+- Reference: [Collections](collections.md) covers the writes an Action makes.
+- Reference: [Events, Deliveries, and Recovery](events-deliveries-recovery.md)
+  explains delivery scopes, retries and operation keys.
+- Reference: [Content and Assets](content-assets.md) covers content preparation
+  and references.

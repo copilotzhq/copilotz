@@ -1,6 +1,6 @@
 ---
 title: "Deployment Topologies"
-description: "Place the same plugins in one embedded process, or split them into a Gateway and Workers using owner capabilities over an admitted transport."
+description: "Place the same plugins in one embedded process, or split them into a Gateway that owns the database and Workers that call it over an admitted transport."
 section: Operate
 order: 40
 status: stable
@@ -71,8 +71,8 @@ Hypervisor is never the recovery authority.
 ### Shared persistence
 
 `createCopilotzPersistence` from `@copilotz/copilotz/persistence` opens one
-connection that several roles in the same process share. Configure recovery and
-lifecycle observation when you create it:
+connection that the host owns and lends to embedded and Gateway roles in the
+same process. Configure recovery and lifecycle observation when you create it:
 
 - `database`: Ominipg options such as `{ url }`, a reconnect-capable
   `{ connect(context) }` connector, or an already open database;
@@ -117,7 +117,7 @@ as
 import { createCopilotz, isStreamOutput } from "@copilotz/copilotz";
 // Type of each item a send handle streams.
 import type { ApplicationOutput } from "@copilotz/copilotz";
-// One database connection that several roles can share without owning it.
+// One database connection the host owns and lends to the Gateway.
 import { createCopilotzPersistence } from "@copilotz/copilotz/persistence";
 // The unchanged business definitions: Collection, Action and Processor.
 import { notesPlugin } from "./notes-plugin.ts";
@@ -206,13 +206,13 @@ try {
       if (drained.status === "rejected") throw drained.reason;
       if (settled.status === "rejected") throw settled.reason;
 
-      // The Gateway reads the outcome back from shared persistence.
+      // The Gateway reads the outcome back from the database it owns.
       const status = await gateway.operationStatus({
         operationId: handle.operationId,
       });
       console.log(`settled operation: ${status?.state ?? "unknown"}`);
     } finally {
-      // Stop executing; this does not close the shared persistence.
+      // Stop executing; the Worker never held the database.
       await worker.close();
     }
   } finally {
@@ -236,13 +236,13 @@ node topology.ts "Ship the release."
 
 The output starts with `worker ready`, shows one `notes.save.invoked`,
 `note.created` and `notes.save.completed`, and ends with
-`settled operation: completed`, read by the Gateway from the shared persistence.
+`settled operation: completed`, read by the Gateway from the database it owns.
 Each `finally` runs even when an earlier step throws, so a failed send still
 closes the Worker, then the Gateway, then the database.
 
 ### Separate processes
 
-The in-process transport and the shared persistence object exist only inside one
+The in-process transport and the host's persistence object exist only inside one
 process. A local `file://` PGlite directory is likewise opened by one connection
 in one process, and cannot be shared across processes or hosts. Separate Gateway
 and Worker processes need:
@@ -318,10 +318,10 @@ listeners and caller-owned Hypervisors remain the host's responsibility.
 `close()` stops a role without waiting for every delivery. A graceful host first
 stops admitting new requests, awaits the operations it already accepted within
 its grace period, then closes Workers, listeners and the Gateway, any host-owned
-Hypervisor, and finally the shared persistence. Work interrupted anyway stays
-recorded, and deliveries that are pending, retryable or under an expired lease
-are picked up by a Worker later. Report a Worker host ready only after
-`worker.ready` resolves.
+Hypervisor, and finally the persistence. Work interrupted anyway stays recorded,
+and deliveries that are pending, retryable or under an expired lease are picked
+up by a Worker later. Report a Worker host ready only after `worker.ready`
+resolves.
 
 ### Interrupted placement and logical replay
 

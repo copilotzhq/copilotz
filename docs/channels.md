@@ -215,6 +215,14 @@ Built-in Web, WhatsApp, Zendesk, Telegram and Discord plugins already compose
 verification in the host **before** enabling its route; secrets and live handles
 never belong in occurrences or `route`.
 
+Channel routes are served by the same HTTP facade as everything else. The
+facade's `authenticate` returns the request's authority binding, and the owner
+policy must grant the ingress Event type, `copilotz.channels.ingress.input`, in
+`events` for `event` intents, as well as the Core thread writes the ingress
+Action makes, as
+[Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)'s
+`chat-access.ts` does. See [Owner authorization](authorization.md).
+
 ### Visibility and reply projection
 
 Custom and Web `receive` mappers that omit `visibility` produce

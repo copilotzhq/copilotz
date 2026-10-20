@@ -1,3 +1,77 @@
+## 0.89.0 — 2026-10-19
+
+The runtime is converted in place to **one owner per database schema**: a single
+serialized writer holds each schema, and workers never hold a database
+connection. There is no alternate runtime or compatibility mode.
+
+### Upgrade required
+
+- Owner schema **v13** is installed only by the explicit offline chain **v5–v10
+  → v11 → owner keys v12 → authority v13**. Stop every writer, drain, then run
+  `upgradeActionLifecycle` with the reviewed plan, owner-key adapters and
+  authority manifest. No step runs at startup. See
+  [the upgrade guide](docs/upgrading.md#current-owner-schema-v13) and
+  [the offline guide](scripts/upgrade-retained-data.md).
+- Applications with protected values configure a master Secret Adapter. Each
+  owner gets its own data key, wrapped by that adapter.
+- The v13 authority manifest binds each authenticated ingress's actor
+  (`actorBinding`) separately from its session or API-key principal.
+
+### Changed
+
+- **Authorization is one owner-evaluated path.**
+  - `authorization: OwnerAuthorization` declares versioned policies, their
+    Collection sources, and the policy for each Collection and Action.
+  - The owner evaluates `ServerConstraints` inside the command that uses them,
+    and retains each authority binding with its expiry.
+  - Sessions are owner records: logout revokes server-side, and a revoked
+    session's open channels end.
+  - Long-lived credentials re-authorize open channels every 15 minutes, and the
+    SDK renews automatically.
+  - Collection policies receive the executing Action, Processor or alarm as
+    `intent.invocation`, so a write can be granted to a specific Action on the
+    user's behalf. Direct calls carry no invocation.
+  - Platform staff access uses a declared directory source, read fresh per
+    command and fail-closed, and audited in the tenant.
+
+  See [authorization](docs/authorization.md).
+- `ServerConstraints.admission` is `{ key }`; product labels such as a thread
+  link travel in `operations.metadata`.
+- Streams push chunks live from the owner and write bytes in checkpoint batches.
+  Failed or cancelled streams keep exactly the committed prefix.
+- Synchronous host calls are one owner command; group commit shares one
+  transaction across queued commands with per-command savepoints.
+- Collection call arguments omit `undefined` optional fields instead of refusing
+  them. Policy output still refuses `undefined`.
+
+### Added
+
+- `createOwnerSecrets({ session, master })` seals application values, such as
+  connected-account tokens, under the schema owner's data key, bound to an
+  application context.
+- Owner export and import bundles (`scripts/owner-bundle.ts`) move one owner's
+  schema, bodies and re-wrapped key to another database.
+- Views are the sixth plugin primitive.
+
+### Fixed
+
+- Owner commands capture their input once, and authorization and execution each
+  see an independent copy. A caller or policy mutating its object can't change
+  what was authorized or what runs, and returned values are detached.
+- Grouped commands record their own captured command time for stream terminal,
+  cancellation and purge timestamps.
+- Concurrent dispatches of one delivery share a single handle even when the
+  first finishes before the second has read the delivery.
+
+### Removed
+
+- `server.authorize`, `CollectionPolicy`, `CollectionPolicies` and
+  `ServerAuthorize`; use `authorization`.
+- Named preparation and its registry, history and renderer surfaces. Ordinary
+  Action `.prepare` remains.
+- Polling live Collection observation; it returns on owner push.
+- The `serverInvoke` bridge Action and transient dispatch paths.
+
 ## 0.88.0 — 2026-10-14
 
 ### Fixed

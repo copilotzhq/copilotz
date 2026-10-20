@@ -50,3 +50,5 @@ agents/examples/internal
 -e 
 # Probe scripts and artifacts
 probe/
+
+node_modules/

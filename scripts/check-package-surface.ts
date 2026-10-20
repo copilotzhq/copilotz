@@ -74,8 +74,8 @@ async function* productionSources(
     const url = new URL(entry.name + (entry.isDirectory ? "/" : ""), directory);
     if (entry.isDirectory) yield* productionSources(url, path);
     else if (
-      entry.isFile && path.endsWith(".ts") &&
-      !path.endsWith(".test.ts") &&
+      entry.isFile && /\.tsx?$/.test(path) &&
+      !/\.test\.tsx?$/.test(path) &&
       !path.startsWith("contracts/") &&
       !path.startsWith("scripts/") &&
       !path.startsWith("runtime/testing/") &&

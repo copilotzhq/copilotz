@@ -177,6 +177,11 @@
           "title": "Views",
           "slug": "views",
           "description": "Scoped one-shot text presentations with an authorized projector."
+        },
+        {
+          "title": "Web runtime and Views",
+          "slug": "web-runtime-and-views",
+          "description": "Framework-neutral browser runtime, live client Collections, plugin renderers and the shared shadcn UI kit."
         }
       ]
     },

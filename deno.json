@@ -51,7 +51,14 @@
     "./core/server": "./plugins/core-http/index.ts",
     "./usage/client": "./plugins/usage/authoring/client/index.ts",
     "./build": "./build/index.ts",
-    "./transcription": "./plugins/transcription/index.ts"
+    "./transcription": "./plugins/transcription/index.ts",
+    "./web": "./client/web/index.ts",
+    "./web/react": "./plugins/web-react/index.ts",
+    "./web/kit": "./plugins/ui-kit/index.ts",
+    "./core/web": "./plugins/core/web.ts",
+    "./admin/web": "./plugins/admin/web.ts",
+    "./usage/web": "./plugins/usage/web.ts",
+    "./ui/web": "./plugins/ui/web.ts"
   },
   "publish": {
     "include": [
@@ -72,12 +79,15 @@
       "server/**/*.ts",
       "client/**/*.ts",
       "build/**/*.ts",
-      "plugins/**/copilotz.json"
+      "plugins/**/copilotz.json",
+      "plugins/**/*.tsx",
+      "plugins/**/*.css"
     ],
     "exclude": [
       "**/*.test.ts",
       "runtime/testing",
-      "plugins/core/shared/testing"
+      "plugins/core/shared/testing",
+      "**/*.test.tsx"
     ]
   },
   "unstable": [
@@ -161,7 +171,35 @@
     "typescript": "npm:typescript@5.8.2",
     "@copilotz/copilotz/transcription": "./plugins/transcription/index.ts",
     "@noble/hashes/sha256": "npm:@noble/hashes@1.8.0/sha256",
-    "aws4fetch": "npm:aws4fetch@1.0.20"
+    "aws4fetch": "npm:aws4fetch@1.0.20",
+    "@copilotz/copilotz/web": "./client/web/index.ts",
+    "@copilotz/copilotz/web/react": "./plugins/web-react/index.ts",
+    "@copilotz/copilotz/web/kit": "./plugins/ui-kit/index.ts",
+    "@copilotz/copilotz/core/web": "./plugins/core/web.ts",
+    "@copilotz/copilotz/admin/web": "./plugins/admin/web.ts",
+    "@copilotz/copilotz/usage/web": "./plugins/usage/web.ts",
+    "@copilotz/copilotz/ui/web": "./plugins/ui/web.ts",
+    "react": "npm:react@19.1.1",
+    "react-dom": "npm:react-dom@19.1.1",
+    "@types/react": "npm:@types/react@19.1.10",
+    "@types/react-dom": "npm:@types/react-dom@19.1.7",
+    "@radix-ui/react-slot": "npm:@radix-ui/react-slot@1.2.3",
+    "@radix-ui/react-dialog": "npm:@radix-ui/react-dialog@1.1.15",
+    "@radix-ui/react-avatar": "npm:@radix-ui/react-avatar@1.1.10",
+    "@radix-ui/react-scroll-area": "npm:@radix-ui/react-scroll-area@1.2.10",
+    "@radix-ui/react-tooltip": "npm:@radix-ui/react-tooltip@1.2.8",
+    "class-variance-authority": "npm:class-variance-authority@0.7.1",
+    "clsx": "npm:clsx@2.1.1",
+    "tailwind-merge": "npm:tailwind-merge@3.3.1",
+    "react-markdown": "npm:react-markdown@9.1.0",
+    "remark-gfm": "npm:remark-gfm@4.0.1",
+    "lucide-react": "npm:lucide-react@0.540.0",
+    "react-dom/client": "npm:react-dom@19.1.1/client",
+    "react-dom/server": "npm:react-dom@19.1.1/server",
+    "react/jsx-runtime": "npm:react@19.1.1/jsx-runtime",
+    "tailwindcss": "npm:tailwindcss@4.1.12",
+    "@tailwindcss/typography": "npm:@tailwindcss/typography@0.5.16",
+    "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12"
   },
   "minimumDependencyAge": {
     "age": "P1D",
@@ -185,17 +223,22 @@
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
     "check": "deno task check:forbidden && deno task check:boundaries && deno task check:plugin-layout && deno task check:surface && deno task check:generated && deno task check:core-ownership",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/package runtime plugins server client scripts build",
+    "test": "deno test --node-modules-dir=auto --allow-all contracts/package runtime plugins server client scripts build",
     "test:contracts": "deno test --allow-all contracts/package",
     "build:plugins": "deno run -A scripts/build-plugins.ts",
     "check:generated": "deno run -A scripts/build-plugins.ts --check",
     "smoke:authoring": "deno run -A build/index.ts build contracts/authoring && deno run -A contracts/authoring/run.ts",
-    "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts"
+    "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts",
+    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify"
   },
   "lock": false,
   "fmt": {
     "exclude": [
       "**/plugin.generated.ts"
     ]
+  },
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
   }
 }

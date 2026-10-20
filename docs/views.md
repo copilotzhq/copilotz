@@ -172,3 +172,7 @@ Operation observations and their multipart streaming remain supported, including
 payload replay, terminal ordering, revocation and bounded renewal (F6 §5). Live
 Collection subscriptions (F6 §6: snapshot plus owner-sequence deltas) are not
 part of this release; they will be built on owner push.
+
+For interactive browser Views, see
+[Web runtime and Views](web-runtime-and-views.md). React adapters and the shared
+UI kit live in plugin entry points; core stays framework-neutral.

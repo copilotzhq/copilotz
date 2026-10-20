@@ -1,9 +1,9 @@
-import {
-  createWorker,
-  type Worker,
-  type WorkerLifecycleCallbacks,
-  type WorkerOptions,
-  type WorkerResult,
+import { createShardWorker as createWorker } from "./shard-worker.ts";
+import type {
+  Worker,
+  WorkerLifecycleCallbacks,
+  WorkerOptions,
+  WorkerResult,
 } from "../../dependencies/oxian-worker.ts";
 import { createOwnerWorkerWorkloads } from "../execution/owner-capability-worker.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";

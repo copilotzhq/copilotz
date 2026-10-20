@@ -51,7 +51,8 @@
     "./core/server": "./plugins/core-http/index.ts",
     "./usage/client": "./plugins/usage/authoring/client/index.ts",
     "./build": "./build/index.ts",
-    "./transcription": "./plugins/transcription/index.ts"
+    "./transcription": "./plugins/transcription/index.ts",
+    "./shard": "./runtime/application/shard-public.ts"
   },
   "publish": {
     "include": [
@@ -161,7 +162,8 @@
     "typescript": "npm:typescript@5.8.2",
     "@copilotz/copilotz/transcription": "./plugins/transcription/index.ts",
     "@noble/hashes/sha256": "npm:@noble/hashes@1.8.0/sha256",
-    "aws4fetch": "npm:aws4fetch@1.0.20"
+    "aws4fetch": "npm:aws4fetch@1.0.20",
+    "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",

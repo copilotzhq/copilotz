@@ -370,7 +370,7 @@ async function fixture(
             alarms.add(callback);
             return callback;
           },
-          cancel(handle: unknown) {
+          cancel(handle: unknown): void {
             alarms.delete(handle as () => void);
           },
         },

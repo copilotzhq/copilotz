@@ -88,6 +88,7 @@ export async function validateConcretePlugin(
     "resources",
     "adapters",
     "views",
+    "web.ts",
     "authoring",
   ]);
   for await (const entry of Deno.readDir(root)) {

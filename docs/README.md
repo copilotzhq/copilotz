@@ -112,3 +112,6 @@ Each page below is the main reference for its topic.
   repository layout and checks for contributors.
 - [DOCUMENTATION.md](https://github.com/copilotzhq/copilotz/blob/main/DOCUMENTATION.md):
   documentation standards.
+
+- [Web runtime and Views](web-runtime-and-views.md): neutral core, plugin
+  renderers, shared UI kit and live reads.

@@ -6,6 +6,7 @@ export type {
   ViewCollections,
   ViewContext,
   ViewDefinition,
+  ViewEnvironment,
   ViewHints,
   ViewMap,
   ViewRead,
@@ -19,4 +20,5 @@ export type {
   OneShotViewRenderer,
   TextRendererOptions,
   TextViewRenderer,
+  ViewRendererAdapter,
 } from "./renderer.ts";

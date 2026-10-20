@@ -4,7 +4,9 @@ export type ViewShows =
   | Readonly<{ list: string }>
   | Readonly<{ action: string }>
   | Readonly<{ navigation: string }>;
-export type ViewHints = Readonly<{ mode?: string; renderer?: string }>;
+export type ViewHints = Readonly<
+  { mode?: string; renderer?: string; [hint: string]: unknown }
+>;
 export type ViewReference<T = unknown> = Readonly<
   { shows: ViewShows; value: T }
 >;
@@ -27,7 +29,23 @@ export type ViewCollections = Readonly<
   >
 >;
 export type ViewActions = Readonly<Record<string, (input: unknown) => unknown>>;
-export interface ViewContext<Shown = string> {
+export interface ViewEnvironment {
+  readonly collections: Readonly<
+    Record<
+      string,
+      { get(input: unknown): unknown; list(input?: unknown): unknown }
+    >
+  >;
+  readonly actions: ViewActions;
+  show(reference: ViewReference, hints?: ViewHints): unknown;
+  readonly resources: Readonly<
+    Record<string, Readonly<Record<string, unknown>>>
+  >;
+  readonly scope: unknown;
+  readonly signal: AbortSignal;
+  readonly hints: ViewHints & Readonly<{ mode: string; renderer: string }>;
+}
+export interface ViewContext<Shown = string> extends ViewEnvironment {
   readonly collections: ViewCollections;
   readonly actions: ViewActions;
   readonly resources: Readonly<
@@ -41,7 +59,7 @@ export interface ViewContext<Shown = string> {
 export interface ViewDefinition<
   T = unknown,
   R = unknown,
-  Context extends ViewContext<unknown> = ViewContext,
+  Context extends ViewEnvironment = ViewContext,
 > {
   readonly id: string;
   readonly shows: ViewShows;
@@ -53,7 +71,7 @@ export interface ViewDefinition<
 export type AnyViewDefinition = ViewDefinition<
   never,
   unknown,
-  ViewContext<unknown>
+  ViewEnvironment
 >;
 export type ViewMap = Readonly<Record<string, AnyViewDefinition>>;
 const keys = new Set(["id", "shows", "renderer", "modes", "render"]);
@@ -116,7 +134,7 @@ export function isViewDefinition(value: unknown): value is AnyViewDefinition {
 export function defineView<
   T = unknown,
   R = unknown,
-  Context extends ViewContext<unknown> = ViewContext,
+  Context extends ViewEnvironment = ViewContext,
 >(
   definition: ViewDefinition<T, R, Context>,
 ): ViewDefinition<T, R, Context> {

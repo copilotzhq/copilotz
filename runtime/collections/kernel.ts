@@ -2037,6 +2037,13 @@ export function createCollectionKernel(
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
+        collectionChange: {
+          collection: name,
+          id: subjectId,
+          record: plan.write.body.operation === "delete"
+            ? null
+            : plan.write.record,
+        },
         ...((adopts && !inStatement) || (!guard && scoped.condition) ||
             definition.alarm
           ? {

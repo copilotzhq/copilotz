@@ -235,6 +235,16 @@ export type ApplicationCollection<
   TInsert extends object = Record<string, unknown>,
 > = Readonly<{
   definition: ScopedCollection<TSelect, TInsert>["definition"];
+  observe(
+    query?: CollectionQuery,
+    options?:
+      & ApplicationScope
+      & import("../subscriptions/types.ts").SubscriptionOptions
+      & {
+        authority?:
+          import("../authorization/authority.ts").AuthenticatedAuthority;
+      },
+  ): Promise<import("../subscriptions/types.ts").CollectionSubscription>;
   create(input: TInsert, options?: ApplicationCallOptions): Promise<TSelect>;
   update(
     input: ScopedCollectionUpdateInput<TSelect>,

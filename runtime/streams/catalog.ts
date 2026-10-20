@@ -191,6 +191,8 @@ export type OperationCatalogAssociation = Readonly<{
 }>;
 
 export type OperationCatalog = Readonly<{
+  /** Last sequenced command associated with this operation, including terminal publication. */
+  resultSequence(namespace: string, operationId: string): Promise<string>;
   databaseSchema: string;
   /** In-memory committed frontier from the existing owner subscription. */
   pushState(
@@ -2062,6 +2064,17 @@ export function createOperationCatalog(
         eventId: row.event_id,
         eventOrdinal: String(row.event_ordinal),
       }));
+    },
+    async resultSequence(namespace, operationId) {
+      const result = await session.query<{ seq: string | number }>(
+        `SELECT COALESCE(MAX(seq),0) AS seq FROM ${
+          createCoreTableNames(databaseSchema).events
+        }
+         WHERE namespace=$1 AND (id IN (SELECT event_id FROM ${tables.operationEvents} WHERE namespace=$1 AND operation_id=$2)
+           OR (type='operation.catalog.changed' AND correlation_id=$2))`,
+        [namespace, operationId],
+      );
+      return String(result.rows[0].seq);
     },
     async get(namespaceInput, operationIdInput, transaction) {
       const namespace = requiredText(namespaceInput, "Operation namespace");

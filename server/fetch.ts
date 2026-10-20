@@ -244,6 +244,7 @@ function jsonResponse(
   return new Response(
     JSON.stringify({
       ...(result.data !== undefined ? { data: result.data } : {}),
+      ...(result.seq !== undefined ? { seq: result.seq } : {}),
       ...(result.pageInfo ? { pageInfo: result.pageInfo } : {}),
     }),
     {

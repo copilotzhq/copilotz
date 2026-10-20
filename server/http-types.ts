@@ -19,6 +19,7 @@ export type HttpResponse = Readonly<{
   status: number;
   headers?: HeadersInit;
   data?: unknown;
+  seq?: string;
   pageInfo?: Readonly<{
     next?: string;
     hasMore: boolean;

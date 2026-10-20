@@ -312,6 +312,11 @@
           "title": "API",
           "slug": "api",
           "description": "createCopilotz, its roles, operation methods and package entrypoints."
+        },
+        {
+          "title": "Subscriptions",
+          "slug": "subscriptions",
+          "description": "Authorized owner-pushed Collection reads, applied checkpoints and optimistic settlement."
         }
       ]
     },

@@ -130,6 +130,7 @@ export type EventStatement<T> = Readonly<{
 }>;
 
 export type CommitEventMutationOptions<T> = {
+  collectionChange?: import("./push.ts").OwnerChange["collectionChange"];
   onCommitted?(result: CommitEventMutationResult<T>): void | Promise<void>;
   /** Private admission facts; never accepted from an Event draft. */
   ingress?: OwnerIngressProof;
@@ -1146,6 +1147,7 @@ export function createEventStore(
           kind: "event",
           seq: result.event.seq,
           event: result.event,
+          collectionChange: mutation.collectionChange,
         });
         afterSqlCommit(transaction, () => {
           boundedSet(recentEvents, result.event.id, remembered(result.event));

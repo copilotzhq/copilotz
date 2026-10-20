@@ -201,6 +201,7 @@ export function createEventCoordinator(
       initialLocalClaim: mutation.initialLocalClaim,
       initialRemoteClaim: mutation.initialRemoteClaim,
       body: mutation.body,
+      collectionChange: mutation.collectionChange,
       statement: mutation.statement,
       mutate: mutation.mutate,
       recoverDuplicate: mutation.recoverDuplicate,

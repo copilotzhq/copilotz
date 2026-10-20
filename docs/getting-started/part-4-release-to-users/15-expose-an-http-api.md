@@ -391,9 +391,11 @@ try {
     idempotencyKey,
   });
   console.log(`operation ${receipt.operationId}`);
-  // Waits for the operation's result. It is `unknown` because it crosses a
-  // network boundary.
-  const output = await client.operations.result(receipt.operationId);
+  // Waits for the operation result and its owner sequence. The value is
+  // `unknown` because it crosses a network boundary.
+  const { value: output, seq } = await client.operations.result(
+    receipt.operationId,
+  );
   const id = field(output, "id");
   const saved = field(output, "text");
   // Print only the note's identity and text, or the raw result if it differs.

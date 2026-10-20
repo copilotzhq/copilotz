@@ -1,3 +1,4 @@
+import { createCollectionObserver } from "../subscriptions/owner.ts";
 import { authorizeOperation } from "../authorization/operation.ts";
 import { withOwnerCommandAuthorization } from "./command-authorization.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
@@ -1146,14 +1147,22 @@ export function createDatabaseScope(
     } as const;
     return result;
   };
+  const authorization = createAuthorizationOwner({
+    session: engine.session,
+    databaseSchema,
+    owner: options.owner,
+    registration: engine.authorization,
+    collections: options.registry.collections,
+    operations: options.operationCatalog,
+  });
   const publicScope: CopilotzEngineDatabaseScope = {
-    authorization: createAuthorizationOwner({
+    authorization,
+    observeCollection: createCollectionObserver({
       session: engine.session,
-      databaseSchema,
+      schema: databaseSchema,
       owner: options.owner,
-      registration: engine.authorization,
+      authorization,
       collections: options.registry.collections,
-      operations: options.operationCatalog,
     }),
     databaseSchema,
     content: { assets, preparer: options.preparer, resolver } as const,
@@ -1289,11 +1298,15 @@ export function createDatabaseScope(
           pushedHead === undefined || BigInt(frame.headSeq) > BigInt(pushedHead)
         ) pushedHead = frame.headSeq;
         if (frame.kind === "change" && frame.change.event) {
-          publicScope.authorization.notice({
-            namespace: frame.change.namespace,
-            collection: frame.change.event.subject?.type,
-            id: frame.change.event.subject?.id,
-          });
+          // Only declared Collection changes invalidate policy sources. Catalog
+          // progress without a subject is not a tenant-wide permission change.
+          if (frame.change.collectionChange) {
+            publicScope.authorization.notice({
+              namespace: frame.change.namespace,
+              collection: frame.change.collectionChange.collection,
+              id: frame.change.collectionChange.id,
+            });
+          }
           void options.eventHub.publish(frame.change.event);
         }
       },

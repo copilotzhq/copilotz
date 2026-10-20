@@ -534,10 +534,11 @@ The flow:
    end, not success. And as in Chapter 8, an operation can complete even though
    the model call failed, so completion alone does not prove the assistant
    replied.
-3. `client.operations.result` returns the send Action's output,
-   `{ threadId, message }`. That is the Action's own result, available as soon
-   as the message is recorded; it does not wait for the assistant's turn. The
-   script uses it only for `threadId`, after step 2 saw the operation settle.
+3. `client.operations.result` returns `{ value, seq }`, where `value` is the
+   send Action's `{ threadId, message }` output. That result is available as
+   soon as the message is recorded; it does not wait for the assistant's turn.
+   The script uses it only for `threadId`, after step 2 saw the operation
+   settle.
 4. `core.threads.messages` reads the thread history, filtered for this actor,
    and the script prints the latest visible messages from it.
 
@@ -622,9 +623,10 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
   // already settled above.
   let threadId: string;
   try {
-    const result = await client.operations.result(receipt.operationId) as {
-      threadId: string;
-    };
+    const result = (await client.operations.result(receipt.operationId))
+      .value as {
+        threadId: string;
+      };
     threadId = result.threadId;
   } catch (error) {
     if (error instanceof CopilotzHttpError) {

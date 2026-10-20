@@ -17,7 +17,8 @@ type MembershipRecipient =
   }>;
 
 type RecipientSelection = Readonly<{
-  recipientIds: readonly string[];
+  /** Absent when the input names no recipients; the Action then defaults them. */
+  recipientIds?: readonly string[];
   membershipParticipants: readonly ParticipantInput[];
   membershipRecipients: readonly MembershipRecipient[];
   newParticipants: readonly ParticipantInput[];
@@ -226,44 +227,14 @@ function configuredAgent(
   return undefined;
 }
 
-async function defaultRecipientIds(
-  context: CoreProcessorContext,
-  threadId: string | undefined,
-  senderInput: unknown,
-): Promise<readonly string[]> {
-  if (!threadId) return ([] as const);
-  const thread = await context.collections.thread.get({ id: threadId });
-  if (!thread) return ([] as const);
-  const sender = typeof senderInput === "string"
-    ? await resolveParticipantRecord(context, optionalText(senderInput) ?? "")
-    : await resolveParticipantRecord(
-      context,
-      optionalText(record(senderInput).id) ??
-        optionalText(record(senderInput).externalId) ?? "",
-    );
-  const senderId = optionalText(sender?.id);
-  const participantIds = stringArray(thread.participantIds);
-  const participants = await Promise.all(
-    participantIds.map((id) => context.collections.participant.get({ id })),
-  );
-  return (participants
-    .filter((item): item is CollectionRecord => item !== null)
-    .filter((item) =>
-      item.participantType === "agent" && optionalText(item.id) !== senderId
-    )
-    .map((item) => String(item.id)));
-}
-
 async function resolveRecipients(
   context: CoreProcessorContext,
   value: unknown,
-  threadId: string | undefined,
   senderInput: unknown,
   rejectUnknown: boolean,
 ): Promise<RecipientSelection> {
   if (!Array.isArray(value)) {
     return ({
-      recipientIds: await defaultRecipientIds(context, threadId, senderInput),
       membershipParticipants: [],
       membershipRecipients: [],
       newParticipants: [],
@@ -402,7 +373,6 @@ async function projectMessage(
   const recipients = await resolveRecipients(
     context,
     input.recipientIds,
-    thread.bootstrap ? undefined : thread.id,
     sender.participant,
     rejectUnknownRecipients,
   );
@@ -422,7 +392,9 @@ async function projectMessage(
     id: messageId,
     threadId,
     sender: sender.participant,
-    recipientIds: [...recipients.recipientIds],
+    ...(recipients.recipientIds
+      ? { recipientIds: [...recipients.recipientIds] }
+      : {}),
     ...(membership ? { membership } : {}),
     content: input.content ?? [],
     metadata: record(input.metadata),

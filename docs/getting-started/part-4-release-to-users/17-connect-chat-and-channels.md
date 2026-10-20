@@ -49,38 +49,43 @@ message visibility.
 Core ships its HTTP projection as a separate, opt-in plugin. `coreHttpPlugin`
 from `@copilotz/copilotz/core/server` contributes:
 
-- the `copilotz.core.conversation.send` Action, which records the message with
-  the authenticated actor as sender. An `externalThreadId` is scoped to that
-  actor, so two users who both say `team-notes-chat` get two different threads;
+- the `copilotz.core.conversation.send` Action, registered under the alias
+  `sendConversation`, which records the message with the authenticated actor as
+  sender. An `externalThreadId` is scoped to that actor, so two users who both
+  say `team-notes-chat` get two different threads;
 - an HTTP adapter registered as `http.core`, whose read routes are
   `core.threads.list`, `core.threads.get`, `core.threads.messages`,
-  `core.threads.message-asset` and `core.threads.observe`. The read routes only
-  return threads whose participants include the actor, and the history route
-  filters messages for that actor as viewer.
+  `core.threads.message-asset` and `core.threads.observe`. They read through the
+  request's authority, so the owner policy decides which threads they see. The
+  history route also filters messages for the actor as viewer.
 
 The plan has four parts:
 
 1. `server.ts` stays a generic factory but accepts **extensions**: extra
-   plugins, resources, adapters and extra public Action IDs. It still imports
-   nothing from Core.
-2. `auth.ts` learns a generic per-principal list of allowed adapter route IDs.
-   The host grants the Core read routes the chat UI needs;
-   `core.threads.observe` and the update, delete and edit Actions stay closed.
+   plugins, resources, adapters, extra public Action IDs and the host's
+   **access** policy. It still imports nothing from Core, and `auth.ts` does not
+   change.
+2. A new definition module, `chat-access.ts`, extends the Notes policy for chat.
+   It binds the `thread` Collection, so every thread read returns only threads
+   whose participants include the actor, lets Core's own Actions and Processors
+   write threads on the member's behalf, and grants the send Action to every
+   member. Raw thread observation stays refused.
 3. A new host, `serve-agent.ts` (or `serve-agent-node.ts`), passes Core, the
-   agent harness and `coreHttpPlugin` into the factory and exposes exactly two
-   Actions: `notes.save` and `copilotz.core.conversation.send`.
+   agent harness, `coreHttpPlugin` and `chatAccess` into the factory and exposes
+   exactly two Actions: `notes.save` and `copilotz.core.conversation.send`.
 4. `chat-client.ts` sends a message over HTTP, waits for the operation to
    settle, and prints the reply from the **filtered** thread history.
 
 ### Replace `server.ts`
 
 Replace `server.ts` with this complete file. Compared with Chapter 16 it adds
-four optional fields to `ServerAppOptions` (`plugins`, `resources`, `adapters`,
-`publicActionIds`) and merges them into the composition. Authentication,
-`authorizeRequest`, `publicActions` and the exposure rules for Collections and
-Channels are unchanged. The types come from the factory's own
-`CreateCopilotzOptions`, so the factory accepts exactly what `createCopilotz`
-accepts and nothing is cast.
+five optional fields to `ServerAppOptions` (`plugins`, `resources`, `adapters`,
+`publicActionIds` and `access`) and merges them into the composition.
+Authentication, `principalScope`, `publicActions`, the `member` Collection and
+the exposure rules for Collections and Channels are unchanged. Without `access`,
+the factory keeps Chapter 16's `notesAccess`. The types come from the factory's
+own `CreateCopilotzOptions`, so the factory accepts exactly what
+`createCopilotz` accepts and nothing is cast.
 
 ```ts
 // Runtime factory, its option types and every accepted database choice.
@@ -93,9 +98,9 @@ import type {
 // authentication callback type.
 import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
 import type { ServerAuthenticate } from "@copilotz/copilotz/server";
-// Trusted-principal policy: scope mapping and per-request authorization.
-import { authorizeRequest, principalScope } from "./auth.ts";
-import type { Principal } from "./auth.ts";
+// Membership, the default policy and the principal-to-scope mapping.
+import { member, notesAccess, principalScope } from "./auth.ts";
+import type { Access, Principal } from "./auth.ts";
 // The reusable Notes package that owns `notes.save`.
 import { notesPlugin } from "./notes-plugin.ts";
 
@@ -129,6 +134,8 @@ export type ServerAppOptions = Readonly<{
   adapters?: ApplicationAdapters;
   // Extra Action IDs to publish, on top of `publicActions`.
   publicActionIds?: readonly string[];
+  // The host's policy. Defaults to `notesAccess` from `auth.ts`.
+  access?: Access;
 }>;
 
 // The only Action IDs the facade publishes by default. Adding a plugin does not
@@ -141,8 +148,11 @@ export const serverPlugins = [notesPlugin, serverPlugin];
 // Builds the Notes application with its HTTP boundary. The returned app's
 // `fetch` method is the handler a host serves.
 export function createServerApp(options: ServerAppOptions) {
+  // One policy for every request this application serves.
+  const access = options.access ?? notesAccess;
+
   // Turns the host's principal into the facade's trusted scope, or rejects.
-  const authenticate: ServerAuthenticate = async (request) => {
+  const authenticate: ServerAuthenticate = async (request, context) => {
     const principal = await options.resolvePrincipal(request);
     // No verified principal: refuse before any route runs.
     if (!principal) {
@@ -153,8 +163,8 @@ export function createServerApp(options: ServerAppOptions) {
         { status: 401, headers: { "www-authenticate": "Bearer" } },
       );
     }
-    // Tenant, schema, actor and owner come only from the verified principal.
-    return principalScope(principal);
+    // Tenant, schema, actor and authority come only from the principal.
+    return principalScope(principal, context, access.policy);
   };
 
   return createCopilotz({
@@ -166,6 +176,10 @@ export function createServerApp(options: ServerAppOptions) {
     plugins: [...serverPlugins, ...(options.plugins ?? [])],
     // Host adapters, only when the host supplied some.
     ...(options.adapters ? { adapters: options.adapters } : {}),
+    // Policy data: the owner reads it, the facade never exposes it.
+    collections: { member },
+    // Evaluated by the owner inside every command a request starts.
+    authorization: access.authorization,
     resources: {
       // Host resources, such as `agents` and `llmConnections`.
       ...options.resources,
@@ -178,15 +192,13 @@ export function createServerApp(options: ServerAppOptions) {
             actions: {
               include: [...publicActions, ...(options.publicActionIds ?? [])],
             },
-            // Notes are written through `notes.save`, not raw Collection routes.
+            // Notes and memberships stay off raw Collection routes.
             collections: false,
             // This application publishes no Channels.
             channels: false,
           },
           // Runs for every matched facade route, including fixed routes.
           authenticate,
-          // Decides, per route, what the authenticated principal may do.
-          authorize: authorizeRequest,
         }),
       },
     },
@@ -197,132 +209,124 @@ export function createServerApp(options: ServerAppOptions) {
 `expose` only covers Action, Collection and Channel families. Routes that a
 plugin contributes through an HTTP adapter, like Core's thread reads, are
 mounted whenever the plugin is composed. That is why the next step matters:
-`authorize` is what keeps them closed or open.
+those routes read Collections, and the policy decides what each read returns.
 
-### Replace `auth.ts`
+### Create `chat-access.ts`
 
-`auth.ts` stays generic: it learns nothing about Core. Like `allowedActionIds`,
-the adapter routes a principal may call become a host decision. Replace
-`auth.ts` with this complete file. It makes three changes:
-
-1. `Principal` gains an optional `allowedHttpEndpointIds` list. Omitted means
-   none, so existing principals and the Chapter 16 tests stay unchanged.
-2. `principalScope` copies that list into the trusted scope's `context`.
-3. `authorizeRequest` gets a `case "http"` that allows only listed route IDs.
-
-The Action check, the operation ownership constraint, the OpenAPI case and the
-default deny are unchanged.
+`chat-access.ts` is a **definition module**. It keeps Chapter 16's rules,
+membership from the `member` source, `saveNote` for editors and owner-only
+operations, and adds the chat rules. It names Core's aliases as plain strings,
+so it imports nothing from Core, and its revision is `3` because it grants more
+than revision `2`.
 
 ```ts
-// Public types for the facade's trusted scope and its authorization callback.
-import type {
-  ServerAuthorize,
-  ServerAuthorizedScope,
-} from "@copilotz/copilotz/server";
+// Type of one constraint set the policy returns.
+import type { ServerConstraints } from "@copilotz/copilotz";
+// The shape `server.ts` accepts as a host's policy.
+import type { Access } from "./auth.ts";
 
-// A caller the host has already verified. The server copies these values into
-// the request scope; it never reads identity or tenant from the request.
-export type Principal = Readonly<{
-  // Stable ID of the acting user. Also the owner of the operations they start.
-  actorId: string;
-  // Semantic tenant. Records, Events and operations are scoped to it.
-  namespace: string;
-  // Optional physical database schema for hosts that separate tenants by schema.
-  databaseSchema?: string;
-  // Stable Action IDs this principal may run over HTTP.
-  allowedActionIds: readonly string[];
-  // Stable route IDs of plugin HTTP adapters this principal may call.
-  // Omitted means none.
-  allowedHttpEndpointIds?: readonly string[];
-}>;
+// The Notes policy, extended for chat. A new revision, because it grants more.
+const chatPolicy = { id: "notes", revision: "3" } as const;
 
-// Turns a verified principal into the facade's trusted scope.
-export function principalScope(principal: Principal): ServerAuthorizedScope {
-  return {
-    actor: { id: principal.actorId },
-    namespace: principal.namespace,
-    ...(principal.databaseSchema
-      ? { databaseSchema: principal.databaseSchema }
-      : {}),
-    // App-owned ownership claim, recorded on every operation this request
-    // starts and matched again on every operation read or cancel.
-    operationMetadata: { initiatorUserId: principal.actorId },
-    // Host policy data for `authorizeRequest`; not caller input.
-    context: {
-      allowedActionIds: [...principal.allowedActionIds],
-      allowedHttpEndpointIds: [...(principal.allowedHttpEndpointIds ?? [])],
+// Owner-evaluated authorization for the chat host. It names Core's aliases as
+// plain strings, so this module imports nothing from Core.
+export const chatAccess: Access = {
+  policy: chatPolicy,
+  authorization: {
+    policies: {
+      [chatPolicy.id]: {
+        revision: chatPolicy.revision,
+        // The only data this policy may read.
+        sources: ["member"],
+        async evaluate(
+          { authority, intent, read },
+        ): Promise<ServerConstraints> {
+          const actorId = authority.principal.id;
+          // Membership in the request's tenant, read inside the command.
+          const [membership] = await read.list("member", {
+            where: { actorId },
+            limit: 1,
+          });
+          // Not a member of this tenant: nothing is granted.
+          if (!membership) return {};
+          const roles = membership.roles as string[];
+          // Operations stay readable only by the actor who started them.
+          const ownOperations = {
+            operations: { metadata: { initiatorUserId: actorId } },
+          };
+          // A thread is visible only to its participants. Core uses the
+          // authenticated actor's ID as that actor's participant ID.
+          const memberThreads = {
+            thread: { contains: { participantIds: [actorId] } },
+          };
+
+          switch (intent.kind) {
+            case "action":
+              // Every member may chat; only editors may save notes, whether
+              // they call `notes.save` or the assistant calls it for them.
+              return {
+                ...ownOperations,
+                actions: {
+                  sendConversation: {},
+                  ...(roles.includes("editor") ? { saveNote: {} } : {}),
+                },
+              };
+            case "collection":
+              // Core's own Actions and Processors create threads and enroll
+              // participants on the member's behalf. Direct reads, such as
+              // the thread routes, get the membership filter and nothing else.
+              return intent.invocation
+                ? {
+                  collections: memberThreads,
+                  collectionMutations: {
+                    thread: {
+                      create: {},
+                      update: {},
+                      commands: { ensureMembership: {} },
+                    },
+                  },
+                }
+                : { collections: memberThreads };
+            default:
+              // Operation reads and observation. No thread filter here, so raw
+              // thread observation, which carries private answers, is refused.
+              return ownOperations;
+          }
+        },
+      },
     },
-  };
-}
-
-// A JSON 403 in the facade's error shape.
-function forbidden(message: string): Response {
-  return Response.json(
-    { error: { code: "forbidden", message } },
-    { status: 403 },
-  );
-}
-
-// Per-request authorization. Runs after `authenticate` on every matched route.
-export const authorizeRequest: ServerAuthorize = (
-  _request,
-  { endpoint, scope },
-) => {
-  const owner = scope.operationMetadata?.initiatorUserId;
-  // Without a trusted owner there is nothing to constrain operations by.
-  if (typeof owner !== "string" || !owner) {
-    return forbidden("No trusted operation owner.");
-  }
-  // Every operation route only sees operations this actor started.
-  const ownOperations = {
-    operations: { metadata: { initiatorUserId: owner } },
-  };
-
-  switch (endpoint.kind) {
-    case "action": {
-      // `endpoint.id` is the stable Action ID, such as `notes.save`.
-      const allowed = scope.context?.allowedActionIds;
-      return Array.isArray(allowed) && allowed.includes(endpoint.id)
-        ? ownOperations
-        : forbidden("This Action is not allowed for the caller.");
-    }
-    case "operation":
-      // Status, result, cancel and observe: owner-only.
-      return ownOperations;
-    case "openapi":
-      // Route metadata only; it reads no tenant data.
-      return {};
-    case "http": {
-      // Plugin adapter routes, by stable route ID. Returning no constraint
-      // leaves the adapter's own checks in place.
-      const allowed = scope.context?.allowedHttpEndpointIds;
-      return Array.isArray(allowed) && allowed.includes(endpoint.id)
-        ? {}
-        : forbidden("This route is not available.");
-    }
-    default:
-      // Assets, Collections, Channels and agents have no policy yet, so they
-      // are denied.
-      return forbidden("This route is not available.");
-  }
+    // Bindings, keyed by alias: the two published Actions and the thread
+    // Collection that Core's read routes go through.
+    actions: { saveNote: chatPolicy, sendConversation: chatPolicy },
+    collections: { thread: chatPolicy },
+  },
 };
 ```
 
-Two details are deliberate:
+Three details are deliberate:
 
-- **The `http` case returns no `collections.thread` filter.** The Core adapter
-  treats an explicit thread filter as the application taking over membership,
-  for example for an admin view, and stops adding its own. An unconstrained
-  filter would open every thread in the tenant.
-- **`copilotz.core.conversation.send` goes through the existing `action` case.**
-  It still has to be in the principal's `allowedActionIds`, and the operation it
-  starts still carries the owner claim, so the `operation` case keeps status and
-  results owner-only. The send Action also rejects a `threadId` the actor is not
-  a member of.
+- **The `thread` binding is what keeps conversations private.** Core's read
+  routes call ordinary Collection reads. Without a binding, those reads would be
+  unfiltered, and every member of the tenant could list every thread. With it,
+  the owner adds the membership filter to each read, before pagination, and
+  `core.threads.get` and `core.threads.messages` answer `404` for a thread the
+  actor is not in.
+- **`intent.invocation` separates Core's work from the caller.** Creating a
+  thread, enrolling participants and recording replies happen inside Core's
+  Actions and Processors, which run with the member's retained authority. The
+  owner tells the policy which Action, Processor or alarm is executing, so the
+  policy can grant those writes there and nowhere else. A direct call has no
+  invocation and gets only the read filter.
+- **The assistant acts with the member's authority.** When the assistant calls
+  `saveNote`, the owner evaluates the same policy for that member. A member
+  without the `editor` role can chat, but the policy refuses the assistant's
+  `saveNote` call, nothing is saved, and the turn's operation fails.
 
-Which Core routes a user may read is now chosen in the host, next to the Actions
-they may run. The Chapter 16 principals grant no adapter routes, so their tests
-behave exactly as before.
+Observation intents get only the operation-ownership constraint and no thread
+filter, so `core.threads.observe` answers `403`, and
+`core.threads.message-asset` stays closed because the policy grants no
+`assets.read`. The send Action also rejects a `threadId` the actor is not a
+member of.
 
 ### Create `serve-agent.ts`
 
@@ -337,11 +341,11 @@ data, and notes, threads and idempotency keys end when the host shuts down. With
 a local file database, do not run another app process against it while this
 server owns it.
 
-The local identity is the same loopback development user as Chapter 16. Its
-`allowedActionIds` now includes the send Action, and its
-`allowedHttpEndpointIds` grants exactly four Core read routes. A production host
-keeps its own `resolvePrincipal` from Chapter 16 and grants these to the users
-who may chat.
+The local identity is the same loopback development user as Chapter 16, and the
+host grants it the `editor` role, so the assistant may save notes for it. Every
+member may chat under `chatAccess`. A production host keeps its own
+`resolvePrincipal` from Chapter 16 and manages memberships from its own
+administration flow.
 
 ```ts
 // Core's optional HTTP projection: the send Action and the `http.core` adapter.
@@ -354,24 +358,15 @@ import { database, namespace, runtimePlugins } from "./composition.ts";
 // The pure server definition and its principal type.
 import { createServerApp } from "./server.ts";
 import type { Principal } from "./server.ts";
+// The chat host's policy, and the host helper that writes memberships.
+import { chatAccess } from "./chat-access.ts";
+import { grantRoles } from "./auth.ts";
 
 // Local demo credential: a fixed string checked by exact match.
 const devAuthorization = "Bearer local-dev-token";
 
-// The same local demo identity as Chapter 16, now also allowed to chat.
-const localUser: Principal = {
-  actorId: "local-guide-user",
-  namespace,
-  allowedActionIds: ["notes.save", "copilotz.core.conversation.send"],
-  // Core's conversation reads, each limited by Core to this actor's threads.
-  // `core.threads.observe` is deliberately not granted.
-  allowedHttpEndpointIds: [
-    "core.threads.list",
-    "core.threads.get",
-    "core.threads.messages",
-    "core.threads.message-asset",
-  ],
-};
+// The same local demo identity as Chapter 16.
+const localUser: Principal = { actorId: "local-guide-user", namespace };
 
 const app = await createServerApp({
   // Exact match only; any other or missing header resolves to no principal.
@@ -388,6 +383,8 @@ const app = await createServerApp({
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
   publicActionIds: ["copilotz.core.conversation.send"],
+  // The policy that also covers chat.
+  access: chatAccess,
 });
 
 // Set once the listener starts, so a signal can shut it down gracefully.
@@ -395,6 +392,10 @@ let server: Deno.HttpServer | undefined;
 const stop = () => void server?.shutdown();
 
 try {
+  // The local demo identity may save notes, directly or through the
+  // assistant. Every member may chat.
+  await grantRoles(app, localUser.actorId, ["editor"]);
+
   Deno.addSignalListener("SIGINT", stop);
   Deno.addSignalListener("SIGTERM", stop);
 
@@ -442,24 +443,15 @@ import { database, namespace, runtimePlugins } from "./composition.ts";
 // The pure server definition and its principal type.
 import { createServerApp } from "./server.ts";
 import type { Principal } from "./server.ts";
+// The chat host's policy, and the host helper that writes memberships.
+import { chatAccess } from "./chat-access.ts";
+import { grantRoles } from "./auth.ts";
 
 // Local demo credential: a fixed string checked by exact match.
 const devAuthorization = "Bearer local-dev-token";
 
-// The same local demo identity as Chapter 16, now also allowed to chat.
-const localUser: Principal = {
-  actorId: "local-guide-user",
-  namespace,
-  allowedActionIds: ["notes.save", "copilotz.core.conversation.send"],
-  // Core's conversation reads, each limited by Core to this actor's threads.
-  // `core.threads.observe` is deliberately not granted.
-  allowedHttpEndpointIds: [
-    "core.threads.list",
-    "core.threads.get",
-    "core.threads.messages",
-    "core.threads.message-asset",
-  ],
-};
+// The same local demo identity as Chapter 16.
+const localUser: Principal = { actorId: "local-guide-user", namespace };
 
 const app = await createServerApp({
   // Exact match only; any other or missing header resolves to no principal.
@@ -475,6 +467,8 @@ const app = await createServerApp({
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
   publicActionIds: ["copilotz.core.conversation.send"],
+  // The policy that also covers chat.
+  access: chatAccess,
 });
 
 // Set by the listener lifecycle below; the `finally` block removes them.
@@ -483,6 +477,10 @@ let fail = (_error: Error) => {};
 let server: ReturnType<typeof serve> | undefined;
 
 try {
+  // The local demo identity may save notes, directly or through the
+  // assistant. Every member may chat.
+  await grantRoles(app, localUser.actorId, ["editor"]);
+
   // Accepts loopback connections and forwards every request to `app.fetch`.
   const listener = serve(
     { fetch: app.fetch, hostname: "127.0.0.1", port: 8000 },
@@ -687,17 +685,19 @@ for the operator's own CLI, whose user may inspect every operation internal. For
 end-user views:
 
 - display replies from `core.threads.messages`, not from raw observation;
-- if users must never receive private agent data, deny them raw observation in
-  `authorize` (the operation observe route, and `core.threads.observe`, which is
-  already denied above), or build your own server-side filtered observation.
-  Hiding it in the browser is not enough.
+- if users must never receive private agent data, do not grant them raw
+  observation: return no `operations` constraint for `observation` intents, as
+  `chatAccess` already does for threads by returning no thread filter, or build
+  your own server-side filtered observation. Hiding it in the browser is not
+  enough.
 
 ### Browsers and Channels
 
 A browser app uses the same two imports as `chat-client.ts`. Serve its assets
-from your host however you already do; any Asset route the UI needs inherits
-this same `auth.ts` policy, which still denies Asset routes until you add one.
-Never bundle `agent.ts`, `composition.ts` or anything that reads a credential.
+from your host however you already do; any Asset route the UI needs goes through
+the same `chatAccess` policy, which grants no Asset reads until you add an
+`assets.read` grant. Never bundle `agent.ts`, `composition.ts` or anything that
+reads a credential.
 
 Channels such as Web, WhatsApp or Telegram are **provider ingress and egress
 adapters**. They turn a provider's webhook into the same Core thread operations
@@ -758,13 +758,14 @@ Stop the host with Ctrl+C.
 ## What this unlocks
 
 - The assistant is reachable over HTTP behind the same verified principals,
-  tenant scope and owner-only operations as `notes.save`.
+  tenant scope and owner-only operations as `notes.save`, and it acts with each
+  member's own authority.
 - Core is opt-in per host: `server.ts` stays generic, and only `serve-agent.ts`
   brings in Core, the model credential and live integrations.
 - Each user gets their own thread for the same external name, and history reads
   are filtered for the viewer.
-- New Core routes and Actions stay closed until you publish and authorize them
-  one by one.
+- New Core Actions stay closed until you publish them and the policy grants
+  them, and Core's read routes see only what the policy's filters allow.
 
 ## Next steps
 
@@ -774,8 +775,10 @@ Stop the host with Ctrl+C.
 - Optional, requires this chapter:
   [Chapter 20: Measure Usage](../part-5-operate-and-scale/20-measure-usage.md)
   records model usage per tenant on this host.
+- Reference: [Owner authorization](../../authorization.md) covers bindings,
+  `intent.invocation` and every constraint.
 - Reference: [HTTP server and browser client](../../server.md) covers adapter
-  routes, endpoint kinds and constraints.
+  routes and endpoint kinds.
 - Reference: [Channels](../../channels.md) and
   [Multi-agent Ask](../../multi-agent-ask.md) cover provider adapters and
   private specialist answers.

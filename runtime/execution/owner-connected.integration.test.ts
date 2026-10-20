@@ -1,3 +1,4 @@
+import { hostIngressProof } from "../application/ingress/authority.ts";
 import {
   type BodyStorageOptions,
   type BodyStore,
@@ -606,11 +607,15 @@ Deno.test("already-connected worker cannot become routable before capability hos
   await provisionCopilotzSchema(db, schema);
   await provisionOperationCatalog(db, schema);
   const store = createEventStore({ session: db, schema });
-  const pending = await store.append({
-    type: "retained.work",
-    namespace,
-    payload: {},
-  }, ["processor:connected.startup"]);
+  const pending = await store.commitMutation({
+    draft: { type: "retained.work", namespace, payload: {} },
+    // This fixture models retained host work, not an unclassified wire Event.
+    ingress: hostIngressProof(),
+    consumers: [{
+      consumerId: "processor:connected.startup",
+      settlement: "inherit",
+    }],
+  });
   (await openDatabaseOwner(db, schema)).stop();
   const database = {
     ...db,

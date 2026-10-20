@@ -52,8 +52,8 @@ Each page below is the main reference for its topic.
 
 ### Runtime
 
-- [Plugins and Processors](plugins-and-processors.md): the five plugin
-  primitives and orchestration that is safe to retry.
+- [Plugins and Processors](plugins-and-processors.md): the six plugin primitives
+  and orchestration that is safe to retry.
 - [Collections](collections.md) and [Actions](actions.md): application state and
   the operations that share it.
 - [Events, deliveries and recovery](events-deliveries-recovery.md): immutable
@@ -73,16 +73,16 @@ Each page below is the main reference for its topic.
 
 ### Deliver
 
-- [HTTP server and browser client](server.md): routes, policy and live
+- [HTTP server and browser client](server.md): routes, authentication and live
   observation.
+- [Owner authorization](authorization.md): versioned policies, sessions,
+  lifetimes and platform staff access.
 - [Channels](channels.md): web, WhatsApp, Telegram, Discord and Zendesk.
 
 ### Operate
 
 - [Runtimes and Host Capabilities](runtime-adapters.md): portable declarations,
   host requirements and the exact CI coverage.
-- [Trusted Host Commands](host-commands.md): owner-local SQL, atomic receipts
-  and explicitly requested startup scopes.
 - [Testing and inspection](testing-and-inspection.md).
 - [Schedules](schedules.md) and [Usage](usage.md).
 - [Deployment Topologies](embedding-and-hypervisors.md): running in one process

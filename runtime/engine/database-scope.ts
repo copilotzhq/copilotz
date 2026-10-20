@@ -703,7 +703,13 @@ export function createDatabaseScope(
           return committed;
         })();
       }
-      return coordinator.append(draft, appendOptions);
+      return coordinator.commitMutation({
+        draft,
+        // Host Events retain their origin so descendant execution does not
+        // become unclassified when unbound Collections fail closed.
+        ingress: hostIngressProof(),
+        maxAttempts: appendOptions?.maxAttempts,
+      });
     },
     appendProtected,
     async emit(input) {

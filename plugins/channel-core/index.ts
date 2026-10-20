@@ -10,6 +10,7 @@ export {
 } from "./plugin.ts";
 export * from "./processors/index.ts";
 export * from "./shared/contracts.ts";
+export { CHANNEL_INGRESS_INPUT_EVENT } from "./shared/contracts.ts";
 export { channelProviderOptions } from "./shared/provider-options.ts";
 export {
   outboundText,

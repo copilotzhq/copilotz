@@ -149,17 +149,18 @@ Imports must be `@copilotz/copilotz` or one of its subpaths listed under
 against the current source, not against older docs or memory. Source paths
 belong in review notes, never in user-facing instructions. Do not use removed
 legacy APIs: `createXPlugin(options)` factories, marker plugins or separate
-compiler APIs, `prepareMcp`, `defineInlineSkill` or `app.actions`. Do not use
-unpublished testing modules (`runtime/testing` is excluded from publishing) or
-invented test, evaluation or migration APIs. Compose with `definePlugin` and the
-public declarative helpers, such as `defineTool`, `defineApi`, `await defineMcp`
-and `defineSkill`, imported from their plugin entrypoints in the form their
-current signatures accept.
+compiler APIs, `prepareMcp`, `defineInlineSkill`, the facade's `authorize`
+callback, `CollectionPolicy`, `hostCommands` or the `serverInvoke` bridge. Do
+not use unpublished testing modules (`runtime/testing` is excluded from
+publishing) or invented test, evaluation or migration APIs. Compose with
+`definePlugin` and the public declarative helpers, such as `defineTool`,
+`defineApi`, `await defineMcp` and `defineSkill`, imported from their plugin
+entrypoints in the form their current signatures accept.
 
 ## Versions and installs
 
 - Installation examples use one caret range for the planned release (currently
-  `^0.86.2`). All subpaths come from the same package version.
+  `^0.89.0`). All subpaths come from the same package version.
 - Before release, recheck that range against the `version` in `deno.json` and
   the published registry. Never publish an example pinned ahead of an available
   release.

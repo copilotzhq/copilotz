@@ -392,9 +392,13 @@ for (const denyFinal of [false, true]) {
         eventStore: f.store,
         coordinator: f.coordinator,
         policies: testCollectionAuthorizations(
-          { child },
+          { child, root },
           f.schema,
           ({ intent }) => {
+            // The outer named query also requires a binding under F4.
+            if (intent.resource === "root") {
+              return { collections: { root: {}, child: {} } };
+            }
             phases.push((intent.input as CollectionPolicyIntent).phase);
             if (!allowed) {
               throw new ActionError("Nested current policy refused.", {
@@ -402,7 +406,7 @@ for (const denyFinal of [false, true]) {
                 status: 403,
               });
             }
-            return { collections: { child: {} } };
+            return { collections: { root: {}, child: {} } };
           },
         ),
       });

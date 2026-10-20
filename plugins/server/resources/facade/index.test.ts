@@ -7,6 +7,7 @@ import {
 Deno.test("defineServerFacade snapshots exposure and defaults", () => {
   const include = ["atlas.*"];
   const value = defineServerFacade({
+    authenticate: () => new Response(null, { status: 401 }),
     expose: { actions: { include } },
   });
   include.push("later.*");
@@ -20,18 +21,27 @@ Deno.test("defineServerFacade snapshots exposure and defaults", () => {
 
 Deno.test("defineServerFacade rejects malformed policy", () => {
   assertThrows(
-    () => defineServerFacade({ expose: { actions: { include: [""] } } }),
+    () =>
+      defineServerFacade({
+        authenticate: () => new Response(null, { status: 401 }),
+        expose: { actions: { include: [""] } },
+      }),
     TypeError,
   );
   assertThrows(
     () =>
       defineServerFacade({
+        authenticate: () => new Response(null, { status: 401 }),
         basePath: "/api/v2",
       }),
     TypeError,
   );
   assertThrows(
-    () => defineServerFacade({ maxAssetUploadBytes: 0 }),
+    () =>
+      defineServerFacade({
+        authenticate: () => new Response(null, { status: 401 }),
+        maxAssetUploadBytes: 0,
+      }),
     TypeError,
   );
 });

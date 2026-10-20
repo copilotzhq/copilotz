@@ -1,4 +1,8 @@
-import { testAuthority } from "../runtime/testing/authority.ts";
+import {
+  bindTestActions,
+  testAuthority,
+} from "../runtime/testing/authority.ts";
+import { testCollectionAuthorizations } from "../runtime/testing/collection-authorization.ts";
 import { createAuthorizationOwner } from "../runtime/authorization/owner.ts";
 import {
   openDatabaseOwner,
@@ -715,9 +719,26 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     coordinator,
     session: db,
     eventStore: events,
+    policies: testCollectionAuthorizations(
+      { thread: threadDefinition },
+      schema,
+      ({ authority }) => ({
+        collections: { thread: {} },
+        ...(authority.principal.id === "fixture-host"
+          ? {
+            collectionMutations: {
+              thread: { create: {}, update: {}, delete: {} },
+            },
+          }
+          : {}),
+      }),
+    ),
   });
   collections.bind(threadDefinition);
-  const scoped = collections.withScope({ namespace: "tenant" });
+  const scoped = bindTestActions(
+    collections.withScope({ namespace: "tenant" }),
+    testAuthority(schema, "tenant", "fixture-host"),
+  );
   const application = {
     config: { namespace: "tenant", databaseSchema: schema },
     plugins: { collections: { thread: threadDefinition } },

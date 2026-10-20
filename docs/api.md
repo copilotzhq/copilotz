@@ -43,11 +43,16 @@ factory. Its `role` option selects what the returned object can do:
 | `"gateway"`             | operation surface plus `fetch`  | admission and placement over `transports`    |
 | `"worker"`              | `{ ready, closed, close }` only | execution of deliveries placed on its worker |
 
-Every role accepts the same composition: `namespace`, `plugins`, `resources`,
-`adapters`, `assets` and persistence options (`database`, or a shared
-`persistence` created by `createCopilotzPersistence()`). The creator of a shared
-persistence facade closes it after closing the roles that use it. Role placement
-is covered in
+Every role accepts the same composition: `namespace`, `databaseSchema`,
+`plugins`, `collections`, `actions`, `processors`, `views`, `resources` and
+`adapters`. Each database schema has one **owner**, a single serialized writer,
+and the embedded or Gateway role holds it. Only those roles accept persistence
+options (`database`, or a shared `persistence` created by
+`createCopilotzPersistence()`), `assets`, `authorization` and `databaseScopes`.
+A Worker rejects them: it executes Processors and Actions without a database
+connection, and its reads, writes and Action calls go to the owner. Plugin code
+is the same in every role. The creator of a shared persistence facade closes it
+after closing the roles that use it. Role placement is covered in
 [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
 
 A Worker result has no operation methods. Await `worker.ready` before relying on
@@ -88,17 +93,14 @@ omitting them uses the application's defaults. The result never exposes the
 engine, raw Collections, deliveries or configuration. Use `collections.<alias>`
 reads for Collection state and `attach` or `observe` for Events.
 
-### Trusted host commands
+### Explicit startup scopes
 
-Embedded and Gateway hosts can register fixed-scope SQL callbacks using
-`hostCommands` and invoke them with
-`app.hostCommands.invoke(name, input,
-{ idempotencyKey })`. The callbacks
-receive a command-lifetime query handle, not a session. `databaseScopes`
-requests recovery of explicitly configured schemas before startup resolves.
-These options are rejected by Workers and are never published as HTTP routes.
-See [Trusted Host Commands](host-commands.md) for the complete authorization,
-scope, receipt and query-lifetime contract.
+Every scoped method accepts a `databaseSchema`, and an owner for a non-default
+schema starts lazily on first use. `databaseScopes: ["archive", "workspace"]`
+asks the embedded or Gateway role to activate those pre-provisioned schemas, and
+run their recovery sweep, before `createCopilotz` resolves. The list is
+validated and deduplicated. It does not enumerate or provision schemas, and
+Workers reject it.
 
 ### Trusted host calls
 
@@ -126,10 +128,10 @@ its progressive outputs.
 `app.actions` and `app.collections` are plain, enumerable maps with no inherited
 properties. `Object.keys` lists the registered caller-facing aliases, matching
 `context.actions` and `context.collections`. Stable Action IDs and Collection
-storage names are not additional keys. Internal Actions such as `serverInvoke`
-are excluded. Unknown aliases, commands and queries are absent properties;
-attempting to call them throws a `TypeError` without admitting an operation.
-Each Collection also exposes the scoped `definition` descriptor.
+storage names are not additional keys. Internal ingress Actions are excluded.
+Unknown aliases, commands and queries are absent properties; attempting to call
+them throws a `TypeError` without admitting an operation. Each Collection also
+exposes the scoped `definition` descriptor.
 
 The factory preserves composed Action inputs/outputs and Collection aliases,
 insert types and record types, including plugin dependencies and contributions.
@@ -159,8 +161,12 @@ Action and mutation options also accept `idempotencyKey`, `correlationId`,
 `causationId`, Event `metadata` and trusted `operationMetadata`. Actions add
 `actionMetadata`, delivered to `context.action.metadata` with the same ingress
 provenance as an HTTP route call. Action metadata and Event metadata are
-separate. These methods are trusted, like `send`: no HTTP `authorize` or
-exposure policy applies and `serverPlugin` is not required.
+separate. These methods run as the trusted host, like `send`: the owner
+evaluates no `authorization` policy for them or for the work they start,
+exposure does not apply and `serverPlugin` is not required. Inside Actions,
+Processors and HTTP route handlers, call through the context instead, which
+carries the caller's authority; see
+[Owner authorization](authorization.md#trusted-host-calls).
 
 An omitted key starts fresh work. With a key, the default correlation is stable;
 repeat the same call and options to restore its recorded result, even after a
@@ -322,13 +328,14 @@ Expected facts: the first run prints `notes.capture.requested`, `note.created`,
 `app.send()` is generic, trusted, in-process ingress: it accepts any input type
 and stores its payload as given. It performs no caller authentication. `fetch`
 is different. It serves only what `serverPlugin` exposes and validates requests
-against declared Action, Collection and Channel schemas. Identity is the host's
-choice: the server's `authenticate` and `authorize` hooks are optional, and
-without them requests run in the application's default scope with no
-constraints. Enabling `serverPlugin` alone installs no login and no tenant
-isolation. The host configures both, as shown in
+against declared Action, Collection and Channel schemas. The facade requires an
+`authenticate` callback that returns the request's scope and authority binding,
+and every exposed Action and Collection needs an `authorization` binding that
+the owner evaluates for each command. Enabling `serverPlugin` installs no login:
+the host verifies credentials and writes the policy, as shown in
 [Authenticate and isolate tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md).
-See [HTTP server and browser client](server.md).
+See [HTTP server and browser client](server.md) and
+[Owner authorization](authorization.md).
 
 Over HTTP, `client.operations.result` and `client.actions.invoke` return the
 target Action's output once that Action is ready. They do not wait for
@@ -344,21 +351,24 @@ filesystem, subprocess, terminal or listener APIs, so browsers and Workers
 cannot use them. Portable adapters run anywhere because the host supplies their
 I/O.
 
-| Entrypoint                                                                                                                                       | Contents                                                                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `@copilotz/copilotz`                                                                                                                             | `createCopilotz`, persistence, Actions, Collections, Events, Processors, plugins, content, streams, `secret` |
-| `/application`                                                                                                                                   | Operation surface types only, no factory                                                                     |
-| `/actions`, `/collections`, `/collections/authoring`, `/events`, `/plugins`, `/content`, `/content/codec`, `/streams`, `/engine`, `/persistence` | Focused runtime subpaths                                                                                     |
-| `/server`, `/client`                                                                                                                             | Server plugin and Fetch facade; typed browser client                                                         |
-| `/core`, `/core/server`, `/core/client`                                                                                                          | Optional agent harness, its HTTP routes and client                                                           |
-| `/llm`, `/llm/tokens`, `/memory`, `/knowledge`, `/skills`, `/transcription`                                                                      | Agent capabilities                                                                                           |
-| `/tools/builtin`, `/tools/openapi`, `/tools/mcp`, `/tools/web`, `/tools/finance`, `/tools/persistent-terminal`                                   | Tool integrations                                                                                            |
-| `/channels`, `/channels/core`, `/schedules`, `/schedules/core`, `/usage`, `/usage/client`, `/admin`                                              | Delivery and operations plugins                                                                              |
-| `/build`                                                                                                                                         | Filesystem authoring build                                                                                   |
-| `/core/cli`                                                                                                                                      | Portable CLI adapter; the host supplies input and output                                                     |
-| `/adapters/deno`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno`                         | Native host: listeners, terminals, local files, subprocesses                                                 |
+| Entrypoint                                                                                                                                                 | Contents                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@copilotz/copilotz`                                                                                                                                       | `createCopilotz`, persistence, Actions, Collections, Events, Processors, Views, plugins, content, streams, owner authorization types, `secret`, `createOwnerSecrets` |
+| `/application`                                                                                                                                             | Operation surface types only, no factory                                                                                                                             |
+| `/authoring`                                                                                                                                               | Definition helpers only (`defineAction`, `defineCollection`, `defineProcessor`, `definePlugin`, `defineView`), no runtime                                            |
+| `/worker`                                                                                                                                                  | The portable Worker factory, with no database implementation, for browser and remote Worker bundles                                                                  |
+| `/actions`, `/collections`, `/collections/authoring`, `/events`, `/plugins`, `/views`, `/content`, `/content/codec`, `/streams`, `/engine`, `/persistence` | Focused runtime subpaths                                                                                                                                             |
+| `/server`, `/client`                                                                                                                                       | Server plugin and Fetch facade; typed browser client                                                                                                                 |
+| `/core`, `/core/server`, `/core/client`                                                                                                                    | Optional agent harness, its HTTP routes and client                                                                                                                   |
+| `/llm`, `/llm/tokens`, `/memory`, `/knowledge`, `/skills`, `/transcription`                                                                                | Agent capabilities                                                                                                                                                   |
+| `/tools/builtin`, `/tools/openapi`, `/tools/mcp`, `/tools/web`, `/tools/finance`, `/tools/persistent-terminal`                                             | Tool integrations                                                                                                                                                    |
+| `/channels`, `/channels/core`, `/schedules`, `/schedules/core`, `/usage`, `/usage/client`, `/admin`                                                        | Delivery and operations plugins                                                                                                                                      |
+| `/build`                                                                                                                                                   | Filesystem authoring build                                                                                                                                           |
+| `/core/cli`                                                                                                                                                | Portable CLI adapter; the host supplies input and output                                                                                                             |
+| `/adapters/deno`, `/adapters/node`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno`                 | Native host: listeners, terminals, local files, subprocesses                                                                                                         |
 
-Protected Action values (`secret`, Secret Adapters) are covered in
+Protected Action values (`secret`, Secret Adapters) and application secrets
+sealed under the owner's data key (`createOwnerSecrets`) are covered in
 [Actions](actions.md).
 
 ## What this unlocks

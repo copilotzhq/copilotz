@@ -60,7 +60,7 @@ application's owner transport without exposing persistence.
 ### Serve on Deno with `listen`
 
 This example uses the files from Chapter 15: `composition.ts` and the pure
-`server.ts` factory. It assumes the `@copilotz/copilotz` import (`^0.87.3`) from
+`server.ts` factory. It assumes the `@copilotz/copilotz` import (`^0.89.0`) from
 that chapter. Create `serve-listen.ts` as a Deno-only alternative to `serve.ts`:
 
 ```ts

@@ -8,6 +8,9 @@ status: stable
 
 # Chapter 19: Schedule Recurring Work
 
+> Part 5 — Operate and Scale · Track: R · Requires: Chapter 7 · Needs: Deno 2.9+
+> or Node 24+ (no credential)
+
 Compose `schedulesPlugin` from `@copilotz/copilotz/schedules` in your
 application. The database owner runs active jobs at their persisted deadline.
 Your host does not send clock Events or fan out a recurring input across

@@ -72,6 +72,7 @@ async function project(
 /** Core conversation routes use ordinary authorized participant reads. */
 export function createCoreHttpAdapter(): HttpAdapter {
   return createHttpAdapter({
+    collections: ["thread", "participant", "message"],
     routes: [
       {
         id: "core.threads.list",

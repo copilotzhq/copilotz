@@ -92,7 +92,9 @@ function assertSecretProjection(schema: Record<string, unknown>): void {
 Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
   const routes = compileServerRoutes(
     createPluginRegistry({ plugins: [fixture] }),
-    defineServerFacade(),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+    }),
   );
   assertEquals(
     routes.match("POST", "/api/actions/atlas/sandbox/preview/list")?.endpoint
@@ -153,7 +155,9 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
 Deno.test("route compiler exposes the generic binary asset upload contract", () => {
   const routes = compileServerRoutes(
     createPluginRegistry({ plugins: [fixture] }),
-    defineServerFacade(),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+    }),
   );
   const upload = routes.match("POST", "/api/assets");
   assertEquals(upload?.endpoint, {
@@ -186,7 +190,10 @@ Deno.test("route compiler applies glob exclusion", () => {
   const registry = createPluginRegistry({ plugins: [fixture] });
   const routes = compileServerRoutes(
     registry,
-    defineServerFacade({ expose: { actions: { exclude: ["atlas.*"] } } }),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+      expose: { actions: { exclude: ["atlas.*"] } },
+    }),
   );
   assertEquals(
     routes.match("POST", "/api/actions/atlas/sandbox/preview/list"),
@@ -196,16 +203,25 @@ Deno.test("route compiler applies glob exclusion", () => {
 
 Deno.test("route compiler exposes writes only through an explicit operation policy", () => {
   const registry = createPluginRegistry({ plugins: [fixture] });
-  const defaultRoutes = compileServerRoutes(registry, defineServerFacade());
+  const defaultRoutes = compileServerRoutes(
+    registry,
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+    }),
+  );
   assertEquals(defaultRoutes.match("POST", "/api/collections/notes"), null);
   const readOnlyRoutes = compileServerRoutes(
     registry,
-    defineServerFacade({ expose: { collections: { include: ["notes"] } } }),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+      expose: { collections: { include: ["notes"] } },
+    }),
   );
   assertEquals(readOnlyRoutes.match("POST", "/api/collections/notes"), null);
   const routes = compileServerRoutes(
     registry,
     defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
       expose: {
         collections: {
           include: ["notes"],
@@ -307,7 +323,9 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
         actions: { protectedAction },
       })],
     }),
-    defineServerFacade(),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+    }),
   );
   const path = routes.openApi.paths as Record<string, Record<string, unknown>>;
   const operation = path["/api/actions/test/openapi-secrets"].post as Record<
@@ -378,6 +396,7 @@ Deno.test("route compiler keeps operation observations and ordinary queries with
       plugins: [definePlugin({ ...fixture, collections: { entry } })],
     }),
     defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
       expose: { collections: { operations: { include: ["*"] } } },
     }),
   );

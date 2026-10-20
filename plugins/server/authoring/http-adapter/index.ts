@@ -97,7 +97,11 @@ export type HttpRoute = Readonly<
     }
   )
 >;
-export type HttpAdapter = Readonly<{ routes: readonly HttpRoute[] }>;
+export type HttpAdapter = Readonly<{
+  /** Collection aliases read by authenticated routes; checked at Server startup. */
+  collections?: readonly string[];
+  routes: readonly HttpRoute[];
+}>;
 
 export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
   const ids = new Set<string>();
@@ -154,5 +158,9 @@ export function createHttpAdapter(input: HttpAdapter): HttpAdapter {
         : {}),
     } as const);
   });
-  return ({ routes: routes } as const);
+  return ({
+    ...input,
+    collections: input.collections?.slice(),
+    routes,
+  } as const);
 }

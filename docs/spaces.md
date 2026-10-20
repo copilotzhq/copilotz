@@ -231,12 +231,15 @@ created earlier in that same transaction: create first, then attach.
 
 The Action checks invariants (owner exists, record declares the relation, Space
 is active), **not** who is calling. Membership describes who the work involves;
-it is not a permission system. Before calling `spaces`, the host decides from a
-trusted principal whether the caller may change the Space, and for `attach`
-whether they may act on the record and on **both** the source and target Space.
-Granting the Action to an agent as a Tool hands that decision to the model, so
-keep it in trusted Processors unless you add your own checks. See
-[Authenticate and isolate tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md).
+it is not a permission system. To let authenticated callers use it, bind the
+`spaces` Action (and the `space` Collection, if callers read it) in
+`authorization` and let the owner policy decide from the caller's retained
+authority and its declared sources whether the caller may change the Space, and
+for `attach` whether they may act on the record and on **both** the source and
+target Space. Trusted host calls run without that policy. Granting the Action to
+an agent as a Tool hands the choice of arguments to the model, but the owner
+still authorizes the call under the user's authority, so keep the policy
+explicit. See [Owner authorization](authorization.md).
 
 Assets referenced by records in a Space are stored per namespace, not per Space.
 Authorizing someone for a Space does not authorize reading its records' Assets,
@@ -271,5 +274,4 @@ or vice versa; check content access on its own route.
 
 - [Memory](memory.md): how peer reads combine with consolidation and grants.
 - [Collections](collections.md): declaring relations on your own records.
-- [Authenticate and isolate tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md):
-  deciding who may call `spaces`.
+- [Owner authorization](authorization.md): deciding who may call `spaces`.

@@ -1,3 +1,4 @@
+import { withContextCollectionInvocation } from "../authorization/invocation.ts";
 import { remoteClaimSession, remoteSessionKey } from "./remote-admission.ts";
 import { ACTION_CONTINUATION_CONSUMER } from "../actions/continuation-work.ts";
 import type { EventDelivery } from "../events/index.ts";
@@ -309,7 +310,10 @@ export function createDeliveryWorkload(
           executionContext: typeof context,
         ) => void | Promise<void>;
         try {
-          await handle(processorEvent, context);
+          await withContextCollectionInvocation(
+            context,
+            () => handle(processorEvent, context),
+          );
         } catch (error) {
           const onError = processor!.onError as (
             | ((
@@ -323,7 +327,10 @@ export function createDeliveryWorkload(
             delivery.attempts >= delivery.maxAttempts;
           if (
             abort.signal.aborted || !terminal ||
-            !await onError?.(error, processorEvent, context)
+            !await withContextCollectionInvocation(
+              context,
+              () => onError?.(error, processorEvent, context),
+            )
           ) throw error;
         }
       }

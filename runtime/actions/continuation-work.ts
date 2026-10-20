@@ -1,3 +1,4 @@
+import type { OwnerIngressProof } from "../application/ingress/authority.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import type { OperationStart } from "./continuation.ts";
@@ -72,6 +73,7 @@ export async function admitActionOperation(
       start: OperationStart;
       correlationId?: string;
       causationId?: string;
+      ingress?: OwnerIngressProof;
       metadata: Readonly<Record<string, unknown>>;
     }
   >,
@@ -102,6 +104,7 @@ export async function admitActionOperation(
   const bodyId = `event-body:${namespace}:${operationId}:start`;
   return await runtime.coordinator.commitMutation({
     eventId: operationId,
+    ingress: input.ingress,
     draft: {
       namespace,
       type: ACTION_CHILD_EVENT,

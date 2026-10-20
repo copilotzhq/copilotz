@@ -3,6 +3,7 @@ import { isOwnerExecutionInterrupted } from "../execution/owner-interruption.ts"
 import {
   closeCollectionPolicyInvocation,
   preserveCollectionInvocation,
+  withContextCollectionInvocation,
 } from "../authorization/invocation.ts";
 import {
   isOwnerAuthorizationRefusal,
@@ -795,13 +796,17 @@ function actionCaller(
           }
         }
       }
-      const output = resumption
-        ? await action.resume!(
-          resumption.receipt.handoff as never,
-          resumption.outcome as never,
-          context as never,
-        )
-        : await action.execute(executionInput as never, context as never);
+      const output = await withContextCollectionInvocation(
+        context,
+        async () =>
+          resumption
+            ? await action.resume!(
+              resumption.receipt.handoff as never,
+              resumption.outcome as never,
+              context as never,
+            )
+            : await action.execute(executionInput as never, context as never),
+      );
       if (invocation.refusal) throw invocation.refusal;
       await progressTail;
       await drainEffects();

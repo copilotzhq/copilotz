@@ -1,4 +1,5 @@
 import { remoteClaimSession } from "./remote-admission.ts";
+import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
 import { localDispatcher } from "./local.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
@@ -463,6 +464,7 @@ export function createDeliveryExecutor(
       try {
         dispatched = await dispatcher.dispatch({
           workload,
+          deadlineAtMs: Date.now() + DELIVERY_DEADLINE_MS,
           ...(remoteSession && preclaim
             ? { target: { workerId: remoteSession.identity.workerId } }
             : target

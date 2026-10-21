@@ -54,6 +54,60 @@ export function preloadMarkdown(): Promise<void> {
 }
 
 const MATH = /\$/;
+
+/** Replaces `\( … \)` and `\[ … \]` in one piece of prose (not code). */
+function prose(text: string): string {
+  // Display math on lines of its own becomes a `$$` block, indented as the
+  // line was (so it stays inside a list item); elsewhere it stays inline.
+  const display = text.replace(
+    /(^|\n)([ \t]*)\\\[([\s\S]+?)\\\][ \t]*(?=\n|$)/g,
+    // A blank line before the block, so it never joins the paragraph above.
+    (_match, start: string, indent: string, body: string) =>
+      `${start}${start ? "\n" : ""}${indent}$$\n${
+        body.trim().split("\n").map((line) => `${indent}${line.trim()}`)
+          .join("\n")
+      }\n${indent}$$`,
+  ).replace(
+    /\\\[([\s\S]+?)\\\]/g,
+    (_match, body: string) => `$$${body.trim()}$$`,
+  );
+  return display.replace(
+    /\\\(([\s\S]+?)\\\)/g,
+    (_match, body: string) => `$${body.trim()}$`,
+  );
+}
+
+/**
+ * LLMs often write math as `\( … \)` and `\[ … \]`, which Markdown reads as
+ * escaped brackets. They become `$ … $` and `$$ … $$`, so the one math path
+ * (KaTeX, no `trust`) renders them; fenced and inline code stay untouched.
+ */
+export function normalizeMathDelimiters(source: string): string {
+  if (!/\\[([]/.test(source)) return source;
+  let out = "", fence: string | null = null, chunk = "";
+  const flush = () => {
+    // Inline code spans keep their text; only the prose around them changes.
+    out += chunk.split(/(`+[^`]*?`+)/).map((part, index) =>
+      index % 2 ? part : prose(part)
+    ).join("");
+    chunk = "";
+  };
+  for (const line of source.split(/(?<=\n)/)) {
+    const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      out += line;
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) {
+        fence = null;
+      }
+    } else if (marker) {
+      flush();
+      fence = marker;
+      out += line;
+    } else chunk += line;
+  }
+  flush();
+  return out;
+}
 const FENCE = /(^|\n)\s*(```|~~~)/;
 
 /**
@@ -188,8 +242,11 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
       ],
       [plugins],
     );
-    const math = MATH.test(children);
-    const highlighted = !streaming && FENCE.test(children);
+    const source = useMemo(() => normalizeMathDelimiters(children), [
+      children,
+    ]);
+    const math = MATH.test(source);
+    const highlighted = !streaming && FENCE.test(source);
     const [, loaded] = useReducer((count: number) => count + 1, 0);
     useEffect(() => {
       let live = true;
@@ -276,7 +333,7 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
                 : <code className={className}>{children}</code>,
           }}
         >
-          {children}
+          {source}
         </ReactMarkdown>
       </div>
     );

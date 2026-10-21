@@ -24,6 +24,7 @@ export * from "./frame.tsx";
 export * from "./boundary.tsx";
 export { cn } from "./utils.ts";
 export {
+  formatBucket,
   formatBytes,
   formatCount,
   formatDateTime,

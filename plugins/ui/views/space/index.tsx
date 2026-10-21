@@ -7,7 +7,7 @@ import { useId } from "react";
 import { Maximize2, X } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { readSpace } from "@copilotz/copilotz/core/web";
+import { readSpace, readThreadMessages } from "@copilotz/copilotz/core/web";
 import {
   Button,
   ReadStatus,
@@ -21,7 +21,11 @@ import { SpaceTabs } from "../../components/space-tabs.tsx";
 import { SpaceMark } from "../../components/space-mark.tsx";
 import { navReference } from "../shell/index.tsx";
 
-/** Sections with live agent tool use since the panel opened (a dot, never a switch). */
+/**
+ * Sections whose tools an agent used in this session (a dot, never a
+ * switch). A tool that failed marks nothing: its result says so (Core's tool
+ * result messages, from the same window the conversation reads).
+ */
 function marked(
   ctx: BrowserViewContext,
   threadId: string | null,
@@ -31,15 +35,32 @@ function marked(
   if (!threadId || !ctx.collections.threadFeed) return result;
   const attempts = ctx.collections.threadFeed.get(threadId).value?.attempts;
   if (!Array.isArray(attempts)) return result;
-  const used = new Set<string>();
-  for (const attempt of attempts) {
-    for (
-      const tool of (attempt as { tools?: { name?: string }[] }).tools ??
-        []
-    ) {
-      if (tool.name) used.add(tool.name);
-    }
-  }
+  // A reply that failed ran none of its tools; a call whose result failed or
+  // was cancelled did nothing to the section either.
+  const calls = (attempts as {
+    status?: string;
+    tools?: { name?: string; toolCallId?: string }[];
+  }[]).flatMap((attempt) =>
+    attempt.status === "failed" ? [] : attempt.tools ?? []
+  ).filter((tool) => tool.name);
+  if (!calls.length) return result;
+  const failed = new Set(
+    readThreadMessages(ctx, threadId).value.flatMap((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      const invocation = metadata.toolInvocation as
+        | { id?: unknown }
+        | undefined;
+      return typeof invocation?.id === "string" &&
+          (metadata.toolStatus === "failed" ||
+            metadata.toolStatus === "cancelled")
+        ? [invocation.id]
+        : [];
+    }),
+  );
+  const used = new Set(
+    calls.filter((tool) => !tool.toolCallId || !failed.has(tool.toolCallId))
+      .map((tool) => tool.name!),
+  );
   for (const section of sections) {
     if (section.tools.some((tool) => used.has(tool))) result.add(section.id);
   }

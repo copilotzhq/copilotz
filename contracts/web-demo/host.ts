@@ -441,11 +441,21 @@ function adminData(live: FixtureLive, alias: string): unknown {
   }
 }
 
+/** Demo server behavior a capture can ask for. */
+export type DemoActionOptions = {
+  /** Extra time `createThread` takes, to show a new chat while it starts. */
+  createLatency?: number;
+  /** The first `createThread` fails after creating (a lost response). */
+  failFirstCreate?: boolean;
+};
+
 export function demoActions(
   live: FixtureLive,
   feed: DemoFeed,
+  behavior: DemoActionOptions = {},
 ): ActionTransport {
   let sequence = 1000;
+  let failCreate = behavior.failFirstCreate ?? false;
   const done = (value: unknown = {}) =>
     Promise.resolve({ value, seq: ++sequence });
   return {
@@ -457,6 +467,14 @@ export function demoActions(
       const now = new Date().toISOString();
       switch (alias) {
         case "createThread": {
+          // Creating an existing id conflicts, as on the server.
+          if (live.rows("thread").some((row) => row.id === data.id)) {
+            throw Object.assign(new Error("Record already exists."), {
+              code: "collection_conflict",
+              status: 409,
+            });
+          }
+          if (behavior.createLatency) await sleep(behavior.createLatency);
           const participants =
             (data.participants as Record<string, unknown>[] ?? [])
               .map((participant) =>
@@ -474,6 +492,10 @@ export function demoActions(
             createdAt: now,
             updatedAt: now,
           });
+          if (failCreate) {
+            failCreate = false;
+            throw new Error("The connection closed before the reply.");
+          }
           return done({ id: data.id });
         }
         case "createThreadMessage": {

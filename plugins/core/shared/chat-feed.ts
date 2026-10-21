@@ -171,20 +171,6 @@ export function createFeedProjector(
     return attempt;
   };
 
-  /**
-   * Lanes open one after another (reasoning, then the answer), so ended lanes
-   * never mean the reply is done; the LLM call or its operation settles it.
-   * Only a failed answer lane fails the reply early.
-   */
-  const settleAttempt = (attempt: MutableAttempt, lane: Lane) => {
-    if (
-      lane.failed && lane.role === "content" && attempt.status === "streaming"
-    ) {
-      attempt.status = "failed";
-      attempt.updatedAt = now();
-    }
-  };
-
   const toolLine = (attempt: MutableAttempt, line: string) => {
     let delta: Record<string, unknown>;
     try {
@@ -395,7 +381,8 @@ export function createFeedProjector(
       lane.failed = frame.kind === "stream-error";
       if (lane.line.trim()) toolLine(attempt, lane.line);
       lane.line = "";
-      settleAttempt(attempt, lane);
+      // A physical lane can fail while its delivery retries. Only durable
+      // Action/operation terminals settle the logical reply above.
       return true;
     },
     snapshot() {

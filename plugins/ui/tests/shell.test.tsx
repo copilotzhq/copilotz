@@ -66,7 +66,12 @@ const { act } = React;
 const { createBrowserRuntime } = await import("@copilotz/copilotz/web");
 const { defineView } = await import("@copilotz/copilotz/views");
 const { reactRenderer } = await import("../../web-react/index.ts");
-const { uiWebPlugin, shellNavigation, shellUrlStorageAdapter } = await import(
+const {
+  bindShellSession,
+  uiWebPlugin,
+  shellNavigation,
+  shellUrlStorageAdapter,
+} = await import(
   "../web.ts"
 );
 const { FixtureLive } = await import("./fixture-live.test.ts");
@@ -327,9 +332,15 @@ const app: BrowserPlugin = {
         order: 20,
         view: "testBoards",
         tools: ["kanban"],
+        params: ["board", "card"],
       },
       unsafe: { label: "Unsafe", order: 30, view: "testUnsafe" },
-      report: { label: "Report", order: 40, view: "testReport" },
+      report: {
+        label: "Report",
+        order: 40,
+        view: "testReport",
+        params: ["range"],
+      },
     },
     headerMenu: {
       fork: { label: "Fork", icon: "git-branch", action: "threadFork" },
@@ -347,8 +358,14 @@ type Mounted = {
   live: InstanceType<typeof FixtureLive>;
   feed: TestFeed;
   calls: { alias: string; input: Record<string, unknown> }[];
+  /** Fail the next createThread after creating it (an observe error). */
+  failCreateOnce?: () => boolean;
   url: () => URL;
   local: ReturnType<typeof memory>;
+  container: {
+    querySelector(selector: string): unknown;
+    textContent: string | null;
+  };
   dispose(): Promise<void>;
 };
 
@@ -366,11 +383,33 @@ async function mount(
   const feed = new TestFeed();
   const local = options.local ?? memory();
   const calls: Mounted["calls"] = [];
+  const hooks: Partial<Mounted> = {};
   const actions: ActionTransport = {
     invoke(alias, input, invocation) {
       invocation.accepted(`op-${calls.length + 1}`);
       calls.push({ alias, input: input as Record<string, unknown> });
       const data = input as Record<string, unknown>;
+      if (alias === "createThread") {
+        const id = String(data.id);
+        if (live.get("thread", id)) {
+          return Promise.reject(
+            Object.assign(new Error("Record already exists."), {
+              code: "collection_conflict",
+              status: 409,
+            }),
+          );
+        }
+        live.put("thread", {
+          id,
+          name: String(data.name ?? "New conversation"),
+          status: "active",
+          participantIds: ["p-ana", "p-north"],
+          updatedAt: new Date().toISOString(),
+        });
+        if (hooks.failCreateOnce?.()) {
+          return Promise.reject(new Error("Internal application error"));
+        }
+      }
       if (alias === "createThreadMessage") {
         live.put("message", {
           id: String(data.id),
@@ -386,6 +425,11 @@ async function mount(
             ...(part.name ? { name: part.name } : {}),
           })),
           metadata: {},
+        });
+        // As Core does: a visible message records activity on its thread.
+        live.patch("thread", String(data.threadId), {
+          updatedAt: new Date().toISOString(),
+          lastMessageId: String(data.id),
         });
       }
       return Promise.resolve({ value: { ok: true }, seq: 1 });
@@ -420,12 +464,13 @@ async function mount(
     mounted = runtime.mount(container, { shows: "shell", value: null });
     await settle();
   });
-  return {
+  return Object.assign(hooks, {
     runtime,
     live,
     feed,
     calls,
     local,
+    container: container as unknown as Mounted["container"],
     url: () => current,
     async dispose() {
       await act(() => {
@@ -434,7 +479,7 @@ async function mount(
       runtime.dispose();
       container.remove();
     },
-  };
+  });
 }
 
 const settle = async () => {
@@ -618,7 +663,11 @@ test("the composer previews, removes and sends attachments with the text", async
     );
     assert.ok(sent, JSON.stringify(shell.calls));
     assert.equal(sent.input.threadId, "t1");
-    assert.equal("recipientIds" in sent.input, false, "Core picks agents");
+    assert.deepEqual(
+      sent.input.recipientIds,
+      ["p-north"],
+      "no mention addresses the thread's default agent only",
+    );
     assert.deepEqual(
       (sent.input.content as { type: string; name?: string }[]).map((part) =>
         part.name ?? part.type
@@ -720,6 +769,74 @@ test("live replies stream with tool activity and app tool renderers; Stop cancel
     );
     await click(byLabel("Stop the response"));
     assert.deepEqual(shell.feed.cancelled, ["op-live"]);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a section's tab gets a dot when an agent uses its tool, and none when the call failed", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await click(byLabel("Show the side panel"));
+    const boards = () =>
+      document.querySelector(
+        'aside[aria-label="Side panel"] [role="tab"][aria-label^="Boards"]',
+      )?.getAttribute("aria-label");
+    assert.equal(boards(), "Boards");
+    await act(async () => {
+      await shell.feed.emit({
+        kind: "output",
+        output: {
+          type: "stream.output",
+          operationId: "op-board",
+          streamId: "tools",
+          role: "text",
+          kind: "text",
+          mediaType: "text/plain",
+          metadata: {
+            llmAttemptId: "run-board",
+            lane: "tool-calls",
+            providerAttemptIndex: 0,
+            copilotzCore: {
+              schema: "copilotz.core.llm-stream.v1",
+              agent: { id: "north", name: "North" },
+            },
+          },
+        },
+      } as never);
+      await shell.feed.emit({
+        kind: "stream-chunk",
+        streamId: "tools",
+        offset: 0,
+        bytes: new TextEncoder().encode(
+          JSON.stringify({
+            draftId: "d1",
+            toolName: "kanban",
+            phase: "complete",
+            toolCallId: "c-board",
+            delta: '{"action":"create_board"}',
+          }) + "\n",
+        ),
+      } as never);
+      await new Promise((r) => setTimeout(r, 80));
+      await settle();
+    });
+    assert.equal(boards(), "Boards, new activity");
+    await act(async () => {
+      shell.live.put("message", {
+        id: "r-board",
+        threadId: "t1",
+        senderId: "p-north",
+        createdAt: "2026-10-21T10:05:00.000Z",
+        content: [{ kind: "text", role: "tool.output", value: "Denied." }],
+        metadata: {
+          toolInvocation: { id: "c-board" },
+          toolStatus: "failed",
+        },
+      });
+      await settle();
+    });
+    assert.equal(boards(), "Boards", "a failed call lights no dot");
   } finally {
     await shell.dispose();
   }
@@ -828,9 +945,9 @@ test("Views share live reads: a conversation with its panel open uses five, peop
     assert.deepEqual(shell.live.active, [
       'message {"where":{"threadId":"t1"},"order":{"field":"createdAt","direction":"desc"},"limit":100}',
       'participant {"where":{"id":{"in":["p-ana","p-north"]}},"limit":2}',
-      'space {"limit":200}',
-      'thread {"order":{"field":"id","direction":"desc"},"limit":200}',
-      'thread {"where":{"spaceId":"s1"},"order":{"field":"id","direction":"desc"},"limit":200}',
+      'space {"order":{"field":"name","direction":"asc"},"limit":200}',
+      'thread {"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
+      'thread {"where":{"spaceId":"s1"},"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
     ]);
     await act(async () => {
       shell.runtime.actions.shellNewChat({});
@@ -842,17 +959,25 @@ test("Views share live reads: a conversation with its panel open uses five, peop
   }
 });
 
-test("live read limits show a friendly state, never a raw error", async () => {
-  const ordered = new FixtureLive(tables());
-  ordered.idOrderOnly = true;
-  const refused = await mount("https://app.example/?chat=t1", {
-    live: ordered,
-  });
-  try {
-    assert.match(main(), /Live updates unavailable/);
-    assert.doesNotMatch(main(), /subscription_|refused\./i);
-  } finally {
-    await refused.dispose();
+test("refused live reads show a friendly state by reason, never a raw error", async () => {
+  for (
+    const [reason, copy] of [
+      ["query_unsupported", /Live updates unavailable/],
+      ["limit_exceeded", /Too much to follow live/],
+      ["unbound_collection", /Not available here/],
+      ["forbidden", /No access to these messages/],
+      ["unavailable", /Couldn't load messages/],
+    ] as const
+  ) {
+    const live = new FixtureLive(tables());
+    live.refusals.set("message", { code: "subscription_failed", reason });
+    const refused = await mount("https://app.example/?chat=t1", { live });
+    try {
+      assert.match(main(), copy, reason);
+      assert.doesNotMatch(main(), /subscription_|refused\.|_/i, reason);
+    } finally {
+      await refused.dispose();
+    }
   }
   const crowded = new FixtureLive(tables());
   crowded.maxSubscriptions = 2;
@@ -990,7 +1115,15 @@ test("the header title keeps priority; the agent selector slot collapses by cont
     const slot = document.querySelector('[data-slot="agent-selector"]')!;
     // The slot takes the width the title leaves (at least an icon) and is a
     // size container, so the core selector (and an app's) collapses inside it.
-    for (const name of ["@container/agents", "flex-1", "basis-0", "min-w-9"]) {
+    for (
+      const name of [
+        "@container/agents",
+        "flex-1",
+        "basis-0",
+        "min-w-9",
+        "overflow-x-clip",
+      ]
+    ) {
       assert.ok(slot.className.split(/\s+/).includes(name), name);
     }
     const title = document.querySelector('[data-slot="shell-header"] h1')!;
@@ -1056,31 +1189,302 @@ test("message text a window read deferred loads when it shows; too long says so"
   }
 });
 
-test("search finds chats by title and by Space name", async () => {
+test("a revoked session routes to sign-in, reads nothing and waits for the app to restore it", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    extra: {
+      id: "sign-in",
+      resources: { shell: { signIn: { href: "/login?next=chat" } } },
+    },
+  });
+  const listeners = new Set<
+    (event: { state: string; code?: string }) => void
+  >();
+  const stop = bindShellSession(shell.runtime, {
+    onAuthState(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  try {
+    assert.ok(shell.live.subscriptionCount > 0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ state: "revoked", code: "session_revoked" });
+      }
+      await settle();
+    });
+    const screen = document.querySelector('[data-slot="signed-out"]');
+    assert.match(screen?.textContent ?? "", /You've been signed out/);
+    assert.equal(
+      screen?.querySelector("a")?.getAttribute("href"),
+      "/login?next=chat",
+    );
+    assert.equal(shell.live.subscriptionCount, 0, "every read is released");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    assert.equal(shell.live.subscriptionCount, 0, "and nothing reconnects");
+    // The app signed in again and reauthenticated the device.
+    await act(async () => {
+      await shell.runtime.actions.shellSessionRestored({}).result();
+      await settle();
+    });
+    assert.equal(document.querySelector('[data-slot="signed-out"]'), null);
+    assert.ok(shell.live.subscriptionCount > 0, "the shell reads again");
+    assert.equal(nav(shell).threadId, "t1", "on the same conversation");
+  } finally {
+    stop();
+    await shell.dispose();
+  }
+});
+
+test("an empty sidebar offers New Space; with groups it comes after No Space", async () => {
+  const empty = await mount("https://app.example/", {
+    live: new FixtureLive({ ...tables(), thread: [], space: [], message: [] }),
+  });
+  try {
+    const nav = document.querySelector('nav[aria-label="Conversations"]')!;
+    assert.match(nav.textContent ?? "", /No conversations yet\./);
+    assert.ok(
+      [...nav.querySelectorAll("button")].some((button) =>
+        button.textContent?.trim() === "New Space"
+      ),
+      "New Space is offered before any group exists",
+    );
+  } finally {
+    await empty.dispose();
+  }
   const shell = await mount("https://app.example/?chat=t1");
   try {
-    const search = document.querySelector(
-      'nav[aria-label="Conversations"]',
-    )!.parentElement!.querySelector('input[type="search"]')!;
+    const text = document.querySelector('nav[aria-label="Conversations"]')!
+      .textContent!;
+    assert.ok(text.indexOf("No Space") < text.indexOf("New Space"), text);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a second tab's Recent list reorders live when a conversation gets a message", async () => {
+  const live = new FixtureLive(tables());
+  const first = await mount("https://app.example/?chat=t3", { live });
+  const second = await mount("https://app.example/?chat=t1", { live });
+  try {
+    await act(async () => {
+      await second.runtime.actions.shellPreference({ groupBy: "date" })
+        .result();
+      await settle();
+    });
+    const order = () =>
+      Array.from(
+        (second.container as unknown as {
+          querySelectorAll(selector: string): ArrayLike<
+            { textContent: string | null }
+          >;
+        }).querySelectorAll('nav[aria-label="Conversations"] [data-nav-item]'),
+      ).map((row) => (row.textContent ?? "").replace(/^[A-Z]{2}/, ""));
+    assert.deepEqual(order(), [
+      "Interview plan",
+      "Deploy checklist",
+      "Loose idea",
+    ]);
+    // The first tab sends in the oldest conversation; Core records the
+    // activity on the thread, and the second tab's window reorders.
+    await act(async () => {
+      await first.runtime.actions.chatSend({ threadId: "t3", text: "Bump" })
+        .result();
+      await settle();
+    });
+    assert.deepEqual(order(), [
+      "Loose idea",
+      "Interview plan",
+      "Deploy checklist",
+    ]);
+  } finally {
+    await first.dispose();
+    await second.dispose();
+  }
+});
+
+test("URL parameters a section owns leave when another section shows", async () => {
+  const shell = await mount(
+    "https://app.example/?chat=t1&panel=1&section=boards&board=b1&card=c1&ref=mail",
+  );
+  try {
+    assert.equal(shell.url().searchParams.get("board"), "b1");
+    await click(byLabel("Report"));
+    const url = shell.url();
+    assert.equal(url.searchParams.get("section"), "report");
+    assert.equal(url.searchParams.get("board"), null);
+    assert.equal(url.searchParams.get("card"), null);
+    assert.equal(url.searchParams.get("ref"), "mail", "others stay");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("people that can't be read show neutrally: no Participant, no bot, no 0 agents", async () => {
+  const live = new FixtureLive(tables());
+  live.refusals.set("participant", {
+    code: "subscription_query_refused",
+    reason: "query_unsupported",
+  });
+  const shell = await mount("https://app.example/?chat=t1", { live });
+  try {
+    assert.match(main(), /Someone/);
+    assert.doesNotMatch(main(), /Participant/);
+    const selector = document.querySelector(
+      '[data-slot="agent-selector"] button',
+    );
+    assert.equal(
+      selector?.getAttribute("aria-label"),
+      "Agents in this conversation",
+    );
+    assert.doesNotMatch(selector?.textContent ?? "", /0 agents/);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+async function typeAndSend(text: string) {
+  const field = document.querySelector('textarea[aria-label="Message"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(field, text);
+    (field as unknown as { selectionStart: number; selectionEnd: number })
+      .selectionStart = text.length;
+    (field as unknown as { selectionEnd: number }).selectionEnd = text.length;
+    field.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await settle();
+  });
+  return {
+    async submit() {
+      await act(async () => {
+        document.querySelector('form[aria-label="Message composer"]')!
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          );
+        await settle();
+      });
+    },
+  };
+}
+
+test("@ opens a mention picker of the agents; a mention becomes the recipients", async () => {
+  const live = new FixtureLive(tables());
+  // Even when people can't be read, the app's configured agents are offered.
+  live.refusals.set("participant", {
+    code: "subscription_query_refused",
+    reason: "query_unsupported",
+  });
+  const shell = await mount("https://app.example/?chat=t1", { live });
+  try {
+    await typeAndSend("Hey @");
+    const options = [...document.querySelectorAll(
+      '#composer-mentions [role="option"]',
+    )].map((option) => option.textContent ?? "");
+    assert.ok(options.some((text) => /North/.test(text)), options.join("|"));
+    await (await typeAndSend("@North what's the risk?")).submit();
+    const sent = shell.calls.find((call) =>
+      call.alias === "createThreadMessage"
+    )!;
+    assert.deepEqual(sent.input.recipientIds, []);
+    assert.deepEqual(
+      (sent.input.membership as { recipients: unknown[] }).recipients,
+      [{ externalId: "north" }],
+      "the mentioned agent, by its external id",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("an app can address every agent by default instead of the first", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    extra: {
+      id: "all-agents",
+      resources: { chat: { defaultRecipients: "all" } },
+    },
+  });
+  try {
+    await (await typeAndSend("Hello team")).submit();
+    const sent = shell.calls.find((call) =>
+      call.alias === "createThreadMessage"
+    )!;
+    assert.equal("recipientIds" in sent.input, false, "Core addresses all");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a new chat shows its first message at once and a retry continues the same thread", async () => {
+  const shell = await mount("https://app.example/");
+  let failCreate = true;
+  try {
+    // The first create fails after the server already made the thread (an
+    // observe error): the retry must continue it, not orphan it.
+    shell.failCreateOnce = () => {
+      if (!failCreate) return false;
+      failCreate = false;
+      return true;
+    };
+    await (await typeAndSend("Plan the launch")).submit();
+    const threadId = nav(shell).threadId!;
+    assert.ok(threadId, "the new conversation opened at once");
+    assert.match(main(), /Plan the launch/, "the first message shows at once");
+    assert.match(main(), /Retry/, "the failed send offers Retry");
+    assert.doesNotMatch(main(), /not found/i);
+    await click(byText("button", "Retry"));
+    const creates = shell.calls.filter((call) => call.alias === "createThread");
+    assert.equal(creates.length, 2);
+    assert.ok(creates.every((call) => call.input.id === threadId));
+    const sends = shell.calls.filter((call) =>
+      call.alias === "createThreadMessage"
+    );
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].input.threadId, threadId);
+    assert.doesNotMatch(main(), /Retry/);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("the sidebar search box opens the palette, which finds chats by title and Space name", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await click(
+      document.querySelector(
+        '[data-slot="sidebar"] button[aria-keyshortcuts]',
+      ) as unknown as { click(): void },
+    );
+    assert.equal(
+      nav(shell).threadId,
+      "t1",
+      "opening search leaves the conversation",
+    );
+    const input = document.querySelector(
+      'input[aria-label="Search conversations, Spaces and commands"]',
+    )!;
+    assert.ok(input, "the palette is open");
     const type = async (value: string) =>
       await act(async () => {
         Object.getOwnPropertyDescriptor(
           window.HTMLInputElement.prototype,
           "value",
-        )!.set!.call(search, value);
-        search.dispatchEvent(new window.Event("input", { bubbles: true }));
+        )!.set!.call(input, value);
+        input.dispatchEvent(new window.Event("input", { bubbles: true }));
         await settle();
       });
-    const list = () =>
-      document.querySelector('nav[aria-label="Conversations"]')!.textContent!;
+    const results = () =>
+      [...document.querySelectorAll('[role="option"]')].map((option) =>
+        option.textContent ?? ""
+      ).join(" | ");
     await type("deploy");
-    assert.match(list(), /Deploy checklist/);
-    assert.doesNotMatch(list(), /Interview plan|Loose idea/);
+    assert.match(results(), /Deploy checklist/);
+    assert.doesNotMatch(results(), /Interview plan/);
     await type("research");
-    assert.match(list(), /Interview plan/);
-    assert.doesNotMatch(list(), /Deploy checklist/);
-    await type("zzz");
-    assert.match(list(), /Nothing matches “zzz”/);
+    assert.match(results(), /Interview plan/, "a chat matches its Space name");
   } finally {
     await shell.dispose();
   }

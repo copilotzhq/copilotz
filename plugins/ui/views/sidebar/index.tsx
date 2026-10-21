@@ -6,7 +6,7 @@ import * as React from "react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { readSpaces, readThreads } from "@copilotz/copilotz/core/web";
-import { ReadStatus } from "@copilotz/copilotz/web/kit";
+import { isReconnecting, ReadStatus } from "@copilotz/copilotz/web/kit";
 import {
   type MenuItem,
   menuItems,
@@ -173,7 +173,8 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
               toast("Space deleted.");
             }
             : undefined}
-          status={threadsRead.status !== "ready" || threadsRead.pending
+          status={(threadsRead.status !== "ready" &&
+              !isReconnecting(threadsRead)) || threadsRead.pending
             ? (
               <ReadStatus
                 state={threadsRead}

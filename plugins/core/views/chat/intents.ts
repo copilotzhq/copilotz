@@ -30,9 +30,17 @@ export interface ChatIntentInputs {
     threadId?: string;
     text: string;
     files?: readonly File[];
+    /** Participants addressed; omitted lets Core address every agent. */
     recipientIds?: readonly string[];
+    /** Agents addressed by external id (`resources.chat.agents` entries). */
+    recipientAgents?: readonly Record<string, unknown>[];
     /** A new conversation's Space. */
     spaceId?: string;
+    /**
+     * Create the conversation `threadId` names first (it does not exist yet):
+     * the first message shows at once and a retry continues the same thread.
+     */
+    create?: { name?: string; spaceId?: string };
     /** Retry this outbox message with its original id. */
     retry?: string;
   };
@@ -90,6 +98,29 @@ export type ChatIntent<N extends ChatIntentName = ChatIntentName> = (
 export type ChatIntents = { [N in ChatIntentName]: ChatIntent<N> };
 
 type Aliases = Readonly<Record<CoreActionName, string>>;
+
+/**
+ * A create that conflicts with an existing record repeats one that already
+ * happened (the same client-chosen id): it is done, not failed.
+ */
+function alreadyDone(error: unknown): undefined {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  if (code === "collection_conflict") return undefined;
+  throw error;
+}
+
+/** A failed send's message: plain words, never a raw server error. */
+function sendFailure(error: unknown): string {
+  const failure = error as { status?: unknown; code?: unknown } | undefined;
+  const status = typeof failure?.status === "number" ? failure.status : 0;
+  if (status === 401 || failure?.code === "unauthorized") {
+    return "Sign in again to send this message.";
+  }
+  if (status === 403 || failure?.code === "forbidden") {
+    return "You can't send messages here.";
+  }
+  return "Not sent. Check your connection and try again.";
+}
 
 function call(
   ctx: BrowserActionContext,
@@ -404,14 +435,16 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
         ? retainedFiles(ctx).get(input.retry) ?? []
         : input.files ?? [];
       if (!text && !files.length && !input.retry) return undefined;
-      let threadId = input.threadId;
-      if (!threadId) {
-        threadId = monotonicUlid();
-        await call(ctx, aliases.createThread, {
-          id: threadId,
-          name: titleFrom(text || files[0]?.name || ""),
-          ...(input.spaceId ? { spaceId: input.spaceId } : {}),
-          participants: [self, ...defaultAgents(ctx)],
+      // A new conversation has its id before anything is sent, so the first
+      // message shows at once and a retry continues the same thread.
+      const threadId = input.threadId ?? monotonicUlid();
+      if (input.create || !input.threadId) {
+        ctx.command("pendingThread", threadId, "set", {
+          name: input.create?.name ?? titleFrom(text || files[0]?.name || ""),
+          ...(input.create?.spaceId ?? input.spaceId
+            ? { spaceId: input.create?.spaceId ?? input.spaceId }
+            : {}),
+          created: false,
         });
       }
       const id = input.retry ?? monotonicUlid();
@@ -419,10 +452,25 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
         ? ctx.collections.outbox.get(id).value
         : undefined;
       const body = input.retry ? String(previous?.text ?? "") : text;
+      const recipientIds = input.retry
+        ? (previous?.recipientIds as string[] | undefined) ?? []
+        : input.recipientIds ?? [];
+      const agents = input.retry
+        ? (previous?.recipientAgents as
+          | Record<string, unknown>[]
+          | undefined) ??
+          []
+        : input.recipientAgents ?? [];
+      const addressed = input.retry
+        ? previous?.addressed === true
+        : input.recipientIds !== undefined || agents.length > 0;
       retainedFiles(ctx).set(id, files);
       ctx.command("outbox", id, "set", {
         threadId,
         text: body,
+        recipientIds: [...recipientIds],
+        recipientAgents: agents.map((agent) => ({ ...agent })),
+        addressed,
         attachments: input.retry ? previous?.attachments ?? [] : files.map((
           file,
         ) => ({
@@ -434,24 +482,49 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
         status: "sending",
         error: null,
         removed: false,
-        createdAt: new Date().toISOString(),
+        createdAt: input.retry
+          ? previous?.createdAt ?? new Date().toISOString()
+          : new Date().toISOString(),
       });
       try {
+        const pending = ctx.collections.pendingThread?.get(threadId).value;
+        if (pending && pending.created !== true) {
+          // An existing thread (an earlier attempt that did create it) is done.
+          await call(ctx, aliases.createThread, {
+            id: threadId,
+            name: String(pending.name ?? "New conversation"),
+            ...(typeof pending.spaceId === "string"
+              ? { spaceId: pending.spaceId }
+              : {}),
+            participants: [self, ...defaultAgents(ctx)],
+          }).catch(alreadyDone);
+          ctx.command("pendingThread", threadId, "set", { created: true });
+        }
         await call(ctx, aliases.createThreadMessage, {
           id,
           threadId,
           sender: self,
           content: await content(ctx, id, body, files),
-          ...(input.recipientIds?.length
-            ? { recipientIds: input.recipientIds }
+          // Explicit recipients, even none, keep Core's default (every agent
+          // in the thread) for apps that choose it by sending nothing.
+          ...(addressed ? { recipientIds: [...recipientIds] } : {}),
+          ...(agents.length
+            ? {
+              membership: {
+                participants: agents,
+                recipients: agents.map((agent) => ({
+                  externalId: String(agent.externalId),
+                })),
+              },
+            }
             : {}),
-        });
+        }).catch(alreadyDone);
         retainedFiles(ctx).delete(id);
         ctx.command("outbox", id, "set", { status: "sent" });
       } catch (error) {
         ctx.command("outbox", id, "set", {
           status: "failed",
-          error: error instanceof Error ? error.message : String(error),
+          error: sendFailure(error),
         });
         throw error;
       }

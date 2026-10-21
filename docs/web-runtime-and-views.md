@@ -29,6 +29,7 @@ import { reactRenderer } from "@copilotz/copilotz/web/react";
 import { threadFeedAdapter } from "@copilotz/copilotz/core/web";
 import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
 import {
+  bindShellSession,
   browserShellHistory,
   shellNavigation,
   shellUrlStorageAdapter,
@@ -59,7 +60,9 @@ const runtime = await createBrowserRuntime({
   show: shellNavigation(() => runtime),
 });
 const mounted = runtime.mount(element, { shows: "shell", value: null });
-// Later: mounted.dispose(); runtime.dispose(); device.close();
+// A revoked session shows the app's sign-in (`resources.shell.signIn`).
+const unbindSession = bindShellSession(runtime, device);
+// Later: unbindSession(); mounted.dispose(); runtime.dispose(); device.close();
 ```
 
 `live` accepts the SDK's `SubscriptionTransport`; use `createDeviceTransport`
@@ -150,12 +153,14 @@ including optimistic overlays.
 The server bounds live reads: 16 active subscriptions per socket and 32 per
 user; each filter up to 64 predicate nodes and 32 values per `in` list;
 `jsonEquals`, case-insensitive matching and filters SQL cannot evaluate are
-refused, and so is `order` by any field but `id` until ordered live reads land.
-A refused read is stale with `error.code` `subscription_query_refused` or
-`subscription_capacity_exceeded`; `ReadStatus` says what happened in plain
-words. Identical reads are shared: the runtime keys a read by its collection and
-canonical query, so Views asking the same question share one subscription.
-`/core/web` builds on that (see
+refused. Windows may be ordered by `id`, `createdAt`, `updatedAt` or a declared
+scalar field, with an id tiebreak; the SDK applies the owner's order with each
+batch. A refused read is stale or denied with `error.reason`
+(`query_unsupported`, `limit_exceeded`, `quota_exceeded`, `forbidden`,
+`unbound_collection` or `unavailable`); `ReadStatus` says what happened and what
+helps in plain words. Identical reads are shared: the runtime keys a read by its
+collection and canonical query, so Views asking the same question share one
+subscription. `/core/web` builds on that (see
 [Core and admin View contracts](#core-and-admin-view-contracts)).
 
 An Action's `optimistic` declaration names a Collection, pure command and
@@ -261,6 +266,16 @@ theme follows `shellPreferences.theme` (light, dark or system) by toggling
 `.dark` on the document; set `resources.shell.theme: "host"` to manage it
 yourself.
 
+When the session ends, the shell routes to sign-in. Connect the device's auth
+state once with `bindShellSession(runtime, device)`: on `{ state: "revoked" }`
+the shell replaces itself with the app's sign-in and releases every read, so
+nothing reconnects against the ended session. The app chooses the sign-in in
+`resources.shell.signIn`: a `view` (rendered full screen with `{ reason }`), an
+`href` (a relative or http(s) link) or an `action` alias; without one the screen
+asks the reader to sign in again. After a new HTTP session, the app calls
+`device.reauthenticate()` and then `runtime.actions.shellSessionRestored({})`,
+and the shell returns where it was.
+
 ### Chat
 
 `createCoreWebPlugin({ actionAliases?, intents?, commands? })` configures chat;
@@ -293,8 +308,29 @@ KiB say so instead. A renderer receives the parsed value as `data`, with
 `chatSend` shows the message at once from the `outbox` (a failed send keeps
 Retry and Discard), uploads attachments through `adapters.core.feed.upload`
 (inline up to 512 KiB without it), then calls `createThreadMessage` with a
-`monotonicUlid` id. It omits `recipientIds` unless the text @mentions agents, so
-Core addresses the thread's agents.
+`monotonicUlid` id. It retries with the same id; a create the server already
+applied (`collection_conflict`) counts as done, so a retry never duplicates a
+message.
+
+Typing `@` in the composer opens a mention picker over the thread's agents
+(arrow keys, Enter or Tab to pick, Escape to close), followed by the app's
+`resources.chat.agents` not yet in it, so mentions work even when people can't
+be read. A mention becomes the message's `recipientIds`; an agent mentioned by
+its configured entry joins and is addressed through `membership` by
+`externalId`. Without a mention, the app chooses who answers with
+`resources.chat.defaultRecipients`:
+
+- `"first"` (the default) addresses one agent: the configured agent marked
+  `default: true` when it is in the thread, else the thread's first agent, else
+  the configured default (or first) agent. The composer always sends explicit
+  recipients, so Core's default (every thread agent) does not apply.
+- `"all"` omits `recipientIds`, so Core addresses every agent in the thread.
+
+A new chat shows its first message at once. The browser picks the thread id,
+remembers the pending thread (`pendingThread`, which titles the View until the
+thread arrives) and opens it, then creates the thread and sends. Creating with
+the same id is idempotent, so Retry continues the same thread instead of
+starting another one; a failed send stays in the thread with Retry and Discard.
 
 ### Streaming
 
@@ -318,8 +354,8 @@ components.
 | Slot             | Declare                                                                                                                      | The View receives                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                             |
-| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats)                                    | —                                                             |
-| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                 | `{spaceId, threadId}`, mode `full` or `panel`                 |
+| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats), `.defaultRecipients`              | —                                                             |
+| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?, params?}`; `null` hides a built-in                        | `{spaceId, threadId}`, mode `full` or `panel`                 |
 | Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                           |
 | Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)              |
 | User menu        | `resources.userMenu.<id>` (same shape)                                                                                       | `{}`, or the page value                                       |
@@ -329,14 +365,18 @@ components.
 | Admin sections   | `resources.adminSections.<id> {label, icon?, order?, description?, view?, requires?}`; `null` hides a built-in               | `{section}`, mode `full`                                      |
 | Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                 | —                                                             |
 | Images           | `resources.markdown.imageOrigins`                                                                                            | —                                                             |
+| Sign-in          | `resources.shell.signIn {view? or href? or action?}`, with `bindShellSession(runtime, device)`                               | `{reason}`, mode `full`                                       |
 
 Built-in Space sections are `overview` (order 0), `conversations` (10) and
 `members` (90). A section's `tools` lists tool names; when an agent uses one in
-the open chat, its tab gets a dot instead of switching. `icon` is a kit icon
-name (`iconNames`). A menu item runs its `action` alias with the input shown,
-opens its `dialog` View, or opens its `page`; `requires: "thread"` or `"space"`
-limits where it appears. A page is a View kind shown in main; its section lives
-in the URL (`?page=<kind>&section=<id>`), and it switches sections with
+the open chat, its tab gets a dot instead of switching; a call that failed or
+was cancelled adds no dot. A section's `params` lists the URL parameters its
+Views own (such as `board`, `card`); the shell removes them from the URL when
+another section, or none, shows. `icon` is a kit icon name (`iconNames`). A menu
+item runs its `action` alias with the input shown, opens its `dialog` View, or
+opens its `page`; `requires: "thread"` or `"space"` limits where it appears. A
+page is a View kind shown in main; its section lives in the URL
+(`?page=<kind>&section=<id>`), and it switches sections with
 `ctx.show({ shows: kind, value: { section } }, { source: "link", region:
 "main" })`.
 The header gives the title priority: the agent selector slot takes the width
@@ -459,8 +499,10 @@ over fixture data, with a demo feed that streams replies and tool output.
 Message text may come from an LLM steered by prompt injection or from another
 thread participant, so Markdown never fetches anything without a click. The kit
 `Markdown` renders GitHub-flavored Markdown, math (KaTeX, with a MathML copy for
-assistive technology) and highlighted code with a copy button. It discards raw
-HTML (`skipHtml`; there is no raw HTML plugin) and applies
+assistive technology) and highlighted code with a copy button. Math may be
+written `$…$` and `$$…$$` or `\(…\)` and `\[…\]`; code spans and blocks keep
+their text, and KaTeX runs without `trust`. It discards raw HTML (`skipHtml`;
+there is no raw HTML plugin) and applies
 `markdownUrlPolicy({ origin, imageOrigins })` from `/web`, which any Markdown
 component can reuse:
 
@@ -512,14 +554,17 @@ shows its error and allows retry.
 Patterns: `Screen` (a title row, actions and content in full or panel density),
 `Frame` (a Screen, or a Dialog header in dialog mode), `ReadStatus` (one
 vocabulary for loading, empty, held, reconnecting, refused, missing and the live
-read limits), `Metric`, `DetailList`, `ResourceTable` (humanized headers,
-relative times, figures aligned right), `ResourceToolbar`, `ResourceList`,
-`ResourceRow`, `ResourceHeader`, `PaneBoundary` and
-`showSafely(ctx, ref,
-hints, label?)`, which contains View resolution and render
-errors. Also `Markdown`, `Icon` and `iconNames`, `identityColor` and `initials`,
-the formatting helpers from `/web` (`formatRelative`, `formatBytes`, …) and
-`dom` helpers typed without the DOM library.
+read limits; `transient="quiet"` leaves reconnecting to a single indicator),
+`ConnectionStatus` (that indicator: it shows only after a reconnect lasts 2.5 s,
+so brief reconnects don't flash), `isReconnecting`, `useSustained`, `Metric`,
+`DetailList`, `ResourceTable` (humanized headers, relative times, figures
+aligned right), `ResourceToolbar`, `ResourceList`, `ResourceRow`,
+`ResourceHeader`, `PaneBoundary` and `showSafely(ctx, ref,
+hints, label?)`,
+which contains View resolution and render errors. Also `Markdown`, `Icon` and
+`iconNames`, `identityColor` and `initials`, the formatting helpers from `/web`
+(`formatRelative`, `formatBytes`, …) and `dom` helpers typed without the DOM
+library.
 
 All plugin TSX has explicit React value imports and file-level classic JSX
 pragmas. Consumers can use their default TSX transform; they need no automatic
@@ -609,21 +654,22 @@ Collection inspector are not addressable.
 Threads display and create the Collection's `name`. `/core/web` exports the
 reads its Views share, for apps to reuse in tracked View rendering:
 
-- `readThreads(ctx)`: the reader's newest 200 conversations (id order, which the
-  live owner supports), sorted by `updatedAt`.
+- `readThreads(ctx)`: the reader's 200 most recently updated conversations, a
+  live window ordered by `updatedAt`, so a conversation that changes moves to
+  the top.
 - `readThread(ctx, id)` and `readSpace(ctx, id)`: one record, served from the
   shared lists when they hold it, so the header, panel, composer and thread add
   no read of their own.
-- `readSpaces(ctx)` and `readSpaceThreads(ctx, spaceId)`.
+- `readSpaces(ctx)` (by name) and `readSpaceThreads(ctx, spaceId)` (most
+  recently updated first), both live ordered windows.
 - `readParticipants(ctx, ids)` and `readSenders(ctx, ids)`: people in one `in`
   read per 32 ids, sorted so Views asking for the same people share it.
 - `readThreadMessages(ctx, threadId, limit?)` with `messageReadSelection`: the
   thread's newest messages by `createdAt`, returned oldest first by creation
   time and then id, the order Core history uses. Message ids are not a timeline:
   agent replies and tool results use ids derived from the work that produced
-  them. Until ordered live reads land the server refuses this read; the thread
-  says live updates are unavailable and keeps the messages sent from this device
-  visible.
+  them. The window is live and ordered by `createdAt`, so new messages and
+  replies from other devices and tabs appear as they are written.
 
 A conversation with its panel open uses five live reads: its messages, its
 people, the conversation list, the Space list and its Space's chats.

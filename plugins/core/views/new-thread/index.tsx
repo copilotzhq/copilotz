@@ -7,6 +7,12 @@ import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { chatConfig } from "../chat/context.tsx";
 import { startConversation } from "../chat/start.ts";
+import {
+  configuredAgents,
+  recipientPolicy,
+  resolveRecipients,
+  sendRecipients,
+} from "../chat/recipients.ts";
 import { readSpace } from "../reads.ts";
 import { ConversationStart } from "../thread/index.tsx";
 
@@ -49,6 +55,12 @@ const view: ViewDefinition<
               ? (text) =>
                 void startConversation(ctx, {
                   text,
+                  ...sendRecipients(resolveRecipients({
+                    mentioned: [],
+                    threadAgents: [],
+                    configured: configuredAgents(ctx),
+                    policy: recipientPolicy(ctx),
+                  })),
                   ...(spaceId ? { spaceId } : {}),
                 }).catch(() => {})
               : undefined}

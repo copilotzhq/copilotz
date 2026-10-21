@@ -59,11 +59,85 @@ export function Screen(
 
 type AnyRead = ReadState & { refresh?(): void };
 
+/** The stable reasons a live read is refused (device `reason`). */
+export type RefusalReason =
+  | "query_unsupported"
+  | "limit_exceeded"
+  | "quota_exceeded"
+  | "forbidden"
+  | "unbound_collection"
+  | "unavailable";
+
+const refusalCopy: Record<
+  RefusalReason,
+  {
+    tone: "info" | "warning" | "error";
+    title: string;
+    body: string;
+    retry: boolean;
+  }
+> = {
+  query_unsupported: {
+    tone: "warning",
+    title: "Live updates unavailable",
+    body: "These {noun} can't be followed live here. Reload to see the latest.",
+    retry: true,
+  },
+  limit_exceeded: {
+    tone: "warning",
+    title: "Too much to follow live",
+    body:
+      "There are more {noun} here than live updates can follow. Narrow the view, or reload to see the latest.",
+    retry: true,
+  },
+  quota_exceeded: {
+    tone: "warning",
+    title: "Too many live views open",
+    body: "Close a panel or another tab of this app, then try again.",
+    retry: true,
+  },
+  forbidden: {
+    tone: "error",
+    title: "No access to these {noun}",
+    body:
+      "Ask an owner to share them with you, or sign in with another account.",
+    retry: false,
+  },
+  unbound_collection: {
+    tone: "info",
+    title: "Not available here",
+    body: "This app doesn't offer these {noun}.",
+    retry: false,
+  },
+  unavailable: {
+    tone: "error",
+    title: "Couldn't load {noun}",
+    body: "Something went wrong. Try again in a moment.",
+    retry: true,
+  },
+};
+
+/** A refusal's reason, from the device `reason` or the older error codes. */
+export function refusalReason(
+  error: ReadState["error"],
+): RefusalReason | undefined {
+  const reason = error?.reason ??
+    (error?.code === "subscription_capacity_exceeded"
+      ? "quota_exceeded"
+      : error?.code === "subscription_query_refused"
+      ? "query_unsupported"
+      : error?.code === "unbound_collection"
+      ? "unbound_collection"
+      : undefined);
+  return reason && reason in refusalCopy ? reason as RefusalReason : undefined;
+}
+
 /**
  * One vocabulary for every read: loading, empty, reconnecting, refused,
- * failed, missing and held, plus the live read limits
- * (`subscription_capacity_exceeded`, `subscription_query_refused`). Renders
- * nothing for a ready read that has data.
+ * failed, missing and held, plus a refused live read's reason
+ * (`query_unsupported`, `limit_exceeded`, `quota_exceeded`, `forbidden`,
+ * `unbound_collection`, `unavailable`). Renders nothing for a ready read that
+ * has data.
  * `noun` names what is read ("conversations"); `empty` marks a ready, empty
  * read and shows `emptyTitle`, `emptyHint` and `emptyAction`.
  */
@@ -76,6 +150,7 @@ export function ReadStatus(
     emptyHint,
     emptyAction,
     compact = false,
+    transient = "notice",
   }: {
     state: AnyRead;
     noun?: string;
@@ -84,6 +159,12 @@ export function ReadStatus(
     emptyHint?: React.ReactNode;
     emptyAction?: React.ReactNode;
     compact?: boolean;
+    /**
+     * A reconnecting read (stale, nothing refused): `notice` shows one quiet
+     * line after a moment; `quiet` shows nothing, for Views covered by the
+     * shell's own indicator.
+     */
+    transient?: "notice" | "quiet";
   },
 ): React.ReactElement | null {
   const retry = state.refresh
@@ -98,26 +179,19 @@ export function ReadStatus(
       </Button>
     )
     : undefined;
-  // Live read limits: say what happened and what helps, never a raw code.
-  const code = state.error?.code;
-  if (
-    (state.status === "stale" || state.status === "denied") &&
-    code === "subscription_capacity_exceeded"
-  ) {
+  // A refused live read: say what happened and what helps, never a raw code.
+  const refusal = state.status === "stale" || state.status === "denied"
+    ? refusalReason(state.error)
+    : undefined;
+  if (refusal) {
+    const copy = refusalCopy[refusal];
     return (
-      <Notice tone="warning" title="Too many live views open" action={retry}>
-        Close a panel or another tab of this app, then try again.
-      </Notice>
-    );
-  }
-  if (
-    (state.status === "stale" || state.status === "denied") &&
-    code === "subscription_query_refused"
-  ) {
-    return (
-      <Notice tone="warning" title="Live updates unavailable" action={retry}>
-        These {noun}{" "}
-        can't stay up to date here yet. Reload the page to see the latest.
+      <Notice
+        tone={copy.tone}
+        title={copy.title.replace("{noun}", noun)}
+        action={copy.retry ? retry : undefined}
+      >
+        {copy.body.replace("{noun}", noun)}
       </Notice>
     );
   }
@@ -188,11 +262,9 @@ export function ReadStatus(
           </Notice>
         );
       }
-      return (
-        <Notice tone="warning" title="Reconnecting…" action={retry}>
-          Showing the last saved {noun}.
-        </Notice>
-      );
+      // A brief reconnect keeps the data on screen and says nothing; a long
+      // one shows one quiet line (the shell shows its own indicator).
+      return transient === "quiet" ? null : <Reconnecting compact={compact} />;
     case "denied":
       return (
         <Notice tone="error" title={`No access to these ${noun}`}>
@@ -206,6 +278,69 @@ export function ReadStatus(
         </Notice>
       );
   }
+}
+
+/** True once `active` has stayed true for `ms`; false as soon as it ends. */
+export function useSustained(active: boolean, ms = 2500): boolean {
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => {
+    if (!active) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+  return active && shown;
+}
+
+/** Whether a read is only reconnecting: stale, with nothing refused. */
+export function isReconnecting(state: ReadState): boolean {
+  return state.status === "stale" &&
+    (!state.error || state.error.kind === "unavailable") &&
+    !refusalReason(state.error);
+}
+
+function Reconnecting(
+  { compact }: { compact: boolean },
+): React.ReactElement | null {
+  const shown = useSustained(true);
+  if (!shown) return null;
+  return (
+    <p
+      role="status"
+      className={cn(
+        "text-muted-foreground flex items-center gap-2 text-xs",
+        compact ? "py-1" : "justify-center py-2",
+      )}
+    >
+      <Spinner className="size-3" /> Reconnecting…
+    </p>
+  );
+}
+
+/**
+ * One unobtrusive connection indicator for a whole screen: it appears only
+ * after the connection has been away for a moment, so brief reconnects never
+ * flash.
+ */
+export function ConnectionStatus(
+  { reconnecting, className }: { reconnecting: boolean; className?: string },
+): React.ReactElement | null {
+  const shown = useSustained(reconnecting);
+  if (!shown) return null;
+  return (
+    <span
+      role="status"
+      data-slot="connection-status"
+      className={cn(
+        "text-muted-foreground bg-muted inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs",
+        className,
+      )}
+    >
+      <Spinner className="size-3" /> Reconnecting…
+    </span>
+  );
 }
 
 /** A labelled figure. */

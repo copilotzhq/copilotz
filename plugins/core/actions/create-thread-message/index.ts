@@ -21,6 +21,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import { decodeGeneratedContent } from "@copilotz/copilotz/content";
 import { asRecord, requiredText } from "../../shared/validation.ts";
+import { retryCoreMutation } from "../../shared/retry-mutation.ts";
 export const CREATE_THREAD_MESSAGE_ACTION_ID =
   "copilotz.core.thread-message.create";
 export type ThreadMessageSender = CollectionRecord | ParticipantInput;
@@ -288,8 +289,8 @@ function threadMembership(value: unknown): ThreadMembership {
   );
   return { participants, recipients };
 }
-/** Idempotent Core domain write, usable without creating a child Action receipt. */
-export async function createThreadMessage(
+/** One atomic write prepared from a fresh conversation snapshot. */
+async function createThreadMessageAttempt(
   input: unknown,
   context: Pick<ActionContext, "collections" | "content" | "transaction">,
 ): Promise<CollectionRecord> {
@@ -423,6 +424,20 @@ export async function createThreadMessage(
       visibility: messageVisibility,
       ...(historyScopeId ? { historyScopeId } : {}),
     }, options);
+    // A visible message is activity: the thread's updatedAt moves with it,
+    // in the same transaction, so recent lists reorder. Internal work does not.
+    if (messageVisibility.kind !== "internal") {
+      await collections.thread.commands.recordMessage({
+        id: threadId,
+        messageId: id,
+      }, {
+        operationKey: `message-activity:${id}`,
+        metadata: {
+          ...coreThreadObservationMetadata(threadId),
+          core: { threadId },
+        },
+      });
+    }
     return created;
   });
   const created = await context.collections.message.get({ id });
@@ -430,6 +445,17 @@ export async function createThreadMessage(
     throw new Error(`Message '${id}' was not created.`);
   }
   return created;
+}
+/** Idempotent Core domain write, usable without creating a child Action receipt.
+ * Re-read after known rollback: parallel Tool/Ask branches can update membership
+ * or activity while another message is being prepared. */
+export async function createThreadMessage(
+  input: unknown,
+  context: Pick<ActionContext, "collections" | "content" | "transaction">,
+): Promise<CollectionRecord> {
+  return await retryCoreMutation(() =>
+    createThreadMessageAttempt(input, context)
+  );
 }
 const createInputSchema = {
   type: "object",

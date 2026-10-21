@@ -6,6 +6,7 @@ import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
+  formatBucket,
   formatCount,
   humanize,
   Metric,
@@ -276,17 +277,27 @@ export function adminSection(
       : Array.isArray(analytics?.breakdown)
       ? analytics.breakdown
       : []) as Record<string, unknown>[];
-  // Usage rows group by dimensions such as model and provider.
-  const shown = rows.map((row) =>
-    row.dimensions && typeof row.dimensions === "object"
-      ? {
-        ...row,
+  const shown = rows.map((row) => {
+    let next = row;
+    // Usage rows group by dimensions such as model and provider.
+    if (row.dimensions && typeof row.dimensions === "object") {
+      next = {
+        ...next,
         dimensions: Object.values(row.dimensions).filter((part) =>
           part !== null && part !== undefined && part !== ""
         ).join(" · "),
-      }
-      : row
-  );
+      };
+    }
+    // Activity buckets are calendar days, not moments: "Today", not "10
+    // hours ago".
+    if (section === "activity" && typeof row.bucket === "string") {
+      next = { ...next, bucket: formatBucket(row.bucket) };
+    }
+    if (section === "threads" && !row.name) {
+      next = { ...next, name: "Untitled conversation" };
+    }
+    return next;
+  });
   const ready = state.status === "ready" && !failed;
   return (
     <div className="grid min-w-0 gap-4">

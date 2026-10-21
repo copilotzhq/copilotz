@@ -7,8 +7,15 @@ import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { readThread } from "../reads.ts";
 import { chatConfig, readSenders } from "../chat/context.tsx";
-import { Composer, type MentionTarget } from "../chat/composer.tsx";
+import { Composer } from "../chat/composer.tsx";
 import { startConversation } from "../chat/start.ts";
+import {
+  configuredAgents,
+  mentionTargets,
+  recipientPolicy,
+  resolveRecipients,
+  sendRecipients,
+} from "../chat/recipients.ts";
 
 /** The draft key: the thread, or a new conversation (optionally in a Space). */
 export function draftKey(threadId?: string, spaceId?: string): string {
@@ -39,10 +46,20 @@ const view: ViewDefinition<
     const participants = Array.isArray(thread?.participantIds)
       ? thread.participantIds.map(String)
       : [];
-    const targets: MentionTarget[] = [...readSenders(ctx, participants)]
-      .flatMap(([id, sender]) =>
-        sender.type === "agent" ? [{ id, name: sender.name, sender }] : []
-      );
+    // The thread's agents that could be read, in thread order, then the
+    // app's configured agents: mentions work even when people can't be read.
+    const threadAgents = [...readSenders(ctx, participants).values()].filter((
+      sender,
+    ) => sender.type === "agent" && !sender.unknown);
+    const configured = configuredAgents(ctx);
+    const targets = mentionTargets(threadAgents, configured);
+    const recipients = (mentioned: readonly string[]) =>
+      sendRecipients(resolveRecipients({
+        mentioned,
+        threadAgents,
+        configured,
+        policy: recipientPolicy(ctx),
+      }));
     const send = ctx.actions.chatSend;
     const disabledReason = !config.self
       ? "Sign in to send messages."
@@ -80,7 +97,7 @@ const view: ViewDefinition<
               await startConversation(ctx, {
                 text,
                 files,
-                recipientIds,
+                ...recipients(recipientIds),
                 ...(spaceId ? { spaceId } : {}),
               });
             } catch (error) {
@@ -90,7 +107,8 @@ const view: ViewDefinition<
             return;
           }
           // A failed send stays in the conversation with Retry.
-          await send({ threadId, text, files, recipientIds }).result()
+          await send({ threadId, text, files, ...recipients(recipientIds) })
+            .result()
             .catch(() => {});
         }}
       />

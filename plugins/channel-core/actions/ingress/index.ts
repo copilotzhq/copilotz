@@ -852,6 +852,16 @@ async function executeChannelIngress(
             },
           },
         });
+        // An inbound message is activity: the thread moves up recent lists.
+        if (messageVisibility.kind !== "internal") {
+          await transaction.collections.thread.commands.recordMessage({
+            id: threadId,
+            messageId,
+          }, {
+            operationKey: "message:activity",
+            metadata: { core: { threadId } },
+          });
+        }
       }, {
         operationKey: `ingress:${input.id}:commit`,
         identity: {

@@ -4,6 +4,7 @@
 import { captureContentInput } from "../content/input.ts";
 import { createContentPreparer } from "../content/preparer.ts";
 import { digestContent } from "../content/digest.ts";
+import { capturePendingContentRef } from "../content/schema.ts";
 import type {
   AssetOrigin,
   ContentInput,
@@ -148,7 +149,19 @@ export async function captureWorkerContent(
         });
       }
       port.signal.throwIfAborted();
-      result.push(await writer.close({ assetId: operationKey, descriptor }));
+      const pending = capturePendingContentRef(
+        await writer.close({ assetId: operationKey, descriptor }),
+      );
+      if (
+        pending.byteLength !== source.byteLength ||
+        pending.digest !== source.digest ||
+        pending.mediaType !== source.mediaType
+      ) {
+        throw new Error(
+          "Captured content does not match its complete prepared body.",
+        );
+      }
+      result.push(pending);
     } catch (error) {
       // Failure of cleanup is itself significant (the worker fatal latch sees
       // every underlying RPC); do not turn an uncertain upload into success.

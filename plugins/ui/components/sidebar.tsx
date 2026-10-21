@@ -220,7 +220,7 @@ function ThreadRow(
   return (
     <li
       className={cn(
-        "group/row relative flex items-center rounded-md",
+        "group/row relative flex min-w-0 items-center rounded-md",
         selected
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "hover:bg-sidebar-accent/60",
@@ -374,7 +374,7 @@ function SpaceGroup(
   const droppable = Boolean(props.onMove) && !group.unavailable;
   return (
     <li
-      className="grid gap-0.5"
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-0.5"
       onDragOver={(event) => {
         if (
           !droppable ||
@@ -547,7 +547,7 @@ function SpaceGroup(
         />
       )}
       {open && (
-        <ul id={listId} className="grid gap-0.5 pl-4">
+        <ul id={listId} className="grid grid-cols-[minmax(0,1fr)] gap-0.5 pl-4">
           {children}
         </ul>
       )}
@@ -565,7 +565,6 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
     expanded,
     labels = {},
   } = props;
-  const [query, setQuery] = useState("");
   const [picking, setPicking] = useState<Row | null>(null);
   const [localCreating, setLocalCreating] = useState(false);
   const creating = props.creatingSpace ?? localCreating;
@@ -573,31 +572,13 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const spacesById = new Map(spaces.map((space) => [space.id, space]));
   const active = spaces.filter((space) => space.status !== "archived");
-  const needle = query.trim().toLowerCase();
-  const matches = (thread: Row) => {
-    if (!needle) return true;
-    const space = typeof thread.spaceId === "string"
-      ? spacesById.get(thread.spaceId)
-      : undefined;
-    return title(thread).toLowerCase().includes(needle) ||
-      spaceName(space).toLowerCase().includes(needle);
-  };
   const hasArchived = threads.some((thread) => thread.status === "archived");
   const visible = threads.filter((thread) =>
-    (showArchived || thread.status !== "archived") && matches(thread)
+    showArchived || thread.status !== "archived"
   );
   const bySpace = props.spacesEnabled && groupBy === "space";
   const groups = bySpace
-    ? groupThreadsBySpace(
-      visible,
-      needle
-        ? active.filter((space) =>
-          spaceName(space).toLowerCase().includes(needle) ||
-          visible.some((thread) => thread.spaceId === space.id)
-        )
-        : spaces,
-      labels.noSpace ?? "No Space",
-    )
+    ? groupThreadsBySpace(visible, spaces, labels.noSpace ?? "No Space")
     : groupThreadsByRecency(visible);
   const touch = useTouchSpaceDrag({
     enabled: Boolean(props.onMove),
@@ -651,7 +632,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
     </li>
   );
   const isOpen = (group: ThreadGroup) =>
-    !group.spaceId || Boolean(needle) || expanded.has(group.spaceId);
+    !group.spaceId || expanded.has(group.spaceId);
   return (
     <div
       data-slot="sidebar"
@@ -771,25 +752,20 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
           >
             <SquarePen /> {labels.newChat ?? "New chat"}
           </Button>
-          <label className="relative">
-            <span className="sr-only">{labels.search ?? "Search"}</span>
-            <Search
-              aria-hidden="true"
-              className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
-            />
-            <Input
-              type="search"
-              value={query}
-              placeholder={labels.search ?? "Search"}
-              className="bg-background h-8 pr-12 pl-8"
-              onChange={(event) =>
-                setQuery((event.target as unknown as { value: string }).value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setQuery("");
-              }}
-            />
-            <Kbd className="absolute top-1/2 right-2 -translate-y-1/2">⌘K</Kbd>
-          </label>
+          {/* Search lives in the palette: the box opens it, as ⌘K does. */}
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-keyshortcuts="Meta+K Control+K"
+            onClick={props.onOpenSearch}
+            className="bg-background text-muted-foreground hover:text-foreground border-input focus-visible:ring-ring/45 flex h-8 w-full items-center gap-2 rounded-md border px-2.5 text-left text-sm shadow-xs outline-none focus-visible:ring-[3px]"
+          >
+            <Search aria-hidden="true" className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">
+              {labels.search ?? "Search"}
+            </span>
+            <Kbd>⌘K</Kbd>
+          </button>
           {props.spacesEnabled && (
             <div
               role="group"
@@ -853,11 +829,9 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
             ? (
               <div className="grid justify-items-center gap-3 px-3 py-8 text-center">
                 <p className="text-muted-foreground text-sm">
-                  {needle
-                    ? `Nothing matches “${query.trim()}”.`
-                    : labels.emptyChats ?? "No conversations yet."}
+                  {labels.emptyChats ?? "No conversations yet."}
                 </p>
-                {!needle && (
+                <div className="flex flex-wrap justify-center gap-2">
                   <Button
                     type="button"
                     size="sm"
@@ -866,16 +840,23 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
                   >
                     <SquarePen /> {labels.newChat ?? "New chat"}
                   </Button>
-                )}
+                  {props.spacesEnabled && props.onCreateSpace && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setCreating(true)}
+                    >
+                      <Plus /> {labels.newSpace ?? "New Space"}
+                    </Button>
+                  )}
+                </div>
               </div>
             )
             : bySpace
             ? (
-              <ul className="grid gap-0.5">
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
                 {groups.map((group) => [
-                  group.key === "space:none" && props.onCreateSpace
-                    ? newSpace
-                    : null,
                   <SpaceGroup
                     key={group.key}
                     group={group}
@@ -901,8 +882,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
                       )}
                   </SpaceGroup>,
                 ])}
-                {!groups.some((group) => group.key === "space:none") &&
-                  props.onCreateSpace && newSpace}
+                {props.onCreateSpace && newSpace}
               </ul>
             )
             : (
@@ -912,7 +892,9 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
                     <h2 className="text-muted-foreground px-2.5 pb-1 text-xs font-medium">
                       {group.label}
                     </h2>
-                    <ul className="grid gap-0.5">{rows(group)}</ul>
+                    <ul className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
+                      {rows(group)}
+                    </ul>
                   </section>
                 ))}
               </div>

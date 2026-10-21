@@ -1,6 +1,8 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   afterSqlCommit,
+  afterSqlSettlement,
+  bindSqlTransactionAlias,
   createSqlSession,
   runSqlTransaction,
   sqlCommitGate,
@@ -37,6 +39,7 @@ for (const outcome of ["rollback", "unknown commit"] as const) {
   Deno.test(`SQL output gate stays closed after ${outcome}`, async () => {
     let gate!: () => void;
     let publications = 0;
+    let settled = 0;
     await assertRejects(() =>
       runSqlTransaction({
         async transaction(operation) {
@@ -44,13 +47,19 @@ for (const outcome of ["rollback", "unknown commit"] as const) {
           throw new Error("commit acknowledgement lost");
         },
       }, (transaction) => {
-        gate = sqlCommitGate(transaction);
-        afterSqlCommit(transaction, () => publications++);
+        const alias: SqlExecutor = {
+          query: (sql, params) => transaction.query(sql, params),
+        };
+        bindSqlTransactionAlias(alias, transaction);
+        gate = sqlCommitGate(alias);
+        afterSqlCommit(alias, () => publications++);
+        afterSqlSettlement(alias, () => settled++);
         if (outcome === "rollback") throw new Error("rollback");
         return Promise.resolve();
       })
     );
     assertEquals(publications, 0);
+    assertEquals(settled, 1);
     assertThrows(gate, Error, "has not confirmed commit");
   });
 }

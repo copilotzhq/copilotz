@@ -13,15 +13,18 @@ import {
 } from "@copilotz/copilotz/web";
 import {
   browser,
+  Button,
   cn,
   Dialog,
   DialogContent,
   DialogTitle,
   domEvent,
+  EmptyState,
   mediaMatches,
   showSafely,
   TooltipProvider,
 } from "@copilotz/copilotz/web/kit";
+import { LockKeyhole } from "lucide-react";
 import { resolveDarkMode, shellPreferences, shellState } from "../../model.ts";
 import { Toaster } from "../../components/toaster.tsx";
 
@@ -104,6 +107,74 @@ export function navReference(
   return origin === "url" ? urlReference(reference) ?? reference : reference;
 }
 
+/** A sign-in link the app configured: relative, or http(s). */
+function signInHref(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  if (value.startsWith("/") && !value.startsWith("//")) return value;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The session ended: the app's sign-in View (`resources.shell.signIn.view`),
+ * or a calm screen with its sign-in link (`href`) or Action (`action`). It
+ * reads nothing, so no read retries against the ended session.
+ */
+function SignedOut(
+  { ctx, code }: { ctx: BrowserViewContext; code: string },
+): React.ReactElement {
+  const signIn = ((ctx.resources.shell as Record<string, unknown> | undefined)
+    ?.signIn ?? {}) as Record<string, unknown>;
+  if (typeof signIn.view === "string") {
+    return (
+      <div data-slot="signed-out" className="bg-background min-h-dvh">
+        {showSafely(
+          ctx,
+          { shows: signIn.view, value: { reason: code } },
+          { mode: "full" },
+          "Sign in",
+        )}
+      </div>
+    );
+  }
+  const href = signInHref(signIn.href);
+  const action = typeof signIn.action === "string"
+    ? ctx.actions[signIn.action]
+    : undefined;
+  return (
+    <main
+      data-slot="signed-out"
+      className="bg-background text-foreground grid min-h-dvh place-items-center p-6"
+    >
+      <EmptyState
+        icon={<LockKeyhole />}
+        title="You've been signed out"
+        action={href
+          ? (
+            <Button asChild>
+              <a href={href}>Sign in again</a>
+            </Button>
+          )
+          : action
+          ? (
+            <Button type="button" onClick={() => void action({}).result()}>
+              Sign in again
+            </Button>
+          )
+          : undefined}
+      >
+        Your session ended. Sign in again to keep working.
+      </EmptyState>
+    </main>
+  );
+}
+
 /**
  * The chat shell: sidebar or icon rail, header, main (a conversation, a
  * Space, or a new conversation) and the resizable right panel. One layout at
@@ -116,10 +187,22 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
     renderer: "react",
     modes: ["full"],
     render(_value, ctx) {
-      const nav = shellState(ctx.collections.shell.get("main").value);
       const preferences = shellPreferences(
         ctx.collections.shellPreferences.get("main").value,
       );
+      const manage =
+        (ctx.resources.shell as Record<string, unknown> | undefined)
+          ?.theme !== "host";
+      const session = ctx.collections.shellSession?.get("main").value;
+      if (session?.state === "revoked") {
+        return (
+          <>
+            {manage && <Theme theme={preferences.theme} />}
+            <SignedOut ctx={ctx} code={String(session.code ?? "")} />
+          </>
+        );
+      }
+      const nav = shellState(ctx.collections.shell.get("main").value);
       const overlay = ctx.collections.shellOverlay.get("main").value;
       const toasts = ctx.collections.shellToasts.list().value.filter((row) =>
         !row.removed

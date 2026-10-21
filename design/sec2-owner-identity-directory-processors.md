@@ -145,3 +145,7 @@ interrupted file plus remaining files passed in a continuation. The browser
 bundle regression exposed missing pure annotations on the two lazy context
 stores; corrected and verified before the final attempts. No server or device
 implementation files were changed.
+
+Native Collection directory mutations extend this contract in
+[Native directory Collection commands](sec2-native-directory-collections.md).
+The joined SQL service interface remains available for service-owned tables.

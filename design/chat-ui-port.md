@@ -102,16 +102,19 @@ omitting `recipientIds` unless @mentioned so Core defaults to the thread's
 agents. New conversations add `resources.chat.agents`.
 
 Reads: `readThreadMessages(ctx, id, limit)` (newest by `createdAt`, the window
-grows by 100 on "Load older"; until ordered live reads land the View shows the
-refusal calmly), `readThreads` (id-desc window, sorted by `updatedAt`),
-`readSpaces`, `readSpaceThreads`, and, served from those shared lists when they
-hold the record, `readThread` and `readSpace`. People are `readParticipants`
-(one `in` read per 32 sorted ids; `readSenders` builds on it), so the thread,
-composer and agent selector share one read. A chat with its panel open uses five
-live reads (messages, people, conversations, Spaces, the Space's chats), well
-inside SEC3's 16 per socket. A refused read keeps its code
-(`subscription_query_refused`, `subscription_capacity_exceeded`) in
-`ReadState.error`, and `ReadStatus` explains it.
+grows by 100 on "Load older"), `readThreads` (a live window ordered by
+`updatedAt`), `readSpaces` (by name), `readSpaceThreads` (by `updatedAt`), and,
+served from those shared lists when they hold the record, `readThread` and
+`readSpace`. People are `readParticipants` (one `in` read per 32 sorted ids;
+`readSenders` builds on it), so the thread, composer and agent selector share
+one read. A chat with its panel open uses five live reads (messages, people,
+conversations, Spaces, the Space's chats), well inside SEC3's 16 per socket. A
+refused read keeps its code and `reason` (`query_unsupported`, `limit_exceeded`,
+`quota_exceeded`, `forbidden`, `unbound_collection`, `unavailable`) in
+`ReadState.error`, and `ReadStatus` explains it. A revoked session
+(`bindShellSession(runtime, device)`) replaces the shell with the app's sign-in
+(`resources.shell.signIn {view|href|action}`) and releases every read;
+`shellSessionRestored` brings it back.
 
 ### Streaming
 
@@ -232,6 +235,23 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   with `byteLength`); live subscription windows defer by default. The chat's
   message selection defers, and `chatLoadBody` reads deferred text when it shows
   (`messageBody`, `ChatMessage.pending`).
+- 2026-10-21 (SEC3 round 2): the thread feed, conversation and Space lists are
+  live ordered windows (`createdAt`, `updatedAt`, `name`); `ReadStatus` reads
+  refusal `reason`s; sessions end through `bindShellSession` and
+  `resources.shell.signIn`, with `shellSessionEnded` and `shellSessionRestored`.
+- 2026-10-21 (E2E round 2): a visible message records activity on its thread
+  (`thread.recordMessage`, `lastMessageId`) so recent lists reorder; the sidebar
+  search box opens the palette (no inline filter), New Space shows in the empty
+  state and after No Space; sections declare `params`; the agents slot clips;
+  unread participants are neutral ("Someone", "Agent", `unknown`); admin shows
+  thread names and calendar-day activity buckets (`formatBucket`).
+- 2026-10-21 (E2E round 3): the composer picks recipients (`@` mentions over the
+  thread's agents, else `resources.chat.defaultRecipients`, default `"first"`)
+  and always sends them; configured agents join through `membership`. A new chat
+  chooses its thread id in the browser (`pendingThread`), shows its message at
+  once, and a retry continues the same thread (`collection_conflict` is done).
+  Markdown accepts `\(…\)` and `\[…\]`. Failed tool calls light no section dot.
+  Reconnecting shows one debounced header indicator (`ConnectionStatus`).
 
 ## Held reads in nested Views
 
@@ -244,7 +264,5 @@ page's context (`adminSection`), so the page shows one Load for its section.
 
 ## Follow-ups
 
-- Ordered message reads: when SEC3 round 2 lands, drop the "Live updates
-  unavailable" fallback for thread messages.
 - Persisted reasoning text is resolved only through the bounded `content` field
   selection; reasoning stored elsewhere shows as a step without text.

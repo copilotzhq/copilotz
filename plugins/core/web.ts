@@ -121,6 +121,8 @@ export function createCoreWebPlugin(
       toolResult: { placement: "browser", initial: [], commands: { set } },
       // Message text bodies a window read deferred, read on demand by asset.
       messageBody: { placement: "browser", initial: [], commands: { set } },
+      // Conversations started here and not yet confirmed created, by id.
+      pendingThread: { placement: "browser", initial: [], commands: { set } },
     },
     actions: {
       // Server proxies only for Actions a default intent still in use calls.

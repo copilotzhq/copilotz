@@ -272,9 +272,10 @@ export const chatAccess: Access = {
                 },
               };
             case "collection":
-              // Core's own Actions and Processors create threads and enroll
-              // participants on the member's behalf. Direct reads, such as
-              // the thread routes, get the membership filter and nothing else.
+              // Core's own Actions and Processors create threads, enroll
+              // participants and record each message as the thread's activity
+              // on the member's behalf. Direct reads, such as the thread
+              // routes, get the membership filter and nothing else.
               return intent.invocation
                 ? {
                   collections: memberThreads,
@@ -282,7 +283,7 @@ export const chatAccess: Access = {
                     thread: {
                       create: {},
                       update: {},
-                      commands: { ensureMembership: {} },
+                      commands: { ensureMembership: {}, recordMessage: {} },
                     },
                   },
                 }
@@ -312,11 +313,12 @@ Three details are deliberate:
   `core.threads.get` and `core.threads.messages` answer `404` for a thread the
   actor is not in.
 - **`intent.invocation` separates Core's work from the caller.** Creating a
-  thread, enrolling participants and recording replies happen inside Core's
-  Actions and Processors, which run with the member's retained authority. The
-  owner tells the policy which Action, Processor or alarm is executing, so the
-  policy can grant those writes there and nowhere else. A direct call has no
-  invocation and gets only the read filter.
+  thread, enrolling participants, recording replies and marking each message as
+  the thread's latest activity happen inside Core's Actions and Processors,
+  which run with the member's retained authority. The owner tells the policy
+  which Action, Processor or alarm is executing, so the policy can grant those
+  writes there and nowhere else. A direct call has no invocation and gets only
+  the read filter.
 - **The assistant acts with the member's authority.** When the assistant calls
   `saveNote`, the owner evaluates the same policy for that member. A member
   without the `editor` role can chat, but the policy refuses the assistant's

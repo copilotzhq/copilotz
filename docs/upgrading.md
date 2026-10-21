@@ -8,6 +8,227 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Upgrading to 0.90.0
+
+0.90.0 refuses several configurations and requests that 0.89.0 accepted. The
+first part of this checklist applies to every application. The second covers
+surfaces that are new in 0.90.0: the device socket and live reads, Action
+sessions and flows, the web runtime and chat UI, and the shard role. Read it if
+you adopt them, or if you built on a pre-release. The
+[CHANGELOG](../CHANGELOG.md) lists everything else that changed.
+
+### Every application
+
+#### Database
+
+1. **Upgrade every owner schema from v13 to v14, offline.** Stop admission,
+   schedules, workers, owners and every physical writer. Confirm the drain with
+   `inspectRetainedDataDrain(session, schema)`, then call
+   `upgradeActionLifecycle(session, schema)` with no new key or manifest inputs
+   (CLI: `apply --schema=SCHEMA`). One transaction does the following:
+   - adds private credential-effect storage, including the accepted flow
+     continuation operation and indexed run and operation lookups;
+   - keys graph nodes by `(namespace, id)`, with cascading composite edge
+     references;
+   - puts `COLLATE "C"` on every text identity column.
+
+   It advances the owner epoch once, preserves sessions and retained authority,
+   and is idempotent. Validate, then start the application. Schemas older than
+   v13 run the [complete chain](#current-owner-schema-v14) first. Nothing
+   upgrades at startup.
+2. **Expect bytewise ID order.** Identity columns sort by code point (`"B"`
+   before `"a"`), and the same node ID may now exist in two namespaces of one
+   schema. Duplicate IDs within one namespace raise a typed conflict. Generated
+   IDs are monotonic ULIDs.
+
+#### Authorization policies
+
+3. **Grant `recordMessage` wherever you grant `ensureMembership`.** Every
+   visible message runs `thread.commands.recordMessage` in its transaction:
+   `createThreadMessage`, channel ingress and scheduled delivery. A policy that
+   grants only `ensureMembership` now refuses the whole send:
+
+   ```ts
+   collectionMutations: {
+     thread: {
+       create: {},
+       update: {},
+       commands: { ensureMembership: {}, recordMessage: {} },
+     },
+   },
+   ```
+4. **Replace boolean session grants and flow-kind arrays with exact grants.**
+   The owner compares the proposed credential with the grant before it stores a
+   session or flow, so derive both from trusted owner state or verified
+   evidence, never from `intent.input`:
+
+   ```ts
+   // Before: sessions: { create: true }, and in pre-release builds of
+   // Action flows, flows: { start: ["oauth"] }.
+   return {
+     sessions: { create: { principal: accountId, maxAge: 3600 } },
+     flows: {
+       start: { oauth: { continuation: "oauthCallback", maxAge: 300 } },
+     },
+   };
+   ```
+
+   - `sessions.create.principal` must equal the created session's principal.
+     `maxAge` is a positive whole number of seconds, at most one year, and must
+     cover the requested lifetime. For an HTTP route's
+     `context.sessions.create({ id, principal, expiresAt })`, `expiresAt` minus
+     the command time must fit within `maxAge`.
+   - `flows.start` maps each kind to its exact continuation **alias** and a
+     `maxAge` of at most 900 seconds. The requested lifetime, 300 seconds by
+     default, must not exceed it.
+   - A session ID and its principal may now differ. Later requests carry
+     `principal: { kind: "session", id: accountId }` and
+     `authorityBasis: { kind: "session", id: sessionId }`, and every command
+     checks both against the stored session row.
+   - For OAuth/OIDC logins, verify the provider's response with an owner-side
+     `defineIdentityVerifier` and read it in policy through
+     `evidence.get(alias)`. See
+     [Owner-verified identity evidence](./authorization.md#owner-verified-identity-evidence).
+5. **Use composition aliases, not stable Action IDs.** Policy `actions` maps and
+   grants, server exposure, HTTP route `action`, handler `context.invoke`, SDK
+   and browser Action calls, Tool bindings and flow continuations all take the
+   alias, such as `saveNote`. A stable ID such as `notes.save` is no longer
+   accepted. Stable IDs still name durable lifecycle events, and
+   `intent.invocation.id` still carries the executing Action's or Processor's
+   stable ID.
+
+#### HTTP
+
+6. **Handle 401 and 403 separately.** An anonymous request refused by an Action
+   policy, including Core HTTP Actions, returns **401**. A credential that was
+   presented and refused keeps **403**. A session cookie that fails verification
+   (revoked, expired, unknown or malformed) now counts as absent: the request
+   runs anonymously and the response clears the cookie, so send users to sign in
+   on 401. A host `authenticate` that verifies its own cookie returns
+   `invalidSessionCookie: true` with an anonymous scope for a bad cookie, and
+   `false` for a valid one.
+
+#### Core behavior
+
+7. **Pass `recipientIds: []` to address nobody.** A message that names no
+   recipients now addresses the thread's agent participants other than the
+   sender. Seeds, imports and notices that must not wake an agent pass an
+   explicit empty list. Human recipients no longer start model calls.
+
+#### Operations
+
+8. **Use the migration API instead of the scripts' internals.**
+   `@copilotz/copilotz/migration` exports `exportOwnerBundle`,
+   `importOwnerBundle`, `relocateOwnerSchema`, `migrateOwnerKeys`, the
+   transfer-body readers and the restore helpers. The offline scripts are thin
+   callers of it. See
+   [Moving retained tenant data](./retained-data-migration.md).
+9. **Align Oxian.** Copilotz depends on Oxian 0.23.1. Hosts that import Oxian
+   directly use the same version.
+
+### New surfaces in 0.90.0
+
+#### Device sockets and live reads
+
+10. **Send cookie credentials explicitly on the device socket.** Browsers that
+    authenticate with the HttpOnly session cookie select it in the hello:
+
+    ```ts
+    const device = createDeviceTransport({
+      url: "wss://app.example/api/device",
+      credentials: () => ({ cookie: true }),
+    });
+    ```
+
+    Header-token clients send a nonempty `authorization` or `x-api-key` value
+    instead. Empty credentials are refused, and so is a cookie on a socket whose
+    `Origin` was missing or not allowed.
+11. **List cross-origin clients in `allowedOrigins`.** `/device` refuses a
+    foreign or opaque `Origin` before upgrading. Same-origin sockets need no
+    configuration. Other origins are listed as canonical HTTP(S) origins:
+    `defineServerFacade({ allowedOrigins: ["https://app.example"] })`.
+    Non-browser clients that send no `Origin` authenticate with header
+    credentials only.
+12. **Expect bounded live reads.** Each device socket holds at most 16
+    subscriptions by default (`deviceLimits.maxSubscriptions`), and each
+    principal 32 attached reads. Filters are limited to 64 predicate nodes and
+    32 `in` values. `jsonEquals`, `eqIgnoreCase` and `inIgnoreCase` are refused
+    with `subscription_query_refused`; capacity refusals use
+    `subscription_capacity_exceeded`. Live windows may be ordered by a scalar
+    field or `createdAt`/`updatedAt`. Live message windows now defer bodies over
+    budget: handle entries marked `deferred` with a `byteLength`.
+
+#### Action sessions
+
+13. **Check the session cookie name.** The Action-session cookie, new in this
+    release, defaults to `__Host-copilotz_session`: Secure, HttpOnly, `Path=/`,
+    no `Domain`. A `__Host-` name refuses a `domain`, `secure: false` or another
+    `path`, so pick a different `sessionCookie.name` if you need those. Update
+    proxies, tests and host `authenticate` callbacks that read the cookie by
+    name. A request that carries the configured cookie twice is refused with
+    `duplicate_session_cookie`.
+
+#### Browser runtime and chat UI
+
+14. **Declare `url` on Views a link may open.** A View is addressable from URL
+    state only when its definition sets `url: true` or
+    `url: { queries: "run" }`. URL values carry identifiers only: a scalar, or a
+    flat record of scalars.
+15. **Start held reads from a user gesture.** In a View opened from a URL, and
+    in every View it nests, `ctx.readAction` returns status `held` and calls
+    nothing until a user gesture calls `refresh()`. `ReadStatus` renders a Load
+    button for it. `url: { queries: "run" }` opts a View out when no query input
+    derives from the URL value.
+16. **Handle `ReadState` `failed`.** A one-shot query read whose attempt failed
+    is `failed` and waits for `refresh()`. `stale` now means only a read that
+    recovers by itself, such as a reconnecting live read. `ReadStatus` renders
+    `failed` with Try again.
+17. **Compose the chat shell.** Pre-release builds' focus/context workspace is
+    removed: `workspace`, `workspaceNavigation`, `workspaceUrlStorageAdapter`,
+    the `ui*` workspace Actions, the navigator and the `resources.navigation`
+    entries.
+    - Compose `uiWebPlugin({ navigation, preferences, core })` from `/ui/web`.
+      `navigation` and `preferences` name storage adapters, and `core` is your
+      `createCoreWebPlugin(...)` instance if you customize it.
+    - Store navigation with
+      `shellUrlStorageAdapter(browserShellHistory(window))` and pass
+      `show: shellNavigation(() => runtime)`.
+    - Grant progressive replies, Stop and uploads with
+      `adapters: { core: { feed: threadFeedAdapter(client) } }`.
+    - Configure chat through `resources.chat`: `sender` (required to send),
+      `agents` (added to new chats) and `defaultRecipients` (`"first"` by
+      default, or `"all"`).
+    - Add Space tabs with `resources.spaceSections.<id>` and administration tabs
+      with `resources.adminSections.<id>`. `null` hides a built-in.
+      `createAdminWebPlugin({ core })` registers a user-menu page.
+    - Call `bindShellSession(runtime, device)` to show `resources.shell.signIn`
+      when the session is revoked.
+
+    See [Web runtime and Views](./web-runtime-and-views.md).
+
+#### Shard hosts
+
+Pre-release builds of the shard role (`@copilotz/copilotz/shard`) change as
+follows:
+
+18. **Authenticate shard controllers from headers.**
+    `createShardControllerHandler` requires `authenticate(request)`, which runs
+    on a bodyless copy of the request before the body is read. A refusal cancels
+    the body and returns 403. Move the bearer or identity check from `authorize`
+    into `authenticate`; keep `authorize(request, input)` for the parsed work's
+    scope.
+19. **Namespace non-worker sessions.** Computers, browsers and connectors occupy
+    reserved session IDs, `shard:<kind>:<id>`, built by
+    `shardSessionId(kind, id)`:
+    - pass `kind: "computer" | "browser" | "connector"` to `createShardWorker`
+      for every non-owner worker. Without it, the worker connects in the
+      `worker` namespace, admission refuses it with `principal_kind_mismatch`,
+      and the worker sees an authentication failure;
+    - in a custom `admit`, `identity.workerId` is the namespaced ID, so compare
+      it with `shardSessionId(kind, logicalId)`;
+    - dispatch still takes the logical target ID plus `kind`;
+    - the owner-facing `sessions` list only `worker` sessions.
+
 ## Current owner schema: v14
 
 Each physical database schema has one fenced owner shared by its namespaces.
@@ -52,9 +273,10 @@ their next step; never relabel a schema or skip a step.
    v13. This validates every binding, writes the accepted manifest receipt,
    invalidates old transport attachments, and fences the old owner epoch.
 6. The same call then commits v13 → v14 in one transaction: private credential
-   effect storage, indexed run/operation lookup and accepted flow continuation
-   bindings. It rechecks drain, advances the owner epoch once, and preserves
-   sessions and retained authority. Starting at v13, call
+   effect storage, indexed run/operation lookup, accepted flow continuation
+   bindings, namespace-local `(namespace, id)` node identity and `COLLATE "C"`
+   on text identity columns. It rechecks drain, advances the owner epoch once,
+   and preserves sessions and retained authority. Starting at v13, call
    `upgradeActionLifecycle(session, schema)` without new key or manifest inputs.
    Validate the v14 schema and catalog, then start the application.
 
@@ -111,7 +333,7 @@ history.
 Copilotz stores three independent things, and each one evolves differently:
 
 1. **Physical schema.** The SQL tables for Events, Collections and Bodies are
-   validated against Event schema v13. Startup provisions fresh Core tables and
+   validated against owner schema v14. Startup provisions fresh Core tables and
    validates existing ones; incompatible Core schemas are rejected. Declared
    Collection indexes are provisioned separately as described below. Stored
    records are never reset or rewritten.
@@ -141,7 +363,7 @@ On Deno, edit the existing `imports` property in `deno.json`. Replace only the
 ```json
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.86.3"
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@^0.89.0"
   }
 }
 ```
@@ -153,13 +375,14 @@ On Node:
 
 ```sh
 # Add the package from JSR and record the resolved version in the lockfile.
-npx jsr add @copilotz/copilotz@^0.86.3
+npx jsr add @copilotz/copilotz@^0.89.0
 ```
 
 Generated or bundled plugins must keep framework imports external so that they
 resolve to the same package. Before you upgrade, read every CHANGELOG entry
 between your version and the target. An entry that names an operator step, such
-as 0.85.0 below, needs that step before the new version serves traffic.
+as the v14 schema upgrade in 0.90.0, needs that step before the new version
+serves traffic.
 
 ### Keep durable identities stable
 
@@ -223,11 +446,11 @@ layers; check each optional feature you enable for its own provisioning needs.
 
 ### Upgrade layers
 
-| Layer              | Current state                 | How it is applied                                                                                          |
-| ------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Event/owner schema | v13, owner keys and authority | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
-| Operation catalog  | `stream-taxonomy-content-v1`  | Installed by fresh provisioning or the same retained-data conversion                                       |
-| Core history index | Optional since 0.85.1         | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
+| Layer              | Current state                | How it is applied                                                                                          |
+| ------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Event/owner schema | v14                          | Provision an absent schema; use the reviewed offline retained-data path for supported existing inventories |
+| Operation catalog  | `stream-taxonomy-content-v1` | Installed by fresh provisioning or the same retained-data conversion                                       |
+| Core history index | Optional since 0.85.1        | `provisionCoreHistoryIndexes`, once per physical Core schema                                               |
 
 - `upgradeOperationCatalog` always takes exclusive catalog and Event locks, even
   when the catalog is already current. Use `validateOperationCatalog` for a

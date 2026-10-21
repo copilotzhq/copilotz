@@ -62,7 +62,7 @@ from `@copilotz/copilotz/core/server` contributes:
 The plan has four parts:
 
 1. `server.ts` stays a generic factory but accepts **extensions**: extra
-   plugins, resources, adapters, extra public Action IDs and the host's
+   plugins, resources, adapters, extra public Action aliases and the host's
    **access** policy. It still imports nothing from Core, and `auth.ts` does not
    change.
 2. A new definition module, `chat-access.ts`, extends the Notes policy for chat.
@@ -72,7 +72,7 @@ The plan has four parts:
    member. Raw thread observation stays refused.
 3. A new host, `serve-agent.ts` (or `serve-agent-node.ts`), passes Core, the
    agent harness, `coreHttpPlugin` and `chatAccess` into the factory and exposes
-   exactly two Actions: `notes.save` and `copilotz.core.conversation.send`.
+   exactly two Actions, by alias: `saveNote` and `sendConversation`.
 4. `chat-client.ts` sends a message over HTTP, waits for the operation to
    settle, and prints the reply from the **filtered** thread history.
 
@@ -80,7 +80,7 @@ The plan has four parts:
 
 Replace `server.ts` with this complete file. Compared with Chapter 16 it adds
 five optional fields to `ServerAppOptions` (`plugins`, `resources`, `adapters`,
-`publicActionIds` and `access`) and merges them into the composition.
+`publicActionAliases` and `access`) and merges them into the composition.
 Authentication, `principalScope`, `publicActions`, the `member` Collection and
 the exposure rules for Collections and Channels are unchanged. Without `access`,
 the factory keeps Chapter 16's `notesAccess`. The types come from the factory's
@@ -132,15 +132,16 @@ export type ServerAppOptions = Readonly<{
   resources?: ApplicationResources;
   // Extra adapters, such as a scripted model in a test.
   adapters?: ApplicationAdapters;
-  // Extra Action IDs to publish, on top of `publicActions`.
-  publicActionIds?: readonly string[];
+  // Extra Action aliases to publish, on top of `publicActions`.
+  publicActionAliases?: readonly string[];
   // The host's policy. Defaults to `notesAccess` from `auth.ts`.
   access?: Access;
 }>;
 
-// The only Action IDs the facade publishes by default. Adding a plugin does not
-// add routes until its Action is listed here or in `publicActionIds`.
-export const publicActions = ["notes.save"];
+// The only Action aliases the facade publishes by default. Adding a plugin does
+// not add routes until its Action's alias is listed here or in
+// `publicActionAliases`.
+export const publicActions = ["saveNote"];
 
 // Plugins the server application composes: the Notes package and the facade.
 export const serverPlugins = [notesPlugin, serverPlugin];
@@ -190,7 +191,10 @@ export function createServerApp(options: ServerAppOptions) {
           // Channel would be exposed.
           expose: {
             actions: {
-              include: [...publicActions, ...(options.publicActionIds ?? [])],
+              include: [
+                ...publicActions,
+                ...(options.publicActionAliases ?? []),
+              ],
             },
             // Notes and memberships stay off raw Collection routes.
             collections: false,
@@ -384,7 +388,7 @@ const app = await createServerApp({
   // Agents, model connections and tools that Core reads.
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });
@@ -468,7 +472,7 @@ const app = await createServerApp({
   // Agents, model connections and tools that Core reads.
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });

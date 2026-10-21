@@ -302,6 +302,11 @@
           "title": "Upgrading and Data Safety",
           "slug": "upgrading",
           "description": "Version pins, stable identities, schema evolution and offline upgrades."
+        },
+        {
+          "title": "Moving Retained Tenant Data",
+          "slug": "retained-data-migration",
+          "description": "Relocate owner schemas, migrate owner keys and read transfer bodies offline with the public migration API."
         }
       ]
     },
@@ -332,11 +337,6 @@
           "title": "Contributing to Built-In Plugins",
           "slug": "plugin-layout",
           "description": "Built-in plugin layout, generated indexes, boundaries and repository checks."
-        },
-        {
-          "title": "Retained Data Migration",
-          "slug": "retained-data-migration",
-          "description": "Move offline tenant schemas, migrate owner keys and drain runtime shutdown."
         }
       ]
     }

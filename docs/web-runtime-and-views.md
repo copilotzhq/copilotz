@@ -1,3 +1,11 @@
+---
+title: "Web Runtime and Views"
+description: "Framework-neutral browser runtime, live client Collections, the chat shell and its extension points, and the shared UI kit."
+section: Runtime
+order: 16
+status: experimental
+---
+
 # Web runtime and Views
 
 Copilotz core is framework-neutral. `/web` supplies the browser runtime, client
@@ -146,10 +154,11 @@ Reads expose `value`, `status`, `pending` and, when stale, failed or denied,
 missing, stale, failed, denied or held. A stale read recovers by itself (a live
 read reconnecting); a failed read does not. The SDK receives an atomic snapshot
 with owner sequence and checkpoint, then ordered contiguous `(from,to]` batches.
-Deltas carry owner seq and record id; records reconstruct the authorized
-id-ordered window. The server owns authorization, projection and limited-window
-refill. Only applied batches advance the checkpoint. Revocation clears readable
-values, including optimistic overlays.
+Deltas carry owner seq and record id; records reconstruct the authorized window
+in the owner's order (a field-ordered batch carries the window's exact `order`
+of IDs). The server owns authorization, projection and limited-window refill.
+Only applied batches advance the checkpoint. Revocation clears readable values,
+including optimistic overlays.
 
 The server bounds live reads: 16 active subscriptions per socket and 32 per
 user; each filter up to 64 predicate nodes and 32 values per `in` list;
@@ -692,3 +701,13 @@ aliases that must be composed for a section to show. `adminSections(ctx)`,
 `embedded: true` renders a section without a Screen. `agent` detail shows public
 agent fields from the authorized agents query, and `participant` detail reads
 its Collection by ID; both accept `{ id }` and full/panel/dialog densities.
+
+## Next steps
+
+- [Subscriptions](./subscriptions.md): the live-read protocol, device
+  credentials and limits behind client Collections.
+- [Views](./views.md): View definitions, composition and resolution.
+- [HTTP server and browser client](./server.md): the facade, session cookies and
+  device hosting.
+- [Upgrading to 0.90.0](./upgrading.md#upgrading-to-0900): moving from the
+  workspace to the chat shell, `url` on Views, held reads and `failed` reads.

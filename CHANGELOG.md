@@ -1,3 +1,256 @@
+## 0.90.0 — 2026-10-21
+
+Browsers now read live data. The owner pushes Collection changes over an
+authenticated device socket to a framework-neutral web runtime, and the chat UX
+ships as Copilotz's React front-end plugins. This release also includes the
+security review's hardening, exact credential grants, owner-verified identity
+evidence and owner schema **v14**.
+
+Read [Upgrading to 0.90.0](docs/upgrading.md#upgrading-to-0900) before you
+upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
+
+### Upgrade required
+
+- Owner schema **v14** is one offline step from v13. Stop every writer, drain,
+  then run `upgradeActionLifecycle(session, schema)`; v13 needs no new key or
+  manifest input. One transaction does the following:
+  - adds the private credential-effect storage with its accepted continuation
+    operation and indexed run and operation lookups;
+  - keys nodes by `(namespace, id)` with cascading composite edge references;
+  - puts `COLLATE "C"` on every text identity column.
+
+  It advances the owner epoch once, preserves sessions and retained authority,
+  and is idempotent. Fresh provisioning installs the same v14. No step runs at
+  startup. See [the upgrade guide](docs/upgrading.md#current-owner-schema-v14).
+- Policies that grant Core's `thread` `ensureMembership` command must also grant
+  `recordMessage`. Every visible message now records itself on its thread in the
+  same transaction, so without this grant the whole send is refused.
+- **Credential grants are exact.** `sessions.create` is `{ principal, maxAge }`
+  and `flows.start` maps each kind to `{ continuation, maxAge }`. The owner
+  compares the proposed credential with the grant before it stores anything.
+  `sessions: { create: true }` and flow-kind arrays no longer authorize minting.
+- Action configuration uses composition aliases everywhere: policies, exposure,
+  HTTP routes, handler `invoke`, Tool bindings, flow continuations and clients.
+  Stable Action IDs are no longer accepted as configuration keys.
+- Anonymous Action refusals return 401, and a session cookie that fails
+  verification counts as absent and is cleared.
+- A message that names no recipients now addresses the thread's agents; pass
+  `recipientIds: []` to address nobody.
+- Apps that adopt the new device socket, web runtime, Action sessions or shard
+  role, or that built on a pre-release, follow the second part of the guide:
+  browsers send `credentials: { cookie: true }` in the device hello,
+  cross-origin clients need `allowedOrigins`, Views a link may open declare
+  `url`, and shard controllers authenticate from headers.
+
+### Changed
+
+- **Security review hardening.** The device socket, live subscriptions, Action
+  sessions and the shard role ship with these protections, and HTTP
+  authentication gains the stale-cookie rule.
+  - `/device` refuses a foreign or opaque `Origin` before upgrading. Same-origin
+    is allowed, and other canonical HTTP(S) origins need `allowedOrigins`. With
+    no `Origin`, captured cookies are stripped and cookie credentials are
+    refused. Empty hello credentials are refused, and only one bounded hello is
+    accepted before authentication.
+  - Live subscriptions have per-principal, per-socket (default 16) and overall
+    quotas, plus predicate node, list value and query byte limits. Refusals use
+    the stable codes `subscription_query_refused` and
+    `subscription_capacity_exceeded`. Their reasons are `query_unsupported`,
+    `limit_exceeded`, `quota_exceeded`, `forbidden`, `unbound_collection` and
+    `unavailable`. `jsonEquals` and locale-dependent case folding are not
+    admitted live. Diagnostics name only the Collection, principal kind and
+    reason.
+  - Recompute is incremental. A commit evaluates only the changed record's old
+    and new image against each compiled filter, never the whole cache. Detached
+    readers no longer consume active admission and are evicted oldest first.
+  - Progress is namespace-local. Invisible mutations and other namespaces emit
+    no frame, and Action result sequences use the same namespace-local count.
+  - The Action-session cookie defaults to `__Host-copilotz_session`. The facade
+    validates its `__Host-` attributes and refuses a request carrying the
+    configured cookie twice (`duplicate_session_cookie`).
+  - `createShardControllerHandler` requires a headers-only
+    `authenticate(request)` that runs before the body is read; a refusal cancels
+    the unread body and returns 403. `authorize(request, input)` still checks
+    the parsed work's scope, and bodies are bounded at 16 MiB.
+  - Non-worker shard sessions occupy reserved IDs, `shard:<kind>:<id>`
+    (`shardSessionId(kind, id)`), so a browser, computer or connector cannot
+    replace a worker connection. Admission refuses a wire ID whose namespace
+    does not match the authenticated principal kind (`principal_kind_mismatch`),
+    and the owner sees only `worker` sessions.
+  - Credential tokens use an HMAC key derived with HKDF and a credential label.
+    Protected-value commitments are unchanged.
+  - A session credential that fails verification (revoked, expired, unknown,
+    malformed or badly signed) counts as absent. Anonymous-capable Actions run
+    anonymously, principal-required Actions return 401, and the response clears
+    the configured cookie.
+- **Authorization.**
+  - Separate workers run every user callback inside a revocable ambient binding
+    that carries the caller's authority. A worker never acquires host trust.
+  - A consumed flow continuation may run child Actions only within its accepted
+    operation. The owner records each descendant in a receipt, and each child
+    still needs its own grant. `operations.start` and
+    `awaitOperation({ start })` refuse flow authority before admitting another
+    operation.
+  - Session principal and session ID are separate. Every command checks both
+    against the stored session row.
+  - Anonymous HTTP Action refusals are 401, including Core HTTP Actions. Refused
+    credentials that were presented keep 403.
+  - HTTP ingress records the authenticated actor separately from the principal.
+- **Live data.**
+  - Live queries accept bounded windows ordered by a scalar schema field or by
+    `createdAt`/`updatedAt`, ascending or descending, with an `id` tiebreak,
+    PostgreSQL null placement and code-point string order. Ordered batches carry
+    the window's exact `order` array.
+  - Live filters accept `id` equality and `id` `in` lists, with SQL parity.
+  - Logout revokes every device socket on that session with a terminal notice
+    and close code 4401. The SDK reports it through `onAuthState`.
+  - The initiator can recover its completed self-logout result with its original
+    credential proof.
+  - Message window reads defer bodies over budget instead of failing the read.
+    Content reads take `bodyByteLimit` and `overflow: "defer"`. Deferred entries
+    stay unresolved references with `deferred` and `byteLength`. Live
+    subscription windows defer by default.
+- **Core.**
+  - A message that names no recipients addresses the thread's agent participants
+    other than the sender. Explicit recipients, including an empty list, are
+    kept.
+  - The router starts agent turns only for agent recipients. Human recipients
+    are delivered and recorded without model calls, and mixed lists route each
+    kind.
+  - Visible messages run `thread.commands.recordMessage`, which sets
+    `lastMessageId` and moves `updatedAt`, so lists ordered by activity reorder.
+    Its own event, `thread.message-recorded`, keeps `thread.updated` Processors
+    out of every message.
+  - The thread feed reads the newest messages by `createdAt` and returns them
+    oldest first. The composer and Revise write time-ordered IDs.
+  - Generated IDs are monotonic ULIDs. Duplicate IDs within a namespace raise a
+    typed, namespace-local conflict.
+  - Delivery dispatch and worker host calls allow 15 minutes. A transport
+    deadline is an interruption, not an Action failure.
+  - The feed treats stream errors as provisional until the operation settles.
+
+### Added
+
+- **Live Collection reads.** `collections.observe` on the application, the
+  server read services and the SDK returns a snapshot, ordered deltas and
+  applied checkpoints pushed by the owner, with no SQL per subscriber on commit.
+  `createDeviceTransport` carries them over the authenticated `/device` socket,
+  which the Deno and Node `listen` adapters serve by default. Custom hosts pass
+  `upgradeDevice`. See [subscriptions](docs/subscriptions.md).
+- **Web runtime.** `@copilotz/copilotz/web` is a framework-free browser runtime:
+  client Collections over live reads, Action handles that settle by owner
+  sequence, client storage and View resolution. `createBrowserPorts(client)`
+  binds it to the SDK. `/web/react` is the React adapter and `/web/kit` the
+  shared kit. See [web runtime and Views](docs/web-runtime-and-views.md).
+- **Chat UI as React front-end plugins.**
+  - `/ui/web` (`uiWebPlugin({ navigation, preferences, core })`) is the shell: a
+    sidebar grouped by Space, a header, a resizable panel, SpaceView, pages, a
+    palette and keyboard navigation.
+  - `/core/web` (`createCoreWebPlugin`, `threadFeedAdapter(client)`) holds the
+    chat Views, live streaming replies, tool activity, attachments and the
+    composer.
+  - `/admin/web` is one administration page with section tabs.
+  - Extension points: `resources.shell.*`, `resources.chat.*`,
+    `resources.spaceSections`, `resources.adminSections`,
+    `resources.headerMenu`, `resources.userMenu`, `resources.toolRenderers`,
+    Markdown plugins and the agent selector.
+  - `bindShellSession(runtime, device)` replaces the shell with the app's
+    sign-in when the session is revoked.
+- **URL state carries identifiers only.** `urlReference` admits a decoded value
+  only when it is a scalar or a flat record of scalars. A View opts into links
+  with `url`. Its query reads, and those of the Views it nests, are `held` until
+  a user gesture; `url: { queries: "run" }` opts out.
+- **Markdown.** `markdownUrlPolicy({ origin, imageOrigins })` from `/web` keeps
+  links to safe schemes and loads images only from the page origin and listed
+  origins (`resources.markdown.imageOrigins`); refused images render as their
+  alt text. Raw HTML stays skipped. KaTeX math (with `\( \)` and `\[ \]`
+  delimiters) and code highlighting load on first use. `preloadMarkdown()` loads
+  both ahead of time, and the kit vendors KaTeX's CSS and fonts.
+- **Mentions and default recipients.** `@` in the composer picks agents. Without
+  a mention, `resources.chat.defaultRecipients` decides: `"first"` (the default)
+  addresses the default or first agent, and `"all"` leaves Core's default.
+- **New chats are optimistic and idempotent.** The browser chooses the thread
+  ID, shows the first message at once, and a retry continues the same thread.
+- `ReadState` has a `failed` status for a query read that failed and waits for
+  `refresh()`. `stale` now means a read that recovers by itself. `ReadStatus`
+  renders `failed` with Try again.
+- **Owner-verified identity evidence.** `defineIdentityVerifier` (from
+  `/engine`) registers an owner-only verifier. Actions call
+  `context.authentication.verify(alias, input)`, and policy reads the result
+  through a declared `evidence` input with `evidence.get(alias)`. The owner
+  reserves each exchange durably and never repeats it. `pruneIdentityEvidence`
+  removes expired evidence.
+- **Directory capabilities.** `defineDatabaseDirectoryRead` and
+  `context.directory.get` give Actions declared, audited, read-only reads of a
+  same-database directory. `defineDatabaseDirectoryCommand` and
+  `context.directory.command` / `tx.directory.command` run trusted directory
+  service commands atomically with the source transaction. A command's
+  `collections` map lets it write the destination's native Collections, under
+  the destination's own policy. Policies grant them with `directoryReads` and
+  `directoryCommands`.
+- **Flow-bounded Processors.** A Processor may project a consumed flow's events
+  when policy grants `flowProcessors: [processorId]` and exact Collection
+  grants.
+- **Sessions and flows as Action effects.** `sessions.create`, `sessions.revoke`
+  and `flows.start` inside `context.transaction` commit atomically with the
+  Action's writes. The HTTP transport projects the session as an HttpOnly cookie
+  (`sessionCookie` on the facade). Flow credentials are signed, short-lived and
+  limited to their continuation.
+- **Trusted tool origins.** `trustedCoreToolOrigin(context)` from `/core`
+  returns a tool call's origin after checking it against owner-retained
+  provenance. App metadata keys no longer invalidate Core's tool and LLM
+  metadata.
+- **Shard role.** `createCopilotz({ role: "shard", ... })` and
+  `@copilotz/copilotz/shard` host pinned worker, computer, browser and connector
+  connections between stateless controllers and the owner. Non-owner workers
+  pass `kind` (`"computer"`, `"browser"` or `"connector"`) to
+  `createShardWorker`. Browsers are assigned to a shard by hashing the
+  authenticated actor. Dispatch still names logical targets plus `kind`.
+- **Migration API.** `@copilotz/copilotz/migration` exports owner bundle export
+  and import, tenant relocation, owner key migration and transfer body reads.
+  The offline scripts are thin callers. See
+  [retained-data migration](docs/retained-data-migration.md).
+- **Automatic owner recovery.** A running application replaces a fenced owner
+  for every opened database scope, resetting its subscriptions and observations.
+  Requests that cannot wait `databaseRecovery.waitMs` (default 2 s) for the
+  replacement, and fence refusals, return a retryable 503 with `Retry-After`.
+  See [owner recovery](docs/owner-recovery.md).
+- Dead-lettered deliveries write one structured `console.error` line naming the
+  consumer, operation, delivery, attempts and the masked error. It never
+  includes the Event or its input.
+
+### Fixed
+
+- Provider completions are checkpointed before finalization, so a retry reuses
+  the paid response instead of calling the provider again. An empty final answer
+  fails visibly.
+- Worker capture verifies sealed bodies against the prepared ones, and atomic
+  Core message writes reuse the bounded conflict retry.
+- A Tool Action refused by policy before capture returns a failed tool result,
+  and the agent turn continues.
+- Namespace predicates were missing from asset, protected-value, graph-upgrade,
+  history and alarm-pagination queries.
+- Owner shutdown waits for queued SQL commands and asynchronous publications, so
+  a second runtime in the same process no longer meets a closed database.
+- Owners are keyed by the database instance they were opened on, so a new
+  runtime never reuses an owner whose database is already closed.
+- An invalid composition, such as a View alias collision, is refused before any
+  database or Hypervisor opens.
+- A first chat on a policy-protected native PGlite database cleans up its
+  snapshot instead of failing with `owner_cleanup_unknown`.
+- JSON tool results reach tool renderers as `data`, or as a reference that is
+  read on demand.
+- Oxian 0.23.1 provides portable route WebSocket upgrades and CLI shutdown, and
+  closing a route WebSocket no longer interrupts unrelated HTTP streams.
+  Observation no longer fails with 500 or 503 after logout or on page load.
+
+### Removed
+
+- `sessions: { create: true }` as a session grant.
+- Stable Action IDs as configuration keys; use composition aliases.
+- Generic Server's Core imports and the 25 ms handler `invoke` polling loop;
+  handler invocation waits for operation changes.
+
 ## 0.89.0 — 2026-10-19
 
 The runtime is converted in place to **one owner per database schema**: a single
@@ -6,18 +259,14 @@ connection. There is no alternate runtime or compatibility mode.
 
 ### Upgrade required
 
-- Owner schema **v14** is installed only by the explicit offline chain **v5–v10
-  → v11 → owner keys v12 → authority v13 → credential effects and flow admission
-  v14**. Stop every writer, drain, then run `upgradeActionLifecycle` with the
-  reviewed plan, owner-key adapters and authority manifest. No step runs at
-  startup. See [the upgrade guide](docs/upgrading.md#current-owner-schema-v14)
-  and [the offline guide](scripts/upgrade-retained-data.md).
+- Owner schema **v13** is installed only by the explicit offline chain **v5–v10
+  → v11 → owner keys v12 → authority v13**. Stop every writer, drain, then run
+  `upgradeActionLifecycle` with the reviewed plan, owner-key adapters and
+  authority manifest. No step runs at startup. See
+  [the upgrade guide](docs/upgrading.md#current-owner-schema-v14) and
+  [the offline guide](scripts/upgrade-retained-data.md).
 - Applications with protected values configure a master Secret Adapter. Each
   owner gets its own data key, wrapped by that adapter.
-- The v13 → v14 step atomically adds private Action session effects, indexed
-  run/operation lookup and accepted flow continuation bindings. It requires
-  drained work, advances the owner epoch once, preserves sessions and is
-  idempotent.
 - The v13 authority manifest binds each authenticated ingress's actor
   (`actorBinding`) separately from its session or API-key principal.
 
@@ -102,7 +351,7 @@ connection. There is no alternate runtime or compatibility mode.
   old writers and run `upgradeActionLifecycle` for each physical schema before
   starting the new runtime. The v6 upgrade preserves in-flight Actions and
   immutable history; the older v5 cutover still requires drained workflows. See
-  [the upgrade guide](docs/upgrading.md#0880-durable-compaction-waits).
+  [the upgrade guide](docs/upgrading.md#current-owner-schema-v14).
 
 ### Removed
 

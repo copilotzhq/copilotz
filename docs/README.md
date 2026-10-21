@@ -59,6 +59,8 @@ Each page below is the main reference for its topic.
 - [Events, deliveries and recovery](events-deliveries-recovery.md): immutable
   facts, retries, settlement and reconnection.
 - [Content and assets](content-assets.md) and [progressive streams](streams.md).
+- [Views](views.md) and [Web runtime and Views](web-runtime-and-views.md):
+  presentations, the browser runtime, the chat shell and the shared UI kit.
 
 ### Agent Harness
 
@@ -73,10 +75,10 @@ Each page below is the main reference for its topic.
 
 ### Deliver
 
-- [HTTP server and browser client](server.md): routes, authentication and live
-  observation.
-- [Owner authorization](authorization.md): versioned policies, sessions,
-  lifetimes and platform staff access.
+- [HTTP server and browser client](server.md): routes, authentication, session
+  cookies and the device socket.
+- [Owner authorization](authorization.md): versioned policies, sessions and
+  flows, identity evidence, directory capabilities and platform staff access.
 - [Channels](channels.md): web, WhatsApp, Telegram, Discord and Zendesk.
 
 ### Operate
@@ -94,13 +96,17 @@ Each page below is the main reference for its topic.
 ### Evolve
 
 - [Filesystem Plugin Authoring](convention-authoring.md).
-- [Upgrading](upgrading.md): explicit upgrades and release history.
+- [Upgrading](upgrading.md): the 0.90.0 checklist and explicit offline upgrades.
+- [Moving retained tenant data](retained-data-migration.md): the public
+  migration API.
 
 ### Reference
 
 - [Architecture](architecture.md): plugin ownership, the durable lifecycle,
   content, streams and execution.
 - [API and package reference](api.md).
+- [Subscriptions](subscriptions.md): live Collection reads, their limits and
+  refusal reasons.
 
 ### Contributors
 
@@ -112,6 +118,3 @@ Each page below is the main reference for its topic.
   repository layout and checks for contributors.
 - [DOCUMENTATION.md](https://github.com/copilotzhq/copilotz/blob/main/DOCUMENTATION.md):
   documentation standards.
-
-- [Web runtime and Views](web-runtime-and-views.md): neutral core, plugin
-  renderers, shared UI kit and live reads.

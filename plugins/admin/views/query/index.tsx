@@ -16,7 +16,19 @@ import {
   type TabItem,
 } from "@copilotz/copilotz/web/kit";
 
-/** The administration sections, in tab order. */
+/** A section of the administration page, as `adminSections` resolves it. */
+export type AdminSectionEntry = Readonly<
+  TabItem & {
+    description?: string;
+    order: number;
+    /** The section's View (it receives `{ section }`); built-ins have none. */
+    view?: string;
+    /** Action aliases that must be composed for the section to show. */
+    requires: readonly string[];
+  }
+>;
+
+/** The built-in sections, in tab order (`resources.adminSections` defaults). */
 export const ADMIN_SECTIONS: readonly (TabItem & { description: string })[] = [
   {
     id: "overview",
@@ -55,6 +67,49 @@ export const ADMIN_SECTIONS: readonly (TabItem & { description: string })[] = [
     description: "Model calls, tokens and cost by model.",
   },
 ];
+
+const record = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+/**
+ * The administration page's sections: the built-ins and an app's
+ * `resources.adminSections.<id>` entries (`{ label, icon?, order?,
+ * description?, view?, requires? }`), by order then label. `null` hides a
+ * section; one whose `requires` Action aliases aren't composed doesn't show.
+ */
+export function adminSections(
+  ctx: BrowserViewContext,
+): AdminSectionEntry[] {
+  const entries = record(ctx.resources.adminSections);
+  return Object.entries(entries).flatMap(([id, value]) => {
+    if (!value || typeof value !== "object") return [];
+    const entry = value as Record<string, unknown>;
+    if (typeof entry.label !== "string") return [];
+    const view = typeof entry.view === "string" ? entry.view : undefined;
+    if (!view && !sections[id]) return []; // Neither a View nor a built-in.
+    const requires =
+      (Array.isArray(entry.requires) ? entry.requires : [entry.requires])
+        .filter((alias): alias is string => typeof alias === "string");
+    if (requires.some((alias) => typeof ctx.actions[alias] !== "function")) {
+      return [];
+    }
+    return [{
+      id,
+      label: entry.label,
+      order: typeof entry.order === "number" ? entry.order : 100,
+      requires,
+      ...(typeof entry.icon === "string" ? { icon: entry.icon } : {}),
+      ...(typeof entry.description === "string"
+        ? { description: entry.description }
+        : {}),
+      ...(view ? { view } : {}),
+    }];
+  }).sort((left, right) =>
+    left.order - right.order || left.label.localeCompare(right.label)
+  );
+}
 
 const sections: Record<
   string,
@@ -265,11 +320,11 @@ export function adminSection(
 }
 
 const view: import("@copilotz/copilotz/views").ViewDefinition<
-  { section: string; query?: Record<string, string> },
+  { section: string; query?: Record<string, string>; embedded?: boolean },
   React.ReactNode,
   BrowserViewContext
 > = defineView<
-  { section: string; query?: Record<string, string> },
+  { section: string; query?: Record<string, string>; embedded?: boolean },
   React.ReactNode,
   BrowserViewContext
 >({
@@ -278,7 +333,9 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   renderer: "react",
   modes: ["full", "panel"],
   url: true,
-  render({ section, query = {} }, ctx) {
+  render({ section, query = {}, embedded = false }, ctx) {
+    // Embedded in an app's own page: the body alone, without a Screen.
+    if (embedded) return adminSection(ctx, section, query);
     const known = ADMIN_SECTIONS.find((item) => item.id === section);
     return (
       <Screen

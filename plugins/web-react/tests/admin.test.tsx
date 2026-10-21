@@ -187,3 +187,80 @@ test("a refused admin section says so in plain words", async () => {
     runtime.dispose();
   }
 });
+
+test("apps add, order, gate and hide administration sections; a query embeds without a Screen", async () => {
+  const { defineView } = await import("@copilotz/copilotz/views");
+  const ledger = defineView<{ section: string }, React.ReactNode>({
+    id: "app.ledger",
+    shows: "appLedger",
+    renderer: "react",
+    modes: ["full"],
+    render: ({ section }) => <p>{`Ledger section ${section}`}</p>,
+  });
+  const app = {
+    id: "app",
+    views: { ledger },
+    actions: {
+      ledgerQuery: { id: "app.ledger", placement: "server" as const },
+    },
+    resources: {
+      adminSections: {
+        ledger: {
+          label: "Ledger",
+          icon: "book",
+          order: 45,
+          view: "appLedger",
+          requires: "ledgerQuery",
+        },
+        profiles: {
+          label: "Profiles",
+          view: "appProfiles",
+          requires: ["profilesQuery"], // not composed: hidden
+        },
+        activity: null, // hide a built-in
+      },
+    },
+  };
+  const runtime = await createBrowserRuntime({
+    renderer: reactRenderer,
+    plugins: [createAdminWebPlugin(), app],
+    live: new MemorySubscriptions(),
+    actions: {
+      invoke: () =>
+        Promise.resolve({ seq: 1, value: { status: 200, data: [] } }),
+      cancel: () => Promise.resolve(),
+    },
+  });
+  try {
+    const page = runtime.observe(() =>
+      runtime.render({ shows: "admin", value: { section: "ledger" } })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const html = renderToStaticMarkup(<ObservedView output={page} />);
+    const tabs = [...html.matchAll(/role="tab"[^>]*aria-label="([^"]+)"/g)]
+      .map((match) => match[1]);
+    assert.deepEqual(tabs, [
+      "Overview",
+      "Agents",
+      "Conversations",
+      "People",
+      "Ledger",
+      "Usage",
+    ]);
+    assert.match(html, /Ledger section ledger/);
+    page.dispose();
+    const embedded = runtime.observe(() =>
+      runtime.render({
+        shows: "adminQuery",
+        value: { section: "agents", embedded: true },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const body = renderToStaticMarkup(<ObservedView output={embedded} />);
+    assert.ok(!body.includes("<h1"), "no Screen title when embedded");
+    assert.match(body, /No agents yet/);
+    embedded.dispose();
+  } finally {
+    runtime.dispose();
+  }
+});

@@ -5,13 +5,14 @@
 import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { TabBar } from "@copilotz/copilotz/web/kit";
-import { ADMIN_SECTIONS, adminSection } from "../query/index.tsx";
+import { EmptyState, showSafely, TabBar } from "@copilotz/copilotz/web/kit";
+import { adminSection, adminSections } from "../query/index.tsx";
 
 /**
- * The administration page: one tab per section, each an authorized query
- * Action. A tab navigates with `region: "main"`, so the section lives in the
- * shell's URL state (`?page=admin&section=agents`).
+ * The administration page: one tab per section (`adminSections`). Built-in
+ * sections read an authorized query Action; an app's sections are Views. A
+ * tab navigates with `region: "main"`, so the section lives in the shell's URL
+ * state (`?page=admin&section=agents`).
  */
 const view: import("@copilotz/copilotz/views").ViewDefinition<
   { section?: string } | null,
@@ -29,9 +30,16 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
     modes: ["full", "panel"],
     url: true,
     render(value, ctx) {
-      const current =
-        ADMIN_SECTIONS.find((item) => item.id === value?.section) ??
-          ADMIN_SECTIONS[0];
+      const sections = adminSections(ctx);
+      const current = sections.find((item) => item.id === value?.section) ??
+        sections[0];
+      if (!current) {
+        return (
+          <EmptyState title="Nothing to administer">
+            This app has no administration sections.
+          </EmptyState>
+        );
+      }
       const panel = ctx.hints.mode === "panel";
       return (
         <section
@@ -45,7 +53,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
             label="Administration sections"
             idPrefix="admin-tab"
             panelId="admin-section"
-            items={ADMIN_SECTIONS}
+            items={sections}
             selected={current.id}
             onSelect={(next) =>
               ctx.show({ shows: "admin", value: { section: next } }, {
@@ -63,11 +71,20 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
               <h2 className="text-lg font-semibold tracking-tight">
                 {current.label}
               </h2>
-              <p className="text-muted-foreground text-sm">
-                {current.description}
-              </p>
+              {current.description && (
+                <p className="text-muted-foreground text-sm">
+                  {current.description}
+                </p>
+              )}
             </header>
-            {adminSection(ctx, current.id)}
+            {current.view
+              ? showSafely(
+                ctx,
+                { shows: current.view, value: { section: current.id } },
+                { mode: ctx.hints.mode },
+                current.label,
+              )
+              : adminSection(ctx, current.id)}
           </div>
         </section>
       );

@@ -6,6 +6,7 @@ import query from "./views/query/index.tsx";
 import records from "./views/records/index.tsx";
 import agent from "./views/agent/index.tsx";
 import participant from "./views/participant/index.tsx";
+import { ADMIN_SECTIONS } from "./views/query/index.tsx";
 
 export type AdminSection =
   | "overview"
@@ -57,6 +58,19 @@ export function createAdminWebPlugin(
     ),
     resources: {
       admin: { actionAliases },
+      // Apps add, reorder (`order`) or hide (`null`) sections by id.
+      adminSections: Object.fromEntries(
+        ADMIN_SECTIONS.map((section, index) => [section.id, {
+          label: section.label,
+          icon: section.icon,
+          description: section.description,
+          order: index * 10,
+          requires: [
+            actionAliases[section.id as AdminSection] ??
+              `admin${section.id[0].toUpperCase()}${section.id.slice(1)}`,
+          ],
+        }]),
+      ),
       userMenu: {
         admin: {
           label: "Administration",
@@ -69,3 +83,9 @@ export function createAdminWebPlugin(
   };
 }
 export const adminWebPlugin: BrowserPlugin = createAdminWebPlugin();
+export {
+  ADMIN_SECTIONS,
+  adminSection,
+  type AdminSectionEntry,
+  adminSections,
+} from "./views/query/index.tsx";

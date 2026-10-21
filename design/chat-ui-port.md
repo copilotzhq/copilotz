@@ -2,204 +2,178 @@
 
 Brings the previous chat UX (`@copilotz/chat-ui` 0.82.7 and
 `@copilotz/chat-adapter`) back as Copilotz's React front-end plugins, improved
-where it simplifies or fixes something. Core stays framework-free. This file is
-the **contract** an app builds on; changes to it are listed under "Contract
-changes" at the end.
+where it simplifies or fixes something (see the UX audit's P1 list). Core stays
+framework-free. This file is the **contract** an app builds on; changes after
+the first commit are listed at the end.
 
 ## Current state (before this change)
 
-- `plugins/ui/web.ts:16` is a focus/context workspace (`workspace`, `uiOpen`,
-  `uiSwap`, `uiClose`) with a navigator and panes. It has no Space-grouped
-  sidebar, resizable panel or header.
-- `plugins/core/views/*` render one Card per message (`message/index.tsx:30`), a
-  bare textarea composer and a thread table. There is no grouping, sender
-  identity, streaming, tool activity or attachments.
-- `plugins/ui-kit/styles.css:1` maps six colors; the old chat UI had the full
-  shadcn token set, sidebar tokens, radius and highlighting styles.
-- Streaming exists on the platform, not in the browser runtime: the LLM call
-  publishes `stream.output` lanes (`plugins/llm/actions/call-llm/index.ts:1602`,
-  lanes `content`, `reasoning`, `tool-calls`), and Core HTTP serves a
+- `plugins/ui/web.ts` was a focus/context workspace (`workspace`, `uiOpen`,
+  `uiSwap`, `uiClose`) with a navigator and panes: no Space-grouped sidebar,
+  resizable panel or header.
+- `plugins/core/views/*` rendered one Card per message, a bare composer and a
+  thread table: no grouping, identity, streaming, tool activity or attachments.
+- `plugins/ui-kit/styles.css` mapped six colors.
+- Streaming exists on the platform: the LLM call publishes `stream.output` lanes
+  (`plugins/llm/actions/call-llm/index.ts:1602`: `content`, `reasoning`,
+  `tool-calls`), every Action stream carries `sourceActionRunId`
+  (`runtime/actions/execution-context.ts:36`), and Core HTTP serves a
   record-scoped feed, `POST /threads/:id/observe`
-  (`plugins/core-http/adapters/http/core/index.ts:262`), which the SDK reads
-  with `createCoreClient(client).threads.observe`. `/web` has no stream
-  primitive (`design/subscriptions.md:149`, deferred `ctx.readOperation`).
+  (`plugins/core-http/adapters/http/core/index.ts:262`). `/web` had no stream
+  primitive (`design/subscriptions.md:149` defers `ctx.readOperation`).
 
 ## Layering
 
-| Entry        | Owns                                                                          |
-| ------------ | ----------------------------------------------------------------------------- |
-| `/web/kit`   | Tokens and themes, primitives, patterns, `Markdown`, `Icon`, identity helpers |
-| `/core/web`  | Chat Collections, Actions, the thread feed, thread/composer/live Views        |
-| `/ui/web`    | The shell: navigation state, sidebar, header, panel, SpaceView, user menu     |
-| `/web/react` | The React renderer (unchanged)                                                |
+| Entry       | Owns                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------- |
+| `/web`      | `format.ts`: locale-aware `formatWhen/Relative/Bytes/Count/Duration`, `recencyGroup`          |
+| `/web/kit`  | Tokens and themes, primitives, `ReadStatus`, resource patterns, `Markdown`, `Icon`, `dom`     |
+| `/core/web` | Chat Collections, intents (browser Actions), the thread feed, thread/composer/live Views      |
+| `/ui/web`   | The shell: navigation state, sidebar, header, panel, SpaceView and sections, palette, profile |
 
-`/ui/web` depends on `/core/web`. Presentational components take plain props and
-callbacks; Views read Collections and pass data and Action proxies down. No
-component fetches.
+`/ui/web` composes `/core/web` (`uiWebPlugin({ core })`). Presentational
+components take plain props; Views read Collections and pass data and Action
+proxies down. No component fetches.
 
-## The shell model (one responsive layout)
+## Shell model: one responsive layout
 
-```
-┌ sidebar ─────┬ header ─────────────────────────────┬──────────────┐
-│ brand  ⟨⟩    │ title · Space chip · agents   ▣ ⋯   │ right panel  │
-│ + New chat   ├─────────────────────────────────────┤ (Space       │
-│ search ⌘K    │ main: a conversation, or SpaceView  │  sections,   │
-│ Spaces|Recent│                                     │  resizable)  │
-│ ▸ Space  (3) │                                     │              │
-│   chat …     │                                     │              │
-│ No Space     │                                     │              │
-│ user menu    │  composer                           │              │
-└──────────────┴─────────────────────────────────────┴──────────────┘
-```
+Sidebar (or icon rail) · header · main · resizable right panel. The Space name
+opens its SpaceView in main; the chevron expands its chats; a chat opens in
+main; while a chat is open the header toggle shows that chat's Space sections in
+the panel. Below `lg` the sidebar is the rail and expands as an overlay, and the
+panel overlays main, keeping its resize handle and width; Escape or the toggle
+closes it. All of this is CSS (container and media queries); nothing reads the
+window width and nothing closes itself on navigation.
 
-- Clicking a Space's name opens its SpaceView in main; its chevron expands its
-  chats. Clicking a chat opens it. While a chat is open, the header's panel
-  toggle shows that chat's Space sections in the right panel.
-- Same state at every width. Below `md` the sidebar defaults to the icon rail
-  and expands as an overlay; below `lg` the right panel overlays the chat. All
-  of this is CSS; there is no `windowWidth` branch and nothing closes itself on
-  navigation.
+### State (client Collections, row `main`)
 
-### Navigation state (Collections)
+| Collection         | Storage                       | Fields                                                                                                                                                            |
+| ------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shell`            | `navigation` (the URL)        | `threadId`, `spaceId`, `section`, `panel`, `newIn`, `origin`                                                                                                      |
+| `shellPreferences` | `preferences` (local storage) | `sidebar` (`auto/expanded/rail`), `groupBy` (`space/date`, default `space`), `panelWidth`, `theme` (`light/dark/system`), `archived`, `expanded[]`, `collapsed[]` |
+| `shellOverlay`     | memory                        | `palette`, `dialog` (a `ViewReference`), `createSpace`                                                                                                            |
+| `shellToasts`      | memory                        | one row per notice                                                                                                                                                |
 
-| Collection         | Placement, storage                  | Row `main`                                                                                    |
-| ------------------ | ----------------------------------- | --------------------------------------------------------------------------------------------- |
-| `shell`            | browser, `navigation` storage (URL) | `threadId`, `spaceId`, `section`, `panel` (boolean), `origin`                                 |
-| `shellPreferences` | browser, `preferences` (local)      | `sidebar` (`auto/expanded/rail`), `groupBy` (`space/date`), `panelWidth`, `theme`, `archived` |
-| `shellDialog`      | browser, memory only                | `reference` (`ViewReference \| null`)                                                         |
-
-URL state carries identifiers and scalars only.
-`shellUrlStorageAdapter(host,
-codec?)` defaults to
-`?chat=<id>&space=<id>&section=<id>&panel=1` and preserves other parameters. A
-row restored from the URL has `origin: "url"`; the shell then passes its
-references through `urlReference`, so only Views that declare `url` render and
-their query reads are `held` until a gesture. Any in-app navigation sets
-`origin: "app"`.
+`shellUrlStorageAdapter(browserShellHistory(window), codec?)` keeps identifiers
+only (default `?chat=&space=&section=&panel=1&new=`, unrelated parameters kept).
+A chat or Space change pushes a history entry; the rest replaces it. State
+restored from a link has `origin: "url"`, so the shell renders it through
+`urlReference`: only Views that declare `url` render, and their query reads are
+`held` until a gesture. In-app navigation is `app`.
 
 Browser Actions: `shellOpenThread {threadId}`,
 `shellOpenSpace {spaceId,
 section?}`, `shellCloseSpace`,
-`shellSection {section}`, `shellPanel {open}`, `shellPreference {patch}`,
-`shellDialog {reference|null}`. `shellNavigation(()
-=> runtime)` is the host
-`show` port: `ctx.show(ref, { source: "link" })` opens threads and Spaces
-natively and any other View in the dialog host.
+`shellNewChat {spaceId?}`, `shellSection
+{section}`, `shellPanel {open}`,
+`shellPreference {…}`, `shellOverlay {…}`, `shellPalette {open}`,
+`shellDialog {reference|null}`, `shellToast {text,
+tone}`. Host `show` port:
+`shellNavigation(() => runtime)` opens `thread`, `space` and `newThread`
+references in place and any other View in the dialog.
 
 ## Chat (core)
 
-Collections: `thread`, `message`, `participant`, `space` (server, read-only),
-`draft` (browser), `threadFeed`, `threadRun` and `outbox` (browser, memory).
+`createCoreWebPlugin({ actionAliases?, intents?, commands? })`; `coreWebPlugin`
+is the default. Collections: `thread`, `message`, `participant`, `space`
+(server; `thread` and `space` have a `patch` command for optimistic overlays,
+`commands` adds more), `draft`, `outbox`, `threadFeed`, `threadRun`,
+`threadOutputs`, `threadWindow` (browser).
 
-Actions keep the server composition aliases (`createThread`,
-`createThreadMessage`, `reviseMessage`, `deleteThreadMessages`,
-`addThreadParticipant`, `spaces`, `updateConversation`, `deleteConversation`).
-`createCoreWebPlugin({ actionAliases })` renames them for an app whose server
-composition differs; `coreWebPlugin` is the default. Browser Actions:
+Intents are browser Actions over the composed server aliases (defaults
+`createThread`, `createThreadMessage`, `reviseMessage`, `deleteThreadMessages`,
+`addThreadParticipant`, `spaces`, `updateConversation`, `deleteConversation`):
+`chatSend`, `chatDiscard`, `chatRevise`, `chatCreateThread`, `chatRenameThread`,
+`chatArchiveThread`, `chatDeleteThread`, `chatMoveThread`, `chatCreateSpace`,
+`chatUpdateSpace`, `chatDeleteSpace`, `chatAddMember`, `chatRemoveMember`,
+`chatAddAgent`, `chatFollow`, `chatStop`; plus `chatLoadOlder` and `setDraft`.
+An app whose server Actions take other inputs replaces single intents
+(`intents.chatCreateSpace = (input, ctx) => ctx.actions.space({…})`).
 
-- `sendMessage {threadId, text, files?, recipientIds?}` puts an `outbox` row
-  (shown immediately, with Retry on failure), uploads files through
-  `adapters.core.feed.upload` when granted (inline base64 under 512 KiB
-  otherwise), then calls `createThreadMessage` with a `monotonicUlid` id. It
-  omits `recipientIds` unless addressed, so Core defaults to the thread's
-  agents.
-- `followThread {threadId}` reads the thread feed through
-  `adapters.core.feed.observe` and projects it into `threadFeed`/`threadRun`
-  (below). The thread View starts it on mount and cancels it on unmount.
-- `stopThread {threadId}` cancels the feed's active operations.
+`chatSend` writes an `outbox` row (shown at once; failed sends keep Retry and
+Discard), uploads files through `adapters.core.feed.upload` (inline base64 up to
+512 KiB without it), then calls `createThreadMessage` with a `monotonicUlid` id,
+omitting `recipientIds` unless @mentioned so Core defaults to the thread's
+agents. New conversations add `resources.chat.agents`.
 
-Reads: `readThreadMessages` (newest 100 by `createdAt`, the window grows on
-"Load older"; ordered live reads arrive with SEC3 round 2, until then the read
-reports its refusal and the View says so calmly), threads
-`{order: id desc,
-limit: 200}` sorted by `updatedAt` in the View, Spaces
-`{limit: 200}`.
+Reads: `readThreadMessages(ctx, id, limit)` (newest by `createdAt`, the window
+grows by 100 on "Load older"; until ordered live reads land the View shows the
+refusal calmly), `readThreads` (id-desc window, sorted by `updatedAt`),
+`readSpaces`.
 
-### Streaming (the smallest correct path)
+### Streaming
 
-`threadFeedAdapter(client)` (exported by `/core/web`) wraps the existing SDK
-feed: `observe(threadId, {checkpoint, signal, onFrame})`, `cancel(operationId)`
-and `upload(file)`. The host grants it as `adapters.core.feed`. Without it the
-chat still works from live Collections, only without progressive text.
+`threadFeedAdapter(client)` (from `/core/web`) wraps Core HTTP: `observe`
+(`POST /threads/:id/observe`), `cancel` (Stop), `upload` (`/assets`), `asset`
+(message attachments). The host grants it as `adapters.core.feed`. Without it
+the chat works from live Collections, without progressive replies or Stop.
 
-`followThread` keeps byte-level state (UTF-8 tails, NDJSON partial lines) in its
-closure and commits display state at most every 50 ms:
+`chatFollow` (started by the thread View, cancelled on unmount) projects frames
+with `createFeedProjector` (`plugins/core/shared/chat-feed.ts`): replies by
+`llmAttemptId`, lanes by `lane`, provider fallbacks by `providerAttemptIndex`,
+tool-call drafts from NDJSON, tool output by `sourceActionRunId` →
+`copilotzToolAction.toolCallId`, bytes by offset. It commits at most every 50
+ms: `threadFeed` (replies), `threadRun` (`status`, `active` operations,
+`stopping`) and `threadOutputs`. Only the `threadLive` View and tool hosts
+re-render while text streams. A reply settles on `llm.call.*` or its operation's
+terminal output and hides once its persisted message (same
+`copilotzWorkflow.llmAttemptId`) is in the window.
 
-- `threadFeed[threadId].attempts[]`:
-  `{ attemptId, operationId, agent, text,
-  reasoning, tools: [{ id, name, input, phase }], status, startedAt }`,
-  keyed by the stream metadata's `llmAttemptId` and lane, never by timing.
-- `threadRun[threadId]`:
-  `{ status: "live" | "reconnecting" | "unavailable",
-  active: operationIds }`.
-  The composer reads only this row, so text chunks never re-render it.
+## Extension points (inert data, or Views)
 
-A live attempt is hidden once its persisted message
-(`metadata.copilotzWorkflow
-.llmAttemptId`) is in the window. Persisted tool
-calls (`metadata.llmToolCalls`) pair with tool result messages
-(`metadata.toolInvocation.id`) to show running, completed and failed tools
-without the feed. Reconnects resume from the last applied checkpoint; renewal is
-transparent.
+| Slot             | Declare                                                                                                                                                                   | The View receives                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}`, `.theme: "host"` to manage `.dark` yourself | —                                                     |
+| Identity         | `resources.chat.sender` (who sends), `resources.chat.agents` (participant inputs for new chats)                                                                           | —                                                     |
+| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                                                              | `{spaceId, threadId}`, mode `full`/`panel`            |
+| Right panel      | `resources.shell.panel {view}` replaces the Space sections                                                                                                                | `{threadId, spaceId}`, mode `panel`                   |
+| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action? or dialog?, destructive?, requires?}`                                                                           | dialog: `{threadId, spaceId}`, mode `dialog`          |
+| User menu        | `resources.userMenu.<id>` (same shape)                                                                                                                                    | `{}`                                                  |
+| Agent selector   | a View for `agentSelector` plus `resources.views.prefer`                                                                                                                  | `{threadId}`                                          |
+| Tool renderers   | `resources.toolRenderers.<toolId> {view, inline?}`; the View declares mode `inline`                                                                                       | `ToolCallView` (status, input, result, live `output`) |
+| Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                                                              | —                                                     |
+| Images           | `resources.markdown.imageOrigins`                                                                                                                                         | —                                                     |
 
-## Extension points (all inert data or Views)
+Built-in sections: `overview` (0), `conversations` (10), `members` (90). A
+section's `tools` puts a dot on its tab when an agent uses one of them; the tab
+never switches. Section and panel Views must declare `url: true` to render from
+a link. `icon` is a kit icon name (`iconNames`).
 
-| Slot              | Declare                                                                                                                                      | The View receives                                 |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Branding, labels  | `resources.shell.branding {title, subtitle?, logoUrl?}`, `resources.shell.labels`, `resources.shell.suggestions`, `resources.shell.features` | —                                                 |
-| Space sections    | `resources.spaceSections.<id> {label, icon?, order?, view}`                                                                                  | `{spaceId, threadId}`, mode `full` or `panel`     |
-| Right panel       | `resources.shell.panel {view}` replaces the default Space sections                                                                           | `{threadId, spaceId}`, mode `panel`               |
-| Header menu items | `resources.headerMenu.<id> {label, icon?, order?, action? \| dialog?, destructive?, requires?}`                                              | dialog View: `{threadId, spaceId}`, mode `dialog` |
-| User menu items   | `resources.userMenu.<id>` (same shape)                                                                                                       | `{}`                                              |
-| Agent selector    | Override View kind `agentSelector` with `resources.views.prefer`                                                                             | `{threadId}`                                      |
-| Tool renderers    | `resources.toolRenderers.<toolId> {view, inline?}`                                                                                           | `ToolCallView` (see `/core/web`)                  |
-| Markdown plugins  | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                                 | —                                                 |
-| Image origins     | `resources.markdown.imageOrigins` (unchanged)                                                                                                | —                                                 |
+## Kit
 
-`icon` is a kit icon name (`iconNames` lists them). `action` names a composed
-Action alias, called with `{threadId, spaceId}`; `dialog` names a View kind
-opened in the shell's dialog host. Built-in sections (`overview`,
-`conversations`, `members`) are registered the same way with orders 0, 10 and
-90. Apps may override any built-in View with `resources.views.prefer`.
-
-## Kit and tokens
-
-`plugins/ui-kit/styles.css` defines OKLCH tokens for light and `.dark`:
-`background foreground card popover primary(-foreground) secondary muted accent
-destructive success warning border input ring sidebar(-foreground, -accent,
--border)`,
-radius `--radius: 0.75rem` (`sm/md/lg/xl` derived), the Inter/system font stack,
-focus rings, scrollbar, prose, code highlighting and KaTeX. Apps brand by
-overriding `--primary` (and optionally `--primary-foreground`).
-`resources.shell.theme` is not used: the shell toggles `.dark` on the document
-from `shellPreferences.theme` (`light/dark/system`).
-
-Primitives (one each): Button, Card, Input, Textarea, Badge, Skeleton, Dialog,
-AlertDialog (`ConfirmAction`), Avatar, ScrollArea, Tooltip, Tabs, DropdownMenu
-(with checkbox/radio items and sub-menus), Separator, Kbd, Spinner, Field,
-NativeSelect, Checkbox, Notice, EmptyState, CopyField. Patterns: Screen, Frame,
-ReadStatus, Metric, ResourceTable, PaneBoundary, showSafely, Markdown, Icon,
-`identityColor`, `initials`.
+`styles.css`: chat-ui's default slate theme (white, slate primary,
+`--radius:
+0.5rem`, system font) as tokens for light and `.dark`, plus `bubble`,
+sidebar and code tokens; prose themed through tokens; MathML math;
+tw-animate-css. Brand by overriding `--primary`/`--primary-foreground`. One set
+of primitives (Button, Badge, Card, Input, Textarea, Dialog,
+`ConfirmDialog`/`ConfirmAction`, `FormDialog`, `NameDescriptionDialog`,
+DropdownMenu with checkbox/radio/sub, Tabs, Tooltip, Avatar, ScrollArea,
+Separator, Kbd, Spinner, Field, NativeSelect, Checkbox, Notice, EmptyState,
+CopyField) and patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`,
+`ResourceTable`, `ResourceToolbar`, `ResourceList`, `ResourceRow`,
+`ResourceHeader`, `PaneBoundary`, `showSafely`, `Markdown`, `Icon`,
+`identityColor`, `initials`).
 
 ## Deletions
 
 `plugins/ui/{workspace.ts, views/workspace, views/panes, views/navigator,
 tests/workspace.test.tsx}`,
-`workspaceNavigation`, `workspaceUrlStorageAdapter`,
-`uiOpen/uiReplace/uiSet/uiRestore/uiSwap/uiClose`, the `workspace` Collection,
-`core.threads` (`{list: "thread"}`), `core.message` and the
-`resources.navigation` entries. Docs sections on workspace panes go with them.
+`workspaceNavigation`, `workspaceUrlStorageAdapter`, the `ui*` workspace
+Actions, `core.threads` (`{list: "thread"}`), `core.message` and the
+`resources.navigation` entries, with their docs and tests.
 
 ## Tests
 
-Ported from `chat-ui/tests`: message grouping, ownership, Space grouping, touch
-drag, prepend anchor, theme, activity labels, Space form. New happy-dom tests:
-sidebar grouping and chevron vs. name, Space vs. chat in main, panel resize and
-restored width, composer attachments, feed projection and live activity, app
-section/panel/tool renderer, narrow width keeps the same state. Screenshots:
-`plugins/ui/demo` (fixture runtime), headless Chrome at 1440×900 and 390×844,
-light and dark.
+Ported (`chat-ui/tests`): grouping, ownership, Space grouping, touch drag,
+prepend anchor, theme, activity labels, Space form. New: feed projection, URL
+codec and history, happy-dom shell tests (sidebar and chevron vs. name, Space
+vs. chat, panel resize and restore, composer attachments, live activity and
+Stop, app section, panel and tool renderer, narrow width keeps state).
+Screenshots: `contracts/web-demo` at 1440×900 and 390×844, light and dark.
 
 ## Contract changes
 
-None yet.
+- 2026-10-21: `uiWebPlugin(options)` takes `{navigation, preferences, core}`
+  (was a storage name); the first draft's `resources.spaceSections` entries
+  gained `tools`; the Space section value is `{spaceId, threadId}`.

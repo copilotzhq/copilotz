@@ -6,6 +6,7 @@
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { useRef, useState } from "react";
+import { Slot } from "@radix-ui/react-slot";
 import {
   Dialog,
   DialogContent,
@@ -13,19 +14,21 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "./dialog.tsx";
 
-export function ConfirmAction(
+/** A controlled confirmation dialog (use it where a trigger can't own the dialog, such as menus). */
+export function ConfirmDialog(
   {
-    trigger,
+    open,
+    onOpenChange,
     title,
     description,
     confirmLabel = "Confirm",
     destructive = false,
     onConfirm,
   }: {
-    trigger: React.ReactElement;
+    open: boolean;
+    onOpenChange(open: boolean): void;
     title: string;
     description?: React.ReactNode;
     confirmLabel?: string;
@@ -34,7 +37,6 @@ export function ConfirmAction(
     onConfirm(): Promise<boolean> | boolean;
   },
 ): React.ReactElement {
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
   const [error, setError] = useState("");
@@ -44,12 +46,11 @@ export function ConfirmAction(
       onOpenChange={(next) => {
         if (!pending.current) {
           setError("");
-          setOpen(next);
+          onOpenChange(next);
         }
       }}
     >
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent>
+      <DialogContent role="alertdialog">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
@@ -61,7 +62,7 @@ export function ConfirmAction(
             type="button"
             variant="outline"
             disabled={busy}
-            onClick={() => setOpen(false)}
+            onClick={() => onOpenChange(false)}
           >
             Cancel
           </Button>
@@ -75,7 +76,7 @@ export function ConfirmAction(
               setBusy(true);
               setError("");
               try {
-                if (await onConfirm()) setOpen(false);
+                if (await onConfirm()) onOpenChange(false);
               } catch (cause) {
                 setError(
                   cause instanceof Error ? cause.message : String(cause),
@@ -91,6 +92,32 @@ export function ConfirmAction(
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A trigger that opens a confirmation dialog for destructive or disruptive work. */
+export function ConfirmAction(
+  {
+    trigger,
+    ...props
+  }: {
+    trigger: React.ReactElement;
+    title: string;
+    description?: React.ReactNode;
+    confirmLabel?: string;
+    destructive?: boolean;
+    /** Resolve true to close; false keeps the dialog open (e.g. on failure). */
+    onConfirm(): Promise<boolean> | boolean;
+  },
+): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Slot aria-haspopup="dialog" onClick={() => setOpen(true)}>
+        {trigger}
+      </Slot>
+      <ConfirmDialog open={open} onOpenChange={setOpen} {...props} />
+    </>
   );
 }
 
@@ -121,7 +148,8 @@ export function FormDialog(
     description?: React.ReactNode;
     submitLabel?: string;
     canSubmit?: boolean;
-    onSubmit(): Promise<boolean | void> | boolean | void;
+    /** Resolve anything but `false` to close. */
+    onSubmit(): unknown;
     children?: React.ReactNode;
   },
 ): React.ReactElement {
@@ -207,9 +235,8 @@ export function NameDescriptionDialog(
     nameLabel?: string;
     descriptionLabel?: string;
     withDescription?: boolean;
-    onSubmit(
-      value: { name: string; description: string },
-    ): Promise<boolean | void> | boolean | void;
+    /** Resolve anything but `false` to close. */
+    onSubmit(value: { name: string; description: string }): unknown;
   },
 ): React.ReactElement {
   const [name, setName] = useState(initial.name ?? "");

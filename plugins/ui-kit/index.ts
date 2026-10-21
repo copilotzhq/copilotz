@@ -32,3 +32,4 @@ export {
   recencyGroup,
   type RecencyLabels,
 } from "../../client/web/format.ts";
+export * from "./dom.ts";

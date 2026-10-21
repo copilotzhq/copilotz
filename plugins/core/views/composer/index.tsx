@@ -3,98 +3,23 @@
 /** @jsxFrag React.Fragment */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { useState } from "react";
-import { defineView } from "@copilotz/copilotz/views";
-import type { ActionHandle, BrowserViewContext } from "@copilotz/copilotz/web";
-import { Button, ConfirmAction, Textarea } from "@copilotz/copilotz/web/kit";
-import { monotonicUlid } from "../../../../dependencies/ulid.ts";
-function Composer(
-  { threadId, text, ctx }: {
-    threadId: string;
-    text: string;
-    ctx: BrowserViewContext;
-  },
-) {
-  const [active, setActive] = useState<ActionHandle | null>(null);
-  const [error, setError] = useState("");
-  const [stopping, setStopping] = useState(false);
-  const sender = ctx.resources.chat?.sender;
-  const send = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!text.trim() || active) return;
-    const handle = ctx.actions.createThreadMessage({
-      // Time-ordered, so message ids sort in the order they were written.
-      id: monotonicUlid(),
-      threadId,
-      sender,
-      content: [{ type: "text", text }],
-    });
-    setActive(handle);
-    setError("");
-    handle.result().then(() => {
-      if (ctx.collections.draft.get(threadId).value?.text === text) {
-        ctx.actions.setDraft({ threadId, text: "" });
-      }
-    }, (cause) => setError(String(cause))).finally(() => {
-      setActive(null);
-      setStopping(false);
-    });
-  };
-  return (
-    <form onSubmit={send} className="space-y-2" aria-label="Message composer">
-      <Textarea
-        aria-label="Message"
-        value={text}
-        placeholder="Write a message…"
-        disabled={Boolean(active)}
-        onChange={(event) =>
-          ctx.actions.setDraft({
-            threadId,
-            text: (event.target as unknown as { value: string }).value,
-          })}
-      />
-      {error && <p role="alert">{error}</p>}
-      <div className="flex gap-2">
-        <Button
-          type="submit"
-          disabled={!sender || !text.trim() || Boolean(active)}
-        >
-          Send
-        </Button>
-        {active && (
-          <ConfirmAction
-            trigger={
-              <Button type="button" variant="outline" disabled={stopping}>
-                {stopping ? "Stopping…" : "Stop"}
-              </Button>
-            }
-            title="Stop this response?"
-            description="This cancels the active response. Messages already received remain in the conversation."
-            confirmLabel="Stop response"
-            destructive
-            onConfirm={async () => {
-              setStopping(true);
-              try {
-                await active.cancel();
-                return true;
-              } catch (cause) {
-                setStopping(false);
-                throw cause;
-              }
-            }}
-          />
-        )}
-      </div>
-      {!sender && <p role="status">Sign in to send messages.</p>}
-    </form>
-  );
+import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
+import type { BrowserViewContext } from "@copilotz/copilotz/web";
+import { chatConfig, readSenders } from "../chat/context.tsx";
+import { Composer, type MentionTarget } from "../chat/composer.tsx";
+import { startConversation } from "../chat/start.ts";
+
+/** The draft key: the thread, or a new conversation (optionally in a Space). */
+export function draftKey(threadId?: string, spaceId?: string): string {
+  return threadId ?? `new:${spaceId ?? ""}`;
 }
-const view: import("@copilotz/copilotz/views").ViewDefinition<
-  { threadId: string },
+
+const view: ViewDefinition<
+  { threadId?: string; spaceId?: string },
   React.ReactNode,
   BrowserViewContext
 > = defineView<
-  { threadId: string },
+  { threadId?: string; spaceId?: string },
   React.ReactNode,
   BrowserViewContext
 >({
@@ -102,14 +27,73 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "composer",
   renderer: "react",
   modes: ["full", "panel"],
-  render({ threadId }, ctx) {
-    const draft = ctx.collections.draft.get(threadId);
+  render({ threadId, spaceId }, ctx) {
+    const config = chatConfig(ctx);
+    const key = draftKey(threadId, spaceId);
+    const draft = ctx.collections.draft.get(key);
+    const run = threadId
+      ? ctx.collections.threadRun?.get(threadId).value
+      : undefined;
+    const thread = threadId
+      ? ctx.collections.thread.get(threadId).value
+      : undefined;
+    const participants = Array.isArray(thread?.participantIds)
+      ? thread.participantIds.map(String)
+      : [];
+    const targets: MentionTarget[] = [...readSenders(ctx, participants)]
+      .flatMap(([id, sender]) =>
+        sender.type === "agent" ? [{ id, name: sender.name, sender }] : []
+      );
+    const send = ctx.actions.chatSend;
+    const disabledReason = !config.self
+      ? "Sign in to send messages."
+      : !send
+      ? "Sending is not available here."
+      : thread?.status === "archived"
+      ? "This conversation is archived. Restore it to reply."
+      : undefined;
+    const generating = Array.isArray(run?.active) && run.active.length > 0;
     return (
       <Composer
-        key={threadId}
-        threadId={threadId}
-        text={String(draft.value?.text ?? "")}
-        ctx={ctx}
+        key={key}
+        value={String(draft.value?.text ?? "")}
+        onChange={(text) => ctx.actions.setDraft({ threadId: key, text })}
+        disabledReason={disabledReason}
+        generating={generating}
+        stopping={run?.stopping === true}
+        onStop={() => void ctx.actions.chatStop?.({ threadId }).result()}
+        targets={targets}
+        attachments={config.features.attachments}
+        voice={config.features.voice}
+        autoFocus={!threadId}
+        labels={{
+          placeholder: config.labels.composerPlaceholder ??
+            (targets.length > 1
+              ? "Message the team, or @mention an agent…"
+              : "Message…"),
+          help: config.labels.composerHelp,
+          footer: config.labels.footer,
+        }}
+        onSubmit={async ({ text, files, recipientIds }) => {
+          ctx.actions.setDraft({ threadId: key, text: "" });
+          if (!threadId) {
+            try {
+              await startConversation(ctx, {
+                text,
+                files,
+                recipientIds,
+                ...(spaceId ? { spaceId } : {}),
+              });
+            } catch (error) {
+              ctx.actions.setDraft({ threadId: key, text });
+              throw error;
+            }
+            return;
+          }
+          // A failed send stays in the conversation with Retry.
+          await send({ threadId, text, files, recipientIds }).result()
+            .catch(() => {});
+        }}
       />
     );
   },

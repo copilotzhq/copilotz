@@ -9,6 +9,7 @@ import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+// @ts-types="./rehype-highlight.d.ts"
 import rehypeHighlight from "rehype-highlight";
 import { Check, Copy } from "lucide-react";
 import { markdownUrlPolicy } from "@copilotz/copilotz/web";
@@ -150,6 +151,7 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
     return (
       <div
         data-slot="markdown"
+        data-streaming={streaming || undefined}
         className={cn(
           "prose prose-sm max-w-none break-words",
           variant === "chat" && "prose-chat",
@@ -175,6 +177,11 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
                 </span>
               ),
             pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+            table: ({ children }) => (
+              <div data-slot="table">
+                <table>{children}</table>
+              </div>
+            ),
             code: ({ children, className }) => (
               <code className={className}>{children}</code>
             ),

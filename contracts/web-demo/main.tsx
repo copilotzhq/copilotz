@@ -15,11 +15,14 @@ import type { BrowserRuntime } from "@copilotz/copilotz/web";
 import { FixtureLive } from "../../plugins/ui/tests/fixture-live.test.ts";
 import { fixtures } from "./fixtures.ts";
 import { demoActions, DemoFeed, playLaunchReply } from "./host.ts";
+import { shareAcrossTabs } from "./share.ts";
 import { demoApp } from "./app.tsx";
 
 const url = new URL(location.href);
 const live = new FixtureLive(fixtures());
 const feed = new DemoFeed(live);
+// Another tab of the demo sees what this one writes, live.
+shareAcrossTabs(live, feed);
 const runtime: BrowserRuntime = await createBrowserRuntime({
   plugins: [
     uiWebPlugin({ navigation: "url", preferences: "local" }),

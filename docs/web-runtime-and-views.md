@@ -29,6 +29,7 @@ import { reactRenderer } from "@copilotz/copilotz/web/react";
 import { threadFeedAdapter } from "@copilotz/copilotz/core/web";
 import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
 import {
+  bindShellSession,
   browserShellHistory,
   shellNavigation,
   shellUrlStorageAdapter,
@@ -59,7 +60,9 @@ const runtime = await createBrowserRuntime({
   show: shellNavigation(() => runtime),
 });
 const mounted = runtime.mount(element, { shows: "shell", value: null });
-// Later: mounted.dispose(); runtime.dispose(); device.close();
+// A revoked session shows the app's sign-in (`resources.shell.signIn`).
+const unbindSession = bindShellSession(runtime, device);
+// Later: unbindSession(); mounted.dispose(); runtime.dispose(); device.close();
 ```
 
 `live` accepts the SDK's `SubscriptionTransport`; use `createDeviceTransport`
@@ -150,12 +153,14 @@ including optimistic overlays.
 The server bounds live reads: 16 active subscriptions per socket and 32 per
 user; each filter up to 64 predicate nodes and 32 values per `in` list;
 `jsonEquals`, case-insensitive matching and filters SQL cannot evaluate are
-refused, and so is `order` by any field but `id` until ordered live reads land.
-A refused read is stale with `error.code` `subscription_query_refused` or
-`subscription_capacity_exceeded`; `ReadStatus` says what happened in plain
-words. Identical reads are shared: the runtime keys a read by its collection and
-canonical query, so Views asking the same question share one subscription.
-`/core/web` builds on that (see
+refused. Windows may be ordered by `id`, `createdAt`, `updatedAt` or a declared
+scalar field, with an id tiebreak; the SDK applies the owner's order with each
+batch. A refused read is stale or denied with `error.reason`
+(`query_unsupported`, `limit_exceeded`, `quota_exceeded`, `forbidden`,
+`unbound_collection` or `unavailable`); `ReadStatus` says what happened and what
+helps in plain words. Identical reads are shared: the runtime keys a read by its
+collection and canonical query, so Views asking the same question share one
+subscription. `/core/web` builds on that (see
 [Core and admin View contracts](#core-and-admin-view-contracts)).
 
 An Action's `optimistic` declaration names a Collection, pure command and
@@ -261,6 +266,16 @@ theme follows `shellPreferences.theme` (light, dark or system) by toggling
 `.dark` on the document; set `resources.shell.theme: "host"` to manage it
 yourself.
 
+When the session ends, the shell routes to sign-in. Connect the device's auth
+state once with `bindShellSession(runtime, device)`: on `{ state: "revoked" }`
+the shell replaces itself with the app's sign-in and releases every read, so
+nothing reconnects against the ended session. The app chooses the sign-in in
+`resources.shell.signIn`: a `view` (rendered full screen with `{ reason }`), an
+`href` (a relative or http(s) link) or an `action` alias; without one the screen
+asks the reader to sign in again. After a new HTTP session, the app calls
+`device.reauthenticate()` and then `runtime.actions.shellSessionRestored({})`,
+and the shell returns where it was.
+
 ### Chat
 
 `createCoreWebPlugin({ actionAliases?, intents?, commands? })` configures chat;
@@ -329,6 +344,7 @@ components.
 | Admin sections   | `resources.adminSections.<id> {label, icon?, order?, description?, view?, requires?}`; `null` hides a built-in               | `{section}`, mode `full`                                      |
 | Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                 | —                                                             |
 | Images           | `resources.markdown.imageOrigins`                                                                                            | —                                                             |
+| Sign-in          | `resources.shell.signIn {view? or href? or action?}`, with `bindShellSession(runtime, device)`                               | `{reason}`, mode `full`                                       |
 
 Built-in Space sections are `overview` (order 0), `conversations` (10) and
 `members` (90). A section's `tools` lists tool names; when an agent uses one in
@@ -609,21 +625,22 @@ Collection inspector are not addressable.
 Threads display and create the Collection's `name`. `/core/web` exports the
 reads its Views share, for apps to reuse in tracked View rendering:
 
-- `readThreads(ctx)`: the reader's newest 200 conversations (id order, which the
-  live owner supports), sorted by `updatedAt`.
+- `readThreads(ctx)`: the reader's 200 most recently updated conversations, a
+  live window ordered by `updatedAt`, so a conversation that changes moves to
+  the top.
 - `readThread(ctx, id)` and `readSpace(ctx, id)`: one record, served from the
   shared lists when they hold it, so the header, panel, composer and thread add
   no read of their own.
-- `readSpaces(ctx)` and `readSpaceThreads(ctx, spaceId)`.
+- `readSpaces(ctx)` (by name) and `readSpaceThreads(ctx, spaceId)` (most
+  recently updated first), both live ordered windows.
 - `readParticipants(ctx, ids)` and `readSenders(ctx, ids)`: people in one `in`
   read per 32 ids, sorted so Views asking for the same people share it.
 - `readThreadMessages(ctx, threadId, limit?)` with `messageReadSelection`: the
   thread's newest messages by `createdAt`, returned oldest first by creation
   time and then id, the order Core history uses. Message ids are not a timeline:
   agent replies and tool results use ids derived from the work that produced
-  them. Until ordered live reads land the server refuses this read; the thread
-  says live updates are unavailable and keeps the messages sent from this device
-  visible.
+  them. The window is live and ordered by `createdAt`, so new messages and
+  replies from other devices and tabs appear as they are written.
 
 A conversation with its panel open uses five live reads: its messages, its
 people, the conversation list, the Space list and its Space's chats.

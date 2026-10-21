@@ -57,7 +57,8 @@ export function readFailure(cause: unknown): ReadFailure {
     : {};
   const status = typeof error.status === "number" ? error.status : undefined;
   const code = typeof error.code === "string" ? error.code : "unavailable";
-  const denied = status === 401 || status === 403 ||
+  const reason = typeof error.reason === "string" ? error.reason : undefined;
+  const denied = status === 401 || status === 403 || reason === "forbidden" ||
     ["forbidden", "unauthorized", "revoked", "denied"].includes(code);
   const unavailable = status !== undefined &&
     (status >= 500 || [408, 425, 429].includes(status));
@@ -77,6 +78,7 @@ export function readFailure(cause: unknown): ReadFailure {
     code,
     message: typeof error.message === "string" ? error.message : String(cause),
     ...(status === undefined ? {} : { status }),
+    ...(reason === undefined ? {} : { reason }),
     retryable: kind === "unavailable",
   });
 }

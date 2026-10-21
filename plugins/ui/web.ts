@@ -90,6 +90,8 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
         commands: { set },
       },
       shellToasts: { placement: "browser", initial: [], commands: { set } },
+      // Whether the signed-in session is still valid (see `bindShellSession`).
+      shellSession: { placement: "browser", initial: [], commands: { set } },
     },
     actions: {
       shellOpenThread: browser(
@@ -188,6 +190,25 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
             removed: true,
           }),
       ),
+      // The session ended (the device revoked it): the shell shows sign-in
+      // and opens no reads until `shellSessionRestored`. Nothing reconnects
+      // by itself.
+      shellSessionEnded: browser(
+        "ui.shell.sessionEnded",
+        (input, ctx) =>
+          ctx.command("shellSession", "main", "set", {
+            state: "revoked",
+            code: String(
+              (input as { code?: unknown } | undefined)?.code ??
+                "session_revoked",
+            ),
+          }),
+      ),
+      shellSessionRestored: browser(
+        "ui.shell.sessionRestored",
+        (_input, ctx) =>
+          ctx.command("shellSession", "main", "set", { state: "active" }),
+      ),
     },
     views: {
       shell,
@@ -271,4 +292,28 @@ export function shellNavigation(
       reference: { shows: reference.shows, value: reference.value },
     });
   };
+}
+
+/** A device transport's auth state, as `createDeviceTransport` reports it. */
+export interface ShellAuthSource {
+  onAuthState(
+    listener: (event: Readonly<{ state: string; code?: string }>) => void,
+  ): () => void;
+}
+
+/**
+ * Connects the device's auth state to the shell: when the session is revoked
+ * the shell replaces itself with sign-in (`resources.shell.signIn`) and stops
+ * reading. The app signs in again, calls `device.reauthenticate()`, then
+ * `runtime.actions.shellSessionRestored({})`. Returns the unsubscribe.
+ */
+export function bindShellSession(
+  runtime: Pick<BrowserRuntime, "actions">,
+  auth: ShellAuthSource,
+): () => void {
+  return auth.onAuthState((event) => {
+    if (event.state !== "revoked") return;
+    void runtime.actions.shellSessionEnded({ code: event.code }).result()
+      .catch(() => {});
+  });
 }

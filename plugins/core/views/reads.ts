@@ -74,17 +74,18 @@ function recent(left: Row, right: Row): number {
 }
 
 /**
- * The reader's conversations, most recently updated first. Thread ids are
- * time-ordered, so the newest-id window holds the newest conversations; the
- * live owner supports id order today.
+ * The reader's conversations, most recently updated first: a live window
+ * ordered by `updatedAt`, so a conversation that just changed moves to the
+ * top (and into the window) as it changes.
  */
 export function readThreads(
   ctx: BrowserViewContext,
 ): ReadState<readonly Row[]> {
   const read = ctx.collections.thread.list({
-    order: { field: "id", direction: "desc" },
+    order: { field: "updatedAt", direction: "desc" },
     limit: THREAD_LIST_LIMIT,
   });
+  // The owner sends the window in order; optimistic edits keep it so.
   return { ...read, value: [...read.value].sort(recent) };
 }
 
@@ -95,7 +96,10 @@ export function readSpaces(
   if (!ctx.collections.space) {
     return { value: [], status: "ready", pending: false };
   }
-  const read = ctx.collections.space.list({ limit: THREAD_LIST_LIMIT });
+  const read = ctx.collections.space.list({
+    order: { field: "name", direction: "asc" },
+    limit: THREAD_LIST_LIMIT,
+  });
   return {
     ...read,
     value: [...read.value].sort((left, right) =>
@@ -140,14 +144,14 @@ function fromList(
   return fallback();
 }
 
-/** A Space's conversations, newest first: one shared read per Space. */
+/** A Space's conversations, most recently updated first: one shared live read per Space. */
 export function readSpaceThreads(
   ctx: BrowserViewContext,
   spaceId: string,
 ): ReadState<readonly Row[]> {
   const read = ctx.collections.thread.list({
     where: { spaceId },
-    order: { field: "id", direction: "desc" },
+    order: { field: "updatedAt", direction: "desc" },
     limit: THREAD_LIST_LIMIT,
   });
   return { ...read, value: [...read.value].sort(recent) };

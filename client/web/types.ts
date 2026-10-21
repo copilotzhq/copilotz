@@ -13,6 +13,12 @@ export type ReadFailure = Readonly<{
   code: string;
   message: string;
   status?: number;
+  /**
+   * A refused live read's stable reason: `query_unsupported`,
+   * `limit_exceeded`, `quota_exceeded`, `forbidden`, `unbound_collection` or
+   * `unavailable`.
+   */
+  reason?: string;
   retryable: boolean;
 }>;
 /** `refresh()` from a user gesture also starts a `held` query read. */

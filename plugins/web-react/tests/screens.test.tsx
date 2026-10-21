@@ -175,7 +175,9 @@ test("shared Markdown rejects raw HTML and unsafe URLs while preserving escaped 
   const code = renderToStaticMarkup(
     <Markdown>{"```html\n<img src=x onerror=alert(1)>\n```"}</Markdown>,
   );
-  assert.ok(code.includes("&lt;img"));
+  // Highlighting wraps tokens in spans; the code itself stays escaped text.
+  const text = code.replace(/<\/?span[^>]*>/g, "");
+  assert.ok(text.includes("&lt;img"), code);
   assert.ok(!code.includes("<img"));
   const button = renderToStaticMarkup(
     <Button asChild>

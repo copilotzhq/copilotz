@@ -54,7 +54,8 @@ export function ConfirmAction(
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
-        {error && <p role="alert">{error}</p>}
+        {error && <Notice tone="error" title="That didn't work">{error}
+        </Notice>}
         <DialogFooter>
           <Button
             type="button"
@@ -94,3 +95,165 @@ export function ConfirmAction(
 }
 
 import { Button } from "./button.tsx";
+import { Input } from "./input.tsx";
+import { Textarea } from "./textarea.tsx";
+import { Notice } from "./feedback.tsx";
+
+/**
+ * A dialog form with one submit path: Enter submits, the submit button shows
+ * progress, a rejection stays open with its message, and dismissal is blocked
+ * while pending. `onSubmit` resolves true (or nothing) to close.
+ */
+export function FormDialog(
+  {
+    open,
+    onOpenChange,
+    title,
+    description,
+    submitLabel = "Save",
+    canSubmit = true,
+    onSubmit,
+    children,
+  }: {
+    open: boolean;
+    onOpenChange(open: boolean): void;
+    title: string;
+    description?: React.ReactNode;
+    submitLabel?: string;
+    canSubmit?: boolean;
+    onSubmit(): Promise<boolean | void> | boolean | void;
+    children?: React.ReactNode;
+  },
+): React.ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = useRef(false);
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (pending.current) return;
+        setError("");
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <form
+          className="grid gap-4"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (pending.current || !canSubmit) return;
+            pending.current = true;
+            setBusy(true);
+            setError("");
+            try {
+              if (await onSubmit() !== false) onOpenChange(false);
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+              pending.current = false;
+              setBusy(false);
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            {description && <DialogDescription>{description}
+            </DialogDescription>}
+          </DialogHeader>
+          {children}
+          {error && (
+            <Notice tone="error" title="That didn't work">{error}</Notice>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy || !canSubmit}>
+              {busy ? "Saving…" : submitLabel}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The one name-and-description editor (Spaces, resources, conversations). */
+export function NameDescriptionDialog(
+  {
+    open,
+    onOpenChange,
+    title,
+    description,
+    initial = {},
+    submitLabel = "Save",
+    nameLabel = "Name",
+    descriptionLabel = "Description",
+    withDescription = true,
+    onSubmit,
+  }: {
+    open: boolean;
+    onOpenChange(open: boolean): void;
+    title: string;
+    description?: React.ReactNode;
+    initial?: { name?: string; description?: string };
+    submitLabel?: string;
+    nameLabel?: string;
+    descriptionLabel?: string;
+    withDescription?: boolean;
+    onSubmit(
+      value: { name: string; description: string },
+    ): Promise<boolean | void> | boolean | void;
+  },
+): React.ReactElement {
+  const [name, setName] = useState(initial.name ?? "");
+  const [text, setText] = useState(initial.description ?? "");
+  const key = `${open}:${initial.name ?? ""}:${initial.description ?? ""}`;
+  const seen = useRef(key);
+  if (seen.current !== key) {
+    seen.current = key;
+    if (open) {
+      setName(initial.name ?? "");
+      setText(initial.description ?? "");
+    }
+  }
+  return (
+    <FormDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      description={description}
+      submitLabel={submitLabel}
+      canSubmit={Boolean(name.trim())}
+      onSubmit={() => onSubmit({ name: name.trim(), description: text.trim() })}
+    >
+      <label className="grid gap-1.5 text-sm font-medium">
+        {nameLabel}
+        <Input
+          autoFocus
+          value={name}
+          onChange={(event) =>
+            setName((event.target as unknown as { value: string }).value)}
+        />
+      </label>
+      {withDescription && (
+        <label className="grid gap-1.5 text-sm font-medium">
+          {descriptionLabel}
+          <Textarea
+            rows={3}
+            value={text}
+            className="min-h-20"
+            onChange={(event) =>
+              setText((event.target as unknown as { value: string }).value)}
+          />
+        </label>
+      )}
+    </FormDialog>
+  );
+}

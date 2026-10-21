@@ -3,6 +3,7 @@ import type {
   SqlSession,
   SqlSnapshotCleanup,
 } from "../events/session.ts";
+import { retainReadSnapshotKind } from "../events/snapshot-kind.ts";
 
 type Snapshot = NonNullable<SqlSession["withReadSnapshot"]>;
 const delegates = new WeakSet<object>();
@@ -197,6 +198,7 @@ export function bindSnapshotSession(
     void task.then(() => tasks.delete(task), () => tasks.delete(task));
     return task;
   };
+  retainReadSnapshotKind(session.withReadSnapshot, capability);
 }
 
 export function closeSnapshotSession(session: SqlSession): Promise<void> {

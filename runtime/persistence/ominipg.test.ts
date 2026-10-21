@@ -1,9 +1,29 @@
 import { assertEquals, assertRejects } from "@std/assert";
+import { usesExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 
 import {
   createOminipgSqlSession,
   openManagedOminipgDatabase,
 } from "./ominipg.ts";
+
+Deno.test("custom PGlite constructor configuration retains native snapshot admission", async () => {
+  const managed = await openManagedOminipgDatabase({
+    pgliteConfig: { extensions: {} },
+  });
+  try {
+    assertEquals(
+      usesExclusiveReadSnapshot(managed.session.withReadSnapshot),
+      false,
+    );
+    await assertRejects(
+      () => managed.session.withReadSnapshot!(() => Promise.resolve("read")),
+      Error,
+      "Exclusive snapshots are unsupported by this PGlite configuration",
+    );
+  } finally {
+    await managed.close();
+  }
+});
 
 Deno.test("managed Ominipg database commits and rolls back atomically", async () => {
   const managed = await openManagedOminipgDatabase();
@@ -42,17 +62,17 @@ Deno.test("managed Ominipg database commits and rolls back atomically", async ()
 Deno.test("Ominipg SQL adapter delegates transaction ownership to Ominipg", async () => {
   const calls: string[] = [];
   const session = createOminipgSqlSession({
-    async query(sql) {
+    query(sql) {
       calls.push(`database:${sql}`);
-      return { rows: [] };
+      return Promise.resolve({ rows: [] });
     },
     async close() {},
     async transaction(operation) {
       calls.push("database:transaction");
       return await operation({
-        async query(sql) {
+        query(sql) {
           calls.push(`transaction:${sql}`);
-          return { rows: [] };
+          return Promise.resolve({ rows: [] });
         },
       });
     },

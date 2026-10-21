@@ -253,6 +253,14 @@ agree, wrap them in `context.readSnapshot(async ({ collections }) => ...)`: one
 repeatable, read-only point in time. Keep it short; do model or network work
 after it returns.
 
+Managed PGlite runs Collection snapshots in the serialized owner transaction,
+including databases with vector extensions. Custom providers, custom constructor
+configuration, and background sync retain their native snapshot admission
+checks. PostgreSQL retains a pooled repeatable-read snapshot and a separate lane
+for current authorization checks. Both close their read scope before returning;
+a snapshot does not authorize writes or expose a raw SQL executor to application
+code.
+
 When several writes must commit together, use
 `context.transaction(async ({ collections }) => ...)`. Its writes stage and
 return `{ id }` references; all records and their Events commit at once or not

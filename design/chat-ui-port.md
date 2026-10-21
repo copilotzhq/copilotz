@@ -192,8 +192,10 @@ Ported (`chat-ui/tests`): grouping, ownership, Space grouping, touch drag,
 prepend anchor, theme, activity labels, Space form. New: feed projection, URL
 codec and history, happy-dom shell tests (sidebar and chevron vs. name, Space
 vs. chat, panel resize and restore, composer attachments, live activity and
-Stop, app section, panel and tool renderer, narrow width keeps state).
-Screenshots: `contracts/web-demo` at 1440×900 and 390×844, light and dark.
+Stop, app section, panel and tool renderer, narrow width keeps state, pages,
+shared live reads, refusal states, arrow keys), admin page and refusals, and the
+runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
+1440×900 and 390×844, light and dark.
 
 ## Contract changes
 

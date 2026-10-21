@@ -58,6 +58,8 @@ Each page below is the main reference for its topic.
   the operations that share it.
 - [Events, deliveries and recovery](events-deliveries-recovery.md): immutable
   facts, retries, settlement and reconnection.
+- [Owner recovery](owner-recovery.md): fencing, bounded admission and production
+  lease timing.
 - [Content and assets](content-assets.md) and [progressive streams](streams.md).
 
 ### Agent Harness

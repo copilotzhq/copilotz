@@ -126,7 +126,12 @@ export async function joinDatabaseOwnerCommand<T>(
 }
 
 function failure(code: string, message: string, cause?: unknown): Error {
-  return Object.assign(new Error(message, { cause }), { code });
+  return Object.assign(new Error(message, { cause }), {
+    code,
+    ...(code === "ActionOwnershipLost"
+      ? { status: 503, retryable: true, retryAfterSeconds: 1 }
+      : {}),
+  });
 }
 
 function canonical(value: CommandJson): string {

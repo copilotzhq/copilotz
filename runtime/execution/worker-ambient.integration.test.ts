@@ -1,3 +1,6 @@
+import { testSecretAdapter } from "../testing/secret-adapter.ts";
+import { createServerFacadeFetchHandler } from "../../server/facade.ts";
+import { defineServerFacade } from "../../plugins/server/resources/facade/index.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzGateway } from "../application/gateway.ts";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
@@ -76,6 +79,7 @@ Deno.test("separate worker retains ambient caller authority for Actions, Process
     database,
     namespace: "space",
     ...definitions,
+    adapters: { secrets: { default: await testSecretAdapter() } },
     authorization: {
       directoryReads: {
         routing: defineDatabaseDirectoryRead({
@@ -105,11 +109,17 @@ Deno.test("separate worker retains ambient caller authority for Actions, Process
             ) authorizationRefused();
             return {
               actions: {
+                credential: {},
                 probe: {},
                 prepare: {},
                 directory: {},
                 ...(authority.principal.id !== "denied" ? { child: {} } : {}),
               },
+              sessions: { create: { principal: "account", maxAge: 3600 } },
+              flows: {
+                start: { login: { continuation: "credential", maxAge: 300 } },
+              },
+              operations: { metadata: {} },
               events: ["authority.requested"],
               collections: { notes: {} },
               collectionMutations: { notes: { create: {} } },
@@ -166,6 +176,82 @@ Deno.test("separate worker retains ambient caller authority for Actions, Process
     );
   try {
     await ready();
+    const handler = createServerFacadeFetchHandler(gateway.application, {
+      facade: defineServerFacade({
+        authenticate: () => ({
+          authority: testAuthority("public", "space", "anonymous"),
+        }),
+        expose: { actions: true, collections: false, channels: false },
+      }),
+    });
+    const request = (path: string, input?: unknown, key?: string) =>
+      handler(
+        new Request(`https://test/api${path}`, {
+          method: input ? "POST" : "GET",
+          headers: {
+            "content-type": "application/json",
+            "x-copilotz-credential-proof": "a".repeat(64),
+            ...(key ? { "idempotency-key": key } : {}),
+          },
+          ...(input ? { body: JSON.stringify(input) } : {}),
+        }),
+      );
+    const mint = async (input: unknown, key: string) => {
+      const admitted = await request("/actions/credential", input, key);
+      assertEquals(admitted.status, 202, await admitted.clone().text());
+      const id = (await admitted.json()).data.operationId;
+      for (let i = 0; i < 200; i++) {
+        const response = await request(`/operations/${id}/result`);
+        if (response.status !== 202) return response;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error("Credential result timed out");
+    };
+    for (
+      const [key, input] of Object.entries({
+        principal: { principal: "admin", maxAge: 3600 },
+        lifetime: { principal: "account", maxAge: 3601 },
+        continuation: { continuation: "child", maxAge: 300 },
+        flowLifetime: { continuation: "credential", maxAge: 301 },
+      })
+    ) {
+      const refused = await mint(input, `refused-${key}`);
+      assertEquals(refused.status, 403, await refused.clone().text());
+      assertEquals((await refused.json()).error.code, "forbidden");
+      assertEquals(refused.headers.get("set-cookie"), null);
+      assertEquals(refused.headers.get("x-copilotz-flow"), null);
+      assertEquals(
+        (await database.query("SELECT id FROM public.authorization_sessions"))
+          .rows,
+        [],
+      );
+      assertEquals(
+        (await database.query(
+          "SELECT effect_key FROM public.authorization_effects",
+        )).rows,
+        [],
+      );
+    }
+    const login = await mint(
+      { principal: "account", maxAge: 3600 },
+      "legitimate-login",
+    );
+    assertEquals(login.status, 200, await login.clone().text());
+    assert(login.headers.get("set-cookie")?.includes("HttpOnly"));
+    assert((await login.json()).data.process !== Deno.pid);
+    assertEquals(
+      (await database.query(
+        "SELECT principal FROM public.authorization_sessions",
+      )).rows,
+      [{ principal: "account" }],
+    );
+    const flow = await mint(
+      { continuation: "credential", maxAge: 300 },
+      "legitimate-flow",
+    );
+    assertEquals(flow.status, 200, await flow.clone().text());
+    assert(flow.headers.get("x-copilotz-flow"));
+
     for (const via of ["captured", "context"]) {
       for (const target of ["child", "write"]) {
         const id = `${via}-${target}`;

@@ -37,6 +37,27 @@ export function authorityDefinitions(
   return {
     collections: { notes },
     actions: {
+      credential: defineAction({
+        id: "authority.credential",
+        async execute(
+          input: { principal?: string; maxAge: number; continuation?: string },
+          ctx,
+        ) {
+          await ctx.transaction(async (tx) => {
+            if (input.continuation) {
+              await tx.flows.start({
+                kind: "login",
+                continuation: input.continuation,
+                maxAge: input.maxAge,
+              });
+            } else {await tx.sessions.create({
+                principal: input.principal!,
+                maxAge: input.maxAge,
+              });}
+          });
+          return { process: Deno.pid };
+        },
+      }),
       probe: defineAction({
         id: "authority.probe",
         execute: (input: Probe, ctx) => work(input, ctx),

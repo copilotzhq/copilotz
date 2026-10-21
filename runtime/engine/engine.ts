@@ -1,7 +1,11 @@
 import { retainedAuthority } from "../authorization/authority.ts";
 import { createDirectoryReader } from "../authorization/directory-read.ts";
-import { hostIngressProof } from "../application/ingress/authority.ts";
 import {
+  hostIngressProof,
+  ownerIngressEvidence,
+} from "../application/ingress/authority.ts";
+import {
+  authorizationRefused,
   captureOwnerAuthorization,
   collectionAuthorizations,
 } from "../authorization/evaluator.ts";
@@ -595,6 +599,9 @@ export async function createCopilotzEngine(
           async start(input) {
             base.signal.throwIfAborted();
             const ingress = hostIngressProof();
+            if (ownerIngressEvidence(ingress)?.authority?.flow) {
+              authorizationRefused();
+            }
             if (
               typeof input.operationKey !== "string" ||
               !input.operationKey.trim() ||

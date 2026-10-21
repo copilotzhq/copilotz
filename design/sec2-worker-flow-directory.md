@@ -95,3 +95,43 @@ transitive child writes, denied child policy, direct child refusal,
 outside-operation refusal and exact replay. Run targeted tests on both engines,
 static checks, fmt, lint delta and type guard, then one full suite per backend
 with the lane timeout.
+
+## Round 3: detached starts and owner-authorized credential claims
+
+The alias merge exposed a misleading regression assertion, not host authority:
+`runtime/actions/resume.ts` treats a settled Action refusal as completed
+delivery. A real `child` alias produced a failed Action terminal with
+`code: forbidden`, no invocation capture and no child execution, while its
+operation completed. `runtime/actions/protected-action-source.ts` retains the
+originating flow across operation ancestry. Refuse new operations earlier:
+`engine.ts` checks the owner-held ingress for standalone starts;
+`continuation-work.ts` checks the retained invocation for linked starts.
+Same-operation child Actions remain the only delegation surface. Tests assert
+authorization reasons and absence of admission/effects, rather than delivery
+status.
+
+Detached Processor deliveries retain ingress authority and cannot become flow
+Action descendants. Scheduled/alarm occurrences instead use independently
+configured `systemScopes` and collection policy (`collections/alarms.ts`,
+`collections/alarm-authority.ts`). A flow may write a schedule only with its
+explicit mutation grant; subsequent work requires the scheduler's independent
+policy grant. Scheduling never inherits implicit host trust.
+
+Choose Option B for credentials: enforce owner-selected claims for both local
+and remote execution at the existing credential commit boundary. Option A would
+remove remote login but leave boolean minting grants broad for local Actions.
+Replace `sessions.create: true` with `{ principal, maxAge }`: exact principal
+and maximum lifetime. Replace flow kind arrays with a map from kind to
+`{ continuation, maxAge }`: exact composition alias and maximum lifetime. No
+wildcards or boolean compatibility path. Scope, credential ID, signing key and
+flow principal remain owner-generated or owner-retained. Revocation retains its
+existing self/tenant checks. Transactions, replay identity and cookie projection
+continue through the existing credential implementation.
+
+Policy must select these claims from trusted owner data or independently
+validated authentication evidence; reflecting requested claims is not
+verification. Remote workers can propose credentials, never authorize their
+claims. Owner checks run in the transaction before session/effect insertion;
+refusal rolls back all staged writes and projects no cookie. Regressions
+exercise principal, lifetime and continuation substitution over the real worker
+transport and a legitimate login with the recommended explicit grant.

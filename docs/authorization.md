@@ -214,7 +214,8 @@ if (intent.kind === "collection") {
 | `operations`          | `{ metadata, absentMetadata? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                               |
 | `observationKeys`     | Opaque catalog keys stamped on admitted work, such as a conversation's selection key from that domain's helper.                                                                                                 |
 | `assets`              | `{ read: [assetId, …] }`: exact Assets the caller may read.                                                                                                                                                     |
-| `sessions`            | `{ create?: true, revoke?: "self" \| "tenant" }`.                                                                                                                                                               |
+| `sessions`            | `{ create?: { principal, maxAge }, revoke?: "self" \| "tenant" }`.                                                                                                                                              |
+| `flows`               | `{ start: { [kind]: { continuation, maxAge } } }`: exact continuation alias and maximum lifetime.                                                                                                               |
 | `events`              | Authenticated root Event types, including adapter-validated channel input.                                                                                                                                      |
 | `admission`           | `{ key }`: the host-selected conversation group for bounded HTTP admission. Product labels, such as a thread link, travel in `operations.metadata`.                                                             |
 
@@ -307,7 +308,8 @@ Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
 
 - `authenticate` verifies the login request itself (a password, a one-time code,
   an identity-provider callback) and returns a credential binding whose policy
-  grants `sessions: { create: true }` for session intents.
+  grants `sessions: { create: { principal: accountId, maxAge: 28800 } }` for
+  session intents.
 - Later requests carry the session ID. `authenticate` returns a binding with
   `principal: { kind: "session", id: accountId }` and
   `authorityBasis: { kind: "session", id: sessionId }`. `sessions.create` binds
@@ -506,12 +508,22 @@ await context.transaction(async ({ collections, sessions }) => {
 });
 ```
 
-Policy must explicitly return `sessions: { create: true }` for the `session`
+Policy must explicitly return
+`sessions: { create: { principal: accountId, maxAge: 3600 } }` for the `session`
 `create` intent. Its input contains the owner-generated session ID, principal
 and expiry, and `intent.invocation` identifies the executing Action. Check that
-Action's identity and its authorized account before granting creation. A broad
-Action grant alone cannot mint a session. Policy refusal rolls back the entire
-transaction, including collection writes, effects and receipts.
+Action's identity and independently verified account before granting creation. A
+broad Action grant alone cannot mint a session. Policy refusal rolls back the
+entire transaction, including collection writes, effects and receipts.
+
+This is also the recommended remote login configuration. The owner compares the
+proposed principal and expiry with the grant before inserting a session or
+effect row. The maximum lifetime must be a positive integer; booleans no longer
+grant creation. A compromised worker cannot substitute another principal or
+extend the grant's lifetime. Derive the grant from trusted owner state or
+independently validated authentication evidence, never by echoing
+`intent.input`. Keep signing keys on the owner; a worker proposes effects and
+receives no credential token.
 
 `await sessions.revoke()` revokes the caller's session; `revoke(id)` targets a
 specific session without clearing the caller's cookie when it targets someone
@@ -537,7 +549,10 @@ await context.transaction(async ({ flows }) => {
 });
 ```
 
-The `flow` `start` intent needs `flows: { start: ["oauth"] }` in policy.
+The `flow` `start` intent needs an exact owner grant:
+`flows: { start: { oauth: { continuation: "oauthCallback", maxAge: 300 } } }`.
+The owner compares the requested continuation and lifetime with that grant
+before creating an effect. Kind arrays no longer authorize minting.
 `continuation` is a registered Action **alias**. Lifetime defaults to 300
 seconds and cannot exceed 900 seconds. The signed credential binds schema,
 namespace, tenant, flow kind, nonce and expiry. Its principal is the nonce, with
@@ -558,7 +573,13 @@ parent and Action identity in the same transaction as policy and input capture.
 A refused child leaves no delegation receipt. Other operations, tenants and
 direct child calls remain refused; replay returns retained results without
 re-running children. Flow expiry and current authorization checks apply to every
-command.
+command. `operations.start` and `awaitOperation({ start })` refuse a flow before
+admitting another operation. Detached Processors retain the flow and cannot
+become admitted Action descendants. Collection alarms and scheduled occurrences
+run with independently configured `systemScopes` and current owner policy, not
+the originating flow. Granting a flow permission to write a schedule does not
+authorize the occurrence's Actions or effects; its independent policy must grant
+them explicitly.
 
 Credential effects retain only public claims. Session tokens never enter Action
 outputs, event bodies, operation metadata, transaction receipts or live reads.

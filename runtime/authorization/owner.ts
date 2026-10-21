@@ -438,9 +438,14 @@ export function createAuthorizationOwner(
         input,
         ...(invocation ? { invocation } : {}),
       }, command);
+      const grant = decision.constraints.sessions?.create;
+      const lifetime = Date.parse(input.expiresAt) -
+        Date.parse(command.commandTime);
       if (
-        !decision.constraints.sessions?.create ||
-        Date.parse(input.expiresAt) <= Date.parse(command.commandTime)
+        !grant || grant.principal !== input.principal ||
+        !Number.isSafeInteger(grant.maxAge) || grant.maxAge <= 0 ||
+        grant.maxAge > 31536000 || lifetime <= 0 ||
+        lifetime > grant.maxAge * 1000
       ) authorizationRefused();
       await command.transaction.query(
         `INSERT INTO ${sessionTable}(namespace,tenant,id,principal,expires_at) VALUES($1,$2,$3,$4,$5::timestamptz)`,

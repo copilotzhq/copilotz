@@ -1,5 +1,5 @@
 import { type CollectionField, collectionField } from "./field.ts";
-import { compileCollectionPredicate } from "./predicate.ts";
+import { compileCollectionPredicate, idWherePredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
@@ -403,6 +403,11 @@ export function compileCollectionFilters(
       );
     }
     for (const [field, value] of Object.entries(predicate.where ?? {})) {
+      const id = idWherePredicate(field, value);
+      if (id) {
+        filters.push(compileCollectionPredicate(id, params));
+        continue;
+      }
       // Equality uses JSON text, so drivers must receive text for scalar
       // booleans/numbers too. PGlite does not coerce them for a text parameter.
       const index = params.push(

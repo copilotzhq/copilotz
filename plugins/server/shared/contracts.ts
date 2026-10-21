@@ -64,6 +64,8 @@ export type ServerEndpointDescriptor = Readonly<{
 }>;
 
 export type ServerAuthorizedScope = Readonly<{
+  /** Configured session cookie: true clears it; false means host-verified. Omit for owner verification. */
+  invalidSessionCookie?: boolean;
   authority: import("@copilotz/copilotz/engine").AuthenticatedAuthority;
   actor?: Readonly<
     { id: string; externalId?: string; name?: string; email?: string }

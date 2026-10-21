@@ -217,6 +217,21 @@ export function matchesCollectionPredicate(
   return false;
 }
 
+/** ID operator shorthand shares the typed predicate semantics in every reader. */
+export function idWherePredicate(
+  field: string,
+  value: unknown,
+): CollectionPredicate | undefined {
+  if (field !== "id" || value === null || typeof value !== "object") return;
+  const keys = Object.keys(value);
+  if (
+    Array.isArray(value) || keys.length !== 1 || !["in", "eq"].includes(keys[0])
+  ) {
+    throw new TypeError("ID where operators must be in or eq.");
+  }
+  return { field: "id", ...value } as CollectionPredicate;
+}
+
 export function matchesCollectionFilter(
   filter: CollectionFilter,
   record: Readonly<Record<string, unknown>>,
@@ -225,6 +240,11 @@ export function matchesCollectionFilter(
     return false;
   }
   for (const [field, expected] of Object.entries(filter.where ?? {})) {
+    const id = idWherePredicate(field, expected);
+    if (id) {
+      if (!matchesCollectionPredicate(id, record)) return false;
+      continue;
+    }
     const actualText = jsonText(valueAt(record, field));
     const expectedText = jsonText(expected);
     if (

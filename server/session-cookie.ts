@@ -25,15 +25,25 @@ export function credentialHeaders(
       0,
       Math.floor((Date.parse(effect.claims.expiresAt) - Date.now()) / 1000),
     );
-    headers["set-cookie"] = `${options.name ?? "__Host-copilotz_session"}=${
-      effect.token ?? ""
-    }; Path=${options.path ?? "/"}; HttpOnly${
-      options.secure === false ? "" : "; Secure"
-    }; SameSite=${options.sameSite ?? "Lax"}; Max-Age=${maxAge}${
-      options.domain ? `; Domain=${options.domain}` : ""
-    }`;
+    headers["set-cookie"] = sessionCookieHeader(
+      effect.token ?? "",
+      maxAge,
+      options,
+    );
     headers["x-copilotz-flow"] = "";
   }
   if (effects.length) headers["cache-control"] = "no-store";
   return headers;
+}
+
+export function sessionCookieHeader(
+  token: string,
+  maxAge: number,
+  options: SessionCookieOptions = {},
+): string {
+  return `${options.name ?? "__Host-copilotz_session"}=${token}; Path=${
+    options.path ?? "/"
+  }; HttpOnly${options.secure === false ? "" : "; Secure"}; SameSite=${
+    options.sameSite ?? "Lax"
+  }; Max-Age=${maxAge}${options.domain ? `; Domain=${options.domain}` : ""}`;
 }

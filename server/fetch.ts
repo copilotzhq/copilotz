@@ -31,6 +31,11 @@ export type CreateHttpFetchHandlerOptions = Readonly<{
     context: HttpRequest["context"] | undefined,
   ) => boolean | HttpBodyPolicy;
   responseHeaders?: Readonly<Record<string, string>>;
+  /** Applies request-scoped transport headers to successes and failures alike. */
+  finalizeResponse?: (
+    response: Response,
+    context: HttpRequest["context"] | undefined,
+  ) => Response;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -306,6 +311,12 @@ export function createHttpFetchHandler(
 ): HttpFetchHandler {
   const base = basePath(options.basePath);
   return async (request) => {
+    let context: HttpRequest["context"] | Response | undefined;
+    const finish = (response: Response) =>
+      options.finalizeResponse?.(
+        response,
+        context instanceof Response ? undefined : context,
+      ) ?? response;
     try {
       const policy = options.requestBodyPolicy?.(request);
       if (policy) request = boundRequest(request, policy);
@@ -324,8 +335,8 @@ export function createHttpFetchHandler(
           code: "route_not_found",
         });
       }
-      const context = await options.resolveContext?.(request);
-      if (context instanceof Response) return context;
+      context = await options.resolveContext?.(request);
+      if (context instanceof Response) return finish(context);
       const parsedBody = await body(
         request,
         options.rawBody?.(request, context),
@@ -343,10 +354,10 @@ export function createHttpFetchHandler(
           ...(parsedBody.raw ? { rawBody: parsedBody.raw } : {}),
         } as const,
       });
-      return await jsonResponse(result, options, request);
+      return finish(await jsonResponse(result, options, request));
     } catch (error) {
       await options.onError?.(error, request);
-      return errorResponse(error, options);
+      return finish(errorResponse(error, options));
     } finally {
       if (!request.bodyUsed) void request.body?.cancel().catch(() => undefined);
     }

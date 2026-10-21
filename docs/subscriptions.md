@@ -146,6 +146,14 @@ Retention loss, owner takeover, credential expiry and schema/scope changes reset
 rather than join different snapshots. The SDK processes resets with a fresh
 snapshot.
 
+The primary key `id` is always a declared string path, including when omitted
+from the collection schema. Live and HTTP queries both support
+`where: { id: { in: ids } }` and `where: { id: { eq: id } }`, as well as scalar
+`where: { id }`. For example, participant lookup uses
+`{ collection: "participant", query: { where: { id: { in: batch } }, limit: batch.length } }`
+with nonempty batches of at most 32 IDs. The existing configurable `in` limit
+and predicate node budget apply; membership sets are compiled once per state.
+
 Live queries accept scalar `filter` predicates, scalar `where` on declared
 scalar fields (plus `id`), conjunctive `all`, `limit` (1–1000), and ascending or
 descending order on `id`, `namespace`, `createdAt`, `updatedAt`, or a declared

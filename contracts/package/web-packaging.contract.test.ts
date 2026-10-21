@@ -32,7 +32,9 @@ test("every web source entry and kit CSS is present in the npm publication archi
   assert.ok(files.has("plugins/ui-kit/katex/katex.css"));
   assert.ok(files.has("plugins/ui-kit/katex/LICENSE"));
   assert.ok(files.has("plugins/ui-kit/katex/fonts/KaTeX_Main-Regular.woff2"));
-  assert.ok(config.publish.include.includes("plugins/ui-kit/katex/fonts/*.woff2"));
+  assert.ok(
+    config.publish.include.includes("plugins/ui-kit/katex/fonts/*.woff2"),
+  );
   assert.ok(![...files].some((file) => /\.test\.tsx?$/.test(file)));
   const visited = new Set<string>();
   async function visit(path: string): Promise<void> {

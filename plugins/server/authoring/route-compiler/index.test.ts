@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { defineAction } from "@copilotz/copilotz/actions";
 import { defineCollection } from "@copilotz/copilotz/collections";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
@@ -97,7 +97,7 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
     }),
   );
   assertEquals(
-    routes.match("POST", "/api/actions/atlas/sandbox/preview/list")?.endpoint
+    routes.match("POST", "/api/actions/preview")?.endpoint
       .id,
     "atlas.sandbox.preview.list",
   );
@@ -118,7 +118,7 @@ Deno.test("route compiler maps IDs, read queries, and OpenAPI", () => {
   );
   assertEquals(paths["/api/collections/notes"].post, undefined);
   assertEquals(paths["/api/collections/notes/{id}"].delete, undefined);
-  const submitted = paths["/api/actions/atlas/sandbox/preview/list"]
+  const submitted = paths["/api/actions/preview"]
     .post as Record<
       string,
       unknown
@@ -192,11 +192,11 @@ Deno.test("route compiler applies glob exclusion", () => {
     registry,
     defineServerFacade({
       authenticate: () => new Response(null, { status: 401 }),
-      expose: { actions: { exclude: ["atlas.*"] } },
+      expose: { actions: { exclude: ["prev*"] } },
     }),
   );
   assertEquals(
-    routes.match("POST", "/api/actions/atlas/sandbox/preview/list"),
+    routes.match("POST", "/api/actions/preview"),
     null,
   );
 });
@@ -328,7 +328,7 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
     }),
   );
   const path = routes.openApi.paths as Record<string, Record<string, unknown>>;
-  const operation = path["/api/actions/test/openapi-secrets"].post as Record<
+  const operation = path["/api/actions/protectedAction"].post as Record<
     string,
     unknown
   >;
@@ -376,7 +376,7 @@ Deno.test("route compiler redacts secret disclosures from the OpenAPI projection
       .nested.properties as Record<string, Record<string, unknown>>
   ).password;
   assert(SECRET_DISCLOSURE_KEYWORDS.every((keyword) => keyword in rawPassword));
-  const route = routes.match("POST", "/api/actions/test/openapi-secrets");
+  const route = routes.match("POST", "/api/actions/protectedAction");
   const routePassword = (
     (route!.endpoint.inputSchema!.properties as Record<
       string,
@@ -410,4 +410,55 @@ Deno.test("route compiler keeps operation observations and ordinary queries with
     routes.match("POST", "/api/operations/observe")?.endpoint.kind,
     "operation",
   );
+});
+
+Deno.test("Action exposure and custom routes accept the composition alias only", () => {
+  const facade = defineServerFacade({
+    authenticate: () => new Response(null, { status: 401 }),
+    expose: { actions: { include: ["preview"] } },
+  });
+  const registry = (action: string) =>
+    createPluginRegistry({
+      plugins: [
+        fixture,
+        definePlugin({
+          id: "test.alias-route",
+          version: "1",
+          adapters: {
+            http: {
+              custom: {
+                routes: [{
+                  id: "preview-route",
+                  method: "POST" as const,
+                  path: "/preview",
+                  action,
+                }],
+              },
+            },
+          },
+        }),
+      ],
+    });
+  const compiled = compileServerRoutes(registry("preview"), facade);
+  assertEquals(
+    compiled.match("POST", "/api/preview")?.endpoint.actionAlias,
+    "preview",
+  );
+  assertEquals(
+    compiled.match("POST", "/api/actions/preview")?.endpoint.id,
+    preview.id,
+  );
+  assertThrows(
+    () => compileServerRoutes(registry(preview.id), facade),
+    TypeError,
+    "was not composed",
+  );
+  const hidden = compileServerRoutes(
+    createPluginRegistry({ plugins: [fixture] }),
+    defineServerFacade({
+      authenticate: () => new Response(null, { status: 401 }),
+      expose: { actions: { include: [preview.id] } },
+    }),
+  );
+  assertEquals(hidden.match("POST", "/api/actions/preview"), null);
 });

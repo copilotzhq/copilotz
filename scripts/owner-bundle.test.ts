@@ -426,6 +426,15 @@ Deno.test({
         prepared = await runtime.prepare(coordinates, {
           token: "portable-secret",
         });
+      await db.query(
+        `INSERT INTO "${schema}".nodes(namespace,id,type,name) VALUES
+        ('space','shared','identity_fixture','shared'),('space','related','identity_fixture','related'),
+        ('other','shared','identity_fixture','shared'),('other','related','identity_fixture','related')`,
+      );
+      await db.query(
+        `INSERT INTO "${schema}".edges(id,namespace,source_node_id,target_node_id,type) VALUES
+        ('space-edge','space','shared','related','fixture'),('other-edge','other','shared','related','fixture')`,
+      );
       await db.query(`CREATE DATABASE "${destination}"`);
       created = true;
       await exportOwnerBundle({
@@ -459,6 +468,26 @@ Deno.test({
         });
         try {
           const tables = createCoreTableNames(schema);
+          assertEquals(
+            (await target.query(
+              `SELECT namespace,id FROM ${tables.nodes} WHERE type='identity_fixture' ORDER BY namespace,id`,
+            )).rows,
+            [
+              { namespace: "other", id: "related" },
+              { namespace: "other", id: "shared" },
+              { namespace: "space", id: "related" },
+              { namespace: "space", id: "shared" },
+            ],
+          );
+          await target.query(
+            `DELETE FROM ${tables.nodes} WHERE namespace='other' AND id='shared'`,
+          );
+          assertEquals(
+            (await target.query(
+              `SELECT id FROM ${tables.edges} WHERE type='fixture' ORDER BY id`,
+            )).rows,
+            [{ id: "space-edge" }],
+          );
           assertEquals(
             (await target.query<{ count: string }>(
               `SELECT count(*) AS count FROM ${tables.events} WHERE type='test.retained'`,

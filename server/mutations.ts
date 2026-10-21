@@ -1,5 +1,5 @@
 import { facadeIngress } from "./context.ts";
-import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
+import { httpIngressMetadata } from "./adapter-metadata.ts";
 /** Durable, policy-bound collection mutation ingress. @module */
 
 import type { ActionSchema } from "../runtime/actions/types.ts";
@@ -67,7 +67,6 @@ export async function collectionMutationResponse(
       : {}),
     input: checked,
   };
-  const observationThreadId = context.operationMetadata.threadId;
   const handle = await admitCollectionMutationRequest(
     application,
     {
@@ -85,11 +84,8 @@ export async function collectionMutationResponse(
           : {}),
       },
       metadata: {
-        ...(typeof observationThreadId === "string"
-          ? coreThreadObservationMetadata(observationThreadId)
-          : {}),
+        ...httpIngressMetadata(application, context.operationMetadata),
         sourceAdapter: "server",
-        core: { visibility: { kind: "internal" } },
       },
     },
     endpoint.inputSchema as ActionSchema | undefined,

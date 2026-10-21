@@ -34,6 +34,7 @@ export class MemorySubscriptions implements SubscriptionTransport {
     query: Parameters<SubscriptionTransport["observe"]>[1],
     options: Parameters<SubscriptionTransport["observe"]>[2],
   ) {
+    await Promise.resolve();
     const key = this.key({
       collection,
       query,

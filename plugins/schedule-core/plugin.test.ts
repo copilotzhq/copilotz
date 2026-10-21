@@ -688,7 +688,7 @@ Deno.test("Core scheduled-message dispatch rolls back every graph mutation when 
           metadata: {},
         }, { operationKey: "rollback-dispatch" }),
       Error,
-      "while its mutation was prepared",
+      "Record already exists.",
     );
     assertEquals(
       await context.collections.participant.queries.byExternalId({

@@ -1,3 +1,4 @@
+import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
   hostIngressProof,
   type OwnerIngressProof,
@@ -63,7 +64,7 @@ import type {
   ScopedCollectionReadOptions,
 } from "./read-options.ts";
 export type { ScopedCollectionReadOptions } from "./read-options.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import {
   type CoordinatedMutationResult,
@@ -847,7 +848,7 @@ function mutationResult<TSelect extends object>(
 export function createCollectionKernel(
   options: CreateCollectionRuntimeOptions,
 ): CollectionKernel {
-  const createId = options.createId ?? ulid;
+  const createId = options.createId ?? monotonicUlid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
   const commands = createAsyncContextStorage<
@@ -2204,7 +2205,7 @@ export function createCollectionKernel(
           }
           return existingBody.record;
         },
-      });
+      }).catch(rethrowNodeIdentityConflict);
       if (execution) {
         execution.pending.push(result as CoordinatedMutationResult<unknown>);
       }

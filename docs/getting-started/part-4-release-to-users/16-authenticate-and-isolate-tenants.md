@@ -528,7 +528,7 @@ export const serverScenarios = {
       for (const client of [clientFor(app), clientFor(app, "token-mallory")]) {
         assert.equal(
           await rejectedStatus(() =>
-            client.actions.submit("notes.save", { text: "Intruder." }, {
+            client.actions.submit("saveNote", { text: "Intruder." }, {
               idempotencyKey: "auth-1",
             })
           ),
@@ -537,7 +537,7 @@ export const serverScenarios = {
       }
       // The key was never admitted: Ada can use it for different text.
       const ada = clientFor(app, "token-ada");
-      const receipt = await ada.actions.submit("notes.save", {
+      const receipt = await ada.actions.submit("saveNote", {
         text: "Mine.",
       }, { idempotencyKey: "auth-1" });
       assert.equal(
@@ -550,7 +550,7 @@ export const serverScenarios = {
   "owner reads its own result": () =>
     withApp(async (app) => {
       const ada = clientFor(app, "token-ada");
-      const receipt = await ada.actions.submit("notes.save", {
+      const receipt = await ada.actions.submit("saveNote", {
         text: "Plan the launch.",
       }, { idempotencyKey: "own-1" });
       assert.equal(
@@ -563,10 +563,10 @@ export const serverScenarios = {
   "idempotency key maps to one submission": () =>
     withApp(async (app) => {
       const ada = clientFor(app, "token-ada");
-      const first = await ada.actions.submit("notes.save", {
+      const first = await ada.actions.submit("saveNote", {
         text: "Once.",
       }, { idempotencyKey: "retry-1" });
-      const retry = await ada.actions.submit("notes.save", {
+      const retry = await ada.actions.submit("saveNote", {
         text: "Once.",
       }, { idempotencyKey: "retry-1" });
       assert.equal(retry.operationId, first.operationId);
@@ -576,7 +576,7 @@ export const serverScenarios = {
       );
       assert.equal(
         await rejectedStatus(() =>
-          ada.actions.submit("notes.save", { text: "Twice." }, {
+          ada.actions.submit("saveNote", { text: "Twice." }, {
             idempotencyKey: "retry-1",
           })
         ),
@@ -589,7 +589,7 @@ export const serverScenarios = {
     withApp(async (app) => {
       const ada = clientFor(app, "token-ada");
       const bea = clientFor(app, "token-bea");
-      const receipt = await ada.actions.submit("notes.save", {
+      const receipt = await ada.actions.submit("saveNote", {
         text: "Tenant A only.",
       }, { idempotencyKey: "tenant-1" });
       await ada.operations.result(receipt.operationId);
@@ -608,7 +608,7 @@ export const serverScenarios = {
     withApp(async (app) => {
       const ada = clientFor(app, "token-ada");
       const grace = clientFor(app, "token-grace");
-      const receipt = await ada.actions.submit("notes.save", {
+      const receipt = await ada.actions.submit("saveNote", {
         text: "Ada's draft.",
       }, { idempotencyKey: "owner-1" });
       assert.equal(
@@ -630,7 +630,7 @@ export const serverScenarios = {
       // Reusing Ada's key and text is a conflict, not access to her operation.
       assert.equal(
         await rejectedStatus(() =>
-          grace.actions.submit("notes.save", { text: "Ada's draft." }, {
+          grace.actions.submit("saveNote", { text: "Ada's draft." }, {
             idempotencyKey: "owner-1",
           })
         ),
@@ -649,7 +649,7 @@ export const serverScenarios = {
       const viv = clientFor(app, "token-viv");
       assert.equal(
         await rejectedStatus(() =>
-          viv.actions.submit("notes.save", { text: "Not allowed." }, {
+          viv.actions.submit("saveNote", { text: "Not allowed." }, {
             idempotencyKey: "deny-1",
           })
         ),
@@ -657,7 +657,7 @@ export const serverScenarios = {
       );
       // Nothing was admitted in tenant A under that key.
       const ada = clientFor(app, "token-ada");
-      const receipt = await ada.actions.submit("notes.save", {
+      const receipt = await ada.actions.submit("saveNote", {
         text: "Allowed.",
       }, { idempotencyKey: "deny-1" });
       assert.equal(
@@ -672,7 +672,7 @@ export const serverScenarios = {
       const viv = clientFor(app, "token-viv");
       assert.equal(
         await rejectedStatus(() =>
-          viv.actions.submit("notes.save", { text: "Not yet." }, {
+          viv.actions.submit("saveNote", { text: "Not yet." }, {
             idempotencyKey: "promote-1",
           })
         ),
@@ -680,7 +680,7 @@ export const serverScenarios = {
       );
       // The trusted host grants the role. Viv's credential does not change.
       await grantRoles(app, "viv", ["editor"], { namespace: "tenant-a" });
-      const receipt = await viv.actions.submit("notes.save", {
+      const receipt = await viv.actions.submit("saveNote", {
         text: "Now I can.",
       }, { idempotencyKey: "promote-2" });
       assert.equal(
@@ -694,7 +694,7 @@ export const serverScenarios = {
     withApp(async (app) => {
       const response = await app.fetch(
         new Request(
-          "http://notes.test/api/actions/notes/save?namespace=tenant-b",
+          "http://notes.test/api/actions/saveNote?namespace=tenant-b",
           {
             method: "POST",
             headers: {

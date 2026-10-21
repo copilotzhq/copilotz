@@ -929,16 +929,16 @@ async function provisionSelectionTables(
     ON ${tables.operationEvents} (namespace, operation_id, event_ordinal)`,
   );
   await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.selectionHeads} (
-    namespace TEXT NOT NULL,
-    selection_key TEXT NOT NULL,
+    namespace TEXT COLLATE "C" NOT NULL,
+    selection_key TEXT COLLATE "C" NOT NULL,
     change_ordinal BIGINT NOT NULL CHECK (change_ordinal >= 0),
     PRIMARY KEY (namespace, selection_key)
   )`);
   await transaction.query(
     `CREATE TABLE IF NOT EXISTS ${tables.selectionOperations} (
-    namespace TEXT NOT NULL,
-    selection_key TEXT NOT NULL,
-    operation_id TEXT NOT NULL,
+    namespace TEXT COLLATE "C" NOT NULL,
+    selection_key TEXT COLLATE "C" NOT NULL,
+    operation_id TEXT COLLATE "C" NOT NULL,
     change_ordinal BIGINT NOT NULL CHECK (change_ordinal >= 1),
     PRIMARY KEY (namespace, selection_key, operation_id)
   )`,
@@ -1013,11 +1013,11 @@ export async function provisionOperationCatalog(
       fingerprint TEXT NOT NULL CHECK (fingerprint = '${OPERATION_CATALOG_FINGERPRINT}')
     )`);
       await transaction.query(`CREATE TABLE IF NOT EXISTS ${tables.operations} (
-      operation_id TEXT PRIMARY KEY,
-      namespace TEXT NOT NULL,
-      root_event_id TEXT NOT NULL,
+      operation_id TEXT COLLATE "C" PRIMARY KEY,
+      namespace TEXT COLLATE "C" NOT NULL,
+      root_event_id TEXT COLLATE "C" NOT NULL,
       visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),
-      correlation_id TEXT NOT NULL,
+      correlation_id TEXT COLLATE "C" NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       next_stream_ordinal BIGINT NOT NULL DEFAULT 1,
       next_event_ordinal BIGINT NOT NULL DEFAULT 1,
@@ -1026,8 +1026,8 @@ export async function provisionOperationCatalog(
       accepted_at TIMESTAMPTZ NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL,
       completed_at TIMESTAMPTZ,
-      parent_operation_id TEXT,
-      parent_action_run_id TEXT,
+      parent_operation_id TEXT COLLATE "C",
+      parent_action_run_id TEXT COLLATE "C",
       cancellation_requested_at TIMESTAMPTZ,
       cancellation_reason TEXT
     )`);
@@ -1045,9 +1045,9 @@ export async function provisionOperationCatalog(
       );
       await transaction.query(
         `CREATE TABLE IF NOT EXISTS ${tables.operationEvents} (
-      namespace TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      event_id TEXT NOT NULL UNIQUE,
+      namespace TEXT COLLATE "C" NOT NULL,
+      operation_id TEXT COLLATE "C" NOT NULL,
+      event_id TEXT COLLATE "C" NOT NULL UNIQUE,
       event_position BIGINT NOT NULL,
       event_ordinal BIGINT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL,
@@ -1061,13 +1061,13 @@ export async function provisionOperationCatalog(
       await provisionSelectionTables(transaction, tables);
       await transaction.query(
         `CREATE TABLE IF NOT EXISTS ${tables.operationStreams} (
-      namespace TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL,
+      operation_id TEXT COLLATE "C" NOT NULL,
       replay_key BIGSERIAL NOT NULL UNIQUE,
       stream_ordinal BIGINT NOT NULL,
-      stream_id TEXT NOT NULL,
-      semantic_stream_id TEXT NOT NULL,
-      body_id TEXT NOT NULL,
+      stream_id TEXT COLLATE "C" NOT NULL,
+      semantic_stream_id TEXT COLLATE "C" NOT NULL,
+      body_id TEXT COLLATE "C" NOT NULL,
       descriptor JSONB NOT NULL,
       state TEXT NOT NULL CONSTRAINT copilotz_operation_streams_state_check
         CHECK (state IN ('open','terminating','terminal')),
@@ -1080,7 +1080,7 @@ export async function provisionOperationCatalog(
       availability_reason TEXT,
       cleanup_state TEXT CONSTRAINT copilotz_operation_streams_cleanup_check
         CHECK (cleanup_state = 'pending'),
-      asset_id TEXT,
+      asset_id TEXT COLLATE "C",
       asset_retention TEXT CHECK (asset_retention IN ('canonical','observation')),
       terminal_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1226,7 +1226,7 @@ export async function upgradeOperationCatalog(
       const staging = 'pg_temp."copilotz_catalog_backfill_bindings"';
       await transaction.query(
         `CREATE TEMP TABLE "copilotz_catalog_backfill_bindings" (
-      namespace TEXT NOT NULL, selection_key TEXT NOT NULL, operation_id TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL, selection_key TEXT COLLATE "C" NOT NULL, operation_id TEXT COLLATE "C" NOT NULL,
       PRIMARY KEY (namespace, selection_key, operation_id)
     ) ON COMMIT DROP`,
       );
@@ -1355,8 +1355,8 @@ export async function upgradeOperationCatalog(
       ON CONFLICT (namespace, selection_key, operation_id) DO UPDATE SET change_ordinal = EXCLUDED.change_ordinal`);
     }
     await transaction.query(`ALTER TABLE ${tables.operations}
-      ADD COLUMN IF NOT EXISTS parent_operation_id TEXT,
-      ADD COLUMN IF NOT EXISTS parent_action_run_id TEXT,
+      ADD COLUMN IF NOT EXISTS parent_operation_id TEXT COLLATE "C",
+      ADD COLUMN IF NOT EXISTS parent_action_run_id TEXT COLLATE "C",
       ADD COLUMN IF NOT EXISTS cancellation_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
       ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','internal')),

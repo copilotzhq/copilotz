@@ -162,6 +162,7 @@ export type {
   ViewRead,
   ViewReference,
   ViewShows,
+  ViewUrl,
 } from "./runtime/views/definition.ts";
 export type { CollectionNamedQueryRead } from "./runtime/collections/authoring.ts";
 

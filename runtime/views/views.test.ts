@@ -58,6 +58,11 @@ test("View definitions validate, snapshot metadata and preserve input/output inf
       { renderer: "" },
       { render: null },
       { surprise: true },
+      { url: false },
+      { url: "run" },
+      { url: { queries: "hold" } },
+      { url: { queries: "run", extra: true } },
+      { url: [] },
     ]
   ) {
     assert.equal(isViewDefinition({ ...basic(), ...invalid }), false);
@@ -66,6 +71,16 @@ test("View definitions validate, snapshot metadata and preserve input/output inf
       TypeError,
     );
   }
+});
+
+test("a View opts in to URL addressability, copied from its definition", () => {
+  assert.equal(basic().url, undefined);
+  assert.equal(defineView({ ...basic(), url: true }).url, true);
+  const url = { queries: "run" as const };
+  const view = defineView({ ...basic(), url });
+  (url as { queries: string }).queries = "hold";
+  assert.deepEqual(view.url, { queries: "run" });
+  assert.equal(isViewDefinition({ ...basic(), url: undefined }), true);
 });
 
 test("resolution distinguishes all reference forms, open modes and renderer", () => {

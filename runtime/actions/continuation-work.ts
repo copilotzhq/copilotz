@@ -169,7 +169,7 @@ export async function startAwaitedOperation(
       SELECT child_operation_id, scope_id FROM ${store.tables.open_actions}
       WHERE namespace = $1 AND child_operation_id IS NOT NULL
     ), ancestors(id) AS (
-      SELECT $2::text UNION SELECT links.parent FROM links JOIN ancestors ON links.child = ancestors.id
+      SELECT $2::text COLLATE "C" UNION SELECT links.parent FROM links JOIN ancestors ON links.child = ancestors.id
       WHERE links.parent IS NOT NULL
     ) SELECT id AS operation_id FROM ancestors`,
     [namespace, parentId],

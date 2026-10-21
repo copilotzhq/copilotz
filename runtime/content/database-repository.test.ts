@@ -1439,3 +1439,31 @@ Deno.test("content Collection joins an existing owner command without preparatio
     await closeFixture(fixture);
   }
 });
+
+Deno.test("explicit Asset IDs and replay receipts are isolated by namespace", async () => {
+  const f = await createFixture();
+  try {
+    for (const namespace of ["tenant-a", "tenant-b"]) {
+      const input = {
+        namespace,
+        id: "same-asset",
+        idempotencyKey: "same-receipt",
+        mediaType: "text/plain",
+        body: new TextEncoder().encode(namespace),
+      };
+      const first = await f.assets.publish(input);
+      const replay = await f.assets.publish(input);
+      assertEquals(first, replay);
+    }
+    for (const namespace of ["tenant-a", "tenant-b"]) {
+      assertEquals(
+        new TextDecoder().decode(
+          (await f.assets.read(namespace, "same-asset")).bytes,
+        ),
+        namespace,
+      );
+    }
+  } finally {
+    await closeFixture(f);
+  }
+});

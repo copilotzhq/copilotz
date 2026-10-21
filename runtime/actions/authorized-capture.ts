@@ -220,8 +220,7 @@ export function createAuthorizedActions(
       },
       input,
     }, command);
-    const policy = decision.constraints.actions?.[alias(frame.actionId)!] ??
-      decision.constraints.actions?.[frame.actionId];
+    const policy = decision.constraints.actions?.[alias(frame.actionId)!];
     if (!policy) authorizationRefused();
     await authority(command, frame);
     const metadata = captureHostCommandJson({

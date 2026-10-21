@@ -1,4 +1,8 @@
-import type { BrowserPlugin, BrowserRuntime } from "@copilotz/copilotz/web";
+import {
+  type BrowserPlugin,
+  type BrowserRuntime,
+  urlReference,
+} from "@copilotz/copilotz/web";
 import type { ViewHints, ViewReference } from "@copilotz/copilotz/views";
 import workspace from "./views/workspace/index.tsx";
 import panes from "./views/panes/index.tsx";
@@ -18,12 +22,19 @@ export function uiWebPlugin(storage?: string): BrowserPlugin {
         commands: {
           open: {
             mutate({ current, input }) {
-              const { reference, source, region, mode } = input as {
-                reference: ViewReference;
+              const { source, region, mode } = input as {
                 source?: string;
                 region?: WorkspaceRegion;
                 mode?: string;
               };
+              let { reference } = input as { reference: ViewReference | null };
+              // A URL open is URL state: identifiers only, opted-in Views only.
+              if (source === "url") {
+                reference = urlReference(reference);
+                if (!reference) {
+                  throw new TypeError("URL state carries identifiers only");
+                }
+              }
               if (region === "dialog" || mode === "dialog") {
                 return { set: { dialog: reference } };
               }

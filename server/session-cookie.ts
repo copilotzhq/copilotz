@@ -17,7 +17,7 @@ export function credentialHeaders(
     if (effect.claims.type === "flow") {
       if (effect.token) {
         headers["x-copilotz-flow"] = effect.token;
-        headers["x-copilotz-flow-action"] = effect.claims.actionId!;
+        headers["x-copilotz-flow-action"] = effect.claims.continuation!;
       }
       continue;
     }

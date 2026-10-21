@@ -73,7 +73,8 @@ Three decisions stay separate:
 | `createCopilotz` `authorization` | what that authority may do, evaluated by the owner inside every command          |
 
 `expose.actions`, `expose.collections` and `expose.channels` each accept `true`,
-`false` or `{ include, exclude }` patterns over stable IDs. Omitting `expose`
+`false` or `{ include, exclude }` patterns. Actions use composition aliases;
+Collections use their names and Channels use aliases. Omitting `expose`
 publishes every registered Action, Collection read and Channel, so list what you
 mean. For Collections, `true` or patterns expose **reads only**; write routes
 (create, update, delete, commands) need an explicit `operations` entry, such as
@@ -118,23 +119,23 @@ Grant nothing for endpoint kinds you have no policy for. See
 
 ### Routes and identity
 
-Action IDs keep their stable identity in the path: dots become segments, so
-`notes.save` is `POST /api/actions/notes/save`. Submissions answer `202` with a
-receipt (`operationId`, `correlationId`, `status`, `acceptedAt`, and optional
-`checkpoint`/`thread`).
+Action routes use composition aliases: `actions: { saveNote }` publishes
+`POST /api/actions/saveNote`. Dots in an alias become path segments. Submissions
+answer `202` with a receipt (`operationId`, `correlationId`, `status`,
+`acceptedAt`, and optional `checkpoint`/`thread`).
 
 Application-specific endpoints come from `createHttpAdapter({ routes })` in
 `@copilotz/copilotz/server`, registered as
 `adapters: { http: { <alias>: ... } }`. Each route has an `id`, `method` and a
 `path` relative to `basePath`, and exactly one of:
 
-- `action` — a stable Action ID (not a caller alias), optionally with an
-  `input(context)` mapper. It is independent of `expose.actions` and answers
-  `202` with a receipt like any submission.
+- `action` — the composition alias used by policies and `expose.actions`,
+  optionally with an `input(context)` mapper. It is independent of
+  `expose.actions` and answers `202` with a receipt like any submission.
 - `handler(context)` — your code; its return value is normally answered with
-  `200`. `context.invoke(actionId, input, options)` runs an Action and waits for
-  its result; there is no submit variant. `context.read` reads Collections under
-  the request's authority; a Collection without a binding is forbidden.
+  `200`. `context.invoke(actionAlias, input, options)` runs an Action and waits
+  for its result; there is no submit variant. `context.read` reads Collections
+  under the request's authority; a Collection without a binding is forbidden.
   `context.sessions` creates and revokes owner sessions, as
   [Owner authorization](authorization.md#sessions-and-logout) shows. Ambient
   `app.actions` and `app.collections` calls inside handlers also carry the
@@ -291,20 +292,20 @@ try {
   const key = { idempotencyKey: "server-check-001" };
 
   // Submit, then retry the same logical submission with the same key.
-  const first = await ada.actions.submit("notes.save", { text: "Hi" }, key);
-  const retry = await ada.actions.submit("notes.save", { text: "Hi" }, key);
+  const first = await ada.actions.submit("saveNote", { text: "Hi" }, key);
+  const retry = await ada.actions.submit("saveNote", { text: "Hi" }, key);
   console.log("same operation:", first.operationId === retry.operationId);
   console.log("result:", await ada.operations.result(first.operationId));
 
   // Same key, different input.
   console.log(
     "conflict:",
-    await status(() => ada.actions.submit("notes.save", { text: "No" }, key)),
+    await status(() => ada.actions.submit("saveNote", { text: "No" }, key)),
   );
   // Same tenant, different actor: the policy grants Bob no Action...
   console.log(
     "bob save:",
-    await status(() => bob.actions.submit("notes.save", { text: "Hi" }, key)),
+    await status(() => bob.actions.submit("saveNote", { text: "Hi" }, key)),
   );
   // ...and only operations he started.
   console.log(
@@ -487,7 +488,7 @@ For a raw HTTP client, send a cryptographically random
 result recovery, retaining it across retries. Only its hash is stored. Retain
 the `x-copilotz-flow` response header and send it on continuation and
 observation requests. `x-copilotz-flow-action` names the continuation's public
-Action ID. For cross-origin clients, host CORS configuration must allow these
+Action alias. For cross-origin clients, host CORS configuration must allow these
 request headers, expose these two response headers, and allow credentials for
 the exact client origin. The browser handles Set-Cookie; application JavaScript
 never receives the session token.
@@ -497,3 +498,23 @@ and no `domain`. Configuration rejects incompatible values, including when the
 name is omitted. Use an explicitly named non-Host cookie only when those
 attributes are intentionally different. Requests containing duplicate cookies
 with the configured session name receive `duplicate_session_cookie` (403).
+
+### Domain observation adapters
+
+Generic Server observes operation IDs and authorized records. An HTTP adapter
+can register
+`observations: { [collectionAlias]: { key(id), outputMetadata(id) } }` to map an
+authorized record to a catalog selection key and output attribution. Handlers
+use `context.operations.observe({ record: { collection, id } })` and
+`context.operations.checkpoint({ collection, id })`. Core HTTP owns the thread
+mapping and its `threadId` output field. Its `ingressMetadata(metadata)` hook
+adds Core observation metadata from trusted operation metadata.
+
+`context.invoke` subscribes before checking the result and wakes on committed
+operation changes. It closes the subscription on completion, failure or request
+cancellation; it does not poll for results.
+
+For Deno hosts, enable `"no-legacy-abort"` in `deno.json`'s `unstable` list (or
+pass `--unstable-no-legacy-abort`). Request signals then represent cancellation,
+and successful responses do not trigger the legacy abort warning. See
+[Deno's request abort migration](https://docs.deno.com/runtime/reference/deno_serve_legacy_abort/).

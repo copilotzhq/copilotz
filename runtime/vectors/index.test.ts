@@ -112,6 +112,24 @@ for (
       assertEquals(matches.map((x) => x.record.id), ["visible"]);
       assertEquals("embedding" in matches[0].record, false);
       assertEquals(await kernel.vectors("tenant-b").search(query), []);
+      await kernel.transaction({
+        namespace: "tenant-b",
+        operationKey: "same-node-identity",
+        async execute(tx) {
+          await tx.collections.document.create({
+            id: "secret",
+            summary: "secret",
+            access: "public",
+          });
+          await tx.vectors.upsert(write("secret", [1, 0]));
+        },
+      });
+      assertEquals(
+        (await kernel.vectors("tenant-b").search(query)).map((match) =>
+          match.record.id
+        ),
+        ["secret"],
+      );
       assertEquals(
         await kernel.vectors("tenant-a").search({
           ...query,
@@ -156,7 +174,7 @@ for (
       const count = await db.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM ${vectorTable(schema)}`,
       );
-      assertEquals(count.rows[0].count, "3");
+      assertEquals(count.rows[0].count, "4");
 
       assertEquals(
         (await kernel.vectors("tenant-a").search(query)).map((x) =>
@@ -170,9 +188,17 @@ for (
       assertEquals(await kernel.vectors("tenant-a").search(query), []);
       await documents.delete("secret", { namespace: "tenant-a" });
       const deleted = await db.query(
-        `SELECT owner_id FROM ${vectorTable(schema)} WHERE owner_id='secret'`,
+        `SELECT owner_id FROM ${
+          vectorTable(schema)
+        } WHERE namespace='tenant-a' AND owner_id='secret'`,
       );
       assertEquals(deleted.rows, []);
+      assertEquals(
+        (await kernel.vectors("tenant-b").search(query)).map((match) =>
+          match.record.id
+        ),
+        ["secret"],
+      );
       await executor.shutdown();
     } finally {
       await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

@@ -92,6 +92,7 @@
     ]
   },
   "unstable": [
+    "no-legacy-abort",
     "bare-node-builtins",
     "detect-cjs",
     "node-globals",
@@ -194,6 +195,7 @@
     "clsx": "npm:clsx@2.1.1",
     "tailwind-merge": "npm:tailwind-merge@3.3.1",
     "react-markdown": "npm:react-markdown@9.1.0",
+    "happy-dom": "npm:happy-dom@21.0.3",
     "remark-gfm": "npm:remark-gfm@4.0.1",
     "lucide-react": "npm:lucide-react@0.540.0",
     "react-dom/client": "npm:react-dom@19.1.1/client",

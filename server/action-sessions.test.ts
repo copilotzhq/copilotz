@@ -289,6 +289,7 @@ async function fixture(
                     request.headers.get("x-tenant") ?? "fixture",
                   ),
                   operationMetadata: requestMetadata,
+                  actor: { id: "person", name: "Authenticated actor" },
                 };
               },
               expose: { actions: true, collections: true, channels: false },
@@ -321,7 +322,7 @@ async function fixture(
     key: string,
     headers: Record<string, string> = {},
   ) => {
-    const response = await request(`/actions/auth/${action}`, {}, {
+    const response = await request(`/actions/${action}`, {}, {
       "idempotency-key": key,
       ...headers,
     });
@@ -387,11 +388,11 @@ Deno.test("Action login replay projects only cookies; logout revokes an open cha
     assertEquals((await response.json()).data, { ok: true });
     const again = await f.result(await f.submit("login", "login"));
     assertEquals(again.headers.get("set-cookie")?.split(";")[0], pair);
-    const replay = await f.request("/actions/auth/login", {}, {
+    const replay = await f.request("/actions/login", {}, {
       "idempotency-key": "login",
     });
     assertEquals(replay.headers.get("set-cookie")?.split(";")[0], pair);
-    const cookieReplay = await f.request("/actions/auth/login", {}, {
+    const cookieReplay = await f.request("/actions/login", {}, {
       "idempotency-key": "login",
       cookie: pair,
     });
@@ -452,7 +453,7 @@ Deno.test("Action login replay projects only cookies; logout revokes an open cha
     assertEquals(cleared.status, 200, await cleared.clone().text());
     assert(cleared.headers.get("set-cookie")?.includes("Max-Age=0"));
     assert(revoked);
-    const replayLogout = await f.request("/actions/auth/logout", {}, {
+    const replayLogout = await f.request("/actions/logout", {}, {
       "idempotency-key": "logout",
     });
     assertEquals(replayLogout.status, 202, await replayLogout.clone().text());
@@ -500,7 +501,7 @@ Deno.test("Logout completion cannot revive writes even when the Action catches r
   try {
     const login = await f.result(await f.submit("login", "login"));
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
-    const receipt = await f.request("/actions/auth/nestedLogout", {
+    const receipt = await f.request("/actions/nestedLogout", {
       attemptWrite: true,
     }, {
       cookie,
@@ -557,7 +558,7 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
     const flow = { "x-copilotz-flow": token };
     assertEquals((await f.result(start, flow)).status, 200);
     assertEquals(
-      (await f.request("/actions/auth/login", {}, flow)).status,
+      (await f.request("/actions/login", {}, flow)).status,
       403,
     );
     const observed = await f.request("/operations/observe", {
@@ -592,7 +593,7 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
     const callback = await f.submit("callback", "continue", flow);
     assertEquals((await f.result(callback, flow)).status, 200);
     assertEquals(await f.submit("callback", "continue", flow), callback);
-    const reused = await f.request("/actions/auth/callback", {}, {
+    const reused = await f.request("/actions/callback", {}, {
       ...flow,
       "idempotency-key": "reuse",
     });
@@ -630,14 +631,14 @@ Deno.test("SDK retains flow headers and lets the browser manage session cookies"
       },
     });
     assertEquals(
-      await client.actions.invoke("auth.start", {}, {
+      await client.actions.invoke("start", {}, {
         idempotencyKey: "sdk-flow",
         signal: AbortSignal.timeout(15000),
       }),
       { started: true },
     );
     assertEquals(
-      await client.actions.invoke("auth.callback", { login: true }, {
+      await client.actions.invoke("callback", { login: true }, {
         idempotencyKey: "sdk-callback",
         signal: AbortSignal.timeout(15000),
       }),
@@ -645,7 +646,7 @@ Deno.test("SDK retains flow headers and lets the browser manage session cookies"
     );
     assert(
       seen.some((request) =>
-        request.url.endsWith("/actions/auth/callback") &&
+        request.url.endsWith("/actions/callback") &&
         request.headers.has("x-copilotz-flow")
       ),
     );
@@ -692,7 +693,7 @@ Deno.test("Flow credential expires at its signed deadline", async () => {
   let now = Date.now();
   const f = await fixture(() => new Date(now));
   try {
-    const receipt = await f.request("/actions/auth/start", { maxAge: 1 }, {
+    const receipt = await f.request("/actions/start", { maxAge: 1 }, {
       "idempotency-key": "short",
     });
     assertEquals(receipt.status, 202);
@@ -798,14 +799,14 @@ Deno.test("SDK login and logout recover cookies with browser-style credential tr
         idempotencyKey: key,
         signal: AbortSignal.timeout(15000),
       });
-    assertEquals(await invoke("auth.login", "sdk-login"), { ok: true });
+    assertEquals(await invoke("login", "sdk-login"), { ok: true });
     assert(cookie);
     const original = cookie;
-    assertEquals(await invoke("auth.login", "sdk-login"), { ok: true });
+    assertEquals(await invoke("login", "sdk-login"), { ok: true });
     assertEquals(cookie, original);
-    assertEquals(await invoke("auth.logout", "sdk-logout"), { ok: true });
+    assertEquals(await invoke("logout", "sdk-logout"), { ok: true });
     assertEquals(cookie, "");
-    assertEquals(await invoke("auth.logout", "sdk-logout"), { ok: true });
+    assertEquals(await invoke("logout", "sdk-logout"), { ok: true });
     assertEquals(cookie, "");
   } finally {
     await f.close();
@@ -823,7 +824,7 @@ Deno.test("Revoking another session leaves the caller's cookie and authority int
       `SELECT id FROM "${f.schema}".authorization_sessions WHERE principal='replayed'`,
     )).rows[0].id;
     const receipt = await f.request(
-      "/actions/auth/revokeOther",
+      "/actions/revokeOther",
       { id: target },
       {
         cookie,
@@ -863,7 +864,7 @@ Deno.test("HTTP Actions project session effects committed by their nested Action
     assertEquals(logout.status, 200, await logout.clone().text());
     assert(logout.headers.get("set-cookie")?.includes("Max-Age=0"));
     assertEquals(
-      (await f.request("/actions/auth/replay", {}, {
+      (await f.request("/actions/replay", {}, {
         cookie,
         "idempotency-key": "after-logout",
       })).status,
@@ -905,16 +906,16 @@ Deno.test("SDK pending continuation is readable before capture and exact replay 
       idempotencyKey: "start",
       signal: AbortSignal.timeout(15000),
     };
-    await client.actions.invoke("auth.start", {}, options);
+    await client.actions.invoke("start", {}, options);
     const otherStart = await f.result(await f.submit("start", "other-flow"));
     const otherFlow = otherStart.headers.get("x-copilotz-flow")!;
     await f.submit("hold", "hold");
     await f.held;
-    const receipt = await client.actions.submit("auth.callback", {
+    const receipt = await client.actions.submit("callback", {
       login: true,
     }, { idempotencyKey: "callback" });
     const callbackRequest = requests.find((request) =>
-      request.url.endsWith("/actions/auth/callback")
+      request.url.endsWith("/actions/callback")
     )!;
     const flow = callbackRequest.headers.get("x-copilotz-flow")!;
     const proof = callbackRequest.headers.get("x-copilotz-credential-proof")!;
@@ -954,14 +955,14 @@ Deno.test("SDK pending continuation is readable before capture and exact replay 
       );
     }
     assertEquals(
-      (await f.request("/actions/auth/callback", { login: true }, {
+      (await f.request("/actions/callback", { login: true }, {
         ...originalHeaders,
         "idempotency-key": "competitor",
       })).status,
       403,
     );
     assertEquals(
-      await client.actions.submit("auth.callback", { login: true }, {
+      await client.actions.submit("callback", { login: true }, {
         idempotencyKey: "callback",
       }).then((value) => value.operationId),
       receipt.operationId,
@@ -969,7 +970,7 @@ Deno.test("SDK pending continuation is readable before capture and exact replay 
     f.release();
     assertEquals((await result).value, { continued: true });
     assertEquals(
-      await client.actions.invoke("auth.callback", { login: true }, {
+      await client.actions.invoke("callback", { login: true }, {
         idempotencyKey: "callback",
         signal: AbortSignal.timeout(15000),
       }),
@@ -978,7 +979,7 @@ Deno.test("SDK pending continuation is readable before capture and exact replay 
     assert(cookie);
     const originalCookie = cookie;
     assertEquals(
-      await client.actions.invoke("auth.callback", { login: true }, {
+      await client.actions.invoke("callback", { login: true }, {
         idempotencyKey: "callback",
         signal: AbortSignal.timeout(15000),
       }),
@@ -994,20 +995,20 @@ Deno.test("SDK pending continuation is readable before capture and exact replay 
       originalCookie,
     );
     await assertRejects(() =>
-      client.actions.submit("auth.callback", { login: false }, {
+      client.actions.submit("callback", { login: false }, {
         idempotencyKey: "callback",
       })
     );
     // New identities cannot use the retired flow or session to execute a callback.
     await assertRejects(() =>
-      client.actions.submit("auth.callback", { login: true }, {
+      client.actions.submit("callback", { login: true }, {
         idempotencyKey: "fresh",
       })
     );
     assertEquals(f.executions.callback, 1);
     now += 301_000;
     await assertRejects(() =>
-      client.actions.submit("auth.callback", { login: true }, {
+      client.actions.submit("callback", { login: true }, {
         idempotencyKey: "callback",
       })
     );
@@ -1030,7 +1031,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
       )[0];
     const logout = await f.submit("logout", "strict-logout", { cookie });
     assertEquals((await f.result(logout, { cookie })).status, 200);
-    const replay = await f.request("/actions/auth/logout", {}, {
+    const replay = await f.request("/actions/logout", {}, {
       "idempotency-key": "strict-logout",
     });
     assertEquals(replay.status, 202, await replay.clone().text());
@@ -1044,7 +1045,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
     );
     f.metadata({ callerTag: "changed" });
     assertEquals(
-      (await f.request("/actions/auth/logout", {}, {
+      (await f.request("/actions/logout", {}, {
         "idempotency-key": "strict-logout",
       })).status,
       409,
@@ -1062,7 +1063,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
     ) {
       assertEquals(
         (await f.request(
-          "/actions/auth/logout",
+          "/actions/logout",
           {},
           Object.fromEntries(
             Object.entries(headers).filter((entry): entry is [string, string] =>
@@ -1074,14 +1075,14 @@ Deno.test("Completed logout submission replays under proof-only recovery without
       );
     }
     assertEquals(
-      (await f.request("/actions/auth/logout", { changed: true }, {
+      (await f.request("/actions/logout", { changed: true }, {
         "idempotency-key": "strict-logout",
       })).status,
       409,
     );
     f.denyOperationReads();
     assertEquals(
-      (await f.request("/actions/auth/logout", {}, {
+      (await f.request("/actions/logout", {}, {
         "idempotency-key": "strict-logout",
       })).status,
       404,
@@ -1089,7 +1090,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
     f.allowOperationReads();
     now += 16 * 60 * 1000;
     assertEquals(
-      (await f.request("/actions/auth/logout", {}, {
+      (await f.request("/actions/logout", {}, {
         "idempotency-key": "strict-logout",
       })).status,
       403,
@@ -1183,6 +1184,35 @@ Deno.test("SEC3 Action cookie rejects cross-site device upgrades and duplicate c
   } finally {
     for (const socket of sockets) socket.terminate();
     await server.shutdown();
+    await f.close();
+  }
+});
+
+Deno.test("session ingress records its actor separately from principal and session basis", async () => {
+  const f = await fixture();
+  try {
+    const login = await f.result(await f.submit("login", "actor-login"));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const id = await f.submit("logout", "actor-logout", { cookie });
+    assertEquals((await f.result(id, { cookie })).status, 200);
+    const ingress = (await f.db.query<
+      {
+        owner_ingress: {
+          actor: { id: string; name: string };
+          authority: AuthenticatedAuthority;
+        };
+      }
+    >(
+      `SELECT owner_ingress FROM "${f.schema}".events WHERE id=$1`,
+      [id],
+    )).rows[0].owner_ingress;
+    assertEquals(ingress.actor, { id: "person", name: "Authenticated actor" });
+    assertEquals(ingress.authority.principal.id, "account");
+    assertEquals(ingress.authority.authorityBasis.kind, "session");
+    assert(
+      ingress.authority.authorityBasis.id !== ingress.authority.principal.id,
+    );
+  } finally {
     await f.close();
   }
 });

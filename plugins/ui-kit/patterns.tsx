@@ -37,13 +37,34 @@ export function Screen(
     </section>
   );
 }
+/** A held query read (opened from a URL) starts only from this button. */
 export function ReadStatus(
-  { state }: { state: ReadState },
+  { state }: { state: ReadState & { refresh?(): void } },
 ): React.ReactElement | null {
   if (state.status === "ready") {
     return state.pending
       ? <p role="status" className="text-muted-foreground">Saving…</p>
       : null;
+  }
+  if (state.status === "held") {
+    return (
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-2 text-muted-foreground"
+      >
+        <span>Opened from a link. Load this content to continue.</span>
+        {state.refresh && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => state.refresh?.()}
+          >
+            Load
+          </Button>
+        )}
+      </div>
+    );
   }
   const labels = {
     loading: "Loading…",

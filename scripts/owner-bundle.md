@@ -19,7 +19,7 @@ generated fixtures.
 ## Configuration and commands
 
 Use a local TypeScript module whose default export supplies
-`OwnerTransferConfig` from `scripts/owner-bundle.ts`:
+`OwnerTransferConfig` from `@copilotz/copilotz/migration`:
 
 - `sourceAdapter`: the original platform adapter (the old direct-value adapter
   when migrating v11).
@@ -28,7 +28,7 @@ Use a local TypeScript module whose default export supplies
 - `readExternalBody`: for object bodies, a reader that resolves the explicit
   backend ID and namespace. `bodyStoreReader(storeFor)` supports S3, native GCS,
   and custom BodyStores. Migration of the old hashed S3 layout must instead use
-  `oldS3BodyReader(config)` from `owner-transfer-storage.ts`. A configuration
+  `oldS3BodyReader(config)` from `@copilotz/copilotz/migration`. A configuration
   with several backends must dispatch explicitly by backend ID.
 - `bindings`: optional original coordinates and reference for custom protected
   captures. The migration infers standard protected Event and Action lifecycle

@@ -218,9 +218,9 @@ export async function createCopilotzEngine(
         onStreamTerminal: ({ namespace, operationId }) => {
           // A terminal body may arrive after its delivery has settled. Wake the
           // generic owner outside the writer/relay's own completion promise.
-          void operationCatalog.reconcile({ namespace, operationId }).catch(
-            () => undefined,
-          );
+          owner.trackPublication(async () => {
+            await operationCatalog.reconcile({ namespace, operationId });
+          });
         },
         beforeTerminal: ({ namespace, operationId }) =>
           executor.settleOutputs({
@@ -287,6 +287,8 @@ export async function createCopilotzEngine(
     const relayedDurableIds = new Set<string>();
     const relayedDurableOrder: string[] = [];
     let closed = false;
+    const liveLifetime = new AbortController();
+    const livePublications = new Set<Promise<void>>();
     let shutdownPromise: Promise<void> | undefined;
     let resolveAdditionalScope: (
       databaseSchema: string,
@@ -1003,7 +1005,7 @@ export async function createCopilotzEngine(
             event,
             eventData,
             resolvedEvent,
-            signal: new AbortController().signal,
+            signal: liveLifetime.signal,
             createContext: createLiveContext,
           }).catch(() => undefined);
           await options.publish?.(resolvedEvent, context);
@@ -1016,6 +1018,9 @@ export async function createCopilotzEngine(
           status: "pending",
           limit: 1_000,
         });
+        // Shutdown parks retained obligations for the next owner; it must not
+        // place new work while the executor is cancelling its admitted handles.
+        if (closed) return;
         for (const delivery of deliveries) {
           executor.scheduleDelivery(delivery);
           reportDeliveryDiagnostic(options.execution?.onDiagnostic, {
@@ -1032,7 +1037,7 @@ export async function createCopilotzEngine(
         }
       },
     });
-    const publishLive = async (
+    const runLivePublication = async (
       event: CopilotzEvent,
       publishOptions: {
         inline?: boolean;
@@ -1060,10 +1065,13 @@ export async function createCopilotzEngine(
       });
       // Transient processors are connection-local. Never place them on a Worker.
       const abort = new AbortController();
-      const relay = () => abort.abort(publishOptions.signal?.reason);
-      if (publishOptions.signal?.aborted) relay();
+      const signal = publishOptions.signal
+        ? AbortSignal.any([publishOptions.signal, liveLifetime.signal])
+        : liveLifetime.signal;
+      const relay = () => abort.abort(signal.reason);
+      if (signal.aborted) relay();
       else {
-        publishOptions.signal?.addEventListener("abort", relay, {
+        signal.addEventListener("abort", relay, {
           once: true,
         });
       }
@@ -1080,7 +1088,7 @@ export async function createCopilotzEngine(
         actionScopeId: publishOptions.actionScopeId,
         createContext: createLiveContext,
       }).finally(() => {
-        publishOptions.signal?.removeEventListener("abort", relay);
+        signal.removeEventListener("abort", relay);
       });
       done.catch(() => undefined);
       return ({
@@ -1094,6 +1102,19 @@ export async function createCopilotzEngine(
           await done.catch(() => undefined);
         },
       } as const);
+    };
+    const publishLive = (
+      ...args: Parameters<typeof runLivePublication>
+    ): ReturnType<typeof runLivePublication> => {
+      const publication = runLivePublication(...args);
+      const done = publication.then((handle) => handle.done);
+      livePublications.add(done);
+      // The caller retains the original publication/handle rejection. This
+      // observer only removes completed work from the shutdown barrier.
+      void done.finally(() => livePublications.delete(done)).catch(() =>
+        undefined
+      );
+      return publication;
     };
     try {
       const scope = createDatabaseScope({
@@ -1158,10 +1179,12 @@ export async function createCopilotzEngine(
                     ),
                   ),
                 onStreamTerminal: ({ namespace, operationId }) => {
-                  void scopedOperationCatalog.reconcile({
-                    namespace,
-                    operationId,
-                  }).catch(() => undefined);
+                  scopedOwner!.trackPublication(async () => {
+                    await scopedOperationCatalog.reconcile({
+                      namespace,
+                      operationId,
+                    });
+                  });
                 },
                 beforeTerminal: ({ namespace, operationId }) =>
                   executor.settleOutputs({
@@ -1201,7 +1224,7 @@ export async function createCopilotzEngine(
             return activated;
           } catch (error) {
             additionalScopes.delete(normalized);
-            if (scopedOwner) releaseDatabaseOwner(scopedOwner);
+            if (scopedOwner) await releaseDatabaseOwner(scopedOwner);
             transientsBySchema.delete(normalized);
             hub.close(error);
             throw error;
@@ -1288,6 +1311,7 @@ export async function createCopilotzEngine(
         shutdown(reason = "copilotz_engine_shutdown") {
           if (shutdownPromise) return shutdownPromise;
           closed = true;
+          liveLifetime.abort(new Error(reason));
           shutdownPromise = Promise.resolve().then(async () => {
             const errors: unknown[] = [];
             const cleanup = async (run: () => unknown) => {
@@ -1320,7 +1344,11 @@ export async function createCopilotzEngine(
                 cleanup(() => runtime.owner.drainAlarms())
               ),
             );
+            for (const runtime of runtimes) runtime.coordinator.close();
             await cleanup(() => executor.shutdown(reason));
+            // Transient invocation cancellation belongs to its caller; finish
+            // every admitted callback before releasing any database attachment.
+            await Promise.allSettled([...livePublications]);
             for (const runtime of runtimes) {
               await cleanup(() => runtime.closePush());
               await cleanup(() => releaseDatabaseOwner(runtime.owner));
@@ -1349,7 +1377,7 @@ export async function createCopilotzEngine(
       throw error;
     }
   } catch (error) {
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     throw error;
   }
 }

@@ -63,7 +63,7 @@ Deno.test("owner command context resolves only live schema-bound query aliases",
       "Alias scope closed",
     );
   } finally {
-    if (owner) releaseDatabaseOwner(owner);
+    if (owner) await releaseDatabaseOwner(owner);
     await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await db.close();
   }

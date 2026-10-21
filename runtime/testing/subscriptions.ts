@@ -210,7 +210,7 @@ export async function fixture(
     counters: () => ({ statements, evaluations }),
     async close() {
       notices.close();
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },

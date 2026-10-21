@@ -157,9 +157,15 @@ async function fixture(
       publicationErrors.length = 0;
     },
     async close() {
-      releaseDatabaseOwner(owner);
-      await db.query(`DROP SCHEMA "${schema}" CASCADE`);
-      await db.close();
+      try {
+        await releaseDatabaseOwner(owner);
+      } finally {
+        try {
+          await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+        } finally {
+          await db.close();
+        }
+      }
     },
   };
 }
@@ -341,7 +347,11 @@ Deno.test({
       assertStrictEquals(errors[0], f.publicationError);
       assertEquals((await f.jobs.get({ id: "first" }))?.name, "after");
     } finally {
-      await f.close();
+      await assertRejects(
+        () => f.close(),
+        AggregateError,
+        "Owner shutdown failed.",
+      );
     }
   },
 });

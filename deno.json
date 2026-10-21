@@ -59,7 +59,8 @@
     "./admin/web": "./plugins/admin/web.ts",
     "./usage/web": "./plugins/usage/web.ts",
     "./ui/web": "./plugins/ui/web.ts",
-    "./shard": "./runtime/application/shard-public.ts"
+    "./shard": "./runtime/application/shard-public.ts",
+    "./migration": "./runtime/migration/index.ts"
   },
   "publish": {
     "include": [
@@ -82,7 +83,8 @@
       "build/**/*.ts",
       "plugins/**/copilotz.json",
       "plugins/**/*.tsx",
-      "plugins/**/*.css"
+      "plugins/**/*.css",
+      "runtime/migration/**/*.ts"
     ],
     "exclude": [
       "**/*.test.ts",
@@ -206,7 +208,8 @@
     "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12",
     "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts",
     "@radix-ui/react-tabs": "npm:@radix-ui/react-tabs@1.1.13",
-    "@radix-ui/react-dropdown-menu": "npm:@radix-ui/react-dropdown-menu@2.1.16"
+    "@radix-ui/react-dropdown-menu": "npm:@radix-ui/react-dropdown-menu@2.1.16",
+    "@copilotz/copilotz/migration": "./runtime/migration/index.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",

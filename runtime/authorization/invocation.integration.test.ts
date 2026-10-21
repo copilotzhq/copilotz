@@ -235,7 +235,7 @@ Deno.test("F4 executing invocation grants remain fenced after attempt takeover a
     await assertRejects(authorize);
     assertEquals(evaluations, 1);
   } finally {
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }

@@ -178,7 +178,7 @@ Deno.test({
         await command.transaction.query("SELECT 1");
       });
     } finally {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     }

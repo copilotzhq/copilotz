@@ -204,7 +204,7 @@ async function fixture(denyCommittedResult = false, vector = false) {
     evaluate,
     authorization,
     async close() {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },

@@ -27,10 +27,14 @@ function fixture(
     transports: [{ type: "websocket", config: { path: "/connect" } }],
     config: { dispatchQueueTimeoutMs: 1000 },
     admit(context) {
-      const principal = principals[context.identity.workerId];
+      const logicalId = context.identity.workerId.startsWith("shard:")
+        ? context.identity.workerId.split(":").slice(2).join(":")
+        : context.identity.workerId;
+      const principal = principals[context.identity.workerId] ??
+        principals[logicalId];
       if (
         !principal ||
-        context.credential.capability !== context.identity.workerId
+        context.credential.capability !== logicalId
       ) throw new Error("unauthorized");
       return {
         principal,
@@ -45,7 +49,7 @@ function fixture(
         sessionGeneration: ++generation,
         authenticatedWith: context.credential.kind,
         resume: {
-          credential: { kind: "resume", capability: context.identity.workerId },
+          credential: { kind: "resume", capability: logicalId },
           expiresAtMs: Date.now() + 60000,
         },
       };
@@ -67,7 +71,8 @@ function fixture(
   const options = (
     id: string,
     epoch = 1,
-  ): Omit<WorkerOptions, "workloads"> => ({
+  ): Omit<WorkerOptions, "workloads"> & { kind?: ShardPrincipal["kind"] } => ({
+    kind: principals[id]?.kind,
     id,
     capacity: 1,
     transport: {
@@ -147,7 +152,6 @@ for (const kind of ["worker", "computer", "browser", "connector"] as const) {
             target: { workerId: "peer" },
           }),
         Error,
-        "worker_scope_refused",
       );
     } finally {
       await worker.stop();
@@ -208,7 +212,10 @@ Deno.test("scoped callHost reaches owner with the authenticated identity", async
       target: { workerId: "peer" },
       kind: "computer",
     });
-    assertEquals(await new Response(work.output).text(), "peer:hello");
+    assertEquals(
+      await new Response(work.output).text(),
+      "shard:computer:peer:hello",
+    );
     assertEquals((await work.completed).status, "completed");
   } finally {
     await worker.stop();
@@ -250,12 +257,15 @@ Deno.test("shard fences takeover and drains connections without shutting workers
       Error,
       "stale_epoch",
     );
-    const before = f.shard.hypervisor.sessions.get("peer")!.connectionId;
-    await f.shard.hypervisor.drain("peer");
+    const before =
+      f.shard.hypervisor.sessions.get("shard:computer:peer")!.connectionId;
+    await f.shard.hypervisor.drain("shard:computer:peer");
     const deadline = Date.now() + 3000;
     while (
-      f.shard.hypervisor.sessions.get("peer")?.phase !== "ready" ||
-      f.shard.hypervisor.sessions.get("peer")?.connectionId === before
+      f.shard.hypervisor.sessions.get("shard:computer:peer")?.phase !==
+        "ready" ||
+      f.shard.hypervisor.sessions.get("shard:computer:peer")?.connectionId ===
+        before
     ) {
       if (Date.now() > deadline) throw new Error("reconnect timeout");
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -298,6 +308,8 @@ Deno.test("stateless shard controller starts before acknowledgement and preserve
     },
   });
   const handler = createShardControllerHandler({
+    authenticate: (request) =>
+      request.headers.get("authorization") === "Bearer test",
     shard: f.shard,
     authorize: (request, input) =>
       request.headers.get("authorization") === "Bearer test" &&
@@ -340,6 +352,12 @@ Deno.test("stateless shard controller starts before acknowledgement and preserve
 Deno.test("gateway owner capabilities and receipts cross the shard to a database-free worker", async () => {
   const f = fixture({
     peer: { kind: "worker", workloads: ["copilotz.delivery.v1"] },
+    "shard:computer:peer": { kind: "computer", workloads: ["echo"] },
+    "shard:browser:peer": {
+      kind: "browser",
+      actor: { namespace: "scope", id: "actor" },
+      workloads: ["echo"],
+    },
   });
   const database = await createTestDatabase();
   const databaseSchema = `shard_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -477,6 +495,12 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
   );
   const f = fixture({
     peer: { kind: "worker", workloads: ["copilotz.delivery.v1"] },
+    "shard:computer:peer": { kind: "computer", workloads: ["echo"] },
+    "shard:browser:peer": {
+      kind: "browser",
+      actor: { namespace: "scope", id: "actor" },
+      workloads: ["echo"],
+    },
   });
   const database = await (await import("../testing/owner-database.ts"))
     .createOwnerTestDatabase();
@@ -485,6 +509,8 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
     echo: defineAction({ id: "relay.echo", execute: (input: string) => input }),
   };
   const handler = createShardControllerHandler({
+    authenticate: (request) =>
+      request.headers.get("authorization") === "Bearer controller",
     shard: f.shard,
     authorize: (request, input) =>
       request.headers.get("authorization") === "Bearer controller" &&
@@ -553,10 +579,18 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
       }),
     },
   });
+  const otherPeers = ["computer", "browser"].map((kind) =>
+    createWorker({
+      ...f.options("peer"),
+      kind: kind as "computer" | "browser",
+      workloads: { echo: () => bytes(kind) },
+    })
+  );
   let worker:
     | { ready: Promise<void>; close(reason?: string): Promise<void> }
     | undefined;
   try {
+    await Promise.all(otherPeers.map((peer) => peer.ready));
     await relay.ready;
     worker = await createCopilotz({
       role: "worker",
@@ -573,6 +607,9 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
       if (Date.now() > deadline) throw new Error("session replication timeout");
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    assertEquals(dispatcher.sessions.list?.().map((s) => s.identity.workerId), [
+      "peer",
+    ]);
     assertEquals(
       await gateway.actions.echo("remote owner", { idempotencyKey: "once" }),
       "remote owner",
@@ -586,6 +623,7 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
     unsubscribe();
     assertEquals(dispatcher.sessions.list?.().length, 0);
   } finally {
+    for (const peer of otherPeers) await peer.stop();
     await worker?.close();
     await relay.close();
     await gateway.close();
@@ -594,5 +632,113 @@ Deno.test("a remote shard relays accepted sessions and callHost to its gateway o
     await f.shard.close();
     await server.shutdown();
     await database.close();
+  }
+});
+
+Deno.test("SEC3 shard authenticates before pulling a 16 MiB body and bounds authenticated streaming", async () => {
+  let pulls = 0, authorized = 0;
+  const handler = createShardControllerHandler({
+    shard: {
+      dispatch() {
+        throw new Error("must not dispatch");
+      },
+    },
+    authenticate: (request) => {
+      assertEquals(request.body, null);
+      return request.headers.has("authorization");
+    },
+    authorize() {
+      authorized++;
+      return true;
+    },
+  });
+  const request = (authenticated: boolean) =>
+    new Request("http://localhost/_copilotz/shard/work", {
+      method: "POST",
+      headers: authenticated ? { authorization: "token" } : {},
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls++;
+          controller.enqueue(new Uint8Array(16 * 1024 * 1024));
+        },
+      }, { highWaterMark: 0 }),
+    });
+  assertEquals((await handler(request(false))).status, 403);
+  assertEquals(pulls, 0);
+  assertEquals(authorized, 0);
+  assertEquals((await handler(request(true))).status, 503);
+  assertEquals(pulls, 2, "stop reading as soon as the body limit is exceeded");
+  assertEquals(authorized, 0);
+});
+
+Deno.test("SEC3 browser and computer cannot replace a worker with the same logical ID", async () => {
+  const principals: Record<string, ShardPrincipal> = {
+    peer: { kind: "worker", workloads: ["echo"] },
+    "shard:computer:peer": { kind: "computer", workloads: ["echo"] },
+    "shard:browser:peer": {
+      kind: "browser",
+      actor: { namespace: "scope", id: "actor" },
+      workloads: ["echo"],
+    },
+  };
+  const f = fixture(principals);
+  const worker = createWorker({
+    ...f.options("peer"),
+    workloads: { echo: () => bytes("worker") },
+  });
+  const others: ReturnType<typeof createWorker>[] = [];
+  try {
+    await worker.ready;
+    const original = f.shard.hypervisor.sessions.get("peer")!;
+    for (const kind of ["computer", "browser"] as const) {
+      const peer = createWorker({
+        ...f.options("peer"),
+        kind,
+        workloads: { echo: () => bytes(kind) },
+      });
+      others.push(peer);
+      await peer.ready;
+      assertEquals(
+        f.shard.hypervisor.sessions.get("peer")?.connectionId,
+        original.connectionId,
+      );
+      const work = await f.shard.dispatch({
+        workload: "echo",
+        target: { workerId: "peer" },
+        kind,
+        ...(kind === "browser"
+          ? { actor: { namespace: "scope", id: "actor" } }
+          : {}),
+      });
+      // Browsers additionally require a bound actor on dispatch.
+      await work.started;
+      assertEquals(await new Response(work.output).text(), kind);
+      await work.completed;
+    }
+    // A forged unqualified ID is rejected before the registry can replace it.
+    principals.peer = { kind: "computer", workloads: ["echo"] };
+    const forged = createWorker({
+      ...f.options("peer"),
+      kind: "worker",
+      reconnectDelay: false,
+      workloads: { echo: () => bytes("forged") },
+    });
+    void forged.closed.catch(() => undefined);
+    others.push(forged);
+    await assertRejects(() => forged.ready);
+    assertEquals(
+      f.shard.hypervisor.sessions.get("peer")?.connectionId,
+      original.connectionId,
+    );
+    const work = await f.shard.dispatch({
+      workload: "echo",
+      target: { workerId: "peer" },
+    });
+    assertEquals(await new Response(work.output).text(), "worker");
+    await work.completed;
+  } finally {
+    for (const other of others) await other.stop();
+    await worker.stop();
+    await f.shard.close();
   }
 });

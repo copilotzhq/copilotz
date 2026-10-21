@@ -107,6 +107,15 @@ export type SessionCookieOptions = Readonly<{
 export type ServerFacadeResource = Readonly<{
   basePath: string;
   sessionCookie?: SessionCookieOptions;
+  /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Readonly<
+    {
+      maxSubscriptions?: number;
+      maxPendingControls?: number;
+      maxPendingBytes?: number;
+    }
+  >;
   /** Maximum raw bytes accepted by the generic asset upload endpoint. */
   maxAssetUploadBytes: number;
   expose: Readonly<{
@@ -120,6 +129,15 @@ export type ServerFacadeResource = Readonly<{
 export type DefineServerFacadeInput = Readonly<{
   basePath?: string;
   sessionCookie?: SessionCookieOptions;
+  /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Readonly<
+    {
+      maxSubscriptions?: number;
+      maxPendingControls?: number;
+      maxPendingBytes?: number;
+    }
+  >;
   /** Defaults to 20 MiB. */
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;

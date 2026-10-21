@@ -351,6 +351,28 @@ console.log(listener.url.href);
 // Close the application and all its owned listeners: await app.close();
 ```
 
+Configure `allowedOrigins: ["https://trusted.example"]` on `defineServerFacade`
+(or the facade handler's device options) to allow additional browser origins.
+The request URL's origin is always allowed. Origins must be canonical HTTP(S)
+origins without paths, credentials or wildcards. Any other Origin, including
+`null`, receives HTTP 403 before upgrade. Configure proxies so the request URL
+reflects the public origin, or list that public origin explicitly.
+
+A missing Origin supports non-browser header-token clients: upgrade cookies are
+removed and cookie hello credentials are refused. Host authentication must
+derive authority only from the supplied request. A browser can send
+`credentials: { cookie: true }` to use its captured HttpOnly cookie after a
+successful Origin check. Token clients send nonempty `authorization` or
+`x-api-key` credentials. Empty credential objects are refused. Cookie changes
+after upgrade do not silently change socket authority.
+
+`deviceLimits` configures `maxSubscriptions` (default 16), `maxPendingControls`
+(256) and `maxPendingBytes` (1 MiB); values must be positive safe integers.
+Before authentication only one hello is accepted. Wait for welcome before
+sending controls. Excess subscriptions return `subscription_capacity_exceeded`;
+invalid live predicates return `subscription_query_refused`. See
+[subscription limits](./subscriptions.md).
+
 Both adapters supply the native upgrade for `<facade.basePath>/device` (normally
 `/api/device`). The same facade authenticates the device handshake and
 authorizes each subscription. Gateway worker WebSockets keep their configured
@@ -418,8 +440,8 @@ const facade = defineServerFacade({
 });
 ```
 
-Defaults are `copilotz_session`, path `/`, HttpOnly, Secure, SameSite=Lax and no
-Domain. HttpOnly is mandatory. Max-Age is the remaining committed session
+Defaults are `__Host-copilotz_session`, path `/`, HttpOnly, Secure, SameSite=Lax
+and no Domain. HttpOnly is mandatory. Max-Age is the remaining committed session
 lifetime, so replay does not extend expiry. Logout clears the same cookie with
 Max-Age=0. SameSite=None requires Secure. Local HTTP development can explicitly
 set `secure: false`.
@@ -470,6 +492,12 @@ Action alias. For cross-origin clients, host CORS configuration must allow these
 request headers, expose these two response headers, and allow credentials for
 the exact client origin. The browser handles Set-Cookie; application JavaScript
 never receives the session token.
+
+The default `__Host-copilotz_session` name requires `secure: true`, `path: "/"`
+and no `domain`. Configuration rejects incompatible values, including when the
+name is omitted. Use an explicitly named non-Host cookie only when those
+attributes are intentionally different. Requests containing duplicate cookies
+with the configured session name receive `duplicate_session_cookie` (403).
 
 ### Domain observation adapters
 

@@ -168,12 +168,18 @@ export async function authenticateHttpRequest(
     },
   });
   const flowToken = request.headers.get("x-copilotz-flow");
-  const cookieName = facade.sessionCookie?.name ?? "copilotz_session";
-  const sessionToken = request.headers.get("cookie")?.split(";").map((value) =>
-    value.trim()
-  ).find((value) => value.startsWith(`${cookieName}=`))?.slice(
-    cookieName.length + 1,
-  );
+  const cookieName = facade.sessionCookie?.name ?? "__Host-copilotz_session";
+  const sessionCookies = (request.headers.get("cookie") ?? "").split(";").map(
+    (value) => value.trim(),
+  )
+    .filter((value) => value.split("=", 1)[0].trim() === cookieName);
+  if (sessionCookies.length > 1) {
+    throw Object.assign(new Error("Duplicate session cookie"), {
+      status: 403,
+      code: "duplicate_session_cookie",
+    });
+  }
+  const sessionToken = sessionCookies[0]?.slice(cookieName.length + 1);
   if (flowToken || sessionToken) {
     const runtime = scope.databaseSchema === application.config.databaseSchema
       ? application

@@ -521,7 +521,11 @@ Deno.test("device server renews the largest queued channel before a revoked cont
         t: "hello",
         version: "1.0",
         capabilities: ["subscriptions"],
+        credentials: "session",
       }),
+    );
+    await until(() =>
+      sockets.server.output.some((frame) => frame.t === "welcome")
     );
     sockets.client.send(
       JSON.stringify({
@@ -597,7 +601,11 @@ Deno.test("device lifetime renews upstream and stale detach cannot retire a newe
         t: "hello",
         version: "1.0",
         capabilities: ["subscriptions"],
+        credentials: "session",
       }),
+    );
+    await until(() =>
+      sockets.server.output.some((frame) => frame.t === "welcome")
     );
     for (const generation of [1, 2]) {
       sockets.client.send(
@@ -755,7 +763,11 @@ Deno.test("device send gate fences queued owner output during permission reautho
         t: "hello",
         version: "1.0",
         capabilities: ["subscriptions"],
+        credentials: "session",
       }),
+    );
+    await until(() =>
+      sockets.server.output.some((frame) => frame.t === "welcome")
     );
     sockets.client.send(
       JSON.stringify({
@@ -804,7 +816,11 @@ Deno.test("device renews channels and detaches upstream before the host request 
         t: "hello",
         version: "1.0",
         capabilities: ["subscriptions"],
+        credentials: "session",
       }),
+    );
+    await until(() =>
+      sockets.server.output.some((frame) => frame.t === "welcome")
     );
     sockets.client.send(
       JSON.stringify({

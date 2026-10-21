@@ -540,6 +540,38 @@ retained authority:
   routes and observation.
 - Reference: [Upgrading](upgrading.md) covers the offline v13 chain.
 
+## Device and live-read admission
+
+`/device` checks Origin before either Deno or Node upgrades the connection.
+Same-origin is allowed; additional canonical HTTP(S) origins require
+`allowedOrigins` on the server facade. Missing Origin is only for header-token
+clients: cookies are removed from captured headers and cannot be supplied in
+hello. Host authentication must use the supplied request without ambient cookie
+fallback. Same-origin browsers can explicitly select their captured HttpOnly
+cookie with `{ cookie: true }`; empty hello credentials are refused.
+
+Action sessions default to `__Host-copilotz_session`, with Secure, HttpOnly,
+Path=/ and no Domain. The Host-prefix attributes are validated, and duplicate
+cookies with the configured name are refused with `duplicate_session_cookie`.
+Credential tokens use an HKDF-derived HMAC key with a credential-specific label.
+The protected-value commitment key is unchanged, preserving shipped data.
+
+Live queries and policy constraints share bounded admission. Defaults allow 32
+attached states per tenant/principal and 16 per device socket, 64 predicate
+nodes, and 32 `in`/`overlaps` values. Expensive or non-equivalent filters are
+refused, including `jsonEquals` and locale-dependent case folding. String ranges
+use Unicode code-point/C ordering. See
+[the complete limits and accepted filters](./subscriptions.md).
+`subscription_query_refused` and `subscription_capacity_exceeded` distinguish
+query refusal from capacity. Detached readers do not consume active admission;
+retained history is bounded and evicted before denying active capacity.
+
+Invisible Collection mutations emit no live frame: policy matching checks both
+the old and new image, including exits and progress-only reads. Progress and
+Action settlement use namespace-local event counts, so another namespace's
+commits cannot advance a subscriber's sequence. Existing permission notices,
+revocation, scope resets and checkpoint identity checks still gate publication.
+
 HTTP ingress stores the authenticated `scope.actor` separately from retained
 `authority.principal` and `authority.authorityBasis`. Session authentication
 does not replace actor attribution with a session or account ID. Offline v14

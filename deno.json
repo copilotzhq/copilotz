@@ -158,6 +158,7 @@
     "@std/path": "jsr:@std/path@1",
     "@std/ulid": "jsr:@std/ulid@1.0.0",
     "@std/yaml": "jsr:@std/yaml@1",
+    "ws": "npm:ws@8.18.3",
     "ajv": "npm:ajv@^8.17.1",
     "ajv-formats": "npm:ajv-formats@^3.0.1",
     "croner": "npm:croner@9.0.0",

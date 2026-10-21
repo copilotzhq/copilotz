@@ -30,7 +30,7 @@ import type {
 } from "../subscriptions/types.ts";
 
 export async function fixture(
-  options: { maxFrames?: number; maxBytes?: number; retentionMs?: number } = {},
+  options: import("../subscriptions/owner.ts").SubscriptionLimits = {},
 ) {
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",

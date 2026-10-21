@@ -1,3 +1,11 @@
+---
+title: "Owner Recovery"
+description: "How a running application replaces a fenced database owner, what callers see while it recovers, and lease timing for loaded hosts."
+section: Runtime
+order: 45
+status: stable
+---
+
 # Owner recovery and loaded hosts
 
 A running application replaces a fenced database owner automatically. It revokes

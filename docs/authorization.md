@@ -134,6 +134,11 @@ The registration has three maps:
 - `systemScopes` (optional) places owner-generated alarm occurrences in an
   explicit tenant for each namespace. Namespace names are never inferred to be
   tenant identities.
+- `directoryReads`, `directoryCommands` and `identityVerifiers` (optional)
+  register the owner capabilities described in
+  [Declared directory reads](#declared-directory-reads-from-actions),
+  [Atomic directory service commands](#atomic-directory-service-commands) and
+  [Owner-verified identity evidence](#owner-verified-identity-evidence).
 
 Startup rejects unknown aliases or revisions, any Action or Collection the
 server facade exposes without a binding, and any Collection that declares
@@ -150,8 +155,8 @@ and `CollectionPolicies` types are removed. `defineServerFacade` rejects an
 
 ### What `evaluate` receives
 
-`evaluate({ authority, intent, commandTime, signal, read, evidence })` runs in
-the owner's command:
+`evaluate({ authority, intent, commandTime, signal, read, evidence, directory })`
+runs in the owner's command:
 
 - `authority` is the retained binding, validated and frozen.
 - `intent` describes the exact command. `kind` is `action`, `collection`,
@@ -165,7 +170,9 @@ the owner's command:
     `input` holds the method, the arguments, the phase and, for writes, the
     `current` and proposed `next` record.
   - Operation intents are `read` or `cancel`; observations `attach`; sessions
-    `create` or `revoke`; Asset intents `read`.
+    `create` or `revoke`; flows `start`; Asset intents `read`. Directory intents
+    name the declared read or command alias, and identity intents the verifier
+    alias.
 - `commandTime` and `signal` are the command's time and cancellation.
 - `read.get(alias, id)` and `read.list(alias, query)` read only the declared
   `sources`, in the binding's namespace, inside the command's transaction. Each
@@ -173,13 +180,20 @@ the owner's command:
   committed change to one re-authorizes the open observations that depended on
   it. Relation includes, raw SQL and owner commands are unavailable, and a
   failed read refuses the command even if the policy catches the error.
+- `evidence.get(alias)` reads owner-verified identity evidence for the policy's
+  declared `evidence` aliases; see
+  [Owner-verified identity evidence](#owner-verified-identity-evidence).
+- `directory` is present only when a directory command writes this owner's
+  Collections; see
+  [Native Collections inside directory commands](#native-collections-inside-directory-commands).
 
 Collection intents also carry `intent.invocation?: { kind, id }`, where `kind`
-is `action`, `processor` or `alarm`. Only the owner supplies this executing
-identity; direct calls, such as HTTP route reads, have none. Nested Actions name
-the immediate executing Action, and run IDs or caller metadata cannot select the
-grant. The user's retained authority is still present, and the invocation grants
-nothing unless the policy says so. This excerpt from
+is `action`, `processor` or `alarm` and `id` is the executing definition's
+stable ID (such as `notes.save`), not its alias. Only the owner supplies this
+executing identity; direct calls, such as HTTP route reads, have none. Nested
+Actions name the immediate executing Action, and run IDs or caller metadata
+cannot select the grant. The user's retained authority is still present, and the
+invocation grants nothing unless the policy says so. This excerpt from
 [Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
 lets Core's own Actions and Processors write threads for a member while direct
 reads get only a membership filter. Core enrolls new members with
@@ -223,6 +237,10 @@ if (intent.kind === "collection") {
 | `sessions`            | `{ create?: { principal, maxAge }, revoke?: "self" \| "tenant" }`.                                                                                                                                              |
 | `flows`               | `{ start: { [kind]: { continuation, maxAge } } }`: exact continuation alias and maximum lifetime.                                                                                                               |
 | `events`              | Authenticated root Event types, including adapter-validated channel input.                                                                                                                                      |
+| `directoryReads`      | Declared directory read aliases this request may use. Inspect the exact requested ID before granting.                                                                                                           |
+| `directoryCommands`   | Declared directory service command aliases this request may run.                                                                                                                                                |
+| `identityVerifiers`   | Declared identity verifier aliases this request may call.                                                                                                                                                       |
+| `flowProcessors`      | Processor stable IDs that may project a consumed flow's events.                                                                                                                                                 |
 | `admission`           | `{ key }`: the host-selected conversation group for bounded HTTP admission. Product labels, such as a thread link, travel in `operations.metadata`.                                                             |
 
 Writes validate both the current and the resulting scope. Action input is
@@ -280,12 +298,13 @@ export const sessionRoutes = createHttpAdapter({
       method: "POST",
       path: "/login",
       async handler(context) {
+        // `authenticate` verified this login and bound the account it proved.
+        const accountId = context.scope.authority.scope.bindings.account;
         const id = crypto.randomUUID();
-        // The policy must grant `sessions.create` to this request.
+        // The policy must grant `sessions.create` for exactly this principal.
         await context.sessions.create({
           id,
-          // The session ID is also the principal ID of every later request.
-          principal: id,
+          principal: accountId,
           expiresAt: new Date(Date.now() + sessionLifetimeMs).toISOString(),
         });
         return Response.json({ ok: true }, {
@@ -313,9 +332,12 @@ export const sessionRoutes = createHttpAdapter({
 Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
 
 - `authenticate` verifies the login request itself (a password, a one-time code,
-  an identity-provider callback) and returns a credential binding whose policy
-  grants `sessions: { create: { principal: accountId, maxAge: 28800 } }` for
-  session intents.
+  an identity-provider callback) and returns a credential binding that records
+  the verified account, here in `scope.bindings.account`. Its policy grants
+  `sessions: { create: { principal: authority.scope.bindings.account, maxAge: 28800 } }`
+  for session intents. The owner refuses a different principal, or an
+  `expiresAt` further away than `maxAge` seconds. Never derive the grant from
+  `intent.input`.
 - Later requests carry the session ID. `authenticate` returns a binding with
   `principal: { kind: "session", id: accountId }` and
   `authorityBasis: { kind: "session", id: sessionId }`. `sessions.create` binds
@@ -500,9 +522,10 @@ are not a business directory API.
 
 Schema version 14 adds owner-private credential effects. Existing version 13
 schemas use the offline `upgradeActionLifecycle` entry point with producers
-stopped. The upgrade preserves existing sessions and authority bindings.
-Configure the application's Secret Adapter: signing uses its wrapped owner data
-key, so credential replay survives owner restart and key rewrapping.
+stopped; see [Upgrading to 0.90.0](upgrading.md#upgrading-to-0900). The upgrade
+preserves existing sessions and authority bindings. Configure the application's
+Secret Adapter: signing uses its wrapped owner data key, so credential replay
+survives owner restart and key rewrapping.
 
 Actions stage sessions inside their existing transaction. `maxAge` is seconds,
 bounded to one year. No token is returned:
@@ -597,59 +620,6 @@ anonymous grant cannot obtain a session merely by reading its operation. The
 projection command reauthorizes operation access before reconstructing a
 credential, including current session revocation and policy constraints.
 
-## Reference
-
-### Upgrading retained authority (v12 → v13)
-
-Schema v13 is installed only by the explicit offline chain in
-[Upgrading](upgrading.md#current-owner-schema-v13). Its last step converts
-retained authority:
-
-- Stop producers and close transports. Run `scripts/upgrade-retained-data.ts`
-  with `authority-inventory`, and review every invocation and ingress binding
-  against application policy. Supply the reviewed JSON manifest through
-  `--authority` to the `apply` command; the script's help lists the database,
-  schema and retained-content plan options.
-- The manifest declares supported policy IDs and revisions, exact invocation
-  digests, and exact ingress digests and bindings. An unclassified root needs
-  explicit `ingress` provenance; the upgrade never guesses its identity. A
-  capture without an old receipt needs an explicit `actionSchemas` snapshot.
-- Every `authenticated-server` event entry also requires `actorBinding`, exactly
-  matching the full ingress `actor` object (for example
-  `{ id: "participant-id", name: "Member" }`). The credential principal and the
-  authority basis stay separate, and the upgrade never rewrites the actor into a
-  credential identity.
-- Missing, duplicate, stale, conflicting and unknown-revision entries abort the
-  transaction. Lifecycle bodies, encrypted values and capture receipts remain
-  byte-for-byte unchanged; nothing is prepared again.
-- The upgrade locks the schema, records a manifest digest, advances the owner
-  epoch and the version marker, and invalidates retained live channels.
-  Repeating the same manifest is idempotent; a different manifest is refused.
-  Clients reattach and re-authorize after restart.
-
-## What this unlocks
-
-- One reviewable place that decides what every caller may do, evaluated where
-  the data is written.
-- Permission changes, revocations and logouts that apply to the next command, to
-  work already running and to open channels, without polling.
-- Agents and Processors acting with exactly the user's authority, plus the
-  explicit grants you give their own Actions and Processors.
-- Tenant data, sessions and audit receipts that stay inside the tenant's own
-  schema.
-
-## Next steps
-
-- Tutorial:
-  [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
-  builds a policy, its bindings and tests.
-- Tutorial:
-  [Chapter 17: Connect Chat and Channels](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
-  extends it to Core's conversation routes.
-- Reference: [HTTP server and browser client](server.md) covers `authenticate`,
-  routes and observation.
-- Reference: [Upgrading](upgrading.md) covers the offline v13 chain.
-
 ## Device and live-read admission
 
 `/device` checks Origin before either Deno or Node upgrades the connection.
@@ -684,9 +654,9 @@ revocation, scope resets and checkpoint identity checks still gate publication.
 
 HTTP ingress stores the authenticated `scope.actor` separately from retained
 `authority.principal` and `authority.authorityBasis`. Session authentication
-does not replace actor attribution with a session or account ID. Offline v14
-manifests use `actorBinding` to review that same actor independently of
-authority.
+does not replace actor attribution with a session or account ID. The offline
+authority manifest (v12 → v13) uses `actorBinding` to review that same actor
+independently of authority.
 
 Action grants, Action policy registrations, HTTP exposure, HTTP route `action`,
 handler `context.invoke`, client Action calls, flow continuations and Tool
@@ -1044,3 +1014,59 @@ to start unrelated operations, invoke child Actions, mint sessions or flows,
 verify identities or call directory commands. Expiry, client proof, current
 delivery lease and owner epoch remain enforced. A remote Processor has the same
 retained invocation around its owner RPCs as an in-process handler.
+
+## Reference
+
+### Upgrading retained authority (v12 → v13)
+
+Retained authority is converted by the v12 → v13 step of the explicit offline
+chain in [Upgrading](upgrading.md#current-owner-schema-v14), which then
+continues to v14:
+
+- Stop producers and close transports. Run `scripts/upgrade-retained-data.ts`
+  with `authority-inventory`, and review every invocation and ingress binding
+  against application policy. Supply the reviewed JSON manifest through
+  `--authority` to the `apply` command; the script's help lists the database,
+  schema and retained-content plan options.
+- The manifest declares supported policy IDs and revisions, exact invocation
+  digests, and exact ingress digests and bindings. An unclassified root needs
+  explicit `ingress` provenance; the upgrade never guesses its identity. A
+  capture without an old receipt needs an explicit `actionSchemas` snapshot.
+- Every `authenticated-server` event entry also requires `actorBinding`, exactly
+  matching the full ingress `actor` object (for example
+  `{ id: "participant-id", name: "Member" }`). The credential principal and the
+  authority basis stay separate, and the upgrade never rewrites the actor into a
+  credential identity.
+- Missing, duplicate, stale, conflicting and unknown-revision entries abort the
+  transaction. Lifecycle bodies, encrypted values and capture receipts remain
+  byte-for-byte unchanged; nothing is prepared again.
+- The upgrade locks the schema, records a manifest digest, advances the owner
+  epoch and the version marker, and invalidates retained live channels.
+  Repeating the same manifest is idempotent; a different manifest is refused.
+  Clients reattach and re-authorize after restart.
+
+## What this unlocks
+
+- One reviewable place that decides what every caller may do, evaluated where
+  the data is written.
+- Permission changes, revocations and logouts that apply to the next command, to
+  work already running and to open channels, without polling.
+- Agents and Processors acting with exactly the user's authority, plus the
+  explicit grants you give their own Actions and Processors.
+- Tenant data, sessions and audit receipts that stay inside the tenant's own
+  schema.
+
+## Next steps
+
+- Tutorial:
+  [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+  builds a policy, its bindings and tests.
+- Tutorial:
+  [Chapter 17: Connect Chat and Channels](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
+  extends it to Core's conversation routes.
+- Reference: [HTTP server and browser client](server.md) covers `authenticate`,
+  routes and observation.
+- Reference: [Upgrading](upgrading.md) covers the offline v14 chain and the
+  [0.90.0 policy changes](upgrading.md#upgrading-to-0900).
+- Reference: [Subscriptions](subscriptions.md) covers live-read admission and
+  limits.

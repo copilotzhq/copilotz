@@ -39,7 +39,8 @@ Authority must be a retained credential identity admitted by the host; worker
 attempt and alarm-occurrence authority cannot open device subscriptions. An
 existing invocation supplies its retained authority automatically. Namespace and
 database scope must match it. Subscription reads use the Collection's registered
-F4 policy, including declared permission sources and credential lifetime.
+owner policy, including declared permission sources and credential lifetime; see
+[Owner authorization](./authorization.md#device-and-live-read-admission).
 
 The SDK's `client.collections.observe(name, query, options)` returns a live
 handle. Supply its authenticated `device` transport when constructing the
@@ -91,14 +92,14 @@ Deno.serve(app.fetch);
 An explicit upgrade takes precedence over the adapter default and must suit the
 native host. The existing facade still owns session authentication, Collection
 exposure, admission and revocation. The binding renews one second before a
-supplied request deadline. The default is Oxian 0.23.0's portable
-`upgradeWebSocket(request, { protocol? })`, including routes hosted by
-`oxian start` or `dev` with either worker transport. Deno and Node complete
-recovery admission and Origin validation before 101. Worker paths remain
-reserved for worker admission; configure them separately from `/api/device`. On
-Deno, the native WebSocket assembles a message before delivery, so its
-pre-delivery size cannot be bounded through that API. Node bounds native
-assembly; both runtimes enforce the device's post-delivery limits.
+supplied request deadline. The default is Oxian's portable
+`upgradeWebSocket(request, { protocol? })` (Copilotz depends on Oxian 0.23.1),
+including routes hosted by `oxian start` or `dev` with either worker transport.
+Deno and Node complete recovery admission and Origin validation before 101.
+Worker paths remain reserved for worker admission; configure them separately
+from `/api/device`. On Deno, the native WebSocket assembles a message before
+delivery, so its pre-delivery size cannot be bounded through that API. Node
+bounds native assembly; both runtimes enforce the device's post-delivery limits.
 
 An open socket reauthenticates explicitly; changing an HTTP cookie alone does
 not change a channel's authority. Each channel renews after five minutes, fences
@@ -277,3 +278,14 @@ const unsubscribeAuth = device.onAuthState(({ state }) => {
 Revocation fences channels and stops automatic reconnect. After establishing a
 new HTTP session, explicitly call `device.reauthenticate()` with fresh proof.
 Collection-specific policy revocation still ends only the affected channel.
+
+## Next steps
+
+- [Owner authorization](./authorization.md#device-and-live-read-admission):
+  device Origin checks, session cookies and live-read policy matching.
+- [HTTP server and browser client](./server.md): the facade, `deviceLimits` and
+  the HTTP status of refused requests.
+- [Web runtime and Views](./web-runtime-and-views.md): browser reads built on
+  these subscriptions.
+- [Upgrading to 0.90.0](./upgrading.md#upgrading-to-0900): what changed for
+  device credentials and live-read limits.

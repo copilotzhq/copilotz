@@ -150,12 +150,14 @@ against the current source, not against older docs or memory. Source paths
 belong in review notes, never in user-facing instructions. Do not use removed
 legacy APIs: `createXPlugin(options)` factories, marker plugins or separate
 compiler APIs, `prepareMcp`, `defineInlineSkill`, the facade's `authorize`
-callback, `CollectionPolicy`, `hostCommands` or the `serverInvoke` bridge. Do
-not use unpublished testing modules (`runtime/testing` is excluded from
-publishing) or invented test, evaluation or migration APIs. Compose with
-`definePlugin` and the public declarative helpers, such as `defineTool`,
-`defineApi`, `await defineMcp` and `defineSkill`, imported from their plugin
-entrypoints in the form their current signatures accept.
+callback, `CollectionPolicy`, `hostCommands`, the `serverInvoke` bridge, boolean
+`sessions.create` or flow-kind array grants, stable Action IDs as configuration
+keys, or the `/ui/web` workspace (`workspace`, `workspaceNavigation`,
+`workspaceUrlStorageAdapter`, `uiOpen`). Do not use unpublished testing modules
+(`runtime/testing` is excluded from publishing) or invented test, evaluation or
+migration APIs. Compose with `definePlugin` and the public declarative helpers,
+such as `defineTool`, `defineApi`, `await defineMcp` and `defineSkill`, imported
+from their plugin entrypoints in the form their current signatures accept.
 
 ## Versions and installs
 

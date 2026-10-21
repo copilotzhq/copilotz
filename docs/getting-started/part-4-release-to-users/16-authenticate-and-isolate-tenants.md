@@ -333,9 +333,9 @@ export type ServerAppOptions = Readonly<{
   database?: CopilotzDatabaseInput;
 }>;
 
-// The only Action IDs the facade publishes. Adding a plugin later does not add
-// routes until its Action is listed here.
-export const publicActions = ["notes.save"];
+// The only Action aliases the facade publishes. Adding a plugin later does not
+// add routes until its Action's alias is listed here.
+export const publicActions = ["saveNote"];
 
 // Plugins the server application composes: the Notes package and the facade.
 export const serverPlugins = [notesPlugin, serverPlugin];
@@ -391,8 +391,8 @@ export function createServerApp(options: ServerAppOptions) {
 }
 ```
 
-`expose` and the policy stay separate on purpose. `expose` keeps `notes.save`
-the only Action route even after you add plugins; the policy decides which
+`expose` and the policy stay separate on purpose. `expose` keeps `saveNote` the
+only Action route even after you add plugins; the policy decides which
 principals may call it, and `collections: false` keeps the memberships off HTTP.
 
 ### Update the hosts

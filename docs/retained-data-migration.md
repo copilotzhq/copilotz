@@ -1,3 +1,11 @@
+---
+title: "Moving Retained Tenant Data"
+description: "Relocate owner schemas, migrate owner keys and read transfer bodies offline with the public migration API."
+section: Evolve
+order: 30
+status: stable
+---
+
 # Moving retained tenant data
 
 Use `@copilotz/copilotz/migration` for offline retained-owner operations. The
@@ -161,3 +169,10 @@ Create additional SQL adapters with `createSqlSession(database)` from
 `@copilotz/copilotz/events`. Instrument that adapter when recording queries or
 transactions. Hand-built wrapper objects have distinct identities. Owner-bound
 observations use adapters of the same database object as their writer.
+
+## Next steps
+
+- [Upgrading](./upgrading.md#current-owner-schema-v14): the offline schema chain
+  to v14, run in place with `upgradeActionLifecycle`.
+- The repository's [offline guide](../scripts/upgrade-retained-data.md): the CLI
+  commands that call these operations.

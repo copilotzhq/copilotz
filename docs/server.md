@@ -213,9 +213,9 @@ offline catalog upgrade in [Upgrading](upgrading.md).
 Raw operation observation and raw thread observation have no history privacy
 filter. An authorized observer receives every stream, including private Ask
 answers. Treat both as trusted diagnostic surfaces; end-user views should read
-Core's normal, visibility-filtered history (`core.threads.messages`), and the
-policy should not grant raw observation where private data must not reach that
-user. Hiding bytes in browser JavaScript is not a confidentiality boundary.
+Core's normal, visibility-filtered history (`GET /threads/:id/messages`), and
+the policy should not grant raw observation where private data must not reach
+that user. Hiding bytes in browser JavaScript is not a confidentiality boundary.
 
 ### Core routes
 
@@ -388,12 +388,12 @@ For Deno, `upgradeDevice: (request) => Deno.upgradeWebSocket(request)` is
 sufficient. No access to private application state is needed.
 
 The default device upgrade uses `upgradeWebSocket(request, { protocol? })` from
-`@oxian/oxian-js/http` (Oxian 0.23.0). It works in Copilotz listeners and in
-Oxian CLI `start`/`dev` routes with either worker transport. Origin and recovery
-admission precede native 101 on both Deno and Node. Oxian tracks sockets for
-listener drain and shutdown; there is no Request-identity registry. Keep
-`upgradeDevice` only for raw Fetch hosts/tests whose listeners do not use Oxian,
-such as a direct `Deno.serve` callback. Release Oxian 0.23.0 before Copilotz.
+`@oxian/oxian-js/http` (Copilotz depends on Oxian 0.23.1). It works in Copilotz
+listeners and in Oxian CLI `start`/`dev` routes with either worker transport.
+Origin and recovery admission precede native 101 on both Deno and Node. Oxian
+tracks sockets for listener drain and shutdown; there is no Request-identity
+registry. Keep `upgradeDevice` only for raw Fetch hosts/tests whose listeners do
+not use Oxian, such as a direct `Deno.serve` callback.
 
 Deno's native WebSocket API assembles messages before delivery, so it cannot
 bound pre-delivery assembly. Node bounds native messages. Both enforce device
@@ -411,20 +411,6 @@ Actions. Authorization, API-key, flow-token and non-discarded cookie headers
 count as presented credentials; the credential-projection proof alone does not
 authenticate a caller. Origin refusals always remain 403. Resource-specific
 concealment and cursor errors keep their existing status codes.
-
-## What this unlocks
-
-- One Fetch handler for Deno, Node and Workers, with tests that need no socket.
-- Exposure, identity and ownership as separate, reviewable decisions.
-- Safe client retries through idempotency keys and receipts.
-- Browser and service callers sharing one public client.
-
-## Next steps
-
-- [Chapter 15: Expose an HTTP API](getting-started/part-4-release-to-users/15-expose-an-http-api.md)
-- [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
-- [Channels](channels.md) for inbound adapters and chat delivery.
-- [Content and Assets](content-assets.md) for uploads and large inputs.
 
 ## Action session cookies and flow credentials
 
@@ -478,27 +464,19 @@ reads/observations. A session cookie response clears the retained flow. Use
 separate client instances for independent concurrent flows. Reuse the client
 instance for retries so its proof survives a lost response.
 
-Wire the web runtime's Action transport to the same SDK client; it then inherits
-cookie and flow handling without exposing credentials to browser Actions:
+Bind the web runtime to the same SDK client with `createBrowserPorts(client)`.
+Its Action transport and live reads then inherit cookie and flow handling
+without exposing credentials to browser Actions:
 
 ```ts
 const runtime = await createBrowserRuntime({
   plugins,
-  actions: {
-    async invoke(id, input, options) {
-      const receipt = await client.actions.submit(id, input, options);
-      options.accepted(receipt.operationId);
-      return await client.operations.result(
-        receipt.operationId,
-        options.signal,
-      );
-    },
-    async cancel(id) {
-      await client.operations.cancel(id);
-    },
-  },
+  ...createBrowserPorts(client),
 });
 ```
+
+See [Web runtime and Views](web-runtime-and-views.md) for the complete browser
+setup.
 
 For a raw HTTP client, send a cryptographically random
 `x-copilotz-credential-proof` (32–128 URL-safe characters) on submission and
@@ -577,3 +555,22 @@ host with no admitted worker returns `503 Service Unavailable` and
 `Retry-After: 1`; this is a host availability response, not an authorization
 refusal. Do not replay a potentially executed operation across a worker's
 no-replay boundary; recover its existing receipt using the original proof.
+
+## What this unlocks
+
+- One Fetch handler for Deno, Node and Workers, with tests that need no socket.
+- Exposure, identity and ownership as separate, reviewable decisions.
+- Safe client retries through idempotency keys and receipts.
+- Browser and service callers sharing one public client.
+
+## Next steps
+
+- [Chapter 15: Expose an HTTP API](getting-started/part-4-release-to-users/15-expose-an-http-api.md)
+- [Chapter 16: Authenticate and Isolate Tenants](getting-started/part-4-release-to-users/16-authenticate-and-isolate-tenants.md)
+- [Channels](channels.md) for inbound adapters and chat delivery.
+- [Content and Assets](content-assets.md) for uploads and large inputs.
+- [Subscriptions](subscriptions.md) for live Collection reads over `/device`.
+- [Web runtime and Views](web-runtime-and-views.md) for the browser runtime and
+  chat UI.
+- [Upgrading to 0.90.0](upgrading.md#upgrading-to-0900) for the device, cookie
+  and 401/403 changes.

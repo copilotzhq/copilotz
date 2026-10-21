@@ -234,7 +234,7 @@ const app = await createServerApp({
   // `coreHttpPlugin` still registers `http.core` itself.
   adapters: { http: { usage: createUsageHttpAdapter() } },
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });
@@ -329,7 +329,7 @@ const app = await createServerApp({
   // `coreHttpPlugin` still registers `http.core` itself.
   adapters: { http: { usage: createUsageHttpAdapter() } },
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });

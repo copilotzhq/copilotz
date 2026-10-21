@@ -559,17 +559,18 @@ Deno.test("database scopes acquire one owner after validation and reject unprovi
     observed.length = 0;
     await engine.databaseScope(tenantSchema);
     assert(observed.some((sql) => sql.includes("open_actions")));
-    assert(/owner_epochs/.test(observed[6]));
-    assert(/pg_index/.test(observed[5]));
+    assert(/owner_epochs/.test(observed[7]));
+    assert(/pg_index/.test(observed[6]));
     assertEquals(/information_schema\.columns/i.test(observed[0]), true);
     assertEquals(/copilotz_schema_metadata/i.test(observed[1]), true);
     assertEquals(
-      /to_regclass/i.test(observed[2]),
+      /pg_constraint/i.test(observed[2]),
       true,
     );
-    assertEquals(/information_schema\.columns/i.test(observed[3]), true);
+    assertEquals(/to_regclass/i.test(observed[3]), true);
+    assertEquals(/information_schema\.columns/i.test(observed[4]), true);
     assertEquals(
-      /copilotz_operation_catalog_metadata/i.test(observed[4]),
+      /copilotz_operation_catalog_metadata/i.test(observed[5]),
       true,
     );
     assert(

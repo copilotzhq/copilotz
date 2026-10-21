@@ -1,3 +1,4 @@
+import { isCollectionConflictError } from "@copilotz/copilotz/collections/authoring";
 /** Projects typed Core Message inputs through the storage Action. @module */
 
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
@@ -445,19 +446,17 @@ async function projectMessage(
       ...(sender.isNew ? [sender.participant] : []),
       ...recipients.newParticipants,
     ];
-    const racedParticipant = missedAtPlan.find((item) =>
-      text ===
-        `Collection 'participant' '${item.id}' was created while its mutation was prepared.`
-    );
+    const participantConflict = isCollectionConflictError(error) &&
+      missedAtPlan.length > 0;
     const racedThread = text ===
       `Collection 'thread' '${threadId}' changed while its mutation was prepared.`;
-    if (!racedParticipant && !racedThread) throw error;
+    if (!participantConflict && !racedThread) throw error;
 
     const alreadyCreated = await context.collections.message?.get({
       id: messageId,
     });
     if (alreadyCreated) return;
-    if (racedParticipant) {
+    if (participantConflict) {
       const matchesExpected = async (item: ParticipantInput) => {
         const stored = item.id
           ? await context.collections.participant.get({ id: item.id })
@@ -468,17 +467,18 @@ async function projectMessage(
             (item.agentId === undefined || stored.agentId === item.agentId),
         );
       };
-      if (!(await matchesExpected(racedParticipant))) throw error;
+      let confirmed = false;
       // The competing transaction may have committed only the shared record;
       // this failed transaction was atomic, so absent private participants
       // remain safe to create on the single bounded retry.
       for (const item of missedAtPlan) {
-        if (item.id === racedParticipant.id) continue;
         const stored = item.id
           ? await context.collections.participant.get({ id: item.id })
           : null;
         if (stored && !(await matchesExpected(item))) throw error;
+        if (stored) confirmed = true;
       }
+      if (!confirmed) throw error;
     }
     const currentThread = await context.collections.thread.get({
       id: threadId,

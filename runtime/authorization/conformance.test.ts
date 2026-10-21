@@ -160,7 +160,7 @@ async function fixture(denyCommittedResult = false, vector = false) {
   const setMember = (allowed: boolean) =>
     run("fixture.membership", {}, async (_, command) => {
       await command.transaction.query(
-        `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('key','main','member','key',$1::jsonb) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data`,
+        `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('key','main','member','key',$1::jsonb) ON CONFLICT(namespace,id) DO UPDATE SET data=EXCLUDED.data`,
         [JSON.stringify({ allowed })],
       );
     });
@@ -385,7 +385,7 @@ Deno.test("F4 tenant logout commits revocation, refuses replay and closes only i
   try {
     await f.authorization.createSession(f.authority, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     await f.authorization.createSession({
@@ -393,14 +393,24 @@ Deno.test("F4 tenant logout commits revocation, refuses replay and closes only i
       scope: { ...f.authority.scope, tenant: "two" },
     }, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     const binding: AuthenticatedAuthority = {
       ...f.authority,
-      principal: { kind: "session", id: "session" },
+      principal: { kind: "session", id: "account" },
       authorityBasis: { kind: "session", id: "session" },
     };
+    await assertRejects(() =>
+      f.authorization.observe(
+        {
+          ...binding,
+          principal: { kind: "session", id: "another-account" },
+        },
+        {},
+        () => {},
+      )
+    );
     const revoked = Promise.withResolvers<unknown>();
     const first = await f.authorization.observe(binding, {}, revoked.resolve);
     let otherRevoked = false;

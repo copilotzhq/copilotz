@@ -1,3 +1,4 @@
+import { isCollectionConflictError } from "@copilotz/copilotz/collections/authoring";
 import type { EventVisibility } from "./events/index.ts";
 import {
   actionCallerDefinitionId,
@@ -95,13 +96,13 @@ function retryableToolPlanMutationFailure(error: unknown): boolean {
     const candidate = current as Record<string, unknown>;
     if (visited.has(candidate)) return false;
     visited.add(candidate);
+    if (isCollectionConflictError(current)) return true;
     if (candidate.retryable === false) return false;
     const code = candidate.code ?? candidate.sqlState ?? candidate.sqlstate;
     if (code === "40P01" || code === "40001") return true;
     if (
       typeof candidate.message === "string" &&
       (candidate.message.includes("changed while its mutation was prepared") ||
-        candidate.message.includes("created while its mutation was prepared") ||
         /(?:^|:\s*)deadlock detected(?:$|\n)/i.test(candidate.message) ||
         /(?:^|:\s*)could not serialize access(?:\b|$)/i.test(
           candidate.message,

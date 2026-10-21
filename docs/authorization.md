@@ -298,9 +298,10 @@ Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
   an identity-provider callback) and returns a credential binding whose policy
   grants `sessions: { create: true }` for session intents.
 - Later requests carry the session ID. `authenticate` returns a binding with
-  `principal: { kind: "session", id }` and
-  `authorityBasis: { kind: "session", id }`. The `principal` passed to
-  `sessions.create` must equal its `id`, or no binding can use the session.
+  `principal: { kind: "session", id: accountId }` and
+  `authorityBasis: { kind: "session", id: sessionId }`. `sessions.create` binds
+  the session ID to its principal; they may differ. Every command checks both
+  against the stored session row.
 - Every protected command checks the session row in its own transaction. An
   unknown, expired or revoked session is refused, and an admission never
   outlives its session's `expiresAt`.
@@ -538,3 +539,14 @@ retained authority:
 - Reference: [HTTP server and browser client](server.md) covers `authenticate`,
   routes and observation.
 - Reference: [Upgrading](upgrading.md) covers the offline v13 chain.
+
+HTTP ingress stores the authenticated `scope.actor` separately from retained
+`authority.principal` and `authority.authorityBasis`. Session authentication
+does not replace actor attribution with a session or account ID. Offline v14
+manifests use `actorBinding` to review that same actor independently of
+authority.
+
+Action grants, Action policy registrations, HTTP exposure, HTTP route `action`,
+handler `context.invoke`, client Action calls, flow continuations and Tool
+bindings all use the composition alias (for example `saveNote`). Stable Action
+IDs identify durable lifecycle events and are not alternate configuration keys.

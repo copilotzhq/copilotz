@@ -104,7 +104,7 @@ const notes = client.collections.observe("note", { limit: 50 }, {
     renderNotesView(rows);
   },
 });
-const receipt = await client.actions.submit("notes.save", input, {
+const receipt = await client.actions.submit("saveNote", input, {
   idempotencyKey: crypto.randomUUID(),
 });
 notes.optimistic(

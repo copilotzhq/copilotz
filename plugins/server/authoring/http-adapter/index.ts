@@ -59,7 +59,7 @@ export type HttpHandlerContext = Readonly<{
   >;
   read: HttpReadServices;
   invoke(
-    actionId: string,
+    actionAlias: string,
     input: unknown,
     options?: {
       idempotencyKey?: string;
@@ -69,12 +69,12 @@ export type HttpHandlerContext = Readonly<{
   content: Readonly<{ get(assetId: string): Promise<Response> }>;
   operations: Readonly<{
     checkpoint(
-      threadId: string,
+      record: Readonly<{ collection: string; id: string }>,
       coverage?: { checkpoint: string; actionRunIds: readonly string[] },
     ): Promise<string>;
     observe(
       selection: {
-        threadId?: string;
+        record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
         checkpoint?: string;
       },
@@ -106,7 +106,17 @@ export type HttpRoute = Readonly<
     }
   )
 >;
+export type HttpObservationSelection = Readonly<{
+  key(id: string): string;
+  outputMetadata?(id: string): Readonly<Record<string, unknown>>;
+}>;
 export type HttpAdapter = Readonly<{
+  /** Domain-owned selection keys, indexed by the authorized Collection alias. */
+  observations?: Readonly<Record<string, HttpObservationSelection>>;
+  /** Domain metadata for durable HTTP ingress, derived from trusted scope metadata. */
+  ingressMetadata?(
+    metadata: Readonly<Record<string, unknown>>,
+  ): Readonly<Record<string, unknown>>;
   /** Collection aliases read by authenticated routes; checked at Server startup. */
   collections?: readonly string[];
   routes: readonly HttpRoute[];

@@ -102,9 +102,9 @@ Deno.test({
       ],
     });
     try {
-      for (const alias of ["denied-child", "denied-root"]) {
+      for (const alias of ["child", "root"]) {
         const admitted = await app.fetch(
-          new Request(`http://fixture.test/api/actions/fixture/${alias}`, {
+          new Request(`http://fixture.test/api/actions/${alias}`, {
             method: "POST",
             headers: {
               "content-type": "application/json",
@@ -121,8 +121,8 @@ Deno.test({
           const response = await app.fetch(new Request(url));
           return response.status === 202 ? undefined : response;
         }, "bounded owner refusal result");
-        assertEquals(result.status, 403);
         const body = await result.text();
+        assertEquals(result.status, 403, `${alias}: ${body}`);
         assertEquals(body.includes("forbidden"), true);
         assertEquals(body.includes("private-policy-detail"), false);
         assertEquals(body.includes("must-not-execute"), false);
@@ -142,7 +142,11 @@ Deno.test({
       );
       assertEquals(
         (await database.query<{ n: number }>(
-          "SELECT count(*)::int AS n FROM public.event_bodies WHERE COALESCE(body->'data',body)->>'actionId'='fixture.denied-child'",
+          `SELECT count(*)::int AS n FROM public.event_bodies
+           WHERE COALESCE(body->'data',body)->>'actionId'='fixture.denied-child'
+             AND (COALESCE(body->'data',body)->>'status' <> 'failed'
+               OR COALESCE(body->'data',body)->'input' IS DISTINCT FROM 'null'::jsonb
+               OR COALESCE(body->'data',body)->'error'->>'message' <> 'Forbidden')`,
         )).rows[0].n,
         0,
       );

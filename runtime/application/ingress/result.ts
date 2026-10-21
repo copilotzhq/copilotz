@@ -618,8 +618,9 @@ async function recoverDirectActionTerminal(
       limit: 1000,
     });
     for (const event of events) {
-      if (
-        event.type === `${actionId}.invoked` &&
+      const directSource = event.namespace === request.namespace &&
+        event.correlationId === request.correlationId &&
+        event.subject?.type === actionId &&
         event.causationId === request.id &&
         event.metadata.sourceEventId === request.id &&
         event.subject?.id ===
@@ -630,8 +631,32 @@ async function recoverDirectActionTerminal(
               record((request as DurableEvent & { data?: unknown }).data)
                 .requestId,
             ),
-          )
-      ) runId = event.subject?.id;
+          );
+      if (event.type === `${actionId}.invoked` && directSource) {
+        runId = event.subject?.id;
+      }
+      if (!runId && directSource && event.type === `${actionId}.failed`) {
+        // A current-policy refusal can precede input capture. Only its exact
+        // source-bound root run and sanitized, input-free refusal are readable
+        // without an invoked event; this cannot grant a successful result.
+        const resolved = await scope.events.resolve(
+          request.namespace,
+          event.id,
+        );
+        const refusal = resolved && parseActionLifecycleEvent(resolved, {
+          actionId,
+          statuses: ["failed"],
+          requireRoot: true,
+        });
+        if (
+          refusal?.status === "failed" && !refusal.parentActionRunId &&
+          refusal.actionRunId === event.subject?.id &&
+          refusal.actionId === actionId && refusal.input === null &&
+          refusal.error.code === "forbidden" &&
+          refusal.error.status === 403 && refusal.error.callerSafe === true &&
+          refusal.error.message === "Forbidden"
+        ) return refusal;
+      }
       if (
         !runId || event.subject?.id !== runId ||
         !["completed", "failed", "cancelled"].some((status) =>

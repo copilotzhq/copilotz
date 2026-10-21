@@ -1,3 +1,4 @@
+import { createCollectionConflictError } from "./errors.ts";
 import { queryCollectionRows } from "./read-rows.ts";
 import { createCollectionValidationError } from "./errors.ts";
 import { getPath } from "./content-path.ts";
@@ -433,8 +434,13 @@ export function composeCollectionProjection(
        LIMIT 1
      )`,
   ];
+  const identityTaken =
+    `EXISTS (SELECT 1 FROM ${tables.nodes} WHERE namespace=${namespace} AND id=${id})`;
   const gates: string[] = [];
-  const reports = [`'exists', EXISTS (SELECT 1 FROM projection_current)`];
+  const reports = [
+    `'exists', EXISTS (SELECT 1 FROM projection_current)`,
+    `'identityTaken', ${identityTaken}`,
+  ];
   const effects: ((source: string) => string)[] = [];
 
   if (guard) {
@@ -471,7 +477,7 @@ export function composeCollectionProjection(
                   OR node.source_type IS DISTINCT FROM asset.source_type
                   OR node.source_id IS DISTINCT FROM asset.source_id) AS differs
          FROM projection_manifest asset
-         JOIN ${tables.nodes} node ON node.id = asset.id
+         JOIN ${tables.nodes} node ON node.namespace = ${namespace} AND node.id = asset.id
        )`,
     );
     gates.push(
@@ -526,7 +532,7 @@ export function composeCollectionProjection(
   const node = projection.node;
   if (node) {
     if (projection.operation === "create") {
-      gates.push(`NOT EXISTS (SELECT 1 FROM projection_current)`);
+      gates.push(`NOT ${identityTaken}`);
     }
     if (projection.operation === "update") {
       gates.push(`EXISTS (SELECT 1 FROM projection_current)`);
@@ -723,14 +729,17 @@ export function composeCollectionProjection(
     effects: (source) => effects.map((effect) => effect(source)),
     report: `jsonb_build_object(${reports.join(", ")})`,
     failure(raw) {
-      const report = record(raw) as ProjectionReport;
+      const report = record(raw) as ProjectionReport & {
+        identityTaken?: boolean;
+      };
+      if (projection.operation === "create" && report.identityTaken) {
+        return createCollectionConflictError();
+      }
       if (guard) {
         if (guard.expected === null ? report.exists : !report.exists) {
-          return new Error(
-            guard.expected === null
-              ? `Collection ${label} was created while its mutation was prepared.`
-              : `Unknown ${projection.type} '${projection.id}'.`,
-          );
+          return guard.expected === null
+            ? createCollectionConflictError()
+            : new Error(`Unknown ${projection.type} '${projection.id}'.`);
         }
         if (guard.expected !== null && !report.matches) {
           return new Error(
@@ -751,7 +760,7 @@ export function composeCollectionProjection(
         );
       }
       if (projection.operation === "create" && report.exists) {
-        return new Error(`Collection ${label} already exists.`);
+        return createCollectionConflictError();
       }
       if (projection.operation === "update" && !report.exists) {
         return new Error(`Unknown ${projection.type} '${projection.id}'.`);
@@ -787,8 +796,8 @@ export async function projectAssetManifestEntry(
   const data = JSON.stringify(manifestNodeData(namespace, entry));
   const existing = await context.transaction.query<NodeRow>(
     `SELECT * FROM ${context.tables.nodes}
-     WHERE id = $1 LIMIT 1`,
-    [entry.assetId],
+     WHERE namespace = $2 AND id = $1 LIMIT 1`,
+    [entry.assetId, namespace],
   );
   const row = existing.rows[0];
   if (row && (row.namespace !== namespace || row.type !== "asset")) {

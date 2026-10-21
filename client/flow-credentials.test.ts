@@ -13,14 +13,14 @@ Deno.test("completed flow submission replay binds result and observation request
         path,
         credential: request.headers.get("x-copilotz-flow"),
       });
-      if (path === "/api/actions/auth/start") {
+      if (path === "/api/actions/start") {
         return Promise.resolve(Response.json({
           data: { operationId: "started-flow" },
         }, {
           status: 202,
           headers: {
             "x-copilotz-flow": "signed-flow",
-            "x-copilotz-flow-action": "auth.continue",
+            "x-copilotz-flow-action": "continue",
           },
         }));
       }
@@ -33,7 +33,7 @@ Deno.test("completed flow submission replay binds result and observation request
       return Promise.resolve(Response.json({ data: {}, seq: "1" }));
     },
   });
-  const receipt = await client.actions.submit("auth.start", {}, {
+  const receipt = await client.actions.submit("start", {}, {
     idempotencyKey: "original-flow",
   });
   await client.operations.result(receipt.operationId);
@@ -49,7 +49,7 @@ Deno.test("completed flow submission replay binds result and observation request
   );
   await client.operations.get("unrelated");
   assertEquals(requests, [
-    { path: "/api/actions/auth/start", credential: null },
+    { path: "/api/actions/start", credential: null },
     {
       path: "/api/operations/started-flow/result",
       credential: "signed-flow",
@@ -83,7 +83,7 @@ Deno.test("browser Action transport retains exact operation flow credentials aft
         headers: starting
           ? {
             "x-copilotz-flow": "signed-flow",
-            "x-copilotz-flow-action": "auth.continue",
+            "x-copilotz-flow-action": "continue",
           }
           : { "x-copilotz-flow": "" },
       }));
@@ -116,9 +116,9 @@ Deno.test("browser Action transport retains exact operation flow credentials aft
     assertEquals(await runtime.actions.continue({}).result(), { ok: true });
     await client.operations.get("continue");
     assertEquals(seen, [
-      { path: "/api/actions/auth/start", credential: null },
+      { path: "/api/actions/start", credential: null },
       { path: "/api/operations/start/result", credential: null },
-      { path: "/api/actions/auth/continue", credential: "signed-flow" },
+      { path: "/api/actions/continue", credential: "signed-flow" },
       { path: "/api/operations/continue/result", credential: "signed-flow" },
       { path: "/api/operations/continue", credential: "signed-flow" },
     ]);
@@ -150,7 +150,7 @@ Deno.test("completed flow replay and observation retain only their original cred
             status: 202,
             headers: {
               "x-copilotz-flow": `flow-${starts}`,
-              "x-copilotz-flow-action": "auth.callback",
+              "x-copilotz-flow-action": "callback",
             },
           }),
         );
@@ -166,8 +166,8 @@ Deno.test("completed flow replay and observation retain only their original cred
       return Promise.resolve(Response.json({ data: {}, seq: "1" }));
     },
   });
-  await client.actions.submit("auth.start", {}, { idempotencyKey: "start-1" });
-  await client.actions.submit("auth.callback", {}, {
+  await client.actions.submit("start", {}, { idempotencyKey: "start-1" });
+  await client.actions.submit("callback", {}, {
     idempotencyKey: "callback",
   });
   await client.operations.result("callback");
@@ -176,8 +176,8 @@ Deno.test("completed flow replay and observation retain only their original cred
       client.operations.observe({ operationIds: ["callback"], onFrame() {} }),
     CopilotzHttpError,
   );
-  await client.actions.submit("auth.start", {}, { idempotencyKey: "start-2" });
-  await client.actions.submit("auth.callback", {}, {
+  await client.actions.submit("start", {}, { idempotencyKey: "start-2" });
+  await client.actions.submit("callback", {}, {
     idempotencyKey: "callback",
   });
   await client.operations.result("callback");

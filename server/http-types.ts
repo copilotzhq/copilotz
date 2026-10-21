@@ -42,7 +42,7 @@ export type HttpObservation = Readonly<{
   outputs: ReadableStream<ApplicationOutput>;
   done: Promise<void>;
   operationId?: string;
-  threadId?: string;
+  selectionMetadata?: Readonly<Record<string, unknown>>;
   replayCursor?: string;
   /** Current committed owner frontier, maintained by owner push. */
   heartbeat?(streamIds?: readonly string[]): Readonly<

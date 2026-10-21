@@ -112,9 +112,9 @@ export function compileServerRoutes(
 
   for (const [alias, action] of Object.entries(registry.actions)) {
     if (
-      !enabled(facade.expose.actions, action.id)
+      !enabled(facade.expose.actions, alias)
     ) continue;
-    const path = canonicalActionPath(action.id);
+    const path = canonicalActionPath(alias);
     endpoints.push(endpoint({
       kind: "action",
       id: action.id,
@@ -231,8 +231,8 @@ export function compileServerRoutes(
       }
       httpIds.add(route.id);
       const action = route.action
-        ? Object.entries(registry.actions).find(([, action]) =>
-          action.id === route.action
+        ? Object.entries(registry.actions).find(([alias]) =>
+          alias === route.action
         )
         : undefined;
       if (route.action && !action) {

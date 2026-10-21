@@ -21,7 +21,7 @@ import {
 } from "../engine/commands.ts";
 import { stageOwnerChange } from "./push.ts";
 import { afterSqlCommit } from "./session.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { canonicalizeContentRefs } from "../content/input.ts";
 import { assertJsonValue } from "../json.ts";
 import { errorRetryability } from "../failure.ts";
@@ -700,7 +700,7 @@ export function createEventStore(
     );
   };
   const runCommand = command;
-  const createId = options.createId ?? ulid;
+  const createId = options.createId ?? monotonicUlid;
   const now = options.now ?? (() => new Date());
   const random = options.random ?? Math.random;
   const defaultLeaseMs = boundedInteger(options.leaseMs, 120_000, 0);

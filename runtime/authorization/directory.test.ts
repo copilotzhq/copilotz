@@ -144,7 +144,7 @@ Deno.test("F4 declared directory staff reads are fresh per command, fail closed 
   const setGrant = (allowed: boolean) =>
     directoryRun("staff.set", {}, async (_, command) => {
       await command.transaction.query(
-        `INSERT INTO "${directorySchema}".nodes(id,namespace,type,name,data) VALUES('member','directory','staff_grant','member',$1::jsonb) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data`,
+        `INSERT INTO "${directorySchema}".nodes(id,namespace,type,name,data) VALUES('member','directory','staff_grant','member',$1::jsonb) ON CONFLICT(namespace,id) DO UPDATE SET data=EXCLUDED.data`,
         [JSON.stringify({ allowed, tenant: "fixture", operation: "create" })],
       );
     });

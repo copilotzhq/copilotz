@@ -1,3 +1,4 @@
+import { coreHttpAdapter } from "../plugins/core-http/index.ts";
 import {
   bindTestActions,
   testAuthority,
@@ -293,6 +294,7 @@ async function createOperations(
     } as unknown as InternalCopilotzApplication,
     testScope(),
     read,
+    [coreHttpAdapter],
   );
 }
 
@@ -368,7 +370,10 @@ Deno.test("history checkpoints retain terminal coverage after byte loss", async 
       availabilityReason: "missing",
     }],
   }));
-  const checkpoint = await operations.checkpoint("thread", {
+  const checkpoint = await operations.checkpoint({
+    collection: "thread",
+    id: "thread",
+  }, {
     checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
     actionRunIds: ["covered-run"],
   });
@@ -422,7 +427,10 @@ Deno.test("history checkpoint bounds sparse coverage and replays deferred lanes"
   const operations = await createOperations(
     checkpointApplication({ [operationId]: streams }),
   );
-  const checkpoint = await operations.checkpoint("thread", {
+  const checkpoint = await operations.checkpoint({
+    collection: "thread",
+    id: "thread",
+  }, {
     checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
     actionRunIds: ["covered-run"],
   });
@@ -505,7 +513,10 @@ Deno.test("history checkpoint enforces sparse capacity across operations", async
     [firstId]: [terminalStream(firstId, 130, "covered-run")],
     [secondId]: [terminalStream(secondId, 129, "covered-run")],
   }));
-  const checkpoint = await operations.checkpoint("thread", {
+  const checkpoint = await operations.checkpoint({
+    collection: "thread",
+    id: "thread",
+  }, {
     checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
     actionRunIds: ["covered-run"],
   });
@@ -542,7 +553,10 @@ Deno.test("history checkpoint validates encoded cursor byte capacity before adop
   const operations = await createOperations(
     checkpointApplication(streamsByOperation),
   );
-  const checkpoint = await operations.checkpoint("thread", {
+  const checkpoint = await operations.checkpoint({
+    collection: "thread",
+    id: "thread",
+  }, {
     checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
     actionRunIds: ["covered-run"],
   });
@@ -603,7 +617,7 @@ Deno.test("history checkpoint propagates unrelated stream catalog errors", async
   const operations = await createOperations(application);
   const caught = await assertRejects(
     () =>
-      operations.checkpoint("thread", {
+      operations.checkpoint({ collection: "thread", id: "thread" }, {
         checkpoint: encodeOperationReplayCursor({ eventPosition: "1" }),
         actionRunIds: ["covered-run"],
       }),
@@ -823,7 +837,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
     authorities.push(authorization);
     const selected = { ...application, authorization };
     const read = await createHttpReads(selected, scope);
-    return await createHttpOperations(selected, scope, read);
+    return await createHttpOperations(selected, scope, read, [coreHttpAdapter]);
   };
   const selected: Awaited<ReturnType<typeof createHttpOperations>>[] = [];
   const observations: Awaited<
@@ -1030,7 +1044,9 @@ Deno.test("initial thread boundary skips completed history and follows earlier a
     await f.thread();
     const history = await f.operation("thread", "completed");
     const active = await f.operation();
-    const { observation, outputs } = await f.start({ threadId: "thread" });
+    const { observation, outputs } = await f.start({
+      record: { collection: "thread", id: "thread" },
+    });
     await until(() => outputs.some((output) => output.operationId === active));
     assertEquals(
       decodeOperationReplayCursor(observation.replayCursor).selectionPosition,
@@ -1069,12 +1085,15 @@ Deno.test("thread cursor authorization checks each indexed member and nested ope
         operationSelectionPositions: { [id]: "1" },
       });
     const denied = await assertRejects(() =>
-      api.observe({ threadId: "thread", checkpoint: cursor(outside) })
+      api.observe({
+        record: { collection: "thread", id: "thread" },
+        checkpoint: cursor(outside),
+      })
     );
     assertEquals((denied as { code: string }).code, "invalid_replay_cursor");
     const controller = new AbortController();
     const allowed = await api.observe({
-      threadId: "thread",
+      record: { collection: "thread", id: "thread" },
       checkpoint: cursor(permitted),
       signal: controller.signal,
     });
@@ -1088,7 +1107,7 @@ Deno.test("thread cursor authorization checks each indexed member and nested ope
       access: { roles: ["viewer"] },
     });
     const rejected = await assertRejects(() =>
-      api.observe({ threadId: "thread" })
+      api.observe({ record: { collection: "thread", id: "thread" } })
     );
     assertEquals((rejected as { code: string }).code, "operation_not_found");
     assert(wrongMetadata);
@@ -1106,7 +1125,7 @@ Deno.test("retirement cursor tombstones cannot authorize unrelated operations", 
     const api = await f.create();
     const error = await assertRejects(() =>
       api.observe({
-        threadId: "thread",
+        record: { collection: "thread", id: "thread" },
         checkpoint: encodeOperationReplayCursor({
           selectionPosition: "0",
           operationRetirementPositions: { [outside]: "1" },
@@ -1123,7 +1142,9 @@ Deno.test("thread changes use indexed hints and idle followers avoid rediscovery
   const f = await observationFixture();
   try {
     await f.thread();
-    const { observation, outputs } = await f.start({ threadId: "thread" });
+    const { observation, outputs } = await f.start({
+      record: { collection: "thread", id: "thread" },
+    });
     await until(() => outputs.length > 0);
     await pause(80);
     const before = f.counts.changes;
@@ -1158,7 +1179,7 @@ Deno.test("120 completed operations paginate discovery and retire replay state w
       ids.push(await f.operation("thread", "completed"));
     }
     const { observation, outputs } = await f.start({
-      threadId: "thread",
+      record: { collection: "thread", id: "thread" },
       checkpoint: encodeOperationReplayCursor({ selectionPosition: "0" }),
     });
     await waitOutput(
@@ -1231,7 +1252,9 @@ Deno.test("a lost final selection push repairs from heartbeat head mismatch with
   const f = await observationFixture({ suppressHints: true });
   try {
     await f.thread();
-    const { observation, outputs } = await f.start({ threadId: "thread" });
+    const { observation, outputs } = await f.start({
+      record: { collection: "thread", id: "thread" },
+    });
     await until(() => outputs.length > 0);
     await pause(100);
     const id = await f.operation("thread", "completed");
@@ -1256,7 +1279,9 @@ Deno.test("thread access revocation closes observation using the scoped collecti
   const f = await observationFixture();
   try {
     await f.thread("thread", "owner");
-    const { consumed } = await f.start({ threadId: "thread" }, {
+    const { consumed } = await f.start({
+      record: { collection: "thread", id: "thread" },
+    }, {
       collections: { thread: { where: { owner: "owner" } } },
     });
     await f.scoped.thread.update({ id: "thread", set: { owner: "other" } });
@@ -1279,7 +1304,7 @@ Deno.test("initial discovery failure releases selection and resource subscriptio
     f.failSelection(new Error("discovery failed"));
     const api = await f.create();
     await assertRejects(
-      () => api.observe({ threadId: "thread" }),
+      () => api.observe({ record: { collection: "thread", id: "thread" } }),
       Error,
       "discovery failed",
     );
@@ -1301,7 +1326,7 @@ Deno.test("late acquired selection subscriptions are released after initial obse
     const api = await f.create();
     const controller = new AbortController();
     const starting = api.observe({
-      threadId: "thread",
+      record: { collection: "thread", id: "thread" },
       signal: controller.signal,
     });
     await until(() => f.counts.subscriptions === 1);
@@ -1350,7 +1375,9 @@ Deno.test("1000 distinct idle observations share selection heads without authori
     const ids = Array.from({ length: 1000 }, (_, index) => `thread-${index}`);
     for (const id of ids) await f.thread(id);
     const views = await Promise.all(
-      ids.map((threadId) => f.start({ threadId })),
+      ids.map((threadId) =>
+        f.start({ record: { collection: "thread", id: threadId } })
+      ),
     );
     await until(() => views.every((view) => view.outputs.length > 0), 10000);
     await pause(100);
@@ -1471,7 +1498,9 @@ Deno.test("thread discovery authorizes nested metadata without per-operation sta
     const api = await f.create({
       operations: { metadata: { access: { roles: ["owner", "editor"] } } },
     });
-    const observation = await api.observe({ threadId: "thread" });
+    const observation = await api.observe({
+      record: { collection: "thread", id: "thread" },
+    });
     assertEquals(
       f.counts.status,
       0,
@@ -1513,7 +1542,7 @@ Deno.test("operation terminal forwarding preserves queued payloads until drain o
       });
       const api = await f.create();
       observation = await api.observe({
-        threadId: "thread",
+        record: { collection: "thread", id: "thread" },
         checkpoint: encodeOperationReplayCursor({ selectionPosition: "0" }),
       });
       const response = applicationOutputsMultipartResponse(observation);

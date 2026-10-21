@@ -610,7 +610,7 @@ export async function createBrowserRuntime(
         }
         if (!options.actions) throw new TypeError("No Action transport");
         const terminal = await options.actions.invoke(
-          definition.id,
+          alias,
           invocation,
           {
             idempotencyKey: id,
@@ -751,7 +751,7 @@ export async function createBrowserRuntime(
                 code: "unavailable",
               });
             }
-            return options.actions.invoke(definition.id, this.input, {
+            return options.actions.invoke(alias, this.input, {
               idempotencyKey: crypto.randomUUID(),
               signal,
               accepted() {},

@@ -260,7 +260,7 @@ test("core conversation creation sends name and Stop cancels only after confirma
     actions: {
       invoke(id, input, options) {
         calls.push({ id, input });
-        if (id.includes("thread-message")) {
+        if (id === "createThreadMessage") {
           options.accepted("active-operation");
           return new Promise((resolve) => {
             finish = resolve;

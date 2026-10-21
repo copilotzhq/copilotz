@@ -188,18 +188,18 @@ export async function provisionBodyStoreSchema(
     `CREATE SCHEMA IF NOT EXISTS ${quoteEventIdentifier(schema)}`,
   );
   await executor.query(`CREATE TABLE ${bodies} (
-    body_id TEXT PRIMARY KEY, state TEXT NOT NULL CONSTRAINT body_state CHECK(state IN ('open','ready','incomplete','aborted')),
-    media_type TEXT NOT NULL, reservation_id TEXT NOT NULL,
+    body_id TEXT COLLATE "C" PRIMARY KEY, state TEXT NOT NULL CONSTRAINT body_state CHECK(state IN ('open','ready','incomplete','aborted')),
+    media_type TEXT NOT NULL, reservation_id TEXT COLLATE "C" NOT NULL,
     writer_generation BIGINT NOT NULL CONSTRAINT body_generation CHECK(writer_generation>=1 AND writer_generation<=9007199254740991),
     fenced_from BIGINT CONSTRAINT body_fenced CHECK(fenced_from IS NULL OR (fenced_from>=1 AND fenced_from=writer_generation-1)),
     byte_length BIGINT NOT NULL CONSTRAINT body_length CHECK(byte_length>=0 AND byte_length<=9007199254740991),
     digest TEXT CONSTRAINT body_digest CHECK((state IN ('ready','incomplete') AND digest IS NOT NULL AND digest ~ '^sha256:[0-9a-f]{64}$') OR (state IN ('open','aborted') AND digest IS NULL)),
-    version_token TEXT NOT NULL,maintenance_version BIGINT NOT NULL CONSTRAINT body_revision CHECK(maintenance_version>=1),updated_at TIMESTAMPTZ NOT NULL
+    version_token TEXT COLLATE "C" NOT NULL,maintenance_version BIGINT NOT NULL CONSTRAINT body_revision CHECK(maintenance_version>=1),updated_at TIMESTAMPTZ NOT NULL
   )`);
   await executor.query(`CREATE TABLE ${parts} (
-    body_id TEXT NOT NULL REFERENCES ${bodies}(body_id) ON DELETE CASCADE,
+    body_id TEXT COLLATE "C" NOT NULL REFERENCES ${bodies}(body_id) ON DELETE CASCADE,
     start_offset BIGINT NOT NULL CONSTRAINT body_offset CHECK(start_offset>=0 AND start_offset<=9007199254740991),
-    append_id TEXT NOT NULL,bytes BYTEA NOT NULL CONSTRAINT body_part_length CHECK(octet_length(bytes)>=1 AND octet_length(bytes)<=1048576),
+    append_id TEXT COLLATE "C" NOT NULL,bytes BYTEA NOT NULL CONSTRAINT body_part_length CHECK(octet_length(bytes)>=1 AND octet_length(bytes)<=1048576),
     part_digest TEXT NOT NULL CONSTRAINT body_part_digest CHECK(part_digest ~ '^sha256:[0-9a-f]{64}$'),
     PRIMARY KEY(body_id,start_offset),UNIQUE(body_id,append_id)
   )`);
@@ -252,7 +252,7 @@ export async function migrateBodyStoreSchema(
       );
     }
     await transaction.query(
-      `ALTER TABLE ${bodies} ADD COLUMN reservation_id TEXT,ADD COLUMN fenced_from BIGINT,ADD COLUMN version_token TEXT`,
+      `ALTER TABLE ${bodies} ADD COLUMN reservation_id TEXT COLLATE "C",ADD COLUMN fenced_from BIGINT,ADD COLUMN version_token TEXT COLLATE "C"`,
     );
     const rows = await transaction.query<
       {

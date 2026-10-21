@@ -57,7 +57,7 @@ Deno.test("concurrent HTTP admission enforces the atomic cap and recovers identi
       Array.from(
         { length: 40 },
         (_, index) =>
-          client.actions.submit("test.blocked", {}, {
+          client.actions.submit("blocked", {}, {
             idempotencyKey: `key-${index}`,
           }),
       ),
@@ -74,14 +74,14 @@ Deno.test("concurrent HTTP admission enforces the atomic cap and recovers identi
     ids.push(...accepted.map(({ receipt }) => receipt.operationId));
     const replayKey = `key-${accepted[0].index}`;
     assertEquals(
-      (await client.actions.submit("test.blocked", {}, {
+      (await client.actions.submit("blocked", {}, {
         idempotencyKey: replayKey,
       })).operationId,
       ids[0],
     );
     const error = await assertRejects(
       () =>
-        client.actions.submit("test.blocked", {}, {
+        client.actions.submit("blocked", {}, {
           idempotencyKey: "overflow",
         }),
       CopilotzHttpError,
@@ -90,7 +90,7 @@ Deno.test("concurrent HTTP admission enforces the atomic cap and recovers identi
     assertEquals(error.status, 409);
     const conflict = await assertRejects(
       () =>
-        client.actions.submit("test.blocked", { different: true }, {
+        client.actions.submit("blocked", { different: true }, {
           idempotencyKey: replayKey,
         }),
       CopilotzHttpError,

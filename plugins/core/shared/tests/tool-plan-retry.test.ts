@@ -1,3 +1,4 @@
+import { createCollectionConflictError } from "../../../../runtime/collections/errors.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { toolPlanCollection } from "../../collections/tool-plan/index.ts";
 import { retryToolPlanMutation } from "../tool-plan.ts";
@@ -35,9 +36,7 @@ Deno.test("Tool-plan state writes retry exact collection conflicts only", async 
   await retryToolPlanMutation(async () => {
     attempts++;
     if (attempts === 1) {
-      throw new Error(
-        "Collection 'toolPlanBranch' 'branch-a' was created while its mutation was prepared.",
-      );
+      throw createCollectionConflictError();
     }
   });
   assertEquals(attempts, 2);

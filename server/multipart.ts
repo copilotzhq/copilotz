@@ -696,7 +696,7 @@ export function applicationOutputsMultipartResponse(
                 ...(source.operationId
                   ? { operationId: source.operationId }
                   : {}),
-                ...(source.threadId ? { threadId: source.threadId } : {}),
+                ...source.selectionMetadata,
               } as const,
             )),
             { ...partOptions, cursor: replayCursor },

@@ -24,12 +24,12 @@ export const coreWebPlugin: BrowserPlugin = {
   },
   actions: {
     createThread: { id: "copilotz.core.thread.create", placement: "server" },
-    sendMessage: {
+    createThreadMessage: {
       id: "copilotz.core.thread-message.create",
       placement: "server",
     },
     reviseMessage: { id: "copilotz.core.message.revise", placement: "server" },
-    deleteMessages: {
+    deleteThreadMessages: {
       id: "copilotz.core.thread.deleteMessages",
       placement: "server",
     },

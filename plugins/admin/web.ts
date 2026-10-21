@@ -15,11 +15,11 @@ export type AdminSection =
   | "participants"
   | "usage";
 export interface AdminWebOptions {
-  actionIds?: Partial<Record<AdminSection, string>>;
+  actionAliases?: Partial<Record<AdminSection, string>>;
 }
 /** Configure the browser registry to match the installed server Actions. */
 export function createAdminWebPlugin(
-  { actionIds = {} }: AdminWebOptions = {},
+  { actionAliases = {} }: AdminWebOptions = {},
 ): BrowserPlugin {
   return {
     id: "@copilotz/admin",
@@ -35,17 +35,22 @@ export function createAdminWebPlugin(
         "usage",
       ] as const).map((
         section,
-      ) => [`admin${section[0].toUpperCase()}${section.slice(1)}`, {
-        id: actionIds[section] ?? `copilotz.admin.${section}`,
-        placement: "server" as const,
-        query: {
-          reads: section === "agents"
-            ? []
-            : ["thread", "message", "participant", "usage"],
+      ) => [
+        actionAliases[section] ??
+          `admin${section[0].toUpperCase()}${section.slice(1)}`,
+        {
+          id: `copilotz.admin.${section}`,
+          placement: "server" as const,
+          query: {
+            reads: section === "agents"
+              ? []
+              : ["thread", "message", "participant", "usage"],
+          },
         },
-      }]),
+      ]),
     ),
     resources: {
+      admin: { actionAliases },
       navigation: {
         admin: { label: "Administration", shows: "admin", value: null },
         ...Object.fromEntries(

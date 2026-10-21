@@ -180,7 +180,7 @@ export function createServerFacadeFetchHandler(
           }
         }
         const submit = async (
-          actionId: string,
+          actionAlias: string,
           input: unknown,
           options: {
             idempotencyKey?: string;
@@ -188,14 +188,14 @@ export function createServerFacadeFetchHandler(
           } = {},
         ) => {
           const entry = Object.entries(application.plugins.actions).find((
-            [, action],
-          ) => action.id === actionId);
+            [alias],
+          ) => alias === actionAlias);
           if (!entry) {
             throw appError(404, "action_not_found", "Action was not found.");
           }
           const target = {
             ...endpoint,
-            id: actionId,
+            id: entry[1].id,
             actionAlias: entry[0],
             inputSchema: entry[1].inputSchema,
           };
@@ -257,15 +257,32 @@ export function createServerFacadeFetchHandler(
             }) as {
               operationId: string;
             };
-            for (;;) {
-              context.serverSignal.throwIfAborted();
-              const result = await operationResult(
-                application,
-                context,
-                receipt.operationId,
-              );
-              if (result.status !== 202) return result.data;
-              await new Promise((resolve) => setTimeout(resolve, 25));
+            const runtime = context.databaseSchema
+              ? await application.databaseScope(context.databaseSchema)
+              : application;
+            // Subscribe before the first read so completion cannot be lost
+            // between observing the current state and waiting for a change.
+            const changes = await runtime.operations.watch(
+              receipt.operationId,
+              {
+                namespace: context.namespace,
+              },
+            );
+            try {
+              for (;;) {
+                context.serverSignal.throwIfAborted();
+                const result = await operationResult(
+                  application,
+                  context,
+                  receipt.operationId,
+                );
+                if (result.status !== 202) return result.data;
+                while (!await changes.wait({ signal: context.serverSignal })) {
+                  context.serverSignal.throwIfAborted();
+                }
+              }
+            } finally {
+              changes.close();
             }
           },
           operations: {

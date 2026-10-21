@@ -74,7 +74,7 @@ function ClearConversation(
       confirmLabel="Clear messages"
       destructive
       onConfirm={async () => {
-        await ctx.actions.deleteMessages({ threadId }).result();
+        await ctx.actions.deleteThreadMessages({ threadId }).result();
         return true;
       }}
     />

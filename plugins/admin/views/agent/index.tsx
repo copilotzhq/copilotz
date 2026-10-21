@@ -22,7 +22,10 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   modes: ["full", "panel", "dialog"],
   render({ id }, ctx) {
     // Agents are public Resources exposed through the authorized query Action.
-    const state = ctx.readAction("adminAgents", {
+    const aliases = ctx.resources.admin?.actionAliases as
+      | Readonly<Record<string, string>>
+      | undefined;
+    const state = ctx.readAction(aliases?.agents ?? "adminAgents", {
       resource: "agents",
       method: "GET",
       query: { limit: "100" },

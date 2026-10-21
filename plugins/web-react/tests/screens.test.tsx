@@ -49,7 +49,11 @@ test("React adapter server renders tracked chat/admin/usage screens in both dens
     });
   publish("thread", undefined, [{ id: "t", name: "A conversation" }], "t");
   publish("thread", { limit: 100 }, [{ id: "t", name: "A conversation" }]);
-  publish("message", { where: { threadId: "t" }, limit: 100 }, [{
+  publish("message", {
+    where: { threadId: "t" },
+    order: { field: "createdAt", direction: "desc" },
+    limit: 100,
+  }, [{
     id: "m",
     content: [{
       assetId: "body",

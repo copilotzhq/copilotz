@@ -13,6 +13,7 @@ import {
   Screen,
   Textarea,
 } from "@copilotz/copilotz/web/kit";
+import { monotonicUlid } from "../../../../dependencies/ulid.ts";
 function Revise(
   { id, threadId, ctx }: {
     id: string;
@@ -39,7 +40,7 @@ function Revise(
       onSubmit={(event) => {
         event.preventDefault();
         ctx.actions.reviseMessage({
-          id: crypto.randomUUID(),
+          id: monotonicUlid(),
           messageId: id,
           threadId,
           content: [{ type: "text", text }],

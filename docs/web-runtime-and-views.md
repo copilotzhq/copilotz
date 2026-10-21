@@ -428,7 +428,12 @@ const codec = {
 Threads display and create the Collection's `name`. `/core/web` exports
 `messageReadSelection` (the bounded text content options) and
 `readThreadMessages(ctx, threadId)` (the canonical thread query using those
-options). Apps reuse these in tracked View rendering.
+options). Apps reuse these in tracked View rendering. `readThreadMessages`
+subscribes to the thread's newest 100 messages by `createdAt` and returns them
+oldest first, ordered by creation time and then id, the same order Core history
+uses. Message ids are not a timeline: client-written messages use time-ordered
+ids, but agent replies and tool results use ids derived from the work that
+produced them.
 
 `createAdminWebPlugin({ actionAliases: { agents: "auditAgents" } })` uses the
 same composition aliases as the server; omitted aliases retain the standard

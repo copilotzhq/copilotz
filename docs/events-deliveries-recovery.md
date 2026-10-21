@@ -83,6 +83,14 @@ create no delivery. Its states are `pending`, `leased`, `retry_wait`,
 - **Bounded retries.** An unknown error is retryable: the delivery waits in
   `retry_wait` and runs again until it succeeds or uses its attempts. Then it is
   `dead_letter`, and an inheriting operation fails.
+- **Dead letters are logged.** Every move to `dead_letter`, including a final
+  attempt whose lease expired, writes one JSON line to `console.error` after it
+  commits: `severity: "ERROR"`, `message: "[copilotz] Delivery dead-lettered"`,
+  the `consumerId` (such as `processor:copilotz.core.message-to-llm-call`),
+  `operationId`, `deliveryId`, `eventId`, `databaseSchema`, `attempts`,
+  `maxAttempts` and `error: { code?, name, message }`. The line never carries
+  the Event, its input or a stack, and the message gets the same credential
+  masking as diagnostics.
 - **Non-retryable failures.** Wrap a deterministic failure with
   `markNonRetryable(error)` to dead-letter it on the current attempt. Collection
   schema-validation errors are already marked.

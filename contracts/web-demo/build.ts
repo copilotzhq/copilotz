@@ -1,6 +1,6 @@
 /**
  * Builds the demo: `deno run -A contracts/web-demo/build.ts` writes
- * `contracts/web-demo/dist/` (bundle, stylesheet and page). Serve that
+ * `contracts/web-demo/dist/` (entry and chunks, stylesheet, fonts and page). Serve that
  * folder from any static server on localhost.
  * @module
  */
@@ -17,14 +17,19 @@ const run = async (args: string[]) => {
   }).output();
   if (!result.success) throw new Error(`Failed: deno ${args.join(" ")}`);
 };
+// Code splitting keeps math and code highlighting in their own chunks, which
+// Markdown loads on first use.
+await Deno.remove(out, { recursive: true }).catch(() => {});
+await Deno.mkdir(out, { recursive: true });
 await run([
   "bundle",
   "--platform=browser",
   "--node-modules-dir=auto",
   "--minify",
+  "--code-splitting",
   "contracts/web-demo/main.tsx",
-  "--output",
-  "contracts/web-demo/dist/demo.js",
+  "--outdir",
+  "contracts/web-demo/dist",
 ]);
 await run([
   "run",

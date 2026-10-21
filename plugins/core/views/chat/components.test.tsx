@@ -11,6 +11,7 @@ import {
   Input,
   Markdown,
   NameDescriptionDialog,
+  preloadMarkdown,
 } from "@copilotz/copilotz/web/kit";
 import { AssistantActivity, toolLabel } from "./activity.tsx";
 import { MessageGroup } from "./message.tsx";
@@ -234,10 +235,28 @@ test("the name and description editor starts from the record", () => {
   assert.equal(html, "");
 });
 
-test("math renders with KaTeX and a MathML copy; it can never carry a link", () => {
+test("before KaTeX and highlighting load, math shows its source and code stays plain", () => {
   const html = renderToStaticMarkup(
     <Markdown>
-      {"Inline $p = \\frac{c}{v}$ and\n\n$$\n\\href{https://evil.example}{x}\n$$"}
+      {"Inline $p = \\frac{c}{v}$ and\n\n$$\nx^2\n$$\n\n```ts\nconst a = 1;\n```"}
+    </Markdown>,
+  );
+  assert.match(html, /data-slot="math-pending"[^>]*>p = \\frac\{c\}\{v\}</);
+  assert.match(
+    html,
+    /class="math-pending-display"/,
+    "display math keeps its box",
+  );
+  assert.ok(!html.includes("katex"));
+  assert.ok(html.includes('data-slot="code-block"'), "code keeps its block");
+  assert.ok(!html.includes("hljs"));
+});
+
+test("math renders with KaTeX and a MathML copy; it can never carry a link", async () => {
+  await preloadMarkdown();
+  const html = renderToStaticMarkup(
+    <Markdown>
+      {"Inline $p = \\frac{c}{v}$ and\n\n$$\n\\href{https://evil.example}{x}\n$$\n\n```ts\nconst a = 1;\n```"}
     </Markdown>,
   );
   assert.ok(html.includes('class="katex"'), html);
@@ -245,4 +264,5 @@ test("math renders with KaTeX and a MathML copy; it can never carry a link", () 
   assert.ok(html.includes('class="katex-display"'), "fenced math is display");
   assert.ok(!html.includes('evil.example"'), "no link from math");
   assert.ok(!/<a\s/.test(html));
+  assert.ok(html.includes("hljs-keyword"), "code is highlighted once loaded");
 });

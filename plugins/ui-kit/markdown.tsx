@@ -4,18 +4,57 @@
 "use client";
 /** The one Markdown renderer: GFM, highlighting, math and the URL policy. @module */
 import * as React from "react";
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useReducer, useState } from "react";
 import ReactMarkdown, { type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-// @ts-types="./rehype-highlight.d.ts"
-import rehypeHighlight from "rehype-highlight";
 import { Check, Copy } from "lucide-react";
 import { markdownUrlPolicy } from "@copilotz/copilotz/web";
 import { cn } from "./utils.ts";
 
 type Plugins = NonNullable<Options["remarkPlugins"]>;
+type RehypePlugin = NonNullable<Options["rehypePlugins"]>[number];
+
+// Math (KaTeX) and code highlighting are the heaviest parts of Markdown, so
+// they load on first use. Until then math shows its source and code shows
+// plain, in boxes of the same shape, so nothing moves when they arrive.
+let mathPlugin: RehypePlugin | undefined;
+let highlightPlugin: RehypePlugin | undefined;
+let mathLoad: Promise<void> | undefined;
+let highlightLoad: Promise<void> | undefined;
+let prefetched = false;
+
+function loadMath(): Promise<void> {
+  return mathLoad ??= import("./markdown-math.ts").then((module) => {
+    mathPlugin = module.mathPlugin;
+  }, (cause) => {
+    mathLoad = undefined; // A later render tries again.
+    throw cause;
+  });
+}
+
+function loadHighlight(): Promise<void> {
+  return highlightLoad ??= import("./markdown-highlight.ts").then(
+    (module) => {
+      highlightPlugin = module.highlightPlugin;
+    },
+    (cause) => {
+      highlightLoad = undefined;
+      throw cause;
+    },
+  );
+}
+
+/**
+ * Load math and code highlighting now; `Markdown` otherwise loads each on
+ * first use. Server rendering and tests await it to render them at once.
+ */
+export function preloadMarkdown(): Promise<void> {
+  return Promise.all([loadMath(), loadHighlight()]).then(() => {});
+}
+
+const MATH = /\$/;
+const FENCE = /(^|\n)\s*(```|~~~)/;
 
 /**
  * Extra unified plugins an app contributes through
@@ -107,18 +146,22 @@ function CodeBlock(
 }
 
 const remarkBuiltIns: Plugins = [remarkGfm, remarkMath];
-// KaTeX's own HTML and fonts render the same everywhere; the MathML copy is
-// for assistive technology. `trust: false` refuses `\href`, `\url` and HTML
-// extensions, so math can never carry a link or markup.
-const katex = [
-  rehypeKatex,
-  { output: "htmlAndMathml", throwOnError: false, trust: false },
-] as const;
-const highlight = [rehypeHighlight, { detect: false }] as const;
+
+function MathSource(
+  { children, display }: { children?: React.ReactNode; display: boolean },
+): React.ReactElement {
+  return display
+    ? (
+      <div data-slot="math-pending" className="math-pending-display">
+        {children}
+      </div>
+    )
+    : <span data-slot="math-pending" className="math-pending">{children}</span>;
+}
 
 /**
  * Raw HTML is discarded, math renders with KaTeX (its fonts come with the kit
- * stylesheet) and code is escaped text,
+ * stylesheet; it loads on first use) and code is escaped text,
  * highlighted once a message settles. URLs follow `markdownUrlPolicy`: unsafe
  * links are dropped, links open in a new tab without a referrer, and an image
  * that may not load renders as its alt text and is never fetched.
@@ -145,15 +188,41 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
       ],
       [plugins],
     );
-    const highlighted = !streaming && /(^|\n)\s*(```|~~~)/.test(children);
+    const math = MATH.test(children);
+    const highlighted = !streaming && FENCE.test(children);
+    const [, loaded] = useReducer((count: number) => count + 1, 0);
+    useEffect(() => {
+      let live = true;
+      const loads = [
+        ...(math && !mathPlugin ? [loadMath()] : []),
+        ...(highlighted && !highlightPlugin ? [loadHighlight()] : []),
+      ];
+      if (loads.length) {
+        Promise.all(loads).then(() => live && loaded(), () => {});
+      }
+      if (!prefetched) {
+        // Once any Markdown is on screen, fetch the rest when idle.
+        prefetched = true;
+        const idle = (globalThis as {
+          requestIdleCallback?: (callback: () => void) => unknown;
+        }).requestIdleCallback ??
+          ((callback: () => void) => setTimeout(callback, 2000));
+        idle(() => void preloadMarkdown().catch(() => {}));
+      }
+      return () => {
+        live = false;
+      };
+    }, [math, highlighted]);
+    const katex = math ? mathPlugin : undefined;
+    const highlight = highlighted ? highlightPlugin : undefined;
     const rehypePlugins = useMemo(
       () =>
         [
-          katex,
-          ...(highlighted ? [highlight] : []),
+          ...(katex ? [katex] : []),
+          ...(highlight ? [highlight] : []),
           ...(plugins ?? []).flatMap((plugin) => plugin.rehypePlugins ?? []),
         ] as NonNullable<Options["rehypePlugins"]>,
-      [highlighted, plugins],
+      [katex, highlight, plugins],
     );
     return (
       <div
@@ -183,15 +252,28 @@ export const Markdown: React.NamedExoticComponent<MarkdownProps> = memo(
                   {alt || "Image not loaded"}
                 </span>
               ),
-            pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+            pre: ({ children }) => {
+              const code = React.Children.toArray(children).find(
+                React.isValidElement,
+              ) as React.ReactElement<{ className?: string }> | undefined;
+              // Display math waiting for KaTeX is not a code block.
+              return /\bmath-display\b/.test(code?.props.className ?? "")
+                ? <>{children}</>
+                : <CodeBlock>{children}</CodeBlock>;
+            },
             table: ({ children }) => (
               <div data-slot="table">
                 <table>{children}</table>
               </div>
             ),
-            code: ({ children, className }) => (
-              <code className={className}>{children}</code>
-            ),
+            code: ({ children, className }) =>
+              /\bmath-(inline|display)\b/.test(className ?? "")
+                ? (
+                  <MathSource display={/\bmath-display\b/.test(className!)}>
+                    {children}
+                  </MathSource>
+                )
+                : <code className={className}>{children}</code>,
           }}
         >
           {children}

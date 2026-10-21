@@ -464,6 +464,13 @@ and never as an `img`. Chat reads the allowlist from
 `resources.markdown.imageOrigins`, and extra remark/rehype plugins from
 `adapters.markdown`; a streaming reply skips highlighting until it settles.
 
+Math (KaTeX) and code highlighting load on first use, through dynamic imports,
+so a bundler with code splitting keeps them out of the first load. Until they
+arrive, math shows its source and code shows plain text, in boxes of the same
+shape, so the page does not shift. Once any Markdown is on screen the rest is
+fetched when the browser is idle. `preloadMarkdown()` loads both at once, for
+server rendering and tests.
+
 Chat opts into the existing Collection content read contract for text bodies,
 with an aggregate 256 KiB limit. Non-text assets remain explicit references that
 the message View loads on demand through `adapters.core.feed.asset`. The live

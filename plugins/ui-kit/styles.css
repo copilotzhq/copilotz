@@ -235,6 +235,20 @@
   overflow-y: hidden;
   padding-block: 0.25rem;
 }
+/* Math source shown until KaTeX loads, in the box KaTeX will fill. */
+.prose .math-pending {
+  font-size: 1.1em;
+  color: var(--muted-foreground);
+}
+.prose .math-pending-display {
+  margin-block: 1em;
+  min-height: 2.75em;
+  overflow-x: auto;
+  padding-block: 0.25rem;
+  text-align: center;
+  white-space: pre-wrap;
+  color: var(--muted-foreground);
+}
 .prose .hljs-keyword,
 .prose .hljs-selector-tag,
 .prose .hljs-built_in,

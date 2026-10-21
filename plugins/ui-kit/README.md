@@ -23,7 +23,8 @@ can name icons in resources.
 code, and applies `markdownUrlPolicy` from `@copilotz/copilotz/web`: it discards
 raw HTML, drops unsafe links, opens links in a new tab without a referrer, and
 loads only relative, same-origin or `imageOrigins` images. Any other image
-renders as its alt text and is never fetched.
+renders as its alt text and is never fetched. Math and highlighting load on
+first use (`preloadMarkdown()` loads them at once).
 
 Process `styles.css` with Tailwind CSS 4, `@tailwindcss/typography` and
 `tw-animate-css`. It imports KaTeX's stylesheet; serve `katex/dist/fonts` at

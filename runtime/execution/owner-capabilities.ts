@@ -9,7 +9,10 @@ import type {
   OwnerSessionSource,
 } from "./types.ts";
 import { ownerExecutionInterrupted } from "./owner-interruption.ts";
-import { collectionReceiptInvocation } from "../authorization/invocation.ts";
+import {
+  collectionReceiptInvocation,
+  withContextCollectionInvocation,
+} from "../authorization/invocation.ts";
 import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,
@@ -159,7 +162,12 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
       ].includes(leaf);
   }
   if (snapshot) return false;
-  if (root === "directory") return path.length === 2 && method === "get";
+  if (root === "authentication") {
+    return path.length === 2 && method === "verify";
+  }
+  if (root === "directory") {
+    return path.length === 2 && ["get", "command"].includes(method);
+  }
   if (root === "actions") {
     return path.length === 2 ||
       path.length === 3 && leaf === "prepare";
@@ -1216,7 +1224,9 @@ export function createOwnerCapabilityHost(
                   !(operation.path.length === 2 &&
                     (root === "sessions" &&
                         ["create", "revoke"].includes(operation.path[1]) ||
-                      root === "flows" && operation.path[1] === "start")) &&
+                      root === "flows" && operation.path[1] === "start" ||
+                      root === "directory" &&
+                        operation.path[1] === "command")) &&
                   !(operation.path.length === 2 &&
                     ["relations", "vectors"].includes(root) &&
                     operation.path[1] === "upsert")
@@ -1339,7 +1349,10 @@ export function createOwnerCapabilityHost(
           ]
           : args;
         const executeCall = async () =>
-          await callPath(invocation.context, path, callArgs);
+          await withContextCollectionInvocation(
+            invocation.context,
+            () => callPath(invocation.context, path, callArgs),
+          );
         try {
           const value = path[0] === "protectedEvent"
             ? await protectedEventResolverFrom(invocation.context)?.()

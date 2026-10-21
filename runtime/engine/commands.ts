@@ -74,6 +74,31 @@ export type CommandRequest<Input> = Readonly<{
   receipt?: Readonly<{ identity: CommandIdentity; intent: CommandJson }>;
 }>;
 
+const executingCommand = /* @__PURE__ */ createAsyncContextStorage<
+  CommandContext
+>();
+/** Capabilities with external effects cannot join an owner transaction. */
+export const currentOwnerCommand = () => executingCommand.getStore();
+
+/** Join an already attached local owner through its durable database identity. */
+export async function attachedDatabaseOwner(
+  transaction: SqlExecutor,
+  schema: string,
+): Promise<DatabaseOwner> {
+  const row =
+    (await transaction.query<{ epoch: number | string; holder: string }>(
+      `UPDATE "${schema}".owner_epochs SET holder=holder WHERE owner='schema' RETURNING epoch,holder`,
+    )).rows[0];
+  const owner = row && localOwners.get(row.holder)?.deref()?.owner;
+  if (
+    !owner || owner.state === "stopped" || owner.epoch !== Number(row.epoch)
+  ) {
+    throw new Error("Directory owner is not attached to this database.");
+  }
+  owner.signal.throwIfAborted();
+  return owner;
+}
+
 function failure(code: string, message: string, cause?: unknown): Error {
   return Object.assign(new Error(message, { cause }), { code });
 }
@@ -171,7 +196,12 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   const capacity = options.maxQueue ?? 1024;
   const groupCount = options.maxGroupCount ?? 32;
   const groupBytes = options.maxGroupBytes ?? 1024 * 1024;
-  const activeCommand = createAsyncContextStorage<CommandContext>();
+  const commandStorage = createAsyncContextStorage<CommandContext>();
+  const activeCommand = {
+    getStore: () => commandStorage.getStore(),
+    run: <T>(context: CommandContext, run: () => T): Promise<Awaited<T>> =>
+      commandStorage.run(context, () => executingCommand.run(context, run)),
+  };
   const publicationCapacity = options.maxPublications ?? 1024;
   if (
     !Number.isSafeInteger(groupCount) || groupCount < 1 ||

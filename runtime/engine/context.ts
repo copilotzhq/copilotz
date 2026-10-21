@@ -478,6 +478,18 @@ export function createProcessorContext(
             vectors,
             sessions,
             flows,
+            directory: {
+              command: async (
+                alias: string,
+                input: unknown,
+                call: { operationKey: string },
+              ) => {
+                if (!options.directory) {
+                  throw new Error("Directory commands unavailable.");
+                }
+                await options.directory.command(alias, input, call);
+              },
+            },
           } as const,
         );
       },
@@ -578,8 +590,15 @@ export function createProcessorContext(
     content,
     streams,
     collections,
+    authentication: options.authentication ??
+      {
+        verify: () =>
+          Promise.reject(new Error("Identity verification unavailable.")),
+      },
     directory: options.directory ?? {
       get: () => Promise.reject(new Error("Directory reads are unavailable.")),
+      command: () =>
+        Promise.reject(new Error("Directory commands unavailable.")),
     },
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,

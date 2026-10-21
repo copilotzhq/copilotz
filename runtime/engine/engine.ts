@@ -1,6 +1,11 @@
 import { retainedAuthority } from "../authorization/authority.ts";
-import { hostIngressProof } from "../application/ingress/authority.ts";
+import { createDirectoryReader } from "../authorization/directory-read.ts";
 import {
+  hostIngressProof,
+  ownerIngressEvidence,
+} from "../application/ingress/authority.ts";
+import {
+  authorizationRefused,
   captureOwnerAuthorization,
   collectionAuthorizations,
 } from "../authorization/evaluator.ts";
@@ -407,6 +412,13 @@ export async function createCopilotzEngine(
         ? retainedAuthority(invocationIngress.authority)
         : undefined;
       return createProcessorContext({
+        directory: createDirectoryReader({
+          session: scopedStore.session,
+          databaseSchema: base.databaseSchema,
+          registration: options.authorization,
+          collections: options.registry.collections,
+          actions: options.registry.actions,
+        }),
         collectionInvocation: {
           owner: {
             ...(invocationAuthority ? { authority: invocationAuthority } : {}),
@@ -417,6 +429,7 @@ export async function createCopilotzEngine(
             direct: base.source?.consumerId ===
               SERVER_COLLECTION_MUTATION_RELAY_CONSUMER,
             logicalRunId: base.idempotencyKey,
+            operationId: base.settlementScopeId,
             scope: {
               databaseSchema: base.databaseSchema,
               namespace: base.event.namespace,
@@ -586,6 +599,9 @@ export async function createCopilotzEngine(
           async start(input) {
             base.signal.throwIfAborted();
             const ingress = hostIngressProof();
+            if (ownerIngressEvidence(ingress)?.authority?.flow) {
+              authorizationRefused();
+            }
             if (
               typeof input.operationKey !== "string" ||
               !input.operationKey.trim() ||

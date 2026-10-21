@@ -39,9 +39,58 @@ export async function checkFlow(
     ) authorizationRefused();
     return;
   }
+  const invocation = intent.invocation;
+  const receipts = `"${authority.scope.databaseSchema}".owner_receipts`;
+  const key = (runId: string) =>
+    JSON.stringify([
+      "flow.descendant",
+      authority.scope.namespace,
+      authority.scope.tenant,
+      flow.id,
+      runId,
+    ]);
+  const descendant = async (runId: string, actionId?: string) => {
+    const receipt = (await command.transaction.query<{
+      intent: { root: string; operation: string; action: string };
+    }>(
+      `SELECT intent FROM ${receipts} WHERE owner='schema' AND domain='logical' AND key=$1 AND kind='flow.descendant'`,
+      [key(runId)],
+    )).rows[0];
+    return !!receipt && receipt.intent.root === row.consumed_run &&
+      receipt.intent.operation === row.accepted_operation &&
+      (!actionId || receipt.intent.action === actionId);
+  };
   if (intent.kind === "action") {
     if (intent.operation === "admit" && intent.resource === flow.continuation) {
       return;
+    }
+    if (
+      row.consumed_run && row.accepted_operation &&
+      invocation?.kind === "action" && invocation.runId &&
+      intent.sourceOperationId === row.accepted_operation
+    ) {
+      if (await descendant(invocation.runId, invocation.id)) return;
+      if (
+        intent.operation === "capture" && invocation.parentRunId &&
+        (invocation.parentRunId === row.consumed_run ||
+          await descendant(invocation.parentRunId))
+      ) {
+        // The owner supplies the frame; policy and input capture share this
+        // transaction, so a refused child cannot leave a delegation receipt.
+        await command.transaction.query(
+          `INSERT INTO ${receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical',$1,'runtime','flow.descendant',$2::jsonb,'{}'::jsonb)`,
+          [
+            key(invocation.runId),
+            JSON.stringify({
+              root: row.consumed_run,
+              operation: row.accepted_operation,
+              parent: invocation.parentRunId,
+              action: invocation.id,
+            }),
+          ],
+        );
+        return;
+      }
     }
     if (
       intent.resource !== flow.continuation || !intent.invocation?.runId ||
@@ -62,10 +111,13 @@ export async function checkFlow(
     }
     return;
   }
-  // Only the owner-resolved continuation can exercise its granted internal writes.
+  // Only the consumed continuation and its admitted descendants may exercise
+  // internal capabilities. Every effect still passes the product's policy.
   if (
-    intent.invocation?.runId && row.consumed_run === intent.invocation.runId &&
-    ["collection", "session", "asset"].includes(intent.kind)
+    invocation?.kind === "action" && invocation.runId && row.consumed_run &&
+    ["collection", "session", "asset", "directory"].includes(intent.kind) &&
+    (row.consumed_run === invocation.runId ||
+      await descendant(invocation.runId, invocation.id))
   ) return;
   authorizationRefused();
 }

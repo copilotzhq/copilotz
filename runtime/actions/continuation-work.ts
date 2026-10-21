@@ -1,3 +1,4 @@
+import { authorizationRefused } from "../authorization/evaluator.ts";
 import type { OwnerIngressProof } from "../application/ingress/authority.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
@@ -183,17 +184,24 @@ export async function startAwaitedOperation(
     );
   }
   const parent = await tx.query<
-    { metadata: Record<string, unknown>; observation_keys: string[] }
+    {
+      metadata: Record<string, unknown>;
+      observation_keys: string[];
+      flow: unknown;
+    }
   >(
     `SELECT operation.metadata,
+      (SELECT authority -> 'flow' FROM ${store.tables.authorization_invocations}
+       WHERE namespace=$1 AND run_id=$3) AS flow,
       ARRAY(SELECT DISTINCT key FROM unnest(operation.observation_keys ||
         ARRAY(SELECT jsonb_array_elements_text(COALESCE(event.metadata -> 'observationKeys', '[]'::jsonb)))) AS key ORDER BY key) AS observation_keys
       FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
       WHERE operation.namespace = $1 AND operation.operation_id = $2
       AND operation.state IN ('accepted','running') AND operation.cancellation_requested_at IS NULL`,
-    [namespace, parentId],
+    [namespace, parentId, data.actionRunId],
   );
   if (!parent.rows[0]) throw new ActionOwnershipLost(data.actionRunId);
+  if (data.start && parent.rows[0].flow) authorizationRefused();
   let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;
   const existing = await tx.query<
     {

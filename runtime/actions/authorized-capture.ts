@@ -212,11 +212,14 @@ export function createAuthorizedActions(
       kind: "action",
       resource: alias(frame.actionId)!,
       operation: firstCapture ? "capture" : "authorize",
-      sourceOperationId: resolved.ancestors[0]?.event.id ?? resolved.event.id,
+      sourceOperationId: source.operationId ?? source.eventId,
       invocation: {
         kind: "action",
         id: frame.actionId,
         runId: frame.actionRunId,
+        ...(frame.parentActionRunId
+          ? { parentRunId: frame.parentActionRunId }
+          : {}),
       },
       input,
     }, command);

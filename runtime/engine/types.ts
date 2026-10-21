@@ -357,6 +357,7 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  directory?: import("../authorization/directory-read.ts").DirectoryReader;
   collectionInvocation?: Readonly<{
     owner: Parameters<
       typeof import("../authorization/invocation.ts").bindProcessorCollectionInvocation

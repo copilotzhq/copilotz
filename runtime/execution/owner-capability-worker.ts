@@ -1,4 +1,10 @@
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
+import {
+  bindWorkerCollectionInvocation,
+  closeCollectionPolicyInvocation,
+  withContextCollectionInvocation,
+} from "../authorization/invocation.ts";
+import { standardActionError } from "../actions/errors.ts";
 /** The single worker execution path for in-process and WebSocket placement. */
 import type { WorkerWorkHandler } from "../../dependencies/oxian-worker.ts";
 import { isHostCallError } from "../../dependencies/oxian-work.ts";
@@ -24,6 +30,9 @@ type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Request = (call: CapabilityCall, signal?: AbortSignal) => Promise<unknown>;
 const MAX_ACTIVE_INVOCATIONS = 256;
+function authorizationRefused(): never {
+  throw standardActionError({ code: "forbidden", status: 403 })!;
+}
 
 function signalFrom(args: readonly unknown[]): AbortSignal | undefined {
   for (const argument of args) {
@@ -450,12 +459,13 @@ function workerContext(options: {
       return [alias, caller];
     }),
   );
-  const context = withProtectedEventResolver({
+  const rawContext = withProtectedEventResolver({
     ...invocation.scope,
     resources: registry.resources,
     adapters: registry.adapters,
     actions,
     collections: collections(),
+    directory: { get: (...args: unknown[]) => rpc(["directory", "get"], args) },
     content: {
       ...methods([
         "authorize",
@@ -511,6 +521,42 @@ function workerContext(options: {
     transaction,
     readSnapshot,
   }, () => rpc(["protectedEvent"], []));
+  const scope = {
+    databaseSchema: String(invocation.scope.databaseSchema),
+    namespace: String(invocation.scope.namespace),
+  };
+  const action = invocation.scope.action as
+    | { id: string; runId: string; parentRunId?: string }
+    | undefined;
+  const context = bindWorkerCollectionInvocation(
+    rawContext,
+    {
+      scope,
+      signal,
+      resolveSource: () =>
+        Promise.reject(capabilityError("owner_source_required")),
+      callHostCapability(path, args, destination) {
+        check();
+        if (
+          destination.databaseSchema !== scope.databaseSchema ||
+          destination.namespace !== scope.namespace
+        ) authorizationRefused();
+        const input = (args[1] ?? {}) as RecordValue;
+        const translated: RecordValue = {};
+        for (const [key, value] of Object.entries(input)) {
+          if (key === "databaseSchema" || key === "namespace") continue;
+          if (!["idempotencyKey", "metadata", "signal"].includes(key)) {
+            authorizationRefused();
+          }
+          translated[key === "idempotencyKey" ? "operationKey" : key] = value;
+        }
+        return rpc(path, [args[0], translated]);
+      },
+    },
+    action
+      ? { kind: "action", ...action }
+      : { kind: "processor", id: invocation.alias, runId: invocation.context },
+  );
   return {
     context,
     async drain() {
@@ -519,6 +565,7 @@ function workerContext(options: {
     },
     stop() {
       stopped = true;
+      closeCollectionPolicyInvocation(context);
     },
   };
 }
@@ -613,9 +660,13 @@ export function createOwnerWorkerWorkloads(
         if (typeof handler !== "function") {
           throw capabilityError("owner_definition_unavailable");
         }
-        const value = invocation.kind === "prepare"
-          ? await (handler as () => unknown)()
-          : await (handler as Method)(...invocation.args, local.context);
+        const value = await withContextCollectionInvocation(
+          local.context,
+          () =>
+            invocation.kind === "prepare"
+              ? (handler as () => unknown)()
+              : (handler as Method)(...invocation.args, local.context),
+        );
         await local.drain();
         await request({ kind: "complete", id: invocation.id, value });
       } catch (error) {

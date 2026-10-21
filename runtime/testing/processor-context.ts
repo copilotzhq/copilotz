@@ -49,6 +49,7 @@ export function createTestProcessorContext(
     adapters: {} as const,
     actions: {} as const,
     collections: {} as const,
+    directory: { get: unavailable },
     vectors: { search: unavailable },
     content,
     operations: { start: unavailable },

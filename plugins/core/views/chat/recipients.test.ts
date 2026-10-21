@@ -46,6 +46,18 @@ test("a mention addresses exactly the mentioned agents", () => {
   );
 });
 
+test("explicit human mentions remain recipients alongside Agent mentions", () => {
+  assert.deepEqual(
+    resolveRecipients({
+      mentioned: ["person", "p-north", "agent:east"],
+      threadAgents: [north],
+      configured,
+      policy: "first",
+    }),
+    { recipientIds: ["person", "p-north"], agents: [configured[2]] },
+  );
+});
+
 test("without a mention, `first` addresses the default agent only; `all` leaves Core's default", () => {
   const base = { mentioned: [], configured };
   // The flagged default, when it is in the thread.

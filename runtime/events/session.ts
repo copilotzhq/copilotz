@@ -1,5 +1,6 @@
 import { bindSqlDatabaseIdentity } from "./database-identity.ts";
 import { createEventStoreError } from "./errors.ts";
+import { retainReadSnapshotKind } from "./snapshot-kind.ts";
 
 export type SqlQueryResult<TRow extends Record<string, unknown>> = {
   rows: TRow[];
@@ -251,11 +252,15 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
   const transaction: SqlSession["transaction"] = (operation) =>
     runSqlTransaction(atomic, operation);
 
+  const withReadSnapshot = typeof database.withReadSnapshot === "function"
+    ? database.withReadSnapshot.bind(database)
+    : undefined;
+  if (withReadSnapshot) {
+    retainReadSnapshotKind(withReadSnapshot, database.withReadSnapshot!);
+  }
   return bindSqlDatabaseIdentity({
     query,
-    ...(typeof database.withReadSnapshot === "function"
-      ? { withReadSnapshot: database.withReadSnapshot.bind(database) }
-      : {}),
+    ...(withReadSnapshot ? { withReadSnapshot } : {}),
     transaction,
     async readSnapshot(operation) {
       return await transaction(async (snapshot) => {

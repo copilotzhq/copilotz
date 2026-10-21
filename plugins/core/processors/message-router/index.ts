@@ -290,11 +290,32 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const routedRecipients = new Set(
         stringArray(coreEvent(event).routing?.recipientIds),
       );
-      for (
-        const recipientId of new Set(
-          stringArray(record.recipientIds).filter(
-            (id) => routedRecipients.has(id),
+      const recipientIds = [
+        ...new Set(
+          stringArray(record.recipientIds).filter((id) =>
+            routedRecipients.has(id)
           ),
+        ),
+      ];
+      // Addressing a Participant does not imply an Agent turn. Keep the Message's
+      // recipients intact for conversation/channel delivery and select inference
+      // recipients from current, authorized records before preparing an Action.
+      const agentRecipients = new Set<string>();
+      for (let offset = 0; offset < recipientIds.length; offset += 1_000) {
+        const batch = recipientIds.slice(offset, offset + 1_000);
+        const participants = await context.collections.participant.list({
+          where: { id: { in: batch } },
+          limit: batch.length,
+        });
+        for (const participant of participants) {
+          if (participant.participantType === "agent") {
+            agentRecipients.add(String(participant.id));
+          }
+        }
+      }
+      for (
+        const recipientId of recipientIds.filter((id) =>
+          agentRecipients.has(id)
         )
       ) {
         const continuationKey = workflow?.kind === "tool_result"

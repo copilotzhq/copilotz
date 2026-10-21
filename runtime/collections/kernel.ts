@@ -35,6 +35,7 @@ import {
 } from "../engine/command-authorization.ts";
 import { collectionCommandReceipt } from "./command-receipt.ts";
 import { withSnapshotControl } from "./snapshot-control.ts";
+import { usesExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 import { isPendingContentRef } from "../content/schema.ts";
 import { syncCollectionAlarm } from "./alarms.ts";
 import {
@@ -4534,18 +4535,22 @@ export function createCollectionKernel(
         }
       });
     };
-    let exclusive = false;
-    const value = await options.session.withReadSnapshot(async (session) => {
-      if (session.kind === "exclusive" && options.policies?.size) {
-        exclusive = true;
-        return undefined;
-      }
-      return await select({ ...session, cleanup: cleanup.promise });
-    }, { onCleanup: cleanup.resolve });
-    if (!exclusive) return value as T;
+    let exclusive = usesExclusiveReadSnapshot(options.session.withReadSnapshot);
+    if (!exclusive) {
+      const value = await options.session.withReadSnapshot(async (session) => {
+        if (session.kind === "exclusive" && options.policies?.size) {
+          exclusive = true;
+          return undefined;
+        }
+        return await select({ ...session, cleanup: cleanup.promise });
+      }, { onCleanup: cleanup.resolve });
+      if (!exclusive) return value as T;
+    }
     // An exclusive backend cannot open a second owner command while its
     // snapshot holds the connection. The acquired owner command itself provides
     // the consistent read scope and evaluates policy in that same transaction.
+    // Known managed PGlite uses this boundary directly: its native raw-snapshot
+    // certification excludes extension configurations such as vector storage.
     const released = Promise.withResolvers<
       import("../events/session.ts").SqlSnapshotCleanup
     >();

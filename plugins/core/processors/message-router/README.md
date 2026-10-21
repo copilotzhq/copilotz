@@ -12,6 +12,11 @@ Agent turns need durable prompt construction and LLM invocation.
 
 It is installed by `corePlugin` and reacts to `message.created`.
 
+Explicit recipient IDs address Participants. Only currently readable Agent
+recipients start LLM turns. Human, Tool, and Job recipients remain on the stored
+Message for conversation and channel delivery; a mixed list starts turns only
+for its Agents. Omitted recipients still default to the Thread's Agents.
+
 ## How it works
 
 It builds participant-relative history, resolves an Agent's dynamic instructions

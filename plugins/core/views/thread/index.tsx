@@ -26,6 +26,7 @@ import {
   type ChatSelf,
   presentTools,
   readSenders,
+  withLoadedBodies,
   withLoadedResults,
 } from "../chat/context.tsx";
 import { MessageGroup } from "../chat/message.tsx";
@@ -173,13 +174,16 @@ const view: ViewDefinition<
         ),
       ),
     ]);
-    const persisted = withLoadedResults(
+    const persisted = withLoadedBodies(
       ctx,
-      projectMessages(
-        rows,
-        (sender) =>
-          senders.get(sender) ??
-            { id: sender, type: "system", name: "Unknown" },
+      withLoadedResults(
+        ctx,
+        projectMessages(
+          rows,
+          (sender) =>
+            senders.get(sender) ??
+              { id: sender, type: "system", name: "Unknown" },
+        ),
       ),
     );
     const known = new Set(rows.map((row) => row.id));
@@ -229,6 +233,13 @@ const view: ViewDefinition<
           tools={tools}
           labels={config.labels}
           loadAsset={loadAsset}
+          onLoadBody={(messageId, assetId) =>
+            void ctx.actions.chatLoadBody?.({
+              threadId: id,
+              messageId,
+              assetId,
+            })
+              .result().catch(() => {})}
           onLoadResult={(item) =>
             item.resultRef &&
             void ctx.actions.chatLoadToolResult?.({

@@ -19,6 +19,7 @@ import {
   defaultIntents,
   intentActions,
   intentServerActions,
+  loadMessageBody,
   loadToolResult,
 } from "./views/chat/intents.ts";
 import { THREAD_MESSAGE_LIMIT, THREAD_MESSAGE_MAX } from "./views/reads.ts";
@@ -118,6 +119,8 @@ export function createCoreWebPlugin(
       threadWindow: { placement: "browser", initial: [], commands: { set } },
       // JSON tool results read on demand, by tool call id.
       toolResult: { placement: "browser", initial: [], commands: { set } },
+      // Message text bodies a window read deferred, read on demand by asset.
+      messageBody: { placement: "browser", initial: [], commands: { set } },
     },
     actions: {
       // Server proxies only for Actions a default intent still in use calls.
@@ -151,6 +154,15 @@ export function createCoreWebPlugin(
         placement: "browser",
         execute: (input, ctx) =>
           loadToolResult(input as Parameters<typeof loadToolResult>[0], ctx),
+      },
+      chatLoadBody: {
+        id: "core.chat.loadBody",
+        placement: "browser",
+        execute: (input, ctx) =>
+          loadMessageBody(
+            input as Parameters<typeof loadMessageBody>[0],
+            ctx,
+          ),
       },
       ...intentActions(intents),
     },
@@ -198,6 +210,7 @@ export {
   coreActionAliases,
   type CoreActionName,
   intentServerActions,
+  MESSAGE_BODY_BYTES,
   titleFrom,
   TOOL_RESULT_BYTES,
 } from "./views/chat/intents.ts";
@@ -211,6 +224,7 @@ export {
   chatConfig,
   readSenders,
   toolRenderers,
+  withLoadedBodies,
   withLoadedResults,
 } from "./views/chat/context.tsx";
 export { SenderAvatar, senderColor } from "./views/chat/identity.tsx";
@@ -218,17 +232,22 @@ export { draftKey } from "./views/composer/index.tsx";
 export {
   type ChatActivity,
   type ChatAttachment,
+  type ChatDeferredBody,
   type ChatMessage,
   type ChatMessageGroup,
   type ChatSender,
   chatSender,
+  type ChatTextPart,
   groupMessages,
+  joinText,
   liveMessage,
   messageAttachments,
   messageText,
+  messageTextParts,
   ownMessagePredicate,
   parseToolInput,
   projectMessages,
+  type ToolResultRef,
   type ToolResultStatus,
 } from "./shared/chat-messages.ts";
 export {

@@ -1,14 +1,30 @@
 import { createContentBodyDecoder } from "./decode.ts";
 import { digestContent } from "./digest.ts";
 import { createContentByteLimitError, createContentError } from "./errors.ts";
+import { planContentBudget } from "./budget.ts";
 import type {
   AssetBody,
   AssetRepository,
   AuthorizeContent,
+  ContentBudget,
   ContentRef,
+  DeferredAssetBody,
+  DeferredContent,
   ResolveContentOptions,
   ResolvedContent,
 } from "./types.ts";
+
+/** `getMany` with `overflow: "defer"` resolves what fits and defers the rest. */
+export type ResolveManyContent = {
+  (
+    refs: readonly ContentRef[],
+    options: ResolveContentOptions & { maxBytes: number; overflow: "defer" },
+  ): Promise<readonly (ResolvedContent | DeferredContent)[]>;
+  (
+    refs: readonly ContentRef[],
+    options: ResolveContentOptions,
+  ): Promise<readonly ResolvedContent[]>;
+};
 
 export type ContentResolver = {
   authorize(ref: ContentRef, options: ResolveContentOptions): Promise<void>;
@@ -16,10 +32,14 @@ export type ContentResolver = {
     ref: ContentRef,
     options: ResolveContentOptions,
   ): Promise<ResolvedContent>;
-  getMany(
-    refs: readonly ContentRef[],
-    options: ResolveContentOptions,
-  ): Promise<readonly ResolvedContent[]>;
+  /**
+   * Resolves references, reading each unique body once. With `maxBytes` the
+   * unique bodies are budgeted from metadata before any read: by default a
+   * read over budget rejects as a whole; with `overflow: "defer"` the bodies
+   * that fit resolve in the order given and the rest return as
+   * `DeferredContent` (see `planContentBudget`).
+   */
+  getMany: ResolveManyContent;
   open(
     ref: ContentRef,
     options: ResolveContentOptions,
@@ -120,14 +140,50 @@ export function createContentResolver(dependencies: {
 }): ContentResolver {
   const digest = dependencies.digest ?? digestContent;
 
-  const getMany: ContentResolver["getMany"] = async (refs, options) => {
-    options.signal?.throwIfAborted();
-    if (
-      options.maxBytes !== undefined &&
-      (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 0)
-    ) {
-      throw new TypeError("maxBytes must be a non-negative safe integer.");
+  const readBodies = async (
+    namespace: string,
+    ids: readonly string[],
+    budget: ContentBudget | undefined,
+  ): Promise<readonly (AssetBody | DeferredAssetBody)[]> => {
+    if (!budget) return await dependencies.assets.readMany(namespace, ids);
+    if (dependencies.assets.readWithin) {
+      return await dependencies.assets.readWithin(namespace, ids, budget);
     }
+    // Repositories without `readWithin`: plan from metadata, then read.
+    const assets = await dependencies.assets.getMany(namespace, ids);
+    const plan = planContentBudget(assets, budget);
+    const wanted = ids.filter((_, index) => plan[index] === "read");
+    const bodies = new Map(
+      (wanted.length
+        ? await dependencies.assets.readMany(namespace, wanted)
+        : []).map((body, index) => [wanted[index], body]),
+    );
+    return ids.map((id, index) =>
+      plan[index] === "read"
+        ? bodies.get(id)!
+        : { asset: assets[index], deferred: plan[index] as "budget" | "size" }
+    );
+  };
+
+  const resolveMany = async (
+    refs: readonly ContentRef[],
+    options: ResolveContentOptions,
+  ): Promise<readonly (ResolvedContent | DeferredContent)[]> => {
+    options.signal?.throwIfAborted();
+    for (
+      const [name, value] of [
+        ["maxBytes", options.maxBytes],
+        ["maxBodyBytes", options.maxBodyBytes],
+      ] as const
+    ) {
+      if (
+        value !== undefined && (!Number.isSafeInteger(value) || value < 0)
+      ) {
+        throw new TypeError(`${name} must be a non-negative safe integer.`);
+      }
+    }
+    const defer = options.overflow === "defer" &&
+      options.maxBytes !== undefined;
     for (const ref of refs) {
       options.signal?.throwIfAborted();
       await requireAuthorization(dependencies.authorize, ref, options);
@@ -135,15 +191,22 @@ export function createContentResolver(dependencies: {
     options.signal?.throwIfAborted();
     const ids = [...new Set(refs.map((ref) => ref.assetId))];
     if (!ids.length) return ([] as const);
-    // The repository enforces the byte budget from the metadata it already
-    // holds, so a bounded read costs the same round trip as an unbounded one.
-    const bodies = await dependencies.assets.readMany(
-      options.namespace,
-      ids,
-      options.maxBytes === undefined
-        ? undefined
-        : { maxBytes: options.maxBytes },
-    );
+    // The repository decides from the metadata it already holds, so a
+    // bounded read costs the same round trip as an unbounded one.
+    const bodies = defer
+      ? await readBodies(options.namespace, ids, {
+        maxBytes: options.maxBytes!,
+        ...(options.maxBodyBytes === undefined
+          ? {}
+          : { maxBodyBytes: options.maxBodyBytes }),
+      })
+      : await dependencies.assets.readMany(
+        options.namespace,
+        ids,
+        options.maxBytes === undefined
+          ? undefined
+          : { maxBytes: options.maxBytes },
+      );
     options.signal?.throwIfAborted();
     if (bodies.length !== ids.length) {
       throw createContentError(
@@ -152,33 +215,58 @@ export function createContentResolver(dependencies: {
         { namespace: options.namespace },
       );
     }
+    const deferred = new Map<string, DeferredAssetBody>();
+    const read: AssetBody[] = [];
     const readers = new Map(
-      await Promise.all(ids.map(async (id, index) => {
+      await Promise.all(ids.flatMap((id, index) => {
+        const body = bodies[index];
+        if ("deferred" in body) {
+          if (body.asset.id !== id) {
+            throw createContentError(
+              "asset_corrupted",
+              `Asset repository returned the wrong body for: ${id}`,
+              { namespace: options.namespace, assetId: id },
+            );
+          }
+          deferred.set(id, body);
+          return [];
+        }
+        read.push(body);
         // Identity and integrity are checked once for each unique body.
-        return [
-          id,
-          await prepareBody(id, bodies[index], options.namespace, digest),
-        ] as const;
+        return [(async () =>
+          [
+            id,
+            await prepareBody(id, body, options.namespace, digest),
+          ] as const)()];
       })),
     );
-    const resolved = refs.map((ref) => readers.get(ref.assetId)!(ref));
+    const resolved = refs.map((ref): ResolvedContent | DeferredContent => {
+      const later = deferred.get(ref.assetId);
+      return later
+        ? {
+          ref: structuredClone(ref),
+          asset: structuredClone(later.asset),
+          deferred: later.deferred,
+        }
+        : readers.get(ref.assetId)!(ref);
+    });
     options.signal?.throwIfAborted();
-    if (
-      options.maxBytes !== undefined &&
-      bodies.reduce((sum, body) => sum + body.bytes.byteLength, 0) >
-        options.maxBytes
-    ) {
-      throw createContentByteLimitError(
-        bodies.reduce((sum, body) => sum + body.bytes.byteLength, 0),
-        options.maxBytes,
-      );
+    const total = read.reduce((sum, body) => sum + body.bytes.byteLength, 0);
+    if (options.maxBytes !== undefined && total > options.maxBytes) {
+      throw createContentByteLimitError(total, options.maxBytes);
     }
     return resolved;
   };
+  const getMany = resolveMany as ResolveManyContent;
 
   const get: ContentResolver["get"] = async (ref, options) => {
     if (options.maxBytes !== undefined) {
-      return (await getMany([ref], options))[0];
+      // One body is resolved or refused; it is never deferred.
+      const [item] = await resolveMany([ref], {
+        ...options,
+        overflow: "reject",
+      });
+      return item as ResolvedContent;
     }
     options.signal?.throwIfAborted();
     await requireAuthorization(dependencies.authorize, ref, options);

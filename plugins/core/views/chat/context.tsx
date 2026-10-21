@@ -12,9 +12,12 @@ import {
 } from "@copilotz/copilotz/web/kit";
 import {
   type ChatActivity,
+  type ChatDeferredBody,
   type ChatMessage,
   type ChatSender,
   chatSender,
+  type ChatTextPart,
+  joinText,
   type ToolResultStatus,
 } from "../../shared/chat-messages.ts";
 import type { ActivityLabels, ToolPresentation } from "./activity.tsx";
@@ -211,23 +214,56 @@ export function withLoadedResults(
   messages: readonly ChatMessage[],
 ): ChatMessage[] {
   const store = ctx.collections.toolResult;
+  const waiting = (item: ChatActivity) =>
+    Boolean(item.resultRef) && item.data === undefined &&
+    item.result === undefined;
   return messages.map((message) => {
-    if (
-      !store ||
-      !message.activity.some((item) =>
-        item.resultRef && item.data === undefined
-      )
-    ) return message;
+    if (!store || !message.activity.some(waiting)) return message;
     return {
       ...message,
       activity: message.activity.map((item) => {
-        if (!item.resultRef || item.data !== undefined) return item;
+        if (!waiting(item)) return item;
         const row = store.get(item.id).value;
         if (!row) return item;
-        return row.status === "ready"
-          ? { ...item, data: row.value }
-          : { ...item, resultStatus: row.status as ToolResultStatus };
+        if (row.status !== "ready") {
+          return { ...item, resultStatus: row.status as ToolResultStatus };
+        }
+        return typeof row.text === "string"
+          ? { ...item, result: row.text }
+          : { ...item, data: row.value };
       }),
+    };
+  });
+}
+
+/**
+ * Message text bodies read on demand (`chatLoadBody`), joined into the text
+ * where they belong; parts still loading keep their status. Call during View
+ * rendering.
+ */
+export function withLoadedBodies(
+  ctx: BrowserViewContext,
+  messages: readonly ChatMessage[],
+): ChatMessage[] {
+  const store = ctx.collections.messageBody;
+  return messages.map((message) => {
+    if (!message.pending) return message;
+    const parts = message.pending.map((part): ChatTextPart => {
+      if ("text" in part) return part;
+      const row = store?.get(part.assetId).value;
+      if (row?.status === "ready" && typeof row.text === "string") {
+        return { text: row.text };
+      }
+      return row?.status
+        ? { ...part, status: row.status as ChatDeferredBody["status"] }
+        : part;
+    });
+    const waiting = parts.some((part) => "assetId" in part);
+    const { pending: _parts, ...rest } = message;
+    return {
+      ...rest,
+      text: joinText(parts),
+      ...(waiting ? { pending: parts } : {}),
     };
   });
 }

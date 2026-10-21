@@ -1,10 +1,12 @@
 import { digestContent } from "./digest.ts";
 import { createContentByteLimitError, createContentError } from "./errors.ts";
+import { planContentBudget } from "./budget.ts";
 import type {
   AssetBody,
   AssetOrigin,
   AssetRecord,
   AssetRepository,
+  ContentDeferral,
   PublishAssetInput,
 } from "./types.ts";
 
@@ -253,6 +255,20 @@ export function createMemoryAssetRepository(
           }
         }
         return bodies;
+      });
+    },
+
+    readWithin(namespace, assetIds, budget) {
+      return Promise.resolve().then(() => {
+        const assets = assetIds.map((assetId) =>
+          cloneRecord(requireRecord(namespace, assetId))
+        );
+        const plan = planContentBudget(assets, budget);
+        return assetIds.map((assetId, index) =>
+          plan[index] === "read"
+            ? cloneBody(requireReadable(namespace, assetId))
+            : { asset: assets[index], deferred: plan[index] as ContentDeferral }
+        );
       });
     },
 

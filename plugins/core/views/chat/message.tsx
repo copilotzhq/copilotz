@@ -44,6 +44,7 @@ import {
 import type {
   ChatActivity,
   ChatAttachment,
+  ChatDeferredBody,
   ChatMessage,
   ChatMessageGroup,
 } from "../../shared/chat-messages.ts";
@@ -68,6 +69,8 @@ export interface MessageGroupProps {
   loadAsset?: AssetLoader;
   /** Read a tool's referenced JSON result, when its step or renderer shows. */
   onLoadResult?(item: ChatActivity): void;
+  /** Read a message text body the window read deferred, when it shows. */
+  onLoadBody?(messageId: string, assetId: string): void;
   onEdit?(messageId: string, text: string): Promise<void>;
   onRetry?(messageId: string): void;
   onDiscard?(messageId: string): void;
@@ -388,25 +391,88 @@ function Editor(
   );
 }
 
+/**
+ * Text the window read deferred (over its budget): read when it shows, with
+ * a calm note while it loads, if it is too long, or if it failed.
+ */
+function DeferredText(
+  { message, onLoadBody }: {
+    message: ChatMessage;
+    onLoadBody?(messageId: string, assetId: string): void;
+  },
+): React.ReactElement | null {
+  const waiting = (message.pending ?? []).filter((
+    part,
+  ): part is ChatDeferredBody => "assetId" in part);
+  const signature = waiting.map((part) => `${part.assetId}:${part.status}`)
+    .join(" ");
+  useEffect(() => {
+    for (const part of waiting) {
+      if (!part.status) onLoadBody?.(message.id, part.assetId);
+    }
+  }, [message.id, signature]);
+  if (!waiting.length) return null;
+  const retry = () => {
+    for (const part of waiting) onLoadBody?.(message.id, part.assetId);
+  };
+  return (
+    <p
+      role="status"
+      data-slot="deferred-text"
+      className="text-muted-foreground flex items-center gap-2 text-sm"
+    >
+      {waiting.some((part) => part.status === "unavailable")
+        ? (
+          <>
+            This message couldn't be loaded.
+            {onLoadBody && (
+              <button
+                type="button"
+                onClick={retry}
+                className="hover:text-foreground focus-visible:ring-ring/45 rounded underline underline-offset-4 outline-none focus-visible:ring-[3px]"
+              >
+                Try again
+              </button>
+            )}
+          </>
+        )
+        : waiting.some((part) => part.status === "too-large")
+        ? "This message is too long to show here."
+        : (
+          <>
+            <Spinner className="size-3" /> Loading this message…
+          </>
+        )}
+    </p>
+  );
+}
+
 function Body(
-  { message, bubble, imageOrigins, markdownPlugins }: {
+  { message, bubble, imageOrigins, markdownPlugins, onLoadBody }: {
     message: ChatMessage;
     bubble: boolean;
     imageOrigins?: readonly string[];
     markdownPlugins?: readonly MarkdownPlugin[];
+    onLoadBody?(messageId: string, assetId: string): void;
   },
 ): React.ReactElement | null {
-  if (!message.text) return null;
+  const deferred = message.pending
+    ? <DeferredText message={message} onLoadBody={onLoadBody} />
+    : null;
+  if (!message.text) return deferred;
   return (
-    <Markdown
-      variant="chat"
-      imageOrigins={imageOrigins}
-      plugins={markdownPlugins}
-      streaming={message.status === "streaming"}
-      className={bubble ? "prose-chat" : undefined}
-    >
-      {message.text}
-    </Markdown>
+    <>
+      <Markdown
+        variant="chat"
+        imageOrigins={imageOrigins}
+        plugins={markdownPlugins}
+        streaming={message.status === "streaming"}
+        className={bubble ? "prose-chat" : undefined}
+      >
+        {message.text}
+      </Markdown>
+      {deferred}
+    </>
   );
 }
 
@@ -421,6 +487,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
       labels,
       loadAsset,
       onLoadResult,
+      onLoadBody,
       onEdit,
       onRetry,
       onDiscard,
@@ -529,7 +596,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                   />
                 )}
                 {human
-                  ? (message.text || attachments) && (
+                  ? (message.text || message.pending || attachments) && (
                     <div
                       className={cn(
                         "flex max-w-[min(42rem,88%)] flex-col gap-2 rounded-2xl px-3.5 py-2.5",
@@ -546,6 +613,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                         bubble
                         imageOrigins={imageOrigins}
                         markdownPlugins={markdownPlugins}
+                        onLoadBody={onLoadBody}
                       />
                       {attachments}
                     </div>
@@ -557,6 +625,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                         bubble={false}
                         imageOrigins={imageOrigins}
                         markdownPlugins={markdownPlugins}
+                        onLoadBody={onLoadBody}
                       />
                       {attachments}
                     </>

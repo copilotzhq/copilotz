@@ -9,9 +9,14 @@ import type {
 export const messageReadSelection: NonNullable<
   Parameters<ClientCollection["list"]>[1]
 > = {
+  // A window over budget never fails: bodies resolve newest first while they
+  // fit (one body may be at most 64 KiB) and the rest stay references the
+  // chat reads on demand.
   content: {
     fields: ["content"],
     byteLimit: 262144,
+    bodyByteLimit: 65536,
+    overflow: "defer",
     exclude: [
       { kind: "image" },
       { kind: "audio" },

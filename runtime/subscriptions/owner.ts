@@ -1,5 +1,8 @@
 import { assertJsonValue } from "../json.ts";
-import { createResolvedCollectionReader } from "../collections/resolved-read.ts";
+import {
+  createResolvedCollectionReader,
+  windowContentOptions,
+} from "../collections/resolved-read.ts";
 import type { ContentResolver } from "../content/resolver.ts";
 import { withRetainedAuthority } from "../authorization/binding.ts";
 import type {
@@ -371,7 +374,7 @@ export function createCollectionObserver(
               change.record ? [change.record] : []
             );
           const resolved = await resolveRows(rows, {
-            content: observation.content,
+            content: windowContentOptions(observation.content),
             signal: observation.signal,
           });
           if (frame.t === "snapshot") {

@@ -225,6 +225,25 @@ export interface AssetBody {
 }
 
 /**
+ * Why a budgeted read left a body unread: `size` when the body alone exceeds
+ * the per-body limit, `budget` when the bodies before it used the budget.
+ */
+export type ContentDeferral = "budget" | "size";
+
+/** A budgeted read's limits: unique bytes in all, and bytes per body. */
+export interface ContentBudget {
+  maxBytes: number;
+  /** Defaults to `maxBytes`. */
+  maxBodyBytes?: number;
+}
+
+/** A body a budgeted read did not read; its metadata (and size) is known. */
+export interface DeferredAssetBody {
+  asset: AssetRecord;
+  deferred: ContentDeferral;
+}
+
+/**
  * What a repository needs of the runtime's per-handler read view: remember
  * rows a handler has read, and forget them when this runtime changes them.
  */
@@ -258,6 +277,17 @@ export interface AssetRepository {
     assetIds: readonly AssetId[],
     options?: { maxBytes?: number },
   ): Promise<readonly AssetBody[]>;
+  /**
+   * Reads, in the order given, the unique bodies that fit `budget` and defers
+   * the rest (see `planContentBudget`), deciding from metadata in the same
+   * round trip as `readMany`. Repositories without it are budgeted from
+   * `getMany` metadata by the resolver.
+   */
+  readWithin?(
+    namespace: string,
+    assetIds: readonly AssetId[],
+    budget: ContentBudget,
+  ): Promise<readonly (AssetBody | DeferredAssetBody)[]>;
   open(
     namespace: string,
     assetId: AssetId,
@@ -274,11 +304,29 @@ export interface ResolvedContent {
   value?: unknown;
 }
 
+/** A reference a budgeted read deferred: authorized, its size known, unread. */
+export interface DeferredContent {
+  ref: ContentRef;
+  asset: AssetRecord;
+  deferred: ContentDeferral;
+}
+
 export type ResolveContentOptions = {
   namespace: string;
   signal?: AbortSignal;
   /** Maximum aggregate unique body bytes, checked against metadata before reads. */
   maxBytes?: number;
+  /**
+   * With `overflow: "defer"`, the most bytes one body may have before it is
+   * deferred on its own (defaults to `maxBytes`).
+   */
+  maxBodyBytes?: number;
+  /**
+   * With `maxBytes`: `reject` (the default) fails a read over budget; `defer`
+   * resolves the bodies that fit, in the order given, and returns the rest as
+   * `DeferredContent`.
+   */
+  overflow?: "reject" | "defer";
 };
 
 export type ContentAuthorizationAction = "metadata" | "read";

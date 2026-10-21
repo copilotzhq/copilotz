@@ -5,6 +5,7 @@ import {
   type AuthorizationIntent,
   authorizationRefused,
 } from "../runtime/authorization/evaluator.ts";
+import { Buffer } from "node:buffer";
 import { decodeObservation } from "../client/protocol.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createCopilotzApplication } from "../runtime/application/application.ts";
@@ -32,6 +33,7 @@ async function fixture(
   now = () => new Date(),
   strict = false,
   capacity?: number,
+  pooledKey = false,
 ) {
   const detached = Promise.withResolvers<{ code: string; flow?: string }>();
   const seen: {
@@ -48,6 +50,19 @@ async function fixture(
     grandchild: 0,
     denied: 0,
   };
+  const adapter = await testSecretAdapter();
+  const secrets = pooledKey
+    ? {
+      ...adapter,
+      async open(input: Parameters<typeof adapter.open>[0]) {
+        const material = await adapter.open(input);
+        const backing = crypto.getRandomValues(new Uint8Array(128));
+        backing.set(material, 32);
+        material.fill(0);
+        return Buffer.from(backing.buffer, 32, 64);
+      },
+    }
+    : adapter;
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
@@ -291,7 +306,7 @@ async function fixture(
       ...(capacity ? { execution: { capacity } } : {}),
       alarmScheduler: { schedule() {}, cancel() {} },
     },
-    adapters: { secrets: { default: await testSecretAdapter() } },
+    adapters: { secrets: { default: secrets } },
     authorization: {
       systemScopes: { main: selected().scope },
       policies: {
@@ -460,6 +475,7 @@ async function fixture(
   };
   return {
     db,
+    secrets,
     schema,
     app,
     handler,
@@ -1213,6 +1229,93 @@ Deno.test("Completed logout submission replays under proof-only recovery without
     );
     assertEquals(f.executions.logout, 1);
   } finally {
+    await f.close();
+  }
+});
+
+Deno.test("SEC3 Action cookie rejects cross-site device upgrades and duplicate cookies", async () => {
+  const { WebSocket: Socket } = await import("ws");
+  const f = await fixture(undefined, false, undefined, true);
+  const handler = createServerFacadeFetchHandler(f.app, {
+    upgradeDevice: (request) => Deno.upgradeWebSocket(request),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    handler,
+  );
+  const origin = `http://127.0.0.1:${server.addr.port}`;
+  const sockets: InstanceType<typeof Socket>[] = [];
+  try {
+    const login = await f.result(await f.submit("login", "security-login"));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    assert(cookie.startsWith("__Host-copilotz_session="));
+    const { readOwnerDataKey, unwrapOwnerDataKey } = await import(
+      "../runtime/actions/owner-data-key.ts"
+    );
+    const wrapped = await readOwnerDataKey(f.db, f.schema);
+    const material = await unwrapOwnerDataKey(f.schema, wrapped!, f.secrets);
+    const oldKey = await crypto.subtle.importKey(
+      "raw",
+      new Uint8Array(material.subarray(32)),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    material.fill(0);
+    const [payload, signature] = cookie.slice(cookie.indexOf("=") + 1).split(
+      ".",
+    );
+    const decoded = Uint8Array.from(
+      atob(signature.replaceAll("-", "+").replaceAll("_", "/")),
+      (c) => c.charCodeAt(0),
+    );
+    assertEquals(
+      await crypto.subtle.verify(
+        "HMAC",
+        oldKey,
+        decoded,
+        new TextEncoder().encode(`copilotz.credential.v1.${payload}`),
+      ),
+      false,
+      "credential HMAC must not reuse the shipped commitment key",
+    );
+    const duplicate = await f.request("/collections/entries", undefined, {
+      cookie: `${cookie}; ${cookie}`,
+    });
+    assertEquals(duplicate.status, 403);
+    for (const allowed of [false, true]) {
+      const socket = new Socket(origin.replace("http", "ws") + "/api/device", {
+        headers: { origin: allowed ? origin : "https://evil.example", cookie },
+      });
+      sockets.push(socket);
+      const admitted = await new Promise<number>((resolve) => {
+        socket.on("open", () => resolve(101));
+        socket.on("unexpected-response", (_req, response) => {
+          response.resume();
+          socket.terminate();
+          resolve(response.statusCode!);
+        });
+        socket.on("error", () => {});
+      });
+      assertEquals(admitted, allowed ? 101 : 403);
+      if (allowed) {
+        const welcome = new Promise<Record<string, unknown>>((resolve) =>
+          socket.once("message", (data) => resolve(JSON.parse(String(data))))
+        );
+        socket.send(
+          JSON.stringify({
+            t: "hello",
+            version: "1.0",
+            capabilities: ["subscriptions"],
+            credentials: { cookie: true },
+          }),
+        );
+        assertEquals((await welcome).t, "welcome");
+      }
+    }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await server.shutdown();
     await f.close();
   }
 });

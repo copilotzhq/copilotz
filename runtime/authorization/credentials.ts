@@ -126,15 +126,29 @@ export function createCredentialEffects(options: {
       row,
       options.master,
     );
+    const keyMaterial = new Uint8Array(material);
     try {
-      return await crypto.subtle.importKey(
+      const key = await crypto.subtle.importKey(
         "raw",
-        material.slice(32),
-        { name: "HMAC", hash: "SHA-256" },
+        keyMaterial,
+        "HKDF",
+        false,
+        ["deriveKey"],
+      );
+      return await crypto.subtle.deriveKey(
+        {
+          name: "HKDF",
+          hash: "SHA-256",
+          salt: new TextEncoder().encode("copilotz.owner.credentials.v1"),
+          info: new TextEncoder().encode("credential-token-hmac"),
+        },
+        key,
+        { name: "HMAC", hash: "SHA-256", length: 256 },
         false,
         ["sign", "verify"],
       );
     } finally {
+      keyMaterial.fill(0);
       material.fill(0);
     }
   };

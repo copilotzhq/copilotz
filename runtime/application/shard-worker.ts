@@ -5,9 +5,11 @@ import {
   type WorkerOptions,
 } from "../../dependencies/oxian-worker.ts";
 
+import { shardSessionId, type ShardSessionKind } from "./shard-identity.ts";
+
 /** Database-free worker boundary; private shard routing never reaches workload metadata. */
 export function createShardWorker(
-  options: WorkerOptions,
+  options: WorkerOptions & { kind?: ShardSessionKind },
   lifecycle: WorkerLifecycleCallbacks = {},
 ): Worker {
   if (
@@ -27,5 +29,27 @@ export function createShardWorker(
       return handle({ ...context, metadata: Object.freeze(metadata) });
     }]),
   );
-  return createWorker({ ...options, workloads }, lifecycle);
+  const { kind = "worker", ...workerOptions } = options;
+  return createWorker({
+    ...workerOptions,
+    workloads,
+    id: shardSessionId(kind, options.id),
+    ...(options.activate
+      ? {
+        async activate(
+          context: Parameters<NonNullable<WorkerOptions["activate"]>>[0],
+        ) {
+          const result = await options.activate!(context);
+          const identity = "identity" in result ? result.identity : result;
+          const scoped = {
+            ...identity,
+            workerId: shardSessionId(kind, identity.workerId),
+          };
+          return "identity" in result
+            ? { ...result, identity: scoped }
+            : scoped;
+        },
+      }
+      : {}),
+  }, lifecycle);
 }

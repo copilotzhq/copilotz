@@ -1,5 +1,7 @@
 /** Defines the immutable semantic Server facade Resource. @module */
 
+import { validateAllowedOrigins } from "../../shared/device-origin.ts";
+
 import type {
   DefineServerFacadeInput,
   ServerCollectionExposure,
@@ -123,7 +125,8 @@ export function defineServerFacade(
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" && key !== "sessionCookie" &&
-      key !== "authenticate" &&
+      key !== "authenticate" && key !== "allowedOrigins" &&
+      key !== "deviceLimits" &&
       key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
@@ -159,14 +162,30 @@ export function defineServerFacade(
       cookie.sameSite !== undefined &&
         !["Strict", "Lax", "None"].includes(String(cookie.sameSite)) ||
       cookie.sameSite === "None" && cookie.secure === false ||
-      typeof cookie.name === "string" && cookie.name.startsWith("__Host-") &&
+      String(cookie.name ?? "__Host-copilotz_session").startsWith("__Host-") &&
         (cookie.domain !== undefined || cookie.secure === false ||
           cookie.path !== undefined && cookie.path !== "/") ||
       typeof cookie.name === "string" && cookie.name.startsWith("__Secure-") &&
         cookie.secure === false
     ) throw new TypeError("Invalid session cookie configuration.");
   }
+  const allowedOrigins = validateAllowedOrigins(input.allowedOrigins);
+  if (input.deviceLimits !== undefined) {
+    const limits = plainRecord(input.deviceLimits, "Device limits");
+    if (
+      Object.entries(limits).some(([key, value]) =>
+        !["maxSubscriptions", "maxPendingControls", "maxPendingBytes"].includes(
+          key,
+        ) ||
+        !Number.isSafeInteger(value) || (value as number) <= 0
+      )
+    ) throw new TypeError("Invalid device limits");
+  }
   return ({
+    allowedOrigins,
+    ...(input.deviceLimits
+      ? { deviceLimits: Object.freeze({ ...input.deviceLimits }) }
+      : {}),
     ...(input.sessionCookie
       ? { sessionCookie: Object.freeze({ ...input.sessionCookie }) }
       : {}),

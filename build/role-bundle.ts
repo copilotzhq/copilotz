@@ -29,6 +29,7 @@ const runtimeModules = new Set([
   "runtime/application/worker.ts",
   "runtime/authorization/invocation.ts",
   "runtime/application/shard-worker.ts",
+  "runtime/application/shard-identity.ts",
   "runtime/collections/definition.ts",
   "runtime/collections/errors.ts",
   "runtime/collections/validate.ts",

@@ -98,3 +98,20 @@ worker role uses the same boundary. An assign callback must throw on a scope
 mismatch: Oxian's `undefined` selection means default placement, not denial.
 Draining refuses WebSocket upgrades with 503, rather than rejecting credentials,
 so workers can reconnect to the successor pinned instance.
+
+## Security admission
+
+The controller requires `authenticate(request)` using a bodyless request before
+reading any body. Keep workload/target decisions in `authorize(request, input)`;
+the authenticated request body is streamed with a 16 MiB bound. A denied header
+credential cancels the unread body and returns 403.
+
+Use `createShardWorker({ kind: "computer" | "browser" | "connector", ... })` for
+non-worker peers. Their wire identities are `shard:<kind>:<logical-id>` (the
+`shardSessionId` helper is also exported). Activation credentials must bind to
+that identity. Ordinary workers retain owner-issued IDs, excluding the reserved
+`shard:` prefix. Admission checks that the wire namespace matches the
+authenticated principal kind before the session registry can replace a
+connection. Dispatch still takes logical IDs plus `kind`. The owner's session
+source and both ends of the shard relay admit only worker-kind identities.
+Browser/computer IDs cannot replace a worker with the same logical ID.

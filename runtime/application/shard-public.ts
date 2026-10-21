@@ -1,4 +1,5 @@
 /** Pinned connection hosting and stateless controller capabilities. */
+export { shardSessionId } from "./shard-identity.ts";
 export { createCopilotzShard, shardForActor } from "./shard.ts";
 export type {
   CopilotzShard,

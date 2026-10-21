@@ -7,6 +7,7 @@ import {
 } from "../../dependencies/oxian-hypervisor.ts";
 import type { WorkHandle, WorkInput } from "../../dependencies/oxian-work.ts";
 import { withOwnedHosting } from "./hosting.ts";
+import { shardSessionId, shardSessionKind } from "./shard-identity.ts";
 
 type AdmissionContext = Parameters<NonNullable<HypervisorOptions["admit"]>>[0];
 type Admission = Awaited<ReturnType<NonNullable<HypervisorOptions["admit"]>>>;
@@ -195,6 +196,9 @@ export function createCopilotzShard(
           principal?.kind,
         ) || !Array.isArray(principal.workloads) || !principal.workloads.length
       ) throw refused("invalid_principal");
+      if (shardSessionKind(context.identity.workerId) !== principal.kind) {
+        throw refused("principal_kind_mismatch");
+      }
       if (
         principal.kind === "browser" &&
         (!principal.actor || await shardForActor(principal.actor, ids) !== id)
@@ -269,6 +273,19 @@ export function createCopilotzShard(
     },
   });
   const dispatch = async (input: ShardWorkInput): Promise<WorkHandle> => {
+    input = {
+      ...input,
+      ...(input.target
+        ? {
+          target: {
+            workerId: shardSessionId(
+              input.kind ?? "worker",
+              input.target.workerId,
+            ),
+          },
+        }
+        : {}),
+    };
     if (draining || closed) throw refused("shard_draining");
     if (
       input.epoch !== undefined &&
@@ -349,7 +366,29 @@ export function createCopilotzShard(
       owner = binding;
       return {
         dispatch: (input: WorkInput) => dispatch({ ...input, kind: "worker" }),
-        sessions: hypervisor.sessions,
+        sessions: {
+          ...hypervisor.sessions,
+          list: () =>
+            hypervisor.sessions.list().filter((session) =>
+              shardSessionKind(session.identity.workerId) === "worker"
+            ),
+          get: (workerId) =>
+            shardSessionKind(workerId) === "worker"
+              ? hypervisor.sessions.get(workerId)
+              : undefined,
+          subscribe: (listener) =>
+            hypervisor.sessions.subscribe!((session) => {
+              if (
+                shardSessionKind(session.identity.workerId) === "worker"
+              ) listener(session);
+            }),
+          assertCurrent(fence) {
+            if (shardSessionKind(fence.identity.workerId) !== "worker") {
+              throw refused("worker_scope_refused");
+            }
+            return hypervisor.sessions.assertCurrent(fence);
+          },
+        },
       };
     },
     capacity() {

@@ -6,7 +6,7 @@ export const DEVICE_LIMITS = Object.freeze({
   queuedFrames: 256,
   queuedBytes: 1024 * 1024,
   socketBytes: 4 * 1024 * 1024,
-  channels: 256,
+  channels: 16,
   heartbeatMs: 15_000,
   lifetimeMs: 5 * 60_000,
 });

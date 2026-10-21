@@ -1,3 +1,4 @@
+import { assertJsonValue } from "../json.ts";
 import { createResolvedCollectionReader } from "../collections/resolved-read.ts";
 import type { ContentResolver } from "../content/resolver.ts";
 import { withRetainedAuthority } from "../authorization/binding.ts";
@@ -14,8 +15,8 @@ import { attachOwnerPush, type OwnerPushSubscription } from "../events/push.ts";
 import { afterSqlCommit, type SqlSession } from "../events/session.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { mapNode, type NodeRow } from "../collections/reducer.ts";
-import { compileCollectionFilters } from "../collections/query.ts";
-import { matchesCollectionFilter } from "../collections/predicate.ts";
+import { compareCodePoints } from "../collections/predicate.ts";
+import { compileLiveFilters, queryRefused } from "./predicate.ts";
 import { stableStringify } from "../collections/equal.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import type {
@@ -33,6 +34,7 @@ type DataFrame = Extract<SubscriptionFrame, { checkpoint: string }>;
 type Cache = {
   rows: Map<string, CollectionRecord>;
   seq: string;
+  localSeq: string;
   rowBytes: Map<string, number>;
   bytes: number;
   push: OwnerPushSubscription;
@@ -40,7 +42,10 @@ type Cache = {
 };
 type State = {
   identity: string;
-  selectionKey: string;
+  principal: string;
+  matches: (row: CollectionRecord) => boolean;
+  policyMatches: (row: CollectionRecord) => boolean;
+  members: string[];
   filter: CollectionFilter;
   cache: Cache;
   query: CollectionQuery;
@@ -64,28 +69,56 @@ type Reader = {
 };
 const bytes = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value)).length;
-const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+const compare = compareCodePoints;
+const capacity = (message: string) =>
+  Object.assign(new RangeError(message), {
+    code: "subscription_capacity_exceeded",
+  });
+export type SubscriptionLimits = Partial<typeof DEFAULT_SUBSCRIPTION_LIMITS>;
+export const DEFAULT_SUBSCRIPTION_LIMITS = {
+  maxFrames: 64,
+  maxBytes: 1024 * 1024,
+  retentionMs: 5 * 60_000,
+  maxStates: 256,
+  maxStatesPerPrincipal: 32,
+  maxDetachedPerPrincipal: 16,
+  maxPredicateNodes: 64,
+  maxPredicateValues: 32,
+  maxQueryBytes: 16 * 1024,
+  maxPendingAdmissions: 256,
+  maxCollections: 32,
+  maxRows: 10_000,
+  maxCacheBytes: 16 * 1024 * 1024,
+};
 
 /** One cache/listener per Collection and row/progress mode, never SQL per commit. */
-export function createCollectionObserver(options: {
-  session: SqlSession;
-  schema: string;
-  owner: DatabaseOwner;
-  authorization: AuthorizationOwner;
-  collections: Readonly<Record<string, CollectionDefinition>>;
-  contentResolver?: ContentResolver;
-  maxFrames?: number;
-  maxBytes?: number;
-  retentionMs?: number;
-}): CollectionObserver {
-  const maxFrames = options.maxFrames ?? 64,
-    maxBytes = options.maxBytes ?? 1024 * 1024;
-  const retentionMs = options.retentionMs ?? 5 * 60_000;
+export function createCollectionObserver(
+  options: {
+    session: SqlSession;
+    schema: string;
+    owner: DatabaseOwner;
+    authorization: AuthorizationOwner;
+    collections: Readonly<Record<string, CollectionDefinition>>;
+    contentResolver?: ContentResolver;
+  } & SubscriptionLimits,
+): CollectionObserver {
+  const limits = {
+    ...DEFAULT_SUBSCRIPTION_LIMITS,
+    ...Object.fromEntries(
+      Object.keys(DEFAULT_SUBSCRIPTION_LIMITS).filter((key) =>
+        options[key as keyof SubscriptionLimits] !== undefined
+      )
+        .map((key) => [key, options[key as keyof SubscriptionLimits]]),
+    ),
+  };
+  const { maxFrames, maxBytes, retentionMs } = limits;
   if (
-    ![maxFrames, maxBytes, retentionMs].every((value) =>
+    !Object.values(limits).every((value) =>
       Number.isSafeInteger(value) && value > 0
     )
-  ) throw new RangeError("Subscription limits must be positive integers.");
+  ) {
+    throw new RangeError("Subscription limits must be positive integers.");
+  }
   const caches = new Map<string, Cache>(), states = new Set<State>();
   let admissions = Promise.resolve(), waiting = 0;
   const run = createSchemaCommandRunner(
@@ -106,20 +139,37 @@ export function createCollectionObserver(options: {
       }
     }
   };
-  const select = (
-    state: Pick<State, "cache" | "query" | "filter" | "progressOnly">,
+  const trimDetached = (principal?: string, pressure?: () => boolean) => {
+    const detached = [...states].filter((s) =>
+      !s.reader && (!principal || s.principal === principal)
+    )
+      .sort((a, b) => a.expires - b.expires);
+    while (
+      detached.length &&
+      (pressure ? pressure() : detached.length > limits.maxDetachedPerPrincipal)
+    ) forget(detached.shift()!);
+  };
+  const select = (state: State) =>
+    state.progressOnly ? [] : state.members
+      .slice(0, state.query.limit ?? 100).map((id) =>
+        state.cache.rows.get(id)!
+      );
+  const updateMember = (
+    state: State,
+    id: string,
+    record: CollectionRecord | null,
   ) => {
-    if (state.progressOnly) return [];
-    const query = state.query;
-    const rows = [...state.cache.rows.values()].filter((row) =>
-      matchesCollectionFilter(state.filter, row) &&
-      matchesCollectionFilter(query, row) &&
-      (query.all ?? []).every((filter) => matchesCollectionFilter(filter, row))
-    );
-    rows.sort((a, b) =>
-      compare(a.id, b.id) * (query.order?.direction === "desc" ? -1 : 1)
-    );
-    return rows.slice(0, query.limit ?? 100);
+    const direction = state.query.order?.direction === "desc" ? -1 : 1;
+    let lo = 0, hi = state.members.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (compare(state.members[mid], id) * direction < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    const included = state.members[lo] === id;
+    const matches = record !== null && state.matches(record);
+    if (included && !matches) state.members.splice(lo, 1);
+    else if (!included && matches) state.members.splice(lo, 0, id);
   };
   const push = (state: State, frame: DataFrame) => {
     const size = bytes(frame);
@@ -151,7 +201,8 @@ export function createCollectionObserver(options: {
   };
   const snapshot = (state: State) => {
     state.rows = select(state);
-    state.seq = state.cache.seq;
+    state.seq = state.cache.localSeq;
+
     push(state, {
       t: "snapshot",
       checkpoint: crypto.randomUUID(),
@@ -199,6 +250,7 @@ export function createCollectionObserver(options: {
     // id uses deterministic string ordering. Locale-dependent scalar/text queries require
     // a shared SQL-compatible index; never approximate them in a live selection.
     if (
+      query.all !== undefined && !Array.isArray(query.all) ||
       query.after || query.before || query.text || query.include?.length ||
       query.order &&
         (query.order.field !== "id" ||
@@ -211,21 +263,38 @@ export function createCollectionObserver(options: {
           .includes(key)
       )
     ) {
-      throw new TypeError(
+      throw queryRefused(
         "Subscription requires a bounded id-ordered Collection query without cursors, search or includes.",
       );
     }
-    if (bytes(query) > 16384) {
-      throw new RangeError("Subscription query exceeds 16 KiB.");
+    const queryMatches = compileLiveFilters(
+      [query, ...(query.all ?? [])],
+      limits,
+      definition.schema,
+    );
+    // Untrusted options must be validated before reserving the serialized queue.
+    if (observation.content !== undefined) {
+      try {
+        assertJsonValue(observation.content, {
+          maxDepth: 16,
+          maxNodes: limits.maxPredicateNodes,
+          omitUndefinedProperties: true,
+        });
+        if (bytes(observation.content) > limits.maxQueryBytes) {
+          throw queryRefused(
+            "Subscription content options exceed the byte limit",
+          );
+        }
+      } catch (error) {
+        throw queryRefused(
+          error instanceof Error ? error.message : "Invalid content options",
+        );
+      }
     }
-    compileCollectionFilters([query, ...(query.all ?? [])], []);
-    if (waiting >= 256) {
-      throw new RangeError("Subscription admission capacity exceeded.");
-    }
-    waiting++;
-    const preceding = admissions, admitted = Promise.withResolvers<void>();
-    admissions = admitted.promise;
-    await preceding;
+    const principal = stableStringify([
+      authority.scope.tenant,
+      authority.principal,
+    ]);
     const identity = stableStringify({
       principal: authority.principal,
       scope: authority.scope,
@@ -238,6 +307,13 @@ export function createCollectionObserver(options: {
       schema: definition.schema,
       name: definition.name,
     });
+    if (waiting >= limits.maxPendingAdmissions) {
+      throw capacity("Subscription admission capacity exceeded.");
+    }
+    waiting++;
+    const preceding = admissions, admitted = Promise.withResolvers<void>();
+    admissions = admitted.promise;
+    await preceding;
     for (const state of [...states]) {
       if (!state.reader && state.expires <= Date.now()) forget(state);
     }
@@ -263,6 +339,7 @@ export function createCollectionObserver(options: {
         if (state?.reader === reader) {
           state.reader = undefined;
           state.expires = Date.now() + retentionMs;
+          trimDetached(state.principal);
         }
         observation.signal?.removeEventListener("abort", reader.detach);
       },
@@ -363,7 +440,19 @@ export function createCollectionObserver(options: {
         }
       },
     };
+    let admissionError: unknown;
     try {
+      const attached = [...states].filter((s) => s.reader && s !== state);
+      if (
+        attached.length >= limits.maxStates ||
+        attached.filter((s) => s.principal === principal).length >=
+          limits.maxStatesPerPrincipal
+      ) {
+        throw capacity("Subscription active state quota exceeded.");
+      }
+      if (!state && states.size >= limits.maxStates) {
+        trimDetached(undefined, () => states.size >= limits.maxStates);
+      }
       if (observation.content) {
         await resolveRows([], { content: observation.content });
       }
@@ -374,6 +463,7 @@ export function createCollectionObserver(options: {
           reader.wake?.();
         });
         let filter: CollectionFilter | undefined;
+        let policyMatches: State["policyMatches"] | undefined;
         reader.authorization = await options.authorization.observe(authority, {
           collection: alias,
           query,
@@ -389,6 +479,18 @@ export function createCollectionObserver(options: {
             decision.constraints.collections?.[definition.name];
           if (!next) {
             reader.stop("revoked", "authorization");
+            return;
+          }
+          try {
+            policyMatches = compileLiveFilters(
+              [next],
+              limits,
+              definition.schema,
+            );
+          } catch (error) {
+            admissionError = error;
+            reader.stop("reset", "subscription_query_refused");
+            if (state) forget(state);
             return;
           }
           filter = next;
@@ -432,9 +534,6 @@ export function createCollectionObserver(options: {
           });
           return;
         }
-        if (states.size >= 256) {
-          throw new RangeError("Subscription capacity exceeded.");
-        }
         const key = JSON.stringify([
           authority.scope.namespace,
           definition.name,
@@ -442,19 +541,31 @@ export function createCollectionObserver(options: {
         ]);
         let cache = caches.get(key);
         if (!cache) {
-          if (caches.size >= 32) {
-            throw new RangeError("Subscription Collection capacity exceeded.");
+          if (caches.size >= limits.maxCollections) {
+            trimDetached(undefined, () => caches.size >= limits.maxCollections);
+          }
+          if (caches.size >= limits.maxCollections) {
+            throw capacity("Subscription Collection capacity exceeded.");
           }
           const rows = progressOnly
             ? []
             : (await command.transaction.query<NodeRow>(
-              `SELECT id,namespace,data FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT 10001`,
+              `SELECT id,namespace,data FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT ${
+                limits.maxRows + 1
+              }`,
               [authority.scope.namespace, definition.name],
             )).rows.map(mapNode);
-          if (rows.length > 10000 || bytes(rows) > 16 * 1024 * 1024) {
-            throw new RangeError("Subscription Collection capacity exceeded.");
+          if (
+            rows.length > limits.maxRows || bytes(rows) > limits.maxCacheBytes
+          ) {
+            throw capacity("Subscription Collection capacity exceeded.");
           }
+          const ordinal = await command.transaction.query<{ seq: string }>(
+            `SELECT COUNT(*)::text AS seq FROM ${tables.events} WHERE namespace=$1`,
+            [authority.scope.namespace],
+          );
           const shared: Cache = {
+            localSeq: ordinal.rows[0].seq,
             rows: new Map(rows.map((r) => [r.id, r])),
             rowBytes: new Map(rows.map((r) => [r.id, bytes(r) + 1])),
             bytes: bytes(rows),
@@ -487,6 +598,8 @@ export function createCollectionObserver(options: {
               const change = frame.kind === "change"
                 ? frame.change.collectionChange
                 : undefined;
+              const old = change?.previous ??
+                (change && shared.rows.get(change.id));
               if (!progressOnly && change?.collection === definition.name) {
                 shared.bytes -= shared.rowBytes.get(change.id) ?? 0;
                 shared.rowBytes.delete(change.id);
@@ -497,65 +610,57 @@ export function createCollectionObserver(options: {
                   shared.bytes += size;
                 } else shared.rows.delete(change.id);
                 if (
-                  shared.rows.size > 10000 ||
-                  shared.bytes > 16 * 1024 * 1024
+                  shared.rows.size > limits.maxRows ||
+                  shared.bytes > limits.maxCacheBytes
                 ) {
                   resetCache(shared, "capacity");
                   return;
                 }
               }
               shared.seq = frame.headSeq;
-              const selections = new Map<
-                string,
-                {
-                  rows: readonly CollectionRecord[];
-                  changes: Extract<
-                    SubscriptionFrame,
-                    { t: "batch" }
-                  >["changes"];
-                }
-              >();
-              for (const item of shared.states) {
+              if (frame.kind !== "change") return;
+              shared.localSeq = String(BigInt(shared.localSeq) + 1n);
+              if (change && change.collection !== definition.name) return;
+              for (const item of [...shared.states]) {
                 if (!item.reader && item.expires <= Date.now()) {
                   forget(item);
                   continue;
                 }
-                const selectionKey = `${item.seq}:${item.selectionKey}`;
-                let selection = selections.get(selectionKey);
-                if (!selection) {
-                  const next = change?.collection === definition.name
-                      ? select(item)
-                      : item.rows,
-                    previous = new Map(item.rows.map((r) => [r.id, r])),
-                    current = new Map(next.map((r) => [r.id, r]));
-                  const ids = [
-                    ...new Set([...previous.keys(), ...current.keys()]),
-                  ].sort(compare);
-                  const changes = ids.filter((id) =>
+                // No public signal (including progress) for an invisible mutation.
+                if (
+                  change && !(old && item.policyMatches(old)) &&
+                  !(change.record && item.policyMatches(change.record))
+                ) continue;
+                if (progressOnly && !change) continue;
+                if (!item.progressOnly && change) {
+                  updateMember(item, change.id, change.record);
+                }
+                const next = select(item);
+                const previous = new Map(item.rows.map((r) => [r.id, r]));
+                const current = new Map(next.map((r) => [r.id, r]));
+                const from = item.seq;
+                item.seq = shared.localSeq;
+                const changes = [
+                  ...new Set([...previous.keys(), ...current.keys()]),
+                ].sort(compare)
+                  .filter((id) =>
+                    previous.get(id) !== current.get(id) &&
                     stableStringify(previous.get(id)) !==
                       stableStringify(current.get(id))
                   )
-                    .map((id) => ({
-                      seq: shared.seq,
-                      id,
-                      record: current.get(id) ?? null,
-                    }));
-                  selection = {
-                    rows: next,
-                    changes,
-                  };
-                  selections.set(selectionKey, selection);
-                }
-                const from = item.seq;
-                item.seq = shared.seq;
-                item.rows = selection.rows;
+                  .map((id) => ({
+                    seq: item.seq,
+                    id,
+                    record: current.get(id) ?? null,
+                  }));
+                item.rows = next;
                 push(item, {
                   t: "batch",
                   checkpoint: crypto.randomUUID(),
                   from,
                   to: item.seq,
-                  changes: selection.changes,
-                  collectionChanged: change?.collection === definition.name,
+                  changes,
+                  collectionChanged: Boolean(change),
                 });
               }
             },
@@ -567,27 +672,47 @@ export function createCollectionObserver(options: {
         }
         const selectedCache = cache;
         afterSqlCommit(command.transaction, () => {
-          if (reader.closed || !filter) return;
+          if (reader.closed || !filter || !policyMatches) {
+            if (!selectedCache.states.size) {
+              selectedCache.push.close();
+              for (const [key, cached] of caches) {
+                if (cached === selectedCache) caches.delete(key);
+              }
+            }
+            return;
+          }
           state = {
             identity,
-            selectionKey: stableStringify([query, filter, progressOnly]),
+            principal,
+            policyMatches,
+            matches: (row) => policyMatches!(row) && queryMatches(row),
+            members: [],
             progressOnly,
             filter,
             cache: selectedCache,
             query,
             rows: [],
-            seq: selectedCache.seq,
+            seq: "0",
             history: [],
             bytes: 0,
             expires: Date.now() + retentionMs,
             reader,
           };
+          if (!progressOnly) {
+            state.members = [...selectedCache.rows.values()].filter(
+              state.matches,
+            ).map((row) => row.id)
+              .sort((a, b) =>
+                compare(a, b) * (query.order?.direction === "desc" ? -1 : 1)
+              );
+          }
           states.add(state);
           selectedCache.states.add(state);
           snapshot(state);
           reader.wake?.();
         });
       });
+      if (admissionError) throw admissionError;
     } catch (error) {
       reader.detach();
       throw error;

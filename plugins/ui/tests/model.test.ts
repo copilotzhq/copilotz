@@ -13,7 +13,7 @@ import {
   shellUrlStorageAdapter,
   spaceDragScrollSpeed,
   spaceSections,
-  TouchSpaceDrag,
+  touchSpaceDrag,
 } from "../model.ts";
 
 const thread = (id: string, spaceId?: string, updatedAt = "") => ({
@@ -81,7 +81,7 @@ test("recency groups are Today, Yesterday, Previous 7 and 30 days, then months",
 });
 
 test("touch drag: a tap stays unarmed and only the owning pointer commits", () => {
-  const drag = new TouchSpaceDrag();
+  const drag = touchSpaceDrag();
   assert.equal(drag.start(1, "thread", "source", 10, 10), true);
   assert.equal(drag.start(2, "other", null, 0, 0), false);
   assert.equal(drag.update(2, 30, 30), false);
@@ -93,7 +93,7 @@ test("touch drag: a tap stays unarmed and only the owning pointer commits", () =
 });
 
 test("touch drag: a release is consumed once; outside, original and ineligible targets never commit", () => {
-  const drag = new TouchSpaceDrag();
+  const drag = touchSpaceDrag();
   drag.start(1, "thread", "source", 0, 0);
   assert.equal(drag.update(1, 6, 0), true);
   assert.deepEqual(drag.release(1, "target", ["target"]), {
@@ -102,7 +102,7 @@ test("touch drag: a release is consumed once; outside, original and ineligible t
   });
   assert.equal(drag.release(1, "target", ["target"]), null);
   for (const target of [null, "source", "missing"]) {
-    const next = new TouchSpaceDrag();
+    const next = touchSpaceDrag();
     next.start(7, "thread", "source", 0, 0);
     next.update(7, 8, 8);
     assert.equal(next.release(7, target, ["target", "source"]), null);

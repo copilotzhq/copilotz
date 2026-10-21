@@ -443,60 +443,70 @@ export type TouchSpaceDragSession = {
   active: boolean;
 };
 
-/** One gesture, consumed synchronously before any asynchronous move. */
-export class TouchSpaceDrag {
-  session: TouchSpaceDragSession | null = null;
-
+/** One touch gesture moving a chat into a Space. */
+export type TouchSpaceDrag = {
+  readonly session: TouchSpaceDragSession | null;
   start(
     pointerId: number,
     threadId: string,
     originalSpaceId: string | null,
     x: number,
     y: number,
-  ): boolean {
-    if (this.session) return false;
-    this.session = {
-      pointerId,
-      threadId,
-      originalSpaceId,
-      startX: x,
-      startY: y,
-      x,
-      y,
-      active: false,
-    };
-    return true;
-  }
-
-  update(pointerId: number, x: number, y: number): boolean {
-    const session = this.session;
-    if (!session || pointerId !== session.pointerId) return false;
-    session.x = x;
-    session.y = y;
-    if (Math.hypot(x - session.startX, y - session.startY) >= 6) {
-      session.active = true;
-    }
-    return session.active;
-  }
-
+  ): boolean;
+  update(pointerId: number, x: number, y: number): boolean;
   release(
     pointerId: number,
     spaceId: string | null,
     eligibleIds: readonly string[],
-  ): { threadId: string; spaceId: string } | null {
-    const session = this.session;
-    if (!session || session.pointerId !== pointerId) return null;
-    this.session = null;
-    if (
-      !session.active || !spaceId || spaceId === session.originalSpaceId ||
-      !eligibleIds.includes(spaceId)
-    ) return null;
-    return { threadId: session.threadId, spaceId };
-  }
+  ): { threadId: string; spaceId: string } | null;
+  cancel(): void;
+};
 
-  cancel(): void {
-    this.session = null;
-  }
+/** One gesture, consumed synchronously before any asynchronous move. */
+export function touchSpaceDrag(): TouchSpaceDrag {
+  let current: TouchSpaceDragSession | null = null;
+  return {
+    get session() {
+      return current;
+    },
+    start(pointerId, threadId, originalSpaceId, x, y) {
+      if (current) return false;
+      current = {
+        pointerId,
+        threadId,
+        originalSpaceId,
+        startX: x,
+        startY: y,
+        x,
+        y,
+        active: false,
+      };
+      return true;
+    },
+    update(pointerId, x, y) {
+      const session = current;
+      if (!session || pointerId !== session.pointerId) return false;
+      session.x = x;
+      session.y = y;
+      if (Math.hypot(x - session.startX, y - session.startY) >= 6) {
+        session.active = true;
+      }
+      return session.active;
+    },
+    release(pointerId, spaceId, eligibleIds) {
+      const session = current;
+      if (!session || session.pointerId !== pointerId) return null;
+      current = null;
+      if (
+        !session.active || !spaceId || spaceId === session.originalSpaceId ||
+        !eligibleIds.includes(spaceId)
+      ) return null;
+      return { threadId: session.threadId, spaceId };
+    },
+    cancel() {
+      current = null;
+    },
+  };
 }
 
 /** Pixels per second; outside the destination viewport never scrolls. */

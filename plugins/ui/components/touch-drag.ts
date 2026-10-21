@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { browser, dom, domEvent } from "@copilotz/copilotz/web/kit";
-import { spaceDragScrollSpeed, TouchSpaceDrag } from "../model.ts";
+import { spaceDragScrollSpeed, touchSpaceDrag } from "../model.ts";
 
 type Options = {
   enabled: boolean;
@@ -25,7 +25,7 @@ export function useTouchSpaceDrag(options: Options): {
 } {
   const current = useRef(options);
   current.current = options;
-  const model = useRef(new TouchSpaceDrag());
+  const model = useRef(touchSpaceDrag());
   const capture = useRef<unknown>(null);
   const frame = useRef<number | null>(null);
   const suppress = useRef(false);

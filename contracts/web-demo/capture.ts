@@ -446,6 +446,38 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    name: "18-empty-sidebar",
+    path: "/?empty=1&stream=0",
+    steps: async (size) => {
+      if (size.mobile) await click('[aria-label="Expand sidebar"]');
+    },
+  },
+  {
+    // The second tab's Recent list after the first tab writes in an older
+    // conversation: it moves to the top live.
+    name: "19-recent-reorders",
+    path: "/?chat=t-notes&stream=0",
+    steps: async (size, theme) => {
+      second = await openTab();
+      await emulate(second.id, size, theme);
+      session = second.id;
+      await navigate("/?chat=t-ideas&stream=0");
+      await wait(900);
+      if (size.mobile) await click('[aria-label="Expand sidebar"]');
+      await click('[aria-pressed="false"]');
+      session = primary.id;
+      await send("Target.activateTarget", { targetId: primary.targetId });
+      await click('textarea[aria-label="Message"]');
+      await send("Input.insertText", { text: "Notes for this week." }, session);
+      if (size.mobile) await click('[aria-label="Send message"]');
+      else await key("Enter");
+      await wait(1500);
+      session = second.id;
+      await send("Target.activateTarget", { targetId: second.targetId });
+      await wait(300);
+    },
+  },
+  {
     name: "14b-long-title",
     path: "/?chat=t-plan&stream=0",
     steps: async () => {

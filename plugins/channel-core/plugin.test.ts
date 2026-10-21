@@ -137,6 +137,8 @@ Deno.test("Channel occurrence becomes one atomic binding graph and external egre
     });
     assertEquals(messages.length, 1);
     assertEquals(messages[0].id, binding.inboundMessageId);
+    // The inbound message is the thread's activity, recorded in the same commit.
+    assertEquals(thread.lastMessageId, binding.inboundMessageId);
     const inboundCreated = (await application.events.list({
       namespace: NAMESPACE,
     })).find((event) =>

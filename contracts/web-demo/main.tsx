@@ -19,7 +19,12 @@ import { shareAcrossTabs } from "./share.ts";
 import { demoApp } from "./app.tsx";
 
 const url = new URL(location.href);
-const live = new FixtureLive(fixtures());
+// `?empty=1` starts with no Spaces or conversations (a new workspace).
+const live = new FixtureLive(
+  url.searchParams.get("empty") === "1"
+    ? { ...fixtures(), space: [], thread: [], message: [] }
+    : fixtures(),
+);
 const feed = new DemoFeed(live);
 // Another tab of the demo sees what this one writes, live.
 shareAcrossTabs(live, feed);

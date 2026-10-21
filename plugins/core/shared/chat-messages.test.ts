@@ -130,8 +130,13 @@ test("participant rows become senders with stable fallbacks", () => {
     }, "p"),
     { id: "p", type: "agent", name: "North", agentId: "north" },
   );
-  assert.equal(chatSender(undefined, "x").name, "Participant");
-  assert.equal(chatSender(undefined, "x").type, "system");
+  // An unread participant (a refused read) is neutral, never a bot.
+  assert.deepEqual(chatSender(undefined, "x"), {
+    id: "x",
+    type: "human",
+    name: "Someone",
+    unknown: true,
+  });
 });
 
 test("tool results fold into their call; failures and internal rows project correctly", () => {
@@ -325,4 +330,24 @@ test("text a budgeted read deferred stays in order, to load on demand", () => {
     assetId: "result",
     kind: "text",
   });
+});
+
+test("unread senders take a neutral identity from what their message says", () => {
+  const unknown = (id: string) => chatSender(undefined, id);
+  const messages = projectMessages([
+    { id: "h", senderId: "p1", content: [text("Hello")] },
+    {
+      id: "a",
+      senderId: "p2",
+      content: [text("Reply")],
+      metadata: { copilotzWorkflow: { kind: "agent_output" } },
+    },
+  ], unknown);
+  assert.deepEqual(
+    messages.map((message) => [message.sender.type, message.sender.name]),
+    [
+      ["human", "Someone"],
+      ["agent", "Agent"],
+    ],
+  );
 });

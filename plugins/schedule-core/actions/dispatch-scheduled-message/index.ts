@@ -377,6 +377,14 @@ async function dispatchScheduledMessage(
         },
       },
     });
+    // A scheduled message is activity: the thread moves up recent lists.
+    await transaction.collections.thread.commands.recordMessage({
+      id: threadRef.id,
+      messageId: messageRef.id,
+    }, {
+      operationKey: "message:activity",
+      metadata: { core: { threadId: threadRef.id } },
+    });
     return ({
       status: "sent",
       messageId: messageRef.id,

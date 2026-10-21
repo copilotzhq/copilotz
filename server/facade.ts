@@ -4,11 +4,8 @@ import {
   deviceOrigin,
   validateAllowedOrigins,
 } from "../plugins/server/shared/device-origin.ts";
-import {
-  type DeviceUpgrade,
-  hostedDeviceUpgrade,
-  trackHostedDeviceSocket,
-} from "../runtime/subscriptions/hosting.ts";
+import type { DeviceUpgrade } from "./device.ts";
+import { upgradeWebSocket } from "../dependencies/oxian-http.ts";
 import { defaultServerFacade } from "../plugins/server/resources/server/default/index.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
@@ -587,7 +584,34 @@ export function createServerFacadeFetchHandler(
       throw appError(404, "route_not_found", "Route was not found.");
     },
   } as const;
-  const fetch = createHttpFetchHandler(app, {
+  const fetch = createHttpFetchHandler({
+    async handle(request) {
+      try {
+        return await app.handle(request);
+      } catch (error) {
+        const typed = error as { status?: number; code?: string };
+        const context = request.context as FacadeContext | undefined;
+        const endpoint = context?.serverEndpointKey
+          ? endpointByKey(routes, context.serverEndpointKey)
+          : undefined;
+        const actionRoute = endpoint?.kind === "action" ||
+          endpoint?.kind === "http" &&
+            "action" in (httpRoutes.get(endpoint.id) ?? {});
+        if (
+          actionRoute && typed?.status === 403 && typed.code === "forbidden" &&
+          !context?.serverScope.actor &&
+          !["authorization", "cookie", "x-api-key", "x-copilotz-flow"].some(
+            (name) => request.headers?.[name]?.trim(),
+          )
+        ) {
+          // Proof alone is a receipt capability. A host-selected actor or a
+          // supplied credential retains 403; anonymous access refusal is 401.
+          throw appError(401, "forbidden", "Authentication is required.");
+        }
+        throw error;
+      }
+    },
+  }, {
     basePath: facade.basePath,
     requestBodyPolicy(request) {
       const endpoint = routes.match(
@@ -634,7 +658,24 @@ export function createServerFacadeFetchHandler(
           "Application route was not found.",
         );
       }
-      return await authenticateHttpRequest(request, application, facade, match);
+      const authenticated = await authenticateHttpRequest(
+        request,
+        application,
+        facade,
+        match,
+      );
+      if (
+        authenticated instanceof Response && authenticated.status === 403 &&
+        !["authorization", "cookie", "x-api-key", "x-copilotz-flow"].some(
+          (name) => request.headers.get(name)?.trim(),
+        )
+      ) {
+        return new Response(authenticated.body, {
+          status: 401,
+          headers: authenticated.headers,
+        });
+      }
+      return authenticated;
     },
   });
   const allowedOrigins = validateAllowedOrigins(
@@ -648,9 +689,8 @@ export function createServerFacadeFetchHandler(
     if (origin === false) {
       return new Response("Device origin refused", { status: 403 });
     }
-    // This must precede adapter discovery: Node prepare() can upgrade synchronously.
-    const upgradeDevice = options.upgradeDevice ?? hostedDeviceUpgrade(request);
-    if (!upgradeDevice) return fetch(request);
+    const upgradeDevice: DeviceUpgrade = options.upgradeDevice ??
+      upgradeWebSocket;
     if (
       request.method !== "GET" ||
       request.headers.get("upgrade")?.toLowerCase() !== "websocket"
@@ -665,12 +705,11 @@ export function createServerFacadeFetchHandler(
     const { socket, response, requestDeadline } = upgradeDevice(
       request,
     );
-    trackHostedDeviceSocket(request, socket);
     attachDeviceSocket(socket, {
       ...facade.deviceLimits,
       ...options.deviceLimits,
       requestDeadline,
-      async authenticate(credentials) {
+      async authenticate(credentials, lifetime) {
         if (
           !credentials || typeof credentials !== "object" ||
           Array.isArray(credentials) || !Object.keys(credentials).length
@@ -713,7 +752,29 @@ export function createServerFacadeFetchHandler(
             "Device authentication refused",
           );
         }
+        const authority = session.serverScope.authority!;
+        if (authority.authorityBasis.kind === "session") {
+          const runtime = (!session.databaseSchema ||
+              session.databaseSchema === application.config.databaseSchema)
+            ? application
+            : await application.databaseScope(session.databaseSchema);
+          const watcher = await runtime.authorization.observeCredential(
+            authority,
+            (error) => {
+              if ((error as { code?: string }).code === "revoked") {
+                lifetime.revoked();
+              }
+            },
+          );
+          if (lifetime.signal.aborted) watcher.close();
+          else {lifetime.signal.addEventListener(
+              "abort",
+              () => watcher.close(),
+              { once: true },
+            );}
+        }
         return {
+          principalKind: authority.principal.kind,
           async observe(collection, query, observation) {
             const endpoint = routes.routes.find((route) =>
               route.endpoint.kind === "collection" &&

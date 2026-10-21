@@ -71,6 +71,13 @@ test("the feed reads the newest messages and shows them oldest first", async () 
       checkpoint: "2",
       from: "1",
       to: "2",
+      // Field-ordered windows carry the owner's selected order.
+      order: [
+        "message:run-c:output",
+        "message:run-b:output",
+        "01K8B",
+        "message:run-a:output",
+      ],
       changes: [
         { seq: "2", id: "01K8A", record: null },
         {

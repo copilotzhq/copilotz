@@ -387,13 +387,28 @@ milliseconds. An explicit upgrade takes precedence when using an adapter too.
 For Deno, `upgradeDevice: (request) => Deno.upgradeWebSocket(request)` is
 sufficient. No access to private application state is needed.
 
-Deno awaits recovery admission before the upgrade. Oxian 0.22's Node listener
-requires a synchronous upgrade decision, so its native handshake may precede
-recovery admission; bounded device input is released only after admission and
-facade binding succeed. A failed admission closes the connection. Custom
-deadlines flow to the existing device renewal timer. See
-[Subscriptions](subscriptions.md) for client setup, reauthentication and
-revocation.
+The default device upgrade uses `upgradeWebSocket(request, { protocol? })` from
+`@oxian/oxian-js/http` (Oxian 0.23.0). It works in Copilotz listeners and in
+Oxian CLI `start`/`dev` routes with either worker transport. Origin and recovery
+admission precede native 101 on both Deno and Node. Oxian tracks sockets for
+listener drain and shutdown; there is no Request-identity registry. Keep
+`upgradeDevice` only for raw Fetch hosts/tests whose listeners do not use Oxian,
+such as a direct `Deno.serve` callback. Release Oxian 0.23.0 before Copilotz.
+
+Deno's native WebSocket API assembles messages before delivery, so it cannot
+bound pre-delivery assembly. Node bounds native messages. Both enforce device
+post-delivery byte/count limits. Custom deadlines feed the existing renewal
+timer. See [Subscriptions](subscriptions.md) for refusal reasons and the
+terminal session notice/4401 close code, and `device.onAuthState` for routing to
+sign-in.
+
+Action access refusals without an authentication credential return **401**.
+Requests carrying a credential that is invalid or not allowed return **403**.
+This applies to generic HTTP Actions and Core HTTP Actions. Authorization,
+API-key, flow-token and cookie headers count as presented credentials; the
+credential-projection proof alone does not authenticate a caller. Origin
+refusals always remain 403. Resource-specific concealment and cursor errors keep
+their existing status codes.
 
 ## What this unlocks
 
@@ -518,3 +533,10 @@ For Deno hosts, enable `"no-legacy-abort"` in `deno.json`'s `unstable` list (or
 pass `--unstable-no-legacy-abort`). Request signals then represent cancellation,
 and successful responses do not trigger the legacy abort warning. See
 [Deno's request abort migration](https://docs.deno.com/runtime/reference/deno_serve_legacy_abort/).
+
+A completed self-logout receipt remains observable with its initiating
+`x-copilotz-credential-proof`, even after the authenticating session is revoked.
+The observation returns only `operation.completed`; retrieve the authorized
+Action result through `/operations/:id/result`. A wrong proof, different tenant,
+other operation or multi-operation selection gains no recovery access. The SDK
+re-admits a single-operation observation once if it is revoked during logout.

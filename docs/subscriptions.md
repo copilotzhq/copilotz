@@ -91,11 +91,14 @@ Deno.serve(app.fetch);
 An explicit upgrade takes precedence over the adapter default and must suit the
 native host. The existing facade still owns session authentication, Collection
 exposure, admission and revocation. The binding renews one second before a
-supplied request deadline. Deno completes recovery admission before upgrading.
-With Oxian 0.22's synchronous Node upgrade decision, the native handshake can
-complete first; device messages remain bounded and held until recovery admission
-succeeds. Worker paths remain reserved for worker admission; configure them
-separately from `/api/device`.
+supplied request deadline. The default is Oxian 0.23.0's portable
+`upgradeWebSocket(request, { protocol? })`, including routes hosted by
+`oxian start` or `dev` with either worker transport. Deno and Node complete
+recovery admission and Origin validation before 101. Worker paths remain
+reserved for worker admission; configure them separately from `/api/device`. On
+Deno, the native WebSocket assembles a message before delivery, so its
+pre-delivery size cannot be bounded through that API. Node bounds native
+assembly; both runtimes enforce the device's post-delivery limits.
 
 An open socket reauthenticates explicitly; changing an HTTP cookie alone does
 not change a channel's authority. Each channel renews after five minutes, fences
@@ -145,12 +148,16 @@ snapshot.
 
 Live queries accept scalar `filter` predicates, scalar `where` on declared
 scalar fields (plus `id`), conjunctive `all`, `limit` (1–1000), and ascending or
-descending `id` order. String ranges use SQL `COLLATE "C"` and Unicode
-code-point ordering in memory. `eqIgnoreCase`, `inIgnoreCase`, `jsonEquals`,
-JSON containment (`contains`/`containsAny`), timestamp predicates, cursors,
-includes, text search, and other ordering fields are refused. These restrictions
-apply to policy filters as well as client queries. Use typed scalar predicates
-for complex data.
+descending order on `id`, `namespace`, `createdAt`, `updatedAt`, or a declared
+string, numeric, or boolean scalar field (optionally nullable). The ID tiebreak
+uses the same direction. Missing/null values sort last ascending and first
+descending, matching SQL. Timestamp ordering retains SQL microseconds even when
+the public record timestamp is less precise. String ordering and ranges use SQL
+`COLLATE "C"` and Unicode code-point ordering in memory. `eqIgnoreCase`,
+`inIgnoreCase`, `jsonEquals`, JSON containment (`contains`/`containsAny`),
+timestamp predicates, cursors, includes, text search, and non-scalar/undeclared
+ordering fields are refused. These restrictions apply to policy filters as well
+as client queries. Use typed scalar predicates for complex data.
 
 Configure owner limits through `engine.subscriptionLimits`:
 
@@ -222,3 +229,43 @@ permission notices, checkpoint resume and revocation still apply. Row
 query/content options cannot be combined with progressOnly, and a progress
 cursor cannot resume a row selection. `/web` uses this mode for query-Action
 dependencies.
+
+For example, the newest message window is:
+
+```ts
+client.collections.observe("message", {
+  where: { threadId },
+  order: { field: "createdAt", direction: "desc" },
+  limit: 100,
+});
+```
+
+Inserts, sort-key updates and deletes update the matching-ID index from changed
+records. Deleted or displaced rows refill from that index, without a database
+read or full predicate rescan during commit. Initial admission builds the index
+once within the existing cache bounds. Ordered batches carry the exact selected
+ID order, which the SDK applies atomically with their changes.
+
+Device subscription errors include a stable `reason`: `query_unsupported` for
+unsupported predicates/order, `limit_exceeded` for query/predicate size or row
+limits, `quota_exceeded` for admission capacity, `forbidden` for policy or
+exposure refusal, `unbound_collection` for unavailable bindings, and
+`unavailable` for other failures. Hidden and unexposed collections share
+`forbidden`; error frames contain no filter values. Server debug logs record
+collection, reason and principal kind only. The SDK preserves `reason` on the
+channel error.
+
+Revoking the authenticating session sends
+`{t:"session",state:"revoked",code:"session_revoked"}` and closes the socket
+with code **4401** (`Session revoked`), including when every collection channel
+has been detached. Device auth listeners receive the terminal state once:
+
+```ts
+const unsubscribeAuth = device.onAuthState(({ state }) => {
+  if (state === "revoked") routeToSignIn();
+});
+```
+
+Revocation fences channels and stops automatic reconnect. After establishing a
+new HTTP session, explicitly call `device.reauthenticate()` with fresh proof.
+Collection-specific policy revocation still ends only the affected channel.

@@ -126,6 +126,7 @@ Deno.test("SEC3 commits evaluate only changed rows and never serialize predicate
       const sub = await f.observe(f.authority, "entry", {
         filter: { field: "title", in: constants },
         limit: i + 1,
+        order: { field: i % 2 ? "updatedAt" : "id", direction: "desc" },
       });
       subs.push(sub);
       await reader(sub).next();

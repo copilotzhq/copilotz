@@ -1,4 +1,5 @@
 /** Portable device binding primitives; no host or database dependencies. */
+export const DEVICE_SESSION_REVOKED = 4401;
 export const DEVICE_VERSION = "1.0";
 export const DEVICE_LIMITS = Object.freeze({
   frame: 1024 * 1024,

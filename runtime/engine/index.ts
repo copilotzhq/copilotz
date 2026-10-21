@@ -60,6 +60,11 @@ export type {
   StaffAuthorizationSource,
 } from "../authorization/directory.ts";
 export { createDatabaseStaffSource } from "../authorization/directory.ts";
+export { defineDatabaseDirectoryRead } from "../authorization/directory-read.ts";
+export type {
+  DatabaseDirectoryRead,
+  DirectoryReader,
+} from "../authorization/directory-read.ts";
 
 export {
   inspectAuthorityUpgrade,

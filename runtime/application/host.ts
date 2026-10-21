@@ -329,12 +329,20 @@ export function createHostServices(
   );
   // Public host services are trusted capabilities. An existing invocation keeps
   // its narrower authority, including when an HTTP handler calls a host method.
-  const bindHost = <T extends object>(value: T): T => {
+  const bindHost = <T extends object>(value: T, path: readonly string[]): T => {
     const bound = Object.create(Object.getPrototypeOf(value));
     for (const [key, member] of Object.entries(value)) {
       bound[key] = typeof member === "function"
         ? async (...args: unknown[]) => {
-          if (captureCollectionInvocation()) {
+          const invocation = captureCollectionInvocation();
+          if (invocation?.callHostCapability) {
+            return invocation.callHostCapability(
+              [...path, key],
+              args,
+              scope((args[1] ?? {}) as ApplicationScope),
+            );
+          }
+          if (invocation) {
             return Reflect.apply(member, value, args);
           }
           const options = (args[1] ?? {}) as ApplicationReadOptions;
@@ -355,10 +363,13 @@ export function createHostServices(
           }, () => Reflect.apply(member, value, args));
         }
         : member && typeof member === "object" && key !== "definition"
-        ? bindHost(member)
+        ? bindHost(member, [...path, key])
         : member;
     }
     return bound;
   };
-  return { actions: bindHost(actions), collections: bindHost(collections) };
+  return {
+    actions: bindHost(actions, ["actions"]),
+    collections: bindHost(collections, ["collections"]),
+  };
 }

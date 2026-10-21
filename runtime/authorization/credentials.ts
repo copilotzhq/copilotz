@@ -1,3 +1,4 @@
+import { captureCollectionCommandInvocation } from "./invocation-command.ts";
 /** Owner-only credential effects. Durable rows contain public claims, never tokens. */
 import {
   type AuthenticatedAuthority,
@@ -5,10 +6,7 @@ import {
   retainedAuthority,
 } from "./authority.ts";
 import { authorizationRefused, type OwnerEvaluator } from "./evaluator.ts";
-import {
-  captureCollectionCommandInvocation,
-  type CollectionInvocationAuthority,
-} from "./invocation.ts";
+import type { CollectionInvocationAuthority } from "./invocation.ts";
 import {
   type CommandContext,
   createSchemaCommandRunner,

@@ -236,6 +236,17 @@ binding is forbidden to authenticated callers, for both reads and writes.
 Explicit `withRetainedAuthority(authority, signal, fn)` scopes from
 `@copilotz/copilotz` retain the same guarantee.
 
+Separate workers install a revocable ambient binding around every user callback:
+Action execute/resume/reconcile, Processor handle/onError and prepare factories.
+The binding survives awaits. Captured same-scope application Action and
+Collection calls use the worker's existing reverse capability and the context
+retained by the owner, including parent provenance and current policy. No host
+authority is sent over the wire. Foreign schemas/namespaces and unsupported host
+ingress are refused; use context capabilities for execution and declared
+directory reads for delegation. Captured application calls accept
+`idempotencyKey`, `metadata` and `signal`; scope options may only name the
+current owner scope. Independent host bootstrap remains trusted.
+
 Policy Collection filters accept only `where`, `contains`, `containsAny` and
 `filter`. The owner validates their shapes and nested predicates before using a
 decision, including mutation filters; malformed filters are refused.
@@ -415,6 +426,67 @@ principal, target scope, provenance, policy, operation and directory source; a
 refused transaction rolls the receipt back with its effects. Staff channels use
 the same 15-minute admission and renewal path.
 
+### Declared directory reads from Actions
+
+`context.directory.get(alias, id)` is a read-only capability for a directory
+Collection in another owner schema **in the same database**. Declare it in
+`authorization.directoryReads`; placement, Collection, fields, byte limit and
+eligible Action aliases are fixed by trusted composition. Caller input selects
+only the declared alias and record ID. There are no list, write or destination
+selection methods, and Processors or independent host calls cannot use it.
+
+```ts
+import { defineDatabaseDirectoryRead } from "@copilotz/copilotz/engine";
+
+const routing = defineDatabaseDirectoryRead({
+  revision: "1",
+  databaseSchema: "directory",
+  namespace: "directory",
+  collection: routes,
+  actions: ["enroll"], // registered, policy-bound Action aliases
+  fields: ["tenant"], // exact top-level projection, no implicit fields
+  maxBytes: 4096, // default 16384, maximum 65536
+  authorize({ authority, id, record }) {
+    // Destination owner policy; inspect fresh state and the retained caller.
+    return record?.active === true &&
+      record.requester === authority.principal.id && record.id === id;
+  },
+});
+// Add to the application's authorization registration:
+// directoryReads: { routing }
+```
+
+The caller's policy must separately return `directoryReads: ["routing"]` for
+`intent.kind === "directory"`, `intent.operation === "get"`. Inspect the exact
+`intent.input.id`, caller scope and `intent.invocation` before granting it. The
+source policy is checked before reading and again before disclosure; the
+declared destination policy must return exactly `true`. Missing declarations,
+undeclared Actions, denial, expired authority, cancellation, unavailable storage
+and oversized results all fail closed. The destination policy receives a
+detached record and retained authority, not a database handle. It must not
+perform writes.
+
+```ts
+const route = await context.directory.get("routing", routingRecordId);
+```
+
+Each call reads current committed directory state through the existing owner
+command transaction; no identity result is cached or replayed by this API.
+Successful reads commit an `authorization.directory` receipt before disclosure.
+Its intent records caller principal, source tenant/namespace, operation and
+Action provenance, declaration revision, destination scope/Collection, projected
+fields, record ID and result digests, and command time. The receipt contains no
+credential or returned record payload. Audit-write failure prevents disclosure.
+Refused reads disclose nothing and roll back with the command; they do not
+create successful-read receipts.
+
+This capability also works through the worker transport, where the owner
+resolves the declaration from its own registration. It does not grant
+cross-owner mutations, transactions, arbitrary queries, or reads from another
+database. Those require a separate authenticated owner-to-owner protocol. Staff
+authorization sources remain restricted to policy evaluation and are not a
+business directory API.
+
 ## Sessions and anonymous flows in Actions
 
 Schema version 14 adds owner-private credential effects. Existing version 13
@@ -472,11 +544,20 @@ a validated `authority.flow` descriptor. The owner consumes it on the
 continuation's first input capture. The same retained Action run may replay; a
 second run is refused.
 
-Flow restrictions apply in addition to policy. A flow can invoke only its
-continuation, read or observe its start and continuation operations, and use the
-continuation's explicitly granted internal collection/session operations. It
-cannot read arbitrary Collections, assets or other flows' operations, even under
-a broad host policy. Flow expiry bounds observation and every command.
+Flow restrictions apply in addition to policy. The credential can directly
+invoke only its continuation and read or observe its start and continuation
+operations. Inside the consumed continuation, `context.actions` may invoke
+transitive child Actions within that exact accepted operation. Each child still
+needs an exact product Action grant; its internal Collection, session, asset and
+directory capabilities still require their own grants. Policy receives
+`intent.invocation`, including the owner-resolved parent run at child capture.
+
+The owner records each descendant's flow, consumed root, accepted operation,
+parent and Action identity in the same transaction as policy and input capture.
+A refused child leaves no delegation receipt. Other operations, tenants and
+direct child calls remain refused; replay returns retained results without
+re-running children. Flow expiry and current authorization checks apply to every
+command.
 
 Credential effects retain only public claims. Session tokens never enter Action
 outputs, event bodies, operation metadata, transaction receipts or live reads.

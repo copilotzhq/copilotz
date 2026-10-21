@@ -24,7 +24,13 @@ async function fixture(
 ) {
   const held = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const executions = { callback: 0, logout: 0 };
+  const executions = {
+    callback: 0,
+    logout: 0,
+    child: 0,
+    grandchild: 0,
+    denied: 0,
+  };
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
@@ -84,6 +90,20 @@ async function fixture(
     id: "auth.callback",
     async execute(input, ctx) {
       executions.callback++;
+      const mode = (input as { descendants?: string }).descendants;
+      if (mode === "allowed") {
+        await ctx.actions.child({}, { operationKey: "child" });
+      }
+      if (mode === "denied") await ctx.actions.denied({});
+      if (mode === "outside") {
+        return {
+          outside: await ctx.operations.start({
+            action: "child",
+            input: {},
+            operationKey: "outside",
+          }),
+        };
+      }
       if ((input as { login?: boolean }).login) {
         await ctx.transaction(async (tx) => {
           await tx.sessions.create({ principal: "flow-account", maxAge: 3600 });
@@ -165,6 +185,32 @@ async function fixture(
     },
   });
   const actions = {
+    child: defineAction({
+      id: "auth.child",
+      async execute(_input, ctx) {
+        executions.child++;
+        await ctx.actions.grandchild({}, { operationKey: "grandchild" });
+        return {};
+      },
+    }),
+    grandchild: defineAction({
+      id: "auth.grandchild",
+      async execute(_input, ctx) {
+        executions.grandchild++;
+        await ctx.collections.entries.create({
+          id: "descendant",
+          value: "committed",
+        });
+        return {};
+      },
+    }),
+    denied: defineAction({
+      id: "auth.denied",
+      execute() {
+        executions.denied++;
+        return {};
+      },
+    }),
     hold,
     login,
     logout,
@@ -208,12 +254,12 @@ async function fixture(
             const proof = authority.scope.bindings["@credential-proof"];
             const isSession = authority.authorityBasis.kind === "session";
             const permitted = Object.keys(actions).filter((key) =>
-              !strict ||
-              (key === "callback"
-                ? !!authority.flow
-                : key === "logout"
-                ? isSession
-                : true)
+              key !== "denied" && (!strict ||
+                (key === "callback"
+                  ? !!authority.flow
+                  : key === "logout"
+                  ? isSession
+                  : true))
             );
             return {
               actions: Object.fromEntries(
@@ -1079,6 +1125,85 @@ Deno.test("Completed logout submission replays under proof-only recovery without
       403,
     );
     assertEquals(f.executions.logout, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("Flow delegates transitive child effects only inside its consumed operation and exact product grants", async () => {
+  const f = await fixture();
+  try {
+    for (const mode of ["allowed", "denied", "outside"]) {
+      const start = await f.result(await f.submit("start", `flow-${mode}`));
+      const headers = {
+        "x-copilotz-flow": start.headers.get("x-copilotz-flow")!,
+      };
+      assertEquals(
+        (await f.request("/actions/auth/child", {}, headers)).status,
+        403,
+      );
+      const input = { descendants: mode };
+      const submit = () =>
+        f.request("/actions/auth/callback", input, {
+          ...headers,
+          "idempotency-key": `callback-${mode}`,
+        });
+      const accepted = await submit();
+      assertEquals(accepted.status, 202, await accepted.clone().text());
+      const id = (await accepted.json()).data.operationId;
+      const response = await f.result(id, headers);
+      assertEquals(
+        response.status,
+        mode === "denied" ? 403 : 200,
+        await response.clone().text(),
+      );
+      if (mode === "outside") {
+        const outside = (await response.json()).data.outside;
+        const handle = await f.app.attach({
+          operationId: outside,
+          namespace: "main",
+          databaseSchema: f.schema,
+        });
+        try {
+          await handle.done;
+          assertEquals(
+            (await f.app.operationStatus({
+              operationId: outside,
+              namespace: "main",
+              databaseSchema: f.schema,
+            }))?.state,
+            "failed",
+          );
+        } finally {
+          await handle.detach();
+        }
+      }
+      if (mode === "allowed") {
+        assertEquals((await submit()).status, 202);
+        assertEquals((await f.result(id, headers)).status, 200);
+        assertEquals(f.executions.child, 1);
+        assertEquals(f.executions.grandchild, 1);
+        assertEquals(
+          (await f.app.host.collections.entries.get({ id: "descendant" }))
+            ?.value,
+          "committed",
+        );
+      }
+      assertEquals(
+        (await f.request("/actions/auth/child", {}, headers)).status,
+        403,
+      );
+    }
+    assertEquals(f.executions.child, 1);
+    assertEquals(f.executions.grandchild, 1);
+    assertEquals(f.executions.denied, 0);
+    const receipts = await f.db.query<{ intent: { action: string } }>(
+      `SELECT intent FROM "${f.schema}".owner_receipts WHERE kind='flow.descendant'`,
+    );
+    assertEquals(receipts.rows.map((row) => row.intent.action).sort(), [
+      "auth.child",
+      "auth.grandchild",
+    ]);
   } finally {
     await f.close();
   }

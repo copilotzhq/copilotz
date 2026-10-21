@@ -21,6 +21,8 @@ export type ServerCollectionMutationConstraints = Readonly<{
 }>;
 
 export type ServerConstraints = Readonly<{
+  /** Declared directory read aliases. Policy must inspect the exact requested id. */
+  directoryReads?: readonly string[];
   /** Authenticated root event types, including adapter-validated channel input. */
   events?: readonly string[];
   /** Opaque catalog selection keys chosen by owner policy for admitted work. */

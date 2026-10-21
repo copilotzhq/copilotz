@@ -247,6 +247,8 @@ export interface RuntimeContext<
   readonly adapters: TAdapters;
   readonly actions: TActions;
   readonly collections: TCollections;
+  readonly directory:
+    import("../authorization/directory-read.ts").DirectoryReader;
   readonly vectors: VectorReader;
   readonly content: RuntimeContent;
   readonly streams: RuntimeStreams;

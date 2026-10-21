@@ -159,6 +159,7 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
       ].includes(leaf);
   }
   if (snapshot) return false;
+  if (root === "directory") return path.length === 2 && method === "get";
   if (root === "actions") {
     return path.length === 2 ||
       path.length === 3 && leaf === "prepare";

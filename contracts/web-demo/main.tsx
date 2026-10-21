@@ -35,7 +35,12 @@ const runtime: BrowserRuntime = await createBrowserRuntime({
     demoApp,
   ],
   live,
-  actions: demoActions(live, feed),
+  // `?slow=<ms>` delays creating a conversation; `?fail=create` loses the
+  // first create's response, to show Retry.
+  actions: demoActions(live, feed, {
+    createLatency: Number(url.searchParams.get("slow") ?? "0"),
+    failFirstCreate: url.searchParams.get("fail") === "create",
+  }),
   adapters: { core: { feed } },
   storage: {
     url: shellUrlStorageAdapter(

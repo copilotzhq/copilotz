@@ -163,3 +163,51 @@ across unchanged rows. New batch ordering is a protocol addition for updated
 clients. Oxian must release 0.23.0 before Copilotz. Deno's native WebSocket
 assembles messages before delivery, so only Node can bound pre-delivery
 reassembly; both retain device post-delivery limits.
+
+## Round 3 — stale cookies and observation transport failures
+
+Current: `server/authentication.ts:174-193` verifies a cookie token but does not
+normalize failed verification or revoked owner-session rows to anonymous host
+authority. `server/facade.ts:601-609` classifies the raw cookie header as a
+credential. `runtime/subscriptions/predicate.ts:211-230` admits scalar `where`
+values only, while `plugins/core/views/reads.ts:176` supplies an ID `in` object;
+`runtime/collections/query.ts:414-427` also needs the same normalization.
+
+Target: discard invalid session cookies at authentication, retain the host's
+anonymous authority, and clear the configured cookie on every resulting HTTP
+response, including 401. Duplicate configured cookies remain a hard refusal.
+Host cookie adapters explicitly report discarded credentials with anonymous
+scope; they must not turn credential verification failures into access-denied
+responses. Cryptographically verified self-revocation receipt recovery remains
+restricted to its original proof and operation, including session transfer.
+Fresh credential projection takes precedence over cookie clearing. The trusted
+host cookie result is `invalidSessionCookie: true` for invalid (anonymous),
+`false` for verified by the host, and omitted for owner token verification.
+
+Normalize ID equality/membership into the existing bounded predicate compiler
+for SQL, live admission and client matching. Compile membership constants once;
+retain 32-value/node/byte limits, incremental commit evaluation and C ordering.
+Test the exact 32-participant query through the real owner and compare `list()`
+after inserts, updates and deletes on both backends.
+
+Reproduce the observed logout 500 and page-load 503 through the real product
+Oxian host with local generated secrets and `--no-llm`. Capture response bodies
+and correlate transport teardown with worker operations. Fix the responsible
+layer; any upstream change is delivered as a patch with a bounded regression. Do
+not retry potentially executed work across the no-replay boundary.
+
+Validation: stale revoked/expired/unknown/bad-signature cookies, anonymous
+sign-in, principal-required 401 and matching clearing attributes; duplicate
+cookies and all proof-bound receipt negatives. Real hosted two-tab logout and
+repeated page loads, targeted backend tests and both full suites, docs and
+gates.
+
+Transport evidence: validated credit can arrive after pending work is removed,
+either discarded at validation or queued for delivery before completion. The
+hypervisor rejected both. Also, an aborted unsent per-stream frame was treated
+as whole-connection failure. Honor validated credit and isolate pre-send
+cancellation. These changes are an upstream patch, preserving protocol
+validation and the no-replay boundary. The product stale-cookie page-load probe
+reproduced observe 503 (plain `Service Unavailable`, Retry-After 1) on every
+attempt; patched authentication and transport returned completed proof-bound
+receipts on every attempt.

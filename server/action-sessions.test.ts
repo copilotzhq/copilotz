@@ -39,6 +39,7 @@ async function fixture(
     committed(): void;
     after: Promise<void>;
   },
+  anonymousHost = false,
 ) {
   const detached = Promise.withResolvers<{ code: string; flow?: string }>();
   const seen: {
@@ -431,7 +432,9 @@ async function fixture(
                     request.headers.get("x-tenant") ?? "fixture",
                   ),
                   operationMetadata: requestMetadata,
-                  actor: { id: "person", name: "Authenticated actor" },
+                  ...(anonymousHost
+                    ? {}
+                    : { actor: { id: "person", name: "Authenticated actor" } }),
                 };
               },
               expose: { actions: true, collections: true, channels: false },
@@ -584,7 +587,7 @@ Deno.test("Action login replay projects only cookies; logout revokes an open cha
       );
       assert(!JSON.stringify(rows.rows).includes(token), table);
     }
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "session",
@@ -620,7 +623,7 @@ Deno.test("Credential projection reauthorizes operation access in the credential
     const cookie = (await f.result(operation)).headers.get("set-cookie")!;
     const pair = cookie.split(";")[0];
     const token = pair.slice(pair.indexOf("=") + 1);
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "session",
@@ -742,7 +745,7 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
         await f.result((await reused.json()).data.operationId, flow),
       );
     } else await forbidden(reused);
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "flow",
@@ -1010,7 +1013,7 @@ Deno.test("HTTP Actions project session effects committed by their nested Action
         cookie,
         "idempotency-key": "after-logout",
       })).status,
-      403,
+      202,
     );
   } finally {
     await f.close();
@@ -1455,6 +1458,9 @@ Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation t
         "Session revoked",
       );
     }
+    // Invalid cookies now fall back to the host's anonymous policy. Deny that
+    // ordinary read policy here to isolate the receipt-only recovery exception.
+    f.denyOperationReads();
     for (
       const [ids, headers] of [
         [[logoutId], { cookie, "x-copilotz-credential-proof": "b".repeat(64) }],
@@ -1466,7 +1472,11 @@ Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation t
       const refused = await f.request("/operations/observe", {
         operationIds: ids,
       }, headers);
-      assertEquals(refused.status, 403, await refused.text());
+      assertEquals(
+        refused.status,
+        404,
+        await refused.text(),
+      );
     }
   } finally {
     for (const device of devices) device.close();
@@ -1689,6 +1699,100 @@ Deno.test("Flow detached Processors retain the flow; alarms require independent 
       ),
     );
     assertEquals(f.executions.child, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("SEC3 stale session cookies clear and permit anonymous sign-in, but require 401 for private Actions", async () => {
+  let now = Date.now();
+  const f = await fixture(
+    () => new Date(now),
+    true,
+    undefined,
+    false,
+    undefined,
+    true,
+  );
+  try {
+    const login = await f.result(await f.submit("login", "stale-login"));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const logout = await f.submit("logout", "stale-logout", { cookie });
+    assertEquals((await f.result(logout, { cookie })).status, 200);
+    for (
+      const invalid of [
+        cookie,
+        "__Host-copilotz_session=bad.signature",
+        // Keep valid claims but change the first signature byte.
+        cookie.replace(
+          /\.([A-Za-z0-9_-])/,
+          (_, first: string) => `.${first === "A" ? "B" : "A"}`,
+        ),
+        "__Host-copilotz_session=",
+      ]
+    ) {
+      const denied = await f.request("/actions/logout", {}, {
+        cookie: invalid,
+        "idempotency-key": crypto.randomUUID(),
+      });
+      assertEquals(denied.status, 401, await denied.clone().text());
+      assertEquals(
+        denied.headers.get("set-cookie"),
+        "__Host-copilotz_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+      );
+      const signIn = await f.request("/actions/replay", {}, {
+        cookie: invalid,
+        "idempotency-key": crypto.randomUUID(),
+      });
+      assertEquals(signIn.status, 202, await signIn.clone().text());
+      assert(
+        signIn.headers.get("set-cookie"),
+        "Discarded cookie is cleared or replaced on the sign-in response",
+      );
+      const accepted = (await signIn.json()).data.operationId;
+      const fresh = await f.result(accepted, { cookie: invalid });
+      assertEquals(fresh.status, 200, await fresh.clone().text());
+      assert(/Max-Age=[1-9][0-9]*/.test(fresh.headers.get("set-cookie") ?? ""));
+      assert(!fresh.headers.get("set-cookie")?.includes("Max-Age=0"));
+      assertEquals(
+        f.seen.findLast((entry) =>
+          entry.intent.kind === "action" &&
+          entry.intent.operation === "admit" &&
+          entry.intent.resource === "replay"
+        )?.authority.authorityBasis.kind,
+        "grant",
+      );
+    }
+    const unknownResult = await f.result(
+      await f.submit("replay", "unknown-session"),
+    );
+    const unknownCookie =
+      unknownResult.headers.get("set-cookie")!.split(";")[0];
+    await f.db.query(
+      `DELETE FROM "${f.schema}".authorization_sessions WHERE principal='replayed'`,
+    );
+    const unknown = await f.request("/actions/logout", {}, {
+      cookie: unknownCookie,
+      "idempotency-key": "unknown",
+    });
+    assertEquals(unknown.status, 401, await unknown.clone().text());
+    assert(unknown.headers.get("set-cookie")?.includes("Max-Age=0"));
+    now += 3600_001;
+    const expired = await f.request("/actions/logout", {}, {
+      cookie,
+      "idempotency-key": "expired",
+    });
+    assertEquals(expired.status, 401, await expired.clone().text());
+    assert(expired.headers.get("set-cookie")?.includes("Max-Age=0"));
+    const duplicate = await f.request("/actions/replay", {}, {
+      cookie: `${cookie}; ${cookie}`,
+      "idempotency-key": "duplicate-stale",
+    });
+    assertEquals(duplicate.status, 403);
+    assertEquals(
+      (await duplicate.json()).error.code,
+      "duplicate_session_cookie",
+    );
   } finally {
     await f.close();
   }

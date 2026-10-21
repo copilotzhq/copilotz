@@ -4,6 +4,9 @@ import type {
 } from "../plugins/server/shared/contracts.ts";
 
 export type FacadeContext = Readonly<{
+  invalidSessionCookie?: true;
+  receiptAuthority?:
+    import("../runtime/authorization/authority.ts").AuthenticatedAuthority;
   sessionCookie?:
     import("../plugins/server/shared/contracts.ts").SessionCookieOptions;
   serverScope: ServerAuthorizedScope;

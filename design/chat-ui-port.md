@@ -245,6 +245,13 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   state and after No Space; sections declare `params`; the agents slot clips;
   unread participants are neutral ("Someone", "Agent", `unknown`); admin shows
   thread names and calendar-day activity buckets (`formatBucket`).
+- 2026-10-21 (E2E round 3): the composer picks recipients (`@` mentions over the
+  thread's agents, else `resources.chat.defaultRecipients`, default `"first"`)
+  and always sends them; configured agents join through `membership`. A new chat
+  chooses its thread id in the browser (`pendingThread`), shows its message at
+  once, and a retry continues the same thread (`collection_conflict` is done).
+  Markdown accepts `\(…\)` and `\[…\]`. Failed tool calls light no section dot.
+  Reconnecting shows one debounced header indicator (`ConnectionStatus`).
 
 ## Held reads in nested Views
 

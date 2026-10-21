@@ -1,3 +1,4 @@
+import { sessionCookieHeader } from "./session-cookie.ts";
 import { retainedAuthority } from "../runtime/authorization/authority.ts";
 import { attachDeviceSocket, type DeviceSessionOptions } from "./device.ts";
 import {
@@ -160,6 +161,8 @@ export function createServerFacadeFetchHandler(
         application,
         context.serverScope,
         read,
+        undefined,
+        context.receiptAuthority,
       );
       if (endpoint.kind === "http") {
         const route = httpRoutes.get(endpoint.id);
@@ -601,7 +604,9 @@ export function createServerFacadeFetchHandler(
           actionRoute && typed?.status === 403 && typed.code === "forbidden" &&
           !context?.serverScope.actor &&
           !["authorization", "cookie", "x-api-key", "x-copilotz-flow"].some(
-            (name) => request.headers?.[name]?.trim(),
+            (name) =>
+              (name !== "cookie" || !context?.invalidSessionCookie) &&
+              request.headers?.[name]?.trim(),
           )
         ) {
           // Proof alone is a receipt capability. A host-selected actor or a
@@ -631,6 +636,30 @@ export function createServerFacadeFetchHandler(
         : { maxBytes: 1024 * 1024 };
     },
     responseHeaders: options.responseHeaders,
+    finalizeResponse(response, context) {
+      if (!(context as FacadeContext | undefined)?.invalidSessionCookie) {
+        return response;
+      }
+      const name = facade.sessionCookie?.name ?? "__Host-copilotz_session";
+      const headers = new Headers(response.headers);
+      // A committed replacement wins; never append a clear after fresh login.
+      if (
+        !headers.getSetCookie().some((cookie) =>
+          cookie.split("=", 1)[0].trim() === name
+        )
+      ) {
+        headers.append(
+          "set-cookie",
+          sessionCookieHeader("", 0, facade.sessionCookie),
+        );
+      }
+      headers.set("cache-control", "no-store");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    },
     onError: options.onError,
     rawBody(_request, context) {
       const key = (context as FacadeContext | undefined)?.serverEndpointKey;

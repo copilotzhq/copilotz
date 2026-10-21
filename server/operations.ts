@@ -28,6 +28,8 @@ export async function createHttpOperations(
   adapters = Object.values(
     application.plugins?.adapters.http ?? {},
   ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[],
+  receiptAuthority?:
+    import("../runtime/authorization/authority.ts").AuthenticatedAuthority,
 ) {
   const namespace = scope.namespace ?? application.config.namespace!;
   const databaseSchema = scope.databaseSchema ??
@@ -39,8 +41,10 @@ export async function createHttpOperations(
     if (!scope.authority) {
       throw failure("forbidden", 403, "Retained authority is required.");
     }
+    const recovered = receiptAuthority &&
+      await runtime.authorization.logoutReceipt(receiptAuthority, operationId);
     const record = await runtime.authorization.operation(
-      scope.authority,
+      recovered?.state === "completed" ? receiptAuthority! : scope.authority,
       operationId,
     );
     return {
@@ -139,7 +143,7 @@ export async function createHttpOperations(
       selection.operationIds?.length === 1
     ) {
       let receipt = await runtime.authorization.logoutReceipt(
-        scope.authority,
+        receiptAuthority ?? scope.authority,
         selection.operationIds[0],
       );
       if (receipt) {
@@ -155,7 +159,7 @@ export async function createHttpOperations(
               selection.signal?.throwIfAborted();
               // Subscribe before rereading so completion cannot fall in a gap.
               receipt = await runtime.authorization.logoutReceipt(
-                scope.authority,
+                receiptAuthority ?? scope.authority,
                 operationId,
               );
               if (!receipt) {
@@ -221,7 +225,7 @@ export async function createHttpOperations(
           operationId: receipt.operationId,
           async authorizePublication(publish) {
             const current = await runtime.authorization.logoutReceipt(
-              scope.authority!,
+              receiptAuthority ?? scope.authority!,
               operationId,
             );
             if (current?.state !== "completed") {

@@ -358,6 +358,8 @@ type Mounted = {
   live: InstanceType<typeof FixtureLive>;
   feed: TestFeed;
   calls: { alias: string; input: Record<string, unknown> }[];
+  /** Fail the next createThread after creating it (an observe error). */
+  failCreateOnce?: () => boolean;
   url: () => URL;
   local: ReturnType<typeof memory>;
   container: {
@@ -381,11 +383,33 @@ async function mount(
   const feed = new TestFeed();
   const local = options.local ?? memory();
   const calls: Mounted["calls"] = [];
+  const hooks: Partial<Mounted> = {};
   const actions: ActionTransport = {
     invoke(alias, input, invocation) {
       invocation.accepted(`op-${calls.length + 1}`);
       calls.push({ alias, input: input as Record<string, unknown> });
       const data = input as Record<string, unknown>;
+      if (alias === "createThread") {
+        const id = String(data.id);
+        if (live.get("thread", id)) {
+          return Promise.reject(
+            Object.assign(new Error("Record already exists."), {
+              code: "collection_conflict",
+              status: 409,
+            }),
+          );
+        }
+        live.put("thread", {
+          id,
+          name: String(data.name ?? "New conversation"),
+          status: "active",
+          participantIds: ["p-ana", "p-north"],
+          updatedAt: new Date().toISOString(),
+        });
+        if (hooks.failCreateOnce?.()) {
+          return Promise.reject(new Error("Internal application error"));
+        }
+      }
       if (alias === "createThreadMessage") {
         live.put("message", {
           id: String(data.id),
@@ -440,7 +464,7 @@ async function mount(
     mounted = runtime.mount(container, { shows: "shell", value: null });
     await settle();
   });
-  return {
+  return Object.assign(hooks, {
     runtime,
     live,
     feed,
@@ -455,7 +479,7 @@ async function mount(
       runtime.dispose();
       container.remove();
     },
-  };
+  });
 }
 
 const settle = async () => {
@@ -639,7 +663,11 @@ test("the composer previews, removes and sends attachments with the text", async
     );
     assert.ok(sent, JSON.stringify(shell.calls));
     assert.equal(sent.input.threadId, "t1");
-    assert.equal("recipientIds" in sent.input, false, "Core picks agents");
+    assert.deepEqual(
+      sent.input.recipientIds,
+      ["p-north"],
+      "no mention addresses the thread's default agent only",
+    );
     assert.deepEqual(
       (sent.input.content as { type: string; name?: string }[]).map((part) =>
         part.name ?? part.type
@@ -741,6 +769,74 @@ test("live replies stream with tool activity and app tool renderers; Stop cancel
     );
     await click(byLabel("Stop the response"));
     assert.deepEqual(shell.feed.cancelled, ["op-live"]);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a section's tab gets a dot when an agent uses its tool, and none when the call failed", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await click(byLabel("Show the side panel"));
+    const boards = () =>
+      document.querySelector(
+        'aside[aria-label="Side panel"] [role="tab"][aria-label^="Boards"]',
+      )?.getAttribute("aria-label");
+    assert.equal(boards(), "Boards");
+    await act(async () => {
+      await shell.feed.emit({
+        kind: "output",
+        output: {
+          type: "stream.output",
+          operationId: "op-board",
+          streamId: "tools",
+          role: "text",
+          kind: "text",
+          mediaType: "text/plain",
+          metadata: {
+            llmAttemptId: "run-board",
+            lane: "tool-calls",
+            providerAttemptIndex: 0,
+            copilotzCore: {
+              schema: "copilotz.core.llm-stream.v1",
+              agent: { id: "north", name: "North" },
+            },
+          },
+        },
+      } as never);
+      await shell.feed.emit({
+        kind: "stream-chunk",
+        streamId: "tools",
+        offset: 0,
+        bytes: new TextEncoder().encode(
+          JSON.stringify({
+            draftId: "d1",
+            toolName: "kanban",
+            phase: "complete",
+            toolCallId: "c-board",
+            delta: '{"action":"create_board"}',
+          }) + "\n",
+        ),
+      } as never);
+      await new Promise((r) => setTimeout(r, 80));
+      await settle();
+    });
+    assert.equal(boards(), "Boards, new activity");
+    await act(async () => {
+      shell.live.put("message", {
+        id: "r-board",
+        threadId: "t1",
+        senderId: "p-north",
+        createdAt: "2026-10-21T10:05:00.000Z",
+        content: [{ kind: "text", role: "tool.output", value: "Denied." }],
+        metadata: {
+          toolInvocation: { id: "c-board" },
+          toolStatus: "failed",
+        },
+      });
+      await settle();
+    });
+    assert.equal(boards(), "Boards", "a failed call lights no dot");
   } finally {
     await shell.dispose();
   }
@@ -1244,6 +1340,111 @@ test("people that can't be read show neutrally: no Participant, no bot, no 0 age
       "Agents in this conversation",
     );
     assert.doesNotMatch(selector?.textContent ?? "", /0 agents/);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+async function typeAndSend(text: string) {
+  const field = document.querySelector('textarea[aria-label="Message"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(field, text);
+    (field as unknown as { selectionStart: number; selectionEnd: number })
+      .selectionStart = text.length;
+    (field as unknown as { selectionEnd: number }).selectionEnd = text.length;
+    field.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await settle();
+  });
+  return {
+    async submit() {
+      await act(async () => {
+        document.querySelector('form[aria-label="Message composer"]')!
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          );
+        await settle();
+      });
+    },
+  };
+}
+
+test("@ opens a mention picker of the agents; a mention becomes the recipients", async () => {
+  const live = new FixtureLive(tables());
+  // Even when people can't be read, the app's configured agents are offered.
+  live.refusals.set("participant", {
+    code: "subscription_query_refused",
+    reason: "query_unsupported",
+  });
+  const shell = await mount("https://app.example/?chat=t1", { live });
+  try {
+    await typeAndSend("Hey @");
+    const options = [...document.querySelectorAll(
+      '#composer-mentions [role="option"]',
+    )].map((option) => option.textContent ?? "");
+    assert.ok(options.some((text) => /North/.test(text)), options.join("|"));
+    await (await typeAndSend("@North what's the risk?")).submit();
+    const sent = shell.calls.find((call) =>
+      call.alias === "createThreadMessage"
+    )!;
+    assert.deepEqual(sent.input.recipientIds, []);
+    assert.deepEqual(
+      (sent.input.membership as { recipients: unknown[] }).recipients,
+      [{ externalId: "north" }],
+      "the mentioned agent, by its external id",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("an app can address every agent by default instead of the first", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    extra: {
+      id: "all-agents",
+      resources: { chat: { defaultRecipients: "all" } },
+    },
+  });
+  try {
+    await (await typeAndSend("Hello team")).submit();
+    const sent = shell.calls.find((call) =>
+      call.alias === "createThreadMessage"
+    )!;
+    assert.equal("recipientIds" in sent.input, false, "Core addresses all");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a new chat shows its first message at once and a retry continues the same thread", async () => {
+  const shell = await mount("https://app.example/");
+  let failCreate = true;
+  try {
+    // The first create fails after the server already made the thread (an
+    // observe error): the retry must continue it, not orphan it.
+    shell.failCreateOnce = () => {
+      if (!failCreate) return false;
+      failCreate = false;
+      return true;
+    };
+    await (await typeAndSend("Plan the launch")).submit();
+    const threadId = nav(shell).threadId!;
+    assert.ok(threadId, "the new conversation opened at once");
+    assert.match(main(), /Plan the launch/, "the first message shows at once");
+    assert.match(main(), /Retry/, "the failed send offers Retry");
+    assert.doesNotMatch(main(), /not found/i);
+    await click(byText("button", "Retry"));
+    const creates = shell.calls.filter((call) => call.alias === "createThread");
+    assert.equal(creates.length, 2);
+    assert.ok(creates.every((call) => call.input.id === threadId));
+    const sends = shell.calls.filter((call) =>
+      call.alias === "createThreadMessage"
+    );
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].input.threadId, threadId);
+    assert.doesNotMatch(main(), /Retry/);
   } finally {
     await shell.dispose();
   }

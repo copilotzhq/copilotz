@@ -278,6 +278,16 @@ export function fixtures(now = Date.now()): Record<string, Row[]> {
           metadata: { byteLength: 248_000 },
         },
       ]),
+      message("m-notes-1", "t-notes", "p-ana", 5_802, [
+        text("How should we track weekly retention?"),
+      ]),
+      message("m-notes-2", "t-notes", "p-east", 5_800, [
+        text(
+          "Track each week against the first: \\(r_w = \\frac{a_w}{a_0}\\), where \\(a_w\\) counts active teams in week \\(w\\). The cohort average is\n\\[\n\\bar r = \\frac{1}{n}\\sum_{i=1}^{n} r_i\n\\]\nCode keeps its text: `\\(a_w\\)` stays as written.",
+        ),
+      ], {
+        copilotzWorkflow: { kind: "agent_output", llmAttemptId: "run-east-1" },
+      }),
       message("m-ideas-1", "t-ideas", "p-ana", 31, [
         text("What if the onboarding email linked straight to the Space?"),
       ]),

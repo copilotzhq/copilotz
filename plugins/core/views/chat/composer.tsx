@@ -51,7 +51,8 @@ export type MentionTarget = Readonly<{
 export interface ComposerSubmit {
   text: string;
   files: readonly File[];
-  /** Participants named by @mention; empty means "the thread's agents". */
+  /** Targets named by @mention; empty means no mention (the View then applies
+   * the app's recipient policy). */
   recipientIds: readonly string[];
 }
 

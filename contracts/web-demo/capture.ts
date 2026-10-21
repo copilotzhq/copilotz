@@ -478,6 +478,50 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    // Typing @ lists the conversation's agents; arrows move, Enter picks.
+    name: "20-mention-picker",
+    path: "/?chat=t-ideas&stream=0",
+    steps: async () => {
+      await click('textarea[aria-label="Message"]');
+      await send("Input.insertText", { text: "Can @" }, session);
+      await key("ArrowDown");
+    },
+  },
+  {
+    // Math written with \( \) and \[ \] renders; code keeps its text.
+    name: "21-math-delimiters",
+    path: "/?chat=t-notes&stream=0",
+  },
+  {
+    // A new chat shows its first message while the conversation is created.
+    name: "22-new-chat-sending",
+    path: "/?stream=0&slow=60000",
+    steps: async (size) => {
+      await click('textarea[aria-label="Message"]');
+      await send("Input.insertText", {
+        text: "Plan a two-week onboarding for new teams.",
+      }, session);
+      if (size.mobile) await click('[aria-label="Send message"]');
+      else await key("Enter");
+      await wait(600);
+    },
+  },
+  {
+    // The first create's response is lost: the message offers Retry, which
+    // continues the same conversation.
+    name: "23-new-chat-retry",
+    path: "/?stream=0&fail=create",
+    steps: async (size) => {
+      await click('textarea[aria-label="Message"]');
+      await send("Input.insertText", {
+        text: "Plan a two-week onboarding for new teams.",
+      }, session);
+      if (size.mobile) await click('[aria-label="Send message"]');
+      else await key("Enter");
+      await wait(1200);
+    },
+  },
+  {
     name: "14b-long-title",
     path: "/?chat=t-plan&stream=0",
     steps: async () => {

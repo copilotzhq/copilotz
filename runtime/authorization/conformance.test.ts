@@ -123,7 +123,10 @@ async function fixture(denyCommittedResult = false, vector = false) {
               metadata: { keyId: "key" },
               absentMetadata: ["computerOperationKind"],
             },
-            sessions: { create: true, revoke: "tenant" },
+            sessions: {
+              create: { principal: "account", maxAge: 3600 },
+              revoke: "tenant",
+            },
           };
         },
       },
@@ -584,12 +587,12 @@ Deno.test("F4 failed logout commit leaves the session and channel live", async (
   try {
     await f.authorization.createSession(f.authority, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     const authority: AuthenticatedAuthority = {
       ...f.authority,
-      principal: { kind: "session", id: "session" },
+      principal: { kind: "session", id: "account" },
       authorityBasis: { kind: "session", id: "session" },
     };
     const channel = await f.authorization.observe(authority, {}, () => {});

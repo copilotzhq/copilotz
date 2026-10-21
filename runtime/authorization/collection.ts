@@ -1,3 +1,4 @@
+import { captureCollectionCommandInvocation } from "./invocation-command.ts";
 import { sameValue } from "../collections/equal.ts";
 import { constrainCollection } from "./collection-constraints.ts";
 import { authorizationRefused } from "./evaluator.ts";
@@ -12,10 +13,7 @@ import type { CommandContext } from "../engine/commands.ts";
 import type { CollectionRecord } from "../collections/types.ts";
 import type { CollectionPolicyIntent } from "./intent.ts";
 import type { CollectionPolicyRegistration } from "./resources.ts";
-import {
-  captureCollectionCommandInvocation,
-  captureCollectionInvocation,
-} from "./invocation.ts";
+import { captureCollectionInvocation } from "./invocation.ts";
 
 type ReadScope = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
 type CommandPolicy = Readonly<{

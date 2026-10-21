@@ -1,3 +1,10 @@
+import { captureCollectionInvocation } from "../runtime/authorization/invocation.ts";
+import type { RuntimeActionCallers } from "../runtime/actions/types.ts";
+import { wakeOwnerAlarms } from "../runtime/testing/owner-alarms.ts";
+import {
+  type AuthorizationIntent,
+  authorizationRefused,
+} from "../runtime/authorization/evaluator.ts";
 import { Buffer } from "node:buffer";
 import { decodeObservation } from "../client/protocol.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
@@ -6,7 +13,11 @@ import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { testSecretAdapter } from "../runtime/testing/secret-adapter.ts";
 import { testAuthority } from "../runtime/testing/authority.ts";
 import { defineAction } from "../runtime/actions/index.ts";
-import { definePlugin } from "../runtime/plugins/index.ts";
+import {
+  definePlugin,
+  defineProcessor,
+  type ProcessorContext,
+} from "../runtime/plugins/index.ts";
 import { defineCollection } from "../runtime/collections/index.ts";
 import { serverPlugin } from "../plugins/server/plugin.ts";
 import { defineServerFacade } from "../plugins/server/resources/facade/index.ts";
@@ -24,9 +35,21 @@ async function fixture(
   capacity?: number,
   pooledKey = false,
 ) {
+  const detached = Promise.withResolvers<{ code: string; flow?: string }>();
+  const seen: {
+    authority: AuthenticatedAuthority;
+    intent: AuthorizationIntent;
+  }[] = [];
+  let allowAlarm = false;
   const held = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const executions = { callback: 0, logout: 0 };
+  const executions = {
+    callback: 0,
+    logout: 0,
+    child: 0,
+    grandchild: 0,
+    denied: 0,
+  };
   const adapter = await testSecretAdapter();
   const secrets = pooledKey
     ? {
@@ -49,6 +72,17 @@ async function fixture(
   let requestMetadata: Record<string, unknown> = {};
   const entries = defineCollection({
     name: "entries",
+    alarm: {
+      deadline: (record) => record.dueAt as string ?? null,
+      command: (record) => ({
+        name: "touch",
+        key: `wake:${record.id}`,
+        input: {},
+      }),
+    },
+    commands: {
+      touch: { mutate: () => ({ set: { value: "alarm", dueAt: null } }) },
+    },
     schema: {
       type: "object",
       properties: { id: { type: "string" }, value: { type: "string" } },
@@ -97,8 +131,38 @@ async function fixture(
   });
   const callback = defineAction({
     id: "auth.callback",
+    resume: () => ({}),
     async execute(input, ctx) {
       executions.callback++;
+      const mode = (input as { descendants?: string }).descendants;
+      if (mode === "detached" || mode?.startsWith("alarm-")) {
+        await ctx.collections.entries.create({
+          id: mode,
+          value: "pending",
+          ...(mode === "detached"
+            ? {}
+            : { dueAt: new Date(now().getTime() + 1000).toISOString() }),
+        });
+      }
+      if (mode === "allowed") {
+        await ctx.actions.child({}, { operationKey: "child" });
+      }
+      if (mode === "denied") await ctx.actions.denied({});
+      if (mode === "linked") {
+        return ctx.awaitOperation({
+          start: { action: "child", input: {} },
+          handoff: {},
+        });
+      }
+      if (mode === "outside") {
+        return {
+          outside: await ctx.operations.start({
+            action: "child",
+            input: {},
+            operationKey: "outside",
+          }),
+        };
+      }
       if ((input as { login?: boolean }).login) {
         await ctx.transaction(async (tx) => {
           await tx.sessions.create({ principal: "flow-account", maxAge: 3600 });
@@ -180,6 +244,32 @@ async function fixture(
     },
   });
   const actions = {
+    child: defineAction({
+      id: "auth.child",
+      async execute(_input, ctx) {
+        executions.child++;
+        await ctx.actions.grandchild({}, { operationKey: "grandchild" });
+        return {};
+      },
+    }),
+    grandchild: defineAction({
+      id: "auth.grandchild",
+      async execute(_input, ctx) {
+        executions.grandchild++;
+        await ctx.collections.entries.create({
+          id: "descendant",
+          value: "committed",
+        });
+        return {};
+      },
+    }),
+    denied: defineAction({
+      id: "auth.denied",
+      execute() {
+        executions.denied++;
+        return {};
+      },
+    }),
     hold,
     login,
     logout,
@@ -211,31 +301,42 @@ async function fixture(
     database: db,
     databaseSchema: schema,
     namespace: "main",
-    engine: { now, ...(capacity ? { execution: { capacity } } : {}) },
+    engine: {
+      now,
+      ...(capacity ? { execution: { capacity } } : {}),
+      alarmScheduler: { schedule() {}, cancel() {} },
+    },
     adapters: { secrets: { default: secrets } },
     authorization: {
+      systemScopes: { main: selected().scope },
       policies: {
         fixture: {
           revision: "1",
           sources: [],
           evaluate({ intent, authority }) {
+            seen.push({ intent, authority });
+            if (authority.validity.kind === "occurrence" && !allowAlarm) {
+              authorizationRefused();
+            }
             if (!allowOperationReads) return {};
             const proof = authority.scope.bindings["@credential-proof"];
             const isSession = authority.authorityBasis.kind === "session";
             const permitted = Object.keys(actions).filter((key) =>
-              !strict ||
-              (key === "callback"
-                ? !!authority.flow
-                : key === "logout"
-                ? isSession
-                : true)
+              key !== "denied" && (!strict ||
+                (key === "callback"
+                  ? !!authority.flow
+                  : key === "logout"
+                  ? isSession
+                  : true))
             );
             return {
               actions: Object.fromEntries(
                 permitted.map((k) => [k, {}]),
               ),
               collections: { entries: {} },
-              collectionMutations: { entries: { create: {} } },
+              collectionMutations: {
+                entries: { create: {}, commands: { touch: {} } },
+              },
               operations: allowOperationReads
                 ? {
                   metadata: strict
@@ -255,13 +356,25 @@ async function fixture(
                 : undefined,
               sessions: allow
                 ? {
-                  create: true,
+                  create: {
+                    principal: ({
+                      "auth.login": "account",
+                      "auth.callback": "flow-account",
+                      "auth.transfer": "transferred",
+                      "auth.rollback": "rolled-back",
+                      "auth.replay": "replayed",
+                    } as Record<string, string>)[intent.invocation?.id ?? ""] ??
+                      "account",
+                    maxAge: 3600,
+                  },
                   revoke: intent.invocation?.id === "auth.revokeOther"
                     ? "tenant" as const
                     : "self" as const,
                 }
                 : {},
-              flows: { start: ["oauth"] },
+              flows: {
+                start: { oauth: { continuation: "callback", maxAge: 300 } },
+              },
             };
           },
         },
@@ -276,6 +389,25 @@ async function fixture(
         id: "test.sessions",
         version: "1",
         actions,
+        processors: {
+          detached: defineProcessor<ProcessorContext>({
+            id: "auth.detached",
+            settlement: "detached",
+            on: [{ eventType: "entries.created", subject: { id: "detached" } }],
+            async handle(event, ctx) {
+              if (!event.durable || event.subject?.id !== "detached") return;
+              try {
+                await (ctx.actions as RuntimeActionCallers).child({});
+                detached.resolve({ code: "executed" });
+              } catch (error) {
+                detached.resolve({
+                  code: (error as { code: string }).code,
+                  flow: captureCollectionInvocation()?.authority?.flow?.kind,
+                });
+              }
+            },
+          }),
+        },
         collections: { entries },
       }),
       definePlugin({
@@ -354,6 +486,9 @@ async function fixture(
     held: held.promise,
     release: () => release.resolve(),
     executions,
+    seen,
+    detached: detached.promise,
+    allowAlarm: () => allowAlarm = true,
     allowOperationReads: () => allowOperationReads = true,
     metadata: (value: Record<string, unknown>) => requestMetadata = value,
     deny: () => allow = false,
@@ -549,6 +684,10 @@ Deno.test("Session policy refusal rolls back the Action transaction and mints no
 });
 Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-use with replay", async () => {
   const f = await fixture();
+  const forbidden = async (response: Response) => {
+    assertEquals(response.status, 403);
+    assertEquals((await response.json()).error.code, "forbidden");
+  };
   try {
     const start = await f.submit("start", "flow");
     const response = await f.result(start);
@@ -557,9 +696,11 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
     assert(token);
     const flow = { "x-copilotz-flow": token };
     assertEquals((await f.result(start, flow)).status, 200);
-    assertEquals(
-      (await f.request("/actions/login", {}, flow)).status,
-      403,
+    await forbidden(
+      await f.request("/actions/login", {}, {
+        ...flow,
+        "idempotency-key": "direct-login",
+      }),
     );
     const observed = await f.request("/operations/observe", {
       operationIds: [start],
@@ -570,25 +711,14 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
         frame.kind === "output" && frame.output.type === "operation.completed"
       ) break;
     }
-    assertEquals(
-      (await f.request("/collections/entries", undefined, flow)).status,
-      403,
-    );
-    assertEquals(
-      (await f.result(start, { ...flow, "x-tenant": "other" })).status,
-      403,
-    );
-    assertEquals(
-      (await f.result(start, { "x-copilotz-flow": token + "x" })).status,
-      403,
-    );
+    await forbidden(await f.request("/collections/entries", undefined, flow));
+    await forbidden(await f.result(start, { ...flow, "x-tenant": "other" }));
+    await forbidden(await f.result(start, { "x-copilotz-flow": token + "x" }));
     const other = await f.submit("start", "other");
     await f.result(other);
-    assertEquals((await f.result(other, flow)).status, 403);
-    assertEquals(
-      (await f.request("/operations/observe", { operationIds: [other] }, flow))
-        .status,
-      403,
+    await forbidden(await f.result(other, flow));
+    await forbidden(
+      await f.request("/operations/observe", { operationIds: [other] }, flow),
     );
     const callback = await f.submit("callback", "continue", flow);
     assertEquals((await f.result(callback, flow)).status, 200);
@@ -598,11 +728,10 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
       "idempotency-key": "reuse",
     });
     if (reused.status === 202) {
-      assertEquals(
-        (await f.result((await reused.json()).data.operationId, flow)).status,
-        403,
+      await forbidden(
+        await f.result((await reused.json()).data.operationId, flow),
       );
-    } else assertEquals(reused.status, 403);
+    } else await forbidden(reused);
     const authority = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
@@ -612,7 +741,10 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
       `UPDATE "${f.schema}".authorization_effects SET claims=jsonb_set(claims,'{expiresAt}',to_jsonb('2000-01-01T00:00:00.000Z'::text)) WHERE effect_key=$1`,
       [authority.flow!.id],
     );
-    await assertRejects(() => f.app.authorization.operation(authority, start));
+    const expired = await assertRejects(() =>
+      f.app.authorization.operation(authority, start)
+    );
+    assertEquals((expired as { code: string }).code, "forbidden");
   } finally {
     await f.close();
   }
@@ -1212,6 +1344,145 @@ Deno.test("session ingress records its actor separately from principal and sessi
     assert(
       ingress.authority.authorityBasis.id !== ingress.authority.principal.id,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("Flow delegates transitive child effects only inside its consumed operation and exact product grants", async () => {
+  const f = await fixture();
+  try {
+    for (const mode of ["allowed", "denied", "outside", "linked"]) {
+      const start = await f.result(await f.submit("start", `flow-${mode}`));
+      const headers = {
+        "x-copilotz-flow": start.headers.get("x-copilotz-flow")!,
+      };
+      const direct = await f.request("/actions/child", {}, {
+        ...headers,
+        "idempotency-key": `direct-${mode}`,
+      });
+      assertEquals(direct.status, 403);
+      assertEquals((await direct.json()).error.code, "forbidden");
+      const input = { descendants: mode };
+      const submit = () =>
+        f.request("/actions/callback", input, {
+          ...headers,
+          "idempotency-key": `callback-${mode}`,
+        });
+      const before = (await f.db.query(
+        `SELECT operation_id FROM "${f.schema}".copilotz_operations`,
+      ))
+        .rows.length;
+      const accepted = await submit();
+      assertEquals(accepted.status, 202, await accepted.clone().text());
+      const id = (await accepted.json()).data.operationId;
+      const response = await f.result(id, headers);
+      assertEquals(
+        response.status,
+        mode === "allowed" ? 200 : 403,
+        await response.clone().text(),
+      );
+      if (mode !== "allowed") {
+        assertEquals((await response.json()).error.code, "forbidden");
+      }
+      if (mode === "outside") {
+        assertEquals(
+          (await f.db.query(
+            `SELECT operation_id FROM "${f.schema}".copilotz_operations WHERE parent_operation_id=$1`,
+            [id],
+          )).rows,
+          [],
+        );
+      }
+      assertEquals(
+        (await f.db.query(
+          `SELECT operation_id FROM "${f.schema}".copilotz_operations`,
+        ))
+          .rows.length,
+        before + 1,
+      );
+      if (mode === "allowed") {
+        assertEquals((await submit()).status, 202);
+        assertEquals((await f.result(id, headers)).status, 200);
+        assertEquals(f.executions.child, 1);
+        assertEquals(f.executions.grandchild, 1);
+        assertEquals(
+          (await f.app.host.collections.entries.get({ id: "descendant" }))
+            ?.value,
+          "committed",
+        );
+      }
+      const after = await f.request("/actions/child", {}, {
+        ...headers,
+        "idempotency-key": `after-${mode}`,
+      });
+      assertEquals(after.status, 403);
+      assertEquals((await after.json()).error.code, "forbidden");
+    }
+    assertEquals(f.executions.child, 1);
+    assertEquals(f.executions.grandchild, 1);
+    assertEquals(f.executions.denied, 0);
+    assert(
+      f.seen.some(({ intent }) =>
+        intent.resource === "denied" && intent.operation === "capture" &&
+        intent.invocation?.id === "auth.denied"
+      ),
+    );
+    const receipts = await f.db.query<{ intent: { action: string } }>(
+      `SELECT intent FROM "${f.schema}".owner_receipts WHERE kind='flow.descendant'`,
+    );
+    assertEquals(receipts.rows.map((row) => row.intent.action).sort(), [
+      "auth.child",
+      "auth.grandchild",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("Flow detached Processors retain the flow; alarms require independent owner authority", async () => {
+  let now = Date.now();
+  const f = await fixture(() => new Date(now));
+  try {
+    for (const mode of ["detached", "alarm-denied", "alarm-allowed"]) {
+      const start = await f.result(await f.submit("start", `start-${mode}`));
+      const headers = {
+        "x-copilotz-flow": start.headers.get("x-copilotz-flow")!,
+        "idempotency-key": `callback-${mode}`,
+      };
+      const accepted = await f.request("/actions/callback", {
+        descendants: mode,
+      }, headers);
+      assertEquals(accepted.status, 202);
+      const id = (await accepted.json()).data.operationId;
+      assertEquals((await f.result(id, headers)).status, 200);
+      if (mode === "detached") {
+        assertEquals(await f.detached, {
+          code: "action_authorization_refused",
+          flow: "oauth",
+        });
+        assertEquals(f.executions.child, 0);
+      } else {
+        if (mode === "alarm-allowed") f.allowAlarm();
+        now += 2000;
+        await wakeOwnerAlarms(f.db.session, f.app.engine, ["main"]);
+        assertEquals(
+          (await f.app.host.collections.entries.get({ id: mode }))?.value,
+          mode === "alarm-allowed" ? "alarm" : "pending",
+        );
+      }
+    }
+    const alarms = f.seen.filter(({ authority }) =>
+      authority.validity.kind === "occurrence"
+    );
+    assert(alarms.length > 1);
+    assert(
+      alarms.every(({ authority }) =>
+        authority.principal.kind === "host-task" && !authority.flow &&
+        authority.provenance.ingress === "alarm"
+      ),
+    );
+    assertEquals(f.executions.child, 0);
   } finally {
     await f.close();
   }

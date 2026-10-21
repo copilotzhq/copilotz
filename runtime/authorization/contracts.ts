@@ -21,13 +21,23 @@ export type ServerCollectionMutationConstraints = Readonly<{
 }>;
 
 export type ServerConstraints = Readonly<{
+  /** Declared directory read aliases. Policy must inspect the exact requested id. */
+  directoryReads?: readonly string[];
   /** Authenticated root event types, including adapter-validated channel input. */
   events?: readonly string[];
   /** Opaque catalog selection keys chosen by owner policy for admitted work. */
   observationKeys?: readonly string[];
   assets?: Readonly<{ read?: readonly string[] }>;
-  flows?: Readonly<{ start?: readonly string[] }>;
-  sessions?: Readonly<{ create?: boolean; revoke?: "self" | "tenant" }>;
+  flows?: Readonly<{
+    start?: Readonly<
+      Record<string, Readonly<{ continuation: string; maxAge: number }>>
+    >;
+  }>;
+  sessions?: Readonly<{
+    /** Exact owner-authorized principal and maximum credential lifetime in seconds. */
+    create?: Readonly<{ principal: string; maxAge: number }>;
+    revoke?: "self" | "tenant";
+  }>;
   actions?: Readonly<
     Record<string, Readonly<{ input?: Readonly<Record<string, unknown>> }>>
   >;

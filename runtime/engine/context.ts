@@ -578,6 +578,9 @@ export function createProcessorContext(
     content,
     streams,
     collections,
+    directory: options.directory ?? {
+      get: () => Promise.reject(new Error("Directory reads are unavailable.")),
+    },
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),

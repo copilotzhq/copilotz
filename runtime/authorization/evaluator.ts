@@ -1,4 +1,5 @@
 import { validateCollectionConstraints } from "./collection-constraints.ts";
+import { defineDatabaseDirectoryRead } from "./directory-read.ts";
 import { checkFlow } from "./flow.ts";
 /** One owner-local policy evaluator. Policy code receives declared, tracked reads. */
 import type {
@@ -44,7 +45,8 @@ export type AuthorizationIntent = Readonly<{
     | "session"
     | "flow"
     | "asset"
-    | "event";
+    | "event"
+    | "directory";
   resource: string;
   operation: string;
   input: unknown;
@@ -55,6 +57,7 @@ export type AuthorizationIntent = Readonly<{
     kind: "action" | "processor" | "alarm";
     id: string;
     runId?: string;
+    parentRunId?: string;
   }>;
 }>;
 export type AuthorizationRead = Readonly<{
@@ -79,6 +82,9 @@ export type OwnerPolicy = Readonly<{
   ): ServerConstraints | Promise<ServerConstraints>;
 }>;
 export type OwnerAuthorization = Readonly<{
+  directoryReads?: Readonly<
+    Record<string, import("./directory-read.ts").DatabaseDirectoryRead>
+  >;
   /** Explicit tenant placement for owner-generated alarm occurrences, by namespace. */
   systemScopes?: Readonly<
     Record<string, import("./authority.ts").AuthorityScope>
@@ -170,6 +176,23 @@ export function validateOwnerAuthorization(
       throw new TypeError("Required Collection authority binding is missing.");
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryReads ?? {},
+    )
+  ) {
+    if (
+      !alias || declaration.kind !== "database-directory-read" ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) {
+      throw new TypeError(
+        "Directory reads require declared, policy-bound Actions.",
+      );
+    }
+    defineDatabaseDirectoryRead(declaration);
+  }
 }
 export function captureOwnerAuthorization(
   registration: OwnerAuthorization | undefined,
@@ -179,6 +202,11 @@ export function captureOwnerAuthorization(
   validateOwnerAuthorization(registration, collections, actions);
   if (!registration) return;
   return Object.freeze({
+    directoryReads: Object.freeze(Object.fromEntries(
+      Object.entries(registration.directoryReads ?? {}).map((
+        [alias, declaration],
+      ) => [alias, defineDatabaseDirectoryRead(declaration)]),
+    )),
     ...(registration.systemScopes
       ? {
         systemScopes: Object.freeze(

@@ -53,6 +53,7 @@ export {
 
 export * from "./authoring/define-tool/generated.ts";
 export * from "./shared/tools/lifecycle-json.ts";
+export { trustedCoreToolOrigin } from "./shared/tool-plan.ts";
 export type { CoreResources } from "./shared/runtime-context.ts";
 export { loadCoreThreadMessageSnapshot } from "./shared/helpers.ts";
 export {

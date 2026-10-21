@@ -1,3 +1,4 @@
+import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
 import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import {
@@ -1431,7 +1432,7 @@ export function createOwnerCapabilityHost(
       maxPerConnection: 128,
       maxRequestBytes: OWNER_CAPABILITY_BYTES,
       maxResponseBytes: OWNER_CAPABILITY_BYTES,
-      timeoutMs: 120_000,
+      timeoutMs: DELIVERY_DEADLINE_MS,
     },
     lifecycle: {
       onDisconnect(event) {
@@ -1465,7 +1466,15 @@ export function createOwnerCapabilityHost(
               event.fence.connectionId &&
             assignment.binding.fence.sessionGeneration ===
               event.fence.sessionGeneration
-          ) assignment.semanticRetirement = true;
+          ) {
+            if (
+              !assignment.semanticRetirement &&
+              event.error?.code === "deadline_exceeded"
+            ) {
+              // Transport expiry is an attempt boundary, not an Action result.
+              assignment.interruption ??= ownerExecutionInterrupted();
+            } else assignment.semanticRetirement = true;
+          }
         }
         return retire(
           (assignment) =>

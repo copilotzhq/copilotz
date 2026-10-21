@@ -5,8 +5,112 @@ import { createCopilotzApplication } from "../../../../runtime/application/index
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import {} from "../../plugin.ts";
 import { listThreadMessageRecords } from "../../shared/projections.ts";
+import { type ActionContext, defineAction } from "@copilotz/copilotz/actions";
+import type { ContentSequence } from "@copilotz/copilotz/content";
+import { createThreadMessage } from "./index.ts";
 
 const NAMESPACE = "tenant-thread-message";
+
+Deno.test("thread-message retry refreshes membership and commits one complete reply after rollback", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = "core_thread_message_retry";
+  let attempts = 0;
+  const retryingMessage = defineAction({
+    id: "test.thread-message-retry",
+    async execute(input, context) {
+      const wrapped: Pick<
+        ActionContext,
+        "collections" | "content" | "transaction"
+      > = {
+        collections: context.collections,
+        content: context.content,
+        async transaction(run, options) {
+          attempts++;
+          try {
+            return await context.transaction(async (tx) => {
+              const result = await run(tx);
+              if (attempts === 1) {
+                throw new Error(
+                  "Collection 'thread' 'thread' changed while its mutation was prepared.",
+                );
+              }
+              return result;
+            }, options);
+          } catch (error) {
+            if (attempts === 1) {
+              // The first write rolled back. Model a competing membership
+              // commit before retry; recipient selection must be refreshed.
+              await context.collections.thread.commands.addParticipant({
+                id: "thread",
+                participantId: "late",
+              });
+            }
+            throw error;
+          }
+        },
+      };
+      return await createThreadMessage(input, wrapped);
+    },
+  });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: schema,
+    plugins: [storageFixture],
+    actions: { retryingMessage },
+  });
+  try {
+    const context = createTestDomainContext(application, NAMESPACE);
+    await context.actions.createThread({
+      id: "thread",
+      participants: [{
+        id: "human",
+        externalId: "human",
+        participantType: "human",
+      }],
+    });
+    await context.collections.participant.create({
+      id: "late",
+      externalId: "late",
+      participantType: "agent",
+      agentId: "late",
+      name: "Late agent",
+      metadata: {},
+    });
+    const reply = "Full reply after a rolled-back attempt 🌎";
+    await context.actions.retryingMessage({
+      id: "reply",
+      threadId: "thread",
+      sender: { externalId: "new-sender", participantType: "job" },
+      content: reply,
+    });
+    assertEquals(attempts, 2);
+    const message = await context.collections.message.get({ id: "reply" });
+    assertEquals(message?.recipientIds, ["late"]);
+    assertEquals(
+      (await context.collections.participant.queries.byExternalId({
+        externalId: "new-sender",
+      })).length,
+      1,
+    );
+    const [body] = await application.content.resolver.getMany(
+      message?.content as ContentSequence,
+      { namespace: NAMESPACE },
+    );
+    assertEquals(new TextDecoder().decode(body.bytes), reply);
+    assertEquals(
+      (await application.events.list({ namespace: NAMESPACE, limit: 100 }))
+        .filter((event) => event.type === "message.created").length,
+      1,
+    );
+  } finally {
+    await application.shutdown();
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await db.close();
+  }
+});
 
 Deno.test("createThreadMessage ensures participant, membership, and message atomically", async () => {
   const db = await createTestDatabase({ url: ":memory:" });

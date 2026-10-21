@@ -6,56 +6,87 @@
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { useState } from "react";
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { Button } from "./button.tsx";
 import { Input } from "./input.tsx";
 import { cn } from "../utils.ts";
 
 export function Notice(
-  { tone = "info", title, children, action }: {
+  { tone = "info", title, children, action, className }: {
     tone?: "info" | "warning" | "error" | "success";
     title?: string;
     children?: React.ReactNode;
     action?: React.ReactNode;
+    className?: string;
   },
 ): React.ReactElement {
+  const Icon = tone === "error"
+    ? CircleAlert
+    : tone === "warning"
+    ? TriangleAlert
+    : tone === "success"
+    ? CircleCheck
+    : Info;
   return (
     <div
       data-slot="notice"
       data-tone={tone}
       role={tone === "error" ? "alert" : "status"}
       className={cn(
-        "flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-sm",
-        tone === "error" && "border-destructive/40 text-destructive",
-        tone === "warning" && "border-amber-500/40",
-        tone === "success" && "border-emerald-500/40",
+        "flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm",
+        tone === "info" && "bg-muted/50",
+        tone === "error" && "border-destructive/30 bg-destructive/5",
+        tone === "warning" && "border-warning/35 bg-warning/5",
+        tone === "success" && "border-success/35 bg-success/5",
+        className,
       )}
     >
-      <div className="grid gap-0.5">
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 size-4 shrink-0",
+          tone === "info" && "text-muted-foreground",
+          tone === "error" && "text-destructive",
+          tone === "warning" && "text-warning",
+          tone === "success" && "text-success",
+        )}
+      />
+      <div className="grid min-w-0 flex-1 gap-0.5">
         {title && <p className="font-medium">{title}</p>}
         {children && <div className="text-muted-foreground">{children}</div>}
       </div>
-      {action}
+      {action && <div className="shrink-0 self-center">{action}</div>}
     </div>
   );
 }
 
 export function EmptyState(
-  { title, children, action }: {
+  { title, children, action, icon, className }: {
     title: string;
     children?: React.ReactNode;
     action?: React.ReactNode;
+    icon?: React.ReactNode;
+    className?: string;
   },
 ): React.ReactElement {
   return (
     <div
       data-slot="empty-state"
-      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-8 text-center"
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-6 py-10 text-center",
+        className,
+      )}
     >
-      <p className="font-medium">{title}</p>
+      {icon && (
+        <div className="bg-muted text-muted-foreground mb-1 flex size-10 items-center justify-center rounded-full [&_svg]:size-5">
+          {icon}
+        </div>
+      )}
+      <p className="text-sm font-medium">{title}</p>
       {children && (
         <div className="text-muted-foreground max-w-sm text-sm">{children}</div>
       )}
-      {action}
+      {action && <div className="mt-2">{action}</div>}
     </div>
   );
 }

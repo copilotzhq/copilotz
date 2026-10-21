@@ -319,3 +319,80 @@ Deno.test("createThreadMessage ensures participant, membership, and message atom
     await db.close();
   }
 });
+
+Deno.test("a message that names no recipients addresses the thread's agents", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: "copilotz_thread_message_default_recipients",
+    plugins: [storageFixture],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const context = createTestDomainContext(application, NAMESPACE);
+    const human = {
+      id: "human-a",
+      externalId: "human-a",
+      participantType: "human",
+    } as const;
+    const agent = {
+      id: "agent-a",
+      externalId: "agent-a",
+      participantType: "agent",
+      agentId: "assistant",
+      name: "Assistant",
+    } as const;
+    await context.actions.createThread({
+      id: "thread-agent",
+      participants: [human, agent],
+    }, { operationKey: "thread-agent:create" });
+    await context.actions.createThread({
+      id: "thread-alone",
+      participants: [human],
+    }, { operationKey: "thread-alone:create" });
+    const recipients = async (input: Record<string, unknown>) => {
+      const created = await context.actions.createThreadMessage({
+        threadId: "thread-agent",
+        sender: human,
+        content: "Hello",
+        ...input,
+      }, { operationKey: `message:${String(input.id)}` }) as {
+        recipientIds: string[];
+      };
+      return created.recipientIds;
+    };
+
+    assertEquals(await recipients({ id: "message-default" }), ["agent-a"]);
+    assertEquals(
+      await recipients({ id: "message-explicit", recipientIds: ["human-a"] }),
+      ["human-a"],
+    );
+    assertEquals(
+      await recipients({ id: "message-explicit-none", recipientIds: [] }),
+      [],
+    );
+    assertEquals(
+      await recipients({
+        id: "message-membership-none",
+        membership: { participants: [], recipients: [] },
+      }),
+      [],
+    );
+    // The sender never addresses itself.
+    assertEquals(
+      await recipients({ id: "message-from-agent", sender: agent }),
+      [],
+    );
+    const alone = await context.actions.createThreadMessage({
+      id: "message-alone",
+      threadId: "thread-alone",
+      sender: human,
+      content: "Anyone?",
+    }, { operationKey: "message:alone" }) as { recipientIds: string[] };
+    assertEquals(alone.recipientIds, []);
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
+});

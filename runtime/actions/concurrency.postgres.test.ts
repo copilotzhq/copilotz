@@ -2,8 +2,8 @@ import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createEventStore,
+  createSqlSession,
   provisionCopilotzSchema,
-  type SqlSession,
 } from "../events/index.ts";
 import { createEventCoordinator } from "../events/coordinator.ts";
 import {
@@ -35,23 +35,21 @@ Deno.test({
     const selected = gate();
     const release = gate();
     let pause = false;
-    const session: SqlSession = {
-      ...db,
-      async query<T extends Record<string, unknown>>(
-        sql: string,
-        params?: unknown[],
+    const session = createSqlSession(db);
+    session.query = async <T extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) => {
+      const result = await db.query<T>(sql, params);
+      if (
+        pause &&
+        sql.includes("ORDER BY operation.updated_at, operation.operation_id")
       ) {
-        const result = await db.query<T>(sql, params);
-        if (
-          pause &&
-          sql.includes("ORDER BY operation.updated_at, operation.operation_id")
-        ) {
-          pause = false;
-          selected.open();
-          await release.wait;
-        }
-        return result;
-      },
+        pause = false;
+        selected.open();
+        await release.wait;
+      }
+      return result;
     };
     try {
       await provisionCopilotzSchema(db, schema);

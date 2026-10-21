@@ -1,3 +1,4 @@
+import { bindSqlDatabaseIdentity } from "./database-identity.ts";
 import { createEventStoreError } from "./errors.ts";
 import { retainReadSnapshotKind } from "./snapshot-kind.ts";
 
@@ -85,6 +86,7 @@ export async function runSqlTransaction<T>(
           return executor.query(sql, params);
         },
       };
+      bindSqlDatabaseIdentity(transaction, session);
       completions.set(transaction, completion);
       try {
         return await operation(transaction);
@@ -145,6 +147,7 @@ export async function runSqlCommandScope<T>(
       });
     },
   };
+  bindSqlDatabaseIdentity(transaction, parent);
   completions.set(transaction, completion);
   afterSqlSettlement(parent, () => {
     for (const callback of completion.settled.splice(0)) callback();
@@ -180,6 +183,7 @@ export function bindSqlTransactionAlias(
   source: SqlExecutor,
 ): void {
   sqlCommitGate(source);
+  bindSqlDatabaseIdentity(alias, source);
   completions.set(alias, completions.get(source)!);
 }
 /** Retain joined owners until the physical transaction settles, including rollback. */
@@ -241,8 +245,12 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
     );
   };
 
+  const atomic = bindSqlDatabaseIdentity(
+    { transaction: rawTransaction },
+    database,
+  );
   const transaction: SqlSession["transaction"] = (operation) =>
-    runSqlTransaction({ transaction: rawTransaction }, operation);
+    runSqlTransaction(atomic, operation);
 
   const withReadSnapshot = typeof database.withReadSnapshot === "function"
     ? database.withReadSnapshot.bind(database)
@@ -250,7 +258,7 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
   if (withReadSnapshot) {
     retainReadSnapshotKind(withReadSnapshot, database.withReadSnapshot!);
   }
-  return {
+  return bindSqlDatabaseIdentity({
     query,
     ...(withReadSnapshot ? { withReadSnapshot } : {}),
     transaction,
@@ -262,5 +270,5 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
         return await operation(snapshot);
       });
     },
-  };
+  }, database);
 }

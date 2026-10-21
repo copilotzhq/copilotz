@@ -835,9 +835,11 @@ export async function createBrowserRuntime(
           }).catch((cause) => {
             if (signal.aborted || generation !== this.generation) return;
             const error = readFailure(cause);
+            // One attempt, no reconnect: the read stays failed until a
+            // refresh, unlike a live read, which recovers by itself.
             this.value = {
               value: undefined,
-              status: error.kind === "denied" ? "denied" : "stale",
+              status: error.kind === "denied" ? "denied" : "failed",
               pending: false,
               error,
             };

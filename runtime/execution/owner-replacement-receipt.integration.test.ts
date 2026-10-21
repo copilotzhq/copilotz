@@ -8,7 +8,7 @@ import { defineProcessor } from "../plugins/processor.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { createCopilotzGateway } from "../application/gateway.ts";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
-import { createEventStore } from "../events/index.ts";
+import { createEventStore, createSqlSession } from "../events/index.ts";
 import {
   createHypervisor,
   type WorkerCallOptions,
@@ -194,8 +194,8 @@ for (const mode of ["processor", "action"] as const) {
       try {
         gateway = await createCopilotzGateway({
           namespace: "replacement",
-          database: {
-            ...database,
+          database: Object.assign(createSqlSession(database), {
+            close: database.close,
             transaction<T>(
               run: (
                 tx: import("../events/session.ts").SqlExecutor,
@@ -225,7 +225,7 @@ for (const mode of ["processor", "action"] as const) {
                 })
               );
             },
-          },
+          }),
           collections: { records },
           processors: { run: processor },
           actions,

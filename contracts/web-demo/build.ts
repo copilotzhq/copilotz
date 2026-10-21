@@ -43,7 +43,7 @@ await run([
 ]);
 await Deno.copyFile(new URL("index.html", here), new URL("index.html", out));
 // KaTeX's stylesheet loads its fonts from `fonts/` next to the CSS.
-const fonts = new URL("node_modules/katex/dist/fonts/", root);
+const fonts = new URL("plugins/ui-kit/katex/fonts/", root);
 await Deno.mkdir(new URL("fonts/", out), { recursive: true });
 for await (const font of Deno.readDir(fonts)) {
   if (font.name.endsWith(".woff2")) {

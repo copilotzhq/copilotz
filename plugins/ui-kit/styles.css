@@ -5,7 +5,8 @@
  */
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "katex/dist/katex.min.css";
+/* Vendored, so the kit resolves it from itself in any install. */
+@import "./katex/katex.css";
 @plugin "@tailwindcss/typography";
 @source "./**/*.{ts,tsx}";
 @source "../core/views/**/*.{ts,tsx}";

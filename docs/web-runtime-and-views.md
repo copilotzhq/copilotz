@@ -278,7 +278,17 @@ The Views call intents, browser Actions over the composed server aliases:
 `chatUpdateSpace`, `chatDeleteSpace`, `chatAddMember`, `chatRemoveMember`,
 `chatAddAgent`, `chatFollow` and `chatStop`. An app whose server Actions take
 other inputs replaces single intents:
-`createCoreWebPlugin({ intents: { chatCreateSpace: (input, ctx) => … } })`.
+`createCoreWebPlugin({ intents: { chatCreateSpace: (input, ctx) => … } })`. The
+plugin declares a server proxy only for the Actions its default intents still in
+use call (`intentServerActions`), so an app that replaces every Space intent
+declares no `spaces` proxy.
+
+Tool results fold into the call that requested them. Text results arrive with
+the message window; Core stores object tool output as JSON content, which the
+window read leaves as a reference. `chatLoadToolResult` reads it once, through
+`adapters.core.feed.asset`, when its step or renderer shows; results over 256
+KiB say so instead. A renderer receives the parsed value as `data`, with
+`resultStatus` while it loads or when it can't show.
 
 `chatSend` shows the message at once from the `outbox` (a failed send keeps
 Retry and Discard), uploads attachments through `adapters.core.feed.upload`
@@ -305,19 +315,20 @@ chat still works from live Collections, without progressive replies or Stop.
 An app extends the shell with inert data and Views; it never edits shell
 components.
 
-| Slot             | Declare                                                                                                                      | The View receives                                     |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                     |
-| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats)                                    | —                                                     |
-| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                 | `{spaceId, threadId}`, mode `full` or `panel`         |
-| Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                   |
-| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)      |
-| User menu        | `resources.userMenu.<id>` (same shape)                                                                                       | `{}`, or the page value                               |
-| Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                       | `{section}` or `null`, mode `full`                    |
-| Agent selector   | a View for `agentSelector` plus `resources.views.prefer`                                                                     | `{threadId}`                                          |
-| Tool renderers   | `resources.toolRenderers.<toolName> {view, inline?}`; the View declares mode `inline`                                        | `ToolCallView` (status, input, result, live `output`) |
-| Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                 | —                                                     |
-| Images           | `resources.markdown.imageOrigins`                                                                                            | —                                                     |
+| Slot             | Declare                                                                                                                      | The View receives                                             |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                             |
+| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats)                                    | —                                                             |
+| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                 | `{spaceId, threadId}`, mode `full` or `panel`                 |
+| Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                           |
+| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)              |
+| User menu        | `resources.userMenu.<id>` (same shape)                                                                                       | `{}`, or the page value                                       |
+| Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                       | `{section}` or `null`, mode `full`                            |
+| Agent selector   | a View for `agentSelector` plus `resources.views.prefer`; collapse it with the `agents` container query                      | `{threadId}`                                                  |
+| Tool renderers   | `resources.toolRenderers.<toolName> {view, inline?}`; the View declares mode `inline`                                        | `ToolCallView` (status, input, result, `data`, live `output`) |
+| Admin sections   | `resources.adminSections.<id> {label, icon?, order?, description?, view?, requires?}`; `null` hides a built-in               | `{section}`, mode `full`                                      |
+| Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                 | —                                                             |
+| Images           | `resources.markdown.imageOrigins`                                                                                            | —                                                             |
 
 Built-in Space sections are `overview` (order 0), `conversations` (10) and
 `members` (90). A section's `tools` lists tool names; when an agent uses one in
@@ -328,7 +339,10 @@ limits where it appears. A page is a View kind shown in main; its section lives
 in the URL (`?page=<kind>&section=<id>`), and it switches sections with
 `ctx.show({ shows: kind, value: { section } }, { source: "link", region:
 "main" })`.
-Section, panel and page Views must declare `url: true` to render from a link.
+The header gives the title priority: the agent selector slot takes the width
+left (at least an icon) and is a size container named `agents`, so a selector
+collapses with `@max-[8rem]/agents:` variants, as the core one does. Section,
+panel and page Views must declare `url: true` to render from a link.
 
 ### Build a chat app
 
@@ -513,11 +527,13 @@ Process `plugins/ui-kit/styles.css` with Tailwind CSS 4,
 files in scanning. The stylesheet defines the tokens for light and `.dark`
 (white and slate, `--radius: 0.5rem`, the system font), the message bubble,
 sidebar and code tokens, prose themed through tokens, and reduced motion. It
-imports KaTeX's stylesheet, which loads its fonts from `fonts/` next to the
-compiled CSS: a pipeline that rebases `url()` (such as Vite) bundles them, and
-otherwise copy `katex/dist/fonts/*.woff2` there. Run `deno task build:web-css`
-to compile the first-party kit and View styles to `dist/web.css`, with the fonts
-in `dist/fonts/`, for a host to include.
+carries KaTeX's stylesheet and fonts (`plugins/ui-kit/katex/`, vendored by
+`scripts/vendor-katex.ts`), so it resolves the same in a linked checkout and in
+an install. A pipeline that rebases `url()` (such as Vite) bundles the fonts;
+otherwise copy `plugins/ui-kit/katex/fonts/*.woff2` to `fonts/` next to the
+compiled CSS. Run `deno task build:web-css` to compile the first-party kit and
+View styles to `dist/web.css`, with the fonts in `dist/fonts/`, for a host to
+include.
 
 The npm source package exports `@copilotz/copilotz/web/kit/styles.css`. Import
 it into the host's Tailwind CSS 4 pipeline, alongside the host's source
@@ -615,7 +631,11 @@ aliases as the server; omitted aliases retain the standard registry values, and
 default instance. With the shell, the user menu gains Administration, which
 opens the `admin` page: Overview, Agents, Conversations, People, Activity and
 Usage, each read from its authorized query Action. Refusals read as plain
-sentences ("You don't have access to this section."). `agent` detail shows
-public agent fields from the authorized agents query, and `participant` detail
-reads its Collection by ID; both accept `{ id }` and full/panel/dialog
-densities.
+sentences ("You don't have access to this section."). The sections are
+`resources.adminSections` entries: an app reorders or hides (`null`) them and
+adds its own as Views that receive `{ section }`. `requires` lists Action
+aliases that must be composed for a section to show. `adminSections(ctx)`,
+`adminSection(ctx, id)` and `ADMIN_SECTIONS` are exported, and `adminQuery` with
+`embedded: true` renders a section without a Screen. `agent` detail shows public
+agent fields from the authorized agents query, and `participant` detail reads
+its Collection by ID; both accept `{ id }` and full/panel/dialog densities.

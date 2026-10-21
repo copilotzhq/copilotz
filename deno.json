@@ -82,7 +82,9 @@
       "build/**/*.ts",
       "plugins/**/copilotz.json",
       "plugins/**/*.tsx",
-      "plugins/**/*.css"
+      "plugins/**/*.css",
+      "plugins/ui-kit/katex/LICENSE",
+      "plugins/ui-kit/katex/fonts/*.woff2"
     ],
     "exclude": [
       "**/*.test.ts",
@@ -244,12 +246,13 @@
     "check:generated": "deno run -A scripts/build-plugins.ts --check",
     "smoke:authoring": "deno run -A build/index.ts build contracts/authoring && deno run -A contracts/authoring/run.ts",
     "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts",
-    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify && mkdir -p dist/fonts && cp node_modules/katex/dist/fonts/*.woff2 dist/fonts/"
+    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify && mkdir -p dist/fonts && cp plugins/ui-kit/katex/fonts/*.woff2 dist/fonts/"
   },
   "lock": false,
   "fmt": {
     "exclude": [
-      "**/plugin.generated.ts"
+      "**/plugin.generated.ts",
+      "plugins/ui-kit/katex/"
     ]
   },
   "compilerOptions": {

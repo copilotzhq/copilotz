@@ -27,6 +27,12 @@ test("every web source entry and kit CSS is present in the npm publication archi
     "./plugins/ui-kit/styles.css",
   );
   assert.ok(files.has("plugins/ui-kit/styles.css"));
+  // The kit stylesheet is self-contained: KaTeX's CSS, fonts and license ship
+  // inside it, so linked checkouts and installs resolve them the same way.
+  assert.ok(files.has("plugins/ui-kit/katex/katex.css"));
+  assert.ok(files.has("plugins/ui-kit/katex/LICENSE"));
+  assert.ok(files.has("plugins/ui-kit/katex/fonts/KaTeX_Main-Regular.woff2"));
+  assert.ok(config.publish.include.includes("plugins/ui-kit/katex/fonts/*.woff2"));
   assert.ok(![...files].some((file) => /\.test\.tsx?$/.test(file)));
   const visited = new Set<string>();
   async function visit(path: string): Promise<void> {

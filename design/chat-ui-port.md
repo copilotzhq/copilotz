@@ -86,9 +86,9 @@ is the default. Collections: `thread`, `message`, `participant`, `space`
 `threadOutputs`, `threadWindow` (browser).
 
 Intents are browser Actions over the composed server aliases (defaults
-`createThread`, `createThreadMessage`, `reviseMessage`, `deleteThreadMessages`,
-`addThreadParticipant`, `spaces`, `updateConversation`, `deleteConversation`):
-`chatSend`, `chatDiscard`, `chatRevise`, `chatCreateThread`, `chatRenameThread`,
+`createThread`, `createThreadMessage`, `reviseMessage`, `addThreadParticipant`,
+`spaces`, `updateConversation`, `deleteConversation`): `chatSend`,
+`chatDiscard`, `chatRevise`, `chatCreateThread`, `chatRenameThread`,
 `chatArchiveThread`, `chatDeleteThread`, `chatMoveThread`, `chatCreateSpace`,
 `chatUpdateSpace`, `chatDeleteSpace`, `chatAddMember`, `chatRemoveMember`,
 `chatAddAgent`, `chatFollow`, `chatStop`; plus `chatLoadOlder` and `setDraft`.
@@ -133,19 +133,19 @@ terminal output and hides once its persisted message (same
 
 ## Extension points (inert data, or Views)
 
-| Slot             | Declare                                                                                                                                                                   | The View receives                                     |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}`, `.theme: "host"` to manage `.dark` yourself | —                                                     |
-| Identity         | `resources.chat.sender` (who sends), `resources.chat.agents` (participant inputs for new chats)                                                                           | —                                                     |
-| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                                                              | `{spaceId, threadId}`, mode `full`/`panel`            |
-| Right panel      | `resources.shell.panel {view}` replaces the Space sections                                                                                                                | `{threadId, spaceId}`, mode `panel`                   |
-| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog? or page?, destructive?, requires?}`                                                                    | dialog: `{threadId, spaceId}`, mode `dialog`          |
-| User menu        | `resources.userMenu.<id>` (same shape)                                                                                                                                    | `{}`                                                  |
-| Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                                                                    | `{section}` or `null`, mode `full`                    |
-| Agent selector   | a View for `agentSelector` plus `resources.views.prefer`                                                                                                                  | `{threadId}`                                          |
-| Tool renderers   | `resources.toolRenderers.<toolId> {view, inline?}`; the View declares mode `inline`                                                                                       | `ToolCallView` (status, input, result, live `output`) |
-| Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                                                              | —                                                     |
-| Images           | `resources.markdown.imageOrigins`                                                                                                                                         | —                                                     |
+| Slot             | Declare                                                                                                                                                                   | The View receives                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}`, `.theme: "host"` to manage `.dark` yourself | —                                                             |
+| Identity         | `resources.chat.sender` (who sends), `resources.chat.agents` (participant inputs for new chats)                                                                           | —                                                             |
+| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                                                              | `{spaceId, threadId}`, mode `full`/`panel`                    |
+| Right panel      | `resources.shell.panel {view}` replaces the Space sections                                                                                                                | `{threadId, spaceId}`, mode `panel`                           |
+| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog? or page?, destructive?, requires?}`                                                                    | dialog: `{threadId, spaceId}`, mode `dialog`                  |
+| User menu        | `resources.userMenu.<id>` (same shape)                                                                                                                                    | `{}`                                                          |
+| Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                                                                    | `{section}` or `null`, mode `full`                            |
+| Agent selector   | a View for `agentSelector` plus `resources.views.prefer`                                                                                                                  | `{threadId}`                                                  |
+| Tool renderers   | `resources.toolRenderers.<toolId> {view, inline?}`; the View declares mode `inline`                                                                                       | `ToolCallView` (status, input, result, `data`, live `output`) |
+| Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                                                              | —                                                             |
+| Images           | `resources.markdown.imageOrigins`                                                                                                                                         | —                                                             |
 
 Built-in sections: `overview` (0), `conversations` (10), `members` (90). A
 section's `tools` puts a dot on its tab when an agent uses one of them; the tab
@@ -177,6 +177,14 @@ for Overview, Agents, Conversations, People, Activity and Usage. Each section
 reads its query Action through the page's own context (`adminSection`), so a
 page opened from a link holds its query until Load. The overview no longer opens
 live reads. Detail Views use `DetailList`; refusals are sentences.
+
+The sections are
+`resources.adminSections.<id> {label, icon?, order?,
+description?, view?, requires?}`:
+the built-ins are entries (orders 0 to 50) an app reorders or hides (`null`),
+and an app adds its own as Views receiving `{ section }`. `requires` names
+Action aliases that must be composed. `adminQuery {section, embedded: true}`
+renders a section without a Screen.
 
 ## Deletions
 
@@ -210,6 +218,14 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   refusal through); kit `TabBar` (Space tabs use it) and `DetailList`.
 - 2026-10-21 (final): Views nested in a URL-opened View inherit its hold; one
   gesture releases the scope. Code highlighting and KaTeX load on first use.
+- 2026-10-21 (product gaps): JSON tool results pass through (`data`,
+  `resultStatus`; `chatLoadToolResult` reads references on demand, bounded at
+  256 KiB); `resources.adminSections` opens the admin page to app sections
+  (`adminSections`, `adminSection`, `ADMIN_SECTIONS` exported; `adminQuery`
+  takes `embedded`); core declares server proxies only for intents in use
+  (`intentServerActions`; the unused `deleteThreadMessages` alias is gone); the
+  header title keeps priority over the `agents` slot; the kit vendors KaTeX's
+  CSS and fonts.
 
 ## Held reads in nested Views
 
@@ -226,5 +242,3 @@ page's context (`adminSection`), so the page shows one Load for its section.
   unavailable" fallback for thread messages.
 - Persisted reasoning text is resolved only through the bounded `content` field
   selection; reasoning stored elsewhere shows as a step without text.
-- JSON tool results stay content references in the activity timeline; resolve
-  and render them when the read contract selects JSON bodies.

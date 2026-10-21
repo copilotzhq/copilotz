@@ -90,6 +90,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "thread",
   renderer: "react",
   modes: ["full", "panel"],
+  url: true,
   render({ id }, ctx) {
     const thread = ctx.collections.thread.get(id);
     const messages = readThreadMessages(ctx, id);

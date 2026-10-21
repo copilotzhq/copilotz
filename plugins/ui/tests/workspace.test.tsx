@@ -10,7 +10,12 @@ import {
   type BrowserViewContext,
   createBrowserRuntime,
 } from "@copilotz/copilotz/web";
-import { defineView, type ViewReference } from "@copilotz/copilotz/views";
+import {
+  defineView,
+  type ViewReference,
+  type ViewRendererAdapter,
+} from "@copilotz/copilotz/views";
+import { coreWebPlugin } from "@copilotz/copilotz/core/web";
 import {
   uiWebPlugin,
   workspaceNavigation,
@@ -18,6 +23,11 @@ import {
   workspaceUrlStorageAdapter,
 } from "../web.ts";
 import { ObservedView, reactRenderer } from "../../web-react/index.ts";
+import {
+  MemorySubscriptions,
+  record as liveRecord,
+  tick,
+} from "../../../client/testing/live-transport.test.ts";
 
 const reference = (id: string): ViewReference => ({
   shows: "record",
@@ -28,6 +38,7 @@ const record = defineView<{ id: string }, React.ReactNode, BrowserViewContext>({
   shows: "record",
   renderer: "react",
   modes: ["full", "panel", "dialog"],
+  url: true,
   render({ id }, ctx) {
     return <p data-density={ctx.hints.mode}>Record {id}</p>;
   },
@@ -158,25 +169,33 @@ const codec: WorkspaceUrlCodec = {
     }
   },
 };
-test("readable deep links round trip through storage, runtime restore and exact history restore", async () => {
+const fromUrl = (id: string) => ({ ...reference(id), origin: "url" });
+test("readable deep links round trip through storage, runtime restore and history navigation", async () => {
   let url = new URL(
     "https://app.example/records?focus=a&context=b&lang=en#section",
   );
+  const events = new EventTarget();
   const storage = workspaceUrlStorageAdapter({
     read: () => url,
     replace: (next) => {
       url = next;
     },
+    events,
   }, codec);
   const runtime = await createBrowserRuntime({
-    plugins: [uiWebPlugin("url")],
+    renderer: reactRenderer,
+    plugins: [uiWebPlugin("url"), { id: "app", views: { record } }],
     storage: { url: storage },
   });
   try {
+    // Decoded panes are admitted as URL state and still render their View.
     assert.deepEqual(
       runtime.collections.workspace.get("main").value?.focus,
-      reference("a"),
+      fromUrl("a"),
     );
+    const panes = render(runtime, "workspacePanes");
+    assert.match(panes, /Record a/);
+    assert.match(panes, /Record b/);
     await runtime.actions.uiSet({
       focus: reference("a /?&"),
       dialog: reference("d"),
@@ -185,16 +204,13 @@ test("readable deep links round trip through storage, runtime restore and exact 
     assert.equal(url.searchParams.get("lang"), "en");
     assert.equal(url.hash, "#section");
     assert.equal(url.searchParams.get("context"), null);
-    const saved = await storage.load("workspace");
-    assert.deepEqual(
-      saved?.[0],
-      runtime.collections.workspace.get("main").value,
-    );
+    assert.equal(url.searchParams.get("focus"), "a /?&");
     url = new URL("https://app.example/records?focus=back");
-    await runtime.actions.uiRestore(codec.decode(url)).result();
+    events.dispatchEvent(new Event("popstate"));
+    await tick();
     assert.deepEqual(runtime.collections.workspace.get("main").value, {
       id: "main",
-      focus: reference("back"),
+      focus: fromUrl("back"),
       context: null,
       dialog: null,
     });
@@ -202,6 +218,153 @@ test("readable deep links round trip through storage, runtime restore and exact 
       codec.decode(new URL("https://app.example/elsewhere")),
       undefined,
     );
+  } finally {
+    runtime.dispose();
+  }
+});
+
+/** An app codec with a JSON fallback: the URL can name any reference. */
+const jsonCodec: WorkspaceUrlCodec = {
+  decode(url) {
+    const pane = (name: string) => {
+      const value = url.searchParams.get(name);
+      return value ? JSON.parse(value) : null;
+    };
+    return {
+      focus: pane("focus"),
+      context: pane("context"),
+      dialog: pane("dialog"),
+    };
+  },
+  encode(url, state) {
+    for (const region of ["focus", "context", "dialog"] as const) {
+      const pane = state[region];
+      if (pane) url.searchParams.set(region, JSON.stringify(pane));
+      else url.searchParams.delete(region);
+    }
+  },
+};
+/** Whole-output rendering, so a refused nested View becomes a local notice. */
+const wholeOutput: ViewRendererAdapter = {
+  id: "react",
+  mount: () => ({ dispose() {} }),
+};
+async function bootFromUrl(params: Record<string, unknown>) {
+  const url = new URL("https://app.example/");
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, JSON.stringify(value));
+  }
+  const live = new MemorySubscriptions();
+  const runtime = await createBrowserRuntime({
+    renderer: wholeOutput,
+    plugins: [coreWebPlugin, uiWebPlugin("url"), {
+      id: "app",
+      views: { record },
+    }],
+    live,
+    storage: {
+      url: workspaceUrlStorageAdapter({
+        read: () => url,
+        replace: () => {},
+      }, jsonCodec),
+    },
+  });
+  return { runtime, live };
+}
+function renderPanes(runtime: BrowserRuntime) {
+  const output = runtime.observe(() =>
+    runtime.render({ shows: "workspacePanes", value: null })
+  );
+  try {
+    return renderToStaticMarkup(
+      <div>{output.getSnapshot() as React.ReactNode}</div>,
+    );
+  } finally {
+    output.dispose();
+  }
+}
+
+test("a crafted URL cannot mount a View that did not opt in", async () => {
+  // The core message View renders Markdown; a link must not spoof one.
+  const { runtime } = await bootFromUrl({
+    focus: {
+      shows: "message",
+      value: { id: "m", role: "assistant", content: "**Spoofed** notice" },
+    },
+    context: { shows: "record", value: { id: "d" } },
+  });
+  try {
+    const html = renderPanes(runtime);
+    assert.match(html, /Focus is unavailable/);
+    assert.match(html, /core\.message&#x27;? cannot be opened from a URL/);
+    assert.doesNotMatch(html, /Spoofed/);
+    // An addressable View named in the same URL still renders.
+    assert.match(html, /Record d/);
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("a URL carrying a record payload is never rendered from the URL", async () => {
+  const { runtime } = await bootFromUrl({
+    focus: {
+      shows: "record",
+      value: { id: "a", content: [{ type: "text", text: "Spoofed" }] },
+    },
+    context: { shows: "record", value: { id: "b" } },
+  });
+  try {
+    const state = runtime.collections.workspace.get("main").value;
+    assert.equal(state?.focus, null);
+    assert.deepEqual(state?.context, fromUrl("b"));
+    assert.doesNotMatch(renderPanes(runtime), /Spoofed/);
+    // A host URL open goes through the same admission.
+    await assert.rejects(
+      runtime.actions.uiOpen({
+        source: "url",
+        reference: { shows: "record", value: { id: "x", rows: [1] } },
+      }).result(),
+      /identifiers only/,
+    );
+    await runtime.actions.uiOpen({
+      source: "url",
+      reference: { shows: "message", value: { id: "m", content: "Spoofed" } },
+    }).result();
+    assert.deepEqual(runtime.collections.workspace.get("main").value?.focus, {
+      shows: "message",
+      value: { id: "m", content: "Spoofed" },
+      origin: "url",
+    });
+    const html = renderPanes(runtime);
+    assert.match(html, /cannot be opened from a URL/);
+    assert.doesNotMatch(html, /Spoofed/);
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("a deep link to an addressable View reads its record by ID", async () => {
+  const { runtime, live } = await bootFromUrl({
+    focus: { shows: "thread", value: { id: "t", name: "From the URL" } },
+  });
+  await live.publish({ collection: "thread", id: "t" }, {
+    t: "snapshot",
+    complete: true,
+    rows: [liveRecord({ id: "t", name: "Authorized name" })],
+    sequence: "1",
+    checkpoint: "1",
+  });
+  try {
+    const output = runtime.observe(() =>
+      runtime.render({ shows: "workspacePanes", value: null })
+    );
+    await tick();
+    const html = renderToStaticMarkup(
+      <div>{output.getSnapshot() as React.ReactNode}</div>,
+    );
+    output.dispose();
+    assert.match(html, /Authorized name/);
+    assert.doesNotMatch(html, /From the URL/);
   } finally {
     runtime.dispose();
   }

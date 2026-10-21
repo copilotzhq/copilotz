@@ -62,7 +62,12 @@ const {
 const { createBrowserRuntime } = await import(
   "@copilotz/copilotz/web"
 );
-const { uiWebPlugin, workspaceNavigation } = await import("../../ui/web.ts");
+const { uiWebPlugin, workspaceNavigation, workspaceUrlStorageAdapter } =
+  await import("../../ui/web.ts");
+const { createAdminWebPlugin } = await import("../../admin/web.ts");
+const { MemorySubscriptions } = await import(
+  "../../../client/testing/live-transport.test.ts"
+);
 const { coreWebPlugin } = await import("../../core/web.ts");
 const { defineView } = await import("@copilotz/copilotz/views");
 const { reactRenderer } = await import("../index.ts");
@@ -326,6 +331,74 @@ test("core conversation creation sends name and Stop cancels only after confirma
     assert.deepEqual(cancelled, ["active-operation"]);
   } finally {
     finish?.({ value: {}, seq: 1 });
+    await act(() => mounted?.dispose());
+    runtime.dispose();
+    container.remove();
+  }
+});
+
+test("URL state: an admin query waits for Load and a refused View stays in its pane", async () => {
+  const calls: { id: string; input: unknown }[] = [];
+  const url = new URL(
+    "https://app.example/?admin=threads&spoof=%2A%2ASpoofed%2A%2A",
+  );
+  const runtime: BrowserRuntime = await createBrowserRuntime({
+    renderer: reactRenderer,
+    plugins: [uiWebPlugin("url"), createAdminWebPlugin()],
+    live: new MemorySubscriptions(),
+    actions: {
+      invoke(id, input) {
+        calls.push({ id, input });
+        return Promise.resolve({
+          seq: 1,
+          value: { status: 200, data: [{ id: "t", name: "Loaded thread" }] },
+        });
+      },
+      cancel: () => Promise.resolve(),
+    },
+    storage: {
+      url: workspaceUrlStorageAdapter({ read: () => url, replace() {} }, {
+        decode: (url) => ({
+          focus: {
+            shows: "adminQuery",
+            value: { section: url.searchParams.get("admin") },
+          },
+          context: {
+            shows: "message",
+            value: { id: "m", content: url.searchParams.get("spoof") },
+          },
+          dialog: null,
+        }),
+        encode() {},
+      }),
+    },
+  });
+  const container = host();
+  let mounted: { dispose(): void } | undefined;
+  const original = console.error;
+  console.error = () => {}; // React logs the contained pane error.
+  try {
+    await act(() => {
+      mounted = runtime.mount(container, {
+        shows: "workspacePanes",
+        value: null,
+      });
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    assert.equal(calls.length, 0, "URL state must not submit the query");
+    assert.match(
+      document.querySelector("main")!.textContent,
+      /Opened from a link/,
+    );
+    const aside = document.querySelector("aside")!.textContent;
+    assert.match(aside, /cannot be opened from a URL/);
+    assert.doesNotMatch(document.body.textContent, /Spoofed/);
+    await click("Load");
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    assert.deepEqual(calls.map((call) => call.id), ["copilotz.admin.threads"]);
+    assert.match(document.querySelector("main")!.textContent, /Loaded thread/);
+  } finally {
+    console.error = original;
     await act(() => mounted?.dispose());
     runtime.dispose();
     container.remove();

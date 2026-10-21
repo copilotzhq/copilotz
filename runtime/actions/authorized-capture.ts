@@ -1,3 +1,4 @@
+import { captureCollectionInvocation } from "../authorization/invocation.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
@@ -212,11 +213,14 @@ export function createAuthorizedActions(
       kind: "action",
       resource: alias(frame.actionId)!,
       operation: firstCapture ? "capture" : "authorize",
-      sourceOperationId: resolved.ancestors[0]?.event.id ?? resolved.event.id,
+      sourceOperationId: source.operationId ?? source.eventId,
       invocation: {
         kind: "action",
         id: frame.actionId,
         runId: frame.actionRunId,
+        ...(frame.parentActionRunId
+          ? { parentRunId: frame.parentActionRunId }
+          : {}),
       },
       input,
     }, command);
@@ -275,6 +279,16 @@ export function createAuthorizedActions(
       }
     >
     | undefined => {
+    const caller = captureCollectionInvocation();
+    // Server ingress may invoke the continuation; a product Processor cannot
+    // turn its event projection grant into an Action's credential capabilities.
+    if (
+      caller?.authority?.flow && !caller.direct &&
+      caller.invocation.kind === "processor" &&
+      caller.invocation.id !== "copilotz.server.action-request"
+    ) {
+      authorizationRefused();
+    }
     if (!definition(frame.actionId)) return;
     const action = actionDefinitionById(options.actions, frame.actionId);
     const input = captureHostCommandJson(

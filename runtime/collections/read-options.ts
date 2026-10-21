@@ -1,4 +1,8 @@
-import type { ContentJsonValue, ContentRef } from "../content/types.ts";
+import type {
+  ContentDeferral,
+  ContentJsonValue,
+  ContentRef,
+} from "../content/types.ts";
 
 /** Content selection is restricted to the Collection's declared content paths. */
 export type CollectionContentOptions =
@@ -13,6 +17,18 @@ export type CollectionContentOptions =
     >[];
     /** Aggregate unique Asset body budget; defaults to 32 MiB. */
     byteLimit?: number;
+    /**
+     * With `overflow: "defer"`, the most bytes one body may have before it is
+     * deferred on its own; defaults to `byteLimit`.
+     */
+    bodyByteLimit?: number;
+    /**
+     * Over budget, `reject` (the default) fails the read; `defer` resolves
+     * the bodies that fit in read order (a newest-first window prefers its
+     * newest) and leaves the rest as `resolve: false` entries marked
+     * `deferred`, with their `byteLength`. Live subscription windows defer.
+     */
+    overflow?: "reject" | "defer";
   }>;
 
 export type ScopedCollectionReadOptions<
@@ -25,6 +41,15 @@ export type ScopedCollectionReadOptions<
 /** Rendering metadata and resolved value, discriminated by content kind. */
 export type ResolvedCollectionContentEntry =
   | Readonly<ContentRef & { resolve: false; value?: never }>
+  | Readonly<
+    ContentRef & {
+      resolve: false;
+      value?: never;
+      /** Left unread by a budgeted read: `budget` or `size` (one body too large). */
+      deferred: ContentDeferral;
+      byteLength: number;
+    }
+  >
   | Readonly<
     & Omit<ContentRef, "kind">
     & { resolve?: never }

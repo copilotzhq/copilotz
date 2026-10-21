@@ -4,6 +4,7 @@ import type { EventVisibility } from "@copilotz/copilotz/core";
 import type {
   CollectionMutationRef,
   CollectionRecord,
+  ScopedCollection,
   ScopedCollectionCallOptions,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
@@ -134,6 +135,25 @@ export async function findParticipant(
     }
   }
   return null;
+}
+/**
+ * Who a message that names no recipients addresses: the Thread's agent
+ * participants other than the sender, in membership order. A Thread without
+ * agents yields none.
+ */
+export async function threadAgentRecipients(
+  participants: Pick<ScopedCollection, "get">,
+  thread: CollectionRecord,
+  senderId?: string,
+): Promise<readonly CollectionRecord[]> {
+  const members = await Promise.all(
+    stringArray(thread.participantIds)
+      .filter((id) => id !== senderId)
+      .map((id) => participants.get({ id })),
+  );
+  return members.filter((member): member is CollectionRecord =>
+    member?.participantType === "agent"
+  );
 }
 export async function ensureParticipantInTransaction(
   collections: ActionTransactionContext["collections"],
@@ -279,6 +299,9 @@ export async function createThreadMessage(
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
   const membership = threadMembership(data.membership);
+  // Explicit recipients win, including an explicit empty list.
+  const namesRecipients = data.recipientIds !== undefined ||
+    asRecord(data.membership).recipients !== undefined;
   const eventVisibility = visibility(data.visibility);
   const messageVisibility = eventVisibility ?? { kind: "public" as const };
   const historyScopeId = optionalText(data.historyScopeId);
@@ -306,6 +329,13 @@ export async function createThreadMessage(
   const senderExternalId = optionalText(existingSender?.externalId) ??
     optionalText(sender.externalId) ?? optionalText(sender.id) ?? "";
   const existingParticipantIds = stringArray(thread.participantIds);
+  const defaultRecipientIds = namesRecipients
+    ? []
+    : (await threadAgentRecipients(
+      context.collections.participant,
+      thread,
+      optionalText(existingSender?.id),
+    )).map((recipient) => recipient.id);
   const content = decodeGeneratedContent(data.content ?? []);
   await context.transaction(async (tx) => {
     const collections = tx.collections;
@@ -342,6 +372,7 @@ export async function createThreadMessage(
     const messageRecipientIds = [
       ...new Set([
         ...recipientIds,
+        ...defaultRecipientIds,
         ...membership.recipients.map((recipient) =>
           "participantId" in recipient
             ? recipient.participantId

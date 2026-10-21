@@ -61,7 +61,8 @@
     "./usage/web": "./plugins/usage/web.ts",
     "./ui/web": "./plugins/ui/web.ts",
     "./shard": "./runtime/application/shard-public.ts",
-    "./web/kit/styles.css": "./plugins/ui-kit/styles.css"
+    "./web/kit/styles.css": "./plugins/ui-kit/styles.css",
+    "./migration": "./runtime/migration/index.ts"
   },
   "files": [
     "LICENSE",
@@ -102,6 +103,7 @@
     "@std/ulid": "npm:@jsr/std__ulid@1.0.0",
     "@std/yaml": "npm:@jsr/std__yaml@1",
     "@tailwindcss/typography": "0.5.16",
+    "@tanstack/react-virtual": "3.13.12",
     "@types/react": "19.1.10",
     "@types/react-dom": "19.1.7",
     "ajv": "^8.17.1",
@@ -112,11 +114,16 @@
     "croner": "9.0.0",
     "jq-wasm": "3.0.0-jq-1.8.2",
     "json-schema-to-ts": "3.1.1",
+    "katex": "0.16.47",
     "lucide-react": "0.540.0",
     "react-markdown": "9.1.0",
+    "rehype-highlight": "7.0.2",
+    "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",
+    "remark-math": "6.0.0",
     "tailwind-merge": "3.3.1",
     "tailwindcss": "4.1.12",
+    "tw-animate-css": "1.3.7",
     "typescript": "5.8.2",
     "yaml": "2.8.0",
     "zod": "3.25.76"

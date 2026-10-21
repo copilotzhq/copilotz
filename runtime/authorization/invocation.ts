@@ -1,10 +1,6 @@
 /** Owner-created invocation bindings. No binding can be selected over a worker call. */
 import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
-import { captureHostCommandJson } from "../application/host-command-json.ts";
-import {
-  type CommandContext,
-  schemaCommandContext,
-} from "../engine/commands.ts";
+import { captureJsonValue } from "../json.ts";
 import type { ProtectedActionSource } from "../actions/protected-action-types.ts";
 import type { ActionInvocationFrame } from "../actions/invoker.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -18,9 +14,18 @@ type OwnerBinding = Readonly<{
   direct?: boolean;
   /** Minted only by the in-process host surface, never by a wire binding. */
   trustedHost?: boolean;
+  /** Worker-local forwarding to the opaque context retained by the owner. */
+  callHostCapability?(
+    path: readonly string[],
+    args: readonly unknown[],
+    scope: Readonly<{ databaseSchema: string; namespace: string }>,
+  ): Promise<unknown>;
   authority?: import("./authority.ts").AuthenticatedAuthority;
   /** Owner-resolved logical Processor run, independent of its current attempt. */
   logicalRunId?: string;
+  operationId?: string;
+  sourceEventId?: string;
+  sourceDeliveryId?: string;
   scope: Readonly<{ databaseSchema: string; namespace: string }>;
   signal: AbortSignal;
   resolveSource(transaction: SqlExecutor): Promise<ProtectedActionSource>;
@@ -70,38 +75,11 @@ export const withoutCollectionPolicyInvocation = <T>(
   run: () => T | Promise<T>,
 ): Promise<T> => calls.run(undefined, () => trustedReads.run(undefined, run));
 
-/** A live call may contribute read-only policy to this exact owner command. */
-export function captureCollectionCommandInvocation(
+/** Unwrap a call scope only for owner command authorization. */
+export function collectionInvocationOwner(
   authority: CollectionInvocationAuthority,
-  command: CommandContext,
 ) {
-  authority.check();
-  const owner = commandAuthorities.get(authority) ?? authority;
-  const scope = Object.freeze({ ...owner.scope });
-  const invocation = captureHostCommandJson(
-    owner.invocation,
-  ) as CollectionPolicyInvocation;
-  const canonical = schemaCommandContext(
-    command.transaction,
-    scope.databaseSchema,
-  );
-  return Object.freeze({
-    ...owner,
-    scope,
-    invocation,
-    check(
-      read: Readonly<{ transaction: SqlExecutor; commandTime: string }> =
-        canonical,
-    ) {
-      if (
-        schemaCommandContext(read.transaction, scope.databaseSchema) !==
-          canonical || read.commandTime !== canonical.commandTime
-      ) closed();
-      canonical.signal.throwIfAborted();
-      owner.signal.throwIfAborted();
-      owner.check();
-    },
-  });
+  return commandAuthorities.get(authority) ?? authority;
 }
 
 function bind<T extends object>(context: T, binding: Binding): T {
@@ -158,7 +136,15 @@ function bind<T extends object>(context: T, binding: Binding): T {
     if (authority !== binding) return bind(value, authority);
     const descriptors = Object.getOwnPropertyDescriptors(value);
     for (
-      const key of ["collections", "vectors", "relations", "sessions", "flows"]
+      const key of [
+        "collections",
+        "vectors",
+        "relations",
+        "sessions",
+        "flows",
+        "directory",
+        "authentication",
+      ]
     ) {
       if (descriptors[key] && "value" in descriptors[key]) {
         descriptors[key] = {
@@ -213,8 +199,9 @@ export async function withOwnerCollectionInvocation<T>(
   const owner = Object.freeze({
     ...authority,
     scope: Object.freeze({ ...authority.scope }),
-    invocation: captureHostCommandJson(
+    invocation: captureJsonValue(
       authority.invocation,
+      { label: "Owner invocation", maxDepth: 64, maxNodes: 100_000 },
     ) as CollectionPolicyInvocation,
   });
   const bound: Binding = {
@@ -263,6 +250,15 @@ export function bindOwnerCollectionInvocation<T extends object>(
   return bind(context, binding(owner, invocation, {}));
 }
 export const bindProcessorCollectionInvocation = bindOwnerCollectionInvocation;
+/** RPC methods already enforce lifetime and track their own staged promises. */
+export function bindWorkerCollectionInvocation<T extends object>(
+  context: T,
+  owner: OwnerBinding,
+  invocation: CollectionPolicyInvocation,
+): T {
+  contexts.set(context, binding(owner, invocation, {}));
+  return context;
+}
 export function bindActionCollectionInvocation<T extends object>(
   context: T,
   host: object,

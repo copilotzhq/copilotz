@@ -187,6 +187,14 @@ export function createActionContext(
             vectors,
             sessions,
             flows,
+            directory: {
+              command: () =>
+                Promise.reject(
+                  new Error(
+                    "Directory commands require an authorized owner invocation.",
+                  ),
+                ),
+            },
           } as const,
         );
       },

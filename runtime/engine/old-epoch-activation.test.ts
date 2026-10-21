@@ -154,7 +154,7 @@ Deno.test("successor activation arms immediate recovery for old local and remote
     );
   } finally {
     clearTimeout(timeout);
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     await engine.shutdown();
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();

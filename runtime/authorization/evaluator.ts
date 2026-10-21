@@ -1,4 +1,10 @@
+import { defineDatabaseDirectoryCommand } from "./directory-command.ts";
+import {
+  defineIdentityVerifier,
+  readIdentityEvidence,
+} from "./identity-evidence.ts";
 import { validateCollectionConstraints } from "./collection-constraints.ts";
+import { defineDatabaseDirectoryRead } from "./directory-read.ts";
 import { checkFlow } from "./flow.ts";
 /** One owner-local policy evaluator. Policy code receives declared, tracked reads. */
 import type {
@@ -44,17 +50,22 @@ export type AuthorizationIntent = Readonly<{
     | "session"
     | "flow"
     | "asset"
-    | "event";
+    | "event"
+    | "directory"
+    | "identity";
   resource: string;
   operation: string;
   input: unknown;
   /** Owner-resolved root source, used when capturing a flow continuation. */
   sourceOperationId?: string;
+  sourceEventId?: string;
+  sourceDeliveryId?: string;
   /** Owner-resolved executing identity. Absent for direct ingress calls. */
   invocation?: Readonly<{
     kind: "action" | "processor" | "alarm";
     id: string;
     runId?: string;
+    parentRunId?: string;
   }>;
 }>;
 export type AuthorizationRead = Readonly<{
@@ -68,6 +79,7 @@ export type OwnerPolicy = Readonly<{
   revision: string;
   /** Local Collection aliases, or explicit directory capabilities for staff grants. */
   sources: readonly AuthorizationSource[];
+  evidence?: readonly string[];
   evaluate(
     context: Readonly<{
       authority: AuthenticatedAuthority;
@@ -75,10 +87,20 @@ export type OwnerPolicy = Readonly<{
       commandTime: string;
       signal: AbortSignal;
       read: AuthorizationRead;
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
     }>,
   ): ServerConstraints | Promise<ServerConstraints>;
 }>;
 export type OwnerAuthorization = Readonly<{
+  identityVerifiers?: Readonly<
+    Record<string, import("./identity-evidence.ts").IdentityVerifier>
+  >;
+  directoryCommands?: Readonly<
+    Record<string, import("./directory-command.ts").DatabaseDirectoryCommand>
+  >;
+  directoryReads?: Readonly<
+    Record<string, import("./directory-read.ts").DatabaseDirectoryRead>
+  >;
   /** Explicit tenant placement for owner-generated alarm occurrences, by namespace. */
   systemScopes?: Readonly<
     Record<string, import("./authority.ts").AuthorityScope>
@@ -128,9 +150,44 @@ export function validateOwnerAuthorization(
       );
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.identityVerifiers ?? {},
+    )
+  ) {
+    defineIdentityVerifier(declaration);
+    if (
+      !alias ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) throw new TypeError("Identity verifiers require policy-bound Actions.");
+  }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryCommands ?? {},
+    )
+  ) {
+    defineDatabaseDirectoryCommand(declaration);
+    if (
+      !alias || declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      ) ||
+      declaration.evidence?.some((evidence) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, evidence)
+      )
+    ) {
+      throw new TypeError(
+        "Directory commands require policy-bound Actions and declared evidence.",
+      );
+    }
+  }
   for (const [id, policy] of Object.entries(registration.policies)) {
     if (
       !id || !policy.revision || typeof policy.evaluate !== "function" ||
+      policy.evidence?.some((alias) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, alias)
+      ) ||
       !Array.isArray(policy.sources) ||
       new Set(policy.sources.map(sourceAlias)).size !== policy.sources.length ||
       policy.sources.some((source) =>
@@ -170,6 +227,23 @@ export function validateOwnerAuthorization(
       throw new TypeError("Required Collection authority binding is missing.");
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryReads ?? {},
+    )
+  ) {
+    if (
+      !alias || declaration.kind !== "database-directory-read" ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) {
+      throw new TypeError(
+        "Directory reads require declared, policy-bound Actions.",
+      );
+    }
+    defineDatabaseDirectoryRead(declaration);
+  }
 }
 export function captureOwnerAuthorization(
   registration: OwnerAuthorization | undefined,
@@ -179,6 +253,25 @@ export function captureOwnerAuthorization(
   validateOwnerAuthorization(registration, collections, actions);
   if (!registration) return;
   return Object.freeze({
+    directoryCommands: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.directoryCommands ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineDatabaseDirectoryCommand(declaration)]),
+      ),
+    ),
+    identityVerifiers: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.identityVerifiers ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineIdentityVerifier(declaration)]),
+      ),
+    ),
+    directoryReads: Object.freeze(Object.fromEntries(
+      Object.entries(registration.directoryReads ?? {}).map((
+        [alias, declaration],
+      ) => [alias, defineDatabaseDirectoryRead(declaration)]),
+    )),
     ...(registration.systemScopes
       ? {
         systemScopes: Object.freeze(
@@ -194,6 +287,7 @@ export function captureOwnerAuthorization(
           id,
           Object.freeze({
             revision: policy.revision,
+            evidence: Object.freeze([...(policy.evidence ?? [])]),
             sources: Object.freeze(
               policy.sources.map(captureAuthorizationSource),
             ),
@@ -381,6 +475,18 @@ export function createOwnerEvaluator(
             intent: captureHostCommandJson(intent) as AuthorizationIntent,
             commandTime: command.commandTime,
             signal: command.signal,
+            evidence: {
+              get(alias) {
+                assertActive();
+                if (!policy.evidence?.includes(alias)) {
+                  failed = true;
+                  authorizationRefused();
+                }
+                return track(() =>
+                  readIdentityEvidence(registration, authority, alias, command)
+                );
+              },
+            },
             read: {
               get(alias, id) {
                 const definition = source(alias, id);
@@ -444,6 +550,11 @@ export function createOwnerEvaluator(
         }, command.signal)
       );
       await Promise.all(pending);
+      if (
+        authority.flow && intent.invocation?.kind === "processor" &&
+        (!Array.isArray(constraints.flowProcessors) ||
+          !constraints.flowProcessors.includes(intent.invocation.id))
+      ) authorizationRefused();
       if (failed) {
         throw new Error("Owner authorization could not be completed.");
       }

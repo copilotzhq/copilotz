@@ -60,6 +60,11 @@ export type {
   StaffAuthorizationSource,
 } from "../authorization/directory.ts";
 export { createDatabaseStaffSource } from "../authorization/directory.ts";
+export { defineDatabaseDirectoryRead } from "../authorization/directory-read.ts";
+export type {
+  DatabaseDirectoryRead,
+  DirectoryReader,
+} from "../authorization/directory-read.ts";
 
 export {
   inspectAuthorityUpgrade,
@@ -67,3 +72,22 @@ export {
 } from "../authorization/upgrade.ts";
 export type { AuthorityUpgradeManifest } from "../authorization/upgrade.ts";
 export { withRetainedAuthority } from "../authorization/binding.ts";
+
+export {
+  defineIdentityVerifier,
+  pruneIdentityEvidence,
+} from "../authorization/identity-evidence.ts";
+export type {
+  IdentityEvidence,
+  IdentityEvidenceReader,
+  IdentityVerifier,
+  IdentityVerifierClient,
+} from "../authorization/identity-evidence.ts";
+
+export { defineDatabaseDirectoryCommand } from "../authorization/directory-command.ts";
+export type {
+  DatabaseDirectoryCommand,
+  DirectoryCommandContext,
+  DirectoryCommands,
+  TransactionDirectoryCommands,
+} from "../authorization/directory-command.ts";

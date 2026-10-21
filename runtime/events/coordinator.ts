@@ -87,7 +87,13 @@ export function awaitEventPublication(
 /** Coordinates the post-commit publication and Oxian dispatch boundary. */
 export function createEventCoordinator(
   options: CreateEventCoordinatorOptions,
-): EventCoordinator {
+):
+  & EventCoordinator
+  & Readonly<{
+    /** Stop placement; committed delivery obligations remain available to recovery. */
+    close(): void;
+  }> {
+  let closed = false;
   const reportFailure = (failure: DeliveryDispatchFailure): void => {
     try {
       options.onDispatchFailure?.(failure);
@@ -100,6 +106,7 @@ export function createEventCoordinator(
     result: CommitEventMutationResult<unknown>,
     remotePreclaim = false,
   ): Promise<EventDispatchReport> => {
+    if (closed) return EMPTY_DISPATCH;
     const actionable = result.deliveries.filter((delivery) =>
       delivery.status === "pending" ||
       (delivery.status === "leased" && (!delivery.leaseExpiresAt ||
@@ -144,7 +151,7 @@ export function createEventCoordinator(
       // which wakes when capacity frees, instead of waiting for recovery's
       // next persisted deadline (possibly an unrelated active lease).
       try {
-        options.executor.scheduleDelivery(actionable[index]);
+        if (!closed) options.executor.scheduleDelivery(actionable[index]);
       } catch {
         // The executor is shutting down. The delivery is already durable and
         // recovery remains its contract; never fail the committed event here.
@@ -228,6 +235,9 @@ export function createEventCoordinator(
   };
 
   return ({
+    close() {
+      closed = true;
+    },
     commitMutation,
     append(draft, appendOptions = {}) {
       return commitMutation({
@@ -236,6 +246,7 @@ export function createEventCoordinator(
       });
     },
     recover(recoveryOptions = {}) {
+      if (closed) return Promise.resolve(EMPTY_DISPATCH);
       return options.executor.dispatchRecoverable({
         ...recoveryOptions,
         databaseSchema: recoveryOptions.databaseSchema ??

@@ -217,7 +217,7 @@ async function createFixture() {
       control.enforce = false;
       for (const { owner, executor } of opened) {
         await executor.shutdown();
-        releaseDatabaseOwner(owner);
+        await releaseDatabaseOwner(owner);
       }
       // Only this fixture's newly created schema is disposable.
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);

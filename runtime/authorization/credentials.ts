@@ -1,3 +1,4 @@
+import { captureCollectionCommandInvocation } from "./invocation-command.ts";
 /** Owner-only credential effects. Durable rows contain public claims, never tokens. */
 import {
   type AuthenticatedAuthority,
@@ -5,10 +6,7 @@ import {
   retainedAuthority,
 } from "./authority.ts";
 import { authorizationRefused, type OwnerEvaluator } from "./evaluator.ts";
-import {
-  captureCollectionCommandInvocation,
-  type CollectionInvocationAuthority,
-} from "./invocation.ts";
+import type { CollectionInvocationAuthority } from "./invocation.ts";
 import {
   type CommandContext,
   createSchemaCommandRunner,
@@ -291,7 +289,15 @@ export function createCredentialEffects(options: {
           input: object,
           invocation: actor,
         }, command);
-        if (!decision.constraints.flows?.start?.includes(object.kind)) {
+        const grants = decision.constraints.flows?.start;
+        const grant = grants && Object.hasOwn(grants, object.kind)
+          ? grants[object.kind]
+          : undefined;
+        if (
+          !grant || grant.continuation !== object.continuation ||
+          !Number.isSafeInteger(grant.maxAge) || grant.maxAge <= 0 ||
+          grant.maxAge > 900 || typeof age !== "number" || age > grant.maxAge
+        ) {
           authorizationRefused();
         }
         claims = {

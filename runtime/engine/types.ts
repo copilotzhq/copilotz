@@ -357,6 +357,9 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  authentication?:
+    import("../authorization/identity-evidence.ts").IdentityVerifierClient;
+  directory?: import("../authorization/directory-read.ts").DirectoryReader;
   collectionInvocation?: Readonly<{
     owner: Parameters<
       typeof import("../authorization/invocation.ts").bindProcessorCollectionInvocation

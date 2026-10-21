@@ -1,9 +1,10 @@
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { Frame, ReadStatus } from "@copilotz/copilotz/web/kit";
+import { DetailList, Frame, ReadStatus } from "@copilotz/copilotz/web/kit";
 
 const view: import("@copilotz/copilotz/views").ViewDefinition<
   { id: string },
@@ -25,23 +26,18 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
           participant?.name ?? participant?.externalId ?? "Participant",
         )}
       >
-        <ReadStatus state={state} />
+        <ReadStatus state={state} noun="participant" />
         {participant && (
-          <dl className="grid gap-3">
-            {[
-              "id",
-              "externalId",
-              "participantType",
-              "namespace",
-              "createdAt",
-              "updatedAt",
-            ].map((field) => (
-              <React.Fragment key={field}>
-                <dt>{field}</dt>
-                <dd>{String(participant[field] ?? "—")}</dd>
-              </React.Fragment>
-            ))}
-          </dl>
+          <DetailList
+            items={[
+              ["Type", participant.participantType],
+              ["External ID", participant.externalId],
+              ["Namespace", participant.namespace],
+              ["Created", participant.createdAt],
+              ["Updated", participant.updatedAt],
+              ["ID", <code key="id" className="text-xs">{id}</code>],
+            ]}
+          />
         )}
       </Frame>
     );

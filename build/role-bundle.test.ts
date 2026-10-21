@@ -196,6 +196,7 @@ Deno.test("worker role rejects literal and nonliteral dynamic loading", async ()
     const source of [
       'export const load = () => import("@copilotz/copilotz/worker");',
       "export const load = (path: string) => import(path);",
+      'const ASYNC_HOOKS_SPECIFIER = "node:async_hooks"; export const load = () => import(ASYNC_HOOKS_SPECIFIER);',
       'declare const require: (path: string) => unknown; export const load = () => require("ajv");',
     ]
   ) {

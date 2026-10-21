@@ -150,13 +150,13 @@ and `CollectionPolicies` types are removed. `defineServerFacade` rejects an
 
 ### What `evaluate` receives
 
-`evaluate({ authority, intent, commandTime, signal, read })` runs in the owner's
-command:
+`evaluate({ authority, intent, commandTime, signal, read, evidence })` runs in
+the owner's command:
 
 - `authority` is the retained binding, validated and frozen.
 - `intent` describes the exact command. `kind` is `action`, `collection`,
-  `operation`, `observation`, `session`, `asset` or `event`, with a `resource`,
-  an `operation` and the captured `input`:
+  `operation`, `observation`, `session`, `flow`, `asset`, `event`, `directory`
+  or `identity`, with a `resource`, an `operation` and the captured `input`:
   - Action intents name the Action by alias. `operation` is `admit` at HTTP
     admission, `capture` when the owner captures the input, and `authorize` when
     execution or a replay checks it again.
@@ -214,7 +214,8 @@ if (intent.kind === "collection") {
 | `operations`          | `{ metadata, absentMetadata? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                               |
 | `observationKeys`     | Opaque catalog keys stamped on admitted work, such as a conversation's selection key from that domain's helper.                                                                                                 |
 | `assets`              | `{ read: [assetId, …] }`: exact Assets the caller may read.                                                                                                                                                     |
-| `sessions`            | `{ create?: true, revoke?: "self" \| "tenant" }`.                                                                                                                                                               |
+| `sessions`            | `{ create?: { principal, maxAge }, revoke?: "self" \| "tenant" }`.                                                                                                                                              |
+| `flows`               | `{ start: { [kind]: { continuation, maxAge } } }`: exact continuation alias and maximum lifetime.                                                                                                               |
 | `events`              | Authenticated root Event types, including adapter-validated channel input.                                                                                                                                      |
 | `admission`           | `{ key }`: the host-selected conversation group for bounded HTTP admission. Product labels, such as a thread link, travel in `operations.metadata`.                                                             |
 
@@ -235,6 +236,17 @@ The context APIs (`context.actions`, `context.collections`, `context.invoke` and
 binding is forbidden to authenticated callers, for both reads and writes.
 Explicit `withRetainedAuthority(authority, signal, fn)` scopes from
 `@copilotz/copilotz` retain the same guarantee.
+
+Separate workers install a revocable ambient binding around every user callback:
+Action execute/resume/reconcile, Processor handle/onError and prepare factories.
+The binding survives awaits. Captured same-scope application Action and
+Collection calls use the worker's existing reverse capability and the context
+retained by the owner, including parent provenance and current policy. No host
+authority is sent over the wire. Foreign schemas/namespaces and unsupported host
+ingress are refused; use context capabilities for execution and declared
+directory reads for delegation. Captured application calls accept
+`idempotencyKey`, `metadata` and `signal`; scope options may only name the
+current owner scope. Independent host bootstrap remains trusted.
 
 Policy Collection filters accept only `where`, `contains`, `containsAny` and
 `filter`. The owner validates their shapes and nested predicates before using a
@@ -296,7 +308,8 @@ Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
 
 - `authenticate` verifies the login request itself (a password, a one-time code,
   an identity-provider callback) and returns a credential binding whose policy
-  grants `sessions: { create: true }` for session intents.
+  grants `sessions: { create: { principal: accountId, maxAge: 28800 } }` for
+  session intents.
 - Later requests carry the session ID. `authenticate` returns a binding with
   `principal: { kind: "session", id: accountId }` and
   `authorityBasis: { kind: "session", id: sessionId }`. `sessions.create` binds
@@ -416,6 +429,67 @@ principal, target scope, provenance, policy, operation and directory source; a
 refused transaction rolls the receipt back with its effects. Staff channels use
 the same 15-minute admission and renewal path.
 
+### Declared directory reads from Actions
+
+`context.directory.get(alias, id)` is a read-only capability for a directory
+Collection in another owner schema **in the same database**. Declare it in
+`authorization.directoryReads`; placement, Collection, fields, byte limit and
+eligible Action aliases are fixed by trusted composition. Caller input selects
+only the declared alias and record ID. There are no list, write or destination
+selection methods, and Processors or independent host calls cannot use it.
+
+```ts
+import { defineDatabaseDirectoryRead } from "@copilotz/copilotz/engine";
+
+const routing = defineDatabaseDirectoryRead({
+  revision: "1",
+  databaseSchema: "directory",
+  namespace: "directory",
+  collection: routes,
+  actions: ["enroll"], // registered, policy-bound Action aliases
+  fields: ["tenant"], // exact top-level projection, no implicit fields
+  maxBytes: 4096, // default 16384, maximum 65536
+  authorize({ authority, id, record }) {
+    // Destination owner policy; inspect fresh state and the retained caller.
+    return record?.active === true &&
+      record.requester === authority.principal.id && record.id === id;
+  },
+});
+// Add to the application's authorization registration:
+// directoryReads: { routing }
+```
+
+The caller's policy must separately return `directoryReads: ["routing"]` for
+`intent.kind === "directory"`, `intent.operation === "get"`. Inspect the exact
+`intent.input.id`, caller scope and `intent.invocation` before granting it. The
+source policy is checked before reading and again before disclosure; the
+declared destination policy must return exactly `true`. Missing declarations,
+undeclared Actions, denial, expired authority, cancellation, unavailable storage
+and oversized results all fail closed. The destination policy receives a
+detached record and retained authority, not a database handle. It must not
+perform writes.
+
+```ts
+const route = await context.directory.get("routing", routingRecordId);
+```
+
+Each call reads current committed directory state through the existing owner
+command transaction; no identity result is cached or replayed by this API.
+Successful reads commit an `authorization.directory` receipt before disclosure.
+Its intent records caller principal, source tenant/namespace, operation and
+Action provenance, declaration revision, destination scope/Collection, projected
+fields, record ID and result digests, and command time. The receipt contains no
+credential or returned record payload. Audit-write failure prevents disclosure.
+Refused reads disclose nothing and roll back with the command; they do not
+create successful-read receipts.
+
+This capability also works through the worker transport, where the owner
+resolves the declaration from its own registration. It does not grant
+cross-owner mutations, transactions, arbitrary queries, or reads from another
+database. Mutations use the separately declared directory service commands
+below. Staff authorization sources remain restricted to policy evaluation and
+are not a business directory API.
+
 ## Sessions and anonymous flows in Actions
 
 Schema version 14 adds owner-private credential effects. Existing version 13
@@ -434,12 +508,22 @@ await context.transaction(async ({ collections, sessions }) => {
 });
 ```
 
-Policy must explicitly return `sessions: { create: true }` for the `session`
+Policy must explicitly return
+`sessions: { create: { principal: accountId, maxAge: 3600 } }` for the `session`
 `create` intent. Its input contains the owner-generated session ID, principal
 and expiry, and `intent.invocation` identifies the executing Action. Check that
-Action's identity and its authorized account before granting creation. A broad
-Action grant alone cannot mint a session. Policy refusal rolls back the entire
-transaction, including collection writes, effects and receipts.
+Action's identity and independently verified account before granting creation. A
+broad Action grant alone cannot mint a session. Policy refusal rolls back the
+entire transaction, including collection writes, effects and receipts.
+
+This is also the recommended remote login configuration. The owner compares the
+proposed principal and expiry with the grant before inserting a session or
+effect row. The maximum lifetime must be a positive integer; booleans no longer
+grant creation. A compromised worker cannot substitute another principal or
+extend the grant's lifetime. Derive the grant from trusted owner state or
+independently validated authentication evidence, never by echoing
+`intent.input`. Keep signing keys on the owner; a worker proposes effects and
+receives no credential token.
 
 `await sessions.revoke()` revokes the caller's session; `revoke(id)` targets a
 specific session without clearing the caller's cookie when it targets someone
@@ -467,7 +551,10 @@ await context.transaction(async ({ flows }) => {
 });
 ```
 
-The `flow` `start` intent needs `flows: { start: ["oauth"] }` in policy.
+The `flow` `start` intent needs an exact owner grant:
+`flows: { start: { oauth: { continuation: "oauthCallback", maxAge: 300 } } }`.
+The owner compares the requested continuation and lifetime with that grant
+before creating an effect. Kind arrays no longer authorize minting.
 `continuation` is a registered Action **alias**. Lifetime defaults to 300
 seconds and cannot exceed 900 seconds. The signed credential binds schema,
 namespace, tenant, flow kind, nonce and expiry. Its principal is the nonce, with
@@ -475,11 +562,26 @@ a validated `authority.flow` descriptor. The owner consumes it on the
 continuation's first input capture. The same retained Action run may replay; a
 second run is refused.
 
-Flow restrictions apply in addition to policy. A flow can invoke only its
-continuation, read or observe its start and continuation operations, and use the
-continuation's explicitly granted internal collection/session operations. It
-cannot read arbitrary Collections, assets or other flows' operations, even under
-a broad host policy. Flow expiry bounds observation and every command.
+Flow restrictions apply in addition to policy. The credential can directly
+invoke only its continuation and read or observe its start and continuation
+operations. Inside the consumed continuation, `context.actions` may invoke
+transitive child Actions within that exact accepted operation. Each child still
+needs an exact product Action grant; its internal Collection, session, asset and
+directory capabilities still require their own grants. Policy receives
+`intent.invocation`, including the owner-resolved parent run at child capture.
+
+The owner records each descendant's flow, consumed root, accepted operation,
+parent and Action identity in the same transaction as policy and input capture.
+A refused child leaves no delegation receipt. Other operations, tenants and
+direct child calls remain refused; replay returns retained results without
+re-running children. Flow expiry and current authorization checks apply to every
+command. `operations.start` and `awaitOperation({ start })` refuse a flow before
+admitting another operation. Detached Processors retain the flow and cannot
+become admitted Action descendants. Collection alarms and scheduled occurrences
+run with independently configured `systemScopes` and current owner policy, not
+the originating flow. Granting a flow permission to write a schedule does not
+authorize the occurrence's Actions or effects; its independent policy must grant
+them explicitly.
 
 Credential effects retain only public claims. Session tokens never enter Action
 outputs, event bodies, operation metadata, transaction receipts or live reads.
@@ -617,3 +719,192 @@ headers. A direct host authentication refusal also becomes 401 when no
 credential is present. A credential-projection proof is a receipt capability,
 not an authentication credential. Cookie defaults remain
 `__Host-copilotz_session`, Secure, HttpOnly, Path=/ and no Domain.
+
+## Owner-verified identity evidence
+
+Register a named `identityVerifiers` capability on the owner. An Action calls
+`context.authentication.verify(alias, input)` before its transaction. Workers
+can request a verifier; they cannot register one or supply its verified result.
+An `externalEffect` checkpoint, even a persisted one, is never authentication
+evidence.
+
+The verifier is trusted owner code. Keep provider secrets, trusted issuer
+configuration and signing-key caches there. For an OIDC code flow, it must
+exchange the code and validate the ID token's signature, issuer, audience,
+expiry and nonce against the owner-retained challenge, including PKCE. Do not
+accept the expected issuer, audience, nonce or principal from the worker.
+
+This generic example uses application-owned `loginChallenges` and `trustedOidc`
+services; those names are not platform APIs:
+
+```ts
+import { defineIdentityVerifier } from "@copilotz/copilotz/engine";
+
+const oidc = defineIdentityVerifier({
+  revision: "1",
+  actions: ["loginCallback"],
+  async verify(input, { binding, exchangeKey, signal }) {
+    const { code } = parseCodeInput(input); // Bounded untrusted input.
+    const challenge = await loginChallenges.get(binding);
+    // Service verifies against configured provider keys and owner-held nonce/PKCE.
+    const identity = await trustedOidc.exchangeAndVerify({
+      code,
+      issuer: configuredIssuer,
+      audience: configuredClientId,
+      clientSecret: ownerClientSecret,
+      nonce: challenge.nonce,
+      pkceVerifier: challenge.pkceVerifier,
+      exchangeKey,
+      signal,
+    });
+    return {
+      issuer: identity.issuer,
+      subject: identity.subject,
+      principal: accountIdFor(identity.issuer, identity.subject),
+    };
+  },
+});
+// authorization.identityVerifiers = { oidc }
+```
+
+The result is a bounded `IdentityEvidence` value with `issuer`, `subject`,
+`principal` and optional JSON `claims`. Return only verified facts needed by
+policy, never tokens, authorization codes or secrets. Inputs and evidence are
+limited to 16 KiB. Policy declares `evidence: ["oidc"]`; its typed
+`evidence.get("oidc")` reader accepts no caller-selected receipt or binding. It
+reads only evidence for the current schema, namespace, tenant, flow, accepted
+root operation and client proof. An undeclared read refuses, including when
+policy catches the read error. Missing evidence is `null`.
+
+```ts
+// Excerpt from the login policy; ordinary admission grants are omitted.
+const identityPolicy = {
+  revision: "1",
+  sources: [],
+  evidence: ["oidc"],
+  async evaluate({ intent, evidence }) {
+    if (intent.kind === "identity" && intent.resource === "oidc") {
+      return { identityVerifiers: ["oidc"] };
+    }
+    if (intent.kind === "session" && intent.operation === "create") {
+      const identity = await evidence.get("oidc");
+      return identity
+        ? {
+          sessions: { create: { principal: identity.principal, maxAge: 3600 } },
+        }
+        : {};
+    }
+    return {};
+  },
+};
+```
+
+Only a consumed flow Action or an admitted descendant in its accepted operation
+can request verification. The owner durably reserves the exchange before
+provider I/O, then records verified evidence before returning it. Repeated calls
+with the same input and verifier revision return the same evidence. Changed
+input or revision refuses. A pending reservation returns
+`identity_evidence_pending`; it never re-exchanges a one-use code. If a crash
+occurs after the provider consumes a code but before the receipt commits, start
+a new flow. This is an explicit unresolved outcome, not a successful login.
+
+Verification runs outside the SQL transaction. A later login rollback retains
+the evidence, so replay does not repeat the provider exchange. Evidence expires
+with the flow. Trusted host maintenance can call
+`pruneIdentityEvidence(session, databaseSchema)` to remove expired evidence and
+pending reservations. Payload-free `identity.audit` receipts remain under the
+owner's audit retention policy. Protect private receipt storage and apply the
+application's retention schedule to owner-held login challenges too.
+
+## Atomic directory service commands
+
+For provisioning, use a declared trusted identity-service command. This extends
+`context.directory` with `command(alias, input, { operationKey })`, and Action
+transactions with `tx.directory.command`. Composition fixes the destination
+schema, namespace, command name, revision and permitted Action aliases. Source
+policy must grant `directoryCommands: [alias]`; the destination's independent
+`authorize` callback must also return `true`.
+
+```ts
+import { defineDatabaseDirectoryCommand } from "@copilotz/copilotz/engine";
+
+const prepare = defineDatabaseDirectoryCommand({
+  databaseSchema: "directory",
+  namespace: "directory",
+  command: "prepareLogin",
+  revision: "1",
+  actions: ["loginCallback"],
+  evidence: ["oidc"],
+  async authorize({ authority, input, evidence }) {
+    const identity = await evidence.get("oidc");
+    return admittedSourceTenant(authority.scope.tenant) &&
+      identity?.principal === parseDirectoryInput(input).accountId;
+  },
+  async execute({ transaction, namespace, input }) {
+    // Trusted service repository; only this supplied SQL transaction may write.
+    return await directoryRepository.prepare(transaction, {
+      namespace,
+      ...parseDirectoryInput(input),
+    });
+  },
+});
+// authorization.directoryCommands = { prepare, publishMembership }
+```
+
+The directory service owns its repository and migrations. Its callbacks run on
+the owner, never on a worker. Use service-owned identity tables; do not write
+native Collection tables without their event, projection and integrity
+invariants. The SQL executor is revoked when the implementation returns. No
+captured application handles, network side effects or independent commits are
+permitted in a service command. Physical tenant provisioning belongs to trusted
+host orchestration before route activation.
+
+Both schema owners must already be attached in the same process and database.
+The source SQL transaction locks and verifies the destination's live owner
+identity. Directory writes, source Collection writes, session effects and both
+owners' audit receipts commit atomically. Commands participate in the existing
+transaction plan in call order; membership publication can see the preceding
+account write. A failure in any command rolls back the whole transaction even if
+Action planning code attempted to catch it.
+
+```ts
+const identity = await context.authentication.verify("oidc", { code });
+await context.transaction(async (tx) => {
+  await tx.directory.command("prepare", { accountId: identity.principal }, {
+    operationKey: "prepare",
+  });
+  await tx.collections.accounts.create({ id: identity.principal });
+  await tx.directory.command("publishMembership", {
+    accountId: identity.principal,
+  }, { operationKey: "publish" });
+  await tx.sessions.create({ principal: identity.principal, maxAge: 3600 });
+}, { operationKey: "complete-login" });
+```
+
+Transactional commands return no result because workers stage their plans.
+Derive the account ID from verified evidence before planning. A standalone
+`context.directory.command` can return a bounded result, but commits its own
+transaction; it cannot promise atomicity with later calls. Reuse of a command
+key in the same accepted Action invocation returns its retained result; changed
+input/revision refuses. Private receipts retain results for replay, while
+`directory.audit` contains coordinates and input/output digests only. Opposing
+cross-schema lock orders may cause a database deadlock and rollback; commands
+must have no effects outside their SQL transaction.
+
+## Flow-bounded Processor projections
+
+A Processor may read or mutate Collections for a flow only when its live,
+owner-retained delivery points to an event committed in that flow's consumed
+operation. Product policy must additionally grant
+`flowProcessors: ["records.project"]` using the Processor's stable ID, along
+with exact Collection grants. Policy receives `intent.invocation` and should
+validate proposed projections against fresh declared sources.
+
+This also permits detached processing of an event committed in the consumed
+operation. It does not authorize a further event emitted in the detached
+Processor's separate operation. Such an event cannot extend the flow, even when
+its metadata claims the original ancestry. Processors cannot use flow authority
+to start unrelated operations, invoke child Actions, mint sessions or flows,
+verify identities or call directory commands. Expiry, client proof, current
+delivery lease and owner epoch remain enforced. A remote Processor has the same
+retained invocation around its owner RPCs as an in-process handler.

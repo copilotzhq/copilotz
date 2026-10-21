@@ -111,7 +111,12 @@ export {
   createMemoryAssetRepository,
   type CreateMemoryAssetRepositoryOptions,
 } from "./repository.ts";
-export { type ContentResolver, createContentResolver } from "./resolver.ts";
+export {
+  type ContentResolver,
+  createContentResolver,
+  type ResolveManyContent,
+} from "./resolver.ts";
+export { planContentBudget } from "./budget.ts";
 export type {
   AssetAdoptionPlan,
   AssetBody,
@@ -127,6 +132,8 @@ export type {
   AuthorizeContent,
   ContentAuthorizationAction,
   ContentBodyValue,
+  ContentBudget,
+  ContentDeferral,
   ContentError,
   ContentErrorCode,
   ContentInput,
@@ -135,6 +142,8 @@ export type {
   ContentRef,
   ContentRole,
   ContentSequence,
+  DeferredAssetBody,
+  DeferredContent,
   DurableContentInput,
   GeneratedContentSequence,
   NormalizeContentOptions,

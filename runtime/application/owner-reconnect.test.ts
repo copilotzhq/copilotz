@@ -21,8 +21,8 @@ for (const mode of ["local", "worker"] as const) {
     await provisionCopilotzSchema(db, secondary);
     await provisionOperationCatalog(db, secondary);
     const preparedOwner = await openDatabaseOwner(db, secondary);
-    releaseDatabaseOwner(preparedOwner);
-    releaseDatabaseOwner(preparedOwner);
+    await releaseDatabaseOwner(preparedOwner);
+    await releaseDatabaseOwner(preparedOwner);
     const transport = {
       type: "in-process",
       config: { topic: crypto.randomUUID() },

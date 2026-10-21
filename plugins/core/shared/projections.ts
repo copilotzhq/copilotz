@@ -5,7 +5,8 @@ import type {
   CollectionRecord,
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
-import { type ContentSequence, isContentRef } from "@copilotz/copilotz/content";
+import type { ContentSequence } from "@copilotz/copilotz/content";
+import { isContentRef } from "@copilotz/copilotz/content/codec";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   ConversationMessage,

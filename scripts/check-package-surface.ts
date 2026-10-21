@@ -12,6 +12,11 @@ const configuration = JSON.parse(
   publish: { include: string[]; exclude: string[] };
 };
 
+// Migration is a supported operator API, never an unpublished scripts graph.
+if (configuration.exports["./migration"] !== "./runtime/migration/index.ts") {
+  throw new Error("The retained-data migration entrypoint must be published.");
+}
+
 const packageName = "@copilotz/copilotz";
 if (configuration.name !== packageName) {
   throw new Error(
@@ -138,6 +143,20 @@ const production = [];
 for await (const file of productionSources(repositoryRoot)) {
   assertPublished(file.path);
   production.push(file);
+}
+
+for (
+  const file of production.filter((file) =>
+    file.path.startsWith("runtime/migration/")
+  )
+) {
+  if (
+    moduleSpecifiers(file.text).some((specifier) =>
+      specifier.includes("scripts/")
+    )
+  ) {
+    throw new Error(`Published migration code imports a CLI: ${file.path}`);
+  }
 }
 
 const inlineExternalImports = production.flatMap((file) =>

@@ -1,5 +1,8 @@
 # WEB2 plugin adoption fixes
 
+> Superseded for the UI plugin: the workspace, panes and navigator described
+> here were replaced by the chat shell. See [Chat UI port](./chat-ui-port.md).
+
 ## Current state
 
 - `plugins/ui-kit/patterns.tsx:1` and several Views import React only as a type,

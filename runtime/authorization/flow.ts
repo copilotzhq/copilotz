@@ -39,9 +39,58 @@ export async function checkFlow(
     ) authorizationRefused();
     return;
   }
+  const invocation = intent.invocation;
+  const receipts = `"${authority.scope.databaseSchema}".owner_receipts`;
+  const key = (runId: string) =>
+    JSON.stringify([
+      "flow.descendant",
+      authority.scope.namespace,
+      authority.scope.tenant,
+      flow.id,
+      runId,
+    ]);
+  const descendant = async (runId: string, actionId?: string) => {
+    const receipt = (await command.transaction.query<{
+      intent: { root: string; operation: string; action: string };
+    }>(
+      `SELECT intent FROM ${receipts} WHERE owner='schema' AND domain='logical' AND key=$1 AND kind='flow.descendant'`,
+      [key(runId)],
+    )).rows[0];
+    return !!receipt && receipt.intent.root === row.consumed_run &&
+      receipt.intent.operation === row.accepted_operation &&
+      (!actionId || receipt.intent.action === actionId);
+  };
   if (intent.kind === "action") {
     if (intent.operation === "admit" && intent.resource === flow.continuation) {
       return;
+    }
+    if (
+      row.consumed_run && row.accepted_operation &&
+      invocation?.kind === "action" && invocation.runId &&
+      intent.sourceOperationId === row.accepted_operation
+    ) {
+      if (await descendant(invocation.runId, invocation.id)) return;
+      if (
+        intent.operation === "capture" && invocation.parentRunId &&
+        (invocation.parentRunId === row.consumed_run ||
+          await descendant(invocation.parentRunId))
+      ) {
+        // The owner supplies the frame; policy and input capture share this
+        // transaction, so a refused child cannot leave a delegation receipt.
+        await command.transaction.query(
+          `INSERT INTO ${receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical',$1,'runtime','flow.descendant',$2::jsonb,'{}'::jsonb)`,
+          [
+            key(invocation.runId),
+            JSON.stringify({
+              root: row.consumed_run,
+              operation: row.accepted_operation,
+              parent: invocation.parentRunId,
+              action: invocation.id,
+            }),
+          ],
+        );
+        return;
+      }
     }
     if (
       intent.resource !== flow.continuation || !intent.invocation?.runId ||
@@ -62,11 +111,40 @@ export async function checkFlow(
     }
     return;
   }
-  // Only the owner-resolved continuation can exercise its granted internal writes.
+  // Only the consumed continuation and its admitted descendants may exercise
+  // internal capabilities. Every effect still passes the product's policy.
   if (
-    intent.invocation?.runId && row.consumed_run === intent.invocation.runId &&
-    ["collection", "session", "asset"].includes(intent.kind)
+    invocation?.kind === "action" && invocation.runId && row.consumed_run &&
+    ["collection", "session", "asset", "directory", "identity"].includes(
+      intent.kind,
+    ) &&
+    (row.consumed_run === invocation.runId ||
+      await descendant(invocation.runId, invocation.id))
   ) return;
+  if (
+    invocation?.kind === "processor" && intent.kind === "collection" &&
+    row.consumed_run && row.accepted_operation && intent.sourceEventId &&
+    intent.sourceDeliveryId
+  ) {
+    const live = await command.transaction.query(
+      `SELECT 1 FROM "${authority.scope.databaseSchema}".event_deliveries AS delivery
+      JOIN "${authority.scope.databaseSchema}".copilotz_operation_events AS indexed ON indexed.event_id=delivery.event_id
+      WHERE delivery.id=$1 AND delivery.event_id=$2 AND delivery.consumer_id=$3 AND delivery.lease_owner=$4
+      AND delivery.status='leased' AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>$5::timestamptz)
+      AND indexed.namespace=$6 AND indexed.operation_id=$7
+      AND delivery.owner_epoch=(SELECT epoch FROM "${authority.scope.databaseSchema}".owner_epochs WHERE owner='schema')`,
+      [
+        intent.sourceDeliveryId,
+        intent.sourceEventId,
+        `processor:${invocation.id}`,
+        invocation.runId,
+        command.commandTime,
+        authority.scope.namespace,
+        row.accepted_operation,
+      ],
+    );
+    if (live.rows.length === 1) return;
+  }
   authorizationRefused();
 }
 export async function assertFlowOperation(

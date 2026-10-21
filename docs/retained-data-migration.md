@@ -148,6 +148,16 @@ completion promise still waits for in-flight work. A callback that never
 finishes keeps close pending.
 
 With multiple runtime attachments, closing one preserves the others. Keep a
-borrowed database open until every runtime using its owner has closed. Global
-owner lookup uses durable holder UUID plus epoch, and session bindings use weak
-object identity; closing the final attachment removes the global holder entry.
+borrowed database open until every runtime using its owner has closed. Owner
+lookup is scoped to the database object and schema. Supported SQL adapters and
+transaction facades retain that database identity; a different connection object
+acquires a new holder even when it sees the same durable epoch. Repository
+helpers borrow the existing binding without adding runtime attachments; helper
+bootstrap starts with zero runtime attachments. Closing the final attachment
+drains and removes its owner binding; captured old repositories remain revoked
+and never retarget the successor.
+
+Create additional SQL adapters with `createSqlSession(database)` from
+`@copilotz/copilotz/events`. Instrument that adapter when recording queries or
+transactions. Hand-built wrapper objects have distinct identities. Owner-bound
+observations use adapters of the same database object as their writer.

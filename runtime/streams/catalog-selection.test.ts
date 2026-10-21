@@ -1,7 +1,11 @@
 import { stageOwnerChange } from "../events/push.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
+import {
+  createEventStore,
+  createSqlSession,
+  provisionCopilotzSchema,
+} from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createOperationCatalog,
@@ -454,7 +458,8 @@ Deno.test({
   ignore: !POSTGRES_URL,
   fn: async () => {
     const db = await createTestDatabase({ url: POSTGRES_URL! });
-    const writer = await createTestDatabase({ url: POSTGRES_URL! });
+    const writer = createSqlSession(db);
+    const observer = await createTestDatabase({ url: POSTGRES_URL! });
     const schema = `catalog_ordering_${
       crypto.randomUUID().replaceAll("-", "")
     }`;
@@ -518,7 +523,7 @@ Deno.test({
             "later commands must wait for the earlier commit",
           );
           assertEquals(
-            (await writer.query<{ change_ordinal: string }>(
+            (await observer.query<{ change_ordinal: string }>(
               `SELECT change_ordinal::text FROM "${schema}".copilotz_operation_selection_heads WHERE namespace = 'tenant-a' AND selection_key = 'opaque'`,
             )).rows[0].change_ordinal,
             before,
@@ -536,8 +541,9 @@ Deno.test({
         assert(changed.some((row) => row.operationId === firstOperation));
         assert(changed.some((row) => row.operationId === secondOperation));
       };
-      // Concurrent contexts share the owner queue. Their global
-      // positions deliberately run backwards relative to the commit order.
+      // Adapters of one database instance share the owner queue; the independent
+      // observer sees only committed state. Global positions deliberately run
+      // backwards relative to the commit order.
       await challenge(
         "first-root",
         "first-root",
@@ -589,7 +595,7 @@ Deno.test({
     } finally {
       await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await db.close();
-      await writer.close();
+      await observer.close();
     }
   },
 });
@@ -600,7 +606,8 @@ Deno.test({
   ignore: !POSTGRES_URL,
   fn: async () => {
     const db = await createTestDatabase({ url: POSTGRES_URL! });
-    const observer = await createTestDatabase({ url: POSTGRES_URL! });
+    // Owner notifications share the writer lifetime through a supported adapter.
+    const observer = createSqlSession(db);
     const schema = `catalog_hints_${crypto.randomUUID().replaceAll("-", "")}`;
     let release: (() => void) | undefined;
     let writing: Promise<void> | undefined;
@@ -683,7 +690,6 @@ Deno.test({
       await writing?.catch(() => undefined);
       await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await db.close();
-      await observer.close();
     }
     function indexedInput() {
       return indexed("root", "root", "1", ["opaque"]);

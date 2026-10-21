@@ -1,3 +1,4 @@
+import { bindSqlDatabaseIdentity } from "../events/database-identity.ts";
 import { createTestDatabase } from "./ominipg.ts";
 
 /** Explicit backend admission: this mode never constructs embedded storage. */
@@ -24,7 +25,7 @@ export async function createOwnerTestDatabase() {
       `PostgreSQL-only admitted: ${url.protocol}//${url.hostname}:${url.port}${url.pathname}`,
     );
     let closing: Promise<void> | undefined;
-    return {
+    return bindSqlDatabaseIdentity({
       ...database,
       close() {
         return closing ??= (async () => {
@@ -40,7 +41,7 @@ export async function createOwnerTestDatabase() {
           }
         })();
       },
-    };
+    }, database);
   } catch (error) {
     try {
       if (created) await admin.query(`DROP DATABASE "${name}"`);

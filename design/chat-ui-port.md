@@ -208,10 +208,23 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   (`readThread`, `readSpace`, `readSpaceThreads`, `readParticipants`); a live
   read's `ReadState` carries `error` (the runtime passes the live query's
   refusal through); kit `TabBar` (Space tabs use it) and `DetailList`.
+- 2026-10-21 (final): Views nested in a URL-opened View inherit its hold; one
+  gesture releases the scope. Code highlighting and KaTeX load on first use.
 
-## Open questions
+## Held reads in nested Views
 
-- A View that a URL opened holds its own query reads, but a View it nests with
-  `ctx.show` is not held. The shell and the admin page avoid it (sections are
-  rendered with the URL origin; admin sections read through the page's context).
-  Should the runtime propagate the hold to nested Views?
+A View that a URL opened holds its query reads, and so does every View it nests
+with `ctx.show` (fail closed). The runtime keeps one hold scope per URL-opened
+root reference; one user gesture on any held read in the scope starts every held
+read still on screen. A View declaring `url: { queries: "run" }` runs its own
+reads; the Views it nests stay held. Admin sections still read through the
+page's context (`adminSection`), so the page shows one Load for its section.
+
+## Follow-ups
+
+- Ordered message reads: when SEC3 round 2 lands, drop the "Live updates
+  unavailable" fallback for thread messages.
+- Persisted reasoning text is resolved only through the bounded `content` field
+  selection; reasoning stored elsewhere shows as a step without text.
+- JSON tool results stay content references in the activity timeline; resolve
+  and render them when the read contract selects JSON bodies.

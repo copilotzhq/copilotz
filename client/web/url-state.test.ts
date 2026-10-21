@@ -242,3 +242,140 @@ test("query reads from URL state wait for a user gesture unless the View declare
     runtime.dispose();
   }
 });
+
+test("Views nested in a URL-opened View stay held until the one gesture that releases it", async () => {
+  type Snapshot = { getSnapshot(): unknown };
+  const lookup = (id: string) => ({ id: "lookup", input: { id } });
+  for (const nested of ["direct", "observed"] as const) {
+    const calls: { id: string; input: unknown }[] = [];
+    // Nested outputs are values, or observations when the renderer embeds
+    // nested Views (as the React adapter does); read them when asserting.
+    const value = (output: unknown) =>
+      (nested === "observed" ? (output as Snapshot).getSnapshot() : output) as
+        & Output
+        & { children?: unknown[] };
+    const show = (ctx: BrowserViewContext, shows: string, id: string) =>
+      ctx.show({ shows, value: { id } });
+    const runtime = await createBrowserRuntime({
+      ...(nested === "observed"
+        ? {
+          // A renderer that embeds nested Views as their own observations.
+          renderer: {
+            id: "default",
+            view: (output: Snapshot) => output,
+            mount: () => ({ dispose() {} }),
+          },
+        }
+        : {}),
+      plugins: [{
+        id: "app",
+        views: {
+          parent: defineView<
+            { id: string },
+            Output & { children: unknown[] },
+            BrowserViewContext
+          >({
+            id: "app.parent",
+            shows: "parent",
+            renderer: "default",
+            modes: ["full"],
+            url: true,
+            render(value, ctx) {
+              const state = ctx.readAction("lookup", { id: value.id });
+              return {
+                label: `${value.id}:${state.status}`,
+                load: state.refresh,
+                children: [
+                  // No `url`: it is not addressable, and its reads are held.
+                  show(ctx, "child", `${value.id}-child`),
+                  // Its query input is fixed, so it may run at once.
+                  show(ctx, "runs", `${value.id}-runs`),
+                ],
+              };
+            },
+          }),
+          child: defineView<{ id: string }, Output, BrowserViewContext>({
+            id: "app.child",
+            shows: "child",
+            renderer: "default",
+            modes: ["full"],
+            render(value, ctx) {
+              const state = ctx.readAction("lookup", { id: value.id });
+              return {
+                label: `${value.id}:${state.status}`,
+                load: state.refresh,
+              };
+            },
+          }),
+          runs: defineView<{ id: string }, Output, BrowserViewContext>({
+            id: "app.runs",
+            shows: "runs",
+            renderer: "default",
+            modes: ["full"],
+            url: { queries: "run" },
+            render(value, ctx) {
+              const state = ctx.readAction("lookup", { id: value.id });
+              return {
+                label: `${value.id}:${state.status}`,
+                load: state.refresh,
+              };
+            },
+          }),
+        },
+        actions: {
+          lookup: {
+            id: "app.lookup",
+            placement: "server",
+            query: { reads: [] },
+          },
+        },
+      }],
+      actions: {
+        invoke(id, input) {
+          calls.push({ id, input });
+          return Promise.resolve({ value: { ok: true }, seq: 1 });
+        },
+        cancel: () => Promise.resolve(),
+      },
+    });
+    const output = runtime.observe(() =>
+      runtime.render(fromUrl("parent", { id: "p" }))
+    );
+    try {
+      await tick();
+      const labels = () => {
+        const parent = value(output.getSnapshot());
+        return [
+          parent.label,
+          ...(parent.children ?? []).map((child) => value(child).label),
+        ];
+      };
+      assert.deepEqual(
+        labels(),
+        ["p:held", "p-child:held", "p-runs:ready"],
+        nested,
+      );
+      assert.deepEqual(
+        calls,
+        [lookup("p-runs")],
+        `${nested}: no held read reaches an Action before the gesture`,
+      );
+      // One gesture, on the parent's Load, releases the parent and the child.
+      value(output.getSnapshot()).load();
+      await tick();
+      await tick();
+      assert.deepEqual(
+        labels(),
+        ["p:ready", "p-child:ready", "p-runs:ready"],
+        nested,
+      );
+      assert.deepEqual(
+        calls.map((call) => (call.input as { id: string }).id).sort(),
+        ["p", "p-child", "p-runs"],
+      );
+    } finally {
+      output.dispose();
+      runtime.dispose();
+    }
+  }
+});

@@ -541,14 +541,15 @@ only Views that opt in.
   that came from a URL. Any other View is refused:
   `View '<id>' cannot be opened from a URL`. The same View still renders from
   in-app navigation.
-- **No submission from the URL.** In a View opened from a URL, `ctx.readAction`
-  returns status `held` and calls nothing until a user gesture calls its
-  `refresh()`. Starting it during render throws. A View that declares
-  `url: { queries: "run" }` starts its query reads immediately; declare it only
-  when no query input derives from the URL value. Collection reads are never
-  held. A held read applies to the View the URL named; a View it nests with
-  `ctx.show` is not held, so a page reads its sections through its own context
-  (as the administration page does).
+- **No submission from the URL.** In a View opened from a URL, and in every View
+  it nests with `ctx.show`, `ctx.readAction` returns status `held` and calls
+  nothing until a user gesture calls `refresh()` on one of those held reads.
+  That one gesture releases the whole tree: every held read still on screen
+  starts. Starting it during render throws. A View that declares
+  `url: { queries: "run" }` starts its own query reads immediately (the Views it
+  nests stay held); declare it only when no query input derives from the URL
+  value. A View that appears only after the release holds its reads again.
+  Collection reads are never held.
 
 ```ts
 defineView({ id: "app.record", shows: "record", url: true /* ... */ });

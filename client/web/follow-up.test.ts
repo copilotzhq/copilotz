@@ -90,7 +90,8 @@ Deno.test("readAction reports denied/unavailable/invalid detail and refreshes wi
       query: {},
       progressOnly: true,
     }]);
-    assertEquals(query.getSnapshot().status, "stale");
+    // A failed attempt is not a reconnect: nothing retries it but refresh().
+    assertEquals(query.getSnapshot().status, "failed");
     assertEquals(query.getSnapshot().error, {
       kind: "unavailable",
       code: "offline",
@@ -105,6 +106,7 @@ Deno.test("readAction reports denied/unavailable/invalid detail and refreshes wi
     query.getSnapshot().refresh();
     await tick();
     assertEquals(query.getSnapshot().error?.kind, "invalid");
+    assertEquals(query.getSnapshot().status, "failed");
     cause = Object.assign(new Error("Forbidden"), {
       status: 403,
       code: "forbidden",
@@ -496,6 +498,7 @@ Deno.test("query dependency outage is unavailable with refresh, never silently r
       complete: true,
     });
     await memory.fail(dependency);
+    // Its live dependency reconnecting keeps the query stale, not failed.
     assertEquals(query.getSnapshot().error?.kind, "unavailable");
     assertEquals(query.getSnapshot().status, "stale");
     query.getSnapshot().refresh();

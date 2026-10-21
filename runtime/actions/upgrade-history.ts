@@ -14,8 +14,8 @@ export async function validateRetainedHistory(
       WHERE event.causation_id IS NOT NULL AND parent.id IS NULL
     UNION ALL
     SELECT 'graph namespace', edge.id FROM ${tables.edges} edge
-      LEFT JOIN ${tables.nodes} source ON source.id=edge.source_node_id
-      LEFT JOIN ${tables.nodes} target ON target.id=edge.target_node_id
+      LEFT JOIN ${tables.nodes} source ON source.namespace=edge.namespace AND source.id=edge.source_node_id
+      LEFT JOIN ${tables.nodes} target ON target.namespace=edge.namespace AND target.id=edge.target_node_id
       WHERE source.id IS NULL OR target.id IS NULL
         OR source.namespace<>edge.namespace OR target.namespace<>edge.namespace
     UNION ALL

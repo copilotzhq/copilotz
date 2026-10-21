@@ -231,14 +231,15 @@ export function registerCollectionAlarms(options: {
       // deadline index in their own transaction; wakes never scan active jobs.
       for (const definition of definitions) {
         let after = "";
+        let afterNamespace = "";
         for (;;) {
           const count = await run(
             "alarm.collection.seed",
             {},
             async (_input, context) => {
               const records = await context.transaction.query<NodeRow>(
-                `SELECT * FROM ${tables.nodes} WHERE type=$1 AND id>$2 ORDER BY id LIMIT 1000`,
-                [definition.name, after],
+                `SELECT * FROM ${tables.nodes} WHERE type=$1 AND (namespace,id)>($2,$3) ORDER BY namespace,id LIMIT 1000`,
+                [definition.name, afterNamespace, after],
               );
               for (const row of records.rows) {
                 await syncCollectionAlarm(
@@ -249,6 +250,7 @@ export function registerCollectionAlarms(options: {
                 );
               }
               after = records.rows.at(-1)?.id ?? after;
+              afterNamespace = records.rows.at(-1)?.namespace ?? afterNamespace;
               return records.rows.length;
             },
           );

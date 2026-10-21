@@ -10,7 +10,7 @@ import {
 } from "../content/promoted-body-store.ts";
 import { digestContent } from "../content/digest.ts";
 import { digestCatalogPrefix } from "../content/prefix-digest.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { createContentError } from "../content/errors.ts";
 import {
   CONTENT_CHUNK_BYTES,
@@ -144,7 +144,8 @@ function createStreamRuntime(
     async open(input, openOptions = {}) {
       cancelled(openOptions.signal);
       cancelled(options.signal);
-      const semanticId = input.id?.trim() || (options.createId ?? ulid)();
+      const semanticId = input.id?.trim() ||
+        (options.createId ?? monotonicUlid)();
       const incarnation = options.incarnationId?.trim();
       const id = contentStreamIncarnationId(semanticId, incarnation);
       const mediaType = input.mediaType.trim(), role = input.role.trim();

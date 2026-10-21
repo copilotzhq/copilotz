@@ -115,11 +115,11 @@ Deno.test({
         secondHandler(new Request(url, init))) as typeof fetch,
     });
     try {
-      const receipt = await client.actions.submit("test.reconnect.stream", {}, {
+      const receipt = await client.actions.submit("stream", {}, {
         idempotencyKey: "stable",
       });
       assertEquals(
-        (await reconnect.actions.submit("test.reconnect.stream", {}, {
+        (await reconnect.actions.submit("stream", {}, {
           idempotencyKey: "stable",
         })).operationId,
         receipt.operationId,

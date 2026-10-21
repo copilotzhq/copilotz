@@ -1,3 +1,4 @@
+import { createCollectionConflictError } from "../../../../runtime/collections/errors.ts";
 import {
   assert,
   assertEquals,
@@ -176,9 +177,7 @@ function fakeProcessorInvocation(
             });
             injectedConflict = true;
             return Promise.reject(
-              new Error(
-                `Collection 'participant' '${agent.id}' was created while its mutation was prepared.`,
-              ),
+              createCollectionConflictError(),
             );
           }
           if (conflict === "participant-type") {
@@ -194,9 +193,7 @@ function fakeProcessorInvocation(
             });
             injectedConflict = true;
             return Promise.reject(
-              new Error(
-                `Collection 'participant' '${agent.id}' was created while its mutation was prepared.`,
-              ),
+              createCollectionConflictError(),
             );
           }
           if (conflict === "thread-update") {
@@ -691,7 +688,7 @@ Deno.test("a confirmed Thread membership conflict retries the message once", asy
 
 Deno.test("a participant-create conflict with mismatched type is never retried", async () => {
   const test = fakeProcessorInvocation("participant-type");
-  await assertRejects(() => test.run(), Error, "was created while");
+  await assertRejects(() => test.run(), Error, "Record already exists.");
   assert(test.injectedConflict);
   assertEquals(test.calls.length, 1);
   const [agent] = [...test.participants.values()];

@@ -92,6 +92,7 @@
     ]
   },
   "unstable": [
+    "no-legacy-abort",
     "bare-node-builtins",
     "detect-cjs",
     "node-globals",

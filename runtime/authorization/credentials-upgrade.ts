@@ -1,4 +1,5 @@
 /** Offline v13 -> v14: credential effects and flow admission in one transaction. */
+import { upgradeStorageIdentity } from "../events/storage-identity-upgrade.ts";
 import type { SqlSession } from "../events/session.ts";
 import { validateEventSchemaName } from "../events/schema.ts";
 import { lockOwnerTables } from "../actions/owner-transfer-storage.ts";
@@ -29,6 +30,7 @@ export async function upgradeCredentialEffects(
     for (const statement of authorizationSchemaStatements(schema)) {
       await tx.query(statement);
     }
+    await upgradeStorageIdentity(tx, schema);
     await tx.query(
       `UPDATE "${schema}".owner_epochs SET epoch=epoch+1,holder=''`,
     );

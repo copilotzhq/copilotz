@@ -77,7 +77,7 @@ Deno.test("replay retains a stream's source Action context when invocation prece
     fetch: ((url, init) => handler(new Request(url, init))) as typeof fetch,
   });
   try {
-    const receipt = await client.actions.submit("test.origin.stream", {}, {
+    const receipt = await client.actions.submit("stream", {}, {
       idempotencyKey: "origin",
     });
     await ready;

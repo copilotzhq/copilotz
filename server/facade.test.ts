@@ -1,3 +1,4 @@
+import { coreHttpAdapter } from "../plugins/core-http/index.ts";
 import type { AuthorizationIntent } from "../runtime/authorization/evaluator.ts";
 import { testAuthority } from "../runtime/testing/authority.ts";
 import { createHttpReads } from "./reads.ts";
@@ -233,6 +234,18 @@ const contentOutput = defineAction({
   },
 });
 
+const coreObservationFixture = definePlugin({
+  id: "test.http-domain-metadata",
+  version: "1",
+  adapters: {
+    http: {
+      metadata: {
+        routes: [],
+        ingressMetadata: coreHttpAdapter.ingressMetadata,
+      },
+    },
+  },
+});
 const fixture = definePlugin({
   id: "test.server-facade",
   version: "1.0.0",
@@ -291,7 +304,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
                 };
               },
               expose: {
-                actions: { include: ["test.server.protected-echo"] },
+                actions: { include: ["protectedEcho"] },
                 collections: false,
                 channels: false,
               },
@@ -307,7 +320,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
   try {
     const input = { label: "protected", credential: SECRET_INPUT };
     const first = await client.actions.submit(
-      "test.server.protected-echo",
+      "protectedEcho",
       input,
       { idempotencyKey: "secret" },
     );
@@ -316,7 +329,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
       sessionToken: SECRET_OUTPUT,
     });
     const repeated = await client.actions.submit(
-      "test.server.protected-echo",
+      "protectedEcho",
       input,
       { idempotencyKey: "secret" },
     );
@@ -324,7 +337,7 @@ Deno.test("Server facade protects durable secrets and restricts plaintext to aut
     assertEquals(protectedExecutions, executionsBefore + 1);
     await assertRejects(
       () =>
-        client.actions.submit("test.server.protected-echo", {
+        client.actions.submit("protectedEcho", {
           ...input,
           credential: "changed",
         }, { idempotencyKey: "secret" }),
@@ -386,7 +399,7 @@ Deno.test("HTTP Action results hydrate nested output content without changing du
                 return { namespace: "tenant-a" };
               },
               expose: {
-                actions: { include: ["test.server.content-output"] },
+                actions: { include: ["contentOutput"] },
                 collections: false,
                 channels: false,
               },
@@ -400,7 +413,7 @@ Deno.test("HTTP Action results hydrate nested output content without changing du
   const client = browser(handler);
   try {
     const receipt = await client.actions.submit(
-      "test.server.content-output",
+      "contentOutput",
       {},
       { idempotencyKey: "content-output-result" },
     );
@@ -461,7 +474,7 @@ Deno.test("authorization predicates intersect requested collection filters befor
                   : {};
               },
               expose: {
-                actions: { include: ["test.server.*"] },
+                actions: { include: ["echo", "contentOutput"] },
                 collections: { include: ["serverNotes"] },
                 channels: false,
               },
@@ -768,7 +781,7 @@ Deno.test("Gateway mounts the composed facade in Oxian-compatible Fetch and reje
     await worker.ready;
     const response = await gateway.fetch(
       new Request(
-        "https://example.test/api/actions/test/server/echo",
+        "https://example.test/api/actions/echo",
         {
           method: "POST",
           headers: {
@@ -820,7 +833,7 @@ Deno.test("the embedded application serves the composed facade", async () => {
   });
   try {
     const response = await application.fetch(
-      new Request("https://example.test/api/actions/test/server/echo", {
+      new Request("https://example.test/api/actions/echo", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -859,6 +872,7 @@ Deno.test("collection mutations are opt-in, policy-bound, and durably replayable
     namespace: "tenant-a",
     databaseSchema: "server_collection_mutation_test",
     plugins: [
+      coreObservationFixture,
       fixture,
       defineFixturePlugin({
         ...serverPlugin,
@@ -974,6 +988,7 @@ Deno.test("thread observation discovers and receives a generic metadata command 
     namespace: "tenant-a",
     databaseSchema,
     plugins: [
+      coreObservationFixture,
       threadMutationFixture,
       defineFixturePlugin({
         ...serverPlugin,
@@ -1047,10 +1062,11 @@ Deno.test("thread observation discovers and receives a generic metadata command 
       authority: testAuthority(databaseSchema, "tenant-a", "fixture-host"),
     },
     read,
+    [coreHttpAdapter],
   );
   const controller = new AbortController();
   const observation = await operations.observe({
-    threadId: "thread-1",
+    record: { collection: "thread", id: "thread-1" },
     signal: controller.signal,
   });
   const reader = observation.outputs.getReader();
@@ -1116,7 +1132,7 @@ Deno.test("HTTP invoke and generic Action results disclose only caller-safe fail
             path: "/board",
             async handler(context) {
               try {
-                await context.invoke("errors.board", context.input);
+                await context.invoke("board", context.input);
               } catch (error) {
                 const failure = error as Error & {
                   code: string;
@@ -1165,7 +1181,7 @@ Deno.test("HTTP invoke and generic Action results disclose only caller-safe fail
           },
         });
 
-        const receipt = await client.actions.submit("errors.board", { safe }, {
+        const receipt = await client.actions.submit("board", { safe }, {
           idempotencyKey: `generic-${safe}`,
         });
         const failure = await assertRejects(
@@ -1353,7 +1369,7 @@ Deno.test("host and HTTP Action failures never copy protected error text into in
         assertEquals((host as Error & { code?: string }).code, undefined);
         const http = await assertRejects(
           () =>
-            client.actions.invoke("errors.secret", input, {
+            client.actions.invoke("fail", input, {
               idempotencyKey: "protected",
             }),
           CopilotzHttpError,
@@ -1424,7 +1440,7 @@ Deno.test("F4 cancellation reauthorizes in the owner command after its HTTP meta
   });
   const client = browser(createServerFacadeFetchHandler(application));
   try {
-    const receipt = await client.actions.submit("fixture.pending", {}, {
+    const receipt = await client.actions.submit("pending", {}, {
       idempotencyKey: "pending",
     });
     await assertRejects(

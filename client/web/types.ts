@@ -107,9 +107,9 @@ export interface BrowserPlugin {
   adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 export interface ActionTransport {
-  /** Resolve only at terminal success, with the last owner command sequence. */
+  /** Invoke a composition alias; resolve at terminal with the last owner sequence. */
   invoke(
-    id: string,
+    alias: string,
     input: unknown,
     options: {
       idempotencyKey: string;

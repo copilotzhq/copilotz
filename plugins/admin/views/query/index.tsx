@@ -58,7 +58,10 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   render({ section, query = {} }, ctx) {
     const config = sections[section];
     if (!config) throw new TypeError("Unknown admin section");
-    const state = ctx.readAction(config.action, {
+    const aliases = ctx.resources.admin?.actionAliases as
+      | Readonly<Record<string, string>>
+      | undefined;
+    const state = ctx.readAction(aliases?.[section] ?? config.action, {
       resource: section,
       method: "GET",
       query: { limit: "100", ...query },

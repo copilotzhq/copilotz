@@ -1,9 +1,3 @@
-import {
-  listThreadOperations,
-  threadEventWatermark,
-} from "@copilotz/copilotz/core/server";
-/** One bounded observation coordinator for operation selections and conversations. */
-import { coreThreadObservationKey } from "@copilotz/copilotz/core";
 import { watchSelection } from "./selection-watch.ts";
 
 import type {
@@ -30,6 +24,9 @@ export async function createHttpOperations(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
   read: HttpReadServices,
+  adapters = Object.values(
+    application.plugins?.adapters.http ?? {},
+  ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[],
 ) {
   const namespace = scope.namespace ?? application.config.namespace!;
   const databaseSchema = scope.databaseSchema ??
@@ -57,20 +54,57 @@ export async function createHttpOperations(
       ...(record.completedAt ? { completedAt: record.completedAt } : {}),
     };
   };
-  const thread = async (id: string) => {
-    if (!await read.get("thread", id)) {
-      throw failure("thread_not_found", 404, "Thread was not found.");
+  type RecordSelection = Readonly<{ collection: string; id: string }>;
+  const descriptor = (record: RecordSelection) => {
+    const matches = adapters.flatMap((adapter) =>
+      adapter.observations?.[record.collection]
+        ? [adapter.observations[record.collection]]
+        : []
+    );
+    if (matches.length !== 1) {
+      throw failure(
+        "invalid_operation_selection",
+        400,
+        "Collection observation is not configured.",
+      );
+    }
+    return matches[0];
+  };
+  const authorizeRecord = async (record: RecordSelection) => {
+    descriptor(record);
+    if (!await read.get(record.collection, record.id)) {
+      throw failure("record_not_found", 404, "Record was not found.");
     }
   };
+  const list = (record: RecordSelection, input: {
+    operationIds?: readonly string[];
+    states?: readonly import("../runtime/streams/catalog.ts").OperationState[];
+    afterPosition?: string;
+    limit: number;
+  }) =>
+    runtime.operations.listSelectionChanges({
+      namespace,
+      selectionKey: descriptor(record).key(record.id),
+      operationIds: input.operationIds,
+      states: input.states,
+      afterChangeOrdinal: input.afterPosition,
+      limit: input.limit,
+    });
+  const watermark = async (record: RecordSelection) => {
+    const key = descriptor(record).key(record.id);
+    return (await runtime.operations.getSelectionHeads({
+      namespace,
+      selectionKeys: [key],
+    }))
+      .find((head) => head.selectionKey === key)?.changeOrdinal;
+  };
   const discover = async (
-    threadId: string,
+    record: RecordSelection,
     afterPosition?: string,
     operationIds?: readonly string[],
   ) => {
-    await thread(threadId);
-    const operations = await listThreadOperations(runtime.operations, {
-      namespace,
-      threadId,
+    await authorizeRecord(record);
+    const operations = await list(record, {
       operationIds,
       afterPosition,
       ...(afterPosition ? {} : { states: ["accepted", "running"] as const }),
@@ -91,17 +125,17 @@ export async function createHttpOperations(
   return ({
     get,
     async checkpoint(
-      threadId: string,
+      record: RecordSelection,
       coverage?: { checkpoint: string; actionRunIds: readonly string[] },
     ) {
-      await thread(threadId);
+      await authorizeRecord(record);
       if (coverage) {
         const position = decodeOperationReplayCursor(coverage.checkpoint);
         let tracker = createOperationReplayCursorTracker(position);
         const covered = new Set(coverage.actionRunIds);
         for (
           const operationId of await discover(
-            threadId,
+            record,
             position.selectionPosition,
           )
         ) {
@@ -155,15 +189,14 @@ export async function createHttpOperations(
         }
         return tracker.cursor();
       }
-      const position =
-        await threadEventWatermark(runtime.operations, namespace, threadId) ??
-          "0";
+      const position = await watermark(record) ??
+        "0";
       return encodeOperationReplayCursor({ selectionPosition: position });
     },
     async observe(
       selection: {
         operationIds?: readonly string[];
-        threadId?: string;
+        record?: RecordSelection;
         checkpoint?: string;
         signal?: AbortSignal;
       },
@@ -256,9 +289,7 @@ export async function createHttpOperations(
         authorityChannel = await runtime.authorization.observe(
           scope.authority,
           {
-            ...(selection.threadId
-              ? { record: { collection: "thread", id: selection.threadId } }
-              : {}),
+            ...(selection.record ? { record: selection.record } : {}),
             ...(selection.operationIds
               ? { operationIds: selection.operationIds }
               : {}),
@@ -268,23 +299,19 @@ export async function createHttpOperations(
           },
         );
         stopAccess = () => authorityChannel?.close();
-        if (selection.threadId) {
-          await thread(selection.threadId);
+        if (selection.record) {
+          await authorizeRecord(selection.record);
           feed = await watchSelection(
             runtime.operations,
             namespace,
-            coreThreadObservationKey(selection.threadId),
+            descriptor(selection.record).key(selection.record.id),
             notify,
           );
         }
         checkpoint = selection.checkpoint ??
-          (selection.threadId
+          (selection.record
             ? encodeOperationReplayCursor({
-              selectionPosition: await threadEventWatermark(
-                runtime.operations,
-                namespace,
-                selection.threadId,
-              ) ?? "0",
+              selectionPosition: await watermark(selection.record) ?? "0",
             })
             : undefined);
         position = decodeOperationReplayCursor(checkpoint);
@@ -302,11 +329,11 @@ export async function createHttpOperations(
           ...Object.keys(position.operationStreamPositions ?? {}),
         ]);
         const authorizedIds = new Set([...cursorIds, ...retired.keys()]);
-        ids = selection.threadId
+        ids = selection.record
           ? [...cursorIds]
           : [...selection.operationIds ?? []];
         if (
-          (!selection.threadId && !ids.length) || ids.length > 32 ||
+          (!selection.record && !ids.length) || ids.length > 32 ||
           new Set(ids).size !== ids.length || ids.some((id) =>
             typeof id !== "string" || !id
           )
@@ -317,11 +344,9 @@ export async function createHttpOperations(
             "Select 1 to 32 distinct operations.",
           );
         }
-        if (selection.threadId) {
+        if (selection.record) {
           const members = authorizedIds.size
-            ? await listThreadOperations(runtime.operations, {
-              namespace,
-              threadId: selection.threadId,
+            ? await list(selection.record, {
               operationIds: [...authorizedIds],
               limit: 64,
             })
@@ -344,9 +369,7 @@ export async function createHttpOperations(
           }
           // The history boundary covers terminal work. Operations still running
           // at that boundary must be followed even if they began earlier.
-          const active = await listThreadOperations(runtime.operations, {
-            namespace,
-            threadId: selection.threadId,
+          const active = await list(selection.record, {
             states: ["accepted", "running"],
             limit: 33,
           });
@@ -375,7 +398,7 @@ export async function createHttpOperations(
           }
           for (const id of ids) await get(id);
         }
-        bootstrap = selection.threadId ? [] : undefined;
+        bootstrap = selection.record ? [] : undefined;
         if (bootstrap) {
           const tracker = createOperationReplayCursorTracker(position);
           for (const operationId of ids) {
@@ -412,7 +435,7 @@ export async function createHttpOperations(
         throw error;
       }
       const selectionFrame = async (operationIds: readonly string[]) => {
-        if (!selection.threadId) return;
+        if (!selection.record) return;
         await writer.write(
           {
             type: "observation.selection",
@@ -446,10 +469,14 @@ export async function createHttpOperations(
               const attributed = {
                 ...output,
                 operationId: id,
-                ...(selection.threadId ? { threadId: selection.threadId } : {}),
+                ...(selection.record
+                  ? descriptor(selection.record).outputMetadata?.(
+                    selection.record.id,
+                  ) ?? {}
+                  : {}),
               };
               if (
-                selection.threadId &&
+                selection.record &&
                 [
                   "operation.completed",
                   "operation.failed",
@@ -461,7 +488,7 @@ export async function createHttpOperations(
               } else await writer.write(attributed);
             }
             await attachment.done;
-            if (!selection.threadId) attachments.delete(id);
+            if (!selection.record) attachments.delete(id);
           })();
           pumps.add(pump);
           void pump.then(
@@ -484,7 +511,7 @@ export async function createHttpOperations(
         try {
           await selectionFrame(ids);
           for (const id of ids) await attach(id);
-          while (selection.threadId && !abort.signal.aborted) {
+          while (selection.record && !abort.signal.aborted) {
             if (!changed) {
               await new Promise<void>((resolve) => {
                 wake = resolve;
@@ -541,9 +568,7 @@ export async function createHttpOperations(
             if (terminal.size) {
               // Indexed membership probes are small and shared live scans stay
               // independent of historical event payload size.
-              const latest = await listThreadOperations(runtime.operations, {
-                namespace,
-                threadId: selection.threadId,
+              const latest = await list(selection.record, {
                 operationIds: [...terminal.keys()],
                 limit: 32,
               });
@@ -608,7 +633,9 @@ export async function createHttpOperations(
         done,
         replayCursor: checkpoint,
         compositeCursor: true,
-        threadId: selection.threadId,
+        selectionMetadata: selection.record
+          ? descriptor(selection.record).outputMetadata?.(selection.record.id)
+          : undefined,
         cancel: (reason) => detach(reason),
       };
     },

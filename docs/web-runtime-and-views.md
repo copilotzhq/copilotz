@@ -345,8 +345,8 @@ Threads display and create the Collection's `name`. `/core/web` exports
 `readThreadMessages(ctx, threadId)` (the canonical thread query using those
 options). Apps reuse these in tracked View rendering.
 
-`createAdminWebPlugin({ actionIds: { agents: "app.admin.agents" } })` binds
-Action aliases to configured server IDs; omitted IDs retain the standard
+`createAdminWebPlugin({ actionAliases: { agents: "auditAgents" } })` uses the
+same composition aliases as the server; omitted aliases retain the standard
 registry values. `adminWebPlugin` is the default instance. All query Views,
 including the agent detail View, read aliases. `agent` detail shows public agent
 fields from the authorized agents query, and `participant` detail reads its

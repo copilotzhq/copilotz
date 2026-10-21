@@ -244,7 +244,7 @@ Deno.test("lost receipt retry retains exact input and idempotency key", async ()
       return Response.json({ data: { operationId: "op" } }, { status: 202 });
     }) as typeof fetch,
   });
-  const receipt = await client.actions.submit("test.echo", input, {
+  const receipt = await client.actions.submit("echo", input, {
     idempotencyKey: "stable",
   });
   assertEquals(receipt.operationId, "op");

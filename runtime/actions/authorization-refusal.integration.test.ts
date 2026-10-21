@@ -140,7 +140,7 @@ for (const begunEffect of [false, true]) {
           terminal.rows.some((row) => row.body.status === "completed"),
           false,
         );
-        assertEquals(terminal.rows.length, 2);
+        assertEquals(terminal.rows.length, 2, JSON.stringify(terminal.rows));
         assertEquals(
           terminal.rows.every((row) =>
             row.body.error?.code ===

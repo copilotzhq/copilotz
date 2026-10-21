@@ -86,7 +86,7 @@ for (const reconnect of [true, false]) {
     });
     const submit = () =>
       app.fetch(
-        new Request("http://test/api/actions/admission/echo", {
+        new Request("http://test/api/actions/echo", {
           method: "POST",
           headers: {
             "content-type": "application/json",

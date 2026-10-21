@@ -1,6 +1,6 @@
 import { credentialHeaders } from "./session-cookie.ts";
 import { facadeIngress } from "./context.ts";
-import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
+import { httpIngressMetadata } from "./adapter-metadata.ts";
 /** Durable Action ingress and authorized result recovery. @module */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import {
@@ -45,7 +45,6 @@ export async function actionResponse(
   const correlationId = context.serverIdentity.correlationId ??
     header(request.headers, "x-copilotz-correlation-id") ??
     `server:${requestId}`;
-  const observationThreadId = context.operationMetadata.threadId;
   const handle = await admitActionRequest(
     application,
     {
@@ -70,13 +69,8 @@ export async function actionResponse(
           : {}),
       },
       metadata: {
-        ...(typeof observationThreadId === "string"
-          ? coreThreadObservationMetadata(observationThreadId)
-          : {}),
+        ...httpIngressMetadata(application, context.operationMetadata),
         ...({ sourceAdapter: "server" } as const),
-        core: {
-          visibility: { kind: "internal" },
-        },
       },
     },
     endpoint.inputSchema,

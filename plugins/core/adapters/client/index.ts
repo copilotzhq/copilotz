@@ -91,7 +91,7 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
 
       send: (input: SendInput, options: SubmitOptions) =>
         client.actions.submit(
-          "copilotz.core.conversation.send",
+          "sendConversation",
           { ...input, content: encodeContent(input.content) },
           options,
         ),
@@ -102,12 +102,12 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
         patch: ThreadPatch,
         options: SubmitOptions,
       ) =>
-        client.actions.submit("copilotz.core.conversation.update", {
+        client.actions.submit("updateConversation", {
           threadId: id,
           patch,
         }, options),
       delete: (id: string, options: SubmitOptions) =>
-        client.actions.submit("copilotz.core.conversation.delete", {
+        client.actions.submit("deleteConversation", {
           threadId: id,
         }, options),
     } as const,
@@ -130,7 +130,7 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
         input: EditMessageInput,
         options: SubmitOptions,
       ) =>
-        client.actions.submit("copilotz.core.conversation.edit-message", {
+        client.actions.submit("editConversationMessage", {
           ...input,
           threadId,
           messageId,

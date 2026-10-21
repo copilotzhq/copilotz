@@ -9,25 +9,25 @@ export function authorizationSchemaStatements(
   return [
     `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_effects (
       ordinal BIGSERIAL NOT NULL,
-      namespace TEXT NOT NULL, tenant TEXT NOT NULL, effect_key TEXT NOT NULL,
-      run_id TEXT NOT NULL, operation_id TEXT NOT NULL, initiator TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL, tenant TEXT COLLATE "C" NOT NULL, effect_key TEXT COLLATE "C" NOT NULL,
+      run_id TEXT COLLATE "C" NOT NULL, operation_id TEXT COLLATE "C" NOT NULL, initiator TEXT NOT NULL,
       method TEXT NOT NULL, intent JSONB NOT NULL, claims JSONB NOT NULL,
-      accepted_operation TEXT, consumed_run TEXT, PRIMARY KEY(namespace,tenant,effect_key)
+      accepted_operation TEXT COLLATE "C", consumed_run TEXT COLLATE "C", PRIMARY KEY(namespace,tenant,effect_key)
     )`,
     `CREATE INDEX IF NOT EXISTS authorization_effects_run ON ${prefix}.authorization_effects(namespace,tenant,run_id,ordinal)`,
     `CREATE INDEX IF NOT EXISTS authorization_effects_operation ON ${prefix}.authorization_effects(namespace,tenant,operation_id)`,
     `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_sessions (
-      namespace TEXT NOT NULL, tenant TEXT NOT NULL, id TEXT NOT NULL,
-      principal TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL, tenant TEXT COLLATE "C" NOT NULL, id TEXT COLLATE "C" NOT NULL,
+      principal TEXT COLLATE "C" NOT NULL, expires_at TIMESTAMPTZ NOT NULL,
       revoked_at TIMESTAMPTZ, PRIMARY KEY(namespace,tenant,id)
     )`,
     `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_channels (
-      id TEXT PRIMARY KEY, namespace TEXT NOT NULL, tenant TEXT NOT NULL,
+      id TEXT COLLATE "C" PRIMARY KEY, namespace TEXT COLLATE "C" NOT NULL, tenant TEXT COLLATE "C" NOT NULL,
       authority JSONB NOT NULL, dependencies JSONB NOT NULL,
       owner_epoch BIGINT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS ${prefix}.authorization_invocations (
-      namespace TEXT NOT NULL, run_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL, run_id TEXT COLLATE "C" NOT NULL, source_event_id TEXT COLLATE "C" NOT NULL,
       authority JSONB NOT NULL, capture JSONB, inventory_digest TEXT,
       PRIMARY KEY(namespace,run_id)
     )`,

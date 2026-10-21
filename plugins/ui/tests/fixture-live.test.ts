@@ -56,8 +56,8 @@ export class FixtureLive implements SubscriptionTransport {
   private sequence = 1;
   /** Collections whose reads the owner refuses. */
   readonly denied: Set<string> = new Set();
-  /** Refuse `order` by any field but id, as owners did before ordered live reads. */
-  idOrderOnly = false;
+  /** Refuse a collection's reads with a device refusal (code and reason). */
+  readonly refusals: Map<string, { code: string; reason: string }> = new Map();
   /** Refuse subscriptions past this many, as a device socket does (16). */
   maxSubscriptions = Infinity;
 
@@ -102,7 +102,6 @@ export class FixtureLive implements SubscriptionTransport {
     query: Parameters<SubscriptionTransport["observe"]>[1],
     options: Parameters<SubscriptionTransport["observe"]>[2],
   ): ReturnType<SubscriptionTransport["observe"]> {
-    const order = (query as Query)?.order as { field?: string } | undefined;
     if (this.denied.has(collection)) {
       return Promise.reject(
         Object.assign(new Error("Forbidden"), {
@@ -111,10 +110,11 @@ export class FixtureLive implements SubscriptionTransport {
         }),
       );
     }
-    if (this.idOrderOnly && order?.field && order.field !== "id") {
+    const refusal = this.refusals.get(collection);
+    if (refusal) {
       return Promise.reject(
-        Object.assign(new TypeError("Subscription query refused."), {
-          code: "subscription_query_refused",
+        Object.assign(new Error("Subscription refused."), {
+          ...refusal,
           retryable: false,
         }),
       );

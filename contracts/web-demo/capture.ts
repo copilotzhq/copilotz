@@ -123,7 +123,7 @@ ws.addEventListener("message", (event) => {
     void send(local ? "Fetch.continueRequest" : "Fetch.failRequest", {
       requestId: params.requestId,
       ...(local ? {} : { errorReason: "BlockedByClient" }),
-    }, session);
+    }, message.sessionId ?? session);
   }
 });
 function send(
@@ -137,13 +137,39 @@ function send(
   );
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
-const { targetId } = await send("Target.createTarget", { url: "about:blank" });
-session =
-  (await send("Target.attachToTarget", { targetId, flatten: true })).sessionId;
-for (const domain of ["Runtime", "Page"]) {
-  await send(`${domain}.enable`, {}, session);
+/** Opens a tab of the same browser (so it shares the demo's channel). */
+async function openTab(): Promise<{ id: string; targetId: string }> {
+  const { targetId } = await send("Target.createTarget", {
+    url: "about:blank",
+  });
+  const id = (await send("Target.attachToTarget", { targetId, flatten: true }))
+    .sessionId;
+  for (const domain of ["Runtime", "Page"]) {
+    await send(`${domain}.enable`, {}, id);
+  }
+  await send("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, id);
+  return { id, targetId };
 }
-await send("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, session);
+async function emulate(id: string, size: Size, theme: string) {
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: size.width,
+    height: size.height,
+    deviceScaleFactor: size.mobile ? 2 : 1,
+    mobile: size.mobile,
+  }, id);
+  await send(
+    "Emulation.setTouchEmulationEnabled",
+    { enabled: size.mobile },
+    id,
+  );
+  await send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-color-scheme", value: theme }],
+  }, id);
+}
+const primary = await openTab();
+session = primary.id;
+/** A second tab a scenario opened; closed after its screenshot. */
+let second: { id: string; targetId: string } | undefined;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function evaluate(expression: string): Promise<unknown> {
@@ -235,7 +261,7 @@ type Scenario = {
   name: string;
   path: string;
   /** Runs after load; may click, type, or set preferences. */
-  steps?: (size: Size) => Promise<void>;
+  steps?: (size: Size, theme: string) => Promise<void>;
   settle?: number;
 };
 const scenarios: Scenario[] = [
@@ -399,6 +425,27 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    // A second tab follows the conversation: the screenshot is of that tab.
+    name: "14c-second-tab",
+    path: "/?chat=t-ideas&stream=0",
+    steps: async (size, theme) => {
+      second = await openTab();
+      await emulate(second.id, size, theme);
+      session = second.id;
+      await navigate("/?chat=t-ideas&stream=0");
+      await wait(900);
+      session = primary.id;
+      await click('textarea[aria-label="Message"]');
+      await send("Input.insertText", {
+        text: "Draft a two-line welcome email for new teams.",
+      }, session);
+      if (size.mobile) await click('[aria-label="Send message"]');
+      else await key("Enter");
+      await wait(1800);
+      session = second.id;
+    },
+  },
+  {
     name: "14b-long-title",
     path: "/?chat=t-plan&stream=0",
     steps: async () => {
@@ -459,7 +506,7 @@ for (const size of sizes) {
       await navigate(scenario.path);
       await wait(scenario.settle ?? 900);
       try {
-        await scenario.steps?.(size);
+        await scenario.steps?.(size, theme);
       } catch (error) {
         log.push(`STEP ${scenario.name} ${size.name}: ${error}`);
       }
@@ -484,6 +531,11 @@ for (const size of sizes) {
         Uint8Array.from(atob(data), (c) => c.charCodeAt(0)),
       );
       shots.push(file);
+      if (second) {
+        await send("Target.closeTarget", { targetId: second.targetId });
+        second = undefined;
+      }
+      session = primary.id;
     }
   }
 }

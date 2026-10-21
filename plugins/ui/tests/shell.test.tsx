@@ -66,7 +66,12 @@ const { act } = React;
 const { createBrowserRuntime } = await import("@copilotz/copilotz/web");
 const { defineView } = await import("@copilotz/copilotz/views");
 const { reactRenderer } = await import("../../web-react/index.ts");
-const { uiWebPlugin, shellNavigation, shellUrlStorageAdapter } = await import(
+const {
+  bindShellSession,
+  uiWebPlugin,
+  shellNavigation,
+  shellUrlStorageAdapter,
+} = await import(
   "../web.ts"
 );
 const { FixtureLive } = await import("./fixture-live.test.ts");
@@ -828,9 +833,9 @@ test("Views share live reads: a conversation with its panel open uses five, peop
     assert.deepEqual(shell.live.active, [
       'message {"where":{"threadId":"t1"},"order":{"field":"createdAt","direction":"desc"},"limit":100}',
       'participant {"where":{"id":{"in":["p-ana","p-north"]}},"limit":2}',
-      'space {"limit":200}',
-      'thread {"order":{"field":"id","direction":"desc"},"limit":200}',
-      'thread {"where":{"spaceId":"s1"},"order":{"field":"id","direction":"desc"},"limit":200}',
+      'space {"order":{"field":"name","direction":"asc"},"limit":200}',
+      'thread {"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
+      'thread {"where":{"spaceId":"s1"},"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
     ]);
     await act(async () => {
       shell.runtime.actions.shellNewChat({});
@@ -842,17 +847,25 @@ test("Views share live reads: a conversation with its panel open uses five, peop
   }
 });
 
-test("live read limits show a friendly state, never a raw error", async () => {
-  const ordered = new FixtureLive(tables());
-  ordered.idOrderOnly = true;
-  const refused = await mount("https://app.example/?chat=t1", {
-    live: ordered,
-  });
-  try {
-    assert.match(main(), /Live updates unavailable/);
-    assert.doesNotMatch(main(), /subscription_|refused\./i);
-  } finally {
-    await refused.dispose();
+test("refused live reads show a friendly state by reason, never a raw error", async () => {
+  for (
+    const [reason, copy] of [
+      ["query_unsupported", /Live updates unavailable/],
+      ["limit_exceeded", /Too much to follow live/],
+      ["unbound_collection", /Not available here/],
+      ["forbidden", /No access to these messages/],
+      ["unavailable", /Couldn't load messages/],
+    ] as const
+  ) {
+    const live = new FixtureLive(tables());
+    live.refusals.set("message", { code: "subscription_failed", reason });
+    const refused = await mount("https://app.example/?chat=t1", { live });
+    try {
+      assert.match(main(), copy, reason);
+      assert.doesNotMatch(main(), /subscription_|refused\.|_/i, reason);
+    } finally {
+      await refused.dispose();
+    }
   }
   const crowded = new FixtureLive(tables());
   crowded.maxSubscriptions = 2;
@@ -1052,6 +1065,55 @@ test("message text a window read deferred loads when it shows; too long says so"
       "m-long-b/long-b",
     ]);
   } finally {
+    await shell.dispose();
+  }
+});
+
+test("a revoked session routes to sign-in, reads nothing and waits for the app to restore it", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    extra: {
+      id: "sign-in",
+      resources: { shell: { signIn: { href: "/login?next=chat" } } },
+    },
+  });
+  const listeners = new Set<
+    (event: { state: string; code?: string }) => void
+  >();
+  const stop = bindShellSession(shell.runtime, {
+    onAuthState(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  try {
+    assert.ok(shell.live.subscriptionCount > 0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ state: "revoked", code: "session_revoked" });
+      }
+      await settle();
+    });
+    const screen = document.querySelector('[data-slot="signed-out"]');
+    assert.match(screen?.textContent ?? "", /You've been signed out/);
+    assert.equal(
+      screen?.querySelector("a")?.getAttribute("href"),
+      "/login?next=chat",
+    );
+    assert.equal(shell.live.subscriptionCount, 0, "every read is released");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    assert.equal(shell.live.subscriptionCount, 0, "and nothing reconnects");
+    // The app signed in again and reauthenticated the device.
+    await act(async () => {
+      await shell.runtime.actions.shellSessionRestored({}).result();
+      await settle();
+    });
+    assert.equal(document.querySelector('[data-slot="signed-out"]'), null);
+    assert.ok(shell.live.subscriptionCount > 0, "the shell reads again");
+    assert.equal(nav(shell).threadId, "t1", "on the same conversation");
+  } finally {
+    stop();
     await shell.dispose();
   }
 });

@@ -113,6 +113,7 @@
     "croner": "9.0.0",
     "jq-wasm": "3.0.0-jq-1.8.2",
     "json-schema-to-ts": "3.1.1",
+    "katex": "0.16.47",
     "lucide-react": "0.540.0",
     "react-markdown": "9.1.0",
     "rehype-highlight": "7.0.2",

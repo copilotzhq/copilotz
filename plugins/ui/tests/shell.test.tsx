@@ -500,6 +500,15 @@ test("the side panel shows the conversation's Space sections and restores its wi
     const panel = () =>
       document.querySelector('aside[aria-label="Side panel"]');
     assert.ok(panel(), "the panel opens beside the conversation");
+    // Narrow panels show icon-only tabs: each keeps its name and a tooltip.
+    const tabs = [...panel()!.querySelectorAll('[role="tab"]')];
+    assert.deepEqual(
+      tabs.map((tab) => tab.getAttribute("aria-label")),
+      ["Overview", "Chats", "Boards", "Unsafe", "Report", "Members"],
+    );
+    assert.ok(
+      tabs.every((tab) => tab.getAttribute("data-slot") === "tooltip-trigger"),
+    );
     await click(byLabel("Boards"));
     assert.match(panel()!.textContent!, /testBoards for s1 \(panel\)/);
     assert.equal(nav(shell).section, "boards");

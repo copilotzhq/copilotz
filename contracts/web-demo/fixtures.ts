@@ -211,7 +211,7 @@ export function fixtures(now = Date.now()): Record<string, Row[]> {
       ]),
       message("m2", "t-plan", "p-north", 11, [
         text(
-          "## Kickoff plan\n\nHere is a first cut. I created the **Launch cycle 1** board in this Space with the first five cards.\n\n| Milestone | Owner | Due |\n|---|---|---|\n| Positioning brief | North | Week 1 |\n| Pricing test | South | Week 2 |\n| Landing page v1 | East | Week 3 |\n\nThe conversion target is modelled as $p = \\frac{c}{v}$, with a 95% interval of\n\n$$\\hat p \\pm 1.96\\sqrt{\\frac{\\hat p(1-\\hat p)}{n}}$$\n\nA quick helper to track it:\n\n```ts\nexport function conversion(clicks: number, visits: number): number {\n  return visits === 0 ? 0 : clicks / visits;\n}\n```\n\n> South will challenge the pricing assumptions before we lock week 2.",
+          "## Kickoff plan\n\nHere is a first cut. I created the **Launch cycle 1** board in this Space with the first five cards.\n\n| Milestone | Owner | Due |\n|---|---|---|\n| Positioning brief | North | Week 1 |\n| Pricing test | South | Week 2 |\n| Landing page v1 | East | Week 3 |\n\nThe conversion target is modelled as $p = \\frac{c}{v}$, with a 95% interval of\n\n$$\n\\hat p \\pm 1.96\\sqrt{\\frac{\\hat p(1-\\hat p)}{n}}\n$$\n\nA quick helper to track it:\n\n```ts\nexport function conversion(clicks: number, visits: number): number {\n  return visits === 0 ? 0 : clicks / visits;\n}\n```\n\n> South will challenge the pricing assumptions before we lock week 2.",
         ),
       ], {
         copilotzWorkflow: { kind: "agent_output", llmAttemptId: "run-north-1" },

@@ -5,6 +5,7 @@
  */
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "katex/dist/katex.min.css";
 @plugin "@tailwindcss/typography";
 @source "./**/*.{ts,tsx}";
 @source "../core/views/**/*.{ts,tsx}";
@@ -225,8 +226,13 @@
 .prose [data-slot="table"] > table {
   margin-block: 0;
 }
-.prose math[display="block"] {
+.prose .katex {
+  font-size: 1.1em;
+}
+.prose .katex-display {
+  margin-block: 1em;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-block: 0.25rem;
 }
 .prose .hljs-keyword,

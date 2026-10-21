@@ -157,15 +157,15 @@ a link. `icon` is a kit icon name (`iconNames`).
 `styles.css`: chat-ui's default slate theme (white, slate primary,
 `--radius:
 0.5rem`, system font) as tokens for light and `.dark`, plus `bubble`,
-sidebar and code tokens; prose themed through tokens; MathML math;
-tw-animate-css. Brand by overriding `--primary`/`--primary-foreground`. One set
-of primitives (Button, Badge, Card, Input, Textarea, Dialog,
-`ConfirmDialog`/`ConfirmAction`, `FormDialog`, `NameDescriptionDialog`,
-DropdownMenu with checkbox/radio/sub, Tabs, `TabBar` (navigation tabs with
-roving focus and an activity dot), Tooltip, Avatar, ScrollArea, Separator, Kbd,
-Spinner, Field, NativeSelect, Checkbox, Notice, EmptyState, CopyField) and
-patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`, `DetailList`,
-`ResourceTable`, `ResourceToolbar`, `ResourceList`, `ResourceRow`,
+sidebar and code tokens; prose themed through tokens; KaTeX math (HTML with its
+fonts, plus MathML); tw-animate-css. Brand by overriding
+`--primary`/`--primary-foreground`. One set of primitives (Button, Badge, Card,
+Input, Textarea, Dialog, `ConfirmDialog`/`ConfirmAction`, `FormDialog`,
+`NameDescriptionDialog`, DropdownMenu with checkbox/radio/sub, Tabs, `TabBar`
+(navigation tabs with roving focus and an activity dot), Tooltip, Avatar,
+ScrollArea, Separator, Kbd, Spinner, Field, NativeSelect, Checkbox, Notice,
+EmptyState, CopyField) and patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`,
+`DetailList`, `ResourceTable`, `ResourceToolbar`, `ResourceList`, `ResourceRow`,
 `ResourceHeader`, `PaneBoundary`, `showSafely`, `Markdown`, `Icon`,
 `identityColor`, `initials`).
 

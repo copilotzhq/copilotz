@@ -191,6 +191,24 @@ async function click(selector: string, index = 0) {
   }
   await wait(250);
 }
+async function hover(selector: string, index = 0) {
+  const point = await evaluate(`(() => {
+    const el = [...document.querySelectorAll(${
+    JSON.stringify(selector)
+  })][${index}];
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  })()`) as { x: number; y: number } | null;
+  if (!point) throw new Error(`No element ${selector}`);
+  await send(
+    "Input.dispatchMouseEvent",
+    { type: "mouseMoved", ...point },
+    session,
+  );
+  await wait(700);
+}
+
 async function key(keyName: string, modifiers = 0) {
   for (const type of ["keyDown", "keyUp"]) {
     await send("Input.dispatchKeyEvent", {
@@ -233,6 +251,13 @@ const scenarios: Scenario[] = [
     settle: 2400,
   },
   {
+    name: "03b-panel-tab-tooltip",
+    path: "/?chat=t-plan&panel=1&section=overview&stream=0",
+    steps: async () => {
+      await hover('#shell-panel [role="tab"]', 4);
+    },
+  },
+  {
     name: "04-space-chats",
     path: "/?space=sp-launch&section=conversations&stream=0",
   },
@@ -249,6 +274,15 @@ const scenarios: Scenario[] = [
     },
   },
   { name: "07-new-chat", path: "/?stream=0" },
+  {
+    name: "08b-math",
+    path: "/?chat=t-plan&stream=0",
+    steps: async () => {
+      await evaluate(
+        `document.querySelector('[data-slot="markdown"] math')?.scrollIntoView({ block: "center" })`,
+      );
+    },
+  },
   {
     name: "08-activity-expanded",
     path: "/?chat=t-plan&stream=0",

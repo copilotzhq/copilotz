@@ -7,7 +7,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Virtualizer } from "@tanstack/react-virtual";
-import { Input, NameDescriptionDialog } from "@copilotz/copilotz/web/kit";
+import {
+  Input,
+  Markdown,
+  NameDescriptionDialog,
+} from "@copilotz/copilotz/web/kit";
 import { AssistantActivity, toolLabel } from "./activity.tsx";
 import { MessageGroup } from "./message.tsx";
 import { activeMention, mentionedTargets } from "./composer.tsx";
@@ -228,4 +232,17 @@ test("the name and description editor starts from the record", () => {
     />,
   );
   assert.equal(html, "");
+});
+
+test("math renders with KaTeX and a MathML copy; it can never carry a link", () => {
+  const html = renderToStaticMarkup(
+    <Markdown>
+      {"Inline $p = \\frac{c}{v}$ and\n\n$$\n\\href{https://evil.example}{x}\n$$"}
+    </Markdown>,
+  );
+  assert.ok(html.includes('class="katex"'), html);
+  assert.ok(html.includes("<math"), "assistive technology reads MathML");
+  assert.ok(html.includes('class="katex-display"'), "fenced math is display");
+  assert.ok(!html.includes('evil.example"'), "no link from math");
+  assert.ok(!/<a\s/.test(html));
 });

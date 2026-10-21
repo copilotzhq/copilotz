@@ -19,16 +19,17 @@ for every read state, including the live read limits), Metric, DetailList and
 the resource list and table patterns. `Icon` names a curated lucide set, so apps
 can name icons in resources.
 
-`Markdown` renders GitHub-flavored Markdown, math as MathML and highlighted
+`Markdown` renders GitHub-flavored Markdown, math with KaTeX and highlighted
 code, and applies `markdownUrlPolicy` from `@copilotz/copilotz/web`: it discards
 raw HTML, drops unsafe links, opens links in a new tab without a referrer, and
 loads only relative, same-origin or `imageOrigins` images. Any other image
 renders as its alt text and is never fetched.
 
 Process `styles.css` with Tailwind CSS 4, `@tailwindcss/typography` and
-`tw-animate-css`. Add the app's own source path to Tailwind scanning. React and
-React DOM must resolve to one copy in the host bundle (19.1.1 in this
-repository).
+`tw-animate-css`. It imports KaTeX's stylesheet; serve `katex/dist/fonts` at
+`fonts/` next to the compiled CSS unless the pipeline rebases `url()`. Add the
+app's own source path to Tailwind scanning. React and React DOM must resolve to
+one copy in the host bundle (19.1.1 in this repository).
 
 TSX sources carry explicit React runtime imports and JSX pragmas, so hosts need
 no JSX compiler override. The npm source package exports

@@ -107,11 +107,18 @@ function CodeBlock(
 }
 
 const remarkBuiltIns: Plugins = [remarkGfm, remarkMath];
-const katex = [rehypeKatex, { output: "mathml", throwOnError: false }] as const;
+// KaTeX's own HTML and fonts render the same everywhere; the MathML copy is
+// for assistive technology. `trust: false` refuses `\href`, `\url` and HTML
+// extensions, so math can never carry a link or markup.
+const katex = [
+  rehypeKatex,
+  { output: "htmlAndMathml", throwOnError: false, trust: false },
+] as const;
 const highlight = [rehypeHighlight, { detect: false }] as const;
 
 /**
- * Raw HTML is discarded, math renders as MathML and code is escaped text,
+ * Raw HTML is discarded, math renders with KaTeX (its fonts come with the kit
+ * stylesheet) and code is escaped text,
  * highlighted once a message settles. URLs follow `markdownUrlPolicy`: unsafe
  * links are dropped, links open in a new tab without a referrer, and an image
  * that may not load renders as its alt text and is never fetched.

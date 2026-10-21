@@ -210,6 +210,7 @@
     "@tanstack/react-virtual": "npm:@tanstack/react-virtual@3.13.12",
     "rehype-highlight": "npm:rehype-highlight@7.0.2",
     "remark-math": "npm:remark-math@6.0.0",
+    "katex": "npm:katex@0.16.47",
     "rehype-katex": "npm:rehype-katex@7.0.1",
     "tw-animate-css": "npm:tw-animate-css@1.3.7"
   },
@@ -243,7 +244,7 @@
     "check:generated": "deno run -A scripts/build-plugins.ts --check",
     "smoke:authoring": "deno run -A build/index.ts build contracts/authoring && deno run -A contracts/authoring/run.ts",
     "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts",
-    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify"
+    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify && mkdir -p dist/fonts && cp node_modules/katex/dist/fonts/*.woff2 dist/fonts/"
   },
   "lock": false,
   "fmt": {

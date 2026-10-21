@@ -444,10 +444,11 @@ over fixture data, with a demo feed that streams replies and tool output.
 
 Message text may come from an LLM steered by prompt injection or from another
 thread participant, so Markdown never fetches anything without a click. The kit
-`Markdown` renders GitHub-flavored Markdown, math (KaTeX as MathML) and
-highlighted code with a copy button. It discards raw HTML (`skipHtml`; there is
-no raw HTML plugin) and applies `markdownUrlPolicy({ origin, imageOrigins })`
-from `/web`, which any Markdown component can reuse:
+`Markdown` renders GitHub-flavored Markdown, math (KaTeX, with a MathML copy for
+assistive technology) and highlighted code with a copy button. It discards raw
+HTML (`skipHtml`; there is no raw HTML plugin) and applies
+`markdownUrlPolicy({ origin, imageOrigins })` from `/web`, which any Markdown
+component can reuse:
 
 - `urlTransform(url, key)` matches react-markdown's option. Links (`href`) keep
   relative URLs and http(s), mailto, xmpp and irc(s); `javascript:` and other
@@ -504,9 +505,12 @@ Process `plugins/ui-kit/styles.css` with Tailwind CSS 4,
 `@tailwindcss/typography` and `tw-animate-css`, including the app's own source
 files in scanning. The stylesheet defines the tokens for light and `.dark`
 (white and slate, `--radius: 0.5rem`, the system font), the message bubble,
-sidebar and code tokens, prose themed through tokens, and reduced motion. Run
-`deno task build:web-css` to compile the first-party kit and View styles to
-`dist/web.css` for a host to include.
+sidebar and code tokens, prose themed through tokens, and reduced motion. It
+imports KaTeX's stylesheet, which loads its fonts from `fonts/` next to the
+compiled CSS: a pipeline that rebases `url()` (such as Vite) bundles them, and
+otherwise copy `katex/dist/fonts/*.woff2` there. Run `deno task build:web-css`
+to compile the first-party kit and View styles to `dist/web.css`, with the fonts
+in `dist/fonts/`, for a host to include.
 
 The npm source package exports `@copilotz/copilotz/web/kit/styles.css`. Import
 it into the host's Tailwind CSS 4 pipeline, alongside the host's source

@@ -13,14 +13,32 @@ export type ReadFailure = Readonly<{
   code: string;
   message: string;
   status?: number;
+  /**
+   * A refused live read's stable reason: `query_unsupported`,
+   * `limit_exceeded`, `quota_exceeded`, `forbidden`, `unbound_collection` or
+   * `unavailable`.
+   */
+  reason?: string;
   retryable: boolean;
 }>;
 /** `refresh()` from a user gesture also starts a `held` query read. */
 export type QueryReadState = ReadState & { refresh(): void };
 export type ReadState<T = unknown> = Readonly<{
   value: T;
-  /** `held`: a query read from URL state that waits for a user gesture. */
-  status: "loading" | "ready" | "missing" | "stale" | "denied" | "held";
+  /**
+   * `stale`: the value may be out of date and the read recovers by itself
+   * (a live read reconnecting, or a query whose dependency is). `failed`: a
+   * query read's attempt failed and nothing retries it; `refresh()` does.
+   * `held`: a query read from URL state that waits for a user gesture.
+   */
+  status:
+    | "loading"
+    | "ready"
+    | "missing"
+    | "stale"
+    | "failed"
+    | "denied"
+    | "held";
   pending: boolean;
   error?: ReadFailure;
 }>;

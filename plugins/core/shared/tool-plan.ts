@@ -1,9 +1,12 @@
-import { isCollectionConflictError } from "@copilotz/copilotz/collections/authoring";
+import { canonicalJson } from "@copilotz/copilotz/content/codec";
+import { retryCoreMutation } from "./retry-mutation.ts";
 import type { EventVisibility } from "./events/index.ts";
 import {
   actionCallerDefinitionId,
+  type ActionContext,
   isActionInputValidationError,
   isSettledActionError,
+  resolveActionSourceData,
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
@@ -30,7 +33,9 @@ import {
   agentAskResultMetadata,
   CORE_TOOL_ACTION_METADATA_SCHEMA,
   type CoreAgentTurnMetadata,
+  coreLlmCallMetadata,
   type CoreToolActionMetadata,
+  coreToolActionMetadata,
   type CoreToolActionOrigin,
   coreToolPlanMetadata,
   defineCoreToolActionMetadata,
@@ -85,51 +90,6 @@ export type CoreToolPlanBase = Readonly<{
 type ToolPlan = Readonly<
   { message: CollectionRecord; calls: readonly LlmToolCall[] }
 >;
-
-function retryableToolPlanMutationFailure(error: unknown): boolean {
-  const visited = new Set<object>();
-  let current = error;
-  while (
-    (typeof current === "object" && current !== null) ||
-    typeof current === "function"
-  ) {
-    const candidate = current as Record<string, unknown>;
-    if (visited.has(candidate)) return false;
-    visited.add(candidate);
-    if (isCollectionConflictError(current)) return true;
-    if (candidate.retryable === false) return false;
-    const code = candidate.code ?? candidate.sqlState ?? candidate.sqlstate;
-    if (code === "40P01" || code === "40001") return true;
-    if (
-      typeof candidate.message === "string" &&
-      (candidate.message.includes("changed while its mutation was prepared") ||
-        /(?:^|:\s*)deadlock detected(?:$|\n)/i.test(candidate.message) ||
-        /(?:^|:\s*)could not serialize access(?:\b|$)/i.test(
-          candidate.message,
-        ))
-    ) return true;
-    current = candidate.cause;
-  }
-  return false;
-}
-
-/** Retries only known transient collection transaction failures. */
-export async function retryToolPlanMutation<T>(
-  operation: () => Promise<T>,
-): Promise<T> {
-  for (let attempt = 0;; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (
-        attempt >= 8 || !retryableToolPlanMutationFailure(error)
-      ) throw error;
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(25, 2 ** attempt))
-      );
-    }
-  }
-}
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -305,6 +265,67 @@ function baseFrom(recordValue: CollectionRecord): CoreToolPlanBase {
   }
   return structuredClone(base) as CoreToolPlanBase;
 }
+
+/** App-facing trusted Tool scope. The cursor is checked against owner-retained
+ * source data and the claimed durable stage; caller metadata alone is insufficient.
+ * Resolve the thread's Space through the app's scoped collections. */
+export async function trustedCoreToolOrigin(
+  context: ActionContext,
+): Promise<CoreToolActionMetadata | null> {
+  const cursor = coreToolActionMetadata(context.action.metadata);
+  if (!cursor || context.action.parentRunId) return null;
+  const source = record(await resolveActionSourceData(context));
+  const plan = await context.collections.toolPlan?.get({ id: cursor.planId });
+  if (!plan) return null;
+  const base = baseFrom(plan);
+  const scope = context as unknown as CoreToolProcessorContext;
+  const branch = await branchState(scope, plan, cursor.planIndex);
+  if (
+    branch?.status !== "running" || branch.stageIndex !== cursor.stageIndex ||
+    branch.owner !== context.identity.causationId ||
+    base.stageActionIds[cursor.planIndex]?.[cursor.stageIndex] !==
+      context.action.id
+  ) return null;
+  // Initial dispatch is sourced by the original LLM completion. Later stages
+  // are sourced by an earlier Tool terminal or a retained stage-ready command.
+  const llm = coreLlmCallMetadata(source.metadata);
+  const prior = coreToolActionMetadata(source.metadata);
+  const sourceRecord = record(source.record);
+  const intent = record(source.intent);
+  const fromLlm = source.actionId === "llm.call" &&
+    source.status === "completed" &&
+    source.actionRunId === base.parentLlmActionRunId &&
+    llm?.threadId === base.threadId &&
+    llm.agentId === base.agentId;
+  const fromTool = prior?.planId === base.planId &&
+    (source.status === "completed" || source.status === "failed" ||
+      source.status === "cancelled") &&
+    base.stageActionIds[prior.planIndex]?.[prior.stageIndex] ===
+      source.actionId;
+  const fromCommand = intent.operation === "command" &&
+    intent.name === "stageReady" &&
+    intent.id === sourceRecord.id &&
+    (sourceRecord.id === base.planId || sourceRecord.planId === base.planId);
+  if (!fromLlm && !fromTool && !fromCommand) return null;
+  const loaded = await loadPlan(scope, base);
+  const call = loaded.calls[cursor.planIndex];
+  if (!call) return null;
+  const trusted = toolActionMetadataAt(
+    base,
+    call,
+    cursor.planIndex,
+    cursor.stageIndex,
+  );
+  // Compare every Core field, including optional ask/turn scopes.
+  const keys = new Set([...Object.keys(cursor), ...Object.keys(trusted)]);
+  if (
+    [...keys].some((key) =>
+      canonicalJson(record(cursor)[key]) !==
+        canonicalJson(record(trusted)[key])
+    )
+  ) return null;
+  return trusted;
+}
 async function branchId(planId: string, index: number): Promise<string> {
   return await deriveWorkflowId("tool-plan-branch", planId, String(index));
 }
@@ -362,7 +383,7 @@ export async function ensureToolPlanBranchLayout(
   if (!branches || !plans) {
     throw new Error("Tool-plan branch collections are not bound.");
   }
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     context.transaction(async (tx) => {
       const targetBranches = tx.collections.toolPlanBranch;
       const targetPlans = tx.collections.toolPlan;
@@ -441,7 +462,7 @@ async function stageResult(
   );
   const operationKey =
     `tool-plan:${planId}:${branchIndex}:${stageIndex}:result`;
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     collection.create({
       id,
       planId,
@@ -697,7 +718,7 @@ export async function createDurableToolPlan(
   if (!context.collections.toolPlan || !context.collections.toolPlanBranch) {
     throw new Error("Tool-plan collections are not bound.");
   }
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     context.transaction(async (tx) => {
       const plans = tx.collections.toolPlan;
       const branches = tx.collections.toolPlanBranch;
@@ -763,7 +784,7 @@ export async function scheduleReadyBranches(
   if (ready.length === 0) return;
   // Publish every currently-ready cursor in one transaction. Dispatch begins
   // only after commit; each mutation targets its own branch record.
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     context.transaction(async (tx) => {
       const branches = tx.collections.toolPlanBranch;
       if (!branches) {
@@ -832,7 +853,7 @@ export async function dispatchReadyStage(
   const currentPlan = await ensureToolPlanBranchLayout(context, plan);
   if (record(currentPlan.state).status !== "running") return;
   const id = await branchId(String(currentPlan.id), branchIndex);
-  const claimed = await retryToolPlanMutation(() =>
+  const claimed = await retryCoreMutation(() =>
     collection.commands.claimStage({
       id,
       stageIndex,
@@ -1005,7 +1026,7 @@ export async function projectAndAdvanceToolPlan(
     metadata.planIndex,
   );
   if (!targetBranch) throw new Error("Tool-plan branch does not exist.");
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     context.transaction(async (tx) => {
       const results = tx.collections.toolPlanStageResult;
       const branches = tx.collections.toolPlanBranch;
@@ -1174,7 +1195,7 @@ export async function advanceCompletedToolMembers(
   const hasNextTool = terminal.status === "completed" &&
     next < stages(call).length;
   const currentBranchId = await branchId(String(currentPlan.id), branchIndex);
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     branches.commands.advanceBranch({
       id: currentBranchId,
       fromStageIndex: from,
@@ -1230,7 +1251,7 @@ async function projectionReady(
   const plans = context.collections.toolPlan;
   if (!plans) throw new Error("Collection 'toolPlan' is not bound.");
   const deduplicationId = `tool-plan:${planId}:projection-ready`;
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     plans.commands.projectionReady({
       id: planId,
     }, {
@@ -1310,7 +1331,7 @@ export async function projectDurableToolPlan(
   const collection = context.collections.toolPlan;
   if (!collection) throw new Error("Collection 'toolPlan' is not bound.");
   const currentPlan = await ensureToolPlanBranchLayout(context, plan);
-  const claimed = await retryToolPlanMutation(() =>
+  const claimed = await retryCoreMutation(() =>
     collection.commands.claimProjection({
       id: currentPlan.id,
       owner: event.id,
@@ -1487,7 +1508,7 @@ export async function projectDurableToolPlan(
       ...(base.agentTurn ? { historyScopeId: base.agentTurn.id } : {}),
     }, context);
   }
-  await retryToolPlanMutation(() =>
+  await retryCoreMutation(() =>
     collection.commands.finishProjection({
       id: currentPlan.id,
       owner: event.id,

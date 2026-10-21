@@ -26,6 +26,8 @@ export type SubscriptionFrame =
       from: string;
       to: string;
       changes: readonly SubscriptionDelta[];
+      /** Exact selected window order for a non-ID ordered query. */
+      order?: readonly string[];
       /** A mutation of this Collection, including outside the selected window. */
       collectionChanged?: boolean;
     }

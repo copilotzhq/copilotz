@@ -34,7 +34,8 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     Reflect.ownKeys(input).some((key) =>
       key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
       key !== "actionMetadata" && key !== "operationMetadata" &&
-      key !== "context" && key !== "actor" && key !== "authority"
+      key !== "context" && key !== "actor" && key !== "authority" &&
+      key !== "invalidSessionCookie"
     )
   ) {
     throw new TypeError(
@@ -64,6 +65,14 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
   ) {
     throw new TypeError("Server actor contains unsupported identity fields.");
   }
+  if (
+    input.invalidSessionCookie !== undefined &&
+    typeof input.invalidSessionCookie !== "boolean"
+  ) {
+    throw new TypeError(
+      "invalidSessionCookie must be boolean when supplied.",
+    );
+  }
   const plain = (candidate: unknown, label: string) => {
     if (candidate === undefined) return undefined;
     if (
@@ -75,6 +84,9 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
   };
   return ({
     authority: retainedAuthority(input.authority),
+    ...(typeof input.invalidSessionCookie === "boolean"
+      ? { invalidSessionCookie: input.invalidSessionCookie }
+      : {}),
     ...(input.actor
       ? {
         actor: plain(
@@ -120,6 +132,18 @@ export async function authenticateHttpRequest(
     match.endpoint,
     facade.maxAssetUploadBytes,
   );
+  const cookieName = facade.sessionCookie?.name ?? "__Host-copilotz_session";
+  const sessionCookies = (request.headers.get("cookie") ?? "").split(";").map(
+    (value) => value.trim(),
+  )
+    .filter((value) => value.split("=", 1)[0].trim() === cookieName);
+  if (sessionCookies.length > 1) {
+    throw Object.assign(new Error("Duplicate session cookie"), {
+      status: 403,
+      code: "duplicate_session_cookie",
+    });
+  }
+  const sessionToken = sessionCookies[0]?.slice(cookieName.length + 1);
   const authenticationContext = {
     lookup: (scope: ServerAuthorizedScope) =>
       createHttpReads(application, scope),
@@ -168,27 +192,24 @@ export async function authenticateHttpRequest(
     },
   });
   const flowToken = request.headers.get("x-copilotz-flow");
-  const cookieName = facade.sessionCookie?.name ?? "__Host-copilotz_session";
-  const sessionCookies = (request.headers.get("cookie") ?? "").split(";").map(
-    (value) => value.trim(),
-  )
-    .filter((value) => value.split("=", 1)[0].trim() === cookieName);
-  if (sessionCookies.length > 1) {
-    throw Object.assign(new Error("Duplicate session cookie"), {
-      status: 403,
-      code: "duplicate_session_cookie",
-    });
-  }
-  const sessionToken = sessionCookies[0]?.slice(cookieName.length + 1);
-  if (flowToken || sessionToken) {
+  let invalidSessionCookie = selected.invalidSessionCookie;
+  let receiptAuthority:
+    | import("../runtime/authorization/authority.ts").AuthenticatedAuthority
+    | undefined;
+  if (
+    flowToken || sessionCookies.length && invalidSessionCookie === undefined
+  ) {
     const runtime = scope.databaseSchema === application.config.databaseSchema
       ? application
       : await application.databaseScope(scope.databaseSchema);
-    selectedAuthority = await runtime.authorization.credentials.authenticate(
+    const verified = await runtime.authorization.credentials.authenticate(
       selectedAuthority,
-      flowToken || sessionToken!,
+      flowToken || sessionToken || "",
       flowToken ? "flow" : "session",
     );
+    selectedAuthority = verified.authority;
+    invalidSessionCookie ||= verified.invalidSession;
+    receiptAuthority = verified.receiptAuthority;
   }
   const authority = retainedAuthority({
     ...selectedAuthority,
@@ -224,6 +245,8 @@ export async function authenticateHttpRequest(
     {
       ...(scope.context ?? {}),
       sessionCookie: facade.sessionCookie,
+      ...(invalidSessionCookie ? { invalidSessionCookie } : {}),
+      ...(receiptAuthority ? { receiptAuthority } : {}),
       serverScope: {
         ...scope,
         authority,

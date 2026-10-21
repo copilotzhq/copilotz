@@ -1,3 +1,4 @@
+import { createEphemeralEvent } from "../runtime/events/index.ts";
 import { watchSelection } from "./selection-watch.ts";
 
 import type {
@@ -27,6 +28,8 @@ export async function createHttpOperations(
   adapters = Object.values(
     application.plugins?.adapters.http ?? {},
   ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[],
+  receiptAuthority?:
+    import("../runtime/authorization/authority.ts").AuthenticatedAuthority,
 ) {
   const namespace = scope.namespace ?? application.config.namespace!;
   const databaseSchema = scope.databaseSchema ??
@@ -38,8 +41,10 @@ export async function createHttpOperations(
     if (!scope.authority) {
       throw failure("forbidden", 403, "Retained authority is required.");
     }
+    const recovered = receiptAuthority &&
+      await runtime.authorization.logoutReceipt(receiptAuthority, operationId);
     const record = await runtime.authorization.operation(
-      scope.authority,
+      recovered?.state === "completed" ? receiptAuthority! : scope.authority,
       operationId,
     );
     return {
@@ -122,6 +127,124 @@ export async function createHttpOperations(
     }
     return operations.map((operation) => operation.operationId);
   };
+  type OperationSelection = {
+    operationIds?: readonly string[];
+    record?: RecordSelection;
+    checkpoint?: string;
+    signal?: AbortSignal;
+  };
+  const logoutObservation = async (
+    selection: OperationSelection,
+  ): Promise<HttpObservation | undefined> => {
+    // A revoked credential can recover only its own completed receipt. Do not
+    // attach history, streams, record selections, or cursor-selected operations.
+    if (
+      scope.authority && !selection.record &&
+      selection.operationIds?.length === 1
+    ) {
+      let receipt = await runtime.authorization.logoutReceipt(
+        receiptAuthority ?? scope.authority,
+        selection.operationIds[0],
+      );
+      if (receipt) {
+        const operationId = receipt.operationId;
+        if (receipt.state === "accepted" || receipt.state === "running") {
+          const changes = await runtime.operations.watch(operationId, {
+            namespace,
+            kind: "operation",
+          });
+          const deadline = Date.now() + 10_000;
+          try {
+            for (;;) {
+              selection.signal?.throwIfAborted();
+              // Subscribe before rereading so completion cannot fall in a gap.
+              receipt = await runtime.authorization.logoutReceipt(
+                receiptAuthority ?? scope.authority,
+                operationId,
+              );
+              if (!receipt) {
+                throw failure("forbidden", 403, "Receipt is unavailable.");
+              }
+              if (
+                receipt.state !== "accepted" && receipt.state !== "running"
+              ) break;
+              const remaining = deadline - Date.now();
+              if (
+                remaining <= 0 ||
+                !await changes.wait({
+                  timeoutMs: remaining,
+                  signal: selection.signal,
+                })
+              ) {
+                throw failure(
+                  "operation_result_pending",
+                  409,
+                  "Logout completion is still pending; retry observation.",
+                );
+              }
+            }
+          } finally {
+            changes.close();
+          }
+        }
+        if (receipt.state !== "completed") {
+          throw failure(
+            "forbidden",
+            403,
+            "Completed receipt is unavailable.",
+          );
+        }
+        selection.signal?.throwIfAborted();
+        const position = decodeOperationReplayCursor(selection.checkpoint);
+        const cursorIds = [
+          ...Object.keys(position.operationEventPositions ?? {}),
+          ...Object.keys(position.operationStreamPositions ?? {}),
+          ...Object.keys(position.operationSelectionPositions ?? {}),
+          ...Object.keys(position.operationRetirementPositions ?? {}),
+        ];
+        if (cursorIds.some((id) => id !== operationId)) {
+          throw failure(
+            "invalid_replay_cursor",
+            403,
+            "Checkpoint is outside the authorized selection.",
+          );
+        }
+        const output = {
+          ...createEphemeralEvent({
+            type: "operation.completed",
+            namespace,
+            correlationId: receipt.correlationId,
+            payload: { status: "completed" },
+          }),
+          operationId: receipt.operationId,
+          state: "completed",
+          data: { status: "completed" },
+        } as ApplicationOutput;
+        return {
+          type: HTTP_OBSERVATION,
+          operationId: receipt.operationId,
+          async authorizePublication(publish) {
+            const current = await runtime.authorization.logoutReceipt(
+              receiptAuthority ?? scope.authority!,
+              operationId,
+            );
+            if (current?.state !== "completed") {
+              throw failure("forbidden", 403, "Receipt is unavailable.");
+            }
+            await publish();
+          },
+          outputs: new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              controller.enqueue(output);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          async cancel() {},
+        };
+      }
+    }
+  };
   return ({
     get,
     async checkpoint(
@@ -194,13 +317,10 @@ export async function createHttpOperations(
       return encodeOperationReplayCursor({ selectionPosition: position });
     },
     async observe(
-      selection: {
-        operationIds?: readonly string[];
-        record?: RecordSelection;
-        checkpoint?: string;
-        signal?: AbortSignal;
-      },
+      selection: OperationSelection,
     ): Promise<HttpObservation> {
+      const recovered = await logoutObservation(selection);
+      if (recovered) return recovered;
       const abort = new AbortController();
       const attachments = new Map<string, ApplicationOperationAttachment>();
       const draining = new Set<ApplicationOperationAttachment>();
@@ -432,6 +552,15 @@ export async function createHttpOperations(
         if (abort.signal.aborted) throw abort.signal.reason;
       } catch (error) {
         await detach(error);
+        const code = (error as { code?: string }).code;
+        if (
+          !selection.signal?.aborted &&
+          ["forbidden", "revoked"].includes(code ?? "")
+        ) {
+          // The self-revocation effect may have committed after initial lookup.
+          const recovered = await logoutObservation(selection);
+          if (recovered) return recovered;
+        }
         throw error;
       }
       const selectionFrame = async (operationIds: readonly string[]) => {

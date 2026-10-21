@@ -1,3 +1,4 @@
+import { withTransactionEffects } from "./transaction-effects.ts";
 import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
   hostIngressProof,
@@ -2057,6 +2058,17 @@ export function createCollectionKernel(
         : undefined;
       const adopts = plan.content.some((item) => item.adoptions.length > 0);
       const inStatement = composed && adopts;
+      const collectionChange = {
+        previous: plan.expected ?? null,
+        collection: name,
+        id: subjectId,
+        record: plan.write.body.operation === "delete"
+          ? null
+          : plan.write.record,
+        ordering: undefined as
+          | { createdAt: string; updatedAt: string }
+          | undefined,
+      };
       const result = await options.coordinator.commitMutation({
         draft,
         ...(alarmEventId ? { eventId: alarmEventId } : {}),
@@ -2069,14 +2081,7 @@ export function createCollectionKernel(
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
-        collectionChange: {
-          previous: plan.expected ?? null,
-          collection: name,
-          id: subjectId,
-          record: plan.write.body.operation === "delete"
-            ? null
-            : plan.write.record,
-        },
+        collectionChange,
         ...((adopts && !inStatement) || (!guard && scoped.condition) ||
             definition.alarm
           ? {
@@ -2105,6 +2110,9 @@ export function createCollectionKernel(
                 definition,
                 plan.write.body,
                 guard,
+                (ordering) => {
+                  collectionChange.ordering = ordering;
+                },
               );
               if (alarmAdmission) {
                 await recordScheduledAlarmIngress(context, {
@@ -2156,7 +2164,14 @@ export function createCollectionKernel(
                   ? `jsonb_build_object('adoption', ${adoption.report}, 'projection', ${projection.report})`
                   : projection.report,
                 resolve: (report: unknown, inserted: boolean) => {
-                  if (inserted) return plan.write.record;
+                  if (inserted) {
+                    const decoded = typeof report === "string"
+                      ? JSON.parse(report)
+                      : report;
+                    collectionChange.ordering =
+                      (adoption ? decoded.projection : decoded)?.ordering;
+                    return plan.write.record;
+                  }
                   const parts = adoption
                     ? (typeof report === "string"
                       ? JSON.parse(report)
@@ -4237,7 +4252,22 @@ export function createCollectionKernel(
     const run = () =>
       execute({ collections, relations, vectors, sessions, flows });
 
-    const value = await finishPlanning(scope, run);
+    const value = await finishPlanning(scope, () =>
+      withTransactionEffects(
+        (key, commit) => {
+          if (scope.state !== "open") {
+            throw new Error("Transaction planning is closed.");
+          }
+          scope.plans.push({
+            id: key,
+            order: [++scope.orderSequence],
+            async commit() {
+              await commit();
+            },
+          });
+        },
+        run,
+      ));
     const pending: CoordinatedMutationResult<unknown>[] = [];
     const writes: CollectionWrite<CollectionRecord>[] = [];
     const orderedPlans = [...scope.plans].sort(comparePlanOrder);

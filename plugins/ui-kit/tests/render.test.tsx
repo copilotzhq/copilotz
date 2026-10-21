@@ -10,6 +10,7 @@ import {
   Button,
   Checkbox,
   ConfirmAction,
+  ConnectionStatus,
   CopyField,
   Dialog,
   DropdownMenu,
@@ -18,6 +19,7 @@ import {
   Field,
   Frame,
   Input,
+  isReconnecting,
   Markdown,
   NativeSelect,
   Notice,
@@ -196,5 +198,35 @@ test("a held read offers a Load button only when it can be refreshed", () => {
   assert.doesNotMatch(
     renderToStaticMarkup(<ReadStatus state={held} />),
     /Load</,
+  );
+});
+
+test("reconnecting is quiet at first and never hides a refusal", () => {
+  const stale = { value: [], status: "stale", pending: false } as const;
+  const away = {
+    kind: "unavailable",
+    code: "socket_closed",
+    message: "Connection lost.",
+    retryable: true,
+  } as const;
+  assert.equal(isReconnecting(stale), true);
+  assert.equal(
+    isReconnecting({ ...stale, error: away }),
+    true,
+  );
+  assert.equal(
+    isReconnecting({
+      ...stale,
+      error: { ...away, reason: "quota_exceeded" },
+    }),
+    false,
+    "a refused read says why instead",
+  );
+  // The indicator waits before it shows, so a brief reconnect never flashes;
+  // a stale read in quiet mode leaves it to that one indicator.
+  assert.equal(renderToStaticMarkup(<ConnectionStatus reconnecting />), "");
+  assert.equal(
+    renderToStaticMarkup(<ReadStatus state={stale} transient="quiet" />),
+    "",
   );
 });

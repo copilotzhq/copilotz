@@ -120,43 +120,73 @@ export async function operationResult(
       context.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(context.databaseSchema)
     : application;
-  const authorize = () =>
-    runtime.authorization.operation(
-      context.serverScope.authority!,
+  let authority = context.serverScope.authority!;
+  const receiptAuthority = context.receiptAuthority ?? authority;
+  const receipt = await runtime.authorization.logoutReceipt(
+    receiptAuthority,
+    operationId,
+  );
+  if (receipt) authority = receiptAuthority;
+  if (receipt && ["accepted", "running"].includes(receipt.state)) {
+    return { status: 202, data: { status: receipt.state } };
+  }
+  const read = async (): Promise<HttpResponse> => {
+    const authorize = () =>
+      runtime.authorization.operation(
+        authority,
+        operationId,
+      );
+    const result = await recordedOperationResult(
+      application,
+      context,
+      operationId,
+    ).catch(async (error) => {
+      // Availability and terminal failures must not disclose hidden operations.
+      await authorize();
+      throw error;
+    });
+    const effects = result.kind === "action" && !result.pending
+      ? await runtime.authorization.credentials.project(
+        authority,
+        operationId,
+      )
+      : [];
+    if (result.kind !== "action" || result.pending) await authorize();
+    return {
+      status: result.pending ? 202 : 200,
+      ...(result.kind === "collection" ? {} : {
+        headers: {
+          "cache-control": "no-store",
+          ...credentialHeaders(effects, context.sessionCookie),
+        },
+      }),
+      data: result.value,
+      ...(!result.pending
+        ? {
+          seq: await runtime.operations.resultSequence(
+            context.namespace ?? application.config.namespace!,
+            operationId,
+          ),
+        }
+        : {}),
+    };
+  };
+  try {
+    return await read();
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (receipt || !["forbidden", "revoked"].includes(code ?? "")) throw error;
+    // Revocation may commit after the first lookup but before ordinary result
+    // authorization. Recover that receipt once, through the same result policy.
+    const current = await runtime.authorization.logoutReceipt(
+      receiptAuthority,
       operationId,
     );
-  const result = await recordedOperationResult(
-    application,
-    context,
-    operationId,
-  ).catch(async (error) => {
-    // Availability and terminal failures must not disclose hidden operations.
-    await authorize();
+    if (current) authority = receiptAuthority;
+    if (current && ["accepted", "running"].includes(current.state)) {
+      return { status: 202, data: { status: current.state } };
+    }
+    if (current?.state === "completed") return await read();
     throw error;
-  });
-  const effects = result.kind === "action" && !result.pending
-    ? await runtime.authorization.credentials.project(
-      context.serverScope.authority!,
-      operationId,
-    )
-    : [];
-  if (result.kind !== "action" || result.pending) await authorize();
-  return {
-    status: result.pending ? 202 : 200,
-    ...(result.kind === "collection" ? {} : {
-      headers: {
-        "cache-control": "no-store",
-        ...credentialHeaders(effects, context.sessionCookie),
-      },
-    }),
-    data: result.value,
-    ...(!result.pending
-      ? {
-        seq: await runtime.operations.resultSequence(
-          context.namespace ?? application.config.namespace!,
-          operationId,
-        ),
-      }
-      : {}),
-  };
+  }
 }

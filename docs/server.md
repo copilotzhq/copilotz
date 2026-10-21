@@ -387,13 +387,30 @@ milliseconds. An explicit upgrade takes precedence when using an adapter too.
 For Deno, `upgradeDevice: (request) => Deno.upgradeWebSocket(request)` is
 sufficient. No access to private application state is needed.
 
-Deno awaits recovery admission before the upgrade. Oxian 0.22's Node listener
-requires a synchronous upgrade decision, so its native handshake may precede
-recovery admission; bounded device input is released only after admission and
-facade binding succeed. A failed admission closes the connection. Custom
-deadlines flow to the existing device renewal timer. See
-[Subscriptions](subscriptions.md) for client setup, reauthentication and
-revocation.
+The default device upgrade uses `upgradeWebSocket(request, { protocol? })` from
+`@oxian/oxian-js/http` (Oxian 0.23.0). It works in Copilotz listeners and in
+Oxian CLI `start`/`dev` routes with either worker transport. Origin and recovery
+admission precede native 101 on both Deno and Node. Oxian tracks sockets for
+listener drain and shutdown; there is no Request-identity registry. Keep
+`upgradeDevice` only for raw Fetch hosts/tests whose listeners do not use Oxian,
+such as a direct `Deno.serve` callback. Release Oxian 0.23.0 before Copilotz.
+
+Deno's native WebSocket API assembles messages before delivery, so it cannot
+bound pre-delivery assembly. Node bounds native messages. Both enforce device
+post-delivery byte/count limits. Custom deadlines feed the existing renewal
+timer. See [Subscriptions](subscriptions.md) for refusal reasons and the
+terminal session notice/4401 close code, and `device.onAuthState` for routing to
+sign-in.
+
+Action access refusals without an authentication credential return **401**. A
+presented credential that is not allowed returns **403**. Invalid session
+cookies are discarded: absent another credential or host identity, a
+principal-required Action returns **401** and clears that cookie. Anonymous
+Actions remain available. This applies to generic HTTP Actions and Core HTTP
+Actions. Authorization, API-key, flow-token and non-discarded cookie headers
+count as presented credentials; the credential-projection proof alone does not
+authenticate a caller. Origin refusals always remain 403. Resource-specific
+concealment and cursor errors keep their existing status codes.
 
 ## What this unlocks
 
@@ -518,3 +535,45 @@ For Deno hosts, enable `"no-legacy-abort"` in `deno.json`'s `unstable` list (or
 pass `--unstable-no-legacy-abort`). Request signals then represent cancellation,
 and successful responses do not trigger the legacy abort warning. See
 [Deno's request abort migration](https://docs.deno.com/runtime/reference/deno_serve_legacy_abort/).
+
+A completed self-logout receipt remains observable with its initiating
+`x-copilotz-credential-proof`, even after the authenticating session is revoked.
+The observation returns only `operation.completed`; retrieve the authorized
+Action result through `/operations/:id/result`. A wrong proof, different tenant,
+other operation or multi-operation selection gains no recovery access. The SDK
+re-admits a single-operation observation once if it is revoked during logout.
+
+### Invalid session cookies
+
+A revoked, expired, unknown or incorrectly signed Action-session cookie does not
+authenticate a request. The facade runs anonymous admission and clears the
+configured cookie using the same name, Path, Domain, Secure, HttpOnly and
+SameSite attributes, with `Max-Age=0`. A newly committed replacement cookie wins
+over clearing, so sign-in can recover in the same browser. Database or key
+service outages remain errors; they do not silently invalidate credentials.
+Duplicate cookies remain `403 duplicate_session_cookie`.
+
+A host that verifies its own session cookies must treat failed verification as
+anonymous, return its normal trusted routing scope with
+`invalidSessionCookie: true`, and omit the invalid session's actor/authority.
+Configure `sessionCookie` to match that host cookie's attributes. The flag is
+trusted adapter output, never a request field. Do not return an early 403 for a
+stale cookie. An independently valid bearer credential may still authenticate
+the request; policy denial for that principal remains 403.
+
+A verified but revoked Action credential is retained internally only for the
+existing proof-bound self-revocation receipt lookup. It cannot authorize a new
+Action, a different operation or a broader observation.
+
+For a valid host-authenticated cookie with the configured name, return
+`invalidSessionCookie: false` alongside the verified authority/actor. This
+prevents the facade from attempting to decode the host's cookie as an Action
+credential. Omit the property when the facade should verify its own
+Action-session token.
+
+Device-session revocation closes that device stream, while the initiating
+proof-bound HTTP operation observation may finish independently. A local Oxian
+host with no admitted worker returns `503 Service Unavailable` and
+`Retry-After: 1`; this is a host availability response, not an authorization
+refusal. Do not replay a potentially executed operation across a worker's
+no-replay boundary; recover its existing receipt using the original proof.

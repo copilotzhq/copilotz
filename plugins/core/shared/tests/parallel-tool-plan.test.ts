@@ -1,10 +1,16 @@
 import { assert, assertEquals } from "@std/assert";
-import { defineAction } from "@copilotz/copilotz/actions";
+import {
+  type ActionContext,
+  ActionError,
+  defineAction,
+} from "@copilotz/copilotz/actions";
 import {
   type AgentResource,
   corePlugin,
   coreToolActionMessageMetadata,
+  coreToolActionMetadata,
   coreToolPlanResultMetadata,
+  trustedCoreToolOrigin,
 } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
@@ -116,6 +122,7 @@ async function waitForIdle(
 async function startRun(
   engine: CopilotzEngine,
   agents: readonly AgentResource[],
+  spaceId?: string,
 ): Promise<string> {
   const collection = (name: string) => {
     const item = engine.collections.get(name);
@@ -140,8 +147,17 @@ async function startRun(
       metadata: {},
     }, {});
   }
+  if (spaceId) {
+    await collection("space").create({ namespace: NAMESPACE }, {
+      id: spaceId,
+      name: "Tool scope",
+      ownerId: "user",
+      memberIds: ["user", "agent-a"],
+    }, {});
+  }
   await collection("thread").create({ namespace: NAMESPACE }, {
     id: "thread",
+    ...(spaceId ? { spaceId } : {}),
     participantIds: ["user", ...agents.map((item) => `agent-${item.id}`)],
     metadata: {},
   }, { identity: { deduplicationId: "thread" } });
@@ -1645,139 +1661,200 @@ for (const generated of [false, true]) {
   });
 }
 
-Deno.test("owner policy refusal of a bound Tool records failure and the agent continues", async () => {
-  let executions = 0, calls = 0, nextTranscript = "";
-  const refused = defineAction({
-    id: "test.refused-tool",
-    execute() {
-      executions++;
-      return "must not execute";
-    },
-  });
-  const testAgent = agent("a", ["refused"]);
-  const plugin = definePlugin({
-    id: "test.refused-tool-plan",
-    version: "1",
-    actions: { refused },
-    resources: {
-      agents: { a: testAgent },
-      tools: {
-        refused: defineTool("refused", refused, {
-          name: "Refused",
-          description: "A policy-bound tool",
-        }),
+for (const mode of ["policy", "execution", "allowed"] as const) {
+  Deno.test(`Tool origin survives app metadata and ${mode} execution settles in the timeline`, async () => {
+    let executions = 0, calls = 0, nextTranscript = "";
+    const refused = defineAction({
+      id: "test.refused-tool",
+      async execute(_input: unknown, context: ActionContext) {
+        executions++;
+        assertEquals(context.action.metadata.appAuthRole, "member");
+        const origin = await trustedCoreToolOrigin(context);
+        assert(origin, "owner-retained tool origin must resolve");
+        assertEquals(origin.threadId, "thread");
+        assertEquals(origin.agentParticipantId, "agent-a");
+        const thread = await context.collections.thread.get({
+          id: origin.threadId,
+        });
+        const space = await context.collections.space.get({
+          id: String(thread?.spaceId),
+        });
+        assertEquals(space?.id, "tool-space");
+        assertEquals("appAuthRole" in origin, false);
+        assert(coreToolActionMetadata(context.action.metadata));
+        const forged = Object.defineProperties({}, {
+          ...Object.getOwnPropertyDescriptors(context),
+          action: {
+            value: {
+              ...context.action,
+              metadata: {
+                ...context.action.metadata,
+                threadId: "another-thread",
+              },
+            },
+            enumerable: true,
+          },
+        }) as ActionContext;
+        assertEquals(await trustedCoreToolOrigin(forged), null);
+        if (mode === "execution") {
+          throw new ActionError("Tool refused", {
+            status: 403,
+            code: "scope_refused",
+          });
+        }
+        return "scope verified";
       },
-      llmConnections: { testModel: { adapter: "test" } },
-    },
-    adapters: {
-      llm: {
-        test: adapterFrom((input) => {
-          if (++calls === 1) {
+    });
+    const testAgent = agent("a", ["refused"]);
+    const plugin = definePlugin({
+      id: "test.refused-tool-plan",
+      version: "1",
+      actions: { refused },
+      resources: {
+        agents: { a: testAgent },
+        tools: {
+          refused: defineTool("refused", refused, {
+            name: "Refused",
+            description: "A policy-bound tool",
+          }),
+        },
+        llmConnections: { testModel: { adapter: "test" } },
+      },
+      adapters: {
+        llm: {
+          test: adapterFrom((input) => {
+            if (++calls === 1) {
+              return {
+                content: [],
+                toolCalls: [{
+                  id: "refused-call",
+                  action: "refused",
+                  input: { privateValue: "refused-input-must-not-persist" },
+                }],
+                attempts: [{ status: "completed" }],
+                finishReason: "tool_calls",
+              };
+            }
+            nextTranscript = JSON.stringify(input.request.messages);
             return {
-              content: [],
-              toolCalls: [{
-                id: "refused-call",
-                action: "refused",
-                input: { privateValue: "refused-input-must-not-persist" },
-              }],
+              content: "continued",
               attempts: [{ status: "completed" }],
-              finishReason: "tool_calls",
             };
-          }
-          nextTranscript = JSON.stringify(input.request.messages);
-          return { content: "continued", attempts: [{ status: "completed" }] };
-        }),
-      },
-    },
-  });
-  const db = await createTestDatabase({
-    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
-  });
-  const registry = createPluginRegistry({ plugins: [corePlugin, plugin] });
-  const policy = { id: "fixture", revision: "1" };
-  const engine = await createCopilotzEngine({
-    session: db,
-    registry,
-    defaultDatabaseSchema: SCHEMA,
-    retryBaseMs: 0,
-    authorization: {
-      policies: {
-        fixture: {
-          revision: "1",
-          sources: [],
-          evaluate: () => ({
-            actions: Object.fromEntries(
-              Object.keys(registry.actions).filter((key) => key !== "refused")
-                .map((key) => [key, {}]),
-            ),
-            collections: Object.fromEntries(
-              Object.keys(registry.collections).map((key) => [key, {}]),
-            ),
-            collectionMutations: Object.fromEntries(
-              Object.entries(registry.collections).map((
-                [key, definition],
-              ) => [key, {
-                create: {},
-                update: {},
-                delete: {},
-                commands: Object.fromEntries(
-                  Object.keys(definition.commands ?? {}).map((
-                    name,
-                  ) => [name, {}]),
-                ),
-              }]),
-            ),
-            operations: { metadata: {} },
           }),
         },
       },
-      collections: Object.fromEntries(
-        Object.keys(registry.collections).map((key) => [key, policy]),
-      ),
-      actions: Object.fromEntries(
-        Object.keys(registry.actions).map((key) => [key, policy]),
-      ),
-    },
+    });
+    const db = await createTestDatabase({
+      url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    });
+    const registry = createPluginRegistry({ plugins: [corePlugin, plugin] });
+    const policy = { id: "fixture", revision: "1" };
+    const engine = await createCopilotzEngine({
+      session: db,
+      registry,
+      defaultDatabaseSchema: SCHEMA,
+      retryBaseMs: 0,
+      authorization: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: [],
+            evaluate: () => ({
+              actionMetadata: {
+                appIdentity: { participantId: "user" },
+                appAuthRole: "member",
+                appTenantAccess: { granted: true },
+                coreConversationAccess: { granted: true },
+                attachedComputerActor: { id: "device" },
+                httpActor: { id: "user" },
+              },
+              actions: Object.fromEntries(
+                Object.keys(registry.actions).filter((key) =>
+                  mode !== "policy" || key !== "refused"
+                )
+                  .map((key) => [key, {}]),
+              ),
+              collections: Object.fromEntries(
+                Object.keys(registry.collections).map((key) => [key, {}]),
+              ),
+              collectionMutations: Object.fromEntries(
+                Object.entries(registry.collections).map((
+                  [key, definition],
+                ) => [key, {
+                  create: {},
+                  update: {},
+                  delete: {},
+                  commands: Object.fromEntries(
+                    Object.keys(definition.commands ?? {}).map((
+                      name,
+                    ) => [name, {}]),
+                  ),
+                }]),
+              ),
+              operations: { metadata: {} },
+            }),
+          },
+        },
+        collections: Object.fromEntries(
+          Object.keys(registry.collections).map((key) => [key, policy]),
+        ),
+        actions: Object.fromEntries(
+          Object.keys(registry.actions).map((key) => [key, policy]),
+        ),
+      },
+    });
+    try {
+      const { withRetainedAuthority } = await import(
+        "../../../../runtime/authorization/binding.ts"
+      );
+      const { testAuthority } = await import(
+        "../../../../runtime/testing/authority.ts"
+      );
+      const root = await withRetainedAuthority(
+        testAuthority(SCHEMA, NAMESPACE),
+        new AbortController().signal,
+        () => startRun(engine, [testAgent], "tool-space"),
+      );
+      await waitForIdle(engine, root, 60000);
+      assertEquals(executions, mode === "policy" ? 0 : 1);
+      assertEquals(calls, 2);
+      const failures =
+        (await db.query<{ body: { status: string; input: unknown } }>(
+          `SELECT body FROM "${SCHEMA}".event_bodies WHERE body->>'actionId'=$1`,
+          [refused.id],
+        )).rows.map((row) => row.body);
+      const terminal = failures.filter((event) =>
+        event.status === "failed" || event.status === "completed"
+      );
+      assertEquals(terminal.length, 1);
+      assertEquals(
+        terminal[0].status,
+        mode === "allowed" ? "completed" : "failed",
+      );
+      if (mode === "policy") {
+        assertEquals(terminal[0].input, null);
+        assert(nextTranscript.includes("Forbidden"));
+      } else {assert(
+          nextTranscript.includes(
+            mode === "allowed" ? "scope verified" : "Tool refused",
+          ),
+        );}
+      const messages = await withRetainedAuthority(
+        testAuthority(SCHEMA, NAMESPACE),
+        new AbortController().signal,
+        () => projectMessages(engine, NAMESPACE, "thread"),
+      );
+      assertEquals(
+        messages.filter((message) => message.sender.participantType === "tool")
+          .length,
+        1,
+      );
+      const status = await engine.operations.get(NAMESPACE, root);
+      assertEquals(status?.state, "completed");
+    } finally {
+      await engine.shutdown();
+      await db.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
+      await db.close();
+    }
   });
-  try {
-    const { withRetainedAuthority } = await import(
-      "../../../../runtime/authorization/binding.ts"
-    );
-    const { testAuthority } = await import(
-      "../../../../runtime/testing/authority.ts"
-    );
-    const root = await withRetainedAuthority(
-      testAuthority(SCHEMA, NAMESPACE),
-      new AbortController().signal,
-      () => startRun(engine, [testAgent]),
-    );
-    await waitForIdle(engine, root, 60000);
-    assertEquals(executions, 0);
-    assertEquals(calls, 2);
-    const failures =
-      (await db.query<{ body: { status: string; input: unknown } }>(
-        `SELECT body FROM "${SCHEMA}".event_bodies WHERE body->>'actionId'=$1`,
-        [refused.id],
-      )).rows.map((row) => row.body);
-    assertEquals(failures.length, 1);
-    assertEquals(failures[0].status, "failed");
-    assertEquals(failures[0].input, null);
-    assert(nextTranscript.includes("Forbidden"));
-    const messages = await withRetainedAuthority(
-      testAuthority(SCHEMA, NAMESPACE),
-      new AbortController().signal,
-      () => projectMessages(engine, NAMESPACE, "thread"),
-    );
-    assertEquals(
-      messages.filter((message) => message.sender.participantType === "tool")
-        .length,
-      1,
-    );
-    const status = await engine.operations.get(NAMESPACE, root);
-    assertEquals(status?.state, "completed");
-  } finally {
-    await engine.shutdown();
-    await db.query(`DROP SCHEMA IF EXISTS "${SCHEMA}" CASCADE`);
-    await db.close();
-  }
-});
+}

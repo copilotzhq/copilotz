@@ -16,7 +16,10 @@ import type {
   CollectionRecord,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
-import type { AgentResource } from "@copilotz/copilotz/core";
+import {
+  type AgentResource,
+  threadAgentRecipients,
+} from "@copilotz/copilotz/core";
 import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import { cloneChannelJson } from "../../authoring/channel-ingress/index.ts";
 import { defineChannelResource } from "../../authoring/channel-resource/index.ts";
@@ -455,17 +458,11 @@ async function existingThreadAgents(
   context: ChannelActionContext,
   threadRecord: CollectionRecord | null,
 ): Promise<readonly ParticipantPlan[]> {
-  if (!threadRecord || !Array.isArray(threadRecord.participantIds)) {
-    return [];
-  }
-  const records = await Promise.all(
-    threadRecord.participantIds.map((id) =>
-      context.collections.participant.get({ id: String(id) })
-    ),
-  );
-  return (records.filter((item): item is CollectionRecord =>
-    item?.participantType === "agent"
-  ).map(existingParticipantPlan));
+  if (!threadRecord) return [];
+  return (await threadAgentRecipients(
+    context.collections.participant,
+    threadRecord,
+  )).map(existingParticipantPlan);
 }
 function uniquePlans(
   plans: readonly ParticipantPlan[],
@@ -855,6 +852,16 @@ async function executeChannelIngress(
             },
           },
         });
+        // An inbound message is activity: the thread moves up recent lists.
+        if (messageVisibility.kind !== "internal") {
+          await transaction.collections.thread.commands.recordMessage({
+            id: threadId,
+            messageId,
+          }, {
+            operationKey: "message:activity",
+            metadata: { core: { threadId } },
+          });
+        }
       }, {
         operationKey: `ingress:${input.id}:commit`,
         identity: {

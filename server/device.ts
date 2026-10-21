@@ -8,6 +8,7 @@ import {
   channelIdentity,
   decodeControl,
   DEVICE_LIMITS,
+  DEVICE_SESSION_REVOKED,
   DEVICE_VERSION,
   type DeviceEnvelope,
   type DeviceSocket,
@@ -16,11 +17,20 @@ import {
   protocolError,
 } from "../runtime/subscriptions/device.ts";
 
+/** Override for raw Fetch hosts that do not install Oxian's portable listener. */
+export type DeviceUpgrade = (request: Request) => {
+  socket: DeviceSocket;
+  response: Response;
+  requestDeadline?: number;
+};
+
+type DeviceSession = SubscriptionTransport & { principalKind?: string };
 export type DeviceSessionOptions = Readonly<{
   /** Resolve session proof to existing authorized read capabilities. Never trust client authority. */
   authenticate(
     credentials: unknown,
-  ): SubscriptionTransport | Promise<SubscriptionTransport>;
+    session: { signal: AbortSignal; revoked(): void },
+  ): DeviceSession | Promise<DeviceSession>;
   maxSubscriptions?: number;
   maxPendingControls?: number;
   maxPendingBytes?: number;
@@ -65,7 +75,8 @@ export function attachDeviceSocket(
   ) throw new RangeError("Invalid device request deadline");
   const channels = new Map<string, Channel>(),
     generations = new Map<string, number>();
-  let transport: SubscriptionTransport | undefined,
+  let credential = new AbortController();
+  let transport: DeviceSession | undefined,
     authenticated = false,
     closed = false;
   let epoch = 0,
@@ -103,6 +114,7 @@ export function attachDeviceSocket(
   const close = () => {
     if (closed) return;
     closed = true;
+    credential.abort();
     epoch++;
     clearInterval(heartbeat);
     clearTimeout(pumpTimer);
@@ -170,6 +182,8 @@ export function attachDeviceSocket(
       throw protocolError("Nonempty session proof required", "forbidden");
     }
     const current = ++epoch;
+    credential.abort();
+    credential = new AbortController();
     authenticated = false;
     transport = undefined;
     clearTimeout(handshakeTimer);
@@ -177,7 +191,21 @@ export function attachDeviceSocket(
     for (const channel of [...channels.values()]) {
       renew(channel, "reauthentication");
     }
-    const next = await options.authenticate(credentials);
+    const next = await options.authenticate(credentials, {
+      signal: credential.signal,
+      revoked() {
+        if (closed || current !== epoch) return;
+        try {
+          control({ t: "session", state: "revoked", code: "session_revoked" });
+        } finally {
+          try {
+            socket.close(DEVICE_SESSION_REVOKED, "Session revoked");
+          } finally {
+            close();
+          }
+        }
+      },
+    });
     if (closed || current !== epoch) return;
     transport = next;
     authenticated = true;
@@ -201,12 +229,22 @@ export function attachDeviceSocket(
     if (!authenticated || !transport) {
       throw protocolError("Device is not authenticated", "forbidden");
     }
+    const refused = (reason: string) =>
+      console.debug("[copilotz/device] Subscription refused", {
+        collection: typeof frame.collection === "string"
+          ? frame.collection.slice(0, 256)
+          : undefined,
+        reason,
+        principalKind: transport?.principalKind ?? "unknown",
+      });
     if (channels.size >= (options.maxSubscriptions ?? DEVICE_LIMITS.channels)) {
+      refused("quota_exceeded");
       control({
         t: "error",
         channel: id,
         generation,
         code: "subscription_capacity_exceeded",
+        reason: "quota_exceeded",
         retryable: false,
       });
       return;
@@ -314,12 +352,31 @@ export function attachDeviceSocket(
       const typed = error as {
         code?: string;
         status?: number;
+        reason?: string;
         retryable?: boolean;
       };
+      const reason =
+        ["query_unsupported", "limit_exceeded", "quota_exceeded"].includes(
+            typed.reason ?? "",
+          )
+          ? typed.reason!
+          : typed.code === "subscription_query_refused"
+          ? "query_unsupported"
+          : typed.code === "subscription_capacity_exceeded"
+          ? "quota_exceeded"
+          : typed.code === "unbound_collection"
+          ? "unbound_collection"
+          : typed.status === 403 || typed.code === "forbidden"
+          ? "forbidden"
+          : error instanceof TypeError
+          ? "query_unsupported"
+          : "unavailable";
+      refused(reason);
       control({
         t: "error",
         channel: id,
         generation,
+        reason,
         code: typed.code ??
           (typed.status === 403 ? "forbidden" : "subscription_failed"),
         retryable: typed.retryable ??

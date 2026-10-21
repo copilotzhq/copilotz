@@ -1,3 +1,4 @@
+import { createDirectoryCommands } from "./directory-command.ts";
 /** Declared, read-only delegation to a directory owner in the same database. */
 import type { AuthenticatedAuthority } from "./authority.ts";
 import type { CollectionPolicyInvocation } from "./intent.ts";
@@ -22,12 +23,14 @@ import {
 import { digestContent } from "../content/digest.ts";
 import { stableStringify } from "../collections/equal.ts";
 
-export type DirectoryReader = Readonly<{
-  get(
-    alias: string,
-    id: string,
-  ): Promise<Readonly<Record<string, unknown>> | null>;
-}>;
+export type DirectoryReader =
+  & import("./directory-command.ts").DirectoryCommands
+  & Readonly<{
+    get(
+      alias: string,
+      id: string,
+    ): Promise<Readonly<Record<string, unknown>> | null>;
+  }>;
 
 export type DatabaseDirectoryRead = Readonly<{
   kind: "database-directory-read";
@@ -98,6 +101,7 @@ export function createDirectoryReader(options: {
     databaseSchema: options.databaseSchema,
   });
   return {
+    ...createDirectoryCommands(options),
     async get(alias, id) {
       const binding = captureCollectionInvocation();
       if (

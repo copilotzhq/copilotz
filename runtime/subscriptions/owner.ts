@@ -1,5 +1,13 @@
+import {
+  compileLiveOrder,
+  type OrderKey,
+  type OrderTimestamps,
+} from "./order.ts";
 import { assertJsonValue } from "../json.ts";
-import { createResolvedCollectionReader } from "../collections/resolved-read.ts";
+import {
+  createResolvedCollectionReader,
+  windowContentOptions,
+} from "../collections/resolved-read.ts";
 import type { ContentResolver } from "../content/resolver.ts";
 import { withRetainedAuthority } from "../authorization/binding.ts";
 import type {
@@ -33,6 +41,7 @@ import type {
 type DataFrame = Extract<SubscriptionFrame, { checkpoint: string }>;
 type Cache = {
   rows: Map<string, CollectionRecord>;
+  ordering: Map<string, OrderTimestamps>;
   seq: string;
   localSeq: string;
   rowBytes: Map<string, number>;
@@ -46,6 +55,8 @@ type State = {
   matches: (row: CollectionRecord) => boolean;
   policyMatches: (row: CollectionRecord) => boolean;
   members: string[];
+  order: ReturnType<typeof compileLiveOrder>;
+  keys: Map<string, OrderKey>;
   filter: CollectionFilter;
   cache: Cache;
   query: CollectionQuery;
@@ -73,6 +84,7 @@ const compare = compareCodePoints;
 const capacity = (message: string) =>
   Object.assign(new RangeError(message), {
     code: "subscription_capacity_exceeded",
+    reason: "quota_exceeded",
   });
 export type SubscriptionLimits = Partial<typeof DEFAULT_SUBSCRIPTION_LIMITS>;
 export const DEFAULT_SUBSCRIPTION_LIMITS = {
@@ -159,17 +171,30 @@ export function createCollectionObserver(
     id: string,
     record: CollectionRecord | null,
   ) => {
-    const direction = state.query.order?.direction === "desc" ? -1 : 1;
-    let lo = 0, hi = state.members.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (compare(state.members[mid], id) * direction < 0) lo = mid + 1;
-      else hi = mid;
+    const position = () => {
+      let lo = 0, hi = state.members.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1, other = state.members[mid];
+        if (
+          state.order.compare(
+            state.keys.get(other)!,
+            state.keys.get(id)!,
+            other,
+            id,
+          ) < 0
+        ) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo;
+    };
+    if (state.keys.has(id)) {
+      state.members.splice(position(), 1);
+      state.keys.delete(id);
     }
-    const included = state.members[lo] === id;
-    const matches = record !== null && state.matches(record);
-    if (included && !matches) state.members.splice(lo, 1);
-    else if (!included && matches) state.members.splice(lo, 0, id);
+    if (record !== null && state.matches(record)) {
+      state.keys.set(id, state.order.key(record, state.cache.ordering.get(id)));
+      state.members.splice(position(), 0, id);
+    }
   };
   const push = (state: State, frame: DataFrame) => {
     const size = bytes(frame);
@@ -245,28 +270,32 @@ export function createCollectionObserver(
       );
     }
     const definition = options.collections[alias];
-    if (!definition) throw new TypeError("Unknown Collection.");
+    if (!definition) {
+      throw Object.assign(new TypeError("Collection is not bound."), {
+        code: "unbound_collection",
+      });
+    }
     const query = structuredClone(input);
-    // id uses deterministic string ordering. Locale-dependent scalar/text queries require
-    // a shared SQL-compatible index; never approximate them in a live selection.
+    if (
+      query.limit !== undefined &&
+      (!Number.isSafeInteger(query.limit) || query.limit < 1 ||
+        query.limit > 1000)
+    ) {
+      throw queryRefused("Subscription row limit exceeded", "limit_exceeded");
+    }
     if (
       query.all !== undefined && !Array.isArray(query.all) ||
       query.after || query.before || query.text || query.include?.length ||
-      query.order &&
-        (query.order.field !== "id" ||
-          ![undefined, "asc", "desc"].includes(query.order.direction)) ||
-      query.limit !== undefined &&
-        (!Number.isSafeInteger(query.limit) || query.limit < 1 ||
-          query.limit > 1000) ||
       Object.keys(query).some((key) =>
         !["filter", "where", "contains", "containsAny", "all", "limit", "order"]
           .includes(key)
       )
     ) {
       throw queryRefused(
-        "Subscription requires a bounded id-ordered Collection query without cursors, search or includes.",
+        "Subscription requires a bounded Collection query without cursors, search or includes.",
       );
     }
+    const order = compileLiveOrder(definition, query);
     const queryMatches = compileLiveFilters(
       [query, ...(query.all ?? [])],
       limits,
@@ -283,9 +312,11 @@ export function createCollectionObserver(
         if (bytes(observation.content) > limits.maxQueryBytes) {
           throw queryRefused(
             "Subscription content options exceed the byte limit",
+            "limit_exceeded",
           );
         }
       } catch (error) {
+        if ((error as { reason?: string }).reason) throw error;
         throw queryRefused(
           error instanceof Error ? error.message : "Invalid content options",
         );
@@ -371,7 +402,7 @@ export function createCollectionObserver(
               change.record ? [change.record] : []
             );
           const resolved = await resolveRows(rows, {
-            content: observation.content,
+            content: windowContentOptions(observation.content),
             signal: observation.signal,
           });
           if (frame.t === "snapshot") {
@@ -547,14 +578,15 @@ export function createCollectionObserver(
           if (caches.size >= limits.maxCollections) {
             throw capacity("Subscription Collection capacity exceeded.");
           }
-          const rows = progressOnly
-            ? []
-            : (await command.transaction.query<NodeRow>(
-              `SELECT id,namespace,data FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT ${
-                limits.maxRows + 1
-              }`,
-              [authority.scope.namespace, definition.name],
-            )).rows.map(mapNode);
+          const rawRows = progressOnly ? [] : (await command.transaction.query<
+            NodeRow & { created_key: string; updated_key: string }
+          >(
+            `SELECT id,namespace,data, (EXTRACT(EPOCH FROM created_at)*1000000)::numeric(30,0)::text AS created_key, (EXTRACT(EPOCH FROM updated_at)*1000000)::numeric(30,0)::text AS updated_key FROM ${tables.nodes} WHERE namespace=$1 AND type=$2 LIMIT ${
+              limits.maxRows + 1
+            }`,
+            [authority.scope.namespace, definition.name],
+          )).rows;
+          const rows = rawRows.map(mapNode);
           if (
             rows.length > limits.maxRows || bytes(rows) > limits.maxCacheBytes
           ) {
@@ -567,6 +599,14 @@ export function createCollectionObserver(
           const shared: Cache = {
             localSeq: ordinal.rows[0].seq,
             rows: new Map(rows.map((r) => [r.id, r])),
+            ordering: new Map(
+              rawRows.map((
+                r,
+              ) => [r.id, {
+                createdAt: r.created_key,
+                updatedAt: r.updated_key,
+              }]),
+            ),
             rowBytes: new Map(rows.map((r) => [r.id, bytes(r) + 1])),
             bytes: bytes(rows),
             seq: "0",
@@ -605,10 +645,16 @@ export function createCollectionObserver(
                 shared.rowBytes.delete(change.id);
                 if (change.record) {
                   shared.rows.set(change.id, change.record);
+                  if (change.ordering) {
+                    shared.ordering.set(change.id, change.ordering);
+                  }
                   const size = bytes(change.record) + 1;
                   shared.rowBytes.set(change.id, size);
                   shared.bytes += size;
-                } else shared.rows.delete(change.id);
+                } else {
+                  shared.rows.delete(change.id);
+                  shared.ordering.delete(change.id);
+                }
                 if (
                   shared.rows.size > limits.maxRows ||
                   shared.bytes > limits.maxCacheBytes
@@ -633,7 +679,13 @@ export function createCollectionObserver(
                 ) continue;
                 if (progressOnly && !change) continue;
                 if (!item.progressOnly && change) {
-                  updateMember(item, change.id, change.record);
+                  try {
+                    updateMember(item, change.id, change.record);
+                  } catch {
+                    item.reader?.stop("reset", "query_unsupported");
+                    forget(item);
+                    continue;
+                  }
                 }
                 const next = select(item);
                 const previous = new Map(item.rows.map((r) => [r.id, r]));
@@ -661,6 +713,9 @@ export function createCollectionObserver(
                   to: item.seq,
                   changes,
                   collectionChanged: Boolean(change),
+                  ...(item.query.order && item.query.order.field !== "id"
+                    ? { order: next.map((row) => row.id) }
+                    : {}),
                 });
               }
             },
@@ -687,6 +742,8 @@ export function createCollectionObserver(
             policyMatches,
             matches: (row) => policyMatches!(row) && queryMatches(row),
             members: [],
+            order,
+            keys: new Map(),
             progressOnly,
             filter,
             cache: selectedCache,
@@ -699,12 +756,25 @@ export function createCollectionObserver(
             reader,
           };
           if (!progressOnly) {
-            state.members = [...selectedCache.rows.values()].filter(
-              state.matches,
-            ).map((row) => row.id)
-              .sort((a, b) =>
-                compare(a, b) * (query.order?.direction === "desc" ? -1 : 1)
+            try {
+              for (const row of selectedCache.rows.values()) {
+                if (state.matches(row)) {
+                  state.keys.set(
+                    row.id,
+                    order.key(row, selectedCache.ordering.get(row.id)),
+                  );
+                  state.members.push(row.id);
+                }
+              }
+              state.members.sort((a, b) =>
+                order.compare(state!.keys.get(a)!, state!.keys.get(b)!, a, b)
               );
+            } catch (error) {
+              admissionError = error;
+              reader.stop("reset", "query_unsupported");
+              forget(state);
+              return;
+            }
           }
           states.add(state);
           selectedCache.states.add(state);

@@ -45,11 +45,17 @@ type Layer = {
   command: string;
   input: unknown;
 };
+/**
+ * The query reads of one URL-opened View and every View it nests. They stay
+ * held until a user gesture releases any of them, which starts them all.
+ */
+type HoldScope = { pending: Map<string, () => void> };
 type ViewNode = {
   kind: string;
   signature: string;
   reference: ViewReference;
   hints: ViewHints;
+  scope: HoldScope | undefined;
   observation: Observation<unknown>;
   output: unknown;
   refresh(): void;
@@ -201,6 +207,8 @@ export async function createBrowserRuntime(
     }
   >();
   const watches = new Set<Watch>();
+  // One scope per URL-opened root reference, stable across re-renders.
+  const holdScopes = new Map<string, HoldScope>();
   const events: ClientEvent[] = [];
   const eventListeners = new Set<(event: ClientEvent) => void>();
   let tracking: Set<string> | undefined;
@@ -441,13 +449,20 @@ export async function createBrowserRuntime(
         rows = rows.slice(0, request.query.limit);
       }
     }
+    const status = local.has(request.collection)
+      ? "ready" as const
+      : entry.live!.status;
+    // A refusal keeps its code, so Views can say what happened.
+    const failure = (status === "stale" || status === "denied") &&
+        entry.live?.error !== undefined
+      ? readFailure(entry.live.error)
+      : undefined;
     return immutable(
       clone({
         value: rows,
-        status: local.has(request.collection)
-          ? "ready" as const
-          : entry.live!.status,
+        status,
         pending,
+        ...(failure ? { error: failure } : {}),
       }),
     );
   }
@@ -681,10 +696,27 @@ export async function createBrowserRuntime(
   }
   Object.freeze(collections);
   Object.freeze(actions);
+  function holdScope(reference: ViewReference): HoldScope {
+    const key = readKey({ collection: "hold", query: { reference } });
+    let scope = holdScopes.get(key);
+    if (!scope) holdScopes.set(key, scope = { pending: new Map() });
+    return scope;
+  }
+  /** One gesture starts every held read of the scope still on screen. */
+  function release(scope: HoldScope, origin: string) {
+    const pending = [...scope.pending];
+    scope.pending.clear();
+    for (const [key, start] of pending) {
+      if (
+        key === origin ||
+        [...watches].some((watch) => watch.dependencies.has(key))
+      ) start();
+    }
+  }
   function readAction(
     alias: string,
     input: unknown,
-    held = false,
+    scope?: HoldScope,
   ): QueryReadState {
     alive();
     const definition = actionDefinitions[alias];
@@ -693,8 +725,13 @@ export async function createBrowserRuntime(
     }
     const key = `query:${readKey({ collection: alias, query: { input } })}`;
     tracking?.add(key);
-    if (held && !queries.has(key)) {
-      // URL state chose this View, so its input waits for a user gesture.
+    if (scope && !queries.has(key)) {
+      // URL state chose this View (or an ancestor), so its input waits for a
+      // user gesture; that gesture releases the whole scope.
+      scope.pending.set(key, () => {
+        if (!queries.has(key)) readAction(alias, input);
+        notify(key);
+      });
       return {
         value: undefined,
         status: "held",
@@ -706,8 +743,13 @@ export async function createBrowserRuntime(
               "Views cannot start a held query during render",
             );
           }
-          readAction(alias, input);
-          notify(key);
+          if (!scope.pending.has(key)) {
+            scope.pending.set(key, () => {
+              if (!queries.has(key)) readAction(alias, input);
+              notify(key);
+            });
+          }
+          release(scope, key);
         },
       };
     }
@@ -793,9 +835,11 @@ export async function createBrowserRuntime(
           }).catch((cause) => {
             if (signal.aborted || generation !== this.generation) return;
             const error = readFailure(cause);
+            // One attempt, no reconnect: the read stays failed until a
+            // refresh, unlike a live read, which recovers by itself.
             this.value = {
               value: undefined,
-              status: error.kind === "denied" ? "denied" : "stale",
+              status: error.kind === "denied" ? "denied" : "failed",
               pending: false,
               error,
             };
@@ -826,13 +870,17 @@ export async function createBrowserRuntime(
       refresh: () => query!.refresh(),
     };
   }
-  function context(hints: ViewHints = {}, held = false): BrowserViewContext {
+  function context(
+    hints: ViewHints = {},
+    scope?: HoldScope,
+    held = false,
+  ): BrowserViewContext {
     return {
       collections,
       actions,
       adapters: grantedAdapters,
-      readAction: held
-        ? (alias, input) => readAction(alias, input, true)
+      readAction: scope && held
+        ? (alias, input) => readAction(alias, input, scope)
         : (alias, input) => readAction(alias, input),
       resources: immutable(clone(resources)),
       scope: immutable(clone(options.scope)),
@@ -847,7 +895,8 @@ export async function createBrowserRuntime(
         if (next.region !== undefined || next.source !== undefined) {
           return options.show?.(reference, next);
         }
-        return render(reference, next);
+        // A nested View inherits the hold of a URL-opened ancestor.
+        return render(reference, next, scope);
       },
     };
   }
@@ -864,10 +913,14 @@ export async function createBrowserRuntime(
       },
     };
   }
-  function render(reference: ViewReference, hints: ViewHints = {}): unknown {
+  function render(
+    reference: ViewReference,
+    hints: ViewHints = {},
+    scope?: HoldScope,
+  ): unknown {
     alive();
     if (!activeWatch || !options.renderer?.view) {
-      return evaluateView(reference, hints);
+      return evaluateView(reference, hints, scope);
     }
     const slot = activeWatch.cursor++;
     const kind = readKey({
@@ -886,12 +939,13 @@ export async function createBrowserRuntime(
         signature,
         reference: clone(reference),
         hints: clone(hints),
+        scope,
         observation: undefined!,
         output: undefined,
         refresh() {},
       };
       next.observation = observeTracked(
-        () => evaluateView(next.reference, next.hints),
+        () => evaluateView(next.reference, next.hints, next.scope),
         (watch) => {
           next.refresh = () => watch.run();
         },
@@ -902,10 +956,11 @@ export async function createBrowserRuntime(
       );
       activeWatch.children[slot] = next;
       node = next;
-    } else if (node.signature !== signature) {
+    } else if (node.signature !== signature || node.scope !== scope) {
       node.signature = signature;
       node.reference = clone(reference);
       node.hints = clone(hints);
+      node.scope = scope;
       node.refresh();
     }
     return node.output;
@@ -913,6 +968,7 @@ export async function createBrowserRuntime(
   function evaluateView(
     reference: ViewReference,
     hints: ViewHints = {},
+    inherited?: HoldScope,
   ): unknown {
     alive();
     const mode = hints.mode ?? "full";
@@ -932,7 +988,11 @@ export async function createBrowserRuntime(
     if (fromUrl && (!view.url || !urlReference(reference))) {
       throw new TypeError(`View '${view.id}' cannot be opened from a URL`);
     }
-    const ctx = context(hints, fromUrl && view.url === true);
+    // Views nested in a URL-opened View share its hold (fail closed); only a
+    // View declaring `url: { queries: "run" }` runs its own reads at once.
+    const scope = inherited ?? (fromUrl ? holdScope(reference) : undefined);
+    const runs = typeof view.url === "object" && view.url.queries === "run";
+    const ctx = context(hints, scope, Boolean(scope) && !runs);
     rendering++;
     try {
       const output = view.render(
@@ -1043,7 +1103,8 @@ export async function createBrowserRuntime(
   const runtime = {
     collections,
     actions,
-    render,
+    render: (reference: ViewReference, hints?: ViewHints) =>
+      render(reference, hints),
     observe,
     get events(): readonly ClientEvent[] {
       return [...events];

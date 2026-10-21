@@ -83,6 +83,8 @@ export const threadCollection: CollectionDefinition = defineCollection({
         type: "array",
         items: { type: "string" },
       },
+      /** The newest message recorded on the thread (`recordMessage`). */
+      lastMessageId: { type: "string" },
       activeMessageBranch: {
         type: "object",
         additionalProperties: false,
@@ -140,6 +142,25 @@ export const threadCollection: CollectionDefinition = defineCollection({
     },
   },
   commands: {
+    /**
+     * A new message on the thread: recording it moves the thread's
+     * `updatedAt`, so lists ordered by recent activity reorder live. Its own
+     * event keeps processors of `thread.updated` out of every message.
+     */
+    recordMessage: {
+      event: "thread.message-recorded",
+      input: {
+        type: "object",
+        additionalProperties: false,
+        properties: { messageId: { type: "string", minLength: 1 } },
+        required: ["messageId"],
+      },
+      mutate({ input }) {
+        return {
+          set: { lastMessageId: (input as { messageId: string }).messageId },
+        };
+      },
+    },
     addParticipant: {
       mutate({ current, input }) {
         const participantId = typeof (input as Record<string, unknown>)

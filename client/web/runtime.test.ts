@@ -689,3 +689,27 @@ test("a cancellation requested before receipt surfaces a later cancellation fail
   await action.result();
   runtime.dispose();
 });
+
+test("a refused live read keeps the refusal code in its read state", async () => {
+  for (
+    const code of [
+      "subscription_query_refused",
+      "subscription_capacity_exceeded",
+    ]
+  ) {
+    const runtime = await createBrowserRuntime({
+      plugins: [counter],
+      live: {
+        observe: () =>
+          Promise.reject(
+            Object.assign(new Error("Refused."), { code, retryable: false }),
+          ),
+      },
+    });
+    const read = runtime.observe((ctx) => ctx.collections.counter.list());
+    await tick();
+    assert.equal(read.getSnapshot().status, "stale");
+    assert.equal(read.getSnapshot().error?.code, code);
+    runtime.dispose();
+  }
+});

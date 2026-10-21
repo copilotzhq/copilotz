@@ -40,6 +40,8 @@ export type LiveQueryOptions =
   }>;
 export type LiveQuery = Readonly<{
   status: "loading" | "ready" | "stale" | "denied";
+  /** Why the query is stale or denied (it carries the refusal `code`). */
+  error: unknown;
   rows: readonly CollectionRecord[];
   deltas: readonly SubscriptionDelta[];
   checkpoint: string | undefined;
@@ -96,6 +98,7 @@ export function createLiveQuery(
     ? AbortSignal.any([options.signal, abort.signal])
     : abort.signal;
   let status: LiveQuery["status"] = options.initial ? "ready" : "loading";
+  let failure: unknown;
   const notify = (frame?: SubscriptionFrame) => {
     try {
       options.onState?.(frame);
@@ -171,10 +174,22 @@ export function createLiveQuery(
         } else records.delete(change.id);
         previous = change;
       }
-      next = [...records.values()].sort((a, b) =>
-        (compareCodePoints(a.id, b.id)) *
-        (query.order?.direction === "desc" ? -1 : 1)
-      );
+      if (query.order && query.order.field !== "id") {
+        if (
+          !Array.isArray(frame.order) || frame.order.length !== records.size ||
+          new Set(frame.order).size !== records.size || frame.order.some((id) =>
+            !records.has(id)
+          )
+        ) {
+          throw new TypeError("Invalid ordered subscription window.");
+        }
+        next = frame.order.map((id) => records.get(id)!);
+      } else {
+        next = [...records.values()].sort((a, b) =>
+          compareCodePoints(a.id, b.id) *
+          (query.order?.direction === "desc" ? -1 : 1)
+        );
+      }
     }
     // Handler arguments cannot mutate the retained authoritative state.
     await options.onChange?.(structuredClone(next), structuredClone(frame));
@@ -189,6 +204,7 @@ export function createLiveQuery(
     if (frame.t === "snapshot") resync = false;
     settle();
     status = "ready";
+    failure = undefined;
     attached?.applied?.(checkpoint);
     notify(frame);
     return true;
@@ -224,6 +240,7 @@ export function createLiveQuery(
           if (!reset) return;
         } catch (error) {
           if (applying) resync = true;
+          failure = error;
           if (
             ["revoked", "forbidden"].includes(
               (error as { code?: string }).code ?? "",
@@ -269,6 +286,9 @@ export function createLiveQuery(
   return {
     get status() {
       return status;
+    },
+    get error() {
+      return failure;
     },
     get rows() {
       return structuredClone(rows);

@@ -103,3 +103,111 @@ owner-issued IDs and cannot use that reserved prefix.
 dispatch targets are qualified in the shard. Admission binds the namespace to
 the authenticated principal kind, and the relay filters both sending and
 receiving.
+
+## Round 2: ordered windows, session outcomes and portable hosting
+
+Current merged code: owner admission (`runtime/subscriptions/owner.ts:255`) only
+allows ID ordering, and SDK delta application (`client/live-query.ts:174`) sorts
+IDs. SQL ordering (`runtime/collections/query.ts:42`) derives typed fields from
+the Collection schema. Physical timestamp columns can retain microseconds, so
+live ordering must use SQL-produced keys instead of parsing public row dates.
+The projection statement (`runtime/collections/reducer.ts:545`) already writes
+those columns in the same statement. Device hosting currently relies on a
+private Request WeakMap (`runtime/subscriptions/hosting.ts:14`), which CLI
+workers cannot populate. Authorization observes individual channels, but device
+authentication has no session-wide observer (`server/facade.ts:673`). Operation
+observation (`server/operations.ts:289`) does not use the completed logout
+receipt exception.
+
+Target:
+
+- Admit schema-declared scalar ordering and physical createdAt/updatedAt,
+  ascending/descending, with ID in the same direction. Match PostgreSQL null
+  placement; text ordering is explicit C/code point. Initial bounded cache reads
+  physical timestamp keys. Existing projection statements return exact timestamp
+  keys into owner push without another SQL round trip. Each state
+  removes/reinserts only the changed ID in its sorted members; refill uses the
+  bounded cache, with no database read or full predicate rescan on commit.
+  Ordered batches carry the selected IDs so SDKs preserve the owner's exact
+  order without reinterpreting timestamp precision or schema types.
+- Authorize only the completed self-revocation operation using the initiator's
+  credential-proof digest and durable clear effect. No permission for another
+  operation, mutation, record discovery, or active observation follows from that
+  receipt. Recheck this receipt after an admission refusal to cover revocation
+  committing between lookup and admission; preserve result policy on retry.
+  Preserve ordinary operation policy for all other paths.
+- Retain a socket-level authority observer, release it on
+  close/reauthentication, and close revoked sessions with a terminal session
+  notice and code 4401. Expose a small device auth-event subscription in
+  client/, without changing client/web.
+- Stable, safe subscription refusal reasons and debug diagnostics contain only
+  collection, principal kind and reason; never query values or credential data.
+- HTTP authorization refusal maps absent credentials to 401, supplied-but-denied
+  credentials to 403, including Core HTTP routes through the shared facade.
+- Default to Oxian 0.23.0 upgradeWebSocket. Delete the private request registry
+  and adapter bridge; Oxian owns listener socket tracking/drain. Retain explicit
+  upgradeDevice for raw Fetch hosts/tests that do not install Oxian hosting.
+  Origin admission remains before any upgrade. Local deno.json links are only a
+  development override, to be stripped before commit/release.
+
+Verification: live windows equal list() after inserts, ties, ordering updates,
+deletes and refill on both backends, including message where threadId, createdAt
+desc, limit 100. Two real tabs prove logout result recovery, peer socket closure
+and client auth event; negative proofs/other operations remain refused. Test
+safe refusal diagnostics and HTTP 401/403. Run an actual Oxian CLI start fixture
+with both worker transports, checking snapshot/101 and foreign-Origin refusal.
+Run focused tests and both full backend suites, check/fmt/lint delta/type guard.
+
+Risks: ordered ID arrays still move bounded entries but never scan predicates
+across unchanged rows. New batch ordering is a protocol addition for updated
+clients. Oxian must release 0.23.0 before Copilotz. Deno's native WebSocket
+assembles messages before delivery, so only Node can bound pre-delivery
+reassembly; both retain device post-delivery limits.
+
+## Round 3 — stale cookies and observation transport failures
+
+Current: `server/authentication.ts:174-193` verifies a cookie token but does not
+normalize failed verification or revoked owner-session rows to anonymous host
+authority. `server/facade.ts:601-609` classifies the raw cookie header as a
+credential. `runtime/subscriptions/predicate.ts:211-230` admits scalar `where`
+values only, while `plugins/core/views/reads.ts:176` supplies an ID `in` object;
+`runtime/collections/query.ts:414-427` also needs the same normalization.
+
+Target: discard invalid session cookies at authentication, retain the host's
+anonymous authority, and clear the configured cookie on every resulting HTTP
+response, including 401. Duplicate configured cookies remain a hard refusal.
+Host cookie adapters explicitly report discarded credentials with anonymous
+scope; they must not turn credential verification failures into access-denied
+responses. Cryptographically verified self-revocation receipt recovery remains
+restricted to its original proof and operation, including session transfer.
+Fresh credential projection takes precedence over cookie clearing. The trusted
+host cookie result is `invalidSessionCookie: true` for invalid (anonymous),
+`false` for verified by the host, and omitted for owner token verification.
+
+Normalize ID equality/membership into the existing bounded predicate compiler
+for SQL, live admission and client matching. Compile membership constants once;
+retain 32-value/node/byte limits, incremental commit evaluation and C ordering.
+Test the exact 32-participant query through the real owner and compare `list()`
+after inserts, updates and deletes on both backends.
+
+Reproduce the observed logout 500 and page-load 503 through the real product
+Oxian host with local generated secrets and `--no-llm`. Capture response bodies
+and correlate transport teardown with worker operations. Fix the responsible
+layer; any upstream change is delivered as a patch with a bounded regression. Do
+not retry potentially executed work across the no-replay boundary.
+
+Validation: stale revoked/expired/unknown/bad-signature cookies, anonymous
+sign-in, principal-required 401 and matching clearing attributes; duplicate
+cookies and all proof-bound receipt negatives. Real hosted two-tab logout and
+repeated page loads, targeted backend tests and both full suites, docs and
+gates.
+
+Transport evidence: validated credit can arrive after pending work is removed,
+either discarded at validation or queued for delivery before completion. The
+hypervisor rejected both. Also, an aborted unsent per-stream frame was treated
+as whole-connection failure. Honor validated credit and isolate pre-send
+cancellation. These changes are an upstream patch, preserving protocol
+validation and the no-replay boundary. The product stale-cookie page-load probe
+reproduced observe 503 (plain `Service Unavailable`, Retry-After 1) on every
+attempt; patched authentication and transport returned completed proof-bound
+receipts on every attempt.

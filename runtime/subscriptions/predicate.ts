@@ -2,6 +2,7 @@ import { compileCollectionFilters } from "../collections/query.ts";
 import {
   type CollectionPredicate,
   compareCodePoints,
+  idWherePredicate,
 } from "../collections/predicate.ts";
 import { stableStringify } from "../collections/equal.ts";
 import type {
@@ -9,8 +10,11 @@ import type {
   CollectionRecord,
 } from "../collections/types.ts";
 
-export const queryRefused = (message: string) =>
-  Object.assign(new TypeError(message), { code: "subscription_query_refused" });
+export const queryRefused = (message: string, reason = "query_unsupported") =>
+  Object.assign(new TypeError(message), {
+    code: "subscription_query_refused",
+    reason,
+  });
 export type LivePredicateLimits = {
   maxPredicateNodes: number;
   maxPredicateValues: number;
@@ -59,7 +63,10 @@ export function compileLiveFilters(
   let nodes = 0;
   const count = () => {
     if (++nodes > limits.maxPredicateNodes) {
-      throw queryRefused("Subscription predicate node limit exceeded");
+      throw queryRefused(
+        "Subscription predicate node limit exceeded",
+        "limit_exceeded",
+      );
     }
   };
   const at = (field: string) => {
@@ -118,7 +125,10 @@ export function compileLiveFilters(
     if ("in" in p || "overlaps" in p) {
       const values = "in" in p ? p.in : p.overlaps;
       if (values.length > limits.maxPredicateValues) {
-        throw queryRefused("Subscription predicate value limit exceeded");
+        throw queryRefused(
+          "Subscription predicate value limit exceeded",
+          "limit_exceeded",
+        );
       }
       const constants = new Set(values.map(stableStringify));
       return "in" in p
@@ -160,7 +170,12 @@ export function compileLiveFilters(
     if (
       new TextEncoder().encode(JSON.stringify(filters)).length >
         limits.maxQueryBytes
-    ) throw queryRefused("Subscription filter bytes exceeded");
+    ) {
+      throw queryRefused(
+        "Subscription filter bytes exceeded",
+        "limit_exceeded",
+      );
+    }
     // PostgreSQL text/jsonb cannot represent NUL or unpaired UTF-16 surrogates.
     const unicode = (value: unknown): void => {
       if (
@@ -192,6 +207,11 @@ export function compileLiveFilters(
       }
       const matches: Match[] = filter.filter ? [predicate(filter.filter)] : [];
       for (const [field, value] of Object.entries(filter.where ?? {})) {
+        const id = idWherePredicate(field, value);
+        if (id) {
+          matches.push(predicate(id));
+          continue;
+        }
         count();
         if (
           !scalarField(field) ||
@@ -217,6 +237,9 @@ export function compileLiveFilters(
     });
     return (row) => compiled.every((match) => match(row));
   } catch (error) {
+    if ((error as { code?: string }).code === "subscription_query_refused") {
+      throw error;
+    }
     throw queryRefused(
       error instanceof Error ? error.message : "Invalid live filter",
     );

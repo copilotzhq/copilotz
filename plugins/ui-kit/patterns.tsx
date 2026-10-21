@@ -1,143 +1,689 @@
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
 /** @jsxFrag React.Fragment */
-// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
+/** Screen layout, one read-state vocabulary, metrics and resource lists. @module */
 import * as React from "react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "./components/card.tsx";
+import { ArrowLeft, Search } from "lucide-react";
 import { Button } from "./components/button.tsx";
+import { Input } from "./components/input.tsx";
+import { Spinner } from "./components/misc.tsx";
+import { EmptyState, Notice } from "./components/feedback.tsx";
 import { cn } from "./utils.ts";
+import { formatRelative } from "../../client/web/format.ts";
 import type { ReadState } from "../../client/web/types.ts";
+
+/** A View body: a title row with actions, then content, in full or panel density. */
 export function Screen(
-  { title, density = "full", children, actions }: {
+  { title, description, density = "full", children, actions, className }: {
     title: string;
+    description?: React.ReactNode;
     density?: string;
     children?: React.ReactNode;
     actions?: React.ReactNode;
+    className?: string;
   },
 ): React.ReactElement | null {
+  const panel = density === "panel";
   return (
     <section
       aria-label={title}
       data-density={density}
       className={cn(
-        "flex min-h-0 flex-col gap-4",
-        density === "panel" ? "p-3 text-sm" : "p-6",
+        "flex min-h-0 w-full flex-col",
+        panel ? "gap-3 p-4 text-sm" : "mx-auto max-w-5xl gap-5 p-4 sm:p-6",
+        className,
       )}
     >
-      <header className="flex items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">{title}</h1>
-        {actions}
+      <header className="flex min-w-0 items-start justify-between gap-3">
+        <div className="grid min-w-0 gap-0.5">
+          <h1
+            className={cn(
+              "truncate font-semibold tracking-tight",
+              panel ? "text-sm" : "text-lg",
+            )}
+          >
+            {title}
+          </h1>
+          {description && (
+            <p className="text-muted-foreground text-sm">{description}</p>
+          )}
+        </div>
+        {actions && (
+          <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+        )}
       </header>
       {children}
     </section>
   );
 }
-/** A held query read (opened from a URL) starts only from this button. */
-export function ReadStatus(
-  { state }: { state: ReadState & { refresh?(): void } },
-): React.ReactElement | null {
-  if (state.status === "ready") {
-    return state.pending
-      ? <p role="status" className="text-muted-foreground">Saving…</p>
-      : null;
+
+type AnyRead = ReadState & { refresh?(): void };
+
+/** The stable reasons a live read is refused (device `reason`). */
+export type RefusalReason =
+  | "query_unsupported"
+  | "limit_exceeded"
+  | "quota_exceeded"
+  | "forbidden"
+  | "unbound_collection"
+  | "unavailable";
+
+const refusalCopy: Record<
+  RefusalReason,
+  {
+    tone: "info" | "warning" | "error";
+    title: string;
+    body: string;
+    retry: boolean;
   }
-  if (state.status === "held") {
-    return (
-      <div
-        role="status"
-        className="flex flex-wrap items-center gap-2 text-muted-foreground"
+> = {
+  query_unsupported: {
+    tone: "warning",
+    title: "Live updates unavailable",
+    body: "These {noun} can't be followed live here. Reload to see the latest.",
+    retry: true,
+  },
+  limit_exceeded: {
+    tone: "warning",
+    title: "Too much to follow live",
+    body:
+      "There are more {noun} here than live updates can follow. Narrow the view, or reload to see the latest.",
+    retry: true,
+  },
+  quota_exceeded: {
+    tone: "warning",
+    title: "Too many live views open",
+    body: "Close a panel or another tab of this app, then try again.",
+    retry: true,
+  },
+  forbidden: {
+    tone: "error",
+    title: "No access to these {noun}",
+    body:
+      "Ask an owner to share them with you, or sign in with another account.",
+    retry: false,
+  },
+  unbound_collection: {
+    tone: "info",
+    title: "Not available here",
+    body: "This app doesn't offer these {noun}.",
+    retry: false,
+  },
+  unavailable: {
+    tone: "error",
+    title: "Couldn't load {noun}",
+    body: "Something went wrong. Try again in a moment.",
+    retry: true,
+  },
+};
+
+/** A refusal's reason, from the device `reason` or the older error codes. */
+export function refusalReason(
+  error: ReadState["error"],
+): RefusalReason | undefined {
+  const reason = error?.reason ??
+    (error?.code === "subscription_capacity_exceeded"
+      ? "quota_exceeded"
+      : error?.code === "subscription_query_refused"
+      ? "query_unsupported"
+      : error?.code === "unbound_collection"
+      ? "unbound_collection"
+      : undefined);
+  return reason && reason in refusalCopy ? reason as RefusalReason : undefined;
+}
+
+/**
+ * One vocabulary for every read: loading, empty, reconnecting, refused,
+ * failed, missing and held, plus a refused live read's reason
+ * (`query_unsupported`, `limit_exceeded`, `quota_exceeded`, `forbidden`,
+ * `unbound_collection`, `unavailable`). Renders nothing for a ready read that
+ * has data.
+ * A `stale` read recovers by itself, so it stays quiet ("Reconnecting…" after
+ * a moment, or nothing with `transient="quiet"`). A `failed` read (an Action
+ * read whose attempt failed) does not: it says so and offers Try again, which
+ * calls the read's `refresh()`.
+ * `noun` names what is read ("conversations"); `empty` marks a ready, empty
+ * read and shows `emptyTitle`, `emptyHint` and `emptyAction`.
+ */
+export function ReadStatus(
+  {
+    state,
+    noun = "content",
+    empty = false,
+    emptyTitle,
+    emptyHint,
+    emptyAction,
+    compact = false,
+    transient = "notice",
+  }: {
+    state: AnyRead;
+    noun?: string;
+    empty?: boolean;
+    emptyTitle?: string;
+    emptyHint?: React.ReactNode;
+    emptyAction?: React.ReactNode;
+    compact?: boolean;
+    /**
+     * A reconnecting read (stale, nothing refused): `notice` shows one quiet
+     * line after a moment; `quiet` shows nothing, for Views covered by the
+     * shell's own indicator.
+     */
+    transient?: "notice" | "quiet";
+  },
+): React.ReactElement | null {
+  const retry = state.refresh
+    ? (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => state.refresh?.()}
       >
-        <span>Opened from a link. Load this content to continue.</span>
-        {state.refresh && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => state.refresh?.()}
-          >
-            Load
-          </Button>
-        )}
-      </div>
+        Try again
+      </Button>
+    )
+    : undefined;
+  // A refused read: say what happened and what helps, never a raw code.
+  const refusal = state.status === "stale" || state.status === "failed" ||
+      state.status === "denied"
+    ? refusalReason(state.error)
+    : undefined;
+  if (refusal) {
+    const copy = refusalCopy[refusal];
+    return (
+      <Notice
+        tone={copy.tone}
+        title={copy.title.replace("{noun}", noun)}
+        action={copy.retry ? retry : undefined}
+      >
+        {copy.body.replace("{noun}", noun)}
+      </Notice>
     );
   }
-  const labels = {
-    loading: "Loading…",
-    missing: "Nothing here yet",
-    stale: "Connection interrupted. Showing saved data.",
-    denied: "This content is unavailable.",
-  };
+  switch (state.status) {
+    case "ready":
+      if (state.pending) {
+        return (
+          <p
+            role="status"
+            className="text-muted-foreground flex items-center gap-2 text-xs"
+          >
+            <Spinner className="size-3" /> Saving…
+          </p>
+        );
+      }
+      if (!empty) return null;
+      return compact
+        ? (
+          <p role="status" className="text-muted-foreground py-2 text-sm">
+            {emptyTitle ?? `No ${noun} yet.`}
+          </p>
+        )
+        : (
+          <EmptyState
+            title={emptyTitle ?? `No ${noun} yet`}
+            action={emptyAction}
+          >
+            {emptyHint}
+          </EmptyState>
+        );
+    case "loading":
+      return (
+        <p
+          role="status"
+          className={cn(
+            "text-muted-foreground flex items-center gap-2 text-sm",
+            compact ? "py-2" : "justify-center py-8",
+          )}
+        >
+          <Spinner /> Loading {noun}…
+        </p>
+      );
+    case "held":
+      return (
+        <Notice
+          title="Opened from a link"
+          action={state.refresh && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => state.refresh?.()}
+            >
+              Load
+            </Button>
+          )}
+        >
+          Load this content to continue.
+        </Notice>
+      );
+    case "failed":
+      // Nothing retries a failed attempt by itself; Try again does.
+      return <Failed noun={noun} error={state.error} retry={retry} />;
+    case "stale":
+      if (state.error && state.error.kind !== "unavailable") {
+        return <Failed noun={noun} error={state.error} retry={retry} />;
+      }
+      // A brief reconnect keeps the data on screen and says nothing; a long
+      // one shows one quiet line (the shell shows its own indicator).
+      return transient === "quiet" ? null : <Reconnecting compact={compact} />;
+    case "denied":
+      return (
+        <Notice tone="error" title={`No access to these ${noun}`}>
+          Ask an owner to share them with you, or sign in with another account.
+        </Notice>
+      );
+    case "missing":
+      return (
+        <Notice title="Not found">
+          This {noun} no longer exists or isn't shared with you.
+        </Notice>
+      );
+  }
+}
+
+function Failed(
+  { noun, error, retry }: {
+    noun: string;
+    error: ReadState["error"];
+    retry: React.ReactNode;
+  },
+): React.ReactElement {
+  return (
+    <Notice tone="error" title={`Couldn't load ${noun}`} action={retry}>
+      {error?.kind === "invalid"
+        ? "The request was not accepted. Try again, or reload the page."
+        : "Something went wrong. Try again in a moment."}
+    </Notice>
+  );
+}
+
+/** True once `active` has stayed true for `ms`; false as soon as it ends. */
+export function useSustained(active: boolean, ms = 2500): boolean {
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => {
+    if (!active) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+  return active && shown;
+}
+
+/** Whether a read is only reconnecting: stale, with nothing refused. */
+export function isReconnecting(state: ReadState): boolean {
+  return state.status === "stale" &&
+    (!state.error || state.error.kind === "unavailable") &&
+    !refusalReason(state.error);
+}
+
+function Reconnecting(
+  { compact }: { compact: boolean },
+): React.ReactElement | null {
+  const shown = useSustained(true);
+  if (!shown) return null;
   return (
     <p
-      role={state.status === "denied" ? "alert" : "status"}
-      className="text-muted-foreground"
+      role="status"
+      className={cn(
+        "text-muted-foreground flex items-center gap-2 text-xs",
+        compact ? "py-1" : "justify-center py-2",
+      )}
     >
-      {labels[state.status]}
+      <Spinner className="size-3" /> Reconnecting…
     </p>
   );
 }
-export function Metric(
-  { label, value }: { label: string; value: React.ReactNode },
+
+/**
+ * One unobtrusive connection indicator for a whole screen: it appears only
+ * after the connection has been away for a moment, so brief reconnects never
+ * flash.
+ */
+export function ConnectionStatus(
+  { reconnecting, className }: { reconnecting: boolean; className?: string },
 ): React.ReactElement | null {
+  const shown = useSustained(reconnecting);
+  if (!shown) return null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{label}</CardTitle>
-      </CardHeader>
-      <CardContent className="text-2xl font-semibold">{value}</CardContent>
-    </Card>
+    <span
+      role="status"
+      data-slot="connection-status"
+      className={cn(
+        "text-muted-foreground bg-muted inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs",
+        className,
+      )}
+    >
+      <Spinner className="size-3" /> Reconnecting…
+    </span>
   );
 }
+
+/** A labelled figure. */
+export function Metric(
+  { label, value, hint }: {
+    label: string;
+    value: React.ReactNode;
+    hint?: React.ReactNode;
+  },
+): React.ReactElement | null {
+  return (
+    <div
+      data-slot="metric"
+      className="bg-card grid gap-1 rounded-lg border p-4 shadow-soft"
+    >
+      <p className="text-muted-foreground text-xs font-medium">{label}</p>
+      <p className="text-2xl font-semibold tracking-tight tabular-nums">
+        {value}
+      </p>
+      {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
+    </div>
+  );
+}
+
+/** Label and value pairs; values use the table's cell formatting. */
+export function DetailList(
+  { items, className }: {
+    items: readonly (readonly [label: string, value: unknown])[];
+    className?: string;
+  },
+): React.ReactElement {
+  return (
+    <dl
+      data-slot="detail-list"
+      className={cn(
+        "bg-card grid grid-cols-[minmax(6rem,auto)_1fr] gap-x-6 rounded-lg border text-sm shadow-soft",
+        className,
+      )}
+    >
+      {items.map(([label, value], index) => (
+        <div
+          key={label}
+          className={cn(
+            "col-span-2 grid grid-cols-subgrid items-baseline px-4 py-2.5",
+            index > 0 && "border-t",
+          )}
+        >
+          <dt className="text-muted-foreground">{label}</dt>
+          <dd className="min-w-0 break-words">
+            {React.isValidElement(value) ? value : cell(value)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** "updatedAt" → "Updated at", "totalCostUsd" → "Total cost usd". */
+export function humanize(field: string): string {
+  const words = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(
+    /[_-]+/g,
+    " ",
+  ).trim().toLowerCase();
+  return words ? words[0].toUpperCase() + words.slice(1) : field;
+}
+
+const isoTime =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+function cell(value: unknown): React.ReactNode {
+  if (value === null || value === undefined || value === "") {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  if (typeof value === "string" && isoTime.test(value)) {
+    return <time dateTime={value} title={value}>{formatRelative(value)}</time>;
+  }
+  if (typeof value === "number") {
+    return <span className="tabular-nums">{value.toLocaleString()}</span>;
+  }
+  if (typeof value === "object") {
+    return (
+      <code className="text-muted-foreground text-xs">
+        {JSON.stringify(value)}
+      </code>
+    );
+  }
+  return String(value);
+}
+
+/** Records as a table; a row with `open` is a button that opens it. */
 export function ResourceTable(
-  { rows, columns, open }: {
+  { rows, columns, open, labels = {}, emptyTitle = "No records yet" }: {
     rows: readonly Record<string, unknown>[];
     columns: readonly string[];
     open?: (row: Record<string, unknown>) => void;
+    labels?: Readonly<Record<string, string>>;
+    emptyTitle?: string;
   },
 ): React.ReactElement | null {
-  if (!rows.length) {
-    return <p className="text-muted-foreground">No records yet.</p>;
-  }
+  if (!rows.length) return <EmptyState title={emptyTitle} />;
+  // Figures align right, so digits line up.
+  const numeric = new Set(
+    columns.filter((column) =>
+      rows.every((row) =>
+        typeof row[column] === "number" || row[column] === undefined ||
+        row[column] === null
+      ) && rows.some((row) => typeof row[column] === "number")
+    ),
+  );
   return (
-    <div className="overflow-x-auto rounded-md border">
+    <div className="bg-card overflow-x-auto rounded-lg border shadow-soft">
       <table className="w-full text-left text-sm">
-        <thead className="bg-muted">
+        <thead className="bg-muted/60 text-muted-foreground text-xs">
           <tr>
             {columns.map((column) => (
-              <th key={column} className="p-3 font-medium">{column}</th>
+              <th
+                key={column}
+                scope="col"
+                className={cn(
+                  "px-3 py-2 font-medium",
+                  numeric.has(column) && "text-right",
+                )}
+              >
+                {labels[column] ?? humanize(column)}
+              </th>
             ))}
-            {open && <th className="p-3">Details</th>}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={String(row.id ?? index)} className="border-t">
-              {columns.map((column) => (
-                <td key={column} className="p-3">
-                  {typeof row[column] === "object"
-                    ? JSON.stringify(row[column])
-                    : String(row[column] ?? "—")}
+            <tr
+              key={String(row.id ?? index)}
+              className={cn(
+                "border-t transition-colors",
+                open && "hover:bg-accent/50",
+              )}
+            >
+              {columns.map((column, position) => (
+                <td
+                  key={column}
+                  className={cn(
+                    "max-w-80 truncate px-3 py-2",
+                    numeric.has(column) && "text-right",
+                  )}
+                >
+                  {open && position === 0
+                    ? (
+                      <button
+                        type="button"
+                        className="focus-visible:ring-ring/45 rounded-sm text-left font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px]"
+                        onClick={() => open(row)}
+                      >
+                        {cell(row[column])}
+                      </button>
+                    )
+                    : cell(row[column])}
                 </td>
               ))}
-              {open && (
-                <td>
-                  <Button
-                    variant="ghost"
-                    onClick={() => open(row)}
-                  >
-                    Open
-                  </Button>
-                </td>
-              )}
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** One toolbar for every resource list: search, then actions. */
+export function ResourceToolbar(
+  { search, onSearch, searchLabel = "Search", children }: {
+    search?: string;
+    onSearch?: (value: string) => void;
+    searchLabel?: string;
+    children?: React.ReactNode;
+  },
+): React.ReactElement {
+  return (
+    <div
+      data-slot="resource-toolbar"
+      className="flex min-w-0 items-center gap-2"
+    >
+      {onSearch && (
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">{searchLabel}</span>
+          <Search
+            aria-hidden="true"
+            className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
+          />
+          <Input
+            type="search"
+            value={search ?? ""}
+            placeholder={searchLabel}
+            className="h-8 pl-8"
+            onChange={(event) =>
+              onSearch((event.target as unknown as { value: string }).value)}
+          />
+        </label>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/** A list of resource rows with list semantics. */
+export function ResourceList(
+  { children, label, className }: {
+    children?: React.ReactNode;
+    label?: string;
+    className?: string;
+  },
+): React.ReactElement {
+  return (
+    <ul
+      data-slot="resource-list"
+      aria-label={label}
+      className={cn("grid gap-1.5", className)}
+    >
+      {children}
+    </ul>
+  );
+}
+
+/**
+ * A resource row: an optional leading mark, title, one-line summary, meta
+ * (such as a status Badge or relative time) and row actions as siblings of
+ * the open button, so each stays separately focusable.
+ */
+export function ResourceRow(
+  { title, subtitle, leading, meta, actions, onOpen, openLabel, selected }: {
+    title: React.ReactNode;
+    subtitle?: React.ReactNode;
+    leading?: React.ReactNode;
+    meta?: React.ReactNode;
+    actions?: React.ReactNode;
+    onOpen?: () => void;
+    openLabel?: string;
+    selected?: boolean;
+  },
+): React.ReactElement {
+  const body = (
+    <>
+      {leading && <span className="shrink-0">{leading}</span>}
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate text-sm font-medium">{title}</span>
+        {subtitle && (
+          <span className="text-muted-foreground truncate text-xs">
+            {subtitle}
+          </span>
+        )}
+      </span>
+      {meta && (
+        <span className="text-muted-foreground flex shrink-0 items-center gap-2 text-xs">
+          {meta}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <li
+      data-slot="resource-row"
+      data-selected={selected || undefined}
+      className={cn(
+        "group/row bg-card flex min-w-0 items-center gap-1 rounded-lg border pr-1 transition-colors",
+        onOpen && "hover:border-ring/40 hover:bg-accent/40",
+        selected && "border-ring/50 bg-accent/50",
+      )}
+    >
+      {onOpen
+        ? (
+          <button
+            type="button"
+            aria-label={openLabel}
+            aria-current={selected ? "true" : undefined}
+            className="focus-visible:ring-ring/45 flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none focus-visible:ring-[3px]"
+            onClick={onOpen}
+          >
+            {body}
+          </button>
+        )
+        : (
+          <div className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5">
+            {body}
+          </div>
+        )}
+      {actions && (
+        <div className="flex shrink-0 items-center gap-0.5">{actions}</div>
+      )}
+    </li>
+  );
+}
+
+/** A detail header: "Back to <plural>", the title, a status and actions. */
+export function ResourceHeader(
+  { title, back, badge, actions, description }: {
+    title: React.ReactNode;
+    back?: { label: string; onClick(): void };
+    badge?: React.ReactNode;
+    actions?: React.ReactNode;
+    description?: React.ReactNode;
+  },
+): React.ReactElement {
+  return (
+    <header data-slot="resource-header" className="grid gap-2">
+      {back && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground -ml-1.5 w-fit"
+          onClick={back.onClick}
+        >
+          <ArrowLeft /> {back.label}
+        </Button>
+      )}
+      <div className="flex min-w-0 items-start gap-2">
+        <h2 className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
+          {title}
+        </h2>
+        {badge}
+        {actions && (
+          <div className="flex shrink-0 items-center gap-1">{actions}</div>
+        )}
+      </div>
+      {description && (
+        <p className="text-muted-foreground text-sm">{description}</p>
+      )}
+    </header>
   );
 }

@@ -190,7 +190,9 @@ A `ChannelAdapter` has three methods:
   `externalThreadId`, `sender`, `content`, optional `recipients`, `thread`,
   non-secret `route` and `visibility`. The shared ingress Action creates the
   thread, participants and the durable **binding** from the provider thread to
-  the Core thread.
+  the Core thread. Without `recipients`, the message goes to the thread's
+  agents, the same default Core applies to any message that names no recipients;
+  a new thread falls back to `defaultAgentAliases`.
 - optional `deliver(attempt, context)` sends resolved reply content to the
   provider and may return `{ deliveryKey, delivered, providerIds? }`.
 

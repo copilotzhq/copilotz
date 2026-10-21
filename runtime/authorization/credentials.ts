@@ -64,6 +64,13 @@ const identity = (authority: AuthenticatedAuthority) =>
     proof: authority.scope.bindings["@credential-proof"] ?? "",
   });
 
+export type CredentialAuthentication = Readonly<{
+  authority: AuthenticatedAuthority;
+  invalidSession?: true;
+  /** Verified identity for proof-bound self-revocation receipts, never new access. */
+  receiptAuthority?: AuthenticatedAuthority;
+}>;
+
 export type CredentialEffects = Readonly<{
   commit(
     binding: CollectionInvocationAuthority | undefined,
@@ -80,7 +87,7 @@ export type CredentialEffects = Readonly<{
     selected: AuthenticatedAuthority,
     token: string,
     type: "session" | "flow",
-  ): Promise<AuthenticatedAuthority>;
+  ): Promise<CredentialAuthentication>;
 }>;
 
 export function createCredentialEffects(options: {
@@ -402,61 +409,112 @@ export function createCredentialEffects(options: {
       selected: AuthenticatedAuthority,
       token: string,
       type: "session" | "flow",
-    ): Promise<AuthenticatedAuthority> {
+    ): Promise<CredentialAuthentication> {
       return await run(
         "authorization.credential.authenticate",
         {},
         async (_, command) => {
+          const invalid = (): CredentialAuthentication => {
+            if (type === "flow") authorizationRefused();
+            return { authority: selected, invalidSession: true };
+          };
+          let claims: CredentialClaims,
+            payload: string,
+            signature: ReturnType<typeof decode>;
           try {
-            if (token.length > 8192) authorizationRefused();
+            if (token.length > 8192) return invalid();
             const parts = token.split(".");
-            if (parts.length !== 2) authorizationRefused();
-            const [payload, signature] = parts;
+            if (parts.length !== 2) return invalid();
+            payload = parts[0];
+            signature = decode(parts[1]);
+            claims = JSON.parse(new TextDecoder().decode(decode(payload)));
             if (
-              !await crypto.subtle.verify(
-                "HMAC",
-                await signingKey(command, false),
-                decode(signature),
-                bytes(`copilotz.credential.v1.${payload}`),
-              )
-            ) authorizationRefused();
-            const claims = JSON.parse(
-              new TextDecoder().decode(decode(payload)),
-            ) as CredentialClaims;
-            if (
-              claims.type !== type || claims.schema !== options.schema ||
+              !claims || claims.type !== type ||
+              claims.schema !== options.schema ||
               claims.namespace !== selected.scope.namespace ||
               claims.tenant !== selected.scope.tenant ||
+              typeof claims.id !== "string" || !claims.id ||
+              typeof claims.principal !== "string" || !claims.principal ||
+              !Number.isFinite(Date.parse(claims.expiresAt)) ||
               Date.parse(claims.expiresAt) <= Date.parse(command.commandTime)
-            ) authorizationRefused();
-            return retainedAuthority({
-              ...selected,
-              principal: {
-                kind: type === "session" ? "session" : "grant",
-                id: claims.principal,
-              },
-              authorityBasis: {
-                kind: type === "session" ? "session" : "grant",
-                id: claims.id,
-              },
-              validity: credentialValidity(
-                new Date(command.commandTime),
-                claims.expiresAt,
-              ),
-              ...(type === "flow"
-                ? {
-                  flow: {
-                    id: claims.id,
-                    kind: claims.kind,
-                    continuation: claims.continuation,
-                    expiresAt: claims.expiresAt,
-                  },
-                }
-                : {}),
-            });
+            ) return invalid();
           } catch {
-            authorizationRefused();
+            return invalid();
           }
+          let key: CryptoKey;
+          try {
+            key = await signingKey(command, false);
+          } catch (error) {
+            if ((error as { code?: string }).code === "forbidden") {
+              return invalid();
+            }
+            throw error; // Persistence/key-service failures are not invalid cookies.
+          }
+          if (
+            !await crypto.subtle.verify(
+              "HMAC",
+              key,
+              signature,
+              bytes(`copilotz.credential.v1.${payload}`),
+            )
+          ) return invalid();
+          const authority = retainedAuthority({
+            ...selected,
+            principal: {
+              kind: type === "session" ? "session" : "grant",
+              id: claims.principal,
+            },
+            authorityBasis: {
+              kind: type === "session" ? "session" : "grant",
+              id: claims.id,
+            },
+            validity: credentialValidity(
+              new Date(command.commandTime),
+              claims.expiresAt,
+            ),
+            ...(type === "flow"
+              ? {
+                flow: {
+                  id: claims.id,
+                  kind: claims.kind,
+                  continuation: claims.continuation,
+                  expiresAt: claims.expiresAt,
+                },
+              }
+              : {}),
+          });
+          if (type === "session") {
+            const live = await command.transaction.query<
+              { expires_at: string }
+            >(
+              `SELECT expires_at::text FROM "${options.schema}".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4 AND revoked_at IS NULL AND expires_at>$5::timestamptz`,
+              [
+                claims.namespace,
+                claims.tenant,
+                claims.id,
+                claims.principal,
+                command.commandTime,
+              ],
+            );
+            if (!live.rows.length) {
+              return { ...invalid(), receiptAuthority: authority };
+            }
+            return {
+              authority: retainedAuthority({
+                ...authority,
+                validity: credentialValidity(
+                  new Date(command.commandTime),
+                  new Date(
+                    Math.min(
+                      Date.parse(claims.expiresAt),
+                      Date.parse(live.rows[0].expires_at),
+                    ),
+                  ).toISOString(),
+                ),
+              }),
+            };
+          }
+          return { authority };
         },
       );
     },

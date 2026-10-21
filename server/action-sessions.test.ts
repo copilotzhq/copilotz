@@ -34,6 +34,12 @@ async function fixture(
   strict = false,
   capacity?: number,
   pooledKey = false,
+  logoutGate?: {
+    before: Promise<void>;
+    committed(): void;
+    after: Promise<void>;
+  },
+  anonymousHost = false,
 ) {
   const detached = Promise.withResolvers<{ code: string; flow?: string }>();
   const seen: {
@@ -106,6 +112,7 @@ async function fixture(
     id: "auth.logout",
     async execute(_input, ctx) {
       executions.logout++;
+      if (logoutGate) await logoutGate.before;
       await ctx.transaction(async (tx) => {
         await tx.collections.entries.create({
           id: "logout",
@@ -113,6 +120,10 @@ async function fixture(
         });
         await tx.sessions.revoke();
       });
+      if (logoutGate) {
+        logoutGate.committed();
+        await logoutGate.after;
+      }
       return { ok: true };
     },
   });
@@ -421,7 +432,9 @@ async function fixture(
                     request.headers.get("x-tenant") ?? "fixture",
                   ),
                   operationMetadata: requestMetadata,
-                  actor: { id: "person", name: "Authenticated actor" },
+                  ...(anonymousHost
+                    ? {}
+                    : { actor: { id: "person", name: "Authenticated actor" } }),
                 };
               },
               expose: { actions: true, collections: true, channels: false },
@@ -574,7 +587,7 @@ Deno.test("Action login replay projects only cookies; logout revokes an open cha
       );
       assert(!JSON.stringify(rows.rows).includes(token), table);
     }
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "session",
@@ -610,7 +623,7 @@ Deno.test("Credential projection reauthorizes operation access in the credential
     const cookie = (await f.result(operation)).headers.get("set-cookie")!;
     const pair = cookie.split(";")[0];
     const token = pair.slice(pair.indexOf("=") + 1);
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "session",
@@ -732,7 +745,7 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
         await f.result((await reused.json()).data.operationId, flow),
       );
     } else await forbidden(reused);
-    const authority = await f.app.authorization.credentials.authenticate(
+    const { authority } = await f.app.authorization.credentials.authenticate(
       f.selected(),
       token,
       "flow",
@@ -1000,7 +1013,7 @@ Deno.test("HTTP Actions project session effects committed by their nested Action
         cookie,
         "idempotency-key": "after-logout",
       })).status,
-      403,
+      202,
     );
   } finally {
     await f.close();
@@ -1217,7 +1230,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
       (await f.request("/actions/logout", {}, {
         "idempotency-key": "strict-logout",
       })).status,
-      404,
+      202,
     );
     f.allowOperationReads();
     now += 16 * 60 * 1000;
@@ -1349,6 +1362,130 @@ Deno.test("session ingress records its actor separately from principal and sessi
   }
 });
 
+Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation terminates both devices", async () => {
+  const { WebSocket: Socket } = await import("ws");
+  const { createDeviceTransport } = await import("../client/device.ts");
+  const f = await fixture(() => new Date(), true);
+  const handler = createServerFacadeFetchHandler(f.app, {
+    upgradeDevice: (request) => Deno.upgradeWebSocket(request),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    handler,
+  );
+  const origin = `http://127.0.0.1:${server.addr.port}`;
+  const devices: ReturnType<typeof createDeviceTransport>[] = [];
+  const peers: InstanceType<typeof Socket>[] = [];
+  try {
+    const loginId = await f.submit("login", "two-tabs-login");
+    const login = await f.result(loginId);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const tabs = [];
+    for (let i = 0; i < 2; i++) {
+      const frames: Record<string, unknown>[] = [];
+      const auth = Promise.withResolvers<unknown>();
+      const closed = Promise.withResolvers<number>();
+      const device = createDeviceTransport({
+        url: origin.replace("http", "ws") + "/api/device",
+        credentials: () => ({ cookie: true }),
+        socket(url) {
+          const peer = new Socket(url, { headers: { origin, cookie } });
+          peers.push(peer);
+          peer.on("message", (data) => frames.push(JSON.parse(String(data))));
+          peer.on("close", (code) => closed.resolve(code));
+          return peer as unknown as WebSocket;
+        },
+      });
+      devices.push(device);
+      device.onAuthState(auth.resolve);
+      const subscription = await device.observe("entries", {}, {});
+      const reader = subscription.frames[Symbol.asyncIterator]();
+      assertEquals((await reader.next()).value?.t, "snapshot");
+      tabs.push({
+        device,
+        frames,
+        auth: auth.promise,
+        closed: closed.promise,
+        subscription,
+      });
+    }
+    // Session liveness is independent of collection channel attachment.
+    tabs[1].subscription.detach();
+    const logoutId = await f.submit("logout", "two-tabs-logout", { cookie });
+    const client = createCopilotzClient({
+      baseUrl: "https://test/api",
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        request.headers.set("cookie", cookie);
+        request.headers.set("x-copilotz-credential-proof", "a".repeat(64));
+        return f.handler(request);
+      },
+    });
+    const clientOutputs: string[] = [];
+    await client.operations.observe({
+      operationIds: [logoutId],
+      onFrame(frame) {
+        if (frame.kind === "output") clientOutputs.push(frame.output.type);
+      },
+    });
+    assertEquals(clientOutputs.at(-1), "operation.completed");
+    const observed = await f.request("/operations/observe", {
+      operationIds: [logoutId],
+    }, { cookie });
+    assertEquals(observed.status, 200, await observed.clone().text());
+    const outputs = [];
+    for await (const frame of decodeObservation(observed)) {
+      if (frame.kind === "output") outputs.push(frame.output.type);
+    }
+    assertEquals(outputs, ["operation.completed"]);
+    const result = await f.result(logoutId, { cookie });
+    assertEquals(result.status, 200, await result.clone().text());
+    assertEquals((await result.json()).data, { ok: true });
+    for (const tab of tabs) {
+      assertEquals(await tab.auth, {
+        state: "revoked",
+        code: "session_revoked",
+      });
+      assertEquals(await tab.closed, 4401);
+      assert(
+        tab.frames.some((frame) =>
+          frame.t === "session" && frame.code === "session_revoked"
+        ),
+      );
+      await assertRejects(
+        () => tab.device.observe("entries", {}, {}),
+        Error,
+        "Session revoked",
+      );
+    }
+    // Invalid cookies now fall back to the host's anonymous policy. Deny that
+    // ordinary read policy here to isolate the receipt-only recovery exception.
+    f.denyOperationReads();
+    for (
+      const [ids, headers] of [
+        [[logoutId], { cookie, "x-copilotz-credential-proof": "b".repeat(64) }],
+        [[loginId], { cookie }],
+        [[logoutId, loginId], { cookie }],
+        [[logoutId], { cookie, "x-tenant": "other" }],
+      ] as const
+    ) {
+      const refused = await f.request("/operations/observe", {
+        operationIds: ids,
+      }, headers);
+      assertEquals(
+        refused.status,
+        404,
+        await refused.text(),
+      );
+    }
+  } finally {
+    for (const device of devices) device.close();
+    for (const peer of peers) peer.terminate();
+    await server.shutdown();
+    await f.close();
+  }
+});
+
 Deno.test("Flow delegates transitive child effects only inside its consumed operation and exact product grants", async () => {
   const f = await fixture();
   try {
@@ -1440,6 +1577,85 @@ Deno.test("Flow delegates transitive child effects only inside its consumed oper
   }
 });
 
+for (const path of ["result", "observe"] as const) {
+  Deno.test(`SEC3 logout ${path} recovers revocation committed after the initial receipt lookup`, async () => {
+    const before = Promise.withResolvers<void>();
+    const committed = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(() => new Date(), true, undefined, false, {
+      before: before.promise,
+      committed: committed.resolve,
+      after: finish.promise,
+    });
+    try {
+      const login = await f.result(
+        await f.submit("login", `race-${path}-login`),
+      );
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      const id = await f.submit("logout", `race-${path}-logout`, { cookie });
+      let first = true;
+      const handler = createServerFacadeFetchHandler({
+        ...f.app,
+        authorization: {
+          ...f.app.authorization,
+          async logoutReceipt(authority, operationId) {
+            const receipt = await f.app.authorization.logoutReceipt(
+              authority,
+              operationId,
+            );
+            if (operationId === id && first) {
+              first = false;
+              assertEquals(receipt, undefined);
+              // Commit the actual revocation between lookup and ordinary admission.
+              before.resolve();
+              await committed.promise;
+            } else if (operationId === id && path === "observe") {
+              finish.resolve();
+            }
+            return receipt;
+          },
+        },
+      });
+      const response = await handler(
+        new Request(
+          `https://test/api/operations/${
+            path === "result" ? `${id}/result` : "observe"
+          }`,
+          {
+            method: path === "result" ? "GET" : "POST",
+            headers: {
+              cookie,
+              "x-copilotz-credential-proof": "a".repeat(64),
+              "content-type": "application/json",
+            },
+            ...(path === "observe"
+              ? { body: JSON.stringify({ operationIds: [id] }) }
+              : {}),
+          },
+        ),
+      );
+      assertEquals(
+        response.status,
+        path === "result" ? 202 : 200,
+        response.status >= 400 ? await response.text() : undefined,
+      );
+      if (path === "observe") {
+        const outputs = [];
+        for await (const frame of decodeObservation(response)) {
+          if (frame.kind === "output") outputs.push(frame.output.type);
+        }
+        assertEquals(outputs, ["operation.completed"]);
+      }
+      finish.resolve();
+      assertEquals((await f.result(id, { cookie })).status, 200);
+    } finally {
+      before.resolve();
+      finish.resolve();
+      await f.close();
+    }
+  });
+}
+
 Deno.test("Flow detached Processors retain the flow; alarms require independent owner authority", async () => {
   let now = Date.now();
   const f = await fixture(() => new Date(now));
@@ -1483,6 +1699,100 @@ Deno.test("Flow detached Processors retain the flow; alarms require independent 
       ),
     );
     assertEquals(f.executions.child, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("SEC3 stale session cookies clear and permit anonymous sign-in, but require 401 for private Actions", async () => {
+  let now = Date.now();
+  const f = await fixture(
+    () => new Date(now),
+    true,
+    undefined,
+    false,
+    undefined,
+    true,
+  );
+  try {
+    const login = await f.result(await f.submit("login", "stale-login"));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const logout = await f.submit("logout", "stale-logout", { cookie });
+    assertEquals((await f.result(logout, { cookie })).status, 200);
+    for (
+      const invalid of [
+        cookie,
+        "__Host-copilotz_session=bad.signature",
+        // Keep valid claims but change the first signature byte.
+        cookie.replace(
+          /\.([A-Za-z0-9_-])/,
+          (_, first: string) => `.${first === "A" ? "B" : "A"}`,
+        ),
+        "__Host-copilotz_session=",
+      ]
+    ) {
+      const denied = await f.request("/actions/logout", {}, {
+        cookie: invalid,
+        "idempotency-key": crypto.randomUUID(),
+      });
+      assertEquals(denied.status, 401, await denied.clone().text());
+      assertEquals(
+        denied.headers.get("set-cookie"),
+        "__Host-copilotz_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0",
+      );
+      const signIn = await f.request("/actions/replay", {}, {
+        cookie: invalid,
+        "idempotency-key": crypto.randomUUID(),
+      });
+      assertEquals(signIn.status, 202, await signIn.clone().text());
+      assert(
+        signIn.headers.get("set-cookie"),
+        "Discarded cookie is cleared or replaced on the sign-in response",
+      );
+      const accepted = (await signIn.json()).data.operationId;
+      const fresh = await f.result(accepted, { cookie: invalid });
+      assertEquals(fresh.status, 200, await fresh.clone().text());
+      assert(/Max-Age=[1-9][0-9]*/.test(fresh.headers.get("set-cookie") ?? ""));
+      assert(!fresh.headers.get("set-cookie")?.includes("Max-Age=0"));
+      assertEquals(
+        f.seen.findLast((entry) =>
+          entry.intent.kind === "action" &&
+          entry.intent.operation === "admit" &&
+          entry.intent.resource === "replay"
+        )?.authority.authorityBasis.kind,
+        "grant",
+      );
+    }
+    const unknownResult = await f.result(
+      await f.submit("replay", "unknown-session"),
+    );
+    const unknownCookie =
+      unknownResult.headers.get("set-cookie")!.split(";")[0];
+    await f.db.query(
+      `DELETE FROM "${f.schema}".authorization_sessions WHERE principal='replayed'`,
+    );
+    const unknown = await f.request("/actions/logout", {}, {
+      cookie: unknownCookie,
+      "idempotency-key": "unknown",
+    });
+    assertEquals(unknown.status, 401, await unknown.clone().text());
+    assert(unknown.headers.get("set-cookie")?.includes("Max-Age=0"));
+    now += 3600_001;
+    const expired = await f.request("/actions/logout", {}, {
+      cookie,
+      "idempotency-key": "expired",
+    });
+    assertEquals(expired.status, 401, await expired.clone().text());
+    assert(expired.headers.get("set-cookie")?.includes("Max-Age=0"));
+    const duplicate = await f.request("/actions/replay", {}, {
+      cookie: `${cookie}; ${cookie}`,
+      "idempotency-key": "duplicate-stale",
+    });
+    assertEquals(duplicate.status, 403);
+    assertEquals(
+      (await duplicate.json()).error.code,
+      "duplicate_session_cookie",
+    );
   } finally {
     await f.close();
   }

@@ -1,3 +1,8 @@
+import { defineDatabaseDirectoryCommand } from "./directory-command.ts";
+import {
+  defineIdentityVerifier,
+  readIdentityEvidence,
+} from "./identity-evidence.ts";
 import { validateCollectionConstraints } from "./collection-constraints.ts";
 import { defineDatabaseDirectoryRead } from "./directory-read.ts";
 import { checkFlow } from "./flow.ts";
@@ -46,12 +51,15 @@ export type AuthorizationIntent = Readonly<{
     | "flow"
     | "asset"
     | "event"
-    | "directory";
+    | "directory"
+    | "identity";
   resource: string;
   operation: string;
   input: unknown;
   /** Owner-resolved root source, used when capturing a flow continuation. */
   sourceOperationId?: string;
+  sourceEventId?: string;
+  sourceDeliveryId?: string;
   /** Owner-resolved executing identity. Absent for direct ingress calls. */
   invocation?: Readonly<{
     kind: "action" | "processor" | "alarm";
@@ -67,21 +75,35 @@ export type AuthorizationRead = Readonly<{
     query?: CollectionQuery,
   ): Promise<readonly CollectionRecord[]>;
 }>;
+export type DirectoryPolicyProvenance = Readonly<{
+  command: string;
+  databaseSchema: string;
+  namespace: string;
+}>;
 export type OwnerPolicy = Readonly<{
   revision: string;
   /** Local Collection aliases, or explicit directory capabilities for staff grants. */
   sources: readonly AuthorizationSource[];
+  evidence?: readonly string[];
   evaluate(
     context: Readonly<{
       authority: AuthenticatedAuthority;
+      directory?: DirectoryPolicyProvenance;
       intent: AuthorizationIntent;
       commandTime: string;
       signal: AbortSignal;
       read: AuthorizationRead;
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
     }>,
   ): ServerConstraints | Promise<ServerConstraints>;
 }>;
 export type OwnerAuthorization = Readonly<{
+  identityVerifiers?: Readonly<
+    Record<string, import("./identity-evidence.ts").IdentityVerifier>
+  >;
+  directoryCommands?: Readonly<
+    Record<string, import("./directory-command.ts").DatabaseDirectoryCommand>
+  >;
   directoryReads?: Readonly<
     Record<string, import("./directory-read.ts").DatabaseDirectoryRead>
   >;
@@ -134,9 +156,44 @@ export function validateOwnerAuthorization(
       );
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.identityVerifiers ?? {},
+    )
+  ) {
+    defineIdentityVerifier(declaration);
+    if (
+      !alias ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) throw new TypeError("Identity verifiers require policy-bound Actions.");
+  }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryCommands ?? {},
+    )
+  ) {
+    defineDatabaseDirectoryCommand(declaration);
+    if (
+      !alias || declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      ) ||
+      declaration.evidence?.some((evidence) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, evidence)
+      )
+    ) {
+      throw new TypeError(
+        "Directory commands require policy-bound Actions and declared evidence.",
+      );
+    }
+  }
   for (const [id, policy] of Object.entries(registration.policies)) {
     if (
       !id || !policy.revision || typeof policy.evaluate !== "function" ||
+      policy.evidence?.some((alias) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, alias)
+      ) ||
       !Array.isArray(policy.sources) ||
       new Set(policy.sources.map(sourceAlias)).size !== policy.sources.length ||
       policy.sources.some((source) =>
@@ -202,6 +259,20 @@ export function captureOwnerAuthorization(
   validateOwnerAuthorization(registration, collections, actions);
   if (!registration) return;
   return Object.freeze({
+    directoryCommands: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.directoryCommands ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineDatabaseDirectoryCommand(declaration)]),
+      ),
+    ),
+    identityVerifiers: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.identityVerifiers ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineIdentityVerifier(declaration)]),
+      ),
+    ),
     directoryReads: Object.freeze(Object.fromEntries(
       Object.entries(registration.directoryReads ?? {}).map((
         [alias, declaration],
@@ -222,6 +293,7 @@ export function captureOwnerAuthorization(
           id,
           Object.freeze({
             revision: policy.revision,
+            evidence: Object.freeze([...(policy.evidence ?? [])]),
             sources: Object.freeze(
               policy.sources.map(captureAuthorizationSource),
             ),
@@ -254,6 +326,10 @@ export function createOwnerEvaluator(
     registration: OwnerAuthorization;
     collections: Readonly<Record<string, CollectionDefinition>>;
     databaseSchema: string;
+    /** Package-only live delegation; never accepted from a worker or retained authority. */
+    directory?: DirectoryPolicyProvenance & {
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
+    };
   }>,
 ): OwnerEvaluator {
   const { registration, collections, databaseSchema } = options;
@@ -266,10 +342,16 @@ export function createOwnerEvaluator(
     >,
   ): Promise<AuthorizationDecision> {
     let authority = retainedAuthority(value);
-    const policy = registration.policies[authority.policy.id];
+    const directory = options.directory;
+    if (directory && intent.kind !== "collection") authorizationRefused();
+    const reference = directory
+      ? registration.collections[intent.resource]
+      : authority.policy;
+    const namespace = directory?.namespace ?? authority.scope.namespace;
+    const policy = reference && registration.policies[reference.id];
     if (
-      !policy || policy.revision !== authority.policy.revision ||
-      authority.scope.databaseSchema !== databaseSchema
+      !policy || policy.revision !== reference?.revision ||
+      (!directory && authority.scope.databaseSchema !== databaseSchema)
     ) authorizationRefused();
     const required = intent.kind === "collection"
       ? registration.collections[intent.resource]
@@ -278,8 +360,8 @@ export function createOwnerEvaluator(
       : undefined;
     if (
       (intent.kind === "collection" || intent.kind === "action") &&
-      (!required || required.id !== authority.policy.id ||
-        required.revision !== authority.policy.revision)
+      (!required || required.id !== reference?.id ||
+        required.revision !== reference?.revision)
     ) authorizationRefused();
     command.signal.throwIfAborted();
     if (
@@ -312,7 +394,7 @@ export function createOwnerEvaluator(
       if (!definition) authorizationRefused();
       dependencies.push({
         owner: authority.scope.owner,
-        namespace: authority.scope.namespace,
+        namespace,
         collection: definition.name,
         ...(id === undefined ? {} : { id }),
       });
@@ -330,7 +412,7 @@ export function createOwnerEvaluator(
       return promise;
     };
     try {
-      if (authority.validity.kind === "attempt") {
+      if (!directory && authority.validity.kind === "attempt") {
         const live = await command.transaction.query(
           `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 AND lease_owner=$2 AND owner_epoch=$3::bigint AND status='leased' AND lease_expires_at>$4::timestamptz`,
           [
@@ -342,8 +424,8 @@ export function createOwnerEvaluator(
         );
         if (!live.rows.length) authorizationRefused();
       }
-      await checkFlow(authority, intent, command);
-      if (authority.authorityBasis.kind === "session") {
+      if (!directory) await checkFlow(authority, intent, command);
+      if (!directory && authority.authorityBasis.kind === "session") {
         const rows = await command.transaction.query<
           { expires_at: string; revoked_at: string | null }
         >(
@@ -379,21 +461,6 @@ export function createOwnerEvaluator(
           completingLogout = effect.rows.length > 0;
         }
         if (
-          session?.revoked_at && intent.kind === "operation" &&
-          intent.operation === "read"
-        ) {
-          const effect = await command.transaction.query(
-            `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND operation_id=$3 AND method='session.revoke' AND claims->>'id'=$4`,
-            [
-              authority.scope.namespace,
-              authority.scope.tenant,
-              intent.resource,
-              authority.authorityBasis.id,
-            ],
-          );
-          completingLogout = effect.rows.length > 0;
-        }
-        if (
           !session || session.revoked_at && !completingLogout ||
           Date.parse(session.expires_at) <= Date.parse(command.commandTime)
         ) authorizationRefused();
@@ -421,9 +488,37 @@ export function createOwnerEvaluator(
         withOwnerPolicyRefusal(() => {
           const result = policy.evaluate({
             authority,
+            ...(directory
+              ? {
+                directory: {
+                  command: directory.command,
+                  databaseSchema,
+                  namespace,
+                },
+              }
+              : {}),
             intent: captureHostCommandJson(intent) as AuthorizationIntent,
             commandTime: command.commandTime,
             signal: command.signal,
+            evidence: {
+              get(alias) {
+                assertActive();
+                if (!policy.evidence?.includes(alias)) {
+                  failed = true;
+                  authorizationRefused();
+                }
+                return track(() =>
+                  directory
+                    ? directory.evidence.get(alias)
+                    : readIdentityEvidence(
+                      registration,
+                      authority,
+                      alias,
+                      command,
+                    )
+                );
+              },
+            },
             read: {
               get(alias, id) {
                 const definition = source(alias, id);
@@ -442,7 +537,7 @@ export function createOwnerEvaluator(
                   loadCollectionRecord(
                     command.transaction,
                     tables,
-                    authority.scope.namespace,
+                    namespace,
                     definition.name,
                     id,
                   )
@@ -475,7 +570,7 @@ export function createOwnerEvaluator(
                     command.transaction,
                     tables,
                     definition,
-                    authority.scope.namespace,
+                    namespace,
                     query,
                   )
                 );
@@ -487,6 +582,11 @@ export function createOwnerEvaluator(
         }, command.signal)
       );
       await Promise.all(pending);
+      if (
+        authority.flow && intent.invocation?.kind === "processor" &&
+        (!Array.isArray(constraints.flowProcessors) ||
+          !constraints.flowProcessors.includes(intent.invocation.id))
+      ) authorizationRefused();
       if (failed) {
         throw new Error("Owner authorization could not be completed.");
       }

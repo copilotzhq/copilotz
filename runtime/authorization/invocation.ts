@@ -24,6 +24,8 @@ type OwnerBinding = Readonly<{
   /** Owner-resolved logical Processor run, independent of its current attempt. */
   logicalRunId?: string;
   operationId?: string;
+  sourceEventId?: string;
+  sourceDeliveryId?: string;
   scope: Readonly<{ databaseSchema: string; namespace: string }>;
   signal: AbortSignal;
   resolveSource(transaction: SqlExecutor): Promise<ProtectedActionSource>;
@@ -37,6 +39,11 @@ export type CollectionInvocationAuthority =
   & Readonly<{
     invocation: CollectionPolicyInvocation;
     check(): void;
+    /** Owner-created bounded directory delegation; never serialized. */
+    authorizeDirectoryIntent?(
+      intent: CollectionPolicyIntent,
+      read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,
+    ): Promise<import("./contracts.ts").ServerConstraints>;
     authorizeIntent?(
       intent: CollectionPolicyIntent,
       read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,
@@ -141,6 +148,7 @@ function bind<T extends object>(context: T, binding: Binding): T {
         "sessions",
         "flows",
         "directory",
+        "authentication",
       ]
     ) {
       if (descriptors[key] && "value" in descriptors[key]) {

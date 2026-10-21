@@ -1,3 +1,4 @@
+import type { EventDelivery } from "../events/types.ts";
 import type {
   DeliveryDiagnostic,
   DeliveryDiagnosticError,
@@ -40,11 +41,6 @@ const CREDENTIAL_PATTERNS: readonly (readonly [RegExp, string])[] = [
 export function summarizeDeliveryError(
   error: unknown,
 ): DeliveryDiagnosticError {
-  const named = error instanceof Error && typeof error.name === "string" &&
-      /^[A-Za-z_$][\w$.]*$/.test(error.name) &&
-      error.name.length <= MAX_NAME_LENGTH
-    ? error.name
-    : "Error";
   let text: string;
   try {
     text = error instanceof Error
@@ -55,6 +51,14 @@ export function summarizeDeliveryError(
   } catch {
     text = "The error message could not be read.";
   }
+  return summarizeError(error instanceof Error ? error.name : undefined, text);
+}
+
+function summarizeError(name: unknown, text: string): DeliveryDiagnosticError {
+  const named = typeof name === "string" &&
+      /^[A-Za-z_$][\w$.]*$/.test(name) && name.length <= MAX_NAME_LENGTH
+    ? name
+    : "Error";
   let message = text.slice(0, MAX_SCANNED_LENGTH);
   for (const [pattern, replacement] of CREDENTIAL_PATTERNS) {
     message = message.replace(pattern, replacement);
@@ -79,5 +83,40 @@ export function reportDeliveryDiagnostic(
     }
   } catch {
     // Diagnostics are deliberately incapable of changing runtime behavior.
+  }
+}
+
+/**
+ * Writes one structured error line when a delivery dead-letters: its consumer
+ * (the Processor or Action), operation, attempts, and the recorded error's
+ * code, name and credential-masked message. Never the Event, its input, or a
+ * stack. Logging cannot affect settlement.
+ */
+export function logDeadLetter(delivery: EventDelivery): void {
+  try {
+    const recorded = delivery.lastError ?? {};
+    const code = recorded.code;
+    console.error(JSON.stringify({
+      severity: "ERROR",
+      message: "[copilotz] Delivery dead-lettered",
+      consumerId: delivery.consumerId,
+      operationId: delivery.settlementScopeId,
+      deliveryId: delivery.id,
+      eventId: delivery.eventId,
+      databaseSchema: delivery.databaseSchema,
+      attempts: delivery.attempts,
+      maxAttempts: delivery.maxAttempts,
+      error: {
+        ...(typeof code === "string" && /^[\w.:-]{1,80}$/.test(code)
+          ? { code }
+          : {}),
+        ...summarizeError(
+          recorded.name,
+          typeof recorded.message === "string" ? recorded.message : "",
+        ),
+      },
+    }));
+  } catch {
+    // Logging is deliberately incapable of changing delivery settlement.
   }
 }

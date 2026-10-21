@@ -4,6 +4,7 @@ import type { EventVisibility } from "@copilotz/copilotz/core";
 import type {
   CollectionMutationRef,
   CollectionRecord,
+  ScopedCollection,
   ScopedCollectionCallOptions,
   ScopedCollections,
 } from "@copilotz/copilotz/collections";
@@ -20,6 +21,7 @@ import {
 } from "@copilotz/copilotz/actions";
 import { decodeGeneratedContent } from "@copilotz/copilotz/content";
 import { asRecord, requiredText } from "../../shared/validation.ts";
+import { retryCoreMutation } from "../../shared/retry-mutation.ts";
 export const CREATE_THREAD_MESSAGE_ACTION_ID =
   "copilotz.core.thread-message.create";
 export type ThreadMessageSender = CollectionRecord | ParticipantInput;
@@ -134,6 +136,25 @@ export async function findParticipant(
     }
   }
   return null;
+}
+/**
+ * Who a message that names no recipients addresses: the Thread's agent
+ * participants other than the sender, in membership order. A Thread without
+ * agents yields none.
+ */
+export async function threadAgentRecipients(
+  participants: Pick<ScopedCollection, "get">,
+  thread: CollectionRecord,
+  senderId?: string,
+): Promise<readonly CollectionRecord[]> {
+  const members = await Promise.all(
+    stringArray(thread.participantIds)
+      .filter((id) => id !== senderId)
+      .map((id) => participants.get({ id })),
+  );
+  return members.filter((member): member is CollectionRecord =>
+    member?.participantType === "agent"
+  );
 }
 export async function ensureParticipantInTransaction(
   collections: ActionTransactionContext["collections"],
@@ -268,8 +289,8 @@ function threadMembership(value: unknown): ThreadMembership {
   );
   return { participants, recipients };
 }
-/** Idempotent Core domain write, usable without creating a child Action receipt. */
-export async function createThreadMessage(
+/** One atomic write prepared from a fresh conversation snapshot. */
+async function createThreadMessageAttempt(
   input: unknown,
   context: Pick<ActionContext, "collections" | "content" | "transaction">,
 ): Promise<CollectionRecord> {
@@ -279,6 +300,9 @@ export async function createThreadMessage(
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
   const membership = threadMembership(data.membership);
+  // Explicit recipients win, including an explicit empty list.
+  const namesRecipients = data.recipientIds !== undefined ||
+    asRecord(data.membership).recipients !== undefined;
   const eventVisibility = visibility(data.visibility);
   const messageVisibility = eventVisibility ?? { kind: "public" as const };
   const historyScopeId = optionalText(data.historyScopeId);
@@ -306,6 +330,13 @@ export async function createThreadMessage(
   const senderExternalId = optionalText(existingSender?.externalId) ??
     optionalText(sender.externalId) ?? optionalText(sender.id) ?? "";
   const existingParticipantIds = stringArray(thread.participantIds);
+  const defaultRecipientIds = namesRecipients
+    ? []
+    : (await threadAgentRecipients(
+      context.collections.participant,
+      thread,
+      optionalText(existingSender?.id),
+    )).map((recipient) => recipient.id);
   const content = decodeGeneratedContent(data.content ?? []);
   await context.transaction(async (tx) => {
     const collections = tx.collections;
@@ -342,6 +373,7 @@ export async function createThreadMessage(
     const messageRecipientIds = [
       ...new Set([
         ...recipientIds,
+        ...defaultRecipientIds,
         ...membership.recipients.map((recipient) =>
           "participantId" in recipient
             ? recipient.participantId
@@ -392,6 +424,20 @@ export async function createThreadMessage(
       visibility: messageVisibility,
       ...(historyScopeId ? { historyScopeId } : {}),
     }, options);
+    // A visible message is activity: the thread's updatedAt moves with it,
+    // in the same transaction, so recent lists reorder. Internal work does not.
+    if (messageVisibility.kind !== "internal") {
+      await collections.thread.commands.recordMessage({
+        id: threadId,
+        messageId: id,
+      }, {
+        operationKey: `message-activity:${id}`,
+        metadata: {
+          ...coreThreadObservationMetadata(threadId),
+          core: { threadId },
+        },
+      });
+    }
     return created;
   });
   const created = await context.collections.message.get({ id });
@@ -399,6 +445,17 @@ export async function createThreadMessage(
     throw new Error(`Message '${id}' was not created.`);
   }
   return created;
+}
+/** Idempotent Core domain write, usable without creating a child Action receipt.
+ * Re-read after known rollback: parallel Tool/Ask branches can update membership
+ * or activity while another message is being prepared. */
+export async function createThreadMessage(
+  input: unknown,
+  context: Pick<ActionContext, "collections" | "content" | "transaction">,
+): Promise<CollectionRecord> {
+  return await retryCoreMutation(() =>
+    createThreadMessageAttempt(input, context)
+  );
 }
 const createInputSchema = {
   type: "object",

@@ -59,7 +59,7 @@ Deno.test("Core authorized View prompt capture survives owner restart and comple
           },
         }),
         result: Promise.resolve({
-          content: [],
+          content: "Authorized context received.",
           attempts: [{ status: "completed" }],
         }),
       };

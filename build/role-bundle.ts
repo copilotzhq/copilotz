@@ -44,6 +44,7 @@ const runtimeModules = new Set([
   "runtime/events/types.ts",
   "runtime/events/workflow-id.ts",
   "runtime/execution/diagnostics.ts",
+  "runtime/execution/deadlines.ts",
   "runtime/execution/owner-capability-wire.ts",
   "runtime/execution/owner-capture.ts",
   "runtime/execution/owner-capability-worker.ts",

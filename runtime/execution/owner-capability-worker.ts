@@ -1,4 +1,5 @@
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
+import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
 import {
   bindWorkerCollectionInvocation,
   closeCollectionPolicyInvocation,
@@ -595,6 +596,9 @@ export function createOwnerWorkerWorkloads(
           workload: OWNER_CAPABILITY_WORKLOAD,
           body: encodeCapability(call),
           signal: callSignal,
+          // Action calls remain open through nested provider work and its
+          // durable finalization; Oxian's short RPC default is insufficient.
+          deadlineAtMs: Date.now() + DELIVERY_DEADLINE_MS,
         });
         const response = await readCapability(handle.output) as {
           value?: unknown;
@@ -612,7 +616,10 @@ export function createOwnerWorkerWorkloads(
             error.message,
           );
           Object.assign(failure, { execution: error.execution, cause: error });
-          if (error.execution === "indeterminate") abort.abort(failure);
+          if (
+            error.execution === "indeterminate" ||
+            error.code === "deadline_exceeded"
+          ) abort.abort(failure);
           throw failure;
         }
         throw error;

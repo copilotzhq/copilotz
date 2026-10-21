@@ -1135,3 +1135,19 @@ Deno.test("snapshot reads have one current-epoch result gate even before owner r
     await f.close();
   }
 });
+
+Deno.test("a trusted dispatch deadline interrupts the attempt without an Action failure terminal", async () => {
+  const f = await setup();
+  try {
+    await f.host.lifecycle!.onComplete!({
+      fence: f.binding.fence,
+      operationId: f.binding.parent!.operationId,
+      streamId: f.binding.parent!.streamId,
+      outcome: "failed",
+      error: { code: "deadline_exceeded" },
+    } as never);
+    assertEquals(isOwnerExecutionInterrupted(await f.failure), true);
+  } finally {
+    await f.close();
+  }
+});

@@ -1467,3 +1467,93 @@ Deno.test("explicit Asset IDs and replay receipts are isolated by namespace", as
     await closeFixture(f);
   }
 });
+
+Deno.test("delivery retry captures a fresh stream incarnation and commits the complete reply after adoption rollback", async () => {
+  const { createContentStreamRuntime } = await import("../streams/stream.ts");
+  const { createDatabaseBodyStore } = await import("./database-body-store.ts");
+  const { captureWorkerContent } = await import(
+    "../execution/owner-capture.ts"
+  );
+  const fixture = await createFixture();
+  try {
+    const storage = createDatabaseBodyStore({
+      session: fixture.session,
+      schema: TEST_SCHEMA,
+    });
+    fixture.assets.registerStore(storage);
+    const answer = "The complete reply, including UTF-8: café.\n".repeat(4000);
+    const prepared = await createContentPreparer().prepare(answer, {
+      namespace: "tenant-a",
+      idempotencyKey: "answer",
+    });
+    const capture = async (incarnationId: string) => {
+      const streams = createContentStreamRuntime({
+        namespace: "tenant-a",
+        store: storage,
+        catalog: fixture.assets.catalog,
+        producerId: "turn",
+        incarnationId,
+        onOpen(_opened, publication) {
+          publication.established();
+        },
+      });
+      return await captureWorkerContent(prepared, { operationKey: "reply" }, {
+        namespace: "tenant-a",
+        signal: new AbortController().signal,
+        open: (input) =>
+          streams.open(
+            { ...input, id: `content.capture:${input.operationKey}` } as never,
+          ),
+        reference: () => {
+          throw new Error("unexpected reference");
+        },
+      }) as import("./types.ts").GeneratedContentSequence;
+    };
+    const first = await capture("attempt-1");
+    const adopter = collectionAssetAdopterFor(fixture.assets);
+    const origin = { type: "message", id: "reply" };
+    const plan = await adopter.prepareMaterialization({
+      namespace: "tenant-a",
+      content: first,
+      origin,
+    });
+    await assertRejects(() =>
+      fixture.coordinator.commitMutation({
+        draft: {
+          type: "reply.created",
+          namespace: "tenant-a",
+          subject: origin,
+          payload: {},
+        },
+        async mutate(context) {
+          await adopter.adoptMaterialization(context, plan);
+          throw new Error("delivery lost after streamed reply");
+        },
+      })
+    );
+    const retry = await capture("attempt-2");
+    assert(isPendingContentRef(first[0]) && isPendingContentRef(retry[0]));
+    assert(first[0].pendingRef !== retry[0].pendingRef);
+    const refs = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: retry,
+      origin,
+    });
+    const committed = await fixture.assets.read("tenant-a", refs[0].assetId);
+    assertEquals(new TextDecoder().decode(committed.bytes), answer);
+    assertEquals(
+      committed.bytes.length,
+      new TextEncoder().encode(answer).length,
+    );
+    assertEquals(
+      await fixture.assets.materialize({
+        namespace: "tenant-a",
+        content: retry,
+        origin,
+      }),
+      refs,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});

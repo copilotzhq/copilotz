@@ -1,4 +1,8 @@
-import { captureJsonValue } from "@copilotz/copilotz/content/codec";
+import {
+  captureJsonValue,
+  decodeContent,
+  encodeContent,
+} from "@copilotz/copilotz/content/codec";
 /** Provider-neutral durable LLM Action. @module */
 
 import {
@@ -13,6 +17,7 @@ import type { PreparedAttemptTranscript } from "../../adapters/bridge/transcript
 import {
   type ActionContext,
   type ActionDefinition,
+  type ActionEffectOutcome,
   defineAction,
 } from "@copilotz/copilotz/actions";
 import type {
@@ -2000,19 +2005,25 @@ async function settleInvocation(
   signal: AbortSignal,
   externalSignal: AbortSignal,
   disposeInput: (reason?: unknown) => Promise<void>,
+  checkpoint: (result: LlmAdapterResult) => Promise<void>,
 ): Promise<LlmAdapterResult> {
   // Observe and normalize the result before touching the frame stream. A
   // malformed or already-locked stream must never orphan a rejecting result.
   const result = observe(
-    Promise.resolve(invocation.result).then((value) => {
+    Promise.resolve(invocation.result).then(async (value) => {
+      let result: LlmAdapterResult;
       try {
-        return invocationResult(value);
+        result = invocationResult(value);
       } catch (error) {
         throw new FrameworkInvocationError(
           "LLM Adapter result failed Copilotz validation.",
           frameworkFailureFromResult(value, error),
         );
       }
+      // Storage/ownership failure is not a provider validation failure. Preserve
+      // its interruption identity so the Action does not settle prematurely.
+      await checkpoint(result);
+      return result;
     }),
   );
   let reader: ReadableStreamDefaultReader<LlmAdapterFrame>;
@@ -2123,10 +2134,21 @@ async function settleInvocation(
       if (drainOutcome.status === "rejected") throw drainOutcome.reason;
       throw resultOutcome.reason;
     }
-    controller.abort(error);
-    disposeWithoutWaiting(disposeInput, error);
-    cancelReaderWithoutWaiting(reader, error);
-    throw error instanceof InvocationBranchError ? error.cause : error;
+    let failure = error;
+    if (
+      error instanceof InvocationBranchError && error.source === "frames" &&
+      !externalSignal.aborted
+    ) {
+      // A frame transport failure can race a successful result. Let its
+      // checkpoint settle before classifying this attempt as a provider failure.
+      await raceSignal(result, externalSignal).catch((resultError) => {
+        failure = resultError;
+      });
+    }
+    controller.abort(failure);
+    disposeWithoutWaiting(disposeInput, failure);
+    cancelReaderWithoutWaiting(reader, failure);
+    throw failure instanceof InvocationBranchError ? failure.cause : failure;
   }
 }
 
@@ -2730,6 +2752,51 @@ function outputFor(
   } as const);
 }
 
+function recordCheckpointError(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  return plainRecord(value.error, "LLM failed checkpoint");
+}
+
+/** Provider output is checkpointed independently of physical stream incarnations. */
+function completionCheckpoint(result: LlmAdapterResult): ActionEffectOutcome {
+  return canonicalJson({
+    status: "completed",
+    result: {
+      ...result,
+      content: encodeContent(result.content),
+      ...(result.reasoning === undefined
+        ? {}
+        : { reasoning: encodeContent(result.reasoning) }),
+      ...(result.nativeReasoning
+        ? {
+          nativeReasoning: {
+            ...result.nativeReasoning,
+            blocks: encodeContent(result.nativeReasoning.blocks),
+          },
+        }
+        : {}),
+    },
+  }, "LLM completion checkpoint") as ActionEffectOutcome;
+}
+
+function restoredCompletion(value: unknown): LlmAdapterResult {
+  const result = plainRecord(value, "LLM completion checkpoint");
+  const native = result.nativeReasoning === undefined
+    ? undefined
+    : plainRecord(result.nativeReasoning, "native reasoning");
+  return invocationResult({
+    ...result,
+    content: decodeContent(result.content),
+    ...(result.reasoning === undefined
+      ? {}
+      : { reasoning: decodeContent(result.reasoning) }),
+    ...(native
+      ? { nativeReasoning: { ...native, blocks: decodeContent(native.blocks) } }
+      : {}),
+  });
+}
+
 async function executeLlmCall(
   rawInput: LlmCallInput,
   context: LlmActionContext,
@@ -2750,12 +2817,31 @@ async function executeLlmCall(
         context,
       );
     }
-    const prepared = await attemptModel(
-      plan[index],
-      input,
-      context,
-      credentialMemo,
-    );
+    const effectStep = `provider:${index}`;
+    const saved = await context.effect.inspect(effectStep);
+    let replay = saved.status === "replay"
+      ? plainRecord(saved.outcome, "LLM provider checkpoint")
+      : undefined;
+    if (replay?.status === "completed") {
+      // Validation can reject a completed response's frame stream. Preserve
+      // that fallback decision across a later delivery retry as well.
+      const rejected = await context.effect.inspect(`${effectStep}:rejected`);
+      if (rejected.status === "replay") {
+        replay = plainRecord(rejected.outcome, "LLM rejected checkpoint");
+      }
+    }
+    const prepared: ConnectionAttemptModel = replay
+      ? replay.status === "credential_unavailable"
+        ? { kind: "unavailable" }
+        : replay.status === "credential_failed"
+        ? { kind: "failed" }
+        : { kind: "ready", candidate: plan[index] }
+      : await attemptModel(
+        plan[index],
+        input,
+        context,
+        credentialMemo,
+      );
     if (context.signal.aborted) {
       await failWithAttemptAccounting(
         signalError(context.signal),
@@ -2764,7 +2850,20 @@ async function executeLlmCall(
       );
     }
     // Connected-account credentials may be unavailable for this user. This is
-    // an intentional no-I/O skip, not a provider attempt or Usage record.
+    // an intentional no-provider-I/O skip, not a provider attempt or Usage record.
+    if (!replay && prepared.kind !== "ready") {
+      // Keep the selection stable: newly available credentials must not cause
+      // a retry to ignore a later candidate's already-paid completion.
+      const permission = await context.effect.begin(effectStep);
+      if (permission.status !== "proceed") {
+        throw new Error("LLM credential checkpoint has no fresh permission.");
+      }
+      await context.effect.confirm(effectStep, {
+        status: prepared.kind === "unavailable"
+          ? "credential_unavailable"
+          : "credential_failed",
+      });
+    }
     if (prepared.kind === "unavailable") continue;
     if (prepared.kind === "failed") {
       const failure = Object.assign(
@@ -2805,112 +2904,145 @@ async function executeLlmCall(
     ]);
     let attemptInput: ManagedInput | undefined;
     let result: LlmAdapterResult;
+    let dispatched = false;
+    let confirmed = Boolean(replay);
+    let checkpointing = false;
     try {
-      const adapterCallInput: LlmAdapterCallInput = {
-        model: candidate.selection.model,
-        adapter: candidate.adapterAlias,
-        providerModel: candidate.selection.model,
-        mode: input.mode,
-        fallbackAvailable: index < plan.length - 1,
-        options: candidate.selection.options ?? ({} as const),
-        request,
-        signal: attemptSignal,
-      };
-      let preparedAttemptTranscript: PreparedAttemptTranscript | undefined;
-      if (candidate.connection.provider !== undefined) {
-        const stamp = input.preparation?.candidates.find((entry) =>
-          entry.index === index
-        );
-        const builtinConfiguration = candidate.builtinConfiguration;
-        if (!builtinConfiguration) {
-          throw new TypeError(
-            "Built-in LLM candidate has no resolved provider configuration.",
+      if (replay) {
+        if (replay.status === "failed") {
+          streams.visible = replay.visible === true;
+          throw Object.assign(
+            new Error(String(recordCheckpointError(replay).message)),
+            recordCheckpointError(replay),
+            {
+              attempts: replay.attempts,
+              rejectedAttemptEvidence: replay.rejectedAttemptEvidence,
+            },
           );
         }
-        preparedAttemptTranscript = await prepareBuiltinModelTranscript(
-          builtinConfiguration,
-          input.mode,
-          candidate.selection.options ?? ({} as const),
-          adapterCallInput,
-          stamp?.calibrationFactor,
-        );
-        const config = toLLMConfig({
-          ...candidate.selection.options,
-          model: candidate.selection.model,
-          provider: candidate.connection.provider,
-        });
-        if (input.preparation) {
-          if (!stamp) {
-            throw new TypeError(
-              "LLM call preparation is missing a built-in candidate.",
-            );
-          }
-          const estimated = preparedAttemptTranscript.inputTokenEstimate;
-          const expectedStatus = estimated.estimatedTokens >
-              (config.limitEstimatedInputTokens ?? 150_000)
-            ? "too_large"
-            : "fit";
-          if (
-            stamp.connection !== candidate.alias ||
-            stamp.model !== candidate.selection.model ||
-            stamp.adapter !== candidate.adapterAlias ||
-            stamp.promptFingerprint !==
-              preparedAttemptTranscript.promptFingerprint ||
-            stamp.calibrationKey !== estimated.calibrationKey ||
-            stamp.calibrationFactor !== estimated.calibrationFactor ||
-            stamp.estimatedInputTokens !== estimated.estimatedTokens ||
-            stamp.limitEstimatedInputTokens !==
-              config.limitEstimatedInputTokens ||
-            stamp.status !== expectedStatus
-          ) {
-            throw new TypeError(
-              "LLM call preparation no longer matches its candidate.",
-            );
-          }
-        }
-        assertEstimatedInputLimit(
-          preparedAttemptTranscript.inputTokenEstimate,
-          config,
-        );
+        result = restoredCompletion(replay.result);
       } else {
-        // Custom adapters do not expose their final wire transcript. Retain
-        // their existing generic LLM preflight guard.
-        preflightLlmRequest(input.request, {
-          ...candidate.selection.options,
+        const adapterCallInput: LlmAdapterCallInput = {
           model: candidate.selection.model,
-        }, context.namespace);
-      }
-      const inputFollower = input.inputStreamId
-        ? await context.streams.follow({
-          id: requiredText(input.inputStreamId, "LLM input stream ID"),
-        }, { signal: attemptSignal })
-        : undefined;
-      attemptInput = inputFollower
-        ? managedInput(inputFollower.body)
-        : undefined;
-      const callInput = {
-        ...adapterCallInput,
-        ...(preparedAttemptTranscript ? { preparedAttemptTranscript } : {}),
-        ...(attemptInput ? { input: attemptInput.stream } : {}),
-      } as LlmAdapterCallInput;
-      const invocation = invocationOf(candidate.adapter!.call(callInput));
-      result = await settleInvocation(
-        invocation,
-        candidate,
-        index,
-        input,
-        context,
-        streams,
-        attemptController,
-        attemptSignal,
-        context.signal,
-        (reason) => attemptInput?.dispose(reason) ?? Promise.resolve(),
-      );
-      if (attemptInput) {
-        disposeWithoutWaiting(
-          attemptInput.dispose,
-          "LLM attempt input settled.",
+          adapter: candidate.adapterAlias,
+          providerModel: candidate.selection.model,
+          mode: input.mode,
+          fallbackAvailable: index < plan.length - 1,
+          options: candidate.selection.options ?? ({} as const),
+          request,
+          signal: attemptSignal,
+        };
+        let preparedAttemptTranscript: PreparedAttemptTranscript | undefined;
+        if (candidate.connection.provider !== undefined) {
+          const stamp = input.preparation?.candidates.find((entry) =>
+            entry.index === index
+          );
+          const builtinConfiguration = candidate.builtinConfiguration;
+          if (!builtinConfiguration) {
+            throw new TypeError(
+              "Built-in LLM candidate has no resolved provider configuration.",
+            );
+          }
+          preparedAttemptTranscript = await prepareBuiltinModelTranscript(
+            builtinConfiguration,
+            input.mode,
+            candidate.selection.options ?? ({} as const),
+            adapterCallInput,
+            stamp?.calibrationFactor,
+          );
+          const config = toLLMConfig({
+            ...candidate.selection.options,
+            model: candidate.selection.model,
+            provider: candidate.connection.provider,
+          });
+          if (input.preparation) {
+            if (!stamp) {
+              throw new TypeError(
+                "LLM call preparation is missing a built-in candidate.",
+              );
+            }
+            const estimated = preparedAttemptTranscript.inputTokenEstimate;
+            const expectedStatus = estimated.estimatedTokens >
+                (config.limitEstimatedInputTokens ?? 150_000)
+              ? "too_large"
+              : "fit";
+            if (
+              stamp.connection !== candidate.alias ||
+              stamp.model !== candidate.selection.model ||
+              stamp.adapter !== candidate.adapterAlias ||
+              stamp.promptFingerprint !==
+                preparedAttemptTranscript.promptFingerprint ||
+              stamp.calibrationKey !== estimated.calibrationKey ||
+              stamp.calibrationFactor !== estimated.calibrationFactor ||
+              stamp.estimatedInputTokens !== estimated.estimatedTokens ||
+              stamp.limitEstimatedInputTokens !==
+                config.limitEstimatedInputTokens ||
+              stamp.status !== expectedStatus
+            ) {
+              throw new TypeError(
+                "LLM call preparation no longer matches its candidate.",
+              );
+            }
+          }
+          assertEstimatedInputLimit(
+            preparedAttemptTranscript.inputTokenEstimate,
+            config,
+          );
+        } else {
+          // Custom adapters do not expose their final wire transcript. Retain
+          // their existing generic LLM preflight guard.
+          preflightLlmRequest(input.request, {
+            ...candidate.selection.options,
+            model: candidate.selection.model,
+          }, context.namespace);
+        }
+        const inputFollower = input.inputStreamId
+          ? await context.streams.follow({
+            id: requiredText(input.inputStreamId, "LLM input stream ID"),
+          }, { signal: attemptSignal })
+          : undefined;
+        attemptInput = inputFollower
+          ? managedInput(inputFollower.body)
+          : undefined;
+        const callInput = {
+          ...adapterCallInput,
+          ...(preparedAttemptTranscript ? { preparedAttemptTranscript } : {}),
+          ...(attemptInput ? { input: attemptInput.stream } : {}),
+        } as LlmAdapterCallInput;
+        const permission = await context.effect.begin(effectStep);
+        if (permission.status !== "proceed") {
+          throw new Error(
+            "LLM provider dispatch has no fresh effect permission.",
+          );
+        }
+        dispatched = true;
+        const invocation = invocationOf(candidate.adapter!.call(callInput));
+        result = await settleInvocation(
+          invocation,
+          candidate,
+          index,
+          input,
+          context,
+          streams,
+          attemptController,
+          attemptSignal,
+          context.signal,
+          (reason) => attemptInput?.dispose(reason) ?? Promise.resolve(),
+          async (completed) => {
+            checkpointing = true;
+            await context.effect.confirm(
+              effectStep,
+              completionCheckpoint(completed),
+            );
+            confirmed = true;
+          },
         );
+        if (attemptInput) {
+          disposeWithoutWaiting(
+            attemptInput.dispose,
+            "LLM attempt input settled.",
+          );
+        }
       }
     } catch (error) {
       attemptController.abort(error);
@@ -2925,6 +3057,31 @@ async function executeLlmCall(
       } catch (validationError) {
         failure = validationError;
       }
+      const failedCheckpoint = () =>
+        canonicalJson({
+          status: "failed",
+          error: errorDetails(failure),
+          attempts: reported,
+          visible: streams.visible,
+          ...(evidence ? { rejectedAttemptEvidence: evidence } : {}),
+        }, "LLM failed checkpoint") as ActionEffectOutcome;
+      if (
+        dispatched && !confirmed && !checkpointing && !context.signal.aborted
+      ) {
+        // A received failure is also a durable outcome: replay it rather than
+        // repeating a paid request while resuming a later fallback candidate.
+        await context.effect.confirm(effectStep, failedCheckpoint());
+      } else if (
+        confirmed && !replay && !cancelled &&
+        error instanceof LlmAdapterCallError
+      ) {
+        const step = `${effectStep}:rejected`;
+        const permission = await context.effect.begin(step);
+        if (permission.status !== "proceed") {
+          throw new Error("LLM rejection checkpoint has no fresh permission.");
+        }
+        await context.effect.confirm(step, failedCheckpoint());
+      }
       appendDurableAttempts(
         attempts,
         candidate,
@@ -2935,6 +3092,7 @@ async function executeLlmCall(
       );
       await reportRejectedAttemptEvidence(evidence, attempts.at(-1), context);
       const terminalFailure = cancelled ||
+        (checkpointing && !confirmed) ||
         streams.visible ||
         index === plan.length - 1;
       if (terminalFailure) {
@@ -2946,6 +3104,16 @@ async function executeLlmCall(
     let resultAccounted = false;
     try {
       const finalContent = await prepareResultContent(result, index, context);
+      if (
+        !result.toolCalls?.length &&
+        finalContent.content.content.every((ref) =>
+          finalContent.content.assets.some((asset) =>
+            asset.id === ref.assetId && asset.byteLength === 0
+          )
+        )
+      ) {
+        throw new Error("The model completed without reply content.");
+      }
       const settledStreams = await settleWriters(
         streams,
         attemptSignal,

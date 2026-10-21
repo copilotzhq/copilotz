@@ -159,13 +159,18 @@ test("tool output follows the tool call through its Action run", () => {
   );
 });
 
-test("the LLM call and the operation settle replies; a failed answer lane fails it", () => {
+test("only terminal LLM and operation events settle replies across failed stream attempts", () => {
   const feed = createFeedProjector();
   feed.apply(open("a", agent("content", "run-a")));
   feed.apply(open("b", agent("content", "run-b")));
   feed.apply(open("c", agent("content", "run-c")));
   feed.apply(event("llm.call.completed", { data: { actionRunId: "run-a" } }));
   feed.apply(end("b", 0, true));
+  assert.equal(
+    feed.snapshot().attempts.find((attempt) => attempt.attemptId === "run-b")
+      ?.status,
+    "streaming",
+  );
   feed.apply(event("operation.cancelled"));
   const status = Object.fromEntries(
     feed.snapshot().attempts.map((

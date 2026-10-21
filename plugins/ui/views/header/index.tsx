@@ -228,6 +228,45 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
       const items = menuItems(ctx.resources.headerMenu);
       const shell = ctx.resources.shell as Record<string, unknown> | undefined;
       const branding = (shell?.branding ?? {}) as { title?: string };
+      const pageItem = nav.page
+        ? [...items, ...menuItems(ctx.resources.userMenu)].find((item) =>
+          item.page === nav.page
+        )
+        : undefined;
+      if (nav.page) {
+        return (
+          <header
+            data-slot="shell-header"
+            className="bg-background/95 supports-[backdrop-filter]:bg-background/80 relative z-20 flex h-14 shrink-0 items-center gap-1.5 border-b px-2 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-3"
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Close"
+                  onClick={() => ctx.actions.shellOpenPage({ page: null })}
+                >
+                  <ArrowLeft />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Close</TooltipContent>
+            </Tooltip>
+            <div className="flex min-w-0 flex-1 items-center gap-2 pl-1">
+              {pageItem?.icon && (
+                <Icon
+                  name={pageItem.icon}
+                  className="text-muted-foreground size-4"
+                />
+              )}
+              <h1 className="min-w-0 truncate text-sm font-semibold sm:text-[15px]">
+                {pageItem?.label ?? branding.title ?? ""}
+              </h1>
+            </div>
+          </header>
+        );
+      }
       const inSpace = Boolean(nav.spaceId);
       const title = inSpace
         ? String(openSpace?.name ?? "Space")

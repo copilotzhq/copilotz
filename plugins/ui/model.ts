@@ -23,6 +23,11 @@ export type ShellState = Readonly<{
   panel: boolean;
   /** A new conversation's Space (the new-conversation screen). */
   newIn: string | null;
+  /**
+   * A page in main, by View kind (such as an app's settings). It receives
+   * `{ section }` when `section` is set, otherwise `null`.
+   */
+  page: string | null;
   /** `url` while the state came from a link; any in-app navigation is `app`. */
   origin: "app" | "url";
 }>;
@@ -33,6 +38,7 @@ export const initialShell: ShellState = {
   section: null,
   panel: false,
   newIn: null,
+  page: null,
   origin: "app",
 };
 
@@ -50,6 +56,7 @@ export function shellState(value: unknown): ShellState {
     section: id(row.section),
     panel: row.panel === true,
     newIn: id(row.newIn),
+    page: id(row.page),
     origin: row.origin === "url" ? "url" : "app",
   };
 }
@@ -60,7 +67,7 @@ export interface ShellUrlCodec {
   encode(url: URL, state: ShellState): void;
 }
 
-/** `?chat=<id>&space=<id>&section=<id>&panel=1&new=<spaceId|1>`. */
+/** `?chat=<id>&space=<id>&section=<id>&panel=1&new=<spaceId|1>&page=<kind>`. */
 export const defaultShellCodec: ShellUrlCodec = {
   decode(url) {
     const query = url.searchParams;
@@ -71,6 +78,7 @@ export const defaultShellCodec: ShellUrlCodec = {
       section: query.get("section"),
       panel: query.get("panel") === "1",
       newIn: fresh && fresh !== "1" ? fresh : null,
+      page: query.get("page"),
     });
   },
   encode(url, state) {
@@ -85,6 +93,7 @@ export const defaultShellCodec: ShellUrlCodec = {
       "new",
       !state.threadId && !state.spaceId && state.newIn ? state.newIn : null,
     );
+    put("page", state.page);
   },
 };
 
@@ -163,7 +172,8 @@ export function shellUrlStorageAdapter(
       const url = new URL(history.read());
       codec.encode(url, state);
       const moved = !last || last.threadId !== state.threadId ||
-        last.spaceId !== state.spaceId || last.newIn !== state.newIn;
+        last.spaceId !== state.spaceId || last.newIn !== state.newIn ||
+        last.page !== state.page;
       last = state;
       if (url.href === history.read().href && !moved) return;
       history.write(url, moved ? "push" : "replace");
@@ -384,6 +394,8 @@ export type MenuItem = Readonly<{
   action?: string;
   /** A View kind opened in the shell's dialog host. */
   dialog?: string;
+  /** A View kind opened as a page in main (see `ShellState.page`). */
+  page?: string;
   destructive: boolean;
   /** Shown only while a conversation (or a Space) is open. */
   requires?: "thread" | "space";
@@ -399,7 +411,8 @@ export function menuItems(resources: unknown): MenuItem[] {
       : undefined;
     if (
       !entry || typeof entry.label !== "string" ||
-      (typeof entry.action !== "string" && typeof entry.dialog !== "string")
+      (typeof entry.action !== "string" && typeof entry.dialog !== "string" &&
+        typeof entry.page !== "string")
     ) return [];
     return [{
       id,
@@ -408,6 +421,7 @@ export function menuItems(resources: unknown): MenuItem[] {
       order: typeof entry.order === "number" ? entry.order : 50,
       ...(typeof entry.action === "string" ? { action: entry.action } : {}),
       ...(typeof entry.dialog === "string" ? { dialog: entry.dialog } : {}),
+      ...(typeof entry.page === "string" ? { page: entry.page } : {}),
       destructive: entry.destructive === true,
       ...(entry.requires === "thread" || entry.requires === "space"
         ? { requires: entry.requires as "thread" | "space" }

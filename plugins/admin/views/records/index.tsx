@@ -5,7 +5,13 @@
 import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { ReadStatus, ResourceTable, Screen } from "@copilotz/copilotz/web/kit";
+import {
+  EmptyState,
+  humanize,
+  ReadStatus,
+  ResourceTable,
+  Screen,
+} from "@copilotz/copilotz/web/kit";
 const view: import("@copilotz/copilotz/views").ViewDefinition<
   { collection: string; columns?: string[] },
   React.ReactNode,
@@ -22,12 +28,18 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   render({ collection, columns = ["id", "name", "status"] }, ctx) {
     const reader = ctx.collections[collection];
     if (!reader) {
-      return <Screen title="Collection unavailable" density={ctx.hints.mode} />;
+      return (
+        <Screen title={humanize(collection)} density={ctx.hints.mode}>
+          <EmptyState title="Not available">
+            This app doesn't include these records.
+          </EmptyState>
+        </Screen>
+      );
     }
     const records = reader.list({ limit: 100 });
     return (
-      <Screen title={collection} density={ctx.hints.mode}>
-        <ReadStatus state={records} />
+      <Screen title={humanize(collection)} density={ctx.hints.mode}>
+        <ReadStatus state={records} noun="records" />
         <ResourceTable rows={records.value} columns={columns} />
       </Screen>
     );

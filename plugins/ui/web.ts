@@ -99,6 +99,7 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
             threadId: (input as { threadId: string }).threadId,
             spaceId: null,
             newIn: null,
+            page: null,
           }),
       ),
       shellOpenSpace: browser("ui.shell.openSpace", (input, ctx) => {
@@ -106,7 +107,13 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
           spaceId: string;
           section?: string;
         };
-        navigate(ctx, { spaceId, ...(section ? { section } : {}) });
+        const from = shellState(ctx.collections.shell.get("main").value);
+        navigate(ctx, {
+          spaceId,
+          page: null,
+          // A page's section never carries over into a Space.
+          ...(section ? { section } : from.page ? { section: null } : {}),
+        });
       }),
       shellCloseSpace: browser(
         "ui.shell.closeSpace",
@@ -116,8 +123,16 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
         navigate(ctx, {
           threadId: null,
           spaceId: null,
+          page: null,
           newIn: (input as { spaceId?: string } | undefined)?.spaceId ?? null,
         })),
+      shellOpenPage: browser("ui.shell.openPage", (input, ctx) => {
+        const { page, section } = input as {
+          page: string | null;
+          section?: string | null;
+        };
+        navigate(ctx, { page, section: section ?? null, spaceId: null });
+      }),
       shellSection: browser(
         "ui.shell.section",
         (input, ctx) =>
@@ -213,7 +228,9 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
 
 /**
  * The host `show` port for the shell: `ctx.show(ref, { source: "link" })`
- * opens conversations and Spaces in place and any other View in the dialog.
+ * opens conversations and Spaces in place, a View with `region: "main"` as a
+ * page (its value is `null` or `{ section }`), and any other View in the
+ * dialog.
  */
 export function shellNavigation(
   runtime: () => BrowserRuntime,
@@ -230,6 +247,18 @@ export function shellNavigation(
         ...(typeof value.section === "string"
           ? { section: value.section }
           : {}),
+      });
+    }
+    // `region: "main"` opens a View as a page; its value may name a section.
+    if (
+      hints.region === "main" && typeof reference.shows === "string" &&
+      (value === null ||
+        (Object.keys(value).every((key) => key === "section") &&
+          (value.section === undefined || typeof value.section === "string")))
+    ) {
+      return actions.shellOpenPage({
+        page: reference.shows,
+        section: (value?.section as string | undefined) ?? null,
       });
     }
     if (reference.shows === "newThread") {

@@ -27,6 +27,10 @@ export function runMenuItem(
   item: MenuItem,
   input: Readonly<{ threadId?: string | null; spaceId?: string | null }>,
 ): void {
+  if (item.page) {
+    ctx.actions.shellOpenPage({ page: item.page });
+    return;
+  }
   if (item.dialog) {
     ctx.actions.shellDialog({
       reference: { shows: item.dialog, value: { ...input } },

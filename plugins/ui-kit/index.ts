@@ -10,6 +10,7 @@ export * from "./components/avatar.tsx";
 export * from "./components/scroll-area.tsx";
 export * from "./components/tooltip.tsx";
 export * from "./components/tabs.tsx";
+export * from "./components/tab-bar.tsx";
 export * from "./components/dropdown-menu.tsx";
 export * from "./components/form.tsx";
 export * from "./components/feedback.tsx";

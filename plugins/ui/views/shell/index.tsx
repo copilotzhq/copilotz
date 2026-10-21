@@ -128,7 +128,12 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
       const manageTheme =
         (ctx.resources.shell as Record<string, unknown> | undefined)
           ?.theme !== "host";
-      const main: ViewReference = nav.spaceId
+      const main: ViewReference = nav.page
+        ? {
+          shows: nav.page,
+          value: nav.section ? { section: nav.section } : null,
+        }
+        : nav.spaceId
         ? {
           shows: "space",
           value: { spaceId: nav.spaceId, threadId: nav.threadId },
@@ -139,7 +144,8 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
           shows: "newThread",
           value: nav.newIn ? { spaceId: nav.newIn } : null,
         };
-      const panelOpen = nav.panel && Boolean(nav.threadId) && !nav.spaceId;
+      const panelOpen = nav.panel && Boolean(nav.threadId) && !nav.spaceId &&
+        !nav.page;
       const dialog = overlay?.dialog as ViewReference | null | undefined;
       return (
         <TooltipProvider>

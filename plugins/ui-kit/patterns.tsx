@@ -206,6 +206,39 @@ export function Metric(
   );
 }
 
+/** Label and value pairs; values use the table's cell formatting. */
+export function DetailList(
+  { items, className }: {
+    items: readonly (readonly [label: string, value: unknown])[];
+    className?: string;
+  },
+): React.ReactElement {
+  return (
+    <dl
+      data-slot="detail-list"
+      className={cn(
+        "bg-card grid grid-cols-[minmax(6rem,auto)_1fr] gap-x-6 rounded-lg border text-sm shadow-soft",
+        className,
+      )}
+    >
+      {items.map(([label, value], index) => (
+        <div
+          key={label}
+          className={cn(
+            "col-span-2 grid grid-cols-subgrid items-baseline px-4 py-2.5",
+            index > 0 && "border-t",
+          )}
+        >
+          <dt className="text-muted-foreground">{label}</dt>
+          <dd className="min-w-0 break-words">
+            {React.isValidElement(value) ? value : cell(value)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /** "updatedAt" → "Updated at", "totalCostUsd" → "Total cost usd". */
 export function humanize(field: string): string {
   const words = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(

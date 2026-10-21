@@ -250,9 +250,37 @@ const forkDialog = defineView<
   render: ({ threadId }) => <p>{`Share ${threadId}`}</p>,
 });
 
+const settingsPage = defineView<
+  { section?: string } | null,
+  React.ReactNode,
+  BrowserViewContext
+>({
+  id: "test.settings",
+  shows: "testSettings",
+  renderer: "react",
+  modes: ["full"],
+  url: true,
+  render: (value, ctx) => (
+    <div>
+      <p>{`Settings: ${value?.section ?? "general"}`}</p>
+      <button
+        type="button"
+        onClick={() =>
+          ctx.show({ shows: "testSettings", value: { section: "billing" } }, {
+            source: "link",
+            region: "main",
+          })}
+      >
+        Billing tab
+      </button>
+    </div>
+  ),
+});
+
 const app: BrowserPlugin = {
   id: "test-app",
   views: {
+    settingsPage,
     boards: section("test.boards", "testBoards"),
     unsafe: section("test.unsafe", "testUnsafe", false),
     report,
@@ -289,6 +317,9 @@ const app: BrowserPlugin = {
       share: { label: "Share", icon: "share", dialog: "testShare" },
     },
     toolRenderers: { terminal: { view: "testTerminal" } },
+    userMenu: {
+      settings: { label: "Settings", icon: "settings", page: "testSettings" },
+    },
   },
 };
 
@@ -726,6 +757,40 @@ test("header menu items run their Action with the conversation or open their dia
     );
   } finally {
     await shell.dispose();
+  }
+});
+
+test("a user menu page opens in main, keeps its section in the URL and closes back", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await pointer(byLabel("Account: Ana"));
+    await click(byText('[role="menuitem"]', "Settings"));
+    assert.match(main(), /Settings: general/);
+    assert.equal(shell.url().searchParams.get("page"), "testSettings");
+    assert.equal(
+      document.querySelector('[data-slot="shell-header"] h1')?.textContent,
+      "Settings",
+    );
+    await click(byText("button", "Billing tab"));
+    assert.match(main(), /Settings: billing/);
+    assert.equal(shell.url().searchParams.get("section"), "billing");
+    await click(byLabel("Close"));
+    assert.equal(nav(shell).page, null);
+    assert.equal(nav(shell).section, null);
+    assert.equal(shell.url().searchParams.get("page"), null);
+    assert.equal(nav(shell).threadId, "t1", "the conversation is back");
+    assert.doesNotMatch(main(), /Settings/);
+  } finally {
+    await shell.dispose();
+  }
+  // A link restores the page and its section.
+  const linked = await mount(
+    "https://app.example/?page=testSettings&section=billing",
+  );
+  try {
+    assert.match(main(), /Settings: billing/);
+  } finally {
+    await linked.dispose();
   }
 });
 

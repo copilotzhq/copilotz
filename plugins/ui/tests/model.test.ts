@@ -155,6 +155,7 @@ test("shell state keeps identifiers only", () => {
       section: null,
       panel: false,
       newIn: null,
+      page: null,
       origin: "app",
     },
   );
@@ -187,6 +188,7 @@ test("the URL adapter restores link state as url origin and keeps other paramete
     section: "boards",
     panel: true,
     newIn: null,
+    page: null,
     origin: "url",
   });
   await adapter.save("shell", [{ ...row, spaceId: null, origin: "app" }]);
@@ -208,6 +210,16 @@ test("entries the app wrote restore as app origin", async () => {
   const { host } = history("https://app.example/?chat=t1", true);
   const [row] = await shellUrlStorageAdapter(host).load("shell") ?? [];
   assert.equal(row.origin, "app");
+});
+
+test("a page round-trips through the URL and pushes history", async () => {
+  const { host, writes } = history("https://app.example/?page=adminOverview");
+  const adapter = shellUrlStorageAdapter(host);
+  const [row] = await adapter.load("shell") ?? [];
+  assert.equal(row.page, "adminOverview");
+  await adapter.save("shell", [{ ...row, page: null, origin: "app" }]);
+  assert.equal(writes.at(-1)?.mode, "push");
+  assert.equal(new URL(writes.at(-1)!.href).searchParams.get("page"), null);
 });
 
 test("the default codec drops values that are not identifiers", () => {
@@ -237,7 +249,9 @@ test("sections and menu items sort by order, then label; malformed entries drop"
     b: { label: "Beta", action: "beta" },
     a: { label: "Alpha", dialog: "alpha", order: 10, requires: "thread" },
     c: { label: "No target" },
+    d: { label: "Settings", page: "settings", order: 99 },
   });
-  assert.deepEqual(items.map((item) => item.id), ["a", "b"]);
+  assert.deepEqual(items.map((item) => item.id), ["a", "b", "d"]);
   assert.equal(items[0].requires, "thread");
+  assert.equal(items[2].page, "settings");
 });

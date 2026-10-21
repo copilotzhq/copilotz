@@ -362,6 +362,28 @@ const scenarios: Scenario[] = [
       await wait(1800);
     },
   },
+  {
+    name: "15-admin-overview",
+    path: "/?chat=t-plan&stream=0",
+    steps: async () => {
+      await evaluate(`demo.runtime.actions.shellOpenPage({ page: "admin" })`);
+      await wait(700);
+    },
+  },
+  {
+    name: "16-admin-usage",
+    path: "/?chat=t-plan&stream=0",
+    steps: async () => {
+      await evaluate(
+        `demo.runtime.actions.shellOpenPage({ page: "admin", section: "usage" })`,
+      );
+      await wait(700);
+    },
+  },
+  {
+    name: "17-admin-from-link",
+    path: "/?page=admin&section=agents&stream=0",
+  },
 ];
 
 await Deno.mkdir(out, { recursive: true });

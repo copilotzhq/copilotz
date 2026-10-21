@@ -10,6 +10,7 @@ import {
   shellUrlStorageAdapter,
   uiWebPlugin,
 } from "@copilotz/copilotz/ui/web";
+import { adminWebPlugin } from "@copilotz/copilotz/admin/web";
 import type { BrowserRuntime } from "@copilotz/copilotz/web";
 import { FixtureLive } from "../../plugins/ui/tests/fixture-live.test.ts";
 import { fixtures } from "./fixtures.ts";
@@ -22,6 +23,7 @@ const feed = new DemoFeed(live);
 const runtime: BrowserRuntime = await createBrowserRuntime({
   plugins: [
     uiWebPlugin({ navigation: "url", preferences: "local" }),
+    adminWebPlugin,
     demoApp,
   ],
   live,

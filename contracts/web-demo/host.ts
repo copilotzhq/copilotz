@@ -4,7 +4,7 @@
  * frame in the canonical observation format.
  * @module
  */
-import type { ActionTransport } from "@copilotz/copilotz/web";
+import type { ActionTransport, Row } from "@copilotz/copilotz/web";
 import type { FeedFrame, ThreadFeedAdapter } from "@copilotz/copilotz/core/web";
 import type { FixtureLive } from "../../plugins/ui/tests/fixture-live.test.ts";
 import { agents, assets } from "./fixtures.ts";
@@ -360,6 +360,93 @@ async function reply(feed: DemoFeed, threadId: string, operationId: string) {
 }
 
 /** Executes the composed Actions against the fixture tables. */
+/** What the administration query Actions return, from the fixtures. */
+function adminData(live: FixtureLive, alias: string): unknown {
+  const threads = live.rows("thread"), people = live.rows("participant");
+  const count = (rows: Row[], field: string, value: string) =>
+    rows.filter((row) => row[field] === value).length;
+  switch (alias) {
+    case "adminOverview":
+      return {
+        threadTotals: {
+          total: threads.length,
+          active: count(threads, "status", "active"),
+          archived: count(threads, "status", "archived"),
+          closed: 0,
+        },
+        messageTotals: { total: live.rows("message").length + 186 },
+        participantTotals: {
+          total: people.length,
+          human: count(people, "participantType", "human"),
+          agent: count(people, "participantType", "agent"),
+          tool: 3,
+          job: 0,
+        },
+        llmTotals: {
+          totalCalls: 128,
+          inputTokens: 912_480,
+          outputTokens: 371_830,
+          reasoningTokens: 64_200,
+          totalTokens: 1_284_310,
+          totalCostUsd: 3.42,
+        },
+        toolTotals: {
+          totalCalls: 57,
+          inputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 0,
+          totalCostUsd: 0.18,
+        },
+      };
+    case "adminAgents":
+      return people.filter((row) => row.participantType === "agent").map((
+        row,
+      ) => ({
+        id: row.agentId,
+        name: row.name,
+        role: (row.metadata as { description?: string })?.description,
+        capabilities: { tools: true, delegation: true },
+      }));
+    case "adminThreads":
+      return threads.map((row) => ({
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        updatedAt: row.updatedAt,
+      }));
+    case "adminParticipants":
+      return people.map((row) => ({
+        id: row.id,
+        displayName: row.name,
+        participantType: row.participantType,
+      }));
+    case "adminActivity":
+      return [6, 5, 4, 3, 2, 1, 0].map((days, index) => ({
+        bucket: new Date(Date.now() - days * 86_400_000).toISOString()
+          .slice(0, 10),
+        messageCount: [18, 32, 25, 41, 37, 22, 29][index],
+        toolCallCount: [4, 9, 6, 12, 10, 5, 11][index],
+        totalTokens:
+          [98_200, 176_400, 141_900, 233_800, 204_100, 119_700, 310_210][index],
+      }));
+    default:
+      return {
+        breakdown: [
+          ["large-model", "provider-a", 74, 702_110, 268_940, 2.91],
+          ["fast-model", "provider-a", 41, 171_320, 84_610, 0.38],
+          ["embedding-model", "provider-b", 13, 39_050, 18_280, 0.13],
+        ].map(([model, provider, attempts, input, output, cost]) => ({
+          dimensions: { model, provider },
+          attempts,
+          inputTokens: input,
+          outputTokens: output,
+          totalCostUsd: cost,
+        })),
+      };
+  }
+}
+
 export function demoActions(
   live: FixtureLive,
   feed: DemoFeed,
@@ -511,6 +598,13 @@ export function demoActions(
           });
           return done();
         }
+        case "adminOverview":
+        case "adminAgents":
+        case "adminThreads":
+        case "adminParticipants":
+        case "adminActivity":
+        case "adminUsage":
+          return done({ status: 200, data: adminData(live, alias) });
         default:
           return done({ ok: true });
       }

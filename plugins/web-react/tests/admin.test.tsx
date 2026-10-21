@@ -112,3 +112,78 @@ test("participant detail reads its ID even outside a paginated admin list", asyn
   }
   assert.equal(live.subscriptions, 0);
 });
+
+test("the administration page reads its section; from a link it waits for Load", async () => {
+  const calls: string[] = [];
+  const runtime = await createBrowserRuntime({
+    renderer: reactRenderer,
+    plugins: [createAdminWebPlugin()],
+    live: new MemorySubscriptions(),
+    actions: {
+      invoke(id) {
+        calls.push(id);
+        return Promise.resolve({
+          seq: 1,
+          value: {
+            status: 200,
+            data: { threadTotals: { total: 9, active: 7, archived: 2 } },
+          },
+        });
+      },
+      cancel: () => Promise.resolve(),
+    },
+  });
+  try {
+    const linked = runtime.observe(() =>
+      runtime.render({
+        shows: "admin",
+        value: { section: "overview" },
+        origin: "url",
+      } as never)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const held = renderToStaticMarkup(<ObservedView output={linked} />);
+    assert.match(held, /Opened from a link/);
+    assert.deepEqual(calls, [], "a link never runs the query by itself");
+    linked.dispose();
+    const opened = runtime.observe(() =>
+      runtime.render({ shows: "admin", value: null })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const html = renderToStaticMarkup(<ObservedView output={opened} />);
+    assert.deepEqual(calls, ["adminOverview"]);
+    for (
+      const text of ["Conversations", "7 active · 2 archived", 'role="tab"']
+    ) {
+      assert.ok(html.includes(text), `${text}: ${html}`);
+    }
+    opened.dispose();
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test("a refused admin section says so in plain words", async () => {
+  const runtime = await createBrowserRuntime({
+    renderer: reactRenderer,
+    plugins: [createAdminWebPlugin()],
+    live: new MemorySubscriptions(),
+    actions: {
+      invoke: () =>
+        Promise.resolve({ seq: 1, value: { status: 403, data: null } }),
+      cancel: () => Promise.resolve(),
+    },
+  });
+  try {
+    const output = runtime.observe(() =>
+      runtime.render({ shows: "adminQuery", value: { section: "usage" } })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const html = renderToStaticMarkup(<ObservedView output={output} />);
+    assert.match(html, /You don&#x27;t have access to this section\./);
+    assert.doesNotMatch(html, /Forbidden|403/);
+    output.dispose();
+  } finally {
+    runtime.dispose();
+  }
+});

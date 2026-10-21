@@ -306,13 +306,29 @@ export function ResourceTable(
   },
 ): React.ReactElement | null {
   if (!rows.length) return <EmptyState title={emptyTitle} />;
+  // Figures align right, so digits line up.
+  const numeric = new Set(
+    columns.filter((column) =>
+      rows.every((row) =>
+        typeof row[column] === "number" || row[column] === undefined ||
+        row[column] === null
+      ) && rows.some((row) => typeof row[column] === "number")
+    ),
+  );
   return (
     <div className="bg-card overflow-x-auto rounded-lg border shadow-soft">
       <table className="w-full text-left text-sm">
         <thead className="bg-muted/60 text-muted-foreground text-xs">
           <tr>
             {columns.map((column) => (
-              <th key={column} scope="col" className="px-3 py-2 font-medium">
+              <th
+                key={column}
+                scope="col"
+                className={cn(
+                  "px-3 py-2 font-medium",
+                  numeric.has(column) && "text-right",
+                )}
+              >
                 {labels[column] ?? humanize(column)}
               </th>
             ))}
@@ -328,7 +344,13 @@ export function ResourceTable(
               )}
             >
               {columns.map((column, position) => (
-                <td key={column} className="max-w-80 truncate px-3 py-2">
+                <td
+                  key={column}
+                  className={cn(
+                    "max-w-80 truncate px-3 py-2",
+                    numeric.has(column) && "text-right",
+                  )}
+                >
                   {open && position === 0
                     ? (
                       <button

@@ -1,5 +1,9 @@
 import { retainedAuthority } from "../runtime/authorization/authority.ts";
-import { attachDeviceSocket } from "./device.ts";
+import { attachDeviceSocket, type DeviceSessionOptions } from "./device.ts";
+import {
+  deviceOrigin,
+  validateAllowedOrigins,
+} from "../plugins/server/shared/device-origin.ts";
 import {
   type DeviceUpgrade,
   hostedDeviceUpgrade,
@@ -41,6 +45,11 @@ export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
   /** Host WebSocket upgrade; mounts the authenticated device binding at /device. */
   upgradeDevice?: DeviceUpgrade;
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Pick<
+    DeviceSessionOptions,
+    "maxSubscriptions" | "maxPendingControls" | "maxPendingBytes"
+  >;
   admit?: () => void | Promise<void>;
   responseHeaders?: Readonly<Record<string, string>>;
   onError?: (error: unknown, request: Request) => void | Promise<void>;
@@ -611,10 +620,18 @@ export function createServerFacadeFetchHandler(
       return await authenticateHttpRequest(request, application, facade, match);
     },
   });
+  const allowedOrigins = validateAllowedOrigins(
+    options.allowedOrigins ?? facade.allowedOrigins,
+  );
   const handler: HttpFetchHandler = async (request) => {
     if (
       new URL(request.url).pathname !== `${facade.basePath}/device`
     ) return fetch(request);
+    const origin = deviceOrigin(request, allowedOrigins);
+    if (origin === false) {
+      return new Response("Device origin refused", { status: 403 });
+    }
+    // This must precede adapter discovery: Node prepare() can upgrade synchronously.
     const upgradeDevice = options.upgradeDevice ?? hostedDeviceUpgrade(request);
     if (!upgradeDevice) return fetch(request);
     if (
@@ -627,24 +644,32 @@ export function createServerFacadeFetchHandler(
     request.signal.throwIfAborted();
     const requestHeaders = new Headers(request.headers),
       requestUrl = request.url;
+    if (origin !== "cookie") requestHeaders.delete("cookie");
     const { socket, response, requestDeadline } = upgradeDevice(
       request,
     );
     trackHostedDeviceSocket(request, socket);
     attachDeviceSocket(socket, {
+      ...facade.deviceLimits,
+      ...options.deviceLimits,
       requestDeadline,
       async authenticate(credentials) {
         if (
           !credentials || typeof credentials !== "object" ||
-          Array.isArray(credentials)
+          Array.isArray(credentials) || !Object.keys(credentials).length
         ) throw appError(403, "forbidden", "Session proof required");
         const headers = new Headers(requestHeaders);
         // Explicit proof changes authority; cookies on an already-open socket do not.
         for (const [key, value] of Object.entries(credentials)) {
           if (
+            key.toLowerCase() === "cookie" && value === true &&
+            origin === "cookie" && headers.get("cookie")
+          ) continue;
+          if (
             !["authorization", "cookie", "x-api-key"].includes(
               key.toLowerCase(),
-            ) || typeof value !== "string"
+            ) || typeof value !== "string" || !value.trim() ||
+            key.toLowerCase() === "cookie" && origin !== "cookie"
           ) throw appError(403, "forbidden", "Invalid session proof");
           headers.set(key, value);
         }

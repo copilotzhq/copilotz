@@ -1254,6 +1254,7 @@ export function createDatabaseScope(
   const publicScope: CopilotzEngineDatabaseScope = {
     authorization,
     observeCollection: createCollectionObserver({
+      ...engine.subscriptionLimits,
       contentResolver: resolver,
       session: engine.session,
       schema: databaseSchema,

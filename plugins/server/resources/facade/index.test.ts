@@ -45,3 +45,34 @@ Deno.test("defineServerFacade rejects malformed policy", () => {
     TypeError,
   );
 });
+
+Deno.test("SEC3 facade validates canonical origins and default Host cookie attributes", () => {
+  for (
+    const allowedOrigins of [["*"], ["null"], ["https://app.example/"], [
+      "https://user:pass@app.example",
+    ], ["file://example"]]
+  ) {
+    assertThrows(() =>
+      defineServerFacade({
+        authenticate: () => {
+          throw new Error("unused");
+        },
+        allowedOrigins,
+      })
+    );
+  }
+  for (
+    const sessionCookie of [{ secure: false }, { path: "/api" }, {
+      domain: "example.com",
+    }]
+  ) {
+    assertThrows(() =>
+      defineServerFacade({
+        authenticate: () => {
+          throw new Error("unused");
+        },
+        sessionCookie,
+      })
+    );
+  }
+});

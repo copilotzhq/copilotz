@@ -45,6 +45,7 @@ Deno.test("F4 subscription admission and notice reauthorization receive the exac
     } finally {
       watch.close();
     }
+    await f.collections.entry.create({ id: "visible", visible: true });
     assertEquals((await r.next()).t, "batch");
     assertEquals(f.intents.at(-1), expected);
     assertEquals(f.intents.length, 2);
@@ -203,7 +204,6 @@ Deno.test("F6 §6.5 and F4 notice revocation fences queued data; changed permiss
     await f.collections.member.update({ id: "key", set: { revision: 1 } });
     await f.run("barrier", {}, () => undefined);
     assert(f.counters().evaluations > checks);
-    await rr.next();
     await f.collections.entry.create({ id: "c", visible: true });
     await f.collections.member.update({ id: "key", set: { allowed: false } });
     assertEquals((await rr.next()).t, "revoked");

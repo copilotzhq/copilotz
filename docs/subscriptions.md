@@ -9,9 +9,15 @@ status: experimental
 # Subscriptions
 
 A subscription is an authorized Collection read. The owner sends a complete
-snapshot at sequence S, then ordered change batches covering `(from, to]`.
-Filtering can produce an empty batch: it still advances coverage. Writes are
-published after commit; ordinary commits perform no subscriber SQL reads.
+snapshot at namespace-local sequence S, then ordered change batches covering
+`(from, to]`. Filtering can produce an empty batch for a policy-visible mutation
+outside the selected window. A mutation invisible to the policy in both its old
+and new record emits no frame. Other namespaces emit no progress.
+Namespace-local event counts also back Action result sequences, preserving
+optimistic settlement. Writes are published after commit; ordinary commits
+perform no subscriber SQL reads. Predicates and their constants are compiled at
+admission. Each state maintains ordered matching IDs and evaluates only changed
+records on commit; window exits refill from that index.
 
 Server adapters use the existing read service:
 
@@ -137,14 +143,64 @@ Retention loss, owner takeover, credential expiry and schema/scope changes reset
 rather than join different snapshots. The SDK processes resets with a fresh
 snapshot.
 
-Queries currently support Collection filters, conjunctive `all`, `limit`
-(1–1000), and ascending or descending `id` order. Cursors, includes, text search
-and other ordering fields are refused. Each owner retains at most 32 observed
-Collection caches, each limited to 10,000 rows and 16 MiB, and 256
-subscriptions. Each reader and replay history is limited to 64 frames / 1 MiB.
-Detached history expires after five minutes. Exceeding a reader buffer emits
-`reset: slow_consumer`; other readers continue. A complete snapshot must fit the
-logical buffer bound.
+Live queries accept scalar `filter` predicates, scalar `where` on declared
+scalar fields (plus `id`), conjunctive `all`, `limit` (1–1000), and ascending or
+descending `id` order. String ranges use SQL `COLLATE "C"` and Unicode
+code-point ordering in memory. `eqIgnoreCase`, `inIgnoreCase`, `jsonEquals`,
+JSON containment (`contains`/`containsAny`), timestamp predicates, cursors,
+includes, text search, and other ordering fields are refused. These restrictions
+apply to policy filters as well as client queries. Use typed scalar predicates
+for complex data.
+
+Configure owner limits through `engine.subscriptionLimits`:
+
+| Option                                                                    |         Default |
+| ------------------------------------------------------------------------- | --------------: |
+| `maxStates` (attached states across the schema)                           |             256 |
+| `maxStatesPerPrincipal` (tenant and principal, across sockets/namespaces) |              32 |
+| `maxDetachedPerPrincipal`                                                 |              16 |
+| `maxPredicateNodes` (per query/policy filter group)                       |              64 |
+| `maxPredicateValues` (`in`/`overlaps` list length)                        |              32 |
+| `maxQueryBytes` (serialized filter group)                                 |          16 KiB |
+| `maxPendingAdmissions`                                                    |             256 |
+| `maxCollections`                                                          |              32 |
+| `maxRows` / `maxCacheBytes` (per row cache)                               | 10,000 / 16 MiB |
+| `maxFrames` / `maxBytes` (reader and replay history)                      |      64 / 1 MiB |
+| `retentionMs`                                                             |         300,000 |
+
+All limits must be positive safe integers; SQL predicate structural bounds still
+apply when raising live limits. Detached states do not consume active admission.
+Retention is bounded per principal, and capacity pressure evicts the oldest
+detached state first. Evicted checkpoints require a fresh snapshot.
+
+`subscription_query_refused` identifies an unsupported or oversized live query
+or policy. `subscription_capacity_exceeded` identifies owner, principal, socket,
+or Collection admission limits. Both are non-retryable on the device protocol;
+change the query or release capacity before retrying. A slow reader receives
+`reset: slow_consumer`; other readers continue. A snapshot must fit `maxBytes`.
+
+The facade's `deviceLimits` (also accepted by `createServerFacadeFetchHandler`)
+sets `maxSubscriptions` (16), `maxPendingControls` (256), and `maxPendingBytes`
+(1 MiB). Set `createDeviceTransport({ maxSubscriptions })` to the matching limit
+when raising the server default. Only a single `hello` is accepted before
+authentication; wait for `welcome` before other controls, including after
+reauthentication. The SDK does this automatically.
+
+Device upgrades require a matching Origin: the request's origin or an explicit
+canonical HTTP(S) origin in `allowedOrigins`. This option is accepted by
+`defineServerFacade` and by `createServerFacadeFetchHandler`. Foreign or opaque
+origins are refused with HTTP 403 before native upgrade, on Deno and Node.
+Without Origin, cookie headers are discarded and cookie credentials are refused;
+non-browser clients must use nonempty `authorization` or `x-api-key`
+credentials. Host authentication must use the supplied request, not ambient
+cookie state.
+
+For same-origin browser cookie authentication use
+`credentials: () => ({ cookie: true })`. This explicitly selects the cookie
+captured at upgrade without exposing an HttpOnly cookie to JavaScript. Empty
+credentials are refused. Cross-origin cookie clients must be explicitly allowed.
+The default Action-session cookie is `__Host-copilotz_session` (Secure, Path=/,
+HttpOnly, no Domain). More than one cookie with the configured name is refused.
 
 The browser runtime takes this same `device` as `live`. Client Collection
 `get(id, options)` and `list(query, options)`, `observe(read)`, Action proxies
@@ -158,8 +214,9 @@ Collection content reader, with its declared fields and byte budget.
 For query invalidation without records, use
 `client.collections.observe(name, {}, {progressOnly:true})`. This is the same
 subscription protocol and state machine: snapshots and deltas have empty rows,
-while `collectionChanged` distinguishes mutations from unrelated owner progress.
-The owner performs no Collection row scan; normal read authorization, permission
-notices, checkpoint resume and revocation still apply. Row query/content options
-cannot be combined with progressOnly, and a progress cursor cannot resume a row
-selection. `/web` uses this mode for query-Action dependencies.
+and `collectionChanged` is emitted only when the policy matches the old or new
+record. The owner performs no Collection row scan; normal read authorization,
+permission notices, checkpoint resume and revocation still apply. Row
+query/content options cannot be combined with progressOnly, and a progress
+cursor cannot resume a row selection. `/web` uses this mode for query-Action
+dependencies.

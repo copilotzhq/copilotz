@@ -25,7 +25,7 @@ export function credentialHeaders(
       0,
       Math.floor((Date.parse(effect.claims.expiresAt) - Date.now()) / 1000),
     );
-    headers["set-cookie"] = `${options.name ?? "copilotz_session"}=${
+    headers["set-cookie"] = `${options.name ?? "__Host-copilotz_session"}=${
       effect.token ?? ""
     }; Path=${options.path ?? "/"}; HttpOnly${
       options.secure === false ? "" : "; Secure"

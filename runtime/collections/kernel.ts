@@ -2069,6 +2069,7 @@ export function createCollectionKernel(
         }),
         body: { id: bodyId, json: plan.write.body },
         collectionChange: {
+          previous: plan.expected ?? null,
           collection: name,
           id: subjectId,
           record: plan.write.body.operation === "delete"

@@ -15,6 +15,8 @@ import {
 
 export type DeviceTransportOptions = Readonly<{
   url: string;
+  /** Match the facade limit when the host raises its default of 16. */
+  maxSubscriptions?: number;
   /** Fresh proof from the HTTP-established session, never retained authority. */
   credentials(): unknown | Promise<unknown>;
   socket?(url: string): DeviceSocket;
@@ -39,6 +41,10 @@ type Channel = {
 export function createDeviceTransport(
   options: DeviceTransportOptions,
 ): DeviceTransport {
+  const maxSubscriptions = options.maxSubscriptions ?? DEVICE_LIMITS.channels;
+  if (!Number.isSafeInteger(maxSubscriptions) || maxSubscriptions < 1) {
+    throw new RangeError("Invalid device subscription limit");
+  }
   let socket: DeviceSocket | undefined, connection: Promise<void> | undefined;
   let welcome: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   let closed = false;
@@ -113,7 +119,7 @@ export function createDeviceTransport(
           if (frame.t === "heartbeat") {
             if (
               !Array.isArray(frame.heads) ||
-              frame.heads.length > DEVICE_LIMITS.channels
+              frame.heads.length > maxSubscriptions
             ) throw protocolError("Invalid heartbeat heads");
             for (const head of frame.heads as DeviceEnvelope[]) {
               const { channel: id, generation } = channelIdentity(head),
@@ -214,8 +220,11 @@ export function createDeviceTransport(
       observation.signal?.throwIfAborted();
       await connect();
       observation.signal?.throwIfAborted();
-      if (channels.size >= DEVICE_LIMITS.channels) {
-        throw protocolError("Device channel capacity exceeded");
+      if (channels.size >= maxSubscriptions) {
+        throw protocolError(
+          "Device channel capacity exceeded",
+          "subscription_capacity_exceeded",
+        );
       }
       const key = JSON.stringify([
         collection,
@@ -304,9 +313,10 @@ export function createDeviceTransport(
           socket?.close(4001, "Reauthentication timeout");
         }, 10_000);
         try {
-          send({ t: "reauthenticate", credentials });
-          // Fence before a blocked application callback is allowed to finish.
+          // Detach while still authenticated; no controls may follow reauthenticate
+          // until the server sends welcome. Fence blocked callbacks immediately.
           fail(new Error("Device reauthentication"));
+          send({ t: "reauthenticate", credentials });
           await connection;
         } catch (error) {
           welcome.reject(error);

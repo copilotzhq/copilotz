@@ -30,6 +30,11 @@ export type ShellState = Readonly<{
   page: string | null;
   /** `url` while the state came from a link; any in-app navigation is `app`. */
   origin: "app" | "url";
+  /**
+   * URL parameters sections own that the shown section does not (see
+   * `SpaceSection.params`); the URL adapter removes them as it writes.
+   */
+  clear?: readonly string[];
 }>;
 
 export const initialShell: ShellState = {
@@ -44,6 +49,8 @@ export const initialShell: ShellState = {
 
 const id = (value: unknown): string | null =>
   typeof value === "string" && /^[\w.:@~-]{1,200}$/.test(value) ? value : null;
+const paramKey = (value: unknown): value is string =>
+  typeof value === "string" && /^[\w.-]{1,64}$/.test(value);
 
 /** Normalize any row or patch into a complete, identifier-only state. */
 export function shellState(value: unknown): ShellState {
@@ -58,6 +65,9 @@ export function shellState(value: unknown): ShellState {
     newIn: id(row.newIn),
     page: id(row.page),
     origin: row.origin === "url" ? "url" : "app",
+    ...(Array.isArray(row.clear) && row.clear.some(paramKey)
+      ? { clear: [...new Set(row.clear.filter(paramKey))] }
+      : {}),
   };
 }
 
@@ -94,6 +104,7 @@ export const defaultShellCodec: ShellUrlCodec = {
       !state.threadId && !state.spaceId && state.newIn ? state.newIn : null,
     );
     put("page", state.page);
+    for (const key of state.clear ?? []) query.delete(key);
   },
 };
 
@@ -357,6 +368,11 @@ export type SpaceSection = Readonly<{
   view: string;
   /** Tool ids whose use marks this section's tab with a dot. */
   tools: readonly string[];
+  /**
+   * URL parameters the section's Views own (such as `board`, `card`); the
+   * shell removes them when another section, or none, is shown.
+   */
+  params: readonly string[];
 }>;
 
 /** The registered sections in order (by `order`, then label). */
@@ -378,6 +394,7 @@ export function spaceSections(resources: unknown): SpaceSection[] {
       tools: Array.isArray(entry.tools)
         ? entry.tools.filter((tool): tool is string => typeof tool === "string")
         : [],
+      params: Array.isArray(entry.params) ? entry.params.filter(paramKey) : [],
     }];
   }).sort((left, right) =>
     left.order - right.order || left.label.localeCompare(right.label)

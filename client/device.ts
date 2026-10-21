@@ -4,6 +4,7 @@ import {
   channelIdentity,
   decodeControl,
   DEVICE_LIMITS,
+  DEVICE_SESSION_REVOKED,
   DEVICE_VERSION,
   type DeviceEnvelope,
   type DeviceSocket,
@@ -21,9 +22,13 @@ export type DeviceTransportOptions = Readonly<{
   credentials(): unknown | Promise<unknown>;
   socket?(url: string): DeviceSocket;
 }>;
+export type DeviceAuthEvent = Readonly<
+  { state: "revoked"; code: "session_revoked" }
+>;
 export type DeviceTransport =
   & SubscriptionTransport
   & Readonly<{
+    onAuthState(listener: (event: DeviceAuthEvent) => void): () => void;
     reauthenticate(): Promise<void>;
     close(): void;
   }>;
@@ -47,7 +52,8 @@ export function createDeviceTransport(
   }
   let socket: DeviceSocket | undefined, connection: Promise<void> | undefined;
   let welcome: ReturnType<typeof Promise.withResolvers<void>> | undefined;
-  let closed = false;
+  let closed = false, revoked = false;
+  const authListeners = new Set<(event: DeviceAuthEvent) => void>();
   let authenticating: Promise<void> | undefined;
   const channels = new Map<string, Channel>();
   const identities = new WeakMap<
@@ -67,8 +73,26 @@ export function createDeviceTransport(
   const fail = (error?: unknown) => {
     for (const channel of [...channels.values()]) channel.stop(error);
   };
+  const revokedError = () =>
+    Object.assign(new Error("Session revoked"), {
+      code: "revoked",
+      retryable: false,
+    });
+  const sessionRevoked = () => {
+    if (revoked) return;
+    revoked = true;
+    const error = revokedError();
+    welcome?.reject(error);
+    fail(error);
+    for (const listener of authListeners) {
+      try {
+        listener({ state: "revoked", code: "session_revoked" });
+      } catch { /* A listener cannot prevent terminal fencing. */ }
+    }
+  };
   const connect = () =>
     connection ??= (async () => {
+      if (revoked) throw revokedError();
       if (closed) throw protocolError("Device transport closed");
       const credentials = await options.credentials();
       if (closed) throw protocolError("Device transport closed");
@@ -101,6 +125,14 @@ export function createDeviceTransport(
         let frame: DeviceEnvelope;
         try {
           frame = decodeControl(event.data);
+          if (
+            frame.t === "session" && frame.state === "revoked" &&
+            frame.code === "session_revoked"
+          ) {
+            sessionRevoked();
+            current.close(DEVICE_SESSION_REVOKED, "Session revoked");
+            return;
+          }
           if (frame.t === "welcome") {
             if (
               frame.version !== DEVICE_VERSION ||
@@ -155,7 +187,11 @@ export function createDeviceTransport(
             if (frame.t === "error") {
               throw Object.assign(
                 new Error(String(frame.message ?? frame.code)),
-                { code: frame.code, retryable: frame.retryable },
+                {
+                  code: frame.code,
+                  reason: frame.reason,
+                  retryable: frame.retryable,
+                },
               );
             }
             const output = frame.t === "reset" || frame.t === "revoked"
@@ -188,6 +224,7 @@ export function createDeviceTransport(
       });
       current.addEventListener("close", (event) => {
         if (socket !== current) return;
+        if (event.code === DEVICE_SESSION_REVOKED) sessionRevoked();
         socket = undefined;
         connection = undefined;
         const error = event.code === 1000
@@ -216,7 +253,14 @@ export function createDeviceTransport(
       throw error;
     });
   return {
+    onAuthState(listener) {
+      authListeners.add(listener);
+      return () => {
+        authListeners.delete(listener);
+      };
+    },
     async observe(collection, query, observation) {
+      if (revoked) throw revokedError();
       observation.signal?.throwIfAborted();
       await connect();
       observation.signal?.throwIfAborted();
@@ -302,6 +346,15 @@ export function createDeviceTransport(
     },
     reauthenticate() {
       return authenticating ??= (async () => {
+        if (revoked) {
+          revoked = false;
+          const previous = socket;
+          socket = undefined;
+          connection = undefined;
+          previous?.close(DEVICE_SESSION_REVOKED, "Session revoked");
+          await connect();
+          return;
+        }
         await connect();
         const credentials = await options.credentials();
         if (closed) throw protocolError("Device transport closed");

@@ -461,21 +461,6 @@ export function createOwnerEvaluator(
           completingLogout = effect.rows.length > 0;
         }
         if (
-          session?.revoked_at && intent.kind === "operation" &&
-          intent.operation === "read"
-        ) {
-          const effect = await command.transaction.query(
-            `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND operation_id=$3 AND method='session.revoke' AND claims->>'id'=$4`,
-            [
-              authority.scope.namespace,
-              authority.scope.tenant,
-              intent.resource,
-              authority.authorityBasis.id,
-            ],
-          );
-          completingLogout = effect.rows.length > 0;
-        }
-        if (
           !session || session.revoked_at && !completingLogout ||
           Date.parse(session.expires_at) <= Date.parse(command.commandTime)
         ) authorizationRefused();

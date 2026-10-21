@@ -1,5 +1,9 @@
 export { createDeviceTransport } from "./device.ts";
-export type { DeviceTransport, DeviceTransportOptions } from "./device.ts";
+export type {
+  DeviceAuthEvent,
+  DeviceTransport,
+  DeviceTransportOptions,
+} from "./device.ts";
 import {
   createLiveQuery,
   type LiveQuery,
@@ -281,6 +285,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     observation: ObserveOptions,
   ): Promise<string | undefined> => {
     let checkpoint = observation.checkpoint;
+    let recoveredRevocation = false;
     for (let attempt = 0;; attempt++) {
       let applying = false;
       let responseReceived = false;
@@ -328,6 +333,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         }
         return checkpoint;
       } catch (error) {
+        const ids =
+          (selection as { operationIds?: readonly string[] }).operationIds;
+        if (
+          !applying && !observation.signal?.aborted && !recoveredRevocation &&
+          ids?.length === 1 && error instanceof CopilotzHttpError &&
+          error.code === "revoked"
+        ) {
+          // A self-revoking operation can finish after its observation is fenced.
+          // One new admission may recover its proof-bound completed receipt.
+          recoveredRevocation = true;
+          continue;
+        }
         if (
           applying || observation.signal?.aborted ||
           error instanceof CopilotzHttpError ||

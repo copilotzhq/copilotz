@@ -497,7 +497,9 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
     const first = group.messages[0];
     const human = group.role === "user";
     const own = group.own;
-    const color = human ? undefined : senderColor(group.sender);
+    const color = human || group.sender.unknown
+      ? undefined
+      : senderColor(group.sender);
     const time = first.createdAt;
     return (
       <article

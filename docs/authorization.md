@@ -530,11 +530,13 @@ specific session without clearing the caller's cookie when it targets someone
 else. The `session` `revoke` intent requires `sessions: { revoke: "self" }` or
 `{ revoke: "tenant" }`. For session transfer, create the replacement **before**
 revoking the old session in the same transaction. The transport delivers the
-replacement cookie. Logout commits revocation and closes that session's open
-channels; the exact logout Action can finish and recover its result without
-reviving authority for other operations. Session principal IDs identify
-accounts; `authority.authorityBasis.id` identifies the particular session.
-Existing fifteen-minute channel admission still applies.
+replacement cookie. Logout commits revocation and sends a terminal session
+notice to every device authenticated with that session, then closes each with
+code 4401, even when no collection channels remain; the exact logout Action can
+finish and recover its result without reviving authority for other operations.
+Session principal IDs identify accounts; `authority.authorityBasis.id`
+identifies the particular session. Existing fifteen-minute channel admission
+still applies.
 
 For an anonymous flow, the start Action runs under an explicitly authorized
 grant and stages a bounded credential:
@@ -684,6 +686,39 @@ Action grants, Action policy registrations, HTTP exposure, HTTP route `action`,
 handler `context.invoke`, client Action calls, flow continuations and Tool
 bindings all use the composition alias (for example `saveNote`). Stable Action
 IDs identify durable lifecycle events and are not alternate configuration keys.
+
+### Completed self-logout receipts
+
+The initiating credential proof can recover its completed self-logout operation
+inside the original schema, namespace and tenant, until the recorded proof
+receipt expires. Recovery matches the durable `session.revoke` effect, its
+original session basis and proof digest. It grants no new Action execution,
+collection access, cancellation or access to another operation. An observation
+of that single operation returns only its completion notice, with no historical
+Events or stream payloads. If revocation has committed but completion is still
+pending, receipt observation waits on owner operation pushes for up to ten
+seconds; a longer wait returns `operation_result_pending` (409) for retry. The
+single writer is never held while waiting. Result polling returns 202 until
+completion. If revocation commits during result or observation admission, the
+server rechecks the same proof-bound receipt once. Ordinary Action-result
+disclosure checks still apply. Operations that also issue replacement
+credentials require the original session as well as its proof; a signed-out
+proof cannot recover replacement credentials.
+
+The device SDK exposes `onAuthState(listener)`, returning an unsubscribe
+function. A session-level notice (or terminal 4401 close) emits
+`{state:"revoked",code:"session_revoked"}` exactly once and prevents automatic
+reconnection. Establish a new session and explicitly reauthenticate to
+reconnect. A permission change for one collection remains a channel-level
+revocation.
+
+Anonymous HTTP Action access without credentials is 401; a supplied but refused
+credential is 403, including Core HTTP Actions. An actor explicitly
+authenticated by the host retains 403 on denial even without standard credential
+headers. A direct host authentication refusal also becomes 401 when no
+credential is present. A credential-projection proof is a receipt capability,
+not an authentication credential. Cookie defaults remain
+`__Host-copilotz_session`, Secure, HttpOnly, Path=/ and no Domain.
 
 ## Owner-verified identity evidence
 

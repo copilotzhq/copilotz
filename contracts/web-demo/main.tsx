@@ -15,11 +15,19 @@ import type { BrowserRuntime } from "@copilotz/copilotz/web";
 import { FixtureLive } from "../../plugins/ui/tests/fixture-live.test.ts";
 import { fixtures } from "./fixtures.ts";
 import { demoActions, DemoFeed, playLaunchReply } from "./host.ts";
+import { shareAcrossTabs } from "./share.ts";
 import { demoApp } from "./app.tsx";
 
 const url = new URL(location.href);
-const live = new FixtureLive(fixtures());
+// `?empty=1` starts with no Spaces or conversations (a new workspace).
+const live = new FixtureLive(
+  url.searchParams.get("empty") === "1"
+    ? { ...fixtures(), space: [], thread: [], message: [] }
+    : fixtures(),
+);
 const feed = new DemoFeed(live);
+// Another tab of the demo sees what this one writes, live.
+shareAcrossTabs(live, feed);
 const runtime: BrowserRuntime = await createBrowserRuntime({
   plugins: [
     uiWebPlugin({ navigation: "url", preferences: "local" }),

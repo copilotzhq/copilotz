@@ -1,175 +1,106 @@
 import { assert, assertEquals } from "@std/assert";
+import { WebSocket as Socket } from "ws";
+import { createHypervisor } from "../../../dependencies/oxian-hypervisor.ts";
 import {
-  createHypervisor,
-  type HypervisorRequestDecision,
-} from "../../../dependencies/oxian-hypervisor.ts";
-import { hostedDeviceUpgrade } from "../../subscriptions/hosting.ts";
-import { DEVICE_LIMITS } from "../../subscriptions/device.ts";
-import { withDeviceUpgrades } from "./device-upgrade.ts";
+  createTestApplication,
+  defineTestServerFacade,
+} from "../../testing/server-authorization.test.ts";
+import { createTestDatabase } from "../../testing/ominipg.ts";
+import { createServerFacadeFetchHandler } from "../../../server/facade.ts";
+import { listen } from "./listen.ts";
 
-type Upgrade = Extract<HypervisorRequestDecision, { kind: "upgrade" }>;
-type Connection = Parameters<Upgrade["attach"]>[0];
-type Observer = Parameters<Connection["subscribe"]>[0];
-
-function fixture() {
-  const admission = Promise.withResolvers<void>();
-  const bound = Promise.withResolvers<void>();
-  let observer: Observer = {};
-  let closed = false;
-  const messages: unknown[] = [];
-  const owner = createHypervisor({
+Deno.test("Node portable facade upgrade waits for admission, cancels late acceptance and bounds native delivery", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `device_admit_${crypto.randomUUID().replaceAll("-", "")}`;
+  let gate = Promise.withResolvers<void>();
+  let entered = Promise.withResolvers<void>();
+  let reject = false, authenticated = 0;
+  const app = await createTestApplication({
+    database: db,
+    databaseSchema: schema,
+    namespace: "main",
+    resources: {
+      server: {
+        default: defineTestServerFacade({
+          authenticate() {
+            authenticated++;
+            return {};
+          },
+        }),
+      },
+    },
+  });
+  const handler = createServerFacadeFetchHandler(app, {
+    async admit() {
+      entered.resolve();
+      await gate.promise;
+      if (reject) throw new Error("Admission refused");
+    },
+  });
+  const hypervisor = createHypervisor({
     transports: [{
       type: "in-process",
       config: { topic: crypto.randomUUID() },
     }],
-    async fallback(request) {
-      if (new URL(request.url).pathname !== "/api/device") {
-        return new Response(null, { status: 404 });
-      }
-      const upgrade = hostedDeviceUpgrade(request)!;
-      await admission.promise;
-      try {
-        const { socket, response } = upgrade(request);
-        socket.addEventListener(
-          "message",
-          (event) => messages.push(event.data),
-        );
-        return response;
-      } finally {
-        bound.resolve();
-      }
-    },
+    fallback: handler,
   });
-  const host = withDeviceUpgrades(owner);
-  const decision = host.prepare(
-    new Request("http://localhost/api/device", {
-      headers: { upgrade: "websocket" },
-    }),
-  );
-  assert(decision.kind === "upgrade");
-  const connection: Connection = {
-    protocol: "",
-    get state() {
-      return closed ? "closed" : "open";
-    },
-    bufferedAmount: 0,
-    send() {},
-    close() {
-      closed = true;
-      observer.close?.({ code: 1000, reason: "", wasClean: true });
-    },
-    subscribe(next) {
-      observer = next;
-      return () => {
-        observer = {};
-      };
-    },
+  const listener = await listen({ hypervisor }, {
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+  const peers: InstanceType<typeof Socket>[] = [];
+  const connect = () => {
+    const peer = new Socket(`ws://127.0.0.1:${listener.port}/api/device`);
+    peers.push(peer);
+    const opened = Promise.withResolvers<void>(),
+      closed = Promise.withResolvers<number>();
+    peer.on("open", () => opened.resolve());
+    peer.on("close", (code) => closed.resolve(code));
+    peer.on("error", () => {});
+    return { peer, opened: opened.promise, closed: closed.promise };
   };
-  decision.attach(connection);
-  return {
-    host,
-    owner,
-    admission,
-    bound,
-    decision,
-    messages,
-    receive(data: string | Uint8Array) {
-      observer.message?.(data);
-    },
-    closed: () => closed,
-    async finish() {
-      admission.resolve();
-      await bound.promise;
-      decision.cancel();
-      await owner.shutdown();
-    },
-  };
-}
-
-Deno.test("Node device upgrade holds early frames until asynchronous admission completes", async () => {
-  const test = fixture();
   try {
-    test.receive("hello");
-    assertEquals(test.messages, []);
-    test.admission.resolve();
-    await test.bound.promise;
-    await Promise.resolve();
-    assertEquals(test.messages, ["hello"]);
-    test.receive("subscribe");
-    assertEquals(test.messages, ["hello", "subscribe"]);
-    const ordinary = test.host.prepare(new Request("http://localhost/other"));
-    assert(ordinary.kind === "response");
-    assertEquals((await ordinary.response).status, 404);
+    const first = connect();
+    await entered.promise;
+    assertEquals(first.peer.readyState, Socket.CONNECTING);
+    assertEquals(authenticated, 0);
+    gate.resolve();
+    await first.opened;
+    // Native parser bounds fragmented message assembly before device delivery.
+    first.peer.send("x".repeat(200000), { fin: false });
+    first.peer.send("x".repeat(200000), { fin: true });
+    assertEquals(await first.closed, 1009);
+    assertEquals(authenticated, 0);
+    gate = Promise.withResolvers<void>();
+    entered = Promise.withResolvers<void>();
+    const cancelled = connect();
+    let accepted = false;
+    void cancelled.opened.then(() => accepted = true);
+    await entered.promise;
+    cancelled.peer.terminate();
+    await cancelled.closed;
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert(!accepted);
+    gate = Promise.withResolvers<void>();
+    entered = Promise.withResolvers<void>();
+    reject = true;
+    const refused = connect();
+    void refused.opened.then(() => accepted = true);
+    await entered.promise;
+    gate.resolve();
+    await refused.closed;
+    assert(!accepted);
+    assertEquals(authenticated, 0);
   } finally {
-    await test.finish();
-  }
-});
-
-Deno.test("Node device upgrade discards early frames when admission fails", async () => {
-  const test = fixture();
-  try {
-    test.receive("hello");
-    test.admission.reject(new Error("recovery refused"));
-    await Promise.resolve();
-    await Promise.resolve();
-    assert(test.closed());
-    assertEquals(test.messages, []);
-  } finally {
-    test.decision.cancel();
-    await test.owner.shutdown();
-  }
-});
-
-for (const limit of ["bytes", "frames"] as const) {
-  Deno.test(`Node device pending admission is bounded by ${limit}`, async () => {
-    const test = fixture();
-    try {
-      if (limit === "bytes") {
-        // Each frame is valid; only their accumulated size exceeds the budget.
-        const frame = "x".repeat(Math.floor(DEVICE_LIMITS.queuedBytes / 2));
-        assert(frame.length <= DEVICE_LIMITS.frame);
-        test.receive(frame);
-        test.receive(frame);
-        assert(!test.closed());
-        test.receive("x");
-      } else {
-        for (let i = 0; i < DEVICE_LIMITS.queuedFrames; i++) {
-          test.receive("x");
-        }
-        assert(!test.closed());
-        test.receive("x");
-      }
-      assert(test.closed());
-      assertEquals(test.messages, []);
-    } finally {
-      await test.finish();
-    }
-  });
-}
-
-for (const data of [new Uint8Array([1]), "x".repeat(DEVICE_LIMITS.frame + 1)]) {
-  Deno.test(`Node device refuses ${typeof data === "string" ? "oversized" : "binary"} frames before admission`, async () => {
-    const test = fixture();
-    try {
-      test.receive(data);
-      assert(test.closed());
-      assertEquals(test.messages, []);
-    } finally {
-      await test.finish();
-    }
-  });
-}
-
-Deno.test("Node device cancelled upgrade cannot bind after late admission", async () => {
-  const test = fixture();
-  try {
-    test.receive("hello");
-    test.decision.cancel();
-    test.admission.resolve();
-    await test.bound.promise;
-    assert(test.closed());
-    assertEquals(test.messages, []);
-  } finally {
-    await test.finish();
+    gate.resolve();
+    for (const peer of peers) peer.terminate();
+    await listener.shutdown();
+    await hypervisor.shutdown();
+    await app.close();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
   }
 });

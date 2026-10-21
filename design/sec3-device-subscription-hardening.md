@@ -103,3 +103,63 @@ owner-issued IDs and cannot use that reserved prefix.
 dispatch targets are qualified in the shard. Admission binds the namespace to
 the authenticated principal kind, and the relay filters both sending and
 receiving.
+
+## Round 2: ordered windows, session outcomes and portable hosting
+
+Current merged code: owner admission (`runtime/subscriptions/owner.ts:255`) only
+allows ID ordering, and SDK delta application (`client/live-query.ts:174`) sorts
+IDs. SQL ordering (`runtime/collections/query.ts:42`) derives typed fields from
+the Collection schema. Physical timestamp columns can retain microseconds, so
+live ordering must use SQL-produced keys instead of parsing public row dates.
+The projection statement (`runtime/collections/reducer.ts:545`) already writes
+those columns in the same statement. Device hosting currently relies on a
+private Request WeakMap (`runtime/subscriptions/hosting.ts:14`), which CLI
+workers cannot populate. Authorization observes individual channels, but device
+authentication has no session-wide observer (`server/facade.ts:673`). Operation
+observation (`server/operations.ts:289`) does not use the completed logout
+receipt exception.
+
+Target:
+
+- Admit schema-declared scalar ordering and physical createdAt/updatedAt,
+  ascending/descending, with ID in the same direction. Match PostgreSQL null
+  placement; text ordering is explicit C/code point. Initial bounded cache reads
+  physical timestamp keys. Existing projection statements return exact timestamp
+  keys into owner push without another SQL round trip. Each state
+  removes/reinserts only the changed ID in its sorted members; refill uses the
+  bounded cache, with no database read or full predicate rescan on commit.
+  Ordered batches carry the selected IDs so SDKs preserve the owner's exact
+  order without reinterpreting timestamp precision or schema types.
+- Authorize only the completed self-revocation operation using the initiator's
+  credential-proof digest and durable clear effect. No permission for another
+  operation, mutation, record discovery, or active observation follows from that
+  receipt. Recheck this receipt after an admission refusal to cover revocation
+  committing between lookup and admission; preserve result policy on retry.
+  Preserve ordinary operation policy for all other paths.
+- Retain a socket-level authority observer, release it on
+  close/reauthentication, and close revoked sessions with a terminal session
+  notice and code 4401. Expose a small device auth-event subscription in
+  client/, without changing client/web.
+- Stable, safe subscription refusal reasons and debug diagnostics contain only
+  collection, principal kind and reason; never query values or credential data.
+- HTTP authorization refusal maps absent credentials to 401, supplied-but-denied
+  credentials to 403, including Core HTTP routes through the shared facade.
+- Default to Oxian 0.23.0 upgradeWebSocket. Delete the private request registry
+  and adapter bridge; Oxian owns listener socket tracking/drain. Retain explicit
+  upgradeDevice for raw Fetch hosts/tests that do not install Oxian hosting.
+  Origin admission remains before any upgrade. Local deno.json links are only a
+  development override, to be stripped before commit/release.
+
+Verification: live windows equal list() after inserts, ties, ordering updates,
+deletes and refill on both backends, including message where threadId, createdAt
+desc, limit 100. Two real tabs prove logout result recovery, peer socket closure
+and client auth event; negative proofs/other operations remain refused. Test
+safe refusal diagnostics and HTTP 401/403. Run an actual Oxian CLI start fixture
+with both worker transports, checking snapshot/101 and foreign-Origin refusal.
+Run focused tests and both full backend suites, check/fmt/lint delta/type guard.
+
+Risks: ordered ID arrays still move bounded entries but never scan predicates
+across unchanged rows. New batch ordering is a protocol addition for updated
+clients. Oxian must release 0.23.0 before Copilotz. Deno's native WebSocket
+assembles messages before delivery, so only Node can bound pre-delivery
+reassembly; both retain device post-delivery limits.

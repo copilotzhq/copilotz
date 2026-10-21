@@ -423,6 +423,20 @@ export async function createThreadMessage(
       visibility: messageVisibility,
       ...(historyScopeId ? { historyScopeId } : {}),
     }, options);
+    // A visible message is activity: the thread's updatedAt moves with it,
+    // in the same transaction, so recent lists reorder. Internal work does not.
+    if (messageVisibility.kind !== "internal") {
+      await collections.thread.commands.recordMessage({
+        id: threadId,
+        messageId: id,
+      }, {
+        operationKey: `message-activity:${id}`,
+        metadata: {
+          ...coreThreadObservationMetadata(threadId),
+          core: { threadId },
+        },
+      });
+    }
     return created;
   });
   const created = await context.collections.message.get({ id });

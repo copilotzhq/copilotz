@@ -139,6 +139,48 @@ for (const adapter of ["deno", "node"] as const) {
       await until(() =>
         token.frames.some((f) => f.code === "subscription_capacity_exceeded")
       );
+      assertEquals(
+        token.frames.find((frame) =>
+          frame.code === "subscription_capacity_exceeded"
+        )?.reason,
+        "quota_exceeded",
+      );
+      const invalid = open();
+      await invalid.opened;
+      invalid.send(hello({ authorization: "Bearer token" }));
+      await until(() => invalid.frames.some((frame) => frame.t === "welcome"));
+      for (
+        const [channel, collection, query, reason] of [
+          ["unsupported", "note", {
+            filter: { field: "id", jsonEquals: "private-filter" },
+          }, "query_unsupported"],
+          ["limit", "note", { limit: 1001 }, "limit_exceeded"],
+          ["values", "note", {
+            filter: {
+              field: "id",
+              in: Array.from({ length: 33 }, (_, i) => String(i)),
+            },
+          }, "limit_exceeded"],
+          ["hidden", "not-exposed", {}, "forbidden"],
+        ] as const
+      ) {
+        invalid.send({
+          t: "subscribe",
+          channel,
+          generation: 1,
+          collection,
+          query,
+        });
+        await until(() =>
+          invalid.frames.some((frame) =>
+            frame.channel === channel && frame.t === "error"
+          )
+        );
+        assertEquals(
+          invalid.frames.find((frame) => frame.channel === channel)?.reason,
+          reason,
+        );
+      }
       token.send({ t: "unsubscribe", channel: "c0", generation: 1 });
       token.send({
         t: "subscribe",

@@ -19,7 +19,7 @@ import {
 } from "@copilotz/copilotz/web/kit";
 import type { ChatSender } from "../../shared/chat-messages.ts";
 import { readSenders } from "../chat/context.tsx";
-import { readThread } from "../reads.ts";
+import { readParticipants, readThread } from "../reads.ts";
 import { SenderAvatar } from "../chat/identity.tsx";
 
 type Available = Readonly<{
@@ -49,14 +49,16 @@ function available(ctx: BrowserViewContext): Available[] {
 }
 
 function Selector(
-  { agents, candidates, onAdd }: {
+  { agents, candidates, onAdd, unread = false }: {
     agents: readonly (ChatSender & { description?: string })[];
     candidates: readonly Available[];
     onAdd?(candidate: Available): Promise<unknown>;
+    /** The people could not be read: say "Agents", not "0 agents". */
+    unread?: boolean;
   },
 ): React.ReactElement | null {
   const [error, setError] = useState("");
-  if (!agents.length && !candidates.length) return null;
+  if (!agents.length && !candidates.length && !unread) return null;
   const shown = agents.slice(0, 3);
   return (
     <DropdownMenu>
@@ -65,9 +67,11 @@ function Selector(
           type="button"
           variant="ghost"
           size="sm"
-          aria-label={`Agents in this conversation: ${
-            agents.map((agent) => agent.name).join(", ") || "none"
-          }`}
+          aria-label={unread && !agents.length
+            ? "Agents in this conversation"
+            : `Agents in this conversation: ${
+              agents.map((agent) => agent.name).join(", ") || "none"
+            }`}
           className="max-w-full min-w-0 gap-1.5 px-2"
         >
           {/* Narrow: an icon; wider: avatars, then the chevron, then a label. */}
@@ -91,7 +95,11 @@ function Selector(
             </span>
           )}
           <span className="hidden truncate text-sm @min-[10rem]/agents:inline">
-            {agents.length === 1 ? agents[0].name : `${agents.length} agents`}
+            {unread && !agents.length
+              ? "Agents"
+              : agents.length === 1
+              ? agents[0].name
+              : `${agents.length} agents`}
           </span>
           <ChevronDown className="text-muted-foreground hidden size-3.5 shrink-0 @min-[6.5rem]/agents:block" />
         </Button>
@@ -115,7 +123,7 @@ function Selector(
         ))}
         {!agents.length && (
           <p className="text-muted-foreground px-2 py-1.5 text-sm">
-            No agents yet.
+            {unread ? "The agents can't be shown right now." : "No agents yet."}
           </p>
         )}
         {onAdd && candidates.length > 0 && (
@@ -173,8 +181,9 @@ const view: ViewDefinition<
       ? thread.participantIds.map(String)
       : [];
     const agents = [...readSenders(ctx, ids).values()].filter((sender) =>
-      sender.type === "agent"
+      sender.type === "agent" && !sender.unknown
     );
+    const unread = readParticipants(ctx, ids).status !== "ready";
     const present = new Set(
       agents.flatMap((agent) => [agent.agentId, agent.externalId]),
     );
@@ -184,6 +193,7 @@ const view: ViewDefinition<
     return (
       <Selector
         agents={agents}
+        unread={unread}
         candidates={candidates}
         onAdd={ctx.actions.chatAddAgent
           ? (candidate) =>

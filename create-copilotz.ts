@@ -1,4 +1,4 @@
-import type { DeviceUpgrade } from "./runtime/subscriptions/hosting.ts";
+import type { DeviceUpgrade } from "./server/device.ts";
 import {
   type CopilotzShard,
   createCopilotzShard,

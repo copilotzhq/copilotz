@@ -558,6 +558,7 @@ export function composeCollectionProjection(
                  )
              WHERE namespace = ${namespace} AND id = ${id} AND type = ${type}
                AND EXISTS (SELECT 1 FROM ${source})
+             RETURNING created_at, updated_at
            )`
         : `projection_node AS (
              INSERT INTO ${tables.nodes} (
@@ -573,7 +574,11 @@ export function composeCollectionProjection(
                       ${updatedAt}::timestamptz, ${createdAt}::timestamptz, NOW()
                     )
              FROM ${source}
+             RETURNING created_at, updated_at
            )`
+    );
+    reports.push(
+      `'ordering', (SELECT jsonb_build_object('createdAt', (EXTRACT(EPOCH FROM created_at)*1000000)::numeric(30,0)::text, 'updatedAt', (EXTRACT(EPOCH FROM updated_at)*1000000)::numeric(30,0)::text) FROM projection_node)`,
     );
   }
 
@@ -843,6 +848,9 @@ export async function projectCollectionEvent(
   definition: CollectionDefinition,
   body: CollectionEventBody<CollectionRecord>,
   guard?: ProjectionGuard,
+  projected?: (
+    ordering: { createdAt: string; updatedAt: string } | undefined,
+  ) => void,
 ): Promise<CollectionRecord> {
   const params: unknown[] = [];
   const param = (value: unknown) => `$${params.push(value)}`;
@@ -874,6 +882,11 @@ export async function projectCollectionEvent(
         `Collection '${definition.name}' '${body.record.id}' was not projected.`,
       );
   }
+  projected?.(
+    (record(row.report) as {
+      ordering?: { createdAt: string; updatedAt: string };
+    }).ordering,
+  );
   return body.record;
 }
 

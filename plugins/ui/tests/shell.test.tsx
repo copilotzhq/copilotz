@@ -66,7 +66,12 @@ const { act } = React;
 const { createBrowserRuntime } = await import("@copilotz/copilotz/web");
 const { defineView } = await import("@copilotz/copilotz/views");
 const { reactRenderer } = await import("../../web-react/index.ts");
-const { uiWebPlugin, shellNavigation, shellUrlStorageAdapter } = await import(
+const {
+  bindShellSession,
+  uiWebPlugin,
+  shellNavigation,
+  shellUrlStorageAdapter,
+} = await import(
   "../web.ts"
 );
 const { FixtureLive } = await import("./fixture-live.test.ts");
@@ -327,9 +332,15 @@ const app: BrowserPlugin = {
         order: 20,
         view: "testBoards",
         tools: ["kanban"],
+        params: ["board", "card"],
       },
       unsafe: { label: "Unsafe", order: 30, view: "testUnsafe" },
-      report: { label: "Report", order: 40, view: "testReport" },
+      report: {
+        label: "Report",
+        order: 40,
+        view: "testReport",
+        params: ["range"],
+      },
     },
     headerMenu: {
       fork: { label: "Fork", icon: "git-branch", action: "threadFork" },
@@ -349,6 +360,10 @@ type Mounted = {
   calls: { alias: string; input: Record<string, unknown> }[];
   url: () => URL;
   local: ReturnType<typeof memory>;
+  container: {
+    querySelector(selector: string): unknown;
+    textContent: string | null;
+  };
   dispose(): Promise<void>;
 };
 
@@ -386,6 +401,11 @@ async function mount(
             ...(part.name ? { name: part.name } : {}),
           })),
           metadata: {},
+        });
+        // As Core does: a visible message records activity on its thread.
+        live.patch("thread", String(data.threadId), {
+          updatedAt: new Date().toISOString(),
+          lastMessageId: String(data.id),
         });
       }
       return Promise.resolve({ value: { ok: true }, seq: 1 });
@@ -426,6 +446,7 @@ async function mount(
     feed,
     calls,
     local,
+    container: container as unknown as Mounted["container"],
     url: () => current,
     async dispose() {
       await act(() => {
@@ -828,9 +849,9 @@ test("Views share live reads: a conversation with its panel open uses five, peop
     assert.deepEqual(shell.live.active, [
       'message {"where":{"threadId":"t1"},"order":{"field":"createdAt","direction":"desc"},"limit":100}',
       'participant {"where":{"id":{"in":["p-ana","p-north"]}},"limit":2}',
-      'space {"limit":200}',
-      'thread {"order":{"field":"id","direction":"desc"},"limit":200}',
-      'thread {"where":{"spaceId":"s1"},"order":{"field":"id","direction":"desc"},"limit":200}',
+      'space {"order":{"field":"name","direction":"asc"},"limit":200}',
+      'thread {"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
+      'thread {"where":{"spaceId":"s1"},"order":{"field":"updatedAt","direction":"desc"},"limit":200}',
     ]);
     await act(async () => {
       shell.runtime.actions.shellNewChat({});
@@ -842,17 +863,25 @@ test("Views share live reads: a conversation with its panel open uses five, peop
   }
 });
 
-test("live read limits show a friendly state, never a raw error", async () => {
-  const ordered = new FixtureLive(tables());
-  ordered.idOrderOnly = true;
-  const refused = await mount("https://app.example/?chat=t1", {
-    live: ordered,
-  });
-  try {
-    assert.match(main(), /Live updates unavailable/);
-    assert.doesNotMatch(main(), /subscription_|refused\./i);
-  } finally {
-    await refused.dispose();
+test("refused live reads show a friendly state by reason, never a raw error", async () => {
+  for (
+    const [reason, copy] of [
+      ["query_unsupported", /Live updates unavailable/],
+      ["limit_exceeded", /Too much to follow live/],
+      ["unbound_collection", /Not available here/],
+      ["forbidden", /No access to these messages/],
+      ["unavailable", /Couldn't load messages/],
+    ] as const
+  ) {
+    const live = new FixtureLive(tables());
+    live.refusals.set("message", { code: "subscription_failed", reason });
+    const refused = await mount("https://app.example/?chat=t1", { live });
+    try {
+      assert.match(main(), copy, reason);
+      assert.doesNotMatch(main(), /subscription_|refused\.|_/i, reason);
+    } finally {
+      await refused.dispose();
+    }
   }
   const crowded = new FixtureLive(tables());
   crowded.maxSubscriptions = 2;
@@ -990,7 +1019,15 @@ test("the header title keeps priority; the agent selector slot collapses by cont
     const slot = document.querySelector('[data-slot="agent-selector"]')!;
     // The slot takes the width the title leaves (at least an icon) and is a
     // size container, so the core selector (and an app's) collapses inside it.
-    for (const name of ["@container/agents", "flex-1", "basis-0", "min-w-9"]) {
+    for (
+      const name of [
+        "@container/agents",
+        "flex-1",
+        "basis-0",
+        "min-w-9",
+        "overflow-x-clip",
+      ]
+    ) {
       assert.ok(slot.className.split(/\s+/).includes(name), name);
     }
     const title = document.querySelector('[data-slot="shell-header"] h1')!;
@@ -1056,31 +1093,197 @@ test("message text a window read deferred loads when it shows; too long says so"
   }
 });
 
-test("search finds chats by title and by Space name", async () => {
+test("a revoked session routes to sign-in, reads nothing and waits for the app to restore it", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    extra: {
+      id: "sign-in",
+      resources: { shell: { signIn: { href: "/login?next=chat" } } },
+    },
+  });
+  const listeners = new Set<
+    (event: { state: string; code?: string }) => void
+  >();
+  const stop = bindShellSession(shell.runtime, {
+    onAuthState(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  try {
+    assert.ok(shell.live.subscriptionCount > 0);
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({ state: "revoked", code: "session_revoked" });
+      }
+      await settle();
+    });
+    const screen = document.querySelector('[data-slot="signed-out"]');
+    assert.match(screen?.textContent ?? "", /You've been signed out/);
+    assert.equal(
+      screen?.querySelector("a")?.getAttribute("href"),
+      "/login?next=chat",
+    );
+    assert.equal(shell.live.subscriptionCount, 0, "every read is released");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    assert.equal(shell.live.subscriptionCount, 0, "and nothing reconnects");
+    // The app signed in again and reauthenticated the device.
+    await act(async () => {
+      await shell.runtime.actions.shellSessionRestored({}).result();
+      await settle();
+    });
+    assert.equal(document.querySelector('[data-slot="signed-out"]'), null);
+    assert.ok(shell.live.subscriptionCount > 0, "the shell reads again");
+    assert.equal(nav(shell).threadId, "t1", "on the same conversation");
+  } finally {
+    stop();
+    await shell.dispose();
+  }
+});
+
+test("an empty sidebar offers New Space; with groups it comes after No Space", async () => {
+  const empty = await mount("https://app.example/", {
+    live: new FixtureLive({ ...tables(), thread: [], space: [], message: [] }),
+  });
+  try {
+    const nav = document.querySelector('nav[aria-label="Conversations"]')!;
+    assert.match(nav.textContent ?? "", /No conversations yet\./);
+    assert.ok(
+      [...nav.querySelectorAll("button")].some((button) =>
+        button.textContent?.trim() === "New Space"
+      ),
+      "New Space is offered before any group exists",
+    );
+  } finally {
+    await empty.dispose();
+  }
   const shell = await mount("https://app.example/?chat=t1");
   try {
-    const search = document.querySelector(
-      'nav[aria-label="Conversations"]',
-    )!.parentElement!.querySelector('input[type="search"]')!;
+    const text = document.querySelector('nav[aria-label="Conversations"]')!
+      .textContent!;
+    assert.ok(text.indexOf("No Space") < text.indexOf("New Space"), text);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a second tab's Recent list reorders live when a conversation gets a message", async () => {
+  const live = new FixtureLive(tables());
+  const first = await mount("https://app.example/?chat=t3", { live });
+  const second = await mount("https://app.example/?chat=t1", { live });
+  try {
+    await act(async () => {
+      await second.runtime.actions.shellPreference({ groupBy: "date" })
+        .result();
+      await settle();
+    });
+    const order = () =>
+      Array.from(
+        (second.container as unknown as {
+          querySelectorAll(selector: string): ArrayLike<
+            { textContent: string | null }
+          >;
+        }).querySelectorAll('nav[aria-label="Conversations"] [data-nav-item]'),
+      ).map((row) => (row.textContent ?? "").replace(/^[A-Z]{2}/, ""));
+    assert.deepEqual(order(), [
+      "Interview plan",
+      "Deploy checklist",
+      "Loose idea",
+    ]);
+    // The first tab sends in the oldest conversation; Core records the
+    // activity on the thread, and the second tab's window reorders.
+    await act(async () => {
+      await first.runtime.actions.chatSend({ threadId: "t3", text: "Bump" })
+        .result();
+      await settle();
+    });
+    assert.deepEqual(order(), [
+      "Loose idea",
+      "Interview plan",
+      "Deploy checklist",
+    ]);
+  } finally {
+    await first.dispose();
+    await second.dispose();
+  }
+});
+
+test("URL parameters a section owns leave when another section shows", async () => {
+  const shell = await mount(
+    "https://app.example/?chat=t1&panel=1&section=boards&board=b1&card=c1&ref=mail",
+  );
+  try {
+    assert.equal(shell.url().searchParams.get("board"), "b1");
+    await click(byLabel("Report"));
+    const url = shell.url();
+    assert.equal(url.searchParams.get("section"), "report");
+    assert.equal(url.searchParams.get("board"), null);
+    assert.equal(url.searchParams.get("card"), null);
+    assert.equal(url.searchParams.get("ref"), "mail", "others stay");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("people that can't be read show neutrally: no Participant, no bot, no 0 agents", async () => {
+  const live = new FixtureLive(tables());
+  live.refusals.set("participant", {
+    code: "subscription_query_refused",
+    reason: "query_unsupported",
+  });
+  const shell = await mount("https://app.example/?chat=t1", { live });
+  try {
+    assert.match(main(), /Someone/);
+    assert.doesNotMatch(main(), /Participant/);
+    const selector = document.querySelector(
+      '[data-slot="agent-selector"] button',
+    );
+    assert.equal(
+      selector?.getAttribute("aria-label"),
+      "Agents in this conversation",
+    );
+    assert.doesNotMatch(selector?.textContent ?? "", /0 agents/);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("the sidebar search box opens the palette, which finds chats by title and Space name", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await click(
+      document.querySelector(
+        '[data-slot="sidebar"] button[aria-keyshortcuts]',
+      ) as unknown as { click(): void },
+    );
+    assert.equal(
+      nav(shell).threadId,
+      "t1",
+      "opening search leaves the conversation",
+    );
+    const input = document.querySelector(
+      'input[aria-label="Search conversations, Spaces and commands"]',
+    )!;
+    assert.ok(input, "the palette is open");
     const type = async (value: string) =>
       await act(async () => {
         Object.getOwnPropertyDescriptor(
           window.HTMLInputElement.prototype,
           "value",
-        )!.set!.call(search, value);
-        search.dispatchEvent(new window.Event("input", { bubbles: true }));
+        )!.set!.call(input, value);
+        input.dispatchEvent(new window.Event("input", { bubbles: true }));
         await settle();
       });
-    const list = () =>
-      document.querySelector('nav[aria-label="Conversations"]')!.textContent!;
+    const results = () =>
+      [...document.querySelectorAll('[role="option"]')].map((option) =>
+        option.textContent ?? ""
+      ).join(" | ");
     await type("deploy");
-    assert.match(list(), /Deploy checklist/);
-    assert.doesNotMatch(list(), /Interview plan|Loose idea/);
+    assert.match(results(), /Deploy checklist/);
+    assert.doesNotMatch(results(), /Interview plan/);
     await type("research");
-    assert.match(list(), /Interview plan/);
-    assert.doesNotMatch(list(), /Deploy checklist/);
-    await type("zzz");
-    assert.match(list(), /Nothing matches “zzz”/);
+    assert.match(results(), /Interview plan/, "a chat matches its Space name");
   } finally {
     await shell.dispose();
   }

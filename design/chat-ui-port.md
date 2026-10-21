@@ -24,12 +24,12 @@ the first commit are listed at the end.
 
 ## Layering
 
-| Entry       | Owns                                                                                          |
-| ----------- | --------------------------------------------------------------------------------------------- |
-| `/web`      | `format.ts`: locale-aware `formatWhen/Relative/Bytes/Count/Duration`, `recencyGroup`          |
-| `/web/kit`  | Tokens and themes, primitives, `ReadStatus`, resource patterns, `Markdown`, `Icon`, `dom`     |
-| `/core/web` | Chat Collections, intents (browser Actions), the thread feed, thread/composer/live Views      |
-| `/ui/web`   | The shell: navigation state, sidebar, header, panel, SpaceView and sections, palette, profile |
+| Entry       | Owns                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| `/web`      | `format.ts`: locale-aware `formatWhen/Relative/Bytes/Count/Duration`, `recencyGroup`        |
+| `/web/kit`  | Tokens and themes, primitives, `ReadStatus`, resource patterns, `Markdown`, `Icon`, `dom`   |
+| `/core/web` | Chat Collections, intents (browser Actions), the thread feed, thread/composer/live Views    |
+| `/ui/web`   | The shell: navigation state, sidebar, header, panel, SpaceView and sections, pages, palette |
 
 `/ui/web` composes `/core/web` (`uiWebPlugin({ core })`). Presentational
 components take plain props; Views read Collections and pass data and Action
@@ -49,28 +49,33 @@ window width and nothing closes itself on navigation.
 
 | Collection         | Storage                       | Fields                                                                                                                                                            |
 | ------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `shell`            | `navigation` (the URL)        | `threadId`, `spaceId`, `section`, `panel`, `newIn`, `origin`                                                                                                      |
+| `shell`            | `navigation` (the URL)        | `threadId`, `spaceId`, `section`, `panel`, `newIn`, `page`, `origin`                                                                                              |
 | `shellPreferences` | `preferences` (local storage) | `sidebar` (`auto/expanded/rail`), `groupBy` (`space/date`, default `space`), `panelWidth`, `theme` (`light/dark/system`), `archived`, `expanded[]`, `collapsed[]` |
 | `shellOverlay`     | memory                        | `palette`, `dialog` (a `ViewReference`), `createSpace`                                                                                                            |
 | `shellToasts`      | memory                        | one row per notice                                                                                                                                                |
 
 `shellUrlStorageAdapter(browserShellHistory(window), codec?)` keeps identifiers
-only (default `?chat=&space=&section=&panel=1&new=`, unrelated parameters kept).
-A chat or Space change pushes a history entry; the rest replaces it. State
-restored from a link has `origin: "url"`, so the shell renders it through
-`urlReference`: only Views that declare `url` render, and their query reads are
-`held` until a gesture. In-app navigation is `app`.
+only (default `?chat=&space=&section=&panel=1&new=&page=`, unrelated parameters
+kept). A chat, Space or page change pushes a history entry; the rest replaces
+it. State restored from a link has `origin: "url"`, so the shell renders it
+through `urlReference`: only Views that declare `url` render, and their query
+reads are `held` until a gesture. In-app navigation is `app`.
 
 Browser Actions: `shellOpenThread {threadId}`,
 `shellOpenSpace {spaceId,
 section?}`, `shellCloseSpace`,
-`shellNewChat {spaceId?}`, `shellSection
-{section}`, `shellPanel {open}`,
-`shellPreference {…}`, `shellOverlay {…}`, `shellPalette {open}`,
-`shellDialog {reference|null}`, `shellToast {text,
-tone}`. Host `show` port:
-`shellNavigation(() => runtime)` opens `thread`, `space` and `newThread`
-references in place and any other View in the dialog.
+`shellNewChat {spaceId?}`, `shellOpenPage {page, section?}`,
+`shellSection {section}`, `shellPanel {open}`, `shellPreference {…}`,
+`shellOverlay {…}`, `shellPalette {open}`, `shellDialog {reference|null}`,
+`shellToast {text,
+tone}`. Host `show` port: `shellNavigation(() => runtime)`
+opens `thread`, `space` and `newThread` references in place, a reference shown
+with `region: "main"` (value `null` or `{section}`) as a page, and any other
+View in the dialog.
+
+A page is a View kind in main (an app's settings, the administration page). It
+receives `{section}` when the shell's `section` is set, otherwise `null`; the
+header shows the label of the menu item that opens it and a Close button.
 
 ## Chat (core)
 
@@ -99,7 +104,14 @@ agents. New conversations add `resources.chat.agents`.
 Reads: `readThreadMessages(ctx, id, limit)` (newest by `createdAt`, the window
 grows by 100 on "Load older"; until ordered live reads land the View shows the
 refusal calmly), `readThreads` (id-desc window, sorted by `updatedAt`),
-`readSpaces`.
+`readSpaces`, `readSpaceThreads`, and, served from those shared lists when they
+hold the record, `readThread` and `readSpace`. People are `readParticipants`
+(one `in` read per 32 sorted ids; `readSenders` builds on it), so the thread,
+composer and agent selector share one read. A chat with its panel open uses five
+live reads (messages, people, conversations, Spaces, the Space's chats), well
+inside SEC3's 16 per socket. A refused read keeps its code
+(`subscription_query_refused`, `subscription_capacity_exceeded`) in
+`ReadState.error`, and `ReadStatus` explains it.
 
 ### Streaming
 
@@ -127,8 +139,9 @@ terminal output and hides once its persisted message (same
 | Identity         | `resources.chat.sender` (who sends), `resources.chat.agents` (participant inputs for new chats)                                                                           | —                                                     |
 | Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                                                              | `{spaceId, threadId}`, mode `full`/`panel`            |
 | Right panel      | `resources.shell.panel {view}` replaces the Space sections                                                                                                                | `{threadId, spaceId}`, mode `panel`                   |
-| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action? or dialog?, destructive?, requires?}`                                                                           | dialog: `{threadId, spaceId}`, mode `dialog`          |
+| Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog? or page?, destructive?, requires?}`                                                                    | dialog: `{threadId, spaceId}`, mode `dialog`          |
 | User menu        | `resources.userMenu.<id>` (same shape)                                                                                                                                    | `{}`                                                  |
+| Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                                                                    | `{section}` or `null`, mode `full`                    |
 | Agent selector   | a View for `agentSelector` plus `resources.views.prefer`                                                                                                                  | `{threadId}`                                          |
 | Tool renderers   | `resources.toolRenderers.<toolId> {view, inline?}`; the View declares mode `inline`                                                                                       | `ToolCallView` (status, input, result, live `output`) |
 | Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                                                              | —                                                     |
@@ -148,12 +161,22 @@ sidebar and code tokens; prose themed through tokens; MathML math;
 tw-animate-css. Brand by overriding `--primary`/`--primary-foreground`. One set
 of primitives (Button, Badge, Card, Input, Textarea, Dialog,
 `ConfirmDialog`/`ConfirmAction`, `FormDialog`, `NameDescriptionDialog`,
-DropdownMenu with checkbox/radio/sub, Tabs, Tooltip, Avatar, ScrollArea,
-Separator, Kbd, Spinner, Field, NativeSelect, Checkbox, Notice, EmptyState,
-CopyField) and patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`,
+DropdownMenu with checkbox/radio/sub, Tabs, `TabBar` (navigation tabs with
+roving focus and an activity dot), Tooltip, Avatar, ScrollArea, Separator, Kbd,
+Spinner, Field, NativeSelect, Checkbox, Notice, EmptyState, CopyField) and
+patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`, `DetailList`,
 `ResourceTable`, `ResourceToolbar`, `ResourceList`, `ResourceRow`,
 `ResourceHeader`, `PaneBoundary`, `showSafely`, `Markdown`, `Icon`,
 `identityColor`, `initials`).
+
+## Admin
+
+`createAdminWebPlugin({ actionAliases?, core? })` composes the app's Core plugin
+(`core`) and registers `resources.userMenu.admin`, a page (`admin`) with tabs
+for Overview, Agents, Conversations, People, Activity and Usage. Each section
+reads its query Action through the page's own context (`adminSection`), so a
+page opened from a link holds its query until Load. The overview no longer opens
+live reads. Detail Views use `DetailList`; refusals are sentences.
 
 ## Deletions
 
@@ -161,7 +184,7 @@ CopyField) and patterns (`Screen`, `Frame`, `ReadStatus`, `Metric`,
 tests/workspace.test.tsx}`,
 `workspaceNavigation`, `workspaceUrlStorageAdapter`, the `ui*` workspace
 Actions, `core.threads` (`{list: "thread"}`), `core.message` and the
-`resources.navigation` entries, with their docs and tests.
+`resources.navigation` entries (admin's included), with their docs and tests.
 
 ## Tests
 
@@ -177,3 +200,16 @@ Screenshots: `contracts/web-demo` at 1440×900 and 390×844, light and dark.
 - 2026-10-21: `uiWebPlugin(options)` takes `{navigation, preferences, core}`
   (was a storage name); the first draft's `resources.spaceSections` entries
   gained `tools`; the Space section value is `{spaceId, threadId}`.
+- 2026-10-21 (later): pages (`shell.page`, `shellOpenPage`, a menu item's
+  `page`, `region: "main"`); `createAdminWebPlugin` takes `core` and registers a
+  user-menu page instead of `resources.navigation`; shared read helpers
+  (`readThread`, `readSpace`, `readSpaceThreads`, `readParticipants`); a live
+  read's `ReadState` carries `error` (the runtime passes the live query's
+  refusal through); kit `TabBar` (Space tabs use it) and `DetailList`.
+
+## Open questions
+
+- A View that a URL opened holds its own query reads, but a View it nests with
+  `ctx.show` is not held. The shell and the admin page avoid it (sections are
+  rendered with the URL origin; admin sections read through the page's context).
+  Should the runtime propagate the hold to nested Views?

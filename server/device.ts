@@ -21,6 +21,9 @@ export type DeviceSessionOptions = Readonly<{
   authenticate(
     credentials: unknown,
   ): SubscriptionTransport | Promise<SubscriptionTransport>;
+  maxSubscriptions?: number;
+  maxPendingControls?: number;
+  maxPendingBytes?: number;
   heartbeatMs?: number;
   lifetimeMs?: number;
   /** Absolute host request deadline; renew one second before it. */
@@ -45,6 +48,9 @@ export function attachDeviceSocket(
 ): { close(): void } {
   for (
     const value of [
+      options.maxSubscriptions ?? DEVICE_LIMITS.channels,
+      options.maxPendingControls ?? DEVICE_LIMITS.queuedFrames,
+      options.maxPendingBytes ?? DEVICE_LIMITS.queuedBytes,
       options.heartbeatMs ?? DEVICE_LIMITS.heartbeatMs,
       options.lifetimeMs ?? DEVICE_LIMITS.lifetimeMs,
     ]
@@ -62,7 +68,11 @@ export function attachDeviceSocket(
   let transport: SubscriptionTransport | undefined,
     authenticated = false,
     closed = false;
-  let epoch = 0, pendingControls = 0, controls = Promise.resolve();
+  let epoch = 0,
+    pendingControls = 0,
+    pendingBytes = 0,
+    helloReceived = false,
+    controls = Promise.resolve();
   let pumpTimer: ReturnType<typeof setTimeout> | undefined;
   const control = (frame: DeviceEnvelope) => {
     if (closed || socket.readyState !== 1) return;
@@ -152,6 +162,13 @@ export function attachDeviceSocket(
     }, 0);
   };
   const authenticate = async (credentials: unknown, renewal: boolean) => {
+    if (
+      !credentials ||
+      typeof credentials === "object" &&
+        (Array.isArray(credentials) || !Object.keys(credentials).length)
+    ) {
+      throw protocolError("Nonempty session proof required", "forbidden");
+    }
     const current = ++epoch;
     authenticated = false;
     transport = undefined;
@@ -184,8 +201,15 @@ export function attachDeviceSocket(
     if (!authenticated || !transport) {
       throw protocolError("Device is not authenticated", "forbidden");
     }
-    if (channels.size >= DEVICE_LIMITS.channels) {
-      throw protocolError("Device channel capacity exceeded");
+    if (channels.size >= (options.maxSubscriptions ?? DEVICE_LIMITS.channels)) {
+      control({
+        t: "error",
+        channel: id,
+        generation,
+        code: "subscription_capacity_exceeded",
+        retryable: false,
+      });
+      return;
     }
     if (
       typeof frame.collection !== "string" || !frame.collection ||
@@ -353,13 +377,31 @@ export function attachDeviceSocket(
   const message = (event: MessageEvent) => {
     try {
       const frame = decodeControl(event.data); // Bound before authentication sees credentials/input.
-      if (++pendingControls > DEVICE_LIMITS.queuedFrames) {
+      if (!authenticated) {
+        if (frame.t !== "hello" || helloReceived) {
+          throw protocolError(
+            "Only one hello is accepted before authentication",
+            "forbidden",
+          );
+        }
+        helloReceived = true;
+      }
+      const size = encoded(frame).length;
+      if (
+        pendingControls + 1 >
+          (options.maxPendingControls ?? DEVICE_LIMITS.queuedFrames) ||
+        pendingBytes + size >
+          (options.maxPendingBytes ?? DEVICE_LIMITS.queuedBytes)
+      ) {
         throw protocolError("Device control queue overflow");
       }
+      pendingControls++;
+      pendingBytes += size;
       controls = controls.then(() => {
         if (!closed) return handle(frame);
       }).catch(fatal).finally(() => {
         pendingControls--;
+        pendingBytes -= size;
       });
     } catch (error) {
       fatal(error);

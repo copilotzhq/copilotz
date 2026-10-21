@@ -18,6 +18,8 @@ import type {
 } from "./shard.ts";
 import { createShardController } from "./shard-controller.ts";
 
+import { shardSessionKind } from "./shard-identity.ts";
+
 const RELAY = "copilotz.shard.relay.v1";
 type Session = ReturnType<Hypervisor["sessions"]["assertCurrent"]>;
 const encode = (value: unknown) =>
@@ -54,6 +56,7 @@ export function createShardDispatcher(options: {
   const current = new Map<string, Session>();
   const subscribers = new Set<(session: Session) => void>();
   const publish = (session: Session) => {
+    if (shardSessionKind(session.identity.workerId) !== "worker") return;
     const previous = current.get(session.identity.workerId);
     if (
       previous &&
@@ -233,6 +236,9 @@ export function connectShardDispatcher(options: {
     await handle.completed;
   }
   function sendSession(session: Session) {
+    if (shardSessionKind(session.identity.workerId) !== "worker") {
+      return Promise.resolve();
+    }
     return control({ kind: "session" }, session);
   }
   const enqueue = (run: () => Promise<void>) => {

@@ -1,3 +1,4 @@
+import { compareCodePoints } from "../runtime/collections/predicate.ts";
 import type {
   CollectionQuery,
   CollectionRecord,
@@ -161,7 +162,8 @@ export function createLiveQuery(
           sequence(change.seq) > sequence(frame.to) ||
           previous &&
             (sequence(change.seq) < sequence(previous.seq) ||
-              change.seq === previous.seq && change.id <= previous.id) ||
+              change.seq === previous.seq &&
+                compareCodePoints(change.id, previous.id) <= 0) ||
           change.record && change.record.id !== change.id
         ) throw new TypeError("Invalid subscription delta ordering.");
         if (change.record) {
@@ -170,7 +172,7 @@ export function createLiveQuery(
         previous = change;
       }
       next = [...records.values()].sort((a, b) =>
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) *
+        (compareCodePoints(a.id, b.id)) *
         (query.order?.direction === "desc" ? -1 : 1)
       );
     }

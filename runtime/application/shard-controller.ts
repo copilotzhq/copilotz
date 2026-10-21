@@ -45,6 +45,8 @@ export class ShardDispatchError extends Error {
 /** Host-authenticated controller ingress; authorization also restricts target scope. */
 export function createShardControllerHandler(options: {
   shard: Pick<CopilotzShard, "dispatch">;
+  /** Authenticate using headers only; the body is never exposed before this succeeds. */
+  authenticate(request: Request): boolean | Promise<boolean>;
   authorize(
     request: Request,
     input: ShardWorkInput,
@@ -55,6 +57,21 @@ export function createShardControllerHandler(options: {
       return new Response(null, { status: 404 });
     }
     if (request.method !== "POST") return new Response(null, { status: 405 });
+    // Pass a bodyless request so authentication cannot accidentally buffer ingress.
+    if (
+      !await options.authenticate(
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          signal: request.signal,
+        }),
+      )
+    ) {
+      void request.body?.cancel().catch(() => undefined);
+      return Response.json({ error: "forbidden", started: false }, {
+        status: 403,
+      });
+    }
     let handle: WorkHandle | undefined;
     try {
       const body = JSON.parse(

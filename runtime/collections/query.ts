@@ -118,7 +118,9 @@ function cursorFilter(
   const greaterThan = (order.direction === "ASC") === followsRequestedOrder;
   const operator = greaterThan ? ">" : "<";
   if (order.expression === "id") {
-    return `id ${operator} $${params.push(anchor.id)}`;
+    return `id COLLATE "C" ${operator} $${
+      params.push(anchor.id)
+    }::text COLLATE "C"`;
   }
   const idIndex = params.push(anchor.id);
   // Match PostgreSQL's default null placement: ASC NULLS LAST / DESC NULLS FIRST.
@@ -295,7 +297,7 @@ export async function queryCollectionRecords(
   }
   const limit = boundedLimit(query.limit);
   const orderBy = order.expression === "id"
-    ? `id ${order.direction}`
+    ? `id COLLATE "C" ${order.direction}`
     : `(${order.expression}) ${order.direction}, id ${order.direction}`;
   const rows = await queryCollectionRows<NodeRow>(
     executor,
@@ -403,8 +405,9 @@ export function compileCollectionFilters(
           ? String(value)
           : value,
       );
-      if (field === "id") filters.push(`id = $${index}`);
-      else filters.push(`${jsonTextPath(field)} = $${index}::text`);
+      if (field === "id") {
+        filters.push(`id = $${index}`);
+      } else filters.push(`${jsonTextPath(field)} = $${index}::text`);
     }
     for (const [field, value] of Object.entries(predicate.contains ?? {})) {
       const path = field.split(".").map(sqlLiteral).join(",");

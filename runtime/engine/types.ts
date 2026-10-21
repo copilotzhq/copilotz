@@ -111,6 +111,7 @@ export type EffectNoStartVerifier = (
   options: Readonly<{ signal: AbortSignal }>,
 ) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
+  subscriptionLimits?: import("../subscriptions/owner.ts").SubscriptionLimits;
   authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
   verifyEffectNotStarted?: EffectNoStartVerifier;
   session: SqlSession;

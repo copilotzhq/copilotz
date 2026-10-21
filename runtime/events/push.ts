@@ -25,6 +25,8 @@ export type OwnerChange = Readonly<{
   collectionChange?: Readonly<
     {
       collection: string;
+      /** Pre-commit image, captured by the Collection plan for policy-local progress. */
+      previous?: import("../collections/types.ts").CollectionRecord | null;
       id: string;
       record: import("../collections/types.ts").CollectionRecord | null;
     }

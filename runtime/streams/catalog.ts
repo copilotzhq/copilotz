@@ -2067,11 +2067,14 @@ export function createOperationCatalog(
     },
     async resultSequence(namespace, operationId) {
       const result = await session.query<{ seq: string | number }>(
-        `SELECT COALESCE(MAX(seq),0) AS seq FROM ${
+        `SELECT COUNT(*)::text AS seq FROM ${
+          createCoreTableNames(databaseSchema).events
+        }
+         WHERE namespace=$1 AND seq <= (SELECT COALESCE(MAX(seq),0) FROM ${
           createCoreTableNames(databaseSchema).events
         }
          WHERE namespace=$1 AND (id IN (SELECT event_id FROM ${tables.operationEvents} WHERE namespace=$1 AND operation_id=$2)
-           OR (type='operation.catalog.changed' AND correlation_id=$2))`,
+           OR (type='operation.catalog.changed' AND correlation_id=$2)))`,
         [namespace, operationId],
       );
       return String(result.rows[0].seq);

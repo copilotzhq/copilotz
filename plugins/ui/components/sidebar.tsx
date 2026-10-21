@@ -229,6 +229,7 @@ function ThreadRow(
     >
       <button
         type="button"
+        data-nav-item=""
         draggable={Boolean(props.onMove)}
         aria-current={selected ? "page" : undefined}
         onClick={() => props.onOpenThread(thread.id)}
@@ -441,8 +442,19 @@ function SpaceGroup(
           ? (
             <button
               type="button"
+              data-nav-item=""
               aria-current={selected ? "page" : undefined}
               onClick={() => props.onOpenSpace(id)}
+              onKeyDown={(event) => {
+                // Right shows the Space's chats, Left hides them.
+                if (event.key === "ArrowRight" && !open) {
+                  event.preventDefault();
+                  props.onToggleSpace(id, true);
+                } else if (event.key === "ArrowLeft" && open) {
+                  event.preventDefault();
+                  props.onToggleSpace(id, false);
+                }
+              }}
               className="focus-visible:ring-sidebar-ring/50 hover:bg-sidebar-accent/70 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-sm font-medium outline-none focus-visible:ring-2"
             >
               <SpaceMark id={id} name={group.label} />
@@ -808,6 +820,27 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
         <nav
           aria-label="Conversations"
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+          onKeyDown={(event) => {
+            // Up and Down move between Spaces and chats; Home and End jump.
+            const target = dom(event.target);
+            if (target.dataset?.navItem === undefined) return;
+            const items = Array.from(
+              dom(event.currentTarget).querySelectorAll("[data-nav-item]"),
+            );
+            const index = items.indexOf(target);
+            const next = event.key === "ArrowDown"
+              ? index + 1
+              : event.key === "ArrowUp"
+              ? index - 1
+              : event.key === "Home"
+              ? 0
+              : event.key === "End"
+              ? items.length - 1
+              : -1;
+            if (next < 0 || next >= items.length || next === index) return;
+            event.preventDefault();
+            items[next].focus();
+          }}
         >
           {props.status && (
             <div className="px-1 pb-2 @max-[12rem]/sidebar:hidden">

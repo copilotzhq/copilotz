@@ -840,6 +840,44 @@ test("live read limits show a friendly state, never a raw error", async () => {
   }
 });
 
+test("arrow keys move through Spaces and chats; Right and Left show and hide a Space's chats", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    const items = () =>
+      all('nav[aria-label="Conversations"] [data-nav-item]') as unknown as {
+        focus(): void;
+        textContent: string | null;
+        dispatchEvent(event: unknown): void;
+      }[];
+    const press = async (key: string) => {
+      await act(async () => {
+        (document.activeElement as unknown as {
+          dispatchEvent(event: unknown): void;
+        }).dispatchEvent(
+          new window.KeyboardEvent("keydown", { key, bubbles: true }),
+        );
+        await settle();
+      });
+    };
+    const first = items()[0];
+    first.focus();
+    await press("ArrowDown");
+    assert.equal(document.activeElement, items()[1] as unknown);
+    await press("End");
+    assert.equal(document.activeElement, items().at(-1) as unknown);
+    await press("Home");
+    assert.equal(document.activeElement, items()[0] as unknown);
+    // The first Space is collapsed: Right shows its chats.
+    const before = items().length;
+    await press("ArrowRight");
+    assert.ok(items().length > before, "its chats are listed");
+    await press("ArrowLeft");
+    assert.equal(items().length, before);
+  } finally {
+    await shell.dispose();
+  }
+});
+
 test("search finds chats by title and by Space name", async () => {
   const shell = await mount("https://app.example/?chat=t1");
   try {

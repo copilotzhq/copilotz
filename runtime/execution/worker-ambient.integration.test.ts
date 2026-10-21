@@ -52,7 +52,8 @@ Deno.test("separate worker retains ambient caller authority for Actions, Process
           authenticatedWith: context.credential.kind,
           resume: {
             credential: { kind: "resume", capability: "test-resume" },
-            expiresAtMs: Date.now() + 60000,
+            // Keep this non-reconnecting fixture alive through the whole matrix.
+            expiresAtMs: Date.now() + 10 * 60_000,
           },
         };
       },

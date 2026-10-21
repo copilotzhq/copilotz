@@ -817,12 +817,13 @@ const prepare = defineDatabaseDirectoryCommand({
 ```
 
 The directory service owns its repository and migrations. Its callbacks run on
-the owner, never on a worker. Use service-owned identity tables; do not write
-native Collection tables without their event, projection and integrity
-invariants. The SQL executor is revoked when the implementation returns. No
-captured application handles, network side effects or independent commits are
-permitted in a service command. Physical tenant provisioning belongs to trusted
-host orchestration before route activation.
+the owner, never on a worker. Use the supplied SQL executor for service-owned
+tables and joined source reads. For native Collections, use the destination
+Collection repository described below: raw writes to native tables omit their
+events, indexes and integrity checks. The SQL executor is revoked when the
+implementation returns. No captured application handles, network side effects or
+independent commits are permitted in a service command. Physical tenant
+provisioning belongs to trusted host orchestration before route activation.
 
 Both schema owners must already be attached in the same process and database.
 The source SQL transaction locks and verifies the destination's live owner
@@ -855,6 +856,119 @@ input/revision refuses. Private receipts retain results for replay, while
 `directory.audit` contains coordinates and input/output digests only. Opposing
 cross-schema lock orders may cause a database deadlock and rollback; commands
 must have no effects outside their SQL transaction.
+
+## Native Collections inside directory commands
+
+Declare destination **composition aliases** and exact native methods in
+`collections`. The owner supplies the registered destination Collection runtime;
+application code does not construct a runtime or a `CommandContext`. Exactly one
+attached destination composition must provide all declared aliases; it must also
+bind their owner policies. Multiple matching compositions refuse. Closing a
+composition removes its registration.
+
+```ts
+const publishMembership = defineDatabaseDirectoryCommand({
+  databaseSchema: "directory",
+  namespace: "directory",
+  command: "publishMembership",
+  revision: "1",
+  actions: ["loginCallback"],
+  evidence: ["oidc"],
+  collections: {
+    loginIndex: ["get", "create", "addMembership"],
+    tenantRoute: ["create"],
+  },
+  async authorize({ authority, input, evidence }) {
+    const identity = await evidence.get("oidc");
+    return admittedSourceTenant(authority.scope.tenant) &&
+      identity?.principal === parseDirectoryInput(input).accountId;
+  },
+  async execute({ collections, authority, evidence, transaction }) {
+    const identity = requireVerifiedIdentity(await evidence.get("oidc"));
+    const subjectId = identityKey(identity.issuer, identity.subject);
+    // These application helpers read trusted state in the joined transaction.
+    await requireActiveSourceAccount(transaction, identity.principal);
+    const route = await requireProvisionedRoute(transaction, authority.scope);
+    const existing = await collections.loginIndex.get({ id: subjectId });
+    if (!existing) {
+      await collections.loginIndex.create({
+        id: subjectId,
+        subject: identity.subject,
+        members: [],
+      });
+    }
+    await collections.loginIndex.commands.addMembership({
+      id: subjectId,
+      member: identity.principal,
+    });
+    // Route activation is allowed only after host-owned physical provisioning.
+    await collections.tenantRoute.create({
+      id: route.id,
+      active: true,
+      databaseSchema: route.databaseSchema,
+    });
+    return { accountId: identity.principal };
+  },
+});
+```
+
+`get({ id })`, `create(input)` and `commands.name({ id, ...input })` keep the
+native Collection shapes. Mutations return planned mutation references. They run
+the destination's schema validation, custom command reduction, event creation
+and indexes. No write options or placement overrides are accepted. Undeclared
+aliases/methods, missing destination policy registrations and expired repository
+handles refuse. A caught repository refusal or unawaited failed call still
+aborts the transaction. Captured app handles remain unavailable.
+
+The destination must independently bind these Collections to its own registered
+owner policies. For delegated calls, policy receives `directory` with the fixed
+`command`, `databaseSchema` and `namespace`, alongside the **unchanged source**
+`authority` and `intent.invocation`. Declared policy reads select fresh records
+in the destination namespace. The source flow/session is validated by its own
+owner; it is never treated as a credential for the destination. For example:
+
+```ts
+// Destination Collection policy excerpt, separate from subscription/read grants.
+evaluate({ authority, intent, directory }) {
+  if (
+    directory?.command !== "publishMembership" ||
+    !admittedSourceTenant(authority.scope.tenant) ||
+    intent.invocation?.id !== loginCallback.id
+  ) return {};
+  return {
+    collections: { loginIndex: {}, tenantRoute: {} },
+    collectionMutations: {
+      loginIndex: {
+        create: { fields: ["subject", "members"] },
+        commands: { addMembership: { fields: ["member"] } },
+      },
+      tenantRoute: { create: { fields: ["active", "databaseSchema"] } },
+    },
+  };
+}
+```
+
+All three gates apply: the source directory grant, the declaration's destination
+`authorize`, and the destination Collection policy. They remain effective at the
+outer transaction's result gate. No directory grant becomes host trust or an
+authority for subsequent detached work.
+
+The destination joins the source transaction using its own live epoch and
+command context. Rollback removes both schemas' records, native events, indexes,
+session effects and receipts. After confirmed commit, destination subscription
+updates and Processor deliveries use the destination owner/coordinator and
+publication queue, including its fencing and shutdown drain. Processors receive
+the original caller provenance; publication grants no additional mutation or
+credential authority.
+
+Replay returns the retained result without rerunning reducers or publishing
+again. It rechecks source and destination authorization, including the retained
+native intents against current destination policy and records. Private native
+intent receipts are bounded to 1 MiB; command inputs/results remain bounded to
+16 KiB. Audit receipts contain coordinates, method declarations and digests,
+never Collection payloads. Protect and retain private receipt storage under the
+same policy as private directory results. Changes to method declarations require
+a new command revision and conflict with an existing operation's replay intent.
 
 ## Flow-bounded Processor projections
 

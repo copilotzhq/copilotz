@@ -52,6 +52,7 @@ type TransactionCompletion = {
   state: "pending" | "committed" | "failed";
   callbacks: Array<() => void>;
   active: boolean;
+  settled: Array<() => void>;
 };
 
 const completions = new WeakMap<SqlExecutor, TransactionCompletion>();
@@ -67,6 +68,7 @@ export async function runSqlTransaction<T>(
   const completion: TransactionCompletion = {
     state: "pending",
     callbacks: [],
+    settled: [],
     active: false,
   };
   let active = false;
@@ -97,6 +99,8 @@ export async function runSqlTransaction<T>(
     if (completion.state !== "committed") completion.state = "failed";
     completion.callbacks.length = 0;
     throw error;
+  } finally {
+    for (const callback of completion.settled.splice(0)) callback();
   }
 }
 
@@ -110,6 +114,7 @@ export async function runSqlCommandScope<T>(
   const completion: TransactionCompletion = {
     state: "pending",
     callbacks: [],
+    settled: [],
     active: true,
   };
   let active = true;
@@ -140,6 +145,9 @@ export async function runSqlCommandScope<T>(
     },
   };
   completions.set(transaction, completion);
+  afterSqlSettlement(parent, () => {
+    for (const callback of completion.settled.splice(0)) callback();
+  });
   if (savepoint) await parent.query("SAVEPOINT owner_command");
   let value: T;
   try {
@@ -163,6 +171,23 @@ export async function runSqlCommandScope<T>(
     for (const callback of completion.callbacks.splice(0)) callback();
   });
   return { ok: true, value };
+}
+
+/** Internal aliases share the outer transaction's commit and rollback gates. */
+export function bindSqlTransactionAlias(
+  alias: SqlExecutor,
+  source: SqlExecutor,
+): void {
+  sqlCommitGate(source);
+  completions.set(alias, completions.get(source)!);
+}
+/** Retain joined owners until the physical transaction settles, including rollback. */
+export function afterSqlSettlement(
+  transaction: SqlExecutor,
+  callback: () => void,
+): void {
+  sqlCommitGate(transaction);
+  completions.get(transaction)!.settled.push(callback);
 }
 
 /** Registers an internal synchronous cache update at the outer commit gate. */

@@ -75,6 +75,11 @@ export type AuthorizationRead = Readonly<{
     query?: CollectionQuery,
   ): Promise<readonly CollectionRecord[]>;
 }>;
+export type DirectoryPolicyProvenance = Readonly<{
+  command: string;
+  databaseSchema: string;
+  namespace: string;
+}>;
 export type OwnerPolicy = Readonly<{
   revision: string;
   /** Local Collection aliases, or explicit directory capabilities for staff grants. */
@@ -83,6 +88,7 @@ export type OwnerPolicy = Readonly<{
   evaluate(
     context: Readonly<{
       authority: AuthenticatedAuthority;
+      directory?: DirectoryPolicyProvenance;
       intent: AuthorizationIntent;
       commandTime: string;
       signal: AbortSignal;
@@ -320,6 +326,10 @@ export function createOwnerEvaluator(
     registration: OwnerAuthorization;
     collections: Readonly<Record<string, CollectionDefinition>>;
     databaseSchema: string;
+    /** Package-only live delegation; never accepted from a worker or retained authority. */
+    directory?: DirectoryPolicyProvenance & {
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
+    };
   }>,
 ): OwnerEvaluator {
   const { registration, collections, databaseSchema } = options;
@@ -332,10 +342,16 @@ export function createOwnerEvaluator(
     >,
   ): Promise<AuthorizationDecision> {
     let authority = retainedAuthority(value);
-    const policy = registration.policies[authority.policy.id];
+    const directory = options.directory;
+    if (directory && intent.kind !== "collection") authorizationRefused();
+    const reference = directory
+      ? registration.collections[intent.resource]
+      : authority.policy;
+    const namespace = directory?.namespace ?? authority.scope.namespace;
+    const policy = reference && registration.policies[reference.id];
     if (
-      !policy || policy.revision !== authority.policy.revision ||
-      authority.scope.databaseSchema !== databaseSchema
+      !policy || policy.revision !== reference?.revision ||
+      (!directory && authority.scope.databaseSchema !== databaseSchema)
     ) authorizationRefused();
     const required = intent.kind === "collection"
       ? registration.collections[intent.resource]
@@ -344,8 +360,8 @@ export function createOwnerEvaluator(
       : undefined;
     if (
       (intent.kind === "collection" || intent.kind === "action") &&
-      (!required || required.id !== authority.policy.id ||
-        required.revision !== authority.policy.revision)
+      (!required || required.id !== reference?.id ||
+        required.revision !== reference?.revision)
     ) authorizationRefused();
     command.signal.throwIfAborted();
     if (
@@ -378,7 +394,7 @@ export function createOwnerEvaluator(
       if (!definition) authorizationRefused();
       dependencies.push({
         owner: authority.scope.owner,
-        namespace: authority.scope.namespace,
+        namespace,
         collection: definition.name,
         ...(id === undefined ? {} : { id }),
       });
@@ -396,7 +412,7 @@ export function createOwnerEvaluator(
       return promise;
     };
     try {
-      if (authority.validity.kind === "attempt") {
+      if (!directory && authority.validity.kind === "attempt") {
         const live = await command.transaction.query(
           `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 AND lease_owner=$2 AND owner_epoch=$3::bigint AND status='leased' AND lease_expires_at>$4::timestamptz`,
           [
@@ -408,8 +424,8 @@ export function createOwnerEvaluator(
         );
         if (!live.rows.length) authorizationRefused();
       }
-      await checkFlow(authority, intent, command);
-      if (authority.authorityBasis.kind === "session") {
+      if (!directory) await checkFlow(authority, intent, command);
+      if (!directory && authority.authorityBasis.kind === "session") {
         const rows = await command.transaction.query<
           { expires_at: string; revoked_at: string | null }
         >(
@@ -487,6 +503,15 @@ export function createOwnerEvaluator(
         withOwnerPolicyRefusal(() => {
           const result = policy.evaluate({
             authority,
+            ...(directory
+              ? {
+                directory: {
+                  command: directory.command,
+                  databaseSchema,
+                  namespace,
+                },
+              }
+              : {}),
             intent: captureHostCommandJson(intent) as AuthorizationIntent,
             commandTime: command.commandTime,
             signal: command.signal,
@@ -498,7 +523,14 @@ export function createOwnerEvaluator(
                   authorizationRefused();
                 }
                 return track(() =>
-                  readIdentityEvidence(registration, authority, alias, command)
+                  directory
+                    ? directory.evidence.get(alias)
+                    : readIdentityEvidence(
+                      registration,
+                      authority,
+                      alias,
+                      command,
+                    )
                 );
               },
             },
@@ -520,7 +552,7 @@ export function createOwnerEvaluator(
                   loadCollectionRecord(
                     command.transaction,
                     tables,
-                    authority.scope.namespace,
+                    namespace,
                     definition.name,
                     id,
                   )
@@ -553,7 +585,7 @@ export function createOwnerEvaluator(
                     command.transaction,
                     tables,
                     definition,
-                    authority.scope.namespace,
+                    namespace,
                     query,
                   )
                 );

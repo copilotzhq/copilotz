@@ -52,6 +52,7 @@ export type {
   AuthorizationDecision,
   AuthorizationIntent,
   AuthorizationRead,
+  DirectoryPolicyProvenance,
   OwnerAuthorization,
   OwnerPolicy,
 } from "../authorization/evaluator.ts";
@@ -91,3 +92,8 @@ export type {
   DirectoryCommands,
   TransactionDirectoryCommands,
 } from "../authorization/directory-command.ts";
+
+export type {
+  DirectoryCollection,
+  DirectoryCollections,
+} from "../authorization/directory-collections.ts";

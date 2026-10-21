@@ -395,3 +395,75 @@ Deno.test("joined events publish only after confirmed outer commit", async () =>
     await fixture.db.close();
   }
 });
+
+Deno.test("shutdown finishes a held publication and parks its durable delivery for recovery", async () => {
+  const fixture = await createStore();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let handled = false;
+  const registry = await createPluginRegistry({
+    plugins: [definePlugin({
+      id: "test.shutdown-publication",
+      version: "1",
+      processors: {
+        retained: defineProcessor({
+          id: "shutdown.retained",
+          on: [{ eventType: "shutdown.retained" }],
+          handle() {
+            handled = true;
+          },
+        }),
+      },
+    })],
+  });
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry,
+    createContext: createTestProcessorContext,
+  });
+  const coordinator = createEventCoordinator({
+    store: fixture.store,
+    registry,
+    executor,
+    async publish() {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  const committing = coordinator.append({
+    type: "shutdown.retained",
+    namespace: "test",
+    payload: {},
+    metadata: { sourceDeliveryId: "earlier-delivery" },
+  });
+  try {
+    await entered.promise;
+    coordinator.close();
+    await executor.shutdown();
+    release.resolve();
+    const result = await committing;
+    assertEquals(result.dispatch, { handles: [], failures: [] });
+    assertEquals(handled, false);
+    assertEquals(
+      (await fixture.store.getDelivery(result.deliveries[0].id))?.status,
+      "pending",
+    );
+    const successor = createDeliveryExecutor({
+      store: fixture.store,
+      registry,
+      createContext: createTestProcessorContext,
+    });
+    try {
+      const handle = await successor.dispatchDelivery(result.deliveries[0]);
+      assertEquals((await handle.done).delivery.status, "succeeded");
+      assert(handled);
+    } finally {
+      await successor.shutdown();
+    }
+  } finally {
+    release.resolve();
+    await committing;
+    await executor.shutdown();
+    await fixture.db.close();
+  }
+});

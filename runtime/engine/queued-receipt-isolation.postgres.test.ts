@@ -183,7 +183,7 @@ async function fixture() {
       )).rows;
     },
     async close() {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },

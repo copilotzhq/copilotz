@@ -332,6 +332,11 @@
           "title": "Contributing to Built-In Plugins",
           "slug": "plugin-layout",
           "description": "Built-in plugin layout, generated indexes, boundaries and repository checks."
+        },
+        {
+          "title": "Retained Data Migration",
+          "slug": "retained-data-migration",
+          "description": "Move offline tenant schemas, migrate owner keys and drain runtime shutdown."
         }
       ]
     }

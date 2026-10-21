@@ -61,7 +61,8 @@
     "./usage/web": "./plugins/usage/web.ts",
     "./ui/web": "./plugins/ui/web.ts",
     "./shard": "./runtime/application/shard-public.ts",
-    "./web/kit/styles.css": "./plugins/ui-kit/styles.css"
+    "./web/kit/styles.css": "./plugins/ui-kit/styles.css",
+    "./migration": "./runtime/migration/index.ts"
   },
   "files": [
     "LICENSE",

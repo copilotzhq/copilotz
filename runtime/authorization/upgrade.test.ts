@@ -93,7 +93,7 @@ Deno.test("F4 version 13 offline upgrade validates every retained binding and pr
     consumers: [],
   });
   const owner = await openDatabaseOwner(db, schema);
-  releaseDatabaseOwner(owner);
+  await releaseDatabaseOwner(owner);
   // Close all owner references before the explicit offline upgrade.
   owner.stop();
   try {
@@ -239,7 +239,7 @@ for (const principalKind of ["session", "api-key"] as const) {
       });
     }
     const owner = await openDatabaseOwner(db, schema);
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     owner.stop();
     try {
       await db.query(

@@ -112,7 +112,7 @@ async function fixture() {
     owner,
     caller: { principal: "fixture", epoch: owner.epoch! },
     async close() {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await session.query(`DROP SCHEMA "${schema}" CASCADE`);
       await managed.close();
     },

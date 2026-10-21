@@ -311,8 +311,8 @@ Deno.test("F4 declared directory staff reads are fresh per command, fail closed 
     await second;
     assertEquals(reads - beforeCommands, 2);
   } finally {
-    releaseDatabaseOwner(owner);
-    releaseDatabaseOwner(directoryOwner);
+    await releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(directoryOwner);
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await directoryDb.query(`DROP SCHEMA "${directorySchema}" CASCADE`);
     await db.close();
@@ -399,7 +399,7 @@ Deno.test("F4 staff reads of a same-database directory run inside the evaluating
     );
   } finally {
     clearTimeout(timer);
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     owner.stop();
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.query(`DROP SCHEMA "${directorySchema}" CASCADE`);

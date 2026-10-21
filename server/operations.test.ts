@@ -1009,7 +1009,7 @@ async function observationFixture(options: { suppressHints?: boolean } = {}) {
       );
       await readers.close();
       await executor.shutdown();
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.close();
     },
   };

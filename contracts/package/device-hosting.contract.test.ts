@@ -1,3 +1,4 @@
+import { upgradeWebSocket } from "../../dependencies/oxian-http.ts";
 import { createCopilotz as createWorker } from "../../worker.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { defineAction, defineCollection } from "../../index.ts";
@@ -215,7 +216,7 @@ for (
 }
 
 for (const role of ["embedded", "gateway"] as const) {
-  Deno.test(`public ${role} custom upgrade is used by fetch and Deno listen, with deadline renewal`, async () => {
+  Deno.test(`public ${role} custom upgrade is used by raw fetch and portable Deno listen, with deadline renewal`, async () => {
     let upgrades = 0;
     const options = {
       database: {
@@ -229,7 +230,9 @@ for (const role of ["embedded", "gateway"] as const) {
       upgradeDevice(request: Request) {
         upgrades++;
         return {
-          ...Deno.upgradeWebSocket(request),
+          ...(Number(new URL(request.url).port) === nativePort
+            ? Deno.upgradeWebSocket(request)
+            : upgradeWebSocket(request)),
           requestDeadline: Date.now() + 1500,
         };
       },
@@ -241,6 +244,7 @@ for (const role of ["embedded", "gateway"] as const) {
       { hostname: "127.0.0.1", port: 0, onListen() {} },
       app.fetch,
     );
+    const nativePort: number = custom.addr.port;
     try {
       const hosted = denoListen(app);
       for (const port of [custom.addr.port, hosted.port]) {

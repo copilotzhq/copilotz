@@ -1,13 +1,12 @@
-import type { DeviceSocket } from "../../subscriptions/device.ts";
-import { provideDeviceUpgrade } from "../../subscriptions/hosting.ts";
 import {
   attachOwnedListenerSync,
   ownedHypervisor,
 } from "../../application/hosting.ts";
 import { serve } from "../../../dependencies/oxian-deno.ts";
-import type {
-  Hypervisor,
-  HypervisorListener,
+import {
+  createHypervisor,
+  type Hypervisor,
+  type HypervisorListener,
 } from "../../../dependencies/oxian-hypervisor.ts";
 
 export type ListenCopilotzOptions = Readonly<{
@@ -15,105 +14,33 @@ export type ListenCopilotzOptions = Readonly<{
   port?: number;
   signal?: AbortSignal;
 }>;
-
-/** Structural host boundary: application factories are not adapter dependencies. */
 export type FetchCapableHost = Readonly<{
   fetch?: (request: Request) => Promise<Response>;
   hypervisor?: Hypervisor;
 }>;
 
-function listenerUrl(hostname: string, port: number): URL {
-  const host = hostname.includes(":") && !hostname.startsWith("[")
-    ? `[${hostname}]`
-    : hostname;
-  return new URL(`http://${host}:${port}/`);
-}
-
-/** Starts a Deno listener while keeping the public operation name portable. */
+/** Oxian owns portable route upgrades and listener-scoped socket draining. */
 export function listen(
   gateway: FetchCapableHost,
   options: ListenCopilotzOptions = {},
 ): HypervisorListener {
-  const hypervisor = ownedHypervisor(gateway) ?? gateway.hypervisor;
-  const sockets = new Set<DeviceSocket>();
-  let stopping = false;
-  const stopDevices = () => {
-    stopping = true;
-    for (const socket of sockets) socket.close(1000, "Listener shutdown");
-    sockets.clear();
-  };
-  const prepareDevice = (request: Request) => {
-    provideDeviceUpgrade(request, () => Deno.upgradeWebSocket, (socket) => {
-      if (stopping) {
-        socket.close(1000, "Listener shutdown");
-        throw new Error("Listener is closed");
-      }
-      sockets.add(socket);
-      socket.addEventListener("close", () => sockets.delete(socket), {
-        once: true,
-      });
-    });
-  };
-  const own = (listener: HypervisorListener): HypervisorListener => {
-    options.signal?.addEventListener("abort", stopDevices, { once: true });
-    const cleanup = () => {
-      stopDevices();
-      options.signal?.removeEventListener("abort", stopDevices);
-    };
-    void listener.finished.then(cleanup, cleanup);
-    return attachOwnedListenerSync(gateway, {
-      ...listener,
-      shutdown() {
-        stopDevices();
-        return listener.shutdown();
-      },
-    });
-  };
-  if (hypervisor) {
-    return own(
-      serve({
-        hypervisor: {
-          ...hypervisor,
-          prepare(request) {
-            prepareDevice(request);
-            return hypervisor.prepare(request);
-          },
-        },
-        hostname: options.hostname,
-        port: options.port,
-        signal: options.signal,
-      }),
-    );
-  }
-  if (!gateway.fetch) {
+  const owned = ownedHypervisor(gateway) ?? gateway.hypervisor;
+  if (!owned && !gateway.fetch) {
     throw new TypeError("Copilotz listener requires a Fetch-capable host.");
   }
-
-  const hostname = options.hostname ?? "127.0.0.1";
-  const port = options.port ?? 0;
-  const server = Deno.serve({
-    hostname,
-    port,
-    signal: options.signal,
-    onListen() {},
-  }, (request) => {
-    prepareDevice(request);
-    return gateway.fetch!(request);
+  const hypervisor = owned ?? createHypervisor({
+    transports: [{
+      type: "in-process",
+      config: { topic: crypto.randomUUID() },
+    }],
+    fallback: gateway.fetch,
   });
-  if (server.addr.transport !== "tcp") {
-    throw new TypeError("Copilotz Gateway listener requires a TCP address.");
-  }
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = (): Promise<void> => {
-    if (shutdownTask) return shutdownTask;
-    shutdownTask = server.shutdown().catch(() => undefined);
-    return shutdownTask;
-  };
-  return own({
-    hostname: server.addr.hostname,
-    port: server.addr.port,
-    url: listenerUrl(server.addr.hostname, server.addr.port),
-    finished: server.finished,
-    shutdown,
+  const listener = serve({ hypervisor, ...options });
+  return attachOwnedListenerSync(gateway, {
+    ...listener,
+    async shutdown() {
+      await listener.shutdown();
+      if (!owned) await hypervisor.shutdown();
+    },
   });
 }

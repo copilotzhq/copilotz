@@ -31,6 +31,13 @@ import type {
 
 export async function fixture(
   options: import("../subscriptions/owner.ts").SubscriptionLimits = {},
+  configuration: {
+    collections?: Record<
+      string,
+      import("../collections/definition.ts").CollectionDefinition
+    >;
+    now?: () => Date;
+  } = {},
 ) {
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
@@ -110,9 +117,13 @@ export async function fixture(
     session,
     eventStore: store,
     coordinator,
+    now: configuration.now,
   });
   runtime.bind(entry);
   runtime.bind(member);
+  for (const definition of Object.values(configuration.collections ?? {})) {
+    runtime.bind(definition);
+  }
   const collections = runtime.withScope({ namespace: "main" });
   await collections.member.create({
     id: "key",
@@ -157,13 +168,22 @@ export async function fixture(
           if (!grant?.allowed) authorizationRefused();
           return {
             collections: {
+              ...Object.fromEntries(
+                Object.keys(configuration.collections ?? {}).map((
+                  key,
+                ) => [key, {}]),
+              ),
               entry: grant.restricted ? { where: { visible: true } } : {},
             },
           };
         },
       },
     },
-    collections: { entry: authority.policy },
+    collections: Object.fromEntries(
+      ["entry", ...Object.keys(configuration.collections ?? {})].map((
+        key,
+      ) => [key, authority.policy]),
+    ),
     actions: {},
   };
   const authorization = createAuthorizationOwner({
@@ -171,7 +191,7 @@ export async function fixture(
     databaseSchema: schema,
     owner,
     registration,
-    collections: { entry, member },
+    collections: { entry, member, ...configuration.collections },
     operations: {} as OperationCatalog,
   });
   const notices = await attachOwnerPush(session, schema, (frame) => {
@@ -188,7 +208,7 @@ export async function fixture(
     schema,
     owner,
     authorization,
-    collections: { entry, member },
+    collections: { entry, member, ...configuration.collections },
     ...options,
   });
   await activateDatabaseOwner(owner, () => Promise.resolve());

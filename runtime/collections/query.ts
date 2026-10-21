@@ -47,8 +47,13 @@ function collectionOrder(
   if (direction !== "asc" && direction !== "desc") {
     throw new TypeError(`Invalid collection order direction '${direction}'.`);
   }
+  const field = collectionField(definition, query.order?.field ?? "id");
   return {
-    ...collectionField(definition, query.order?.field ?? "id"),
+    ...field,
+    expression: field.cast === "text" && field.expression !== "id" &&
+        field.expression !== "namespace"
+      ? `(${field.expression}) COLLATE "C"`
+      : field.expression,
     direction: direction === "desc" ? "DESC" : "ASC",
   };
 }

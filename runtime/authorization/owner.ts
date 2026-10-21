@@ -1,6 +1,6 @@
 import { assertFlowOperation } from "./flow.ts";
 import { createCredentialEffects } from "./credentials.ts";
-import { authorizeOperation } from "./operation.ts";
+import { authorizeOperation, logoutReceipt } from "./operation.ts";
 import { afterSqlCommit } from "../events/session.ts";
 import { completeOwnerDeadline, writeOwnerDeadline } from "../engine/alarms.ts";
 import type { CommandContext } from "../engine/commands.ts";
@@ -45,6 +45,10 @@ export type AuthorizationOwner = Readonly<{
     authority: AuthenticatedAuthority,
     id: string,
   ): Promise<import("../streams/catalog.ts").OperationRecord>;
+  logoutReceipt(
+    authority: AuthenticatedAuthority,
+    id: string,
+  ): Promise<import("../streams/catalog.ts").OperationRecord | undefined>;
   observe(
     authority: AuthenticatedAuthority,
     input: Readonly<
@@ -59,6 +63,11 @@ export type AuthorizationOwner = Readonly<{
     changed?: (
       decision: import("./evaluator.ts").AuthorizationDecision,
     ) => void,
+  ): Promise<AuthorityObservation>;
+  /** Watches only this credential's liveness, without granting resource reads. */
+  observeCredential(
+    authority: AuthenticatedAuthority,
+    failed: (error: unknown) => void,
   ): Promise<AuthorityObservation>;
   notice(change: { namespace: string; collection?: string; id?: string }): void;
   asset(authority: AuthenticatedAuthority, id: string): Promise<void>;
@@ -108,6 +117,7 @@ export function createAuthorizationOwner(
     id: string;
     authority: AuthenticatedAuthority;
     intent: AuthorizationIntent;
+    credentialOnly: boolean;
     selection: {
       collection?: string;
       record?: Readonly<{ collection: string; id: string }>;
@@ -159,6 +169,47 @@ export function createAuthorizationOwner(
   ) => {
     check(channel);
     if (!evaluate) authorizationRefused();
+    if (channel.credentialOnly) {
+      const authority = channel.authority;
+      if (
+        authority.authorityBasis.kind !== "session" ||
+        authority.validity.kind !== "credential"
+      ) authorizationRefused();
+      const live = await command.transaction.query<{ expires_at: string }>(
+        `SELECT expires_at::text FROM "${options.databaseSchema}".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4 AND revoked_at IS NULL AND expires_at>$5::timestamptz`,
+        [
+          authority.scope.namespace,
+          authority.scope.tenant,
+          authority.authorityBasis.id,
+          authority.principal.id,
+          command.commandTime,
+        ],
+      );
+      if (!live.rows.length) authorizationRefused();
+      channel.authority = retainedAuthority({
+        ...authority,
+        validity: {
+          ...authority.validity,
+          expiresAt: new Date(
+            Math.min(
+              Date.parse(authority.validity.expiresAt),
+              Date.parse(live.rows[0].expires_at),
+            ),
+          ).toISOString(),
+        },
+      });
+      channel.dependencies = [{
+        owner: authority.scope.owner,
+        namespace: authority.scope.namespace,
+        collection: "@authorization/session",
+        id: authority.authorityBasis.id,
+      }];
+      return {
+        authority: channel.authority,
+        constraints: {},
+        dependencies: channel.dependencies,
+      };
+    }
     const decision = await evaluate(channel.authority, channel.intent, command);
     channel.authority = decision.authority;
     const input = channel.selection;
@@ -233,11 +284,13 @@ export function createAuthorizationOwner(
     changed?: (
       decision: import("./evaluator.ts").AuthorizationDecision,
     ) => void,
+    credentialOnly = false,
   ) => {
     const authority = retainedAuthority(value);
     const channel: Channel = {
       id: crypto.randomUUID(),
       authority,
+      credentialOnly,
       selection: input,
       intent: {
         kind: input.collection ? "collection" : "observation",
@@ -543,6 +596,17 @@ export function createAuthorizationOwner(
     notice,
     createSession,
     revokeSession,
+    logoutReceipt: (value, id) => {
+      const authority = retainedAuthority(value);
+      return run(
+        "authorization.logout.receipt",
+        { id },
+        (_, command) =>
+          logoutReceipt(options.operations, authority, id, command),
+      );
+    },
+    observeCredential: (authority, failed) =>
+      observe(authority, {}, failed, undefined, true),
     assertResources(resources) {
       for (const kind of ["collections", "actions"] as const) {
         for (const alias of resources[kind]) {

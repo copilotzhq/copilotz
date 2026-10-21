@@ -1,4 +1,3 @@
-import { withDeviceUpgrades } from "./device-upgrade.ts";
 import { serve } from "../../../dependencies/oxian-node.ts";
 import type {
   Hypervisor,
@@ -27,7 +26,7 @@ export async function listen(
     );
   }
   const listener = await serve({
-    hypervisor: withDeviceUpgrades(hypervisor),
+    hypervisor,
     ...options,
   });
   return await attachOwnedListener(application, listener);

@@ -23,6 +23,11 @@ async function fixture(
   strict = false,
   capacity?: number,
   pooledKey = false,
+  logoutGate?: {
+    before: Promise<void>;
+    committed(): void;
+    after: Promise<void>;
+  },
 ) {
   const held = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -72,6 +77,7 @@ async function fixture(
     id: "auth.logout",
     async execute(_input, ctx) {
       executions.logout++;
+      if (logoutGate) await logoutGate.before;
       await ctx.transaction(async (tx) => {
         await tx.collections.entries.create({
           id: "logout",
@@ -79,6 +85,10 @@ async function fixture(
         });
         await tx.sessions.revoke();
       });
+      if (logoutGate) {
+        logoutGate.committed();
+        await logoutGate.after;
+      }
       return { ok: true };
     },
   });
@@ -1085,7 +1095,7 @@ Deno.test("Completed logout submission replays under proof-only recovery without
       (await f.request("/actions/logout", {}, {
         "idempotency-key": "strict-logout",
       })).status,
-      404,
+      202,
     );
     f.allowOperationReads();
     now += 16 * 60 * 1000;
@@ -1216,3 +1226,199 @@ Deno.test("session ingress records its actor separately from principal and sessi
     await f.close();
   }
 });
+
+Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation terminates both devices", async () => {
+  const { WebSocket: Socket } = await import("ws");
+  const { createDeviceTransport } = await import("../client/device.ts");
+  const f = await fixture(() => new Date(), true);
+  const handler = createServerFacadeFetchHandler(f.app, {
+    upgradeDevice: (request) => Deno.upgradeWebSocket(request),
+  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0, onListen() {} },
+    handler,
+  );
+  const origin = `http://127.0.0.1:${server.addr.port}`;
+  const devices: ReturnType<typeof createDeviceTransport>[] = [];
+  const peers: InstanceType<typeof Socket>[] = [];
+  try {
+    const loginId = await f.submit("login", "two-tabs-login");
+    const login = await f.result(loginId);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const tabs = [];
+    for (let i = 0; i < 2; i++) {
+      const frames: Record<string, unknown>[] = [];
+      const auth = Promise.withResolvers<unknown>();
+      const closed = Promise.withResolvers<number>();
+      const device = createDeviceTransport({
+        url: origin.replace("http", "ws") + "/api/device",
+        credentials: () => ({ cookie: true }),
+        socket(url) {
+          const peer = new Socket(url, { headers: { origin, cookie } });
+          peers.push(peer);
+          peer.on("message", (data) => frames.push(JSON.parse(String(data))));
+          peer.on("close", (code) => closed.resolve(code));
+          return peer as unknown as WebSocket;
+        },
+      });
+      devices.push(device);
+      device.onAuthState(auth.resolve);
+      const subscription = await device.observe("entries", {}, {});
+      const reader = subscription.frames[Symbol.asyncIterator]();
+      assertEquals((await reader.next()).value?.t, "snapshot");
+      tabs.push({
+        device,
+        frames,
+        auth: auth.promise,
+        closed: closed.promise,
+        subscription,
+      });
+    }
+    // Session liveness is independent of collection channel attachment.
+    tabs[1].subscription.detach();
+    const logoutId = await f.submit("logout", "two-tabs-logout", { cookie });
+    const client = createCopilotzClient({
+      baseUrl: "https://test/api",
+      fetch: (input, init) => {
+        const request = new Request(input, init);
+        request.headers.set("cookie", cookie);
+        request.headers.set("x-copilotz-credential-proof", "a".repeat(64));
+        return f.handler(request);
+      },
+    });
+    const clientOutputs: string[] = [];
+    await client.operations.observe({
+      operationIds: [logoutId],
+      onFrame(frame) {
+        if (frame.kind === "output") clientOutputs.push(frame.output.type);
+      },
+    });
+    assertEquals(clientOutputs.at(-1), "operation.completed");
+    const observed = await f.request("/operations/observe", {
+      operationIds: [logoutId],
+    }, { cookie });
+    assertEquals(observed.status, 200, await observed.clone().text());
+    const outputs = [];
+    for await (const frame of decodeObservation(observed)) {
+      if (frame.kind === "output") outputs.push(frame.output.type);
+    }
+    assertEquals(outputs, ["operation.completed"]);
+    const result = await f.result(logoutId, { cookie });
+    assertEquals(result.status, 200, await result.clone().text());
+    assertEquals((await result.json()).data, { ok: true });
+    for (const tab of tabs) {
+      assertEquals(await tab.auth, {
+        state: "revoked",
+        code: "session_revoked",
+      });
+      assertEquals(await tab.closed, 4401);
+      assert(
+        tab.frames.some((frame) =>
+          frame.t === "session" && frame.code === "session_revoked"
+        ),
+      );
+      await assertRejects(
+        () => tab.device.observe("entries", {}, {}),
+        Error,
+        "Session revoked",
+      );
+    }
+    for (
+      const [ids, headers] of [
+        [[logoutId], { cookie, "x-copilotz-credential-proof": "b".repeat(64) }],
+        [[loginId], { cookie }],
+        [[logoutId, loginId], { cookie }],
+        [[logoutId], { cookie, "x-tenant": "other" }],
+      ] as const
+    ) {
+      const refused = await f.request("/operations/observe", {
+        operationIds: ids,
+      }, headers);
+      assertEquals(refused.status, 403, await refused.text());
+    }
+  } finally {
+    for (const device of devices) device.close();
+    for (const peer of peers) peer.terminate();
+    await server.shutdown();
+    await f.close();
+  }
+});
+
+for (const path of ["result", "observe"] as const) {
+  Deno.test(`SEC3 logout ${path} recovers revocation committed after the initial receipt lookup`, async () => {
+    const before = Promise.withResolvers<void>();
+    const committed = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(() => new Date(), true, undefined, false, {
+      before: before.promise,
+      committed: committed.resolve,
+      after: finish.promise,
+    });
+    try {
+      const login = await f.result(
+        await f.submit("login", `race-${path}-login`),
+      );
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      const id = await f.submit("logout", `race-${path}-logout`, { cookie });
+      let first = true;
+      const handler = createServerFacadeFetchHandler({
+        ...f.app,
+        authorization: {
+          ...f.app.authorization,
+          async logoutReceipt(authority, operationId) {
+            const receipt = await f.app.authorization.logoutReceipt(
+              authority,
+              operationId,
+            );
+            if (operationId === id && first) {
+              first = false;
+              assertEquals(receipt, undefined);
+              // Commit the actual revocation between lookup and ordinary admission.
+              before.resolve();
+              await committed.promise;
+            } else if (operationId === id && path === "observe") {
+              finish.resolve();
+            }
+            return receipt;
+          },
+        },
+      });
+      const response = await handler(
+        new Request(
+          `https://test/api/operations/${
+            path === "result" ? `${id}/result` : "observe"
+          }`,
+          {
+            method: path === "result" ? "GET" : "POST",
+            headers: {
+              cookie,
+              "x-copilotz-credential-proof": "a".repeat(64),
+              "content-type": "application/json",
+            },
+            ...(path === "observe"
+              ? { body: JSON.stringify({ operationIds: [id] }) }
+              : {}),
+          },
+        ),
+      );
+      assertEquals(
+        response.status,
+        path === "result" ? 202 : 200,
+        response.status >= 400 ? await response.text() : undefined,
+      );
+      if (path === "observe") {
+        const outputs = [];
+        for await (const frame of decodeObservation(response)) {
+          if (frame.kind === "output") outputs.push(frame.output.type);
+        }
+        assertEquals(outputs, ["operation.completed"]);
+      }
+      finish.resolve();
+      assertEquals((await f.result(id, { cookie })).status, 200);
+    } finally {
+      before.resolve();
+      finish.resolve();
+      await f.close();
+    }
+  });
+}

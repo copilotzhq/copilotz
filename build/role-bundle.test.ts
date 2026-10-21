@@ -439,7 +439,7 @@ Deno.test("installed source artifact builds from its own complete worker package
     );
     if (Array.isArray(copiedConfig.links)) {
       copiedConfig.links = copiedConfig.links.map((link: string) =>
-        new URL(link + "/", new URL("deno.json", packageRoot)).href
+        new URL(link, new URL("deno.json", packageRoot)).href.replace(/\/$/, "")
       );
       await Deno.writeTextFile(
         installed + "/deno.json",

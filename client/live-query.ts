@@ -171,10 +171,22 @@ export function createLiveQuery(
         } else records.delete(change.id);
         previous = change;
       }
-      next = [...records.values()].sort((a, b) =>
-        (compareCodePoints(a.id, b.id)) *
-        (query.order?.direction === "desc" ? -1 : 1)
-      );
+      if (query.order && query.order.field !== "id") {
+        if (
+          !Array.isArray(frame.order) || frame.order.length !== records.size ||
+          new Set(frame.order).size !== records.size || frame.order.some((id) =>
+            !records.has(id)
+          )
+        ) {
+          throw new TypeError("Invalid ordered subscription window.");
+        }
+        next = frame.order.map((id) => records.get(id)!);
+      } else {
+        next = [...records.values()].sort((a, b) =>
+          compareCodePoints(a.id, b.id) *
+          (query.order?.direction === "desc" ? -1 : 1)
+        );
+      }
     }
     // Handler arguments cannot mutate the retained authoritative state.
     await options.onChange?.(structuredClone(next), structuredClone(frame));

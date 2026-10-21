@@ -15,6 +15,7 @@ import {
   type ChatMessage,
   type ChatSender,
   chatSender,
+  type ToolResultStatus,
 } from "../../shared/chat-messages.ts";
 import type { ActivityLabels, ToolPresentation } from "./activity.tsx";
 import type { ThreadFeedAdapter } from "./host.ts";
@@ -34,6 +35,13 @@ export type ToolCallView = Readonly<{
   rawInput?: string;
   /** The result text, when the history read includes it. */
   result?: string;
+  /**
+   * The structured (JSON) result. Core stores object tool output as JSON; it
+   * arrives once read on demand (see `resultStatus`), bounded at 256 KiB.
+   */
+  data?: unknown;
+  /** A JSON result still loading, too large to show, or unavailable. */
+  resultStatus?: ToolResultStatus;
   error?: string;
   /** Progressive output while the tool runs, by channel (such as `stdout`). */
   output?: Readonly<Record<string, string>>;
@@ -168,6 +176,8 @@ export function presentTools(
         ...(item.input ? { input: item.input } : {}),
         ...(item.rawInput !== undefined ? { rawInput: item.rawInput } : {}),
         ...(item.result !== undefined ? { result: item.result } : {}),
+        ...(item.data !== undefined ? { data: item.data } : {}),
+        ...(item.resultStatus ? { resultStatus: item.resultStatus } : {}),
         ...(item.error !== undefined ? { error: item.error } : {}),
       };
       let node: React.ReactNode;
@@ -190,4 +200,34 @@ export function presentTools(
     }
   }
   return tools;
+}
+
+/**
+ * Tool results read on demand (`chatLoadToolResult`), merged into the activity
+ * that references them. Call during View rendering.
+ */
+export function withLoadedResults(
+  ctx: BrowserViewContext,
+  messages: readonly ChatMessage[],
+): ChatMessage[] {
+  const store = ctx.collections.toolResult;
+  return messages.map((message) => {
+    if (
+      !store ||
+      !message.activity.some((item) =>
+        item.resultRef && item.data === undefined
+      )
+    ) return message;
+    return {
+      ...message,
+      activity: message.activity.map((item) => {
+        if (!item.resultRef || item.data !== undefined) return item;
+        const row = store.get(item.id).value;
+        if (!row) return item;
+        return row.status === "ready"
+          ? { ...item, data: row.value }
+          : { ...item, resultStatus: row.status as ToolResultStatus };
+      }),
+    };
+  });
 }

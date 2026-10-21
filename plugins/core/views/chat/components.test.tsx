@@ -81,6 +81,21 @@ test("activity steps name the tool and their state, with disclosure semantics", 
   assert.equal(toolLabel("sharedDocument"), "shared document");
 });
 
+test("a structured tool result shows as JSON in its step", () => {
+  const html = renderToStaticMarkup(
+    <AssistantActivity
+      items={[{
+        id: "c",
+        kind: "tool",
+        status: "complete",
+        toolId: "search",
+        data: { hits: 2, top: "Pricing" },
+      }]}
+    />,
+  );
+  assert.match(html, /aria-expanded="false"/, "the step has details");
+});
+
 test("a settled timeline of more than three steps folds into one summary", () => {
   const html = renderToStaticMarkup(
     <AssistantActivity

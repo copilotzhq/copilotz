@@ -4,7 +4,7 @@
 /** The agent's work timeline: thinking, tool calls and failures, each expandable. @module */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { memo, useId, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import {
   Brain,
   ChevronRight,
@@ -107,10 +107,52 @@ function json(value: unknown): string {
   }
 }
 
+/** Structured results show as JSON, cut short past this many characters. */
+const RESULT_PREVIEW = 20_000;
+
+function preview(value: unknown): string {
+  const text = json(value);
+  return text.length > RESULT_PREVIEW
+    ? `${text.slice(0, RESULT_PREVIEW)}\n…`
+    : text;
+}
+
+const resultNotes: Record<NonNullable<ChatActivity["resultStatus"]>, string> = {
+  loading: "Loading the result…",
+  "too-large": "The result is too large to show here.",
+  unavailable: "The result couldn't be loaded.",
+};
+
+/** Reads a referenced JSON result once its renderer or step is on screen. */
+function LoadResult(
+  { item, onLoadResult }: {
+    item: ChatActivity;
+    onLoadResult?(item: ChatActivity): void;
+  },
+): null {
+  const pending = Boolean(item.resultRef) && item.data === undefined &&
+    !item.resultStatus;
+  useEffect(() => {
+    if (pending) onLoadResult?.(item);
+  }, [pending, item.id]);
+  return null;
+}
+
 function Details(
-  { item, tool }: { item: ChatActivity; tool?: ToolPresentation },
+  { item, tool, onLoadResult }: {
+    item: ChatActivity;
+    tool?: ToolPresentation;
+    onLoadResult?(item: ChatActivity): void;
+  },
 ): React.ReactElement | null {
-  if (tool) return <div className="pt-1.5 pb-1">{tool.node}</div>;
+  if (tool) {
+    return (
+      <div className="pt-1.5 pb-1">
+        <LoadResult item={item} onLoadResult={onLoadResult} />
+        {tool.node}
+      </div>
+    );
+  }
   const blocks: React.ReactNode[] = [];
   if (item.reasoning) {
     blocks.push(
@@ -137,16 +179,40 @@ function Details(
       </figure>,
     );
   }
-  if (item.result) {
+  blocks.push(
+    <LoadResult key="load" item={item} onLoadResult={onLoadResult} />,
+  );
+  const result = item.data !== undefined ? preview(item.data) : item.result;
+  if (result) {
     blocks.push(
       <figure key="result" className="grid gap-1">
         <figcaption className="text-muted-foreground text-xs font-medium">
           Result
         </figcaption>
         <pre className="bg-muted/60 max-h-64 overflow-auto rounded-md p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-          {item.result}
+          {result}
         </pre>
       </figure>,
+    );
+  } else if (item.resultRef) {
+    const status = item.resultStatus ?? "loading";
+    blocks.push(
+      <p
+        key="result"
+        role="status"
+        className="text-muted-foreground flex items-center gap-2 text-xs"
+      >
+        {resultNotes[status]}
+        {status === "unavailable" && onLoadResult && (
+          <button
+            type="button"
+            className="hover:text-foreground focus-visible:ring-ring/45 rounded underline underline-offset-4 outline-none focus-visible:ring-[3px]"
+            onClick={() => onLoadResult(item)}
+          >
+            Try again
+          </button>
+        )}
+      </p>,
     );
   }
   if (item.error && item.kind !== "failure") {
@@ -154,24 +220,26 @@ function Details(
       <p key="error" className="text-destructive">{item.error}</p>,
     );
   }
-  if (!blocks.length) return null;
+  if (blocks.length === 1) return <>{blocks}</>;
   return <div className="grid gap-2.5 pt-1.5 pb-1 text-sm">{blocks}</div>;
 }
 
 function hasDetails(item: ChatActivity, tool?: ToolPresentation): boolean {
   return Boolean(
     tool || item.reasoning || item.rawInput || item.result ||
+      item.data !== undefined || item.resultRef ||
       (item.input && Object.keys(item.input).length) ||
       (item.error && item.kind !== "failure"),
   );
 }
 
 function Step(
-  { item, tool, last, labels }: {
+  { item, tool, last, labels, onLoadResult }: {
     item: ChatActivity;
     tool?: ToolPresentation;
     last: boolean;
     labels: ActivityLabels;
+    onLoadResult?(item: ChatActivity): void;
   },
 ): React.ReactElement {
   // A running tool with its own renderer starts open, so its live output shows.
@@ -242,7 +310,7 @@ function Step(
           )}
         {expandable && open && (
           <div id={id}>
-            <Details item={item} tool={tool} />
+            <Details item={item} tool={tool} onLoadResult={onLoadResult} />
           </div>
         )}
       </div>
@@ -258,11 +326,14 @@ export const AssistantActivity: React.NamedExoticComponent<{
   items: readonly ChatActivity[];
   tools?: ReadonlyMap<string, ToolPresentation>;
   labels?: ActivityLabels;
+  /** Read a referenced JSON result when its step opens. */
+  onLoadResult?(item: ChatActivity): void;
 }> = memo(function AssistantActivity(
-  { items, tools, labels = {} }: {
+  { items, tools, labels = {}, onLoadResult }: {
     items: readonly ChatActivity[];
     tools?: ReadonlyMap<string, ToolPresentation>;
     labels?: ActivityLabels;
+    onLoadResult?(item: ChatActivity): void;
   },
 ): React.ReactElement | null {
   const [expanded, setExpanded] = useState(false);
@@ -277,6 +348,7 @@ export const AssistantActivity: React.NamedExoticComponent<{
     <div data-slot="assistant-activity" className="grid gap-2">
       {inline.map((item) => (
         <div key={item.id} data-tool={item.toolId}>
+          <LoadResult item={item} onLoadResult={onLoadResult} />
           {tools!.get(item.id)!.node}
         </div>
       ))}
@@ -313,6 +385,7 @@ export const AssistantActivity: React.NamedExoticComponent<{
                 tool={tools?.get(item.id)}
                 last={index === steps.length - 1}
                 labels={labels}
+                onLoadResult={onLoadResult}
               />
             ))}
           </ol>

@@ -154,7 +154,9 @@ const terminal = defineView<ToolCallView, React.ReactNode, BrowserViewContext>({
   render(call) {
     const command = String(call.input?.stdin ?? "");
     const running = call.status === "running" || call.status === "streaming";
-    const output = call.output?.stdout ?? call.result ?? "";
+    // Live output while it runs; the persisted JSON result once it is read.
+    const result = call.data as { stdout?: string } | undefined;
+    const output = call.output?.stdout ?? result?.stdout ?? call.result ?? "";
     return (
       <div className="overflow-hidden rounded-lg border border-(--code-border) bg-(--code-background) text-(--code-foreground)">
         <div className="flex items-center gap-2 border-b border-(--code-border) px-3 py-1.5 text-xs">

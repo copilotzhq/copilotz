@@ -42,6 +42,7 @@ import {
   TooltipTrigger,
 } from "@copilotz/copilotz/web/kit";
 import type {
+  ChatActivity,
   ChatAttachment,
   ChatMessage,
   ChatMessageGroup,
@@ -65,6 +66,8 @@ export interface MessageGroupProps {
   tools?: ReadonlyMap<string, ToolPresentation>;
   labels?: ActivityLabels;
   loadAsset?: AssetLoader;
+  /** Read a tool's referenced JSON result, when its step or renderer shows. */
+  onLoadResult?(item: ChatActivity): void;
   onEdit?(messageId: string, text: string): Promise<void>;
   onRetry?(messageId: string): void;
   onDiscard?(messageId: string): void;
@@ -417,6 +420,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
       tools,
       labels,
       loadAsset,
+      onLoadResult,
       onEdit,
       onRetry,
       onDiscard,
@@ -521,6 +525,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                     items={message.activity}
                     tools={tools}
                     labels={labels}
+                    onLoadResult={onLoadResult}
                   />
                 )}
                 {human

@@ -1,5 +1,6 @@
 /** Browser leaves of the core plugin: chat Collections, intents and Views. @module */
 import type {
+  BrowserActionDefinition,
   BrowserPlugin,
   ClientCollectionDefinition,
 } from "@copilotz/copilotz/web";
@@ -11,11 +12,14 @@ import agentSelector from "./views/agent-selector/index.tsx";
 import askToolCall from "./views/ask-tool/index.tsx";
 import toolCall from "./views/tool-call/index.tsx";
 import {
+  type ChatIntentName,
   type ChatIntents,
   coreActionAliases,
   type CoreActionName,
   defaultIntents,
   intentActions,
+  intentServerActions,
+  loadToolResult,
 } from "./views/chat/intents.ts";
 import { THREAD_MESSAGE_LIMIT, THREAD_MESSAGE_MAX } from "./views/reads.ts";
 
@@ -39,12 +43,47 @@ const set: Commands[string] = {
   mutate: ({ input }) => ({ set: { ...(input as Record<string, unknown>) } }),
 };
 
+const serverProxies: Readonly<
+  Record<CoreActionName, BrowserActionDefinition>
+> = {
+  createThread: { id: "copilotz.core.thread.create", placement: "server" },
+  createThreadMessage: {
+    id: "copilotz.core.thread-message.create",
+    placement: "server",
+  },
+  reviseMessage: { id: "copilotz.core.message.revise", placement: "server" },
+  addThreadParticipant: {
+    id: "copilotz.core.thread.addParticipant",
+    placement: "server",
+  },
+  spaces: { id: "copilotz.core.spaces", placement: "server" },
+  updateConversation: {
+    id: "copilotz.core.conversation.update",
+    placement: "server",
+    optimistic: {
+      collection: "thread",
+      command: "patch",
+      id: (input) => String((input as { threadId: string }).threadId),
+      input: (input) => (input as { patch: unknown }).patch,
+    },
+  },
+  deleteConversation: {
+    id: "copilotz.core.conversation.delete",
+    placement: "server",
+  },
+};
+
 /** The core browser plugin for an app's composition and server aliases. */
 export function createCoreWebPlugin(
   options: CoreWebOptions = {},
 ): BrowserPlugin {
   const aliases = { ...coreActionAliases, ...options.actionAliases };
   const intents = { ...defaultIntents(aliases), ...options.intents };
+  const used = new Set(
+    (Object.keys(intentServerActions) as ChatIntentName[]).flatMap((name) =>
+      options.intents?.[name] ? [] : intentServerActions[name]
+    ),
+  );
   const server = (
     name: "thread" | "message" | "participant" | "space",
     commands: Commands = {},
@@ -77,43 +116,14 @@ export function createCoreWebPlugin(
       threadRun: { placement: "browser", initial: [], commands: { set } },
       threadOutputs: { placement: "browser", initial: [], commands: { set } },
       threadWindow: { placement: "browser", initial: [], commands: { set } },
+      // JSON tool results read on demand, by tool call id.
+      toolResult: { placement: "browser", initial: [], commands: { set } },
     },
     actions: {
-      [aliases.createThread]: {
-        id: "copilotz.core.thread.create",
-        placement: "server",
-      },
-      [aliases.createThreadMessage]: {
-        id: "copilotz.core.thread-message.create",
-        placement: "server",
-      },
-      [aliases.reviseMessage]: {
-        id: "copilotz.core.message.revise",
-        placement: "server",
-      },
-      [aliases.deleteThreadMessages]: {
-        id: "copilotz.core.thread.deleteMessages",
-        placement: "server",
-      },
-      [aliases.addThreadParticipant]: {
-        id: "copilotz.core.thread.addParticipant",
-        placement: "server",
-      },
-      [aliases.spaces]: { id: "copilotz.core.spaces", placement: "server" },
-      [aliases.updateConversation]: {
-        id: "copilotz.core.conversation.update",
-        placement: "server",
-        optimistic: {
-          collection: "thread",
-          command: "patch",
-          id: (input) => String((input as { threadId: string }).threadId),
-          input: (input) => (input as { patch: unknown }).patch,
-        },
-      },
-      [aliases.deleteConversation]: {
-        id: "copilotz.core.conversation.delete",
-        placement: "server",
-      },
+      // Server proxies only for Actions a default intent still in use calls.
+      ...Object.fromEntries(
+        [...used].map((name) => [aliases[name], serverProxies[name]]),
+      ),
       setDraft: {
         id: "core.draft.set",
         placement: "browser",
@@ -135,6 +145,12 @@ export function createCoreWebPlugin(
             limit: Math.min(current + THREAD_MESSAGE_LIMIT, THREAD_MESSAGE_MAX),
           });
         },
+      },
+      chatLoadToolResult: {
+        id: "core.chat.loadToolResult",
+        placement: "browser",
+        execute: (input, ctx) =>
+          loadToolResult(input as Parameters<typeof loadToolResult>[0], ctx),
       },
       ...intentActions(intents),
     },
@@ -181,7 +197,9 @@ export {
   type ChatIntents,
   coreActionAliases,
   type CoreActionName,
+  intentServerActions,
   titleFrom,
+  TOOL_RESULT_BYTES,
 } from "./views/chat/intents.ts";
 export type {
   ChatConfig,
@@ -193,6 +211,7 @@ export {
   chatConfig,
   readSenders,
   toolRenderers,
+  withLoadedResults,
 } from "./views/chat/context.tsx";
 export { SenderAvatar, senderColor } from "./views/chat/identity.tsx";
 export { draftKey } from "./views/composer/index.tsx";
@@ -210,6 +229,7 @@ export {
   ownMessagePredicate,
   parseToolInput,
   projectMessages,
+  type ToolResultStatus,
 } from "./shared/chat-messages.ts";
 export {
   createFeedProjector,

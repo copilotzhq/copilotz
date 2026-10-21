@@ -14,7 +14,30 @@ const FUNNEL =
 export const assets: Record<string, { type: string; body: string }> = {
   "asset-funnel": { type: "image/svg+xml", body: FUNNEL },
   "asset-brief": { type: "application/pdf", body: "%PDF-1.4\n%demo\n" },
+  // Tool results Core stored as JSON; the window read leaves them as
+  // references, and the chat reads them when their step shows.
+  "json-board": {
+    type: "application/json",
+    body: JSON.stringify({ ok: true, boardId: "b-cycle1", cards: 5 }),
+  },
+  "json-suite": {
+    type: "application/json",
+    body: JSON.stringify({
+      stdout:
+        "running 14 tests from ./tests/launch.test.ts\nok | 14 passed | 0 failed (1s)\n",
+      exitCode: 0,
+    }),
+  },
 };
+
+/** A JSON tool result as the message window read returns it: a reference. */
+export const jsonResult = (assetId: string) => ({
+  assetId,
+  kind: "json",
+  role: "tool.output",
+  mediaType: "application/json",
+  resolve: false,
+});
 
 const text = (value: string, role = "body") => ({
   assetId: `text-${crypto.randomUUID()}`,
@@ -233,10 +256,7 @@ export function fixtures(now = Date.now()): Record<string, Row[]> {
         }],
       }),
       message("m2-result", "t-plan", "p-kanban", 11, [
-        text(
-          '{ "ok": true, "boardId": "b-cycle1", "cards": 5 }',
-          "tool.output",
-        ),
+        jsonResult("json-board"),
       ], { toolInvocation: { id: "tc1" }, toolStatus: "completed" }),
       message("m3", "t-plan", "p-south", 10, [
         text(

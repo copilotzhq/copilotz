@@ -167,6 +167,20 @@ class TestFeed implements ThreadFeedAdapter {
     this.cancelled.push(operationId);
     return Promise.resolve();
   }
+  /** Asset bodies by id, for results and attachments read on demand. */
+  bodies = new Map<string, string>();
+  assetReads: string[] = [];
+  asset(
+    _threadId: string,
+    messageId: string,
+    assetId: string,
+  ): Promise<Blob> {
+    this.assetReads.push(`${messageId}/${assetId}`);
+    const body = this.bodies.get(assetId);
+    return body === undefined
+      ? Promise.reject(new Error("Not found"))
+      : Promise.resolve(new Blob([body], { type: "application/json" }));
+  }
   async emit(frame: Omit<FeedFrame, "checkpoint">) {
     const full = { ...frame, checkpoint: String(++this.position) } as FeedFrame;
     for (const observer of this.observers) await observer(full);
@@ -221,7 +235,12 @@ const report = defineView<unknown, React.ReactNode, BrowserViewContext>({
 });
 
 const terminal = defineView<
-  { input?: { stdin?: string }; output?: { stdout?: string }; status: string },
+  {
+    input?: { stdin?: string };
+    output?: { stdout?: string };
+    data?: { stdout?: string; exitCode?: number };
+    status: string;
+  },
   React.ReactNode,
   BrowserViewContext
 >({
@@ -232,8 +251,8 @@ const terminal = defineView<
   render: (call) => (
     <pre data-tool="terminal">
       {`$ ${call.input?.stdin ?? ""} [${call.status}] ${
-        call.output?.stdout ?? ""
-      }`}
+        call.output?.stdout ?? call.data?.stdout ?? ""
+      }${call.data ? ` (exit ${call.data.exitCode})` : ""}`}
     </pre>
   ),
 });
@@ -882,6 +901,84 @@ test("arrow keys move through Spaces and chats; Right and Left show and hide a S
     assert.ok(items().length > before, "its chats are listed");
     await press("ArrowLeft");
     assert.equal(items().length, before);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a JSON tool result is read on demand, bounded, and reaches the step and the renderer", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    shell.feed.bodies.set(
+      "json-run",
+      JSON.stringify({ stdout: "14 passed", exitCode: 0 }),
+    );
+    shell.feed.bodies.set(
+      "json-big",
+      JSON.stringify({ blob: "x".repeat(300_000) }),
+    );
+    const call = (id: string, action: string, at: string) => ({
+      id: `m-${id}`,
+      threadId: "t1",
+      senderId: "p-north",
+      createdAt: at,
+      content: [],
+      metadata: {
+        llmToolCalls: [{ id, action, input: { stdin: "deno task test" } }],
+      },
+    });
+    const result = (id: string, assetId: string, at: string) => ({
+      id: `r-${id}`,
+      threadId: "t1",
+      senderId: "p-tool",
+      createdAt: at,
+      // As the window read returns JSON content: a reference, not a value.
+      content: [{
+        assetId,
+        kind: "json",
+        role: "tool.output",
+        mediaType: "application/json",
+        resolve: false,
+      }],
+      metadata: { toolInvocation: { id }, toolStatus: "completed" },
+    });
+    await act(async () => {
+      shell.live.put("participant", {
+        id: "p-tool",
+        participantType: "tool",
+        name: "terminal",
+      });
+      shell.live.put(
+        "message",
+        call("c-run", "terminal", "2026-10-21T10:01:00.000Z"),
+        result("c-run", "json-run", "2026-10-21T10:01:01.000Z"),
+        call("c-big", "search", "2026-10-21T10:02:00.000Z"),
+        result("c-big", "json-big", "2026-10-21T10:02:01.000Z"),
+      );
+      await settle();
+    });
+    assert.ok(
+      !shell.feed.assetReads.includes("r-c-big/json-big"),
+      "a closed step reads nothing",
+    );
+    // The terminal renderer shows (a running tool's step opens by itself):
+    // its JSON result loads once and reaches the renderer.
+    if (!document.querySelector('[data-tool="terminal"]')) {
+      await click(byText("button", "Used terminal"));
+    }
+    await settle();
+    assert.match(
+      document.querySelector('[data-tool="terminal"]')?.textContent ?? "",
+      /14 passed \(exit 0\)/,
+    );
+    // A default step shows the JSON; one over the bound says so instead.
+    await click(byText("button", "Used search"));
+    await settle();
+    assert.match(main(), /The result is too large to show here\./);
+    assert.deepEqual(shell.feed.assetReads, [
+      "r-c-run/json-run",
+      "r-c-big/json-big",
+    ]);
   } finally {
     await shell.dispose();
   }

@@ -26,6 +26,7 @@ import {
   type ChatSelf,
   presentTools,
   readSenders,
+  withLoadedResults,
 } from "../chat/context.tsx";
 import { MessageGroup } from "../chat/message.tsx";
 import { type LogItem, MessageLog } from "../chat/list.tsx";
@@ -172,10 +173,14 @@ const view: ViewDefinition<
         ),
       ),
     ]);
-    const persisted = projectMessages(
-      rows,
-      (sender) =>
-        senders.get(sender) ?? { id: sender, type: "system", name: "Unknown" },
+    const persisted = withLoadedResults(
+      ctx,
+      projectMessages(
+        rows,
+        (sender) =>
+          senders.get(sender) ??
+            { id: sender, type: "system", name: "Unknown" },
+      ),
     );
     const known = new Set(rows.map((row) => row.id));
     const self = config.self;
@@ -224,6 +229,13 @@ const view: ViewDefinition<
           tools={tools}
           labels={config.labels}
           loadAsset={loadAsset}
+          onLoadResult={(item) =>
+            item.resultRef &&
+            void ctx.actions.chatLoadToolResult?.({
+              callId: item.id,
+              threadId: id,
+              ...item.resultRef,
+            }).result().catch(() => {})}
           onEdit={ctx.actions.chatRevise
             ? (messageId, text) =>
               ctx.actions.chatRevise({ threadId: id, messageId, text })

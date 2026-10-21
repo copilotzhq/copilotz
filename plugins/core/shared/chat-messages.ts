@@ -46,9 +46,21 @@ export type ChatActivity = Readonly<{
   rawInput?: string;
   /** The tool result's text, when the read includes it. */
   result?: string;
+  /** The tool's structured (JSON) result, once read. */
+  data?: unknown;
+  /**
+   * A JSON result the window read leaves as a reference; it is read on
+   * demand (`chatLoadToolResult`), bounded, when the step or renderer shows.
+   */
+  resultRef?: Readonly<{ messageId: string; assetId: string }>;
+  /** Why a referenced result is not shown yet. */
+  resultStatus?: ToolResultStatus;
   error?: string;
   reasoning?: string;
 }>;
+
+/** A referenced JSON result while it loads, or why it cannot show. */
+export type ToolResultStatus = "loading" | "too-large" | "unavailable";
 
 export type ChatMessage = Readonly<{
   id: string;
@@ -176,8 +188,32 @@ export function parseToolInput(
 type ToolResult = {
   status: ChatActivityStatus;
   result?: string;
+  data?: unknown;
+  resultRef?: { messageId: string; assetId: string };
   error?: string;
 };
+
+/**
+ * A tool's JSON result: its value when the read resolved it, otherwise a
+ * reference to read on demand. Core stores object tool output as JSON content.
+ */
+function jsonResult(
+  row: Row,
+): Pick<ToolResult, "data" | "resultRef"> {
+  for (const part of Array.isArray(row.content) ? row.content : []) {
+    const entry = record(part);
+    if (entry.kind !== "json") continue;
+    if (entry.value !== undefined && entry.resolve !== false) {
+      return { data: entry.value };
+    }
+    if (typeof entry.assetId === "string") {
+      return {
+        resultRef: { messageId: String(row.id), assetId: entry.assetId },
+      };
+    }
+  }
+  return {};
+}
 
 function toolResult(row: Row): [string, ToolResult] | undefined {
   const metadata = record(row.metadata);
@@ -192,6 +228,7 @@ function toolResult(row: Row): [string, ToolResult] | undefined {
       ? "failed"
       : "active",
     ...(body ? { result: body } : {}),
+    ...jsonResult(row),
     ...(status === "cancelled"
       ? { error: "Cancelled." }
       : status === "failed"
@@ -304,6 +341,8 @@ export function projectMessages(
         toolId: text(value.action) ?? text(value.name) ?? "tool",
         input: record(value.input),
         ...(result?.result ? { result: result.result } : {}),
+        ...(result?.data !== undefined ? { data: result.data } : {}),
+        ...(result?.resultRef ? { resultRef: result.resultRef } : {}),
         ...(result?.error ? { error: result.error } : {}),
       });
     }

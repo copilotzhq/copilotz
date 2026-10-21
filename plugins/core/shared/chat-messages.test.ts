@@ -242,3 +242,44 @@ test("a live reply shows thinking, tool drafts and its text while streaming", ()
   ]);
   assert.deepEqual(working.activity[1].input, { stdin: "ls" });
 });
+
+test("JSON tool results pass through: a resolved value as data, a reference to read on demand", () => {
+  const senders: Record<string, ChatSender> = {
+    north,
+    tool: sender("tool", "tool", "terminal"),
+  };
+  const json = (id: string, extra: Record<string, unknown>) => ({
+    id: `r-${id}`,
+    senderId: "tool",
+    content: [{
+      assetId: `j-${id}`,
+      kind: "json",
+      role: "tool.output",
+      mediaType: "application/json",
+      ...extra,
+    }],
+    metadata: { toolInvocation: { id }, toolStatus: "completed" },
+  });
+  const [reply] = projectMessages([
+    {
+      id: "a",
+      senderId: "north",
+      content: [],
+      metadata: {
+        llmToolCalls: [
+          { id: "c1", action: "terminal", input: {} },
+          { id: "c2", action: "terminal", input: {} },
+        ],
+      },
+    },
+    json("c1", { value: { stdout: "ok", exitCode: 0 } }),
+    json("c2", { resolve: false }),
+  ], (id) => senders[id]);
+  assert.deepEqual(reply.activity[0].data, { stdout: "ok", exitCode: 0 });
+  assert.equal(reply.activity[0].resultRef, undefined);
+  assert.deepEqual(reply.activity[1].resultRef, {
+    messageId: "r-c2",
+    assetId: "j-c2",
+  });
+  assert.equal(reply.activity[1].data, undefined);
+});

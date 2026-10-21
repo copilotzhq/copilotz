@@ -17,7 +17,6 @@ export const coreActionAliases = {
   createThread: "createThread",
   createThreadMessage: "createThreadMessage",
   reviseMessage: "reviseMessage",
-  deleteThreadMessages: "deleteThreadMessages",
   addThreadParticipant: "addThreadParticipant",
   spaces: "spaces",
   updateConversation: "updateConversation",
@@ -58,6 +57,32 @@ export interface ChatIntentInputs {
   chatStop: { threadId: string };
 }
 export type ChatIntentName = keyof ChatIntentInputs;
+
+/**
+ * The server Actions each default intent calls. The core plugin declares a
+ * server proxy only for Actions a default intent still in use calls, so an
+ * app that replaces every Space intent declares no `spaces` proxy.
+ */
+export const intentServerActions: Readonly<
+  Record<ChatIntentName, readonly CoreActionName[]>
+> = {
+  chatSend: ["createThread", "createThreadMessage"],
+  chatDiscard: [],
+  chatRevise: ["reviseMessage"],
+  chatCreateThread: ["createThread"],
+  chatRenameThread: ["updateConversation"],
+  chatArchiveThread: ["updateConversation"],
+  chatDeleteThread: ["deleteConversation"],
+  chatMoveThread: ["spaces"],
+  chatCreateSpace: ["spaces"],
+  chatUpdateSpace: ["spaces"],
+  chatDeleteSpace: ["spaces"],
+  chatAddMember: ["spaces"],
+  chatRemoveMember: ["spaces"],
+  chatAddAgent: ["addThreadParticipant"],
+  chatFollow: [],
+  chatStop: [],
+};
 export type ChatIntent<N extends ChatIntentName = ChatIntentName> = (
   input: ChatIntentInputs[N],
   ctx: BrowserActionContext,
@@ -127,6 +152,42 @@ function base64(bytes: Uint8Array): string {
 
 /** The JSON Action body limit leaves room for this much inline attachment data. */
 export const INLINE_ATTACHMENT_BYTES = 512 * 1024;
+/** The largest JSON tool result read on demand; larger ones say so. */
+export const TOOL_RESULT_BYTES = 256 * 1024;
+
+/**
+ * Reads a tool's JSON result that the window read left as a reference, once,
+ * through the host's message asset capability, and keeps it in `toolResult`.
+ */
+export async function loadToolResult(
+  input: {
+    callId: string;
+    threadId: string;
+    messageId: string;
+    assetId: string;
+  },
+  ctx: BrowserActionContext,
+): Promise<void> {
+  const current = ctx.collections.toolResult?.get(input.callId).value;
+  if (current && current.status !== "unavailable") return;
+  const set = (row: Record<string, unknown>) =>
+    ctx.command("toolResult", input.callId, "set", row);
+  const host = feed(ctx);
+  if (!host?.asset) return set({ status: "unavailable" });
+  set({ status: "loading" });
+  try {
+    const body = await host.asset(
+      input.threadId,
+      input.messageId,
+      input.assetId,
+      ctx.signal,
+    );
+    if (body.size > TOOL_RESULT_BYTES) return set({ status: "too-large" });
+    set({ status: "ready", value: JSON.parse(await body.text()) });
+  } catch {
+    set({ status: "unavailable" });
+  }
+}
 
 /** Files kept for an outbox retry, outside Collections (bodies are not state). */
 const retained = new WeakMap<object, Map<string, readonly File[]>>();

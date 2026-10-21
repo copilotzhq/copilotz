@@ -7,7 +7,7 @@
 import type { ActionTransport, Row } from "@copilotz/copilotz/web";
 import type { FeedFrame, ThreadFeedAdapter } from "@copilotz/copilotz/core/web";
 import type { FixtureLive } from "../../plugins/ui/tests/fixture-live.test.ts";
-import { agents, assets } from "./fixtures.ts";
+import { agents, assets, jsonResult } from "./fixtures.ts";
 
 type Observer = (frame: FeedFrame) => void | Promise<void>;
 const encoder = new TextEncoder();
@@ -281,13 +281,7 @@ export async function playLaunchReply(
     threadId: thread,
     senderId: "p-terminal",
     recipientIds: [],
-    content: [{
-      assetId: "text-m5r",
-      kind: "text",
-      role: "tool.output",
-      mediaType: "text/plain",
-      value: "ok | 14 passed | 0 failed (1s)",
-    }],
+    content: [jsonResult("json-suite")],
     metadata: { toolInvocation: { id: "tc2" }, toolStatus: "completed" },
     createdAt: now,
     updatedAt: now,

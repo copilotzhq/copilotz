@@ -16,7 +16,11 @@ import {
   projectMessages,
 } from "../../shared/chat-messages.ts";
 import { projectActiveMessageBranch } from "../../shared/projections.ts";
-import { readThreadMessages, THREAD_MESSAGE_LIMIT } from "../reads.ts";
+import {
+  readThread,
+  readThreadMessages,
+  THREAD_MESSAGE_LIMIT,
+} from "../reads.ts";
 import {
   chatConfig,
   type ChatSelf,
@@ -138,7 +142,7 @@ const view: ViewDefinition<
   url: true,
   render({ id }, ctx) {
     const config = chatConfig(ctx);
-    const thread = ctx.collections.thread.get(id);
+    const thread = readThread(ctx, id);
     const window = ctx.collections.threadWindow?.get(id).value;
     const limit = Number(window?.limit ?? THREAD_MESSAGE_LIMIT);
     const current = readThreadMessages(ctx, id, limit);
@@ -151,7 +155,23 @@ const view: ViewDefinition<
       messages.value,
       thread.value?.activeMessageBranch as MessageBranch | undefined,
     );
-    const senders = readSenders(ctx, rows.map((row) => String(row.senderId)));
+    // The thread's people are one shared read (the composer and the agent
+    // selector read the same); only senders outside it add another.
+    const people = readSenders(
+      ctx,
+      Array.isArray(thread.value?.participantIds)
+        ? thread.value.participantIds.map(String)
+        : [],
+    );
+    const senders = new Map([
+      ...people,
+      ...readSenders(
+        ctx,
+        rows.map((row) => String(row.senderId)).filter((sender) =>
+          !people.has(sender)
+        ),
+      ),
+    ]);
     const persisted = projectMessages(
       rows,
       (sender) =>

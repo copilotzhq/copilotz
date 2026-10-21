@@ -4,7 +4,7 @@
 /** What chat Views read from the app's composition, in one place. @module */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
+import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
   type MarkdownPlugin,
   markdownPlugins,
@@ -18,6 +18,7 @@ import {
 } from "../../shared/chat-messages.ts";
 import type { ActivityLabels, ToolPresentation } from "./activity.tsx";
 import type { ThreadFeedAdapter } from "./host.ts";
+import { readParticipants } from "../reads.ts";
 
 /** What a tool renderer View receives as its value. */
 export type ToolCallView = Readonly<{
@@ -110,13 +111,9 @@ export function readSenders(
   ctx: BrowserViewContext,
   ids: Iterable<string>,
 ): Map<string, ChatSender> {
-  const senders = new Map<string, ChatSender>();
-  for (const id of new Set(ids)) {
-    if (!id) continue;
-    const row = ctx.collections.participant.get(id).value as Row | undefined;
-    senders.set(id, chatSender(row, id));
-  }
-  return senders;
+  const unique = [...new Set(ids)].filter(Boolean);
+  const rows = readParticipants(ctx, unique);
+  return new Map(unique.map((id) => [id, chatSender(rows.get(id), id)]));
 }
 
 /** The registered tool renderers. */

@@ -7,6 +7,7 @@ import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { chatConfig } from "../chat/context.tsx";
 import { startConversation } from "../chat/start.ts";
+import { readSpace } from "../reads.ts";
 import { ConversationStart } from "../thread/index.tsx";
 
 /** A new conversation: a welcome, suggestions, and the composer. */
@@ -27,9 +28,7 @@ const view: ViewDefinition<
   render(value, ctx) {
     const config = chatConfig(ctx);
     const spaceId = value?.spaceId;
-    const space = spaceId && ctx.collections.space
-      ? ctx.collections.space.get(spaceId).value
-      : undefined;
+    const space = spaceId ? readSpace(ctx, spaceId).value : undefined;
     return (
       <section
         aria-label="New conversation"

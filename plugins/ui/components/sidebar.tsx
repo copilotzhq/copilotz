@@ -105,6 +105,8 @@ export interface SidebarProps extends SidebarHandlers {
   labels?: SidebarLabels;
   /** The rendered user menu, pinned at the bottom. */
   footer?: React.ReactNode;
+  /** A read state notice (loading, refused, reconnecting) above the list. */
+  status?: React.ReactNode;
   /** A notice for the polite live region (moves, failures). */
   announce?(text: string, tone?: "info" | "error"): void;
   /** The New Space dialog, when another control (⌘K) opens it. */
@@ -807,7 +809,14 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
           aria-label="Conversations"
           className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
         >
-          {groups.length === 0
+          {props.status && (
+            <div className="px-1 pb-2 @max-[12rem]/sidebar:hidden">
+              {props.status}
+            </div>
+          )}
+          {props.status && groups.length === 0
+            ? null
+            : groups.length === 0
             ? (
               <div className="grid justify-items-center gap-3 px-3 py-8 text-center">
                 <p className="text-muted-foreground text-sm">

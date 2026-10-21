@@ -7,7 +7,7 @@ import { useState } from "react";
 import { FolderInput, X } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { readSpaces } from "@copilotz/copilotz/core/web";
+import { readSpaces, readThread } from "@copilotz/copilotz/core/web";
 import { Button, EmptyState, showSafely } from "@copilotz/copilotz/web/kit";
 import { shellPreferences, shellState } from "../../model.ts";
 import { ResizablePanel } from "../../components/resizable-panel.tsx";
@@ -91,7 +91,7 @@ const view: ViewDefinition<
     const preferences = shellPreferences(
       ctx.collections.shellPreferences.get("main").value,
     );
-    const thread = ctx.collections.thread.get(threadId).value;
+    const thread = readThread(ctx, threadId).value;
     const spaceId = typeof thread?.spaceId === "string" ? thread.spaceId : null;
     const custom = (ctx.resources.shell as Record<string, unknown> | undefined)
       ?.panel as { view?: unknown } | undefined;

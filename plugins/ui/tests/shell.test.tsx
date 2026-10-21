@@ -794,6 +794,52 @@ test("a user menu page opens in main, keeps its section in the URL and closes ba
   }
 });
 
+test("Views share live reads: a conversation with its panel open uses five, people in one", async () => {
+  const shell = await mount("https://app.example/?chat=t1&panel=1");
+  try {
+    assert.deepEqual(shell.live.active, [
+      'message {"where":{"threadId":"t1"},"order":{"field":"createdAt","direction":"desc"},"limit":100}',
+      'participant {"where":{"id":{"in":["p-ana","p-north"]}},"limit":2}',
+      'space {"limit":200}',
+      'thread {"order":{"field":"id","direction":"desc"},"limit":200}',
+      'thread {"where":{"spaceId":"s1"},"order":{"field":"id","direction":"desc"},"limit":200}',
+    ]);
+    await act(async () => {
+      shell.runtime.actions.shellNewChat({});
+      await settle();
+    });
+    assert.equal(shell.live.subscriptionCount, 2, "closed Views release reads");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("live read limits show a friendly state, never a raw error", async () => {
+  const ordered = new FixtureLive(tables());
+  ordered.idOrderOnly = true;
+  const refused = await mount("https://app.example/?chat=t1", {
+    live: ordered,
+  });
+  try {
+    assert.match(main(), /Live updates unavailable/);
+    assert.doesNotMatch(main(), /subscription_|refused\./i);
+  } finally {
+    await refused.dispose();
+  }
+  const crowded = new FixtureLive(tables());
+  crowded.maxSubscriptions = 2;
+  const full = await mount("https://app.example/?chat=t1", { live: crowded });
+  try {
+    assert.match(document.body.textContent ?? "", /Too many live views open/);
+    assert.doesNotMatch(
+      document.body.textContent ?? "",
+      /capacity exceeded|subscription_/i,
+    );
+  } finally {
+    await full.dispose();
+  }
+});
+
 test("search finds chats by title and by Space name", async () => {
   const shell = await mount("https://app.example/?chat=t1");
   try {

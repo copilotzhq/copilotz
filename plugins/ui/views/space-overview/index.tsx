@@ -7,6 +7,7 @@ import { useState } from "react";
 import { MessageSquare, Pencil, Users } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
+import { readSpace, readSpaceThreads } from "@copilotz/copilotz/core/web";
 import {
   Button,
   cn,
@@ -32,12 +33,8 @@ const view: ViewDefinition<
   modes: ["full", "panel"],
   url: true,
   render({ spaceId }, ctx) {
-    const space = ctx.collections.space.get(spaceId);
-    const threads = ctx.collections.thread.list({
-      where: { spaceId },
-      order: { field: "id", direction: "desc" },
-      limit: 200,
-    });
+    const space = readSpace(ctx, spaceId);
+    const threads = readSpaceThreads(ctx, spaceId);
     const value = space.value;
     if (!value) return <ReadStatus state={space} noun="Space" />;
     const members = Array.isArray(value.memberIds) ? value.memberIds.length : 0;

@@ -18,6 +18,7 @@ import {
 } from "@copilotz/copilotz/web/kit";
 import type { ChatSender } from "../../shared/chat-messages.ts";
 import { readSenders } from "../chat/context.tsx";
+import { readThread } from "../reads.ts";
 import { SenderAvatar } from "../chat/identity.tsx";
 
 type Available = Readonly<{
@@ -160,7 +161,7 @@ const view: ViewDefinition<
   renderer: "react",
   modes: ["full", "panel"],
   render({ threadId }, ctx) {
-    const thread = ctx.collections.thread.get(threadId).value;
+    const thread = readThread(ctx, threadId).value;
     const ids = Array.isArray(thread?.participantIds)
       ? thread.participantIds.map(String)
       : [];

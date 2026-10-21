@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
-import { readSpaces } from "@copilotz/copilotz/core/web";
+import { readSpace, readSpaces, readThread } from "@copilotz/copilotz/core/web";
 import {
   Button,
   cn,
@@ -212,12 +212,11 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
     render(_value, ctx) {
       const nav = shellState(ctx.collections.shell.get("main").value);
       const thread = nav.threadId
-        ? ctx.collections.thread.get(nav.threadId).value
+        ? readThread(ctx, nav.threadId).value
         : undefined;
       const spaces = readSpaces(ctx).value;
       const openSpace = nav.spaceId
-        ? spaces.find((space) => space.id === nav.spaceId) ??
-          ctx.collections.space?.get(nav.spaceId).value
+        ? readSpace(ctx, nav.spaceId).value
         : undefined;
       const threadSpaceId = typeof thread?.spaceId === "string"
         ? thread.spaceId

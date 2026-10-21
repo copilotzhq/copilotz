@@ -7,6 +7,7 @@ import { useState } from "react";
 import { MessageSquare, SquarePen } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
+import { readSpaceThreads } from "@copilotz/copilotz/core/web";
 import {
   Badge,
   Button,
@@ -107,11 +108,7 @@ const view: ViewDefinition<
   modes: ["full", "panel"],
   url: true,
   render({ spaceId, threadId = null }, ctx) {
-    const threads = ctx.collections.thread.list({
-      where: { spaceId },
-      order: { field: "id", direction: "desc" },
-      limit: 200,
-    });
+    const threads = readSpaceThreads(ctx, spaceId);
     if (threads.status !== "ready") {
       return (
         <div className="p-4">

@@ -158,7 +158,12 @@ export const coreWebPlugin: BrowserPlugin = createCoreWebPlugin();
 
 export {
   messageReadSelection,
+  PARTICIPANT_BATCH,
+  readParticipants,
+  readSpace,
   readSpaces,
+  readSpaceThreads,
+  readThread,
   readThreadMessages,
   readThreads,
   THREAD_LIST_LIMIT,

@@ -98,3 +98,77 @@ export function readSpaces(
     ),
   };
 }
+
+/**
+ * One conversation, served from the shared conversation list when it holds
+ * it, so Views showing the open conversation add no live read of their own.
+ */
+export function readThread(
+  ctx: BrowserViewContext,
+  id: string,
+): ReadState<Row | undefined> {
+  return fromList(readThreads(ctx), id, () => ctx.collections.thread.get(id));
+}
+
+/** One Space, served from the shared Space list when it holds it. */
+export function readSpace(
+  ctx: BrowserViewContext,
+  id: string,
+): ReadState<Row | undefined> {
+  if (!ctx.collections.space) {
+    return { value: undefined, status: "missing", pending: false };
+  }
+  return fromList(readSpaces(ctx), id, () => ctx.collections.space.get(id));
+}
+
+function fromList(
+  list: ReadState<readonly Row[]>,
+  id: string,
+  fallback: () => ReadState<Row | undefined>,
+): ReadState<Row | undefined> {
+  const found = list.value.find((row) => row.id === id);
+  if (found) return { value: found, status: "ready", pending: list.pending };
+  // Wait for the list rather than opening a read it is about to answer.
+  if (list.status === "loading") {
+    return { value: undefined, status: "loading", pending: false };
+  }
+  return fallback();
+}
+
+/** A Space's conversations, newest first: one shared read per Space. */
+export function readSpaceThreads(
+  ctx: BrowserViewContext,
+  spaceId: string,
+): ReadState<readonly Row[]> {
+  const read = ctx.collections.thread.list({
+    where: { spaceId },
+    order: { field: "id", direction: "desc" },
+    limit: THREAD_LIST_LIMIT,
+  });
+  return { ...read, value: [...read.value].sort(recent) };
+}
+
+/** The most values one live `in` filter may carry. */
+export const PARTICIPANT_BATCH = 32;
+
+/**
+ * Participants by id, in as few live reads as the server allows (`in` lists
+ * of at most 32). Ids are sorted, so Views reading the same people share the
+ * same reads.
+ */
+export function readParticipants(
+  ctx: BrowserViewContext,
+  ids: Iterable<string>,
+): ReadonlyMap<string, Row> {
+  const unique = [...new Set(ids)].filter(Boolean).sort();
+  const rows = new Map<string, Row>();
+  for (let index = 0; index < unique.length; index += PARTICIPANT_BATCH) {
+    const batch = unique.slice(index, index + PARTICIPANT_BATCH);
+    const read = ctx.collections.participant.list({
+      where: { id: { in: batch } },
+      limit: batch.length,
+    });
+    for (const row of read.value) rows.set(String(row.id), row);
+  }
+  return rows;
+}

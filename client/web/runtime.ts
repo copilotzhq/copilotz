@@ -441,13 +441,20 @@ export async function createBrowserRuntime(
         rows = rows.slice(0, request.query.limit);
       }
     }
+    const status = local.has(request.collection)
+      ? "ready" as const
+      : entry.live!.status;
+    // A refusal keeps its code, so Views can say what happened.
+    const failure = (status === "stale" || status === "denied") &&
+        entry.live?.error !== undefined
+      ? readFailure(entry.live.error)
+      : undefined;
     return immutable(
       clone({
         value: rows,
-        status: local.has(request.collection)
-          ? "ready" as const
-          : entry.live!.status,
+        status,
         pending,
+        ...(failure ? { error: failure } : {}),
       }),
     );
   }

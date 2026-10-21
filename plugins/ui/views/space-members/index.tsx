@@ -7,7 +7,12 @@ import { useState } from "react";
 import { UserMinus, UserPlus } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
-import { readSenders, SenderAvatar } from "@copilotz/copilotz/core/web";
+import {
+  readParticipants,
+  readSenders,
+  readSpace,
+  SenderAvatar,
+} from "@copilotz/copilotz/core/web";
 import type { ChatSender } from "@copilotz/copilotz/core/web";
 import {
   Badge,
@@ -163,7 +168,7 @@ const view: ViewDefinition<
   modes: ["full", "panel"],
   url: true,
   render({ spaceId }, ctx) {
-    const space = ctx.collections.space.get(spaceId);
+    const space = readSpace(ctx, spaceId);
     if (!space.value) {
       return (
         <div className="p-4">
@@ -178,9 +183,11 @@ const view: ViewDefinition<
         ? space.value.memberIds.map(String)
         : []),
     ].filter(Boolean);
+    // The same ids, so the same shared read as the senders.
     const senders = readSenders(ctx, ids);
+    const people = readParticipants(ctx, ids);
     const members: Member[] = [...senders.values()].map((sender) => {
-      const row = ctx.collections.participant.get(sender.id).value;
+      const row = people.get(sender.id);
       return {
         ...sender,
         owner: sender.id === owner,

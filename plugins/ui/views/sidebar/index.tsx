@@ -6,6 +6,7 @@ import * as React from "react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { readSpaces, readThreads } from "@copilotz/copilotz/core/web";
+import { ReadStatus } from "@copilotz/copilotz/web/kit";
 import {
   type MenuItem,
   menuItems,
@@ -60,7 +61,8 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
         ctx.collections.shellPreferences.get("main").value,
       );
       const overlay = ctx.collections.shellOverlay.get("main").value;
-      const threads = readThreads(ctx).value;
+      const threadsRead = readThreads(ctx);
+      const threads = threadsRead.value;
       const spaces = readSpaces(ctx).value;
       const shell = record(ctx.resources.shell);
       const features = record(shell.features);
@@ -170,6 +172,15 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
               if (nav.spaceId === spaceId) actions.shellCloseSpace({});
               toast("Space deleted.");
             }
+            : undefined}
+          status={threadsRead.status !== "ready" || threadsRead.pending
+            ? (
+              <ReadStatus
+                state={threadsRead}
+                noun="conversations"
+                compact
+              />
+            )
             : undefined}
           footer={
             <UserMenu

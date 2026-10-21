@@ -28,7 +28,7 @@ function field(row: Row, path: string): unknown {
   return value;
 }
 
-/** Equality `where`, one `order` field, and `limit`, as the live owner bounds them. */
+/** Equality and `in` `where`, one `order` field, and `limit`, as the live owner bounds them. */
 export function select(rows: readonly Row[], query: Query): Row[] {
   const where = (query?.where ?? {}) as Record<string, unknown>;
   const order = query?.order as
@@ -37,7 +37,11 @@ export function select(rows: readonly Row[], query: Query): Row[] {
   const by = order?.field ?? "id";
   const sign = order?.direction === "desc" ? -1 : 1;
   const selected = rows.filter((row) =>
-    Object.entries(where).every(([key, value]) => field(row, key) === value)
+    Object.entries(where).every(([key, value]) =>
+      value && typeof value === "object" && "in" in value
+        ? (value as { in: unknown[] }).in.includes(field(row, key))
+        : field(row, key) === value
+    )
   ).sort((left, right) => {
     const a = String(field(left, by) ?? ""), b = String(field(right, by) ?? "");
     return (a < b ? -1 : a > b ? 1 : left.id < right.id ? -1 : 1) * sign;
@@ -54,6 +58,8 @@ export class FixtureLive implements SubscriptionTransport {
   readonly denied: Set<string> = new Set();
   /** Refuse `order` by any field but id, as owners did before ordered live reads. */
   idOrderOnly = false;
+  /** Refuse subscriptions past this many, as a device socket does (16). */
+  maxSubscriptions = Infinity;
 
   constructor(data: Readonly<Record<string, readonly Row[]>> = {}) {
     for (const [collection, rows] of Object.entries(data)) {
@@ -107,8 +113,16 @@ export class FixtureLive implements SubscriptionTransport {
     }
     if (this.idOrderOnly && order?.field && order.field !== "id") {
       return Promise.reject(
-        Object.assign(new Error("Subscription failed."), {
-          code: "subscription_failed",
+        Object.assign(new TypeError("Subscription query refused."), {
+          code: "subscription_query_refused",
+          retryable: false,
+        }),
+      );
+    }
+    if (this.subscriptions.size >= this.maxSubscriptions) {
+      return Promise.reject(
+        Object.assign(new Error("Device channel capacity exceeded"), {
+          code: "subscription_capacity_exceeded",
           retryable: false,
         }),
       );
@@ -162,5 +176,12 @@ export class FixtureLive implements SubscriptionTransport {
 
   get subscriptionCount(): number {
     return this.subscriptions.size;
+  }
+
+  /** The active subscriptions, as `collection query` lines. */
+  get active(): string[] {
+    return [...this.subscriptions].map((subscription) =>
+      `${subscription.collection} ${JSON.stringify(subscription.query ?? {})}`
+    ).sort();
   }
 }

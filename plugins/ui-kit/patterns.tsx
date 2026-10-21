@@ -61,7 +61,9 @@ type AnyRead = ReadState & { refresh?(): void };
 
 /**
  * One vocabulary for every read: loading, empty, reconnecting, refused,
- * failed, missing and held. Renders nothing for a ready read that has data.
+ * failed, missing and held, plus the live read limits
+ * (`subscription_capacity_exceeded`, `subscription_query_refused`). Renders
+ * nothing for a ready read that has data.
  * `noun` names what is read ("conversations"); `empty` marks a ready, empty
  * read and shows `emptyTitle`, `emptyHint` and `emptyAction`.
  */
@@ -96,6 +98,29 @@ export function ReadStatus(
       </Button>
     )
     : undefined;
+  // Live read limits: say what happened and what helps, never a raw code.
+  const code = state.error?.code;
+  if (
+    (state.status === "stale" || state.status === "denied") &&
+    code === "subscription_capacity_exceeded"
+  ) {
+    return (
+      <Notice tone="warning" title="Too many live views open" action={retry}>
+        Close a panel or another tab of this app, then try again.
+      </Notice>
+    );
+  }
+  if (
+    (state.status === "stale" || state.status === "denied") &&
+    code === "subscription_query_refused"
+  ) {
+    return (
+      <Notice tone="warning" title="Live updates unavailable" action={retry}>
+        These {noun}{" "}
+        can't stay up to date here yet. Reload the page to see the latest.
+      </Notice>
+    );
+  }
   switch (state.status) {
     case "ready":
       if (state.pending) {

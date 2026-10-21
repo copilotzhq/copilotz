@@ -7,6 +7,7 @@ import { useId } from "react";
 import { Maximize2, X } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
+import { readSpace } from "@copilotz/copilotz/core/web";
 import {
   Button,
   ReadStatus,
@@ -66,21 +67,21 @@ const view: ViewDefinition<
   render({ spaceId, threadId = null }, ctx) {
     const panel = ctx.hints.mode === "panel";
     const nav = shellState(ctx.collections.shell?.get("main").value);
-    const space = ctx.collections.space?.get(spaceId);
+    const space = readSpace(ctx, spaceId);
     const sections = spaceSections(ctx.resources.spaceSections);
     const selected = sections.find((section) => section.id === nav.section) ??
       sections[0];
-    const name = String(space?.value?.name ?? "") || "Space";
+    const name = String(space.value?.name ?? "") || "Space";
     const dots = panel ? marked(ctx, threadId, sections) : new Set<string>();
-    if (!space || space.status !== "ready" || !selected) {
+    if (space.status !== "ready" || !space.value || !selected) {
       return (
         <div className="mx-auto grid w-full max-w-3xl gap-3 p-6">
-          {space ? <ReadStatus state={space} noun="Space" /> : (
-            <ReadStatus
-              state={{ value: undefined, status: "missing", pending: false }}
-              noun="Space"
-            />
-          )}
+          <ReadStatus
+            state={space.status === "ready"
+              ? { value: undefined, status: "missing", pending: false }
+              : space}
+            noun="Space"
+          />
         </div>
       );
     }

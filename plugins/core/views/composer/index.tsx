@@ -5,6 +5,7 @@
 import * as React from "react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
+import { readThread } from "../reads.ts";
 import { chatConfig, readSenders } from "../chat/context.tsx";
 import { Composer, type MentionTarget } from "../chat/composer.tsx";
 import { startConversation } from "../chat/start.ts";
@@ -34,9 +35,7 @@ const view: ViewDefinition<
     const run = threadId
       ? ctx.collections.threadRun?.get(threadId).value
       : undefined;
-    const thread = threadId
-      ? ctx.collections.thread.get(threadId).value
-      : undefined;
+    const thread = threadId ? readThread(ctx, threadId).value : undefined;
     const participants = Array.isArray(thread?.participantIds)
       ? thread.participantIds.map(String)
       : [];

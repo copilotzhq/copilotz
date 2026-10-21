@@ -2,7 +2,6 @@
 /** @jsx React.createElement */
 /** @jsxFrag React.Fragment */
 /** Screen layout, one read-state vocabulary, metrics and resource lists. @module */
-// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { ArrowLeft, Search } from "lucide-react";
 import { Button } from "./components/button.tsx";

@@ -120,17 +120,20 @@ export async function operationResult(
       context.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(context.databaseSchema)
     : application;
+  let authority = context.serverScope.authority!;
+  const receiptAuthority = context.receiptAuthority ?? authority;
   const receipt = await runtime.authorization.logoutReceipt(
-    context.serverScope.authority!,
+    receiptAuthority,
     operationId,
   );
+  if (receipt) authority = receiptAuthority;
   if (receipt && ["accepted", "running"].includes(receipt.state)) {
     return { status: 202, data: { status: receipt.state } };
   }
   const read = async (): Promise<HttpResponse> => {
     const authorize = () =>
       runtime.authorization.operation(
-        context.serverScope.authority!,
+        authority,
         operationId,
       );
     const result = await recordedOperationResult(
@@ -144,7 +147,7 @@ export async function operationResult(
     });
     const effects = result.kind === "action" && !result.pending
       ? await runtime.authorization.credentials.project(
-        context.serverScope.authority!,
+        authority,
         operationId,
       )
       : [];
@@ -176,9 +179,10 @@ export async function operationResult(
     // Revocation may commit after the first lookup but before ordinary result
     // authorization. Recover that receipt once, through the same result policy.
     const current = await runtime.authorization.logoutReceipt(
-      context.serverScope.authority!,
+      receiptAuthority,
       operationId,
     );
+    if (current) authority = receiptAuthority;
     if (current && ["accepted", "running"].includes(current.state)) {
       return { status: 202, data: { status: current.state } };
     }

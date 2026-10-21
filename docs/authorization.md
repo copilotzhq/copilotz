@@ -712,13 +712,29 @@ reconnection. Establish a new session and explicitly reauthenticate to
 reconnect. A permission change for one collection remains a channel-level
 revocation.
 
-Anonymous HTTP Action access without credentials is 401; a supplied but refused
-credential is 403, including Core HTTP Actions. An actor explicitly
-authenticated by the host retains 403 on denial even without standard credential
-headers. A direct host authentication refusal also becomes 401 when no
-credential is present. A credential-projection proof is a receipt capability,
+Anonymous HTTP Action access without credentials, or with only a discarded
+session cookie, is 401, including Core HTTP Actions. A failed session-cookie
+verification is anonymous and clears the cookie, allowing anonymous sign-in
+Actions to run. Other presented but refused credentials remain 403. An actor
+explicitly authenticated by the host retains 403 on denial even without standard
+credential headers. A direct host authentication refusal also becomes 401 when
+no credential is present. A credential-projection proof is a receipt capability,
 not an authentication credential. Cookie defaults remain
 `__Host-copilotz_session`, Secure, HttpOnly, Path=/ and no Domain.
+
+Host-authenticated session cookies follow the same recovery contract: verify
+before retaining a principal, return anonymous scope plus
+`invalidSessionCookie: true` on invalid/revoked/expired credentials, and
+configure the facade's `sessionCookie` attributes to match. Duplicate configured
+cookies are refused before calling the host authenticator. Credential proof
+remains required for the narrowly scoped completed self-revocation receipt;
+discarded cookies never confer ordinary operation-read or Action authority.
+
+For a valid host-authenticated cookie with the configured name, return
+`invalidSessionCookie: false` alongside the verified authority/actor. This
+prevents the facade from attempting to decode the host's cookie as an Action
+credential. Omit the property when the facade should verify its own
+Action-session token.
 
 ## Owner-verified identity evidence
 

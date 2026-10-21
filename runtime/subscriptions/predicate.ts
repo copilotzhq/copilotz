@@ -2,6 +2,7 @@ import { compileCollectionFilters } from "../collections/query.ts";
 import {
   type CollectionPredicate,
   compareCodePoints,
+  idWherePredicate,
 } from "../collections/predicate.ts";
 import { stableStringify } from "../collections/equal.ts";
 import type {
@@ -206,6 +207,11 @@ export function compileLiveFilters(
       }
       const matches: Match[] = filter.filter ? [predicate(filter.filter)] : [];
       for (const [field, value] of Object.entries(filter.where ?? {})) {
+        const id = idWherePredicate(field, value);
+        if (id) {
+          matches.push(predicate(id));
+          continue;
+        }
         count();
         if (
           !scalarField(field) ||

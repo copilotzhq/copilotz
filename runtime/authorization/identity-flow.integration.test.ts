@@ -1,3 +1,4 @@
+import { defineCollection } from "../collections/definition.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
 import { testAuthority } from "../testing/authority.ts";
@@ -27,6 +28,32 @@ async function fixture(remote: boolean) {
     database: db,
     databaseSchema: "directory",
     namespace: "directory",
+    collections: {
+      memberships: defineCollection({
+        name: "native_membership",
+        schema: { type: "object" },
+      }),
+    },
+    authorization: {
+      policies: {
+        destination: {
+          revision: "1",
+          sources: [],
+          evaluate({ authority, directory, intent }) {
+            assert(directory);
+            assert(authority.flow);
+            assertEquals(authority.scope.databaseSchema, "public");
+            assertEquals(intent.invocation?.id, "identity.login");
+            return {
+              collections: { memberships: {} },
+              collectionMutations: { memberships: { create: {} } },
+            };
+          },
+        },
+      },
+      actions: {},
+      collections: { memberships: { id: "destination", revision: "1" } },
+    },
   });
   await db.query(
     'CREATE TABLE "directory".identities(id text PRIMARY KEY, namespace text NOT NULL, member boolean NOT NULL DEFAULT false)',
@@ -44,12 +71,17 @@ async function fixture(remote: boolean) {
       revision: "1",
       actions: ["login"],
       evidence: ["provider"],
+      ...(command === "publishMembership"
+        ? { collections: { memberships: ["create"] } }
+        : {}),
       async authorize({ authority, input, evidence }) {
         return destinationAllowed && authority.scope.tenant === "fixture" &&
           (await evidence.get("provider"))?.principal ===
             (input as { account: string }).account;
       },
-      async execute({ transaction, input, databaseSchema, namespace }) {
+      async execute(
+        { transaction, input, databaseSchema, namespace, collections },
+      ) {
         const value = input as { account: string; fail?: boolean };
         assertEquals(databaseSchema, "directory");
         if (command === "prepareLogin") {
@@ -60,6 +92,10 @@ async function fixture(remote: boolean) {
           );
         } else {
           memberships++;
+          await collections.memberships.create({
+            id: value.account,
+            principal: value.account,
+          });
           const account = await transaction.query(
             "SELECT id FROM public.nodes WHERE namespace=$1 AND type=$2 AND id=$3",
             ["space", "identity_account", value.account],
@@ -391,6 +427,12 @@ for (const remote of [false, true]) {
         (await f.db.query('SELECT id,member FROM "directory".identities')).rows,
         [{ id: "account", member: true }],
       );
+      assertEquals(
+        (await f.db.query(
+          "SELECT id FROM directory.nodes WHERE type='native_membership'",
+        )).rows,
+        [{ id: "account" }],
+      );
       const replay = await f.submit({}, flow, submitted.key);
       assertEquals(replay.id, submitted.id);
       assertEquals((await f.result(replay.id, flow)).status, 200);
@@ -481,6 +523,18 @@ for (const remote of [false, true]) {
           assertEquals((await response.json()).error.code, "forbidden");
         }
         assertEquals(response.headers.get("set-cookie"), null);
+        assertEquals(
+          (await f.db.query(
+            "SELECT id FROM directory.nodes WHERE type='native_membership'",
+          )).rows,
+          [],
+        );
+        assertEquals(
+          (await f.db.query(
+            "SELECT id FROM directory.events WHERE type='native_membership.created'",
+          )).rows,
+          [],
+        );
         assertEquals(
           (await f.db.query('SELECT id FROM "directory".identities')).rows,
           [],

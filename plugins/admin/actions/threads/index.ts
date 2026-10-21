@@ -72,6 +72,7 @@ export const adminThreadsAction: ActionDefinition<
       values = values.filter((thread) =>
         JSON.stringify({
           id: thread.id,
+          name: thread.name,
           externalId: thread.externalId,
           metadata: thread.metadata,
         }).toLowerCase().includes(search)
@@ -85,8 +86,9 @@ export const adminThreadsAction: ActionDefinition<
         id: thread.id,
         threadId: thread.id,
         externalId: thread.externalId ?? null,
-        name: metadataText(record(thread.metadata), "name") ??
-          thread.externalId ?? thread.id,
+        // The conversation's own name; an unnamed one has none (never its id).
+        name: metadataText(thread, "name") ??
+          metadataText(record(thread.metadata), "name") ?? null,
         summary: metadataText(record(thread.metadata), "summary") ?? null,
         status: thread.status,
         participantIds: Array.isArray(thread.participantIds)

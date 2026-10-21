@@ -18,7 +18,12 @@ import spaceMembers from "./views/space-members/index.tsx";
 import userProfile from "./views/profile/index.tsx";
 import panel from "./views/panel/index.tsx";
 import palette from "./views/palette/index.tsx";
-import { initialShell, shellPreferences, shellState } from "./model.ts";
+import {
+  initialShell,
+  shellPreferences,
+  shellState,
+  spaceSections,
+} from "./model.ts";
 
 export * from "./model.ts";
 export {
@@ -49,8 +54,19 @@ const set: NonNullable<ClientCollectionDefinition["commands"]>[string] = {
 
 function navigate(ctx: BrowserActionContext, patch: Record<string, unknown>) {
   const current = shellState(ctx.collections.shell.get("main").value);
+  const next = shellState({ ...current, ...patch });
+  // Parameters owned by sections not shown now leave the URL with them.
+  const sections = spaceSections(ctx.resources.spaceSections);
+  const shown = next.spaceId || (next.threadId && next.panel && !next.page)
+    ? sections.find((section) => section.id === next.section) ?? sections[0]
+    : undefined;
+  const clear = sections.flatMap((section) =>
+    section === shown ? [] : section.params
+  ).filter((key) => !shown?.params.includes(key));
+  const { clear: _previous, ...rest } = next;
   ctx.command("shell", "main", "set", {
-    ...shellState({ ...current, ...patch }),
+    ...rest,
+    clear: clear.length ? [...new Set(clear)] : [],
     origin: "app",
   });
 }

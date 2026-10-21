@@ -322,10 +322,11 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             {!inSpace && thread && (
               // The title keeps its width first; the selector takes what is
               // left (at least an icon) and collapses through the `agents`
-              // container query, as an app's own selector can too.
+              // container query, as an app's own selector can too. Whatever
+              // still does not fit is clipped, never drawn over the toggles.
               <div
                 data-slot="agent-selector"
-                className="@container/agents ml-1 flex min-w-9 flex-1 basis-0 items-center"
+                className="@container/agents ml-1 flex min-w-9 flex-1 basis-0 items-center overflow-x-clip [overflow-clip-margin:4px]"
               >
                 {showSafely(
                   ctx,

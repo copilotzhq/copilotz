@@ -255,3 +255,23 @@ test("sections and menu items sort by order, then label; malformed entries drop"
   assert.equal(items[0].requires, "thread");
   assert.equal(items[2].page, "settings");
 });
+
+test("sections declare the URL parameters they own; the codec drops the ones to clear", () => {
+  const [boards] = spaceSections({
+    boards: {
+      label: "Boards",
+      view: "b",
+      params: ["board", "card", "bad key"],
+    },
+  });
+  assert.deepEqual(boards.params, ["board", "card"]);
+  const url = new URL("https://app.example/?board=b1&card=c1&ref=mail");
+  defaultShellCodec.encode(
+    url,
+    shellState({ threadId: "t1", clear: ["board", "card", "<x>"] }),
+  );
+  assert.equal(url.searchParams.get("board"), null);
+  assert.equal(url.searchParams.get("card"), null);
+  assert.equal(url.searchParams.get("ref"), "mail");
+  assert.equal(url.searchParams.get("chat"), "t1");
+});

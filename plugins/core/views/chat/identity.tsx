@@ -4,7 +4,7 @@
 /** Sender avatars and names, colored by identity. @module */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { Bot, Wrench } from "lucide-react";
+import { Bot, User, Wrench } from "lucide-react";
 import { markdownUrlPolicy } from "@copilotz/copilotz/web";
 import {
   Avatar,
@@ -52,7 +52,8 @@ export function SenderAvatar(
   },
 ): React.ReactElement {
   const source = avatarSource(sender.avatarUrl, imageOrigins);
-  const agentLike = sender.type !== "human";
+  // An unread sender is neutral: no identity color, a plain person or bot.
+  const agentLike = sender.type !== "human" && !sender.unknown;
   const color = agentLike ? senderColor(sender) : undefined;
   return (
     <Avatar
@@ -70,8 +71,11 @@ export function SenderAvatar(
       >
         {sender.type === "tool"
           ? <Wrench className="size-3.5" />
-          : sender.type === "system"
+          : sender.type === "system" ||
+              (sender.unknown && sender.type !== "human")
           ? <Bot className="size-3.5" />
+          : sender.unknown
+          ? <User className="size-3.5" />
           : initials(sender.name).slice(0, letters)}
       </AvatarFallback>
     </Avatar>

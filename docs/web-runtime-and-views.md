@@ -334,7 +334,7 @@ components.
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                             |
 | Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats)                                    | —                                                             |
-| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?}`; `null` hides a built-in                                 | `{spaceId, threadId}`, mode `full` or `panel`                 |
+| Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?, params?}`; `null` hides a built-in                        | `{spaceId, threadId}`, mode `full` or `panel`                 |
 | Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                           |
 | Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)              |
 | User menu        | `resources.userMenu.<id>` (same shape)                                                                                       | `{}`, or the page value                                       |
@@ -348,11 +348,14 @@ components.
 
 Built-in Space sections are `overview` (order 0), `conversations` (10) and
 `members` (90). A section's `tools` lists tool names; when an agent uses one in
-the open chat, its tab gets a dot instead of switching. `icon` is a kit icon
-name (`iconNames`). A menu item runs its `action` alias with the input shown,
-opens its `dialog` View, or opens its `page`; `requires: "thread"` or `"space"`
-limits where it appears. A page is a View kind shown in main; its section lives
-in the URL (`?page=<kind>&section=<id>`), and it switches sections with
+the open chat, its tab gets a dot instead of switching. A section's `params`
+lists the URL parameters its Views own (such as `board`, `card`); the shell
+removes them from the URL when another section, or none, shows. `icon` is a kit
+icon name (`iconNames`). A menu item runs its `action` alias with the input
+shown, opens its `dialog` View, or opens its `page`; `requires: "thread"` or
+`"space"` limits where it appears. A page is a View kind shown in main; its
+section lives in the URL (`?page=<kind>&section=<id>`), and it switches sections
+with
 `ctx.show({ shows: kind, value: { section } }, { source: "link", region:
 "main" })`.
 The header gives the title priority: the agent selector slot takes the width

@@ -168,16 +168,19 @@ export const PARTICIPANT_BATCH = 32;
 export function readParticipants(
   ctx: BrowserViewContext,
   ids: Iterable<string>,
-): ReadonlyMap<string, Row> {
+): ReadonlyMap<string, Row> & { readonly status: ReadState["status"] } {
   const unique = [...new Set(ids)].filter(Boolean).sort();
   const rows = new Map<string, Row>();
+  let status: ReadState["status"] = "ready";
   for (let index = 0; index < unique.length; index += PARTICIPANT_BATCH) {
     const batch = unique.slice(index, index + PARTICIPANT_BATCH);
     const read = ctx.collections.participant.list({
       where: { id: { in: batch } },
       limit: batch.length,
     });
+    // The least settled batch decides: loading, then refused, then ready.
+    if (read.status !== "ready" && status !== "loading") status = read.status;
     for (const row of read.value) rows.set(String(row.id), row);
   }
-  return rows;
+  return Object.assign(rows, { status });
 }

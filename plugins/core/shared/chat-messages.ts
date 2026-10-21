@@ -19,6 +19,11 @@ export type ChatSender = Readonly<{
   externalId?: string;
   agentId?: string;
   avatarUrl?: string;
+  /**
+   * The participant could not be read (refused or missing): the name and type
+   * are neutral guesses from the message, never another person's.
+   */
+  unknown?: true;
 }>;
 
 export type ChatAttachment = Readonly<{
@@ -116,6 +121,11 @@ export function chatSender(
   row: Row | undefined,
   fallbackId: string,
 ): ChatSender {
+  // Unread participants stay neutral: a person until the message says
+  // otherwise (see `projectMessages`), never "Participant" with a bot.
+  if (!row) {
+    return { id: fallbackId, type: "human", name: "Someone", unknown: true };
+  }
   const metadata = record(row?.metadata);
   const type = row?.participantType;
   const name = text(row?.name) ?? text(metadata.displayName) ??
@@ -335,6 +345,24 @@ export function ownMessagePredicate(
 }
 
 /**
+ * An unread sender's neutral identity, from what the message says about its
+ * author: an agent's output or a tool's result; a person otherwise.
+ */
+function inferSender(sender: ChatSender, row: Row): ChatSender {
+  if (!sender.unknown) return sender;
+  const metadata = record(row.metadata);
+  if (text(record(metadata.toolInvocation).id)) {
+    return { ...sender, type: "tool", name: "Tool" };
+  }
+  const kind = workflow(row).kind;
+  if (
+    kind === "agent_output" || kind === "agent_failure" ||
+    Array.isArray(metadata.llmToolCalls)
+  ) return { ...sender, type: "agent", name: "Agent" };
+  return sender;
+}
+
+/**
  * Message rows (already in conversation order) as chat messages. Tool result
  * rows fold into the activity of the call that requested them; internal rows
  * and agent rows with nothing to show are dropped.
@@ -345,7 +373,7 @@ export function projectMessages(
 ): ChatMessage[] {
   const results = new Map<string, ToolResult>();
   for (const row of rows) {
-    const sender = senderOf(String(row.senderId ?? ""));
+    const sender = inferSender(senderOf(String(row.senderId ?? "")), row);
     if (sender.type !== "tool") continue;
     const result = toolResult(row);
     if (result) results.set(result[0], result[1]);
@@ -353,7 +381,7 @@ export function projectMessages(
   const messages: ChatMessage[] = [];
   for (const row of rows) {
     if (record(row.visibility).kind === "internal") continue;
-    const sender = senderOf(String(row.senderId ?? ""));
+    const sender = inferSender(senderOf(String(row.senderId ?? "")), row);
     if (isToolResult(row, sender)) continue;
     const metadata = record(row.metadata);
     const flow = workflow(row);

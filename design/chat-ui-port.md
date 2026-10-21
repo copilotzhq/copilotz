@@ -239,6 +239,12 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   live ordered windows (`createdAt`, `updatedAt`, `name`); `ReadStatus` reads
   refusal `reason`s; sessions end through `bindShellSession` and
   `resources.shell.signIn`, with `shellSessionEnded` and `shellSessionRestored`.
+- 2026-10-21 (E2E round 2): a visible message records activity on its thread
+  (`thread.recordMessage`, `lastMessageId`) so recent lists reorder; the sidebar
+  search box opens the palette (no inline filter), New Space shows in the empty
+  state and after No Space; sections declare `params`; the agents slot clips;
+  unread participants are neutral ("Someone", "Agent", `unknown`); admin shows
+  thread names and calendar-day activity buckets (`formatBucket`).
 
 ## Held reads in nested Views
 

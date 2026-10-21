@@ -167,3 +167,40 @@ export function recencyGroup(
   }`;
   return { key: `5-${month}`, label };
 }
+
+const pad = (value: number) => String(value).padStart(2, "0");
+
+/**
+ * A UTC day or hour bucket (such as `2026-10-20T00:00:00.000Z`) as a calendar
+ * label: "Today", "Yesterday", or a short date, with the hour when the bucket
+ * is not a whole day. Buckets are UTC, so the label is too.
+ */
+export function formatBucket(
+  value: string,
+  options: { now?: number; locale?: string } = {},
+): string {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+  const day = (date: Date) =>
+    `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${
+      pad(date.getUTCDate())
+    }`;
+  const now = new Date(options.now ?? Date.now());
+  const label = day(at) === day(now)
+    ? "Today"
+    : day(at) === day(new Date(now.getTime() - 86_400_000))
+    ? "Yesterday"
+    : new Intl.DateTimeFormat(options.locale, {
+      timeZone: "UTC",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      ...(at.getUTCFullYear() === now.getUTCFullYear()
+        ? {}
+        : { year: "numeric" as const }),
+    }).format(at);
+  const whole = at.getUTCHours() === 0 && at.getUTCMinutes() === 0;
+  return whole
+    ? label
+    : `${label} ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`;
+}

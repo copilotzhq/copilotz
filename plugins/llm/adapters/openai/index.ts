@@ -26,29 +26,6 @@ function isOpenAIDebugEnabled(config: ProviderConfig): boolean {
   return config.runtimeDiagnostics?.enabled === true;
 }
 
-function summarizeBodyForDebug(
-  body: Record<string, unknown>,
-  apiMode: OpenAIApiMode,
-): Record<string, unknown> {
-  const messages = Array.isArray(body.messages) ? body.messages : undefined;
-  const input = Array.isArray(body.input) ? body.input : undefined;
-  return {
-    apiMode,
-    model: body.model,
-    stream: body.stream,
-    messageCount: messages?.length ?? input?.length ?? 0,
-    bodyKeys: Object.keys(body).sort(),
-    maxCompletionTokens: body.max_completion_tokens,
-    maxOutputTokens: body.max_output_tokens,
-    temperature: body.temperature,
-    reasoning: body.reasoning,
-    text: body.text,
-    responseFormat: body.response_format,
-    hasStop: body.stop !== undefined,
-    hasPromptCacheKey: body.prompt_cache_key !== undefined,
-  };
-}
-
 function summarizeOpenAIStreamError(data: any): Record<string, unknown> {
   const error = data?.error ?? data?.response?.error ?? {};
   return {
@@ -664,16 +641,10 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     }),
 
     body: (messages: ChatMessage[], config: ProviderConfig) => {
-      const body = apiMode === "responses"
+      // No per-attempt request logging: diagnostics report failures only.
+      return apiMode === "responses"
         ? buildResponsesBody(messages, config)
         : buildChatCompletionsBody(messages, config);
-      if (diagnosticsEnabled) {
-        console.log(
-          "[openai.debug] request body summary",
-          summarizeBodyForDebug(body, apiMode),
-        );
-      }
-      return body;
     },
 
     extractContent: (data: any): ExtractedPart[] | null => {

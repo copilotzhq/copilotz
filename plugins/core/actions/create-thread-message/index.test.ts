@@ -396,3 +396,75 @@ Deno.test("a message that names no recipients addresses the thread's agents", as
     await db.close();
   }
 });
+
+Deno.test("a visible message moves its thread's updatedAt in the same write; internal work does not", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const application = await createCopilotzApplication({
+    database: db,
+    namespace: NAMESPACE,
+    databaseSchema: "copilotz_thread_message_activity",
+    plugins: [storageFixture],
+    engine: { retryBaseMs: 0, random: () => 0 },
+  });
+  try {
+    const context = createTestDomainContext(application, NAMESPACE);
+    const human = {
+      id: "human-a",
+      externalId: "human-a",
+      participantType: "human",
+    } as const;
+    for (const id of ["thread-old", "thread-new"]) {
+      await context.actions.createThread({ id, participants: [human] }, {
+        operationKey: `${id}:create`,
+      });
+    }
+    const collections = application.collections.withScope({
+      namespace: NAMESPACE,
+    });
+    const updatedAt = async (id: string) =>
+      String((await collections.thread.get({ id }))?.updatedAt);
+    const before = await updatedAt("thread-old");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await context.actions.createThreadMessage({
+      id: "message-internal",
+      threadId: "thread-old",
+      sender: human,
+      visibility: { kind: "internal" },
+      content: "Internal note",
+    }, { operationKey: "message:internal" });
+    assertEquals(await updatedAt("thread-old"), before, "internal work");
+    await context.actions.createThreadMessage({
+      id: "message-visible",
+      threadId: "thread-old",
+      sender: human,
+      content: "Back to this one",
+    }, { operationKey: "message:visible" });
+    const after = await updatedAt("thread-old");
+    assertEquals(after > before, true, `${after} > ${before}`);
+    assertEquals(
+      (await collections.thread.get({ id: "thread-old" }))?.lastMessageId,
+      "message-visible",
+    );
+    // The thread that just had a message now leads a recent-first list.
+    const recent = await collections.thread.list({
+      order: { field: "updatedAt", direction: "desc" },
+      limit: 2,
+    });
+    assertEquals(recent.map((thread) => thread.id), [
+      "thread-old",
+      "thread-new",
+    ]);
+    // Its own event keeps `thread.updated` processors out of every message.
+    const types = (await application.events.list({
+      namespace: NAMESPACE,
+      limit: 200,
+    })).map((event) => event.type);
+    assertEquals(
+      types.filter((type) => type === "thread.message-recorded").length,
+      1,
+    );
+  } finally {
+    await application.shutdown();
+    await db.close();
+  }
+});

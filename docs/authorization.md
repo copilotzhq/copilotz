@@ -182,7 +182,9 @@ grant. The user's retained authority is still present, and the invocation grants
 nothing unless the policy says so. This excerpt from
 [Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
 lets Core's own Actions and Processors write threads for a member while direct
-reads get only a membership filter:
+reads get only a membership filter. Core enrolls new members with
+`ensureMembership` and records each visible message as the thread's activity
+with `recordMessage`, so a policy that binds `thread` grants both commands:
 
 ```ts
 const memberThreads = {
@@ -193,7 +195,11 @@ if (intent.kind === "collection") {
     ? {
       collections: memberThreads,
       collectionMutations: {
-        thread: { create: {}, update: {}, commands: { ensureMembership: {} } },
+        thread: {
+          create: {},
+          update: {},
+          commands: { ensureMembership: {}, recordMessage: {} },
+        },
       },
     }
     : { collections: memberThreads };

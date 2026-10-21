@@ -147,9 +147,10 @@ export const chatAccess: Access = {
                   ? { collections: { usage: {} } }
                   : {};
               }
-              // Core's own Actions and Processors create threads and enroll
-              // participants on the member's behalf. Direct reads, such as
-              // the thread routes, get the membership filter and nothing else.
+              // Core's own Actions and Processors create threads, enroll
+              // participants and record each message as the thread's activity
+              // on the member's behalf. Direct reads, such as the thread
+              // routes, get the membership filter and nothing else.
               return intent.invocation
                 ? {
                   collections: memberThreads,
@@ -157,7 +158,7 @@ export const chatAccess: Access = {
                     thread: {
                       create: {},
                       update: {},
-                      commands: { ensureMembership: {} },
+                      commands: { ensureMembership: {}, recordMessage: {} },
                     },
                   },
                 }

@@ -243,7 +243,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
                     thread: {
                       create: {},
                       update: {},
-                      commands: { ensureMembership: {} },
+                      commands: { ensureMembership: {}, recordMessage: {} },
                     },
                     message: { create: {}, update: {} },
                   },

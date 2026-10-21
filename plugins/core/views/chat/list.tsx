@@ -161,6 +161,9 @@ export function MessageLog(
   };
 
   const rows = virtualizer.getVirtualItems();
+  // A viewport with no measured size (hidden, or a test DOM) shows every row
+  // in normal flow rather than none.
+  const flat = rows.length === 0;
   return (
     <div className="relative min-h-0 flex-1">
       <div
@@ -197,29 +200,44 @@ export function MessageLog(
                     )}
                 </div>
               )}
-              <div
-                ref={list}
-                className="relative w-full"
-                style={{ height: virtualizer.getTotalSize() }}
-              >
-                {rows.map((row) => (
-                  <div
-                    key={row.key}
-                    data-index={row.index}
-                    ref={virtualizer.measureElement}
-                    className="absolute top-0 left-0 w-full"
-                    style={{ transform: `translateY(${row.start}px)` }}
-                  >
-                    <div
-                      className={row.index === 0 || items[row.index].bare
-                        ? ""
-                        : "pt-6"}
-                    >
-                      {items[row.index].node}
-                    </div>
+              {flat
+                ? (
+                  <div ref={list} className="w-full">
+                    {items.map((item, index) => (
+                      <div
+                        key={item.key}
+                        className={index === 0 || item.bare ? "" : "pt-6"}
+                      >
+                        {item.node}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )
+                : (
+                  <div
+                    ref={list}
+                    className="relative w-full"
+                    style={{ height: virtualizer.getTotalSize() }}
+                  >
+                    {rows.map((row) => (
+                      <div
+                        key={row.key}
+                        data-index={row.index}
+                        ref={virtualizer.measureElement}
+                        className="absolute top-0 left-0 w-full"
+                        style={{ transform: `translateY(${row.start}px)` }}
+                      >
+                        <div
+                          className={row.index === 0 || items[row.index].bare
+                            ? ""
+                            : "pt-6"}
+                        >
+                          {items[row.index].node}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
             </div>
           )}
       </div>

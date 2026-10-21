@@ -313,7 +313,7 @@ async function fixture(
           server: {
             default: defineServerFacade({
               expose: {
-                actions: { include: [write.id] },
+                actions: { include: ["write"] },
                 collections: false,
                 channels: false,
               },
@@ -467,7 +467,7 @@ async function fixture(
   type Opened = Awaited<ReturnType<typeof start>>;
   const submit = (app: Opened, id: string) =>
     app.gateway.fetch(
-      new Request("http://integrity.test/api/actions/integrity/write", {
+      new Request("http://integrity.test/api/actions/write", {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": id },
         body: JSON.stringify({ id, value: `value-${id}` }),

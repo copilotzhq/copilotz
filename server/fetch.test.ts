@@ -259,7 +259,7 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
       schemaVersion: 1,
       type: "message.created",
       namespace: "tenant-a",
-      threadId: "thread-a",
+      selectionMetadata: { threadId: "thread-a" },
       payload: { operationId },
       routing: {},
       visibility: { kind: "public" as const },

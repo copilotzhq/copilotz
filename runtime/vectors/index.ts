@@ -110,11 +110,13 @@ export async function provisionVectorStorage(
     async (_input, { transaction: tx }) => {
       await tx.query("CREATE EXTENSION IF NOT EXISTS vector");
       await tx.query(`CREATE TABLE IF NOT EXISTS ${table} (
-      namespace TEXT NOT NULL, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES ${nodes}(id) ON DELETE CASCADE,
+      namespace TEXT COLLATE "C" NOT NULL, owner_type TEXT NOT NULL, owner_id TEXT COLLATE "C" NOT NULL,
       field TEXT NOT NULL, profile TEXT NOT NULL, dimensions INTEGER NOT NULL,
       source_field TEXT NOT NULL, source_revision TEXT NOT NULL,
-      value vector NOT NULL, asset_id TEXT REFERENCES ${nodes}(id) ON DELETE CASCADE,
+      value vector NOT NULL, asset_id TEXT COLLATE "C",
       PRIMARY KEY(namespace, owner_type, owner_id, field, profile),
+      CONSTRAINT copilotz_vectors_owner_id_fkey FOREIGN KEY(namespace, owner_id) REFERENCES ${nodes}(namespace, id) ON DELETE CASCADE,
+      CONSTRAINT copilotz_vectors_asset_id_fkey FOREIGN KEY(namespace, asset_id) REFERENCES ${nodes}(namespace, id) ON DELETE CASCADE,
       CHECK(vector_dims(value) = dimensions)
     )`);
     },

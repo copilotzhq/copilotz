@@ -65,6 +65,12 @@ The registry exposes `views` and `resolveView(shows, mode, renderer)`.
 a raw record to render. Mode names are open-ended; defaults are `context` and
 `text`.
 
+A View may declare `url: true` (or `url: { queries: "run" }`) to let a link open
+it. Without it, URL state cannot name the View. The browser runtime enforces
+this, admits identifier values only and holds query reads until a user gesture;
+see [URL state](web-runtime-and-views.md#url-state-and-deep-links). The text
+renderer accepts only `{ shows, value }`, so it refuses a URL-marked reference.
+
 Overlapping Views fail composition unless the final Resource overlay selects a
 matching candidate:
 

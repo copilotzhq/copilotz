@@ -221,7 +221,7 @@ async function insertOwner(
     `INSERT INTO ${context.tables.nodes} (
        id, namespace, type, name, data, created_at, updated_at
      ) VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (namespace, id) DO NOTHING`,
     [
       ref.ownerNodeId,
       namespace,
@@ -236,8 +236,8 @@ async function insertOwner(
     data: unknown;
   }>(
     `SELECT namespace, type, data FROM ${context.tables.nodes}
-      WHERE id = $1 LIMIT 1`,
-    [ref.ownerNodeId],
+      WHERE namespace = $2 AND id = $1 LIMIT 1`,
+    [ref.ownerNodeId, namespace],
   );
   const row = existing.rows[0];
   if (

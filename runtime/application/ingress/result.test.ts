@@ -4,6 +4,7 @@ const SERVER_INVOKE_ACTION_ID = "copilotz.server.internal.invoke";
 import {
   SERVER_ACTION_REQUEST_EVENT_TYPE,
   SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
+  serverActionRunId,
 } from "./contracts.ts";
 import type { InternalCopilotzApplication } from "../types.ts";
 import type { ActionEventData } from "../../actions/types.ts";
@@ -117,6 +118,65 @@ async function failure(events: ReturnType<typeof lifecycle>[]) {
     Error,
   );
 }
+Deno.test("pre-capture root refusal requires exact source identity and an input-free sanitized failure", async () => {
+  const create = () => {
+    const event = lifecycle("failed", true);
+    const runId = serverActionRunId("delivery", actionId, "request");
+    event.subject.id = runId;
+    event.data.actionRunId = runId;
+    delete event.data.parentActionRunId;
+    Object.assign(event.data, { input: null });
+    Object.assign(event.metadata, { sourceDeliveryId: "delivery" });
+    event.deduplicationId = `${runId}:action:terminal`;
+    event.payload.dataRef.eventBodyId =
+      `event-body:${namespace}:${event.deduplicationId}`;
+    return event;
+  };
+  assertEquals(
+    (await failure([create()]) as Error & { code: string }).code,
+    "forbidden",
+  );
+  const changes: Array<(event: ReturnType<typeof lifecycle>) => void> = [
+    (event) => {
+      event.causationId = "other";
+    },
+    (event) => {
+      event.namespace = "other";
+    },
+    (event) => {
+      event.correlationId = "other";
+    },
+    (event) => {
+      event.metadata.sourceEventId = "other";
+    },
+    (event) => {
+      Object.assign(event.metadata, { sourceDeliveryId: "other" });
+    },
+    (event) => {
+      event.data.actionRunId = "other";
+    },
+    (event) => {
+      event.data.parentActionRunId = "other";
+    },
+    (event) => {
+      Object.assign(event.data, { input: { secret: "hidden" } });
+    },
+    (event) => {
+      Object.assign(event.data, { error: { ...forbidden, callerSafe: false } });
+    },
+    (event) => {
+      Object.assign(event.data, { status: "completed", output: "hidden" });
+    },
+  ];
+  for (const change of changes) {
+    const event = create();
+    change(event);
+    assertEquals(
+      (await failure([event]) as Error & { code: string }).code,
+      "action_not_completed",
+    );
+  }
+});
 Deno.test("current wrapper failure/cancellation is a bounded caller-safe refusal without a target lifecycle", async () => {
   for (const status of ["failed", "cancelled"] as const) {
     const error = await failure([lifecycle(status)]);

@@ -238,7 +238,7 @@ export async function authenticateHttpRequest(
       serverIdentity: scope.identity ?? ({} as const),
       serverSignal: request.signal,
     } as const,
-    authorityIngressProof(authority),
+    authorityIngressProof(authority, scope.actor),
   );
   return result;
 }

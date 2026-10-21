@@ -31,13 +31,21 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   renderer: "react",
   modes: ["full", "panel"],
   render(message, ctx) {
+    // An app allows remote image origins with `resources.markdown.imageOrigins`.
+    const origins = ctx.resources.markdown?.imageOrigins;
     return (
       <Card data-density={ctx.hints.mode}>
         <CardContent className="space-y-2">
           <Badge variant="secondary">
             {String(message.role ?? message.senderName ?? "Message")}
           </Badge>
-          <Markdown>{messageText(message.content)}</Markdown>
+          <Markdown
+            imageOrigins={Array.isArray(origins)
+              ? origins.filter((origin) => typeof origin === "string")
+              : []}
+          >
+            {messageText(message.content)}
+          </Markdown>
           {message.status === "streaming" && <p role="status">Writing…</p>}
         </CardContent>
       </Card>

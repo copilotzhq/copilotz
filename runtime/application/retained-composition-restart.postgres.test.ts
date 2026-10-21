@@ -225,7 +225,7 @@ for (const mode of ["in-process", "websocket"] as const) {
               server: {
                 default: defineServerFacade({
                   expose: {
-                    actions: { include: [write.id] },
+                    actions: { include: ["write"] },
                     collections: false,
                     channels: false,
                   },
@@ -360,7 +360,7 @@ for (const mode of ["in-process", "websocket"] as const) {
         key: string,
       ) =>
         app.gateway.fetch(
-          new Request("http://retained.test/api/actions/retained/write", {
+          new Request("http://retained.test/api/actions/write", {
             method: "POST",
             headers: {
               "content-type": "application/json",

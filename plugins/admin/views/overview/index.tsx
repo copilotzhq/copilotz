@@ -20,6 +20,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "admin",
   renderer: "react",
   modes: ["full", "panel"],
+  url: true,
   render(_item, ctx) {
     const threads = ctx.collections.thread.list({ limit: 100 });
     const people = ctx.collections.participant.list({ limit: 100 });

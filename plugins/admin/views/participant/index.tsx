@@ -14,6 +14,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "participant",
   renderer: "react",
   modes: ["full", "panel", "dialog"],
+  url: true,
   render({ id }, ctx) {
     const state = ctx.collections.participant.get(id);
     const participant = state.value;

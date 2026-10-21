@@ -94,3 +94,8 @@ export type {
   SubscriptionFrame,
   SubscriptionOptions,
 } from "../subscriptions/types.ts";
+
+export {
+  type CollectionConflictError,
+  isCollectionConflictError,
+} from "./errors.ts";

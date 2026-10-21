@@ -714,7 +714,7 @@ Deno.test("host and HTTP calls keep distinct outcomes when keys and correlations
     resources: {
       server: {
         default: defineServerFacade({
-          expose: { actions: { include: ["host.echo"] } },
+          expose: { actions: { include: ["echo"] } },
           evaluate() {
             authorized++;
             return {};
@@ -725,7 +725,7 @@ Deno.test("host and HTTP calls keep distinct outcomes when keys and correlations
   });
   try {
     const response = await app.fetch(
-      new Request("https://example.test/api/actions/host/echo", {
+      new Request("https://example.test/api/actions/echo", {
         method: "POST",
         headers: {
           "content-type": "application/json",

@@ -1,5 +1,6 @@
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ import {
 import { createAdminWebPlugin } from "@copilotz/copilotz/admin/web";
 import { ObservedView, reactRenderer } from "../index.ts";
 
-test("admin query and agent detail resolve configured Action IDs through aliases", async () => {
+test("admin query and agent detail resolve configured Action aliases", async () => {
   const calls: string[] = [];
   const sections = [
     "overview",
@@ -23,12 +24,12 @@ test("admin query and agent detail resolve configured Action IDs through aliases
     "participants",
     "usage",
   ] as const;
-  const actionIds = Object.fromEntries(
-    sections.map((section) => [section, `app.audit.${section}`]),
+  const actionAliases = Object.fromEntries(
+    sections.map((section) => [section, `audit${section}`]),
   );
   const runtime = await createBrowserRuntime({
     renderer: reactRenderer,
-    plugins: [createAdminWebPlugin({ actionIds })],
+    plugins: [createAdminWebPlugin({ actionAliases })],
     live: new MemorySubscriptions(),
     actions: {
       invoke(id) {
@@ -56,7 +57,7 @@ test("admin query and agent detail resolve configured Action IDs through aliases
       );
       await new Promise((resolve) => setTimeout(resolve, 0));
       renderToStaticMarkup(<ObservedView output={output} />);
-      assert.ok(calls.includes(actionIds[section]));
+      assert.ok(calls.includes(actionAliases[section]));
       output.dispose();
     }
     const output = runtime.observe(() =>
@@ -67,7 +68,7 @@ test("admin query and agent detail resolve configured Action IDs through aliases
     for (const text of ["Configured agent", "Assistant", "search"]) {
       assert.ok(html.includes(text), html);
     }
-    assert.ok(calls.every((id) => id.startsWith("app.audit.")));
+    assert.ok(calls.every((id) => id.startsWith("audit")));
     output.dispose();
   } finally {
     runtime.dispose();

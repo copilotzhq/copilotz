@@ -1,3 +1,4 @@
+import { createCollectionConflictError } from "../collections/errors.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import {
@@ -26,7 +27,7 @@ import {
 } from "./body-store-schema.ts";
 import { BODY_APPEND_MAX_BYTES } from "./body-store-operations.ts";
 import { afterSqlCommit } from "../events/session.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
   DurableEvent,
@@ -463,7 +464,7 @@ function preparedBodyCacheKey(namespace: string, assetId: string): string {
 export function createDatabaseAssetRepository(
   options: CreateDatabaseAssetRepositoryOptions,
 ): DatabaseAssetRepository {
-  const createId = options.createId ?? ulid;
+  const createId = options.createId ?? monotonicUlid;
   const now = options.now ?? (() => new Date());
   const digest = options.digest ?? digestContent;
   const configuredStorage = options.storage ?? createBodyStorageRuntime();
@@ -1250,7 +1251,7 @@ export function createDatabaseAssetRepository(
          id, namespace, type, name, data, source_type, source_id,
          created_at, updated_at
        ) VALUES ($1, $2, 'asset', $3, $4::jsonb, $5, $6, $7, $7)
-       RETURNING *`,
+       ON CONFLICT (namespace,id) DO NOTHING RETURNING *`,
       [
         asset.id,
         namespace,
@@ -1261,6 +1262,7 @@ export function createDatabaseAssetRepository(
         asset.createdAt,
       ],
     );
+    if (!result.rows.length) throw createCollectionConflictError();
     return mapAsset(result.rows[0]);
   };
 
@@ -1474,7 +1476,7 @@ export function createDatabaseAssetRepository(
             OR EXISTS(SELECT 1 FROM ${physical.bodies} WHERE body_id=wanted.physical_key)))`
             : ""
         }
-          OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND taken.type='asset' AND (taken.id=wanted.id OR (wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
+          OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND (taken.id=wanted.id OR (taken.type='asset' AND wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
       ],
       gate: "NOT (SELECT refused FROM adoption_refused)",
       effects: (source) => [

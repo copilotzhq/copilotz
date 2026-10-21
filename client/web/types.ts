@@ -15,10 +15,12 @@ export type ReadFailure = Readonly<{
   status?: number;
   retryable: boolean;
 }>;
+/** `refresh()` from a user gesture also starts a `held` query read. */
 export type QueryReadState = ReadState & { refresh(): void };
 export type ReadState<T = unknown> = Readonly<{
   value: T;
-  status: "loading" | "ready" | "missing" | "stale" | "denied";
+  /** `held`: a query read from URL state that waits for a user gesture. */
+  status: "loading" | "ready" | "missing" | "stale" | "denied" | "held";
   pending: boolean;
   error?: ReadFailure;
 }>;
@@ -107,9 +109,9 @@ export interface BrowserPlugin {
   adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 export interface ActionTransport {
-  /** Resolve only at terminal success, with the last owner command sequence. */
+  /** Invoke a composition alias; resolve at terminal with the last owner sequence. */
   invoke(
-    id: string,
+    alias: string,
     input: unknown,
     options: {
       idempotencyKey: string;

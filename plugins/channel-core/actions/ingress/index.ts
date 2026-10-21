@@ -511,7 +511,10 @@ function retryableGraphConflict(error: unknown): boolean {
     }
     const value = candidate as Record<string, unknown>;
     const code = typeof value.code === "string" ? value.code : "";
-    if (code === "23505" || code === "40001" || code === "40P01") {
+    if (
+      code === "collection_conflict" || code === "23505" || code === "40001" ||
+      code === "40P01"
+    ) {
       return true;
     }
     const message = value instanceof Error

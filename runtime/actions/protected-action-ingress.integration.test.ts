@@ -115,20 +115,20 @@ Deno.test("owner Action admission inserts trusted fields, retains first capture 
       active: true,
       credential: "first-secret",
     });
-    const receipt = await client.actions.submit(action.id, { label: "one" }, {
+    const receipt = await client.actions.submit("use", { label: "one" }, {
       idempotencyKey: "one",
     });
     assertEquals((await client.operations.result(receipt.operationId)).value, {
       ok: true,
     });
     assertEquals(uses, 1);
-    const duplicate = await client.actions.submit(action.id, { label: "one" }, {
+    const duplicate = await client.actions.submit("use", { label: "one" }, {
       idempotencyKey: "one",
     });
     assertEquals(duplicate.operationId, receipt.operationId);
     assertEquals(uses, 1);
     await assertRejects(() =>
-      client.actions.submit(action.id, {
+      client.actions.submit("use", {
         label: "forged",
         credential: "client-secret",
       }, { idempotencyKey: "forged" })
@@ -136,7 +136,7 @@ Deno.test("owner Action admission inserts trusted fields, retains first capture 
     await members.update({ id: "member", set: { active: false } });
     await assertRejects(() => client.operations.result(receipt.operationId));
     await assertRejects(() =>
-      client.actions.submit(action.id, { label: "one" }, {
+      client.actions.submit("use", { label: "one" }, {
         idempotencyKey: "one",
       })
     );

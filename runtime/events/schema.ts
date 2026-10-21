@@ -1,3 +1,4 @@
+import { isStorageIdentityColumn } from "./storage-identity.ts";
 import {
   AUTHORIZATION_SCHEMA_COLUMNS,
   authorizationSchemaStatements,
@@ -210,8 +211,9 @@ export async function validateCopilotzSchema(
   const result = await executor.query<{
     table_name: string;
     column_name: string;
+    collation_name: string | null;
   }>(
-    `SELECT table_name, column_name
+    `SELECT table_name, column_name, collation_name
        FROM information_schema.columns
       WHERE table_schema = $1
         AND table_name IN (
@@ -275,6 +277,20 @@ export async function validateCopilotzSchema(
     });
     throw error;
   }
+  if (
+    result.rows.some((row) =>
+      isStorageIdentityColumn(row.column_name) && row.collation_name !== "C"
+    )
+  ) throw incompatibleSchema(schema);
+  const tables = createCoreTableNames(schema);
+  const keys = await executor.query<{ valid: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=$1::regclass AND contype='p' AND pg_get_constraintdef(oid)='PRIMARY KEY (namespace, id)')
+     AND 2=(SELECT count(*) FROM pg_constraint k WHERE k.conrelid=$2::regclass AND k.confrelid=$1::regclass AND k.contype='f' AND k.confdeltype='c'
+       AND ARRAY(SELECT a.attname::text FROM unnest(k.confkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.confrelid AND a.attnum=x.num ORDER BY x.ord)=ARRAY['namespace','id']
+       AND ARRAY(SELECT a.attname::text FROM unnest(k.conkey) WITH ORDINALITY x(num,ord) JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=x.num ORDER BY x.ord) IN (ARRAY['namespace','source_node_id'],ARRAY['namespace','target_node_id'])) AS valid`,
+    [tables.nodes, tables.edges],
+  );
+  if (!keys.rows[0]?.valid) throw incompatibleSchema(schema);
   return ({ schema, version: EVENT_SCHEMA_VERSION } as const);
 }
 
@@ -365,18 +381,18 @@ export function createOwnerSchemaStatements(
     ...createEffectSchemaStatements(schemaName),
     ...contentCatalogStatements(validateEventSchemaName(schemaName)),
     `CREATE TABLE IF NOT EXISTS ${tables.owner_epochs} (
-      owner TEXT PRIMARY KEY,
+      owner TEXT COLLATE "C" PRIMARY KEY,
       epoch BIGINT NOT NULL CHECK (epoch >= 0),
-      holder TEXT NOT NULL,
+      holder TEXT COLLATE "C" NOT NULL,
       last_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_seq >= 0)
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "owner_epochs_singleton_idx"
       ON ${tables.owner_epochs} ((TRUE))`,
     `CREATE TABLE IF NOT EXISTS ${tables.owner_receipts} (
-      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      owner TEXT COLLATE "C" NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       domain TEXT NOT NULL CHECK (domain IN ('logical', 'incarnation', 'occurrence')),
-      key TEXT NOT NULL,
-      principal TEXT NOT NULL,
+      key TEXT COLLATE "C" NOT NULL,
+      principal TEXT COLLATE "C" NOT NULL,
       readers TEXT[] NOT NULL DEFAULT '{}',
       kind TEXT NOT NULL,
       intent JSONB NOT NULL,
@@ -384,16 +400,16 @@ export function createOwnerSchemaStatements(
       PRIMARY KEY (owner, domain, key)
     )`,
     `CREATE TABLE IF NOT EXISTS ${tables.owner_alarms} (
-      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      owner TEXT COLLATE "C" NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       name TEXT NOT NULL,
       due_at TIMESTAMPTZ NOT NULL,
       PRIMARY KEY (owner, name)
     )`,
     `CREATE TABLE IF NOT EXISTS ${tables.owner_deadlines} (
-      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      owner TEXT COLLATE "C" NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       source TEXT NOT NULL,
-      key TEXT NOT NULL,
-      namespace TEXT,
+      key TEXT COLLATE "C" NOT NULL,
+      namespace TEXT COLLATE "C",
       due_at TIMESTAMPTZ NOT NULL,
       payload JSONB NOT NULL DEFAULT 'null',
       revision BIGSERIAL NOT NULL,
@@ -406,11 +422,11 @@ export function createOwnerSchemaStatements(
     `DELETE FROM ${tables.owner_alarms} WHERE name <> 'wake'`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "owner_alarms_owner_idx" ON ${tables.owner_alarms} (owner)`,
     `CREATE TABLE IF NOT EXISTS ${tables.owner_body_retirements} (
-      owner TEXT NOT NULL REFERENCES ${tables.owner_epochs}(owner),
+      owner TEXT COLLATE "C" NOT NULL REFERENCES ${tables.owner_epochs}(owner),
       backend_kind TEXT NOT NULL,
-      backend_id TEXT NOT NULL,
-      body_id TEXT NOT NULL,
-      token TEXT NOT NULL,
+      backend_id TEXT COLLATE "C" NOT NULL,
+      body_id TEXT COLLATE "C" NOT NULL,
+      token TEXT COLLATE "C" NOT NULL,
       completed BOOLEAN NOT NULL DEFAULT FALSE,
       PRIMARY KEY (owner, backend_kind, backend_id, body_id)
     )`,
@@ -426,16 +442,16 @@ export function createActionObligationStatements(
   const tables = createCoreTableNames(schemaName);
   return [
     `CREATE TABLE IF NOT EXISTS ${tables.open_actions} (
-      namespace TEXT NOT NULL,
-      action_run_id TEXT NOT NULL,
-      action_id TEXT NOT NULL,
-      scope_id TEXT NOT NULL,
-      invoked_event_id TEXT NOT NULL REFERENCES ${tables.events}(id),
+      namespace TEXT COLLATE "C" NOT NULL,
+      action_run_id TEXT COLLATE "C" NOT NULL,
+      action_id TEXT COLLATE "C" NOT NULL,
+      scope_id TEXT COLLATE "C" NOT NULL,
+      invoked_event_id TEXT COLLATE "C" NOT NULL REFERENCES ${tables.events}(id),
       state TEXT NOT NULL CHECK (state IN ('invoked', 'awaiting')),
-      owner_delivery_id TEXT,
-      action_scope_id TEXT,
-      await_event_id TEXT REFERENCES ${tables.events}(id),
-      child_operation_id TEXT,
+      owner_delivery_id TEXT COLLATE "C",
+      action_scope_id TEXT COLLATE "C",
+      await_event_id TEXT COLLATE "C" REFERENCES ${tables.events}(id),
+      child_operation_id TEXT COLLATE "C",
       PRIMARY KEY (namespace, action_run_id)
     )`,
     `CREATE INDEX IF NOT EXISTS "event_deliveries_action_scope_idx"
@@ -464,16 +480,17 @@ export function createCoreSchemaStatements(
   return [
     `CREATE SCHEMA IF NOT EXISTS ${schema}`,
     `CREATE TABLE IF NOT EXISTS ${tables.nodes} (
-      id TEXT PRIMARY KEY,
-      namespace TEXT NOT NULL,
+      id TEXT COLLATE "C" NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL,
       type TEXT NOT NULL,
       name TEXT NOT NULL,
       content TEXT,
       data JSONB,
       source_type TEXT,
-      source_id TEXT,
+      source_id TEXT COLLATE "C",
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (namespace, id)
     )`,
     `CREATE INDEX IF NOT EXISTS "nodes_namespace_type_created_idx"
       ON ${tables.nodes} (namespace, type, created_at, id)`,
@@ -491,14 +508,16 @@ export function createCoreSchemaStatements(
     `CREATE INDEX IF NOT EXISTS "nodes_data_gin_idx"
       ON ${tables.nodes} USING GIN (data)`,
     `CREATE TABLE IF NOT EXISTS ${tables.edges} (
-      id TEXT PRIMARY KEY,
-      namespace TEXT NOT NULL,
-      source_node_id TEXT NOT NULL REFERENCES ${tables.nodes}(id) ON DELETE CASCADE,
-      target_node_id TEXT NOT NULL REFERENCES ${tables.nodes}(id) ON DELETE CASCADE,
+      id TEXT COLLATE "C" PRIMARY KEY,
+      namespace TEXT COLLATE "C" NOT NULL,
+      source_node_id TEXT COLLATE "C" NOT NULL,
+      target_node_id TEXT COLLATE "C" NOT NULL,
       type TEXT NOT NULL,
       data JSONB,
       weight DOUBLE PRECISION,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT edges_source_node_id_fkey FOREIGN KEY (namespace, source_node_id) REFERENCES ${tables.nodes}(namespace, id) ON DELETE CASCADE,
+      CONSTRAINT edges_target_node_id_fkey FOREIGN KEY (namespace, target_node_id) REFERENCES ${tables.nodes}(namespace, id) ON DELETE CASCADE
     )`,
     `CREATE INDEX IF NOT EXISTS "edges_source_type_idx"
       ON ${tables.edges} (namespace, source_node_id, type)`,
@@ -510,19 +529,19 @@ export function createCoreSchemaStatements(
     `CREATE TABLE IF NOT EXISTS ${tables.events} (
       position BIGSERIAL PRIMARY KEY,
       seq BIGINT NOT NULL UNIQUE CHECK (seq > 0),
-      id TEXT NOT NULL UNIQUE,
+      id TEXT COLLATE "C" NOT NULL UNIQUE,
       schema_version INTEGER NOT NULL,
       type TEXT NOT NULL,
-      namespace TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL,
       subject_type TEXT,
-      subject_id TEXT,
+      subject_id TEXT COLLATE "C",
       payload JSONB NOT NULL,
       delta JSONB,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       owner_ingress JSONB,
-      causation_id TEXT,
-      correlation_id TEXT NOT NULL,
-      deduplication_id TEXT,
+      causation_id TEXT COLLATE "C",
+      correlation_id TEXT COLLATE "C" NOT NULL,
+      deduplication_id TEXT COLLATE "C",
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CHECK ((subject_type IS NULL) = (subject_id IS NULL))
     )`,
@@ -536,8 +555,8 @@ export function createCoreSchemaStatements(
     `CREATE INDEX IF NOT EXISTS "events_causation_idx"
       ON ${tables.events} (namespace, causation_id, position)`,
     `CREATE TABLE IF NOT EXISTS ${tables.event_bodies} (
-      namespace TEXT NOT NULL,
-      event_body_id TEXT NOT NULL,
+      namespace TEXT COLLATE "C" NOT NULL,
+      event_body_id TEXT COLLATE "C" NOT NULL,
       schema_version INTEGER NOT NULL,
       body JSONB NOT NULL,
       digest TEXT NOT NULL,
@@ -549,11 +568,11 @@ export function createCoreSchemaStatements(
       version INTEGER NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS ${tables.event_deliveries} (
-      id TEXT PRIMARY KEY,
-      event_id TEXT NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,
-      consumer_id TEXT NOT NULL,
-      settlement_scope_id TEXT NOT NULL,
-      action_scope_id TEXT,
+      id TEXT COLLATE "C" PRIMARY KEY,
+      event_id TEXT COLLATE "C" NOT NULL REFERENCES ${tables.events}(id) ON DELETE CASCADE,
+      consumer_id TEXT COLLATE "C" NOT NULL,
+      settlement_scope_id TEXT COLLATE "C" NOT NULL,
+      action_scope_id TEXT COLLATE "C",
       status TEXT NOT NULL CHECK (status IN (
         'pending', 'leased', 'retry_wait', 'succeeded', 'cancelled', 'dead_letter'
       )),
@@ -561,7 +580,7 @@ export function createCoreSchemaStatements(
       max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
       priority INTEGER NOT NULL DEFAULT 0,
       available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      lease_owner TEXT,
+      lease_owner TEXT COLLATE "C",
       lease_expires_at TIMESTAMPTZ,
       last_error JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -570,7 +589,7 @@ export function createCoreSchemaStatements(
       UNIQUE (event_id, consumer_id)
     )`,
     `ALTER TABLE ${tables.event_deliveries}
-      ADD COLUMN IF NOT EXISTS settlement_scope_id TEXT`,
+      ADD COLUMN IF NOT EXISTS settlement_scope_id TEXT COLLATE "C"`,
     `WITH RECURSIVE ancestry AS (
        SELECT delivery.id AS delivery_id,
               event.namespace,
@@ -643,7 +662,7 @@ export function createEffectSchemaStatements(
 ): readonly string[] {
   const tables = createCoreTableNames(schemaName);
   return [`CREATE TABLE IF NOT EXISTS ${tables.action_effects} (
-    namespace TEXT NOT NULL, action_run_id TEXT NOT NULL, step TEXT NOT NULL,
+    namespace TEXT COLLATE "C" NOT NULL, action_run_id TEXT COLLATE "C" NOT NULL, step TEXT COLLATE "C" NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('begun','confirmed','not_started')),
     outcome JSONB, evidence JSONB,
     PRIMARY KEY (namespace, action_run_id, step),
@@ -678,7 +697,7 @@ export function createOwnerDataKeyStatements(
       createCoreTableNames(schemaName).owner_data_keys
     } (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton),
-    key_id TEXT NOT NULL UNIQUE, wrapped_key TEXT NOT NULL, envelope JSONB NOT NULL
+    key_id TEXT COLLATE "C" NOT NULL UNIQUE, wrapped_key TEXT NOT NULL, envelope JSONB NOT NULL
   )`,
   ];
 }

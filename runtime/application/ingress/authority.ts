@@ -118,10 +118,14 @@ export async function assertOwnerIngressReplay(
 
 export const authorityIngressProof = (
   authority: import("../../authorization/authority.ts").AuthenticatedAuthority,
+  actor: Extract<
+    ProtectedActionIngress,
+    { kind: "authenticated-server" }
+  >["actor"] = { id: authority.principal.id },
 ): OwnerIngressProof =>
   proof({
     kind: "authenticated-server",
-    actor: { id: authority.principal.id },
+    actor,
     authority,
   });
 

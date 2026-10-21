@@ -20,6 +20,7 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
   shows: "usage",
   renderer: "react",
   modes: ["full", "panel"],
+  url: true,
   render(_item, ctx) {
     const usage = ctx.collections.usage.list({ limit: 100 });
     const sum = (key: string) =>

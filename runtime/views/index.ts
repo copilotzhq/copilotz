@@ -12,6 +12,7 @@ export type {
   ViewRead,
   ViewReference,
   ViewShows,
+  ViewUrl,
 } from "./definition.ts";
 export { createViewResolver } from "./resolution.ts";
 export type { ViewPreference } from "./resolution.ts";

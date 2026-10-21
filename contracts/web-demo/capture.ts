@@ -353,12 +353,14 @@ const scenarios: Scenario[] = [
   {
     name: "14-send-and-stream",
     path: "/?chat=t-ideas&stream=0",
-    steps: async () => {
+    steps: async (size) => {
       await click('textarea[aria-label="Message"]');
       await send("Input.insertText", {
         text: "Draft a two-line welcome email for new teams.",
       }, session);
-      await key("Enter");
+      // On touch, Enter is a new line; the Send button sends.
+      if (size.mobile) await click('[aria-label="Send message"]');
+      else await key("Enter");
       await wait(1800);
     },
   },

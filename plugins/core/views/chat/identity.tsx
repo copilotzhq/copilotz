@@ -42,11 +42,13 @@ export function senderColor(
 }
 
 export function SenderAvatar(
-  { sender, size = "md", imageOrigins, className }: {
+  { sender, size = "md", imageOrigins, className, letters = 2 }: {
     sender: ChatSender;
     size?: "sm" | "md";
     imageOrigins?: readonly string[];
     className?: string;
+    /** One letter suits overlapping stacks, where a second would be cut. */
+    letters?: 1 | 2;
   },
 ): React.ReactElement {
   const source = avatarSource(sender.avatarUrl, imageOrigins);
@@ -70,9 +72,7 @@ export function SenderAvatar(
           ? <Wrench className="size-3.5" />
           : sender.type === "system"
           ? <Bot className="size-3.5" />
-          : agentLike
-          ? initials(sender.name)
-          : initials(sender.name).slice(0, 1)}
+          : initials(sender.name).slice(0, letters)}
       </AvatarFallback>
     </Avatar>
   );

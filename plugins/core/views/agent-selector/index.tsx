@@ -77,6 +77,7 @@ function Selector(
                     key={agent.id}
                     sender={agent}
                     size="sm"
+                    letters={1}
                     className="ring-background ring-2"
                   />
                 ))}

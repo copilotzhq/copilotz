@@ -24,7 +24,10 @@ recent activity reorder live. Message creation (`createThreadMessage`, channel
 ingress and scheduled delivery) calls it in the same transaction, with an
 operation key scoped to the message. It emits `thread.message-recorded`, not
 `thread.updated`, so processors of thread changes do not run for every message.
-Internal messages do not record activity.
+Internal messages do not record activity. Because every visible message writes
+the thread, an owner policy that binds `thread` must grant
+`commands.recordMessage` (like `ensureMembership`) to Core's invocations, or the
+send is refused.
 
 ## How it works
 

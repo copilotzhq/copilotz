@@ -11,6 +11,7 @@ import {
   Input,
   Markdown,
   NameDescriptionDialog,
+  normalizeMathDelimiters,
   preloadMarkdown,
 } from "@copilotz/copilotz/web/kit";
 import { AssistantActivity, toolLabel } from "./activity.tsx";
@@ -280,4 +281,25 @@ test("math renders with KaTeX and a MathML copy; it can never carry a link", asy
   assert.ok(!html.includes('evil.example"'), "no link from math");
   assert.ok(!/<a\s/.test(html));
   assert.ok(html.includes("hljs-keyword"), "code is highlighted once loaded");
+});
+
+test("math written as \\( \\) and \\[ \\] renders like $ and $$; code keeps its text", async () => {
+  await preloadMarkdown();
+  const html = renderToStaticMarkup(
+    <Markdown>
+      {"Inline \\(a^2 + b^2\\) and display:\n\\[\nx = \\frac{1}{2}\n\\]\n\nCode `\\(kept\\)` here.\n\n```\n\\[ also kept \\]\n```"}
+    </Markdown>,
+  );
+  assert.equal(html.match(/class="katex"/g)?.length, 2, html);
+  assert.ok(html.includes('class="katex-display"'), "display math is a block");
+  assert.ok(
+    html.includes("<code>\\(kept\\)</code>"),
+    "inline code is untouched",
+  );
+  assert.ok(html.includes("\\[ also kept \\]"), "fenced code is untouched");
+  assert.equal(
+    normalizeMathDelimiters("- item\n  \\[\n  z\n  \\]"),
+    "- item\n\n  $$\n  z\n  $$",
+    "display math stays inside its list item",
+  );
 });

@@ -17,17 +17,24 @@ import {
 } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
-import { readSpace, readSpaces, readThread } from "@copilotz/copilotz/core/web";
+import {
+  readSpace,
+  readSpaces,
+  readThread,
+  readThreads,
+} from "@copilotz/copilotz/core/web";
 import {
   Button,
   cn,
   ConfirmDialog,
+  ConnectionStatus,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Icon,
+  isReconnecting,
   Kbd,
   NameDescriptionDialog,
   showSafely,
@@ -267,10 +274,15 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
         );
       }
       const inSpace = Boolean(nav.spaceId);
+      const starting = !thread && nav.threadId
+        ? ctx.collections.pendingThread?.get(nav.threadId).value
+        : undefined;
       const title = inSpace
         ? String(openSpace?.name ?? "Space")
         : thread
         ? String(thread.name ?? "") || "New conversation"
+        : starting
+        ? String(starting.name ?? "") || "New conversation"
         : nav.threadId
         ? "Conversation"
         : "New conversation";
@@ -343,6 +355,17 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             )}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
+            {
+              /* One quiet indicator for the whole shell, only when the
+                connection stays away for a moment. */
+            }
+            <ConnectionStatus
+              reconnecting={isReconnecting(readThreads(ctx)) ||
+                (Boolean(nav.threadId) &&
+                  ctx.collections.threadRun?.get(nav.threadId!).value
+                      ?.status === "reconnecting")}
+              className="mr-1"
+            />
             {inSpace && nav.spaceId &&
               items.filter((item) => item.requires === "space").map((item) => (
                 <Tooltip key={item.id}>

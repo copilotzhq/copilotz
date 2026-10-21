@@ -150,6 +150,7 @@ export function ReadStatus(
     emptyHint,
     emptyAction,
     compact = false,
+    transient = "notice",
   }: {
     state: AnyRead;
     noun?: string;
@@ -158,6 +159,12 @@ export function ReadStatus(
     emptyHint?: React.ReactNode;
     emptyAction?: React.ReactNode;
     compact?: boolean;
+    /**
+     * A reconnecting read (stale, nothing refused): `notice` shows one quiet
+     * line after a moment; `quiet` shows nothing, for Views covered by the
+     * shell's own indicator.
+     */
+    transient?: "notice" | "quiet";
   },
 ): React.ReactElement | null {
   const retry = state.refresh
@@ -255,11 +262,9 @@ export function ReadStatus(
           </Notice>
         );
       }
-      return (
-        <Notice tone="warning" title="Reconnecting…" action={retry}>
-          Showing the last saved {noun}.
-        </Notice>
-      );
+      // A brief reconnect keeps the data on screen and says nothing; a long
+      // one shows one quiet line (the shell shows its own indicator).
+      return transient === "quiet" ? null : <Reconnecting compact={compact} />;
     case "denied":
       return (
         <Notice tone="error" title={`No access to these ${noun}`}>
@@ -273,6 +278,69 @@ export function ReadStatus(
         </Notice>
       );
   }
+}
+
+/** True once `active` has stayed true for `ms`; false as soon as it ends. */
+export function useSustained(active: boolean, ms = 2500): boolean {
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => {
+    if (!active) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+  return active && shown;
+}
+
+/** Whether a read is only reconnecting: stale, with nothing refused. */
+export function isReconnecting(state: ReadState): boolean {
+  return state.status === "stale" &&
+    (!state.error || state.error.kind === "unavailable") &&
+    !refusalReason(state.error);
+}
+
+function Reconnecting(
+  { compact }: { compact: boolean },
+): React.ReactElement | null {
+  const shown = useSustained(true);
+  if (!shown) return null;
+  return (
+    <p
+      role="status"
+      className={cn(
+        "text-muted-foreground flex items-center gap-2 text-xs",
+        compact ? "py-1" : "justify-center py-2",
+      )}
+    >
+      <Spinner className="size-3" /> Reconnecting…
+    </p>
+  );
+}
+
+/**
+ * One unobtrusive connection indicator for a whole screen: it appears only
+ * after the connection has been away for a moment, so brief reconnects never
+ * flash.
+ */
+export function ConnectionStatus(
+  { reconnecting, className }: { reconnecting: boolean; className?: string },
+): React.ReactElement | null {
+  const shown = useSustained(reconnecting);
+  if (!shown) return null;
+  return (
+    <span
+      role="status"
+      data-slot="connection-status"
+      className={cn(
+        "text-muted-foreground bg-muted inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs",
+        className,
+      )}
+    >
+      <Spinner className="size-3" /> Reconnecting…
+    </span>
+  );
 }
 
 /** A labelled figure. */

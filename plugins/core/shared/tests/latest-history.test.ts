@@ -354,16 +354,26 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let armed = false;
+  // Hold exactly the seeded context body's read. Every body read checks the
+  // store's head first, including one whose bytes come from the repository's
+  // prepared-body cache, so gating the first byte read of any body would
+  // instead pause whichever read happened to miss that cache.
+  let publishing = false;
+  const contextBodies = new Set<string>();
   const backingStore = createMemoryBodyStore();
   const gatedStore: BodyStore = {
     ...backingStore,
-    async readRange(input) {
-      if (armed) {
+    async put(input) {
+      if (publishing) contextBodies.add(input.bodyId);
+      return await backingStore.put(input);
+    },
+    async head(input) {
+      if (armed && contextBodies.has(input.bodyId)) {
         armed = false;
         entered.resolve();
         await release.promise;
       }
-      return await backingStore.readRange(input);
+      return await backingStore.head(input);
     },
   };
   let promptRef: ContentRef | undefined;
@@ -387,10 +397,13 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
   });
   let finishSend: (() => Promise<void>) | undefined;
   try {
+    publishing = true;
     const asset = await test.domain.content.publish({
       mediaType: "text/plain",
       body: new TextEncoder().encode("context body held during preparation"),
     }, { operationKey: "seed-context" });
+    publishing = false;
+    assertEquals(contextBodies.size, 1, "the context body was stored");
     promptRef = {
       assetId: asset.id,
       kind: "text",

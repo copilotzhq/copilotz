@@ -7,7 +7,11 @@ import { useEffect } from "react";
 import { MessageSquare, Sparkles } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
-import { ReadStatus, Skeleton } from "@copilotz/copilotz/web/kit";
+import {
+  isReconnecting,
+  ReadStatus,
+  Skeleton,
+} from "@copilotz/copilotz/web/kit";
 import {
   type ChatMessage,
   type ChatSender,
@@ -145,6 +149,14 @@ const view: ViewDefinition<
   render({ id }, ctx) {
     const config = chatConfig(ctx);
     const thread = readThread(ctx, id);
+    // A conversation started here shows its first message while Core
+    // creates it; it is never "not found" in the meantime.
+    const starting = thread.value
+      ? undefined
+      : ctx.collections.pendingThread?.get(id).value;
+    const title = String(
+      thread.value?.name ?? starting?.name ?? "Conversation",
+    );
     const window = ctx.collections.threadWindow?.get(id).value;
     const limit = Number(window?.limit ?? THREAD_MESSAGE_LIMIT);
     const current = readThreadMessages(ctx, id, limit);
@@ -266,13 +278,14 @@ const view: ViewDefinition<
     }));
     items.push({ key: "live", node: live, bare: true });
     const loading = messages.status === "loading" && !rows.length;
+    // A reconnect keeps the messages on screen; the shell's indicator says so.
     const unavailable = messages.status !== "ready" &&
-      messages.status !== "loading";
+      messages.status !== "loading" && !isReconnecting(messages);
     const empty = !loading && !all.length && messages.status === "ready";
     const embedded = ctx.hints.embedded === true;
     return (
       <section
-        aria-label={String(thread.value?.name ?? "Conversation")}
+        aria-label={title}
         data-density={ctx.hints.mode}
         className="flex h-full min-h-0 flex-col"
       >
@@ -280,11 +293,12 @@ const view: ViewDefinition<
         {!embedded && (
           <header className="flex h-12 shrink-0 items-center border-b px-4">
             <h1 className="truncate text-sm font-semibold">
-              {String(thread.value?.name ?? "Conversation")}
+              {title}
             </h1>
           </header>
         )}
-        {thread.status === "denied" || thread.status === "missing"
+        {!starting &&
+            (thread.status === "denied" || thread.status === "missing")
           ? (
             <div className="mx-auto w-full max-w-3xl p-6">
               <ReadStatus state={thread} noun="conversation" />

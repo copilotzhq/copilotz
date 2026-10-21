@@ -308,8 +308,29 @@ KiB say so instead. A renderer receives the parsed value as `data`, with
 `chatSend` shows the message at once from the `outbox` (a failed send keeps
 Retry and Discard), uploads attachments through `adapters.core.feed.upload`
 (inline up to 512 KiB without it), then calls `createThreadMessage` with a
-`monotonicUlid` id. It omits `recipientIds` unless the text @mentions agents, so
-Core addresses the thread's agents.
+`monotonicUlid` id. It retries with the same id; a create the server already
+applied (`collection_conflict`) counts as done, so a retry never duplicates a
+message.
+
+Typing `@` in the composer opens a mention picker over the thread's agents
+(arrow keys, Enter or Tab to pick, Escape to close), followed by the app's
+`resources.chat.agents` not yet in it, so mentions work even when people can't
+be read. A mention becomes the message's `recipientIds`; an agent mentioned by
+its configured entry joins and is addressed through `membership` by
+`externalId`. Without a mention, the app chooses who answers with
+`resources.chat.defaultRecipients`:
+
+- `"first"` (the default) addresses one agent: the configured agent marked
+  `default: true` when it is in the thread, else the thread's first agent, else
+  the configured default (or first) agent. The composer always sends explicit
+  recipients, so Core's default (every thread agent) does not apply.
+- `"all"` omits `recipientIds`, so Core addresses every agent in the thread.
+
+A new chat shows its first message at once. The browser picks the thread id,
+remembers the pending thread (`pendingThread`, which titles the View until the
+thread arrives) and opens it, then creates the thread and sends. Creating with
+the same id is idempotent, so Retry continues the same thread instead of
+starting another one; a failed send stays in the thread with Retry and Discard.
 
 ### Streaming
 
@@ -333,7 +354,7 @@ components.
 | Slot             | Declare                                                                                                                      | The View receives                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                             |
-| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats)                                    | —                                                             |
+| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats), `.defaultRecipients`              | —                                                             |
 | Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?, params?}`; `null` hides a built-in                        | `{spaceId, threadId}`, mode `full` or `panel`                 |
 | Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                           |
 | Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)              |
@@ -348,14 +369,14 @@ components.
 
 Built-in Space sections are `overview` (order 0), `conversations` (10) and
 `members` (90). A section's `tools` lists tool names; when an agent uses one in
-the open chat, its tab gets a dot instead of switching. A section's `params`
-lists the URL parameters its Views own (such as `board`, `card`); the shell
-removes them from the URL when another section, or none, shows. `icon` is a kit
-icon name (`iconNames`). A menu item runs its `action` alias with the input
-shown, opens its `dialog` View, or opens its `page`; `requires: "thread"` or
-`"space"` limits where it appears. A page is a View kind shown in main; its
-section lives in the URL (`?page=<kind>&section=<id>`), and it switches sections
-with
+the open chat, its tab gets a dot instead of switching; a call that failed or
+was cancelled adds no dot. A section's `params` lists the URL parameters its
+Views own (such as `board`, `card`); the shell removes them from the URL when
+another section, or none, shows. `icon` is a kit icon name (`iconNames`). A menu
+item runs its `action` alias with the input shown, opens its `dialog` View, or
+opens its `page`; `requires: "thread"` or `"space"` limits where it appears. A
+page is a View kind shown in main; its section lives in the URL
+(`?page=<kind>&section=<id>`), and it switches sections with
 `ctx.show({ shows: kind, value: { section } }, { source: "link", region:
 "main" })`.
 The header gives the title priority: the agent selector slot takes the width
@@ -478,8 +499,10 @@ over fixture data, with a demo feed that streams replies and tool output.
 Message text may come from an LLM steered by prompt injection or from another
 thread participant, so Markdown never fetches anything without a click. The kit
 `Markdown` renders GitHub-flavored Markdown, math (KaTeX, with a MathML copy for
-assistive technology) and highlighted code with a copy button. It discards raw
-HTML (`skipHtml`; there is no raw HTML plugin) and applies
+assistive technology) and highlighted code with a copy button. Math may be
+written `$…$` and `$$…$$` or `\(…\)` and `\[…\]`; code spans and blocks keep
+their text, and KaTeX runs without `trust`. It discards raw HTML (`skipHtml`;
+there is no raw HTML plugin) and applies
 `markdownUrlPolicy({ origin, imageOrigins })` from `/web`, which any Markdown
 component can reuse:
 
@@ -531,14 +554,17 @@ shows its error and allows retry.
 Patterns: `Screen` (a title row, actions and content in full or panel density),
 `Frame` (a Screen, or a Dialog header in dialog mode), `ReadStatus` (one
 vocabulary for loading, empty, held, reconnecting, refused, missing and the live
-read limits), `Metric`, `DetailList`, `ResourceTable` (humanized headers,
-relative times, figures aligned right), `ResourceToolbar`, `ResourceList`,
-`ResourceRow`, `ResourceHeader`, `PaneBoundary` and
-`showSafely(ctx, ref,
-hints, label?)`, which contains View resolution and render
-errors. Also `Markdown`, `Icon` and `iconNames`, `identityColor` and `initials`,
-the formatting helpers from `/web` (`formatRelative`, `formatBytes`, …) and
-`dom` helpers typed without the DOM library.
+read limits; `transient="quiet"` leaves reconnecting to a single indicator),
+`ConnectionStatus` (that indicator: it shows only after a reconnect lasts 2.5 s,
+so brief reconnects don't flash), `isReconnecting`, `useSustained`, `Metric`,
+`DetailList`, `ResourceTable` (humanized headers, relative times, figures
+aligned right), `ResourceToolbar`, `ResourceList`, `ResourceRow`,
+`ResourceHeader`, `PaneBoundary` and `showSafely(ctx, ref,
+hints, label?)`,
+which contains View resolution and render errors. Also `Markdown`, `Icon` and
+`iconNames`, `identityColor` and `initials`, the formatting helpers from `/web`
+(`formatRelative`, `formatBytes`, …) and `dom` helpers typed without the DOM
+library.
 
 All plugin TSX has explicit React value imports and file-level classic JSX
 pragmas. Consumers can use their default TSX transform; they need no automatic

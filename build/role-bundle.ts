@@ -496,12 +496,15 @@ export async function buildWorkerRole(
       ...new Set([
         ...(Array.isArray(ownConfig.links)
           ? ownConfig.links.map((link) =>
-            new URL(String(link) + "/", ownConfigUrl).href
+            new URL(String(link).replace(/\/+$/, "") + "/", ownConfigUrl).href
           )
           : []),
         ...(Array.isArray(selected.links)
           ? selected.links.map((link) =>
-            new URL(String(link) + "/", pathToFileURL(config!)).href
+            new URL(
+              String(link).replace(/\/+$/, "") + "/",
+              pathToFileURL(config!),
+            ).href
           )
           : []),
       ]),

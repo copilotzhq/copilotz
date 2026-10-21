@@ -112,6 +112,17 @@ export function captureCollectionPolicy(
       collectionPolicyRefused();
     }
     await policyAuthority.authorizeIntent?.(fixed, read);
+    if (policyAuthority.authorizeDirectoryIntent) {
+      authorizedArgs = constrainCollection(
+        fixed,
+        await policyAuthority.authorizeDirectoryIntent(fixed, read),
+      );
+      if (
+        operation.expectedArgs !== undefined &&
+        !sameValue(authorizedArgs, operation.expectedArgs)
+      ) authorizationRefused();
+      return;
+    }
     if (policyAuthority.trustedHost) return;
     let binding = policyAuthority.authority;
     if (!binding) {

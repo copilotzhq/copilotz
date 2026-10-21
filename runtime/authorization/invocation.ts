@@ -39,6 +39,11 @@ export type CollectionInvocationAuthority =
   & Readonly<{
     invocation: CollectionPolicyInvocation;
     check(): void;
+    /** Owner-created bounded directory delegation; never serialized. */
+    authorizeDirectoryIntent?(
+      intent: CollectionPolicyIntent,
+      read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,
+    ): Promise<import("./contracts.ts").ServerConstraints>;
     authorizeIntent?(
       intent: CollectionPolicyIntent,
       read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,

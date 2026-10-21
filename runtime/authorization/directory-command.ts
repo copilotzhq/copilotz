@@ -1,3 +1,7 @@
+import {
+  type DirectoryCollections,
+  withDirectoryCollections,
+} from "./directory-collections.ts";
 import { stageTransactionEffect } from "../collections/transaction-effects.ts";
 /** Explicit owner-local directory service commands in the source SQL transaction. */
 import type { AuthenticatedAuthority } from "./authority.ts";
@@ -13,7 +17,10 @@ import {
   createSchemaCommandRunner,
 } from "../engine/commands.ts";
 import { withOwnerAuthorizationPhase } from "../engine/command-authorization.ts";
-import { captureCollectionInvocation } from "./invocation.ts";
+import {
+  captureCollectionInvocation,
+  collectionInvocationOwner,
+} from "./invocation.ts";
 import { authorizationRefused, createOwnerEvaluator } from "./evaluator.ts";
 import {
   type IdentityEvidenceReader,
@@ -38,10 +45,16 @@ export type DatabaseDirectoryCommand = Readonly<{
   command: string;
   actions: readonly string[];
   evidence?: readonly string[];
+  /** Destination composition aliases mapped to get/create/custom command names. */
+  collections?: Readonly<Record<string, readonly string[]>>;
   authorize(context: DirectoryCommandContext): boolean | Promise<boolean>;
-  /** Trusted owner code. SQL only: no provider I/O, captured app handles or independent commits. */
+  /** Trusted owner code. Joined SQL/native Collections only; no provider I/O, captured handles or independent commits. */
   execute(
-    context: DirectoryCommandContext & Readonly<{ transaction: SqlExecutor }>,
+    context:
+      & DirectoryCommandContext
+      & Readonly<
+        { transaction: SqlExecutor; collections: DirectoryCollections }
+      >,
   ): Promise<unknown>;
 }>;
 export type DirectoryCommands = Readonly<{
@@ -66,12 +79,23 @@ export function defineDatabaseDirectoryCommand(
     !value.namespace?.trim() || !value.command?.trim() ||
     !value.revision?.trim() ||
     !value.actions?.length || value.actions.some((a) => !a?.trim()) ||
+    Object.entries(value.collections ?? {}).some(([alias, methods]) =>
+      !alias.trim() || !Array.isArray(methods) || !methods.length ||
+      methods.some((method) => !method?.trim())
+    ) ||
     typeof value.authorize !== "function" || typeof value.execute !== "function"
   ) {
     throw new TypeError("Invalid directory command declaration.");
   }
   return Object.freeze({
     ...value,
+    collections: Object.freeze(
+      Object.fromEntries(
+        Object.entries(value.collections ?? {}).map((
+          [alias, methods],
+        ) => [alias, Object.freeze([...methods])]),
+      ),
+    ),
     actions: Object.freeze([...value.actions]),
     evidence: Object.freeze([...(value.evidence ?? [])]),
   });
@@ -125,6 +149,9 @@ export function createDirectoryCommands(
           namespace: definition.namespace,
           command: definition.command,
         },
+        ...(Object.keys(definition.collections ?? {}).length
+          ? { collections: definition.collections }
+          : {}),
         inputDigest: await digest(input),
       };
       const commit = () =>
@@ -136,6 +163,7 @@ export function createDirectoryCommands(
               command.transaction,
               definition.databaseSchema,
             );
+            const invocationOwner = collectionInvocationOwner(binding);
             let complete = false;
             afterCommandAuthorization(command.transaction, () => {
               if (!complete) {
@@ -144,19 +172,24 @@ export function createDirectoryCommands(
                 );
               }
               owner.signal.throwIfAborted();
-              return Promise.resolve();
+              return authorize(true);
             });
             let active = true;
-            const check = () => {
-              binding.check();
+            const checkOwner = () => {
+              invocationOwner.check();
               owner.signal.throwIfAborted();
+            };
+            const check = () => {
+              checkOwner();
               if (!active) {
                 throw new Error(
                   "Directory command capability ended.",
                 );
               }
             };
-            const evidence: IdentityEvidenceReader = {
+            const evidenceReader = (
+              check: () => void,
+            ): IdentityEvidenceReader => ({
               async get(name) {
                 check();
                 if (!definition.evidence?.includes(name)) {
@@ -171,8 +204,10 @@ export function createDirectoryCommands(
                 check();
                 return result;
               },
-            };
-            const context = (): DirectoryCommandContext => ({
+            });
+            const evidence = evidenceReader(check);
+            const policyEvidence = evidenceReader(checkOwner);
+            const context = (final = false): DirectoryCommandContext => ({
               authority: captureHostCommandJson(
                 binding.authority!,
               ) as AuthenticatedAuthority,
@@ -182,11 +217,15 @@ export function createDirectoryCommands(
               namespace: definition.namespace,
               commandTime: command.commandTime,
               signal: binding.signal,
-              evidence,
+              evidence: final ? policyEvidence : evidence,
             });
-            const authorize = async () => {
-              check();
-              await binding.assertCurrent?.(command, binding.invocation);
+            const authorize = async (final = false) => {
+              if (final) checkOwner();
+              else check();
+              await invocationOwner.assertCurrent?.(
+                command,
+                binding.invocation,
+              );
               const decision = await evaluate(binding.authority!, {
                 kind: "directory",
                 resource: alias,
@@ -198,7 +237,7 @@ export function createDirectoryCommands(
                 !Array.isArray(decision.constraints.directoryCommands) ||
                 !decision.constraints.directoryCommands.includes(alias) ||
                 await withOwnerAuthorizationPhase(() =>
-                    definition.authorize(context())
+                    definition.authorize(context(final))
                   ) !== true
               ) authorizationRefused();
             };
@@ -215,8 +254,31 @@ export function createDirectoryCommands(
                 if (
                   stableStringify(previous.intent) !== stableStringify(intent)
                 ) authorizationRefused();
+                if (
+                  Object.keys(definition.collections ?? {}).length &&
+                  !Array.isArray(
+                    (previous.result as { intents?: unknown })?.intents,
+                  )
+                ) authorizationRefused();
+                const result = Object.keys(definition.collections ?? {}).length
+                  ? (await withDirectoryCollections({
+                    owner,
+                    source: command,
+                    binding,
+                    definition,
+                    evidence: policyEvidence,
+                    key,
+                    replay: (previous.result as {
+                      intents: import("./intent.ts").CollectionPolicyIntent[];
+                    }).intents,
+                    execute: () =>
+                      Promise.resolve(
+                        (previous.result as { value: unknown }).value,
+                      ),
+                  })).value
+                  : previous.result;
                 complete = true;
-                return captureHostCommandJson(previous.result);
+                return captureHostCommandJson(result);
               }
               const transaction: SqlExecutor = {
                 query(sql, params) {
@@ -224,11 +286,33 @@ export function createDirectoryCommands(
                   return command.transaction.query(sql, params);
                 },
               };
-              const result = captureHostCommandJson(
-                await withOwnerAuthorizationPhase(() =>
-                  definition.execute({ ...context(), transaction })
-                ),
+              const storedResult = captureHostCommandJson(
+                await (Object.keys(definition.collections ?? {}).length
+                  ? withDirectoryCollections({
+                    owner,
+                    source: command,
+                    binding,
+                    definition,
+                    evidence: policyEvidence,
+                    key,
+                    execute: (collections) =>
+                      definition.execute({
+                        ...context(),
+                        transaction,
+                        collections,
+                      }),
+                  })
+                  : withOwnerAuthorizationPhase(() =>
+                    definition.execute({
+                      ...context(),
+                      transaction,
+                      collections: Object.freeze({}),
+                    })
+                  )),
               );
+              const result = Object.keys(definition.collections ?? {}).length
+                ? (storedResult as { value: unknown }).value
+                : storedResult;
               if (
                 new TextEncoder().encode(stableStringify(result)).length > 16384
               ) authorizationRefused();
@@ -252,7 +336,7 @@ export function createDirectoryCommands(
                   key,
                   binding.authority!.principal.id,
                   JSON.stringify(intent),
-                  JSON.stringify(result),
+                  JSON.stringify(storedResult),
                 ],
               );
               for (

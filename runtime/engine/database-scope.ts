@@ -1,3 +1,4 @@
+import { registerDirectoryCollections } from "../authorization/directory-collections.ts";
 import { bindFlowOperation } from "../authorization/flow.ts";
 import { isOwnerAuthorizationRefusal } from "./authorization-refusal.ts";
 import { createCollectionObserver } from "../subscriptions/owner.ts";
@@ -355,6 +356,14 @@ export function createDatabaseScope(
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);
   }
+  const closeDirectoryCollections = registerDirectoryCollections(
+    options.owner,
+    {
+      runtime: collections,
+      definitions: options.registry.collections,
+      authorization: engine.authorization,
+    },
+  );
   const capabilities: DatabaseScopeCapabilities = {
     assets,
     collections,
@@ -1479,6 +1488,7 @@ export function createDatabaseScope(
     },
     publishActivation,
     closeAlarms() {
+      closeDirectoryCollections();
       closeContentAlarms();
       collectionAlarms.close();
       closeDeliveryAlarms();

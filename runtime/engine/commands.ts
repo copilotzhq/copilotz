@@ -24,6 +24,8 @@ import {
 } from "../events/schema.ts";
 import {
   afterSqlCommit,
+  afterSqlSettlement,
+  bindSqlTransactionAlias,
   runSqlCommandScope,
   runSqlTransaction,
   sqlCommitGate,
@@ -97,6 +99,23 @@ export async function attachedDatabaseOwner(
   }
   owner.signal.throwIfAborted();
   return owner;
+}
+
+type JoinOwner = <T>(
+  source: CommandContext,
+  execute: (command: CommandContext) => Promise<T>,
+) => Promise<T>;
+const ownerJoins = new WeakMap<DatabaseOwner, JoinOwner>();
+/** Private owner-to-owner admission. The destination creates its own real context. */
+export async function joinDatabaseOwnerCommand<T>(
+  source: CommandContext,
+  owner: DatabaseOwner,
+  execute: (command: CommandContext) => Promise<T>,
+): Promise<T> {
+  assertCommandTransaction(source.transaction);
+  const join = ownerJoins.get(owner);
+  if (!join) throw new Error("Destination owner cannot join commands.");
+  return await join(source, execute);
 }
 
 function failure(code: string, message: string, cause?: unknown): Error {
@@ -224,14 +243,17 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   let running = false;
   let acquiring = false;
   let inFlight = 0;
+  let joinedInFlight = 0;
   let stagedPublications = 0;
+  let joinedPublications = 0;
   let publishing = false;
   let publicationCount = 0;
   let idle = Promise.withResolvers<void>();
   let closing: Promise<void> | undefined;
   const publicationErrors: unknown[] = [];
   const isIdle = () =>
-    !acquiring && !running && !publishing && publicationCount === 0;
+    !acquiring && !running && !publishing && publicationCount === 0 &&
+    joinedInFlight === 0;
   function signalIdle() {
     if (isIdle()) {
       idle.resolve();
@@ -486,6 +508,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     caller: CommandCaller,
     request: CommandRequest<Input> & { [capturedInput]?: true },
     handler: CommandDefinition<Input, Output>,
+    adopted?: CommandContext,
   ): Promise<Output> {
     const joined = activeCommand.getStore();
     try {
@@ -524,7 +547,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       async run(tx, joined) {
         const callbacks: Array<() => void | Promise<void>> = [];
         const finalizers: Array<() => Promise<void>> = [];
-        const commandTime = joined?.commandTime ??
+        const commandTime = joined?.commandTime ?? adopted?.commandTime ??
           (options.now?.() ?? new Date())
             .toISOString();
         const context: CommandContext = {
@@ -538,7 +561,8 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
             assertAcquired();
             sqlCommitGate(tx);
             if (
-              publicationCount + stagedPublications >= publicationCapacity
+              publicationCount + stagedPublications + joinedPublications >=
+                publicationCapacity
             ) {
               throw failure(
                 "owner_publication_queue_full",
@@ -546,7 +570,13 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
               );
             }
             callbacks.push(callback);
-            stagedPublications++;
+            if (!adopted) stagedPublications++;
+            else {
+              joinedPublications++;
+              afterSqlSettlement(tx, () => {
+                joinedPublications--;
+              });
+            }
           },
         };
         if (!joined) {
@@ -607,6 +637,12 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
               return existing.result as Output;
             }
           }
+          if (adopted) {
+            afterCommandAuthorization(adopted.transaction, async () => {
+              assertAcquired();
+              await authorizeOwnerCommand(undefined, context, "result");
+            });
+          }
           const produced = await handler.execute(inputView(), context);
           const outputText = receipt
             ? canonical(produced as CommandJson)
@@ -651,6 +687,18 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     };
     // Joined calls use the active command's revocable facade and output gate.
     // They cannot wait on the queue whose current command is awaiting them.
+    if (adopted) {
+      const transaction: SqlExecutor = {
+        query: (sql, params) => adopted.transaction.query(sql, params),
+      };
+      bindSqlTransactionAlias(transaction, adopted.transaction);
+      joinedInFlight++;
+      afterSqlSettlement(transaction, () => {
+        joinedInFlight--;
+        signalIdle();
+      });
+      return item.run(transaction) as Promise<Output>;
+    }
     if (joined) return item.run(joined.transaction, joined) as Promise<Output>;
     try {
       item.bytes = new TextEncoder().encode(JSON.stringify(request)).byteLength;
@@ -668,7 +716,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     return completion.promise;
   }
 
-  return {
+  const result: OwnerCommands<T> = {
     get state() {
       return state;
     },
@@ -750,6 +798,20 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     },
     stop,
   };
+  ownerJoins.set(result, (source, execute) =>
+    submit(
+      "directory.collections",
+      { principal: source.caller.principal, epoch: epoch! },
+      { input: null },
+      {
+        authorize() {
+          assertAcquired();
+        },
+        execute: (_, command) => execute(command),
+      },
+      source,
+    ));
+  return result;
 }
 
 export type DatabaseOwner = OwnerCommands<Record<never, never>>;

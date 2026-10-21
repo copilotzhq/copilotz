@@ -28,7 +28,8 @@ const worker = await createCopilotzWorker({
   }),
   register: () => ({
     credential: { kind: "registration", capability: "test-registration" },
-    expiresAtMs: Date.now() + 60000,
+    // Credential expiry is tested separately; this process serves a long matrix.
+    expiresAtMs: Date.now() + 10 * 60_000,
   }),
   reconnectDelay: false,
 });

@@ -138,6 +138,10 @@ export function refusalReason(
  * (`query_unsupported`, `limit_exceeded`, `quota_exceeded`, `forbidden`,
  * `unbound_collection`, `unavailable`). Renders nothing for a ready read that
  * has data.
+ * A `stale` read recovers by itself, so it stays quiet ("Reconnecting…" after
+ * a moment, or nothing with `transient="quiet"`). A `failed` read (an Action
+ * read whose attempt failed) does not: it says so and offers Try again, which
+ * calls the read's `refresh()`.
  * `noun` names what is read ("conversations"); `empty` marks a ready, empty
  * read and shows `emptyTitle`, `emptyHint` and `emptyAction`.
  */
@@ -179,8 +183,9 @@ export function ReadStatus(
       </Button>
     )
     : undefined;
-  // A refused live read: say what happened and what helps, never a raw code.
-  const refusal = state.status === "stale" || state.status === "denied"
+  // A refused read: say what happened and what helps, never a raw code.
+  const refusal = state.status === "stale" || state.status === "failed" ||
+      state.status === "denied"
     ? refusalReason(state.error)
     : undefined;
   if (refusal) {
@@ -252,15 +257,12 @@ export function ReadStatus(
           Load this content to continue.
         </Notice>
       );
+    case "failed":
+      // Nothing retries a failed attempt by itself; Try again does.
+      return <Failed noun={noun} error={state.error} retry={retry} />;
     case "stale":
       if (state.error && state.error.kind !== "unavailable") {
-        return (
-          <Notice tone="error" title={`Couldn't load ${noun}`} action={retry}>
-            {state.error.kind === "invalid"
-              ? "The request was not accepted. Try again, or reload the page."
-              : "Something went wrong. Try again in a moment."}
-          </Notice>
-        );
+        return <Failed noun={noun} error={state.error} retry={retry} />;
       }
       // A brief reconnect keeps the data on screen and says nothing; a long
       // one shows one quiet line (the shell shows its own indicator).
@@ -278,6 +280,22 @@ export function ReadStatus(
         </Notice>
       );
   }
+}
+
+function Failed(
+  { noun, error, retry }: {
+    noun: string;
+    error: ReadState["error"];
+    retry: React.ReactNode;
+  },
+): React.ReactElement {
+  return (
+    <Notice tone="error" title={`Couldn't load ${noun}`} action={retry}>
+      {error?.kind === "invalid"
+        ? "The request was not accepted. Try again, or reload the page."
+        : "Something went wrong. Try again in a moment."}
+    </Notice>
+  );
 }
 
 /** True once `active` has stayed true for `ms`; false as soon as it ends. */

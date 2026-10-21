@@ -141,14 +141,15 @@ closures.
 
 ## Live reads and optimism
 
-Reads expose `value`, `status`, `pending` and, when stale or denied, `error`
-(`{kind, code, message, status?, retryable}`). Status is loading, ready,
-missing, stale or denied. The SDK receives an atomic snapshot with owner
-sequence and checkpoint, then ordered contiguous `(from,to]` batches. Deltas
-carry owner seq and record id; records reconstruct the authorized id-ordered
-window. The server owns authorization, projection and limited-window refill.
-Only applied batches advance the checkpoint. Revocation clears readable values,
-including optimistic overlays.
+Reads expose `value`, `status`, `pending` and, when stale, failed or denied,
+`error` (`{kind, code, message, status?, retryable}`). Status is loading, ready,
+missing, stale, failed, denied or held. A stale read recovers by itself (a live
+read reconnecting); a failed read does not. The SDK receives an atomic snapshot
+with owner sequence and checkpoint, then ordered contiguous `(from,to]` batches.
+Deltas carry owner seq and record id; records reconstruct the authorized
+id-ordered window. The server owns authorization, projection and limited-window
+refill. Only applied batches advance the checkpoint. Revocation clears readable
+values, including optimistic overlays.
 
 The server bounds live reads: 16 active subscriptions per socket and 32 per
 user; each filter up to 64 predicate nodes and 32 values per `in` list;
@@ -183,11 +184,13 @@ Query results add `error?` and `refresh()`. A query read made by a View that a
 URL opened has status `held` until a user gesture calls `refresh()`;
 `ReadStatus` renders it with a Load button (see
 [URL state](#url-state-and-deep-links)). Error kind is denied, unavailable or
-invalid; status remains denied for refused reads and stale for
-unavailable/invalid results. Refresh starts a fresh query, fences prior
-responses and reattaches stale/revoked dependency reads using the current
-transport authority. Reauthenticate the device first if session proof changed.
-Each attempt has its own idempotency key; there is no polling loop.
+invalid; status is denied for refused reads and failed for unavailable/invalid
+results, which nothing retries until `refresh()`. A query whose dependency read
+is reconnecting is stale instead, and recovers with it. Refresh starts a fresh
+query, fences prior responses and reattaches stale/revoked dependency reads
+using the current transport authority. Reauthenticate the device first if
+session proof changed. Each attempt has its own idempotency key; there is no
+polling loop.
 
 The single bounded diagnostic event log exposes local changes, live deltas,
 Action transitions and `app.started`. Processors receive live changes, never
@@ -553,12 +556,13 @@ shows its error and allows retry.
 
 Patterns: `Screen` (a title row, actions and content in full or panel density),
 `Frame` (a Screen, or a Dialog header in dialog mode), `ReadStatus` (one
-vocabulary for loading, empty, held, reconnecting, refused, missing and the live
-read limits; `transient="quiet"` leaves reconnecting to a single indicator),
-`ConnectionStatus` (that indicator: it shows only after a reconnect lasts 2.5 s,
-so brief reconnects don't flash), `isReconnecting`, `useSustained`, `Metric`,
-`DetailList`, `ResourceTable` (humanized headers, relative times, figures
-aligned right), `ResourceToolbar`, `ResourceList`, `ResourceRow`,
+vocabulary for loading, empty, held, reconnecting, failed, refused, missing and
+the live read limits; a failed read shows its error with Try again, which calls
+`refresh()`, while `transient="quiet"` leaves reconnecting to a single
+indicator), `ConnectionStatus` (that indicator: it shows only after a reconnect
+lasts 2.5 s, so brief reconnects don't flash), `isReconnecting`, `useSustained`,
+`Metric`, `DetailList`, `ResourceTable` (humanized headers, relative times,
+figures aligned right), `ResourceToolbar`, `ResourceList`, `ResourceRow`,
 `ResourceHeader`, `PaneBoundary` and `showSafely(ctx, ref,
 hints, label?)`,
 which contains View resolution and render errors. Also `Markdown`, `Icon` and

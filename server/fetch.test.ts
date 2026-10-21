@@ -102,31 +102,36 @@ Deno.test("Fetch adapter returns bounded HTTP errors and preserves native Respon
   assertEquals(streamed.headers.get("content-type"), "text/plain");
 });
 
-Deno.test("Fetch adapter exposes bounded retryable persistence failures as HTTP 503", async () => {
-  const app: HttpApplication = Object.freeze({
-    handle() {
-      throw Object.assign(
-        new Error("Application persistence is temporarily unavailable."),
-        {
-          status: 503,
-          code: "persistence_unavailable",
-          retryAfterSeconds: 4,
-        },
-      );
-    },
+for (
+  const code of [
+    "persistence_unavailable",
+    "owner_unavailable",
+    "ActionOwnershipLost",
+  ]
+) {
+  Deno.test(`Fetch adapter exposes ${code} as retryable HTTP 503`, async () => {
+    const app: HttpApplication = Object.freeze({
+      handle() {
+        throw Object.assign(
+          new Error("Application is temporarily unavailable."),
+          {
+            status: 503,
+            code,
+            retryAfterSeconds: 4,
+          },
+        );
+      },
+    });
+    const response = await createHttpFetchHandler(app)(
+      new Request("https://example.test/operations/observe"),
+    );
+    assertEquals(response.status, 503);
+    assertEquals(response.headers.get("retry-after"), "4");
+    assertEquals(await response.json(), {
+      error: { code, message: "Application is temporarily unavailable." },
+    });
   });
-  const response = await createHttpFetchHandler(app)(
-    new Request("https://example.test/threads"),
-  );
-  assertEquals(response.status, 503);
-  assertEquals(response.headers.get("retry-after"), "4");
-  assertEquals(await response.json(), {
-    error: {
-      code: "persistence_unavailable",
-      message: "Application persistence is temporarily unavailable.",
-    },
-  });
-});
+}
 
 Deno.test("Fetch adapter preserves application response headers for JSON, empty, and multipart responses", async () => {
   let mode: "json" | "empty" | "multipart" = "json";

@@ -282,7 +282,8 @@ function errorResponse(
     ? typed.code
     : "internal_error";
   const availability = code === "persistence_unavailable" ||
-    code === "persistence_indeterminate";
+    code === "persistence_indeterminate" || code === "owner_unavailable" ||
+    code === "ActionOwnershipLost";
   const safeAuthenticationFailure = status === 503 &&
     code === "auth_unavailable" &&
     error instanceof Error && error.message === "Authentication is unavailable";

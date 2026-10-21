@@ -155,7 +155,7 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         unregister();
         await dispatcher.shutdown();
-        releaseDatabaseOwner(owner);
+        await releaseDatabaseOwner(owner);
         await db.query(`DROP SCHEMA "${schema}" CASCADE`);
         await db.close();
       }

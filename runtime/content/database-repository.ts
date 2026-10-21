@@ -45,6 +45,7 @@ import {
 import { digestContent } from "./digest.ts";
 import { assetNodeData } from "./asset-node.ts";
 import { createContentByteLimitError, createContentError } from "./errors.ts";
+import { planContentBudget } from "./budget.ts";
 import { captureContentInput, cloneContentRef } from "./input.ts";
 import {
   assetBodyKey,
@@ -68,6 +69,7 @@ import type {
   AssetRecord,
   AssetRepository,
   AssetState,
+  ContentDeferral,
   ContentInput,
   ContentRef,
   ContentSequence,
@@ -1777,6 +1779,12 @@ export function createDatabaseAssetRepository(
         .reduce((sum, row) => sum + mapAsset(row).byteLength, 0);
       if (bytes > maxBytes) throw createContentByteLimitError(bytes, maxBytes);
     }
+    return await bodiesOf(rows);
+  };
+
+  const bodiesOf = async (
+    rows: readonly AssetNodeRow[],
+  ): Promise<readonly AssetBody[]> => {
     const assets = rows.map((row) => {
       const asset = mapAsset(row);
       assertReadable(asset);
@@ -2150,6 +2158,22 @@ export function createDatabaseAssetRepository(
         requiredText(namespaceInput, "Asset namespace"),
         assetIds,
         readOptions?.maxBytes,
+      );
+    },
+
+    async readWithin(namespaceInput, assetIds, budget) {
+      const namespace = requiredText(namespaceInput, "Asset namespace");
+      // One metadata round trip decides; only the bodies that fit are read.
+      const rows = await getRows(options.session, namespace, assetIds);
+      const plan = planContentBudget(rows.map(mapAsset), budget);
+      const bodies = await bodiesOf(
+        rows.filter((_, index) => plan[index] === "read"),
+      );
+      let next = 0;
+      return rows.map((row, index) =>
+        plan[index] === "read"
+          ? bodies[next++]
+          : { asset: mapAsset(row), deferred: plan[index] as ContentDeferral }
       );
     },
 

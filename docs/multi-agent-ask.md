@@ -102,10 +102,13 @@ recipientIds: ["assistant"],
 ```
 
 The Core `message()` helper used by in-process hosts has only `recipientIds`, so
-in-process enrollment happens by addressing an agent. The HTTP client's
-conversation send additionally accepts `participantIds`, which enrolls agents
-without addressing the message to them. Enrollment belongs to the thread, so a
-new thread or a separate in-memory database starts without it.
+in-process enrollment happens by addressing an agent. A message that names no
+recipients, through `message()` or the `thread-message.create` Action, goes to
+every agent already in the thread except its sender; an explicit empty list
+addresses no one. The HTTP client's conversation send additionally accepts
+`participantIds`, which enrolls agents without addressing the message to them.
+Enrollment belongs to the thread, so a new thread or a separate in-memory
+database starts without it.
 
 ### What happens on an `ask`
 

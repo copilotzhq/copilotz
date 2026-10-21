@@ -25,5 +25,10 @@ composition and `plugin.ts` exposes its public name. Regenerate with
 configuration at invocation; there is no plugin factory or runtime directory
 discovery.
 
+`@copilotz/copilotz/core/web` is the browser side: chat Collections, intents,
+the live thread feed (`threadFeedAdapter`) and the thread, composer, agent
+selector and tool Views. The chat shell in `@copilotz/copilotz/ui/web` composes
+it; see [Web runtime and Views](../../docs/web-runtime-and-views.md).
+
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.

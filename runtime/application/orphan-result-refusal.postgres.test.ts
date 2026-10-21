@@ -73,7 +73,7 @@ async function fixture(
   const url = new URL(selected);
   assert(["postgres:", "postgresql:"].includes(url.protocol));
   const admin = await createTestDatabase({ url: url.href, pgPoolMax: 1 });
-  const databaseName = `orphan_refusal_${
+  const databaseName = `${url.pathname.slice(1)}_orphan_${
     crypto.randomUUID().replaceAll("-", "")
   }`;
   await admin.query(`CREATE DATABASE "${databaseName}"`);
@@ -385,7 +385,7 @@ async function fixture(
       authorize() {},
       execute: () => "ready",
     });
-    releaseDatabaseOwner(probeOwner);
+    await releaseDatabaseOwner(probeOwner);
     const probe = () =>
       invokeProbe(
         { principal: "integrity-observer", epoch: probeOwner.epoch! },
@@ -399,10 +399,7 @@ async function fixture(
       ? await openDatabaseOwner(database, schema)
       : undefined;
     if (retainedOwner) {
-      resources.push(() => {
-        releaseDatabaseOwner(retainedOwner);
-        return Promise.resolve();
-      });
+      resources.push(() => releaseDatabaseOwner(retainedOwner));
     }
     const listener = listen(gateway, { hostname: "127.0.0.1", port: 0 });
     resources.push(() => listener.shutdown());

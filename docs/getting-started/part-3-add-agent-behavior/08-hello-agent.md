@@ -190,7 +190,9 @@ A few facts about the message it sends:
   own names. On the first message, Core creates the thread and the human
   participant; on later messages with the same IDs, it finds and reuses them.
 - `recipientIds` addresses the message to the agent with ID `assistant`, which
-  enrolls the agent in the thread and asks it to reply.
+  enrolls the agent in the thread and asks it to reply. A later message that
+  omits `recipientIds` goes to the thread's agents other than its sender; an
+  explicit empty list addresses no one.
 
 The reply arrives as **stream outputs**. Core opens one byte stream per kind of
 model output: `content` for the visible reply, and others such as reasoning or

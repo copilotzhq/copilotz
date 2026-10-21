@@ -92,7 +92,6 @@ import {
   createEphemeralEvent,
   createEventCoordinator,
   createEventStore,
-  type EventCoordinator,
   type EventStore,
   matchesCopilotzEvent,
   waitForCopilotzEvent,
@@ -140,7 +139,7 @@ export type DatabaseScopeRuntime = Readonly<{
   deferPublication(publish: () => Promise<void>): () => Promise<void>;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
-  coordinator: EventCoordinator;
+  coordinator: ReturnType<typeof createEventCoordinator>;
   capabilities: DatabaseScopeCapabilities;
   streamBodyStore: BodyStore;
   transients: TransientProcessorSet;

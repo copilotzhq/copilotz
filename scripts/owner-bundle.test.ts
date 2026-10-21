@@ -18,9 +18,9 @@ import {
   validateCopilotzSchema,
 } from "../runtime/events/schema.ts";
 import { createEventStore } from "../runtime/events/store.ts";
-import { encodeEventBody } from "../runtime/events/body-store.ts";
+import { encodeEventBody } from "@copilotz/copilotz/migration";
 import { provisionOperationCatalog } from "../runtime/streams/catalog.ts";
-import { createContentCatalog } from "../runtime/content/catalog.ts";
+import { createContentCatalog } from "@copilotz/copilotz/migration";
 import { createDatabaseBodyStore } from "../runtime/content/database-body-store.ts";
 import { createBodyStorageRuntime } from "../runtime/content/storage.ts";
 import { createS3BodyStore } from "../runtime/content/s3-body-store.ts";
@@ -33,10 +33,13 @@ import {
   additionalAuthenticatedData,
   createProtectedValueRuntime,
   protectedValueRef,
-} from "../runtime/actions/protected-value.ts";
-import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
-import { bodyStoreReader, oldS3BodyReader } from "./owner-transfer-storage.ts";
-import { exportOwnerBundle, importOwnerBundle } from "./owner-bundle.ts";
+} from "@copilotz/copilotz/migration";
+import { migrateOwnerKeys } from "@copilotz/copilotz/migration";
+import { bodyStoreReader, oldS3BodyReader } from "@copilotz/copilotz/migration";
+import {
+  exportOwnerBundle,
+  importOwnerBundle,
+} from "@copilotz/copilotz/migration";
 import { createCopilotzApplication } from "../runtime/application/application.ts";
 import { definePlugin, defineProcessor } from "../runtime/plugins/index.ts";
 
@@ -352,7 +355,7 @@ Deno.test({
   fn: async () => {
     const db = await createTestDatabase({ url: pgUrl }),
       schema = unique("owner_export"),
-      destination = unique("owner_import");
+      destination = unique(`${new URL(pgUrl!).pathname.slice(1)}_import`);
     const targetUrl = new URL(pgUrl!);
     targetUrl.pathname = `/${destination}`;
     const temp = await Deno.makeTempDir({ prefix: "owner-bundle-" }),

@@ -5,6 +5,7 @@ import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
+  DetailList,
   EmptyState,
   Frame,
   Notice,
@@ -39,24 +40,56 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
     const agent = !failed && Array.isArray(response?.data)
       ? response.data.find((row) => row.id === id)
       : undefined;
+    const capabilities = agent?.capabilities &&
+        typeof agent.capabilities === "object"
+      ? Object.entries(agent.capabilities as Record<string, unknown>)
+      : [];
     return (
       <Frame ctx={ctx} title={String(agent?.name ?? "Agent")}>
-        <ReadStatus state={state} />
-        {failed && <Notice tone="error">Unable to read this agent.</Notice>}
+        <ReadStatus state={state} noun="agent" />
+        {failed && (
+          <Notice tone="error">
+            {response?.status === 403 || response?.status === 401
+              ? "You don't have access to this agent."
+              : "This agent couldn't be loaded. Try again in a moment."}
+          </Notice>
+        )}
         {agent && (
-          <dl className="grid gap-3">
-            <dt>ID</dt>
-            <dd>{id}</dd>
-            <dt>Role</dt>
-            <dd>{String(agent.role ?? "—")}</dd>
-            <dt>Capabilities</dt>
-            <dd>
-              <pre className="overflow-x-auto whitespace-pre-wrap">{JSON.stringify(agent.capabilities ?? {}, null, 2)}</pre>
-            </dd>
-          </dl>
+          <DetailList
+            items={[
+              ["Name", agent.name],
+              ["ID", <code key="id" className="text-xs">{id}</code>],
+              ["Role", agent.role],
+              [
+                "Capabilities",
+                capabilities.length
+                  ? (
+                    <ul key="capabilities" className="flex flex-wrap gap-1.5">
+                      {capabilities.map(([name, value]) => (
+                        <li
+                          key={name}
+                          className="bg-muted rounded-md px-2 py-0.5 text-xs"
+                        >
+                          {value === true
+                            ? name
+                            : `${name}: ${
+                              typeof value === "object"
+                                ? JSON.stringify(value)
+                                : String(value)
+                            }`}
+                        </li>
+                      ))}
+                    </ul>
+                  )
+                  : null,
+              ],
+            ]}
+          />
         )}
         {!failed && !agent && state.status === "ready" && (
-          <EmptyState title="Agent unavailable" />
+          <EmptyState title="Agent unavailable">
+            This agent isn't configured in this app.
+          </EmptyState>
         )}
       </Frame>
     );

@@ -6,6 +6,7 @@ import * as React from "react";
 import { defineView } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
+  formatCount,
   Metric,
   ReadStatus,
   ResourceTable,
@@ -30,16 +31,35 @@ const view: import("@copilotz/copilotz/views").ViewDefinition<
         0,
       );
     return (
-      <Screen title="Usage" density={ctx.hints.mode}>
-        <ReadStatus state={usage} />
-        <p className="text-muted-foreground">Totals for the loaded records</p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Metric label="Tokens" value={sum("totalTokens").toLocaleString()} />
-          <Metric label="Cost (USD)" value={sum("totalCostUsd").toFixed(4)} />
+      <Screen
+        title="Usage"
+        description="Totals for the most recent model calls."
+        density={ctx.hints.mode}
+      >
+        <ReadStatus state={usage} noun="usage" />
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Metric label="Model calls" value={formatCount(usage.value.length)} />
+          <Metric label="Tokens" value={formatCount(sum("totalTokens"))} />
+          <Metric
+            label="Cost (USD)"
+            value={`$${sum("totalCostUsd").toFixed(4)}`}
+          />
         </div>
         <ResourceTable
           rows={usage.value}
-          columns={["model", "status", "totalTokens", "totalCostUsd"]}
+          columns={[
+            "model",
+            "status",
+            "totalTokens",
+            "totalCostUsd",
+            "createdAt",
+          ]}
+          labels={{
+            totalTokens: "Tokens",
+            totalCostUsd: "Cost (USD)",
+            createdAt: "When",
+          }}
+          emptyTitle="No model calls yet"
         />
       </Screen>
     );

@@ -2,7 +2,7 @@ import type { EventVisibility } from "@copilotz/copilotz/core";
 import type {} from "@copilotz/copilotz/events";
 import type { ConversationMessage } from "./contracts.ts";
 import type { FrozenContextContribution } from "./types.ts";
-import { isContentRef } from "@copilotz/copilotz/content";
+import { isContentRef } from "@copilotz/copilotz/content/codec";
 
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";

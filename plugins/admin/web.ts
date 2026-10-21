@@ -6,6 +6,7 @@ import query from "./views/query/index.tsx";
 import records from "./views/records/index.tsx";
 import agent from "./views/agent/index.tsx";
 import participant from "./views/participant/index.tsx";
+import { ADMIN_SECTIONS } from "./views/query/index.tsx";
 
 export type AdminSection =
   | "overview"
@@ -16,14 +17,20 @@ export type AdminSection =
   | "usage";
 export interface AdminWebOptions {
   actionAliases?: Partial<Record<AdminSection, string>>;
+  /** The app's Core plugin, when it configures its own (`createCoreWebPlugin`). */
+  core?: BrowserPlugin;
 }
-/** Configure the browser registry to match the installed server Actions. */
+/**
+ * Configure the browser registry to match the installed server Actions. With
+ * the chat shell, the user menu gains "Administration", which opens the
+ * `admin` page in main.
+ */
 export function createAdminWebPlugin(
-  { actionAliases = {} }: AdminWebOptions = {},
+  { actionAliases = {}, core = coreWebPlugin }: AdminWebOptions = {},
 ): BrowserPlugin {
   return {
     id: "@copilotz/admin",
-    plugins: [coreWebPlugin, usageWebPlugin],
+    plugins: [core, usageWebPlugin],
     views: { overview, records, query, agent, participant },
     actions: Object.fromEntries(
       ([
@@ -51,20 +58,34 @@ export function createAdminWebPlugin(
     ),
     resources: {
       admin: { actionAliases },
-      navigation: {
-        admin: { label: "Administration", shows: "admin", value: null },
-        ...Object.fromEntries(
-          ["overview", "agents", "activity", "threads", "participants", "usage"]
-            .map((
-              section,
-            ) => [`admin${section}`, {
-              label: section[0].toUpperCase() + section.slice(1),
-              shows: "adminQuery",
-              value: { section },
-            }]),
-        ),
+      // Apps add, reorder (`order`) or hide (`null`) sections by id.
+      adminSections: Object.fromEntries(
+        ADMIN_SECTIONS.map((section, index) => [section.id, {
+          label: section.label,
+          icon: section.icon,
+          description: section.description,
+          order: index * 10,
+          requires: [
+            actionAliases[section.id as AdminSection] ??
+              `admin${section.id[0].toUpperCase()}${section.id.slice(1)}`,
+          ],
+        }]),
+      ),
+      userMenu: {
+        admin: {
+          label: "Administration",
+          icon: "shield",
+          page: "admin",
+          order: 80,
+        },
       },
     },
   };
 }
 export const adminWebPlugin: BrowserPlugin = createAdminWebPlugin();
+export {
+  ADMIN_SECTIONS,
+  adminSection,
+  type AdminSectionEntry,
+  adminSections,
+} from "./views/query/index.tsx";

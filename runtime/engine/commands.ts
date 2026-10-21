@@ -171,6 +171,12 @@ export type OwnerCommands<T extends CommandTypes> = Readonly<{
   pauseAlarms(): void;
   drainAlarms(): Promise<void>;
   activate(): void;
+  /** Wait for admitted commands and all committed publications. */
+  drain(): Promise<void>;
+  /** Retain asynchronous work started by a synchronous SQL commit observer. */
+  trackPublication(callback: () => Promise<void>): void;
+  /** Graceful final attachment shutdown. */
+  close(): Promise<void>;
   stop(error?: unknown): void;
 }>;
 
@@ -216,10 +222,34 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   let epoch: number | undefined;
   let reason: unknown;
   let running = false;
+  let acquiring = false;
   let inFlight = 0;
   let stagedPublications = 0;
   let publishing = false;
   let publicationCount = 0;
+  let idle = Promise.withResolvers<void>();
+  let closing: Promise<void> | undefined;
+  const publicationErrors: unknown[] = [];
+  const isIdle = () =>
+    !acquiring && !running && !publishing && publicationCount === 0;
+  function signalIdle() {
+    if (isIdle()) {
+      idle.resolve();
+      idle = Promise.withResolvers<void>();
+    }
+  }
+  async function waitIdle(): Promise<void> {
+    while (!isIdle()) await idle.promise;
+  }
+  async function drainWork(): Promise<void> {
+    await waitIdle();
+    if (publicationErrors.length) {
+      throw new AggregateError(
+        publicationErrors.splice(0),
+        "Owner publication failed.",
+      );
+    }
+  }
   const pending: Pending[] = [];
   const publications: Array<Array<() => void | Promise<void>>> = [];
   const lifetime = new AbortController();
@@ -251,7 +281,11 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     lifetime.abort(error);
     readiness.reject(error);
     for (const item of pending.splice(0)) item.reject(error);
-    stopped.resolve();
+    // Authority is revoked synchronously; completion includes all SQL and output
+    // work already admitted. The signal is the immediate invalidation boundary.
+    void Promise.allSettled([waitIdle(), alarms.drain()]).then(() =>
+      stopped.resolve()
+    );
   }
   function assertAcquired() {
     if (state !== "acquired" && state !== "ready") {
@@ -259,21 +293,25 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
         failure("owner_not_acquired", "The database owner is not acquired.");
     }
   }
+  function runPublication(callback: () => void | Promise<void>): void {
+    void runIndependentAsyncContext(callback).catch((error) => {
+      publicationErrors.push(error);
+      try {
+        options.onPublicationError?.(error);
+      } catch { /* observer only */ }
+    }).finally(() => {
+      publicationCount--;
+      signalIdle();
+    });
+  }
   function publish() {
-    // Invoke in commit order, but do not serialize their completion: a callback
-    // may await another owner command's publication. In-flight work stays charged.
+    // Invoke in commit order, but do not serialize completion: a callback can
+    // await another command's publication. Both remain charged until complete.
     for (const batch of publications.splice(0)) {
-      for (const callback of batch) {
-        void runIndependentAsyncContext(callback).catch((error) => {
-          try {
-            options.onPublicationError?.(error);
-          } catch { /* observer only */ }
-        }).finally(() => {
-          publicationCount--;
-        });
-      }
+      for (const callback of batch) runPublication(callback);
     }
     publishing = false;
+    signalIdle();
   }
   async function runGroup(group: Pending[]): Promise<void> {
     if (state === "stopped") {
@@ -382,6 +420,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
     } finally {
       inFlight = 0;
       running = false;
+      signalIdle();
     }
   }
 
@@ -396,6 +435,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       throw new TypeError("Invalid expected owner epoch.");
     }
     state = "acquiring";
+    acquiring = true;
     let callbackFinished = false;
     try {
       const acquired = await runSqlTransaction(options.session, async (tx) => {
@@ -435,6 +475,9 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
           : error,
       );
       throw reason;
+    } finally {
+      acquiring = false;
+      signalIdle();
     }
   }
 
@@ -672,6 +715,39 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       readiness.resolve();
       void alarms.rearm().catch(stop);
     },
+    drain: drainWork,
+    trackPublication(callback) {
+      publicationCount++;
+      runPublication(callback);
+    },
+    close() {
+      closing ??= (async () => {
+        const errors: unknown[] = [];
+        try {
+          alarms.pause();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await alarms.drain();
+        } catch (error) {
+          errors.push(error);
+        }
+        do {
+          try {
+            await drainWork();
+          } catch (error) {
+            errors.push(error);
+          }
+        } while (!isIdle());
+        stop();
+        await stopped.promise;
+        if (errors.length) {
+          throw new AggregateError(errors, "Owner shutdown failed.");
+        }
+      })();
+      return closing;
+    },
     stop,
   };
 }
@@ -681,6 +757,7 @@ type OwnerEntry = {
   owner: DatabaseOwner;
   references: number;
   activation?: Promise<void>;
+  closing?: Promise<void>;
 };
 const localOwners = new Map<string, WeakRef<OwnerEntry>>();
 function ownerEntry(owner: DatabaseOwner): OwnerEntry {
@@ -706,7 +783,12 @@ export async function openDatabaseOwner(
     ["schema"],
   );
   const row = observed.rows[0];
-  const existing = row && localOwners.get(row.holder)?.deref()?.owner;
+  const existingEntry = row && localOwners.get(row.holder)?.deref();
+  if (existingEntry?.closing) {
+    await existingEntry.closing;
+    return await openDatabaseOwner(session, schema, clock);
+  }
+  const existing = existingEntry && existingEntry.owner;
   if (
     existing && existing.state !== "stopped" &&
     existing.epoch === Number(row.epoch)
@@ -733,13 +815,14 @@ export function pauseFinalDatabaseOwnerAlarms(owner: DatabaseOwner): void {
 }
 
 /** Scope shutdown releases its attachment; the last attachment stops admission. */
-export function releaseDatabaseOwner(owner: DatabaseOwner): void {
-  const remaining = ownerEntry(owner).references - 1;
-  ownerEntry(owner).references = remaining;
-  if (remaining <= 0) {
-    owner.stop();
+export function releaseDatabaseOwner(owner: DatabaseOwner): Promise<void> {
+  const entry = ownerEntry(owner);
+  if (entry.closing) return entry.closing;
+  if (--entry.references > 0) return Promise.resolve();
+  entry.closing = owner.close().finally(() => {
     localOwners.delete(owner.holderId);
-  }
+  });
+  return entry.closing;
 }
 
 const schemaOwners = new WeakMap<

@@ -1,3 +1,4 @@
+import { withTransactionEffects } from "./transaction-effects.ts";
 import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
   hostIngressProof,
@@ -4237,7 +4238,22 @@ export function createCollectionKernel(
     const run = () =>
       execute({ collections, relations, vectors, sessions, flows });
 
-    const value = await finishPlanning(scope, run);
+    const value = await finishPlanning(scope, () =>
+      withTransactionEffects(
+        (key, commit) => {
+          if (scope.state !== "open") {
+            throw new Error("Transaction planning is closed.");
+          }
+          scope.plans.push({
+            id: key,
+            order: [++scope.orderSequence],
+            async commit() {
+              await commit();
+            },
+          });
+        },
+        run,
+      ));
     const pending: CoordinatedMutationResult<unknown>[] = [];
     const writes: CollectionWrite<CollectionRecord>[] = [];
     const orderedPlans = [...scope.plans].sort(comparePlanOrder);

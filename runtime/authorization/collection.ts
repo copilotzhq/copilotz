@@ -127,6 +127,12 @@ export function captureCollectionPolicy(
       resource: operation.registration.alias,
       operation: operation.method,
       input: fixed,
+      ...(policyAuthority.sourceEventId
+        ? { sourceEventId: policyAuthority.sourceEventId }
+        : {}),
+      ...(policyAuthority.sourceDeliveryId
+        ? { sourceDeliveryId: policyAuthority.sourceDeliveryId }
+        : {}),
       ...(!policyAuthority.direct
         ? {
           invocation: {

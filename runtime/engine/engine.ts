@@ -1,3 +1,4 @@
+import { createIdentityVerifierClient } from "../authorization/identity-evidence.ts";
 import { retainedAuthority } from "../authorization/authority.ts";
 import { createDirectoryReader } from "../authorization/directory-read.ts";
 import {
@@ -414,6 +415,13 @@ export async function createCopilotzEngine(
         ? retainedAuthority(invocationIngress.authority)
         : undefined;
       return createProcessorContext({
+        authentication: createIdentityVerifierClient({
+          session: scopedStore.session,
+          databaseSchema: base.databaseSchema,
+          registration: options.authorization,
+          collections: options.registry.collections,
+          actions: options.registry.actions,
+        }),
         directory: createDirectoryReader({
           session: scopedStore.session,
           databaseSchema: base.databaseSchema,
@@ -432,6 +440,10 @@ export async function createCopilotzEngine(
               SERVER_COLLECTION_MUTATION_RELAY_CONSUMER,
             logicalRunId: base.idempotencyKey,
             operationId: base.settlementScopeId,
+            ...(base.event.durable ? { sourceEventId: base.event.id } : {}),
+            ...(base.source?.kind === "delivery"
+              ? { sourceDeliveryId: base.source.id }
+              : {}),
             scope: {
               databaseSchema: base.databaseSchema,
               namespace: base.event.namespace,

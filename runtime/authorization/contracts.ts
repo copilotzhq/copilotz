@@ -21,6 +21,9 @@ export type ServerCollectionMutationConstraints = Readonly<{
 }>;
 
 export type ServerConstraints = Readonly<{
+  identityVerifiers?: readonly string[];
+  flowProcessors?: readonly string[];
+  directoryCommands?: readonly string[];
   /** Declared directory read aliases. Policy must inspect the exact requested id. */
   directoryReads?: readonly string[];
   /** Authenticated root event types, including adapter-validated channel input. */

@@ -115,10 +115,36 @@ export async function checkFlow(
   // internal capabilities. Every effect still passes the product's policy.
   if (
     invocation?.kind === "action" && invocation.runId && row.consumed_run &&
-    ["collection", "session", "asset", "directory"].includes(intent.kind) &&
+    ["collection", "session", "asset", "directory", "identity"].includes(
+      intent.kind,
+    ) &&
     (row.consumed_run === invocation.runId ||
       await descendant(invocation.runId, invocation.id))
   ) return;
+  if (
+    invocation?.kind === "processor" && intent.kind === "collection" &&
+    row.consumed_run && row.accepted_operation && intent.sourceEventId &&
+    intent.sourceDeliveryId
+  ) {
+    const live = await command.transaction.query(
+      `SELECT 1 FROM "${authority.scope.databaseSchema}".event_deliveries AS delivery
+      JOIN "${authority.scope.databaseSchema}".copilotz_operation_events AS indexed ON indexed.event_id=delivery.event_id
+      WHERE delivery.id=$1 AND delivery.event_id=$2 AND delivery.consumer_id=$3 AND delivery.lease_owner=$4
+      AND delivery.status='leased' AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>$5::timestamptz)
+      AND indexed.namespace=$6 AND indexed.operation_id=$7
+      AND delivery.owner_epoch=(SELECT epoch FROM "${authority.scope.databaseSchema}".owner_epochs WHERE owner='schema')`,
+      [
+        intent.sourceDeliveryId,
+        intent.sourceEventId,
+        `processor:${invocation.id}`,
+        invocation.runId,
+        command.commandTime,
+        authority.scope.namespace,
+        row.accepted_operation,
+      ],
+    );
+    if (live.rows.length === 1) return;
+  }
   authorizationRefused();
 }
 export async function assertFlowOperation(

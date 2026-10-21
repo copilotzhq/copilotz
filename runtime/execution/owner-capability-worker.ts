@@ -309,7 +309,7 @@ function workerContext(options: {
         ) as unknown[];
         const entry = { path: [...path], args: copied };
         plan.push(entry);
-        if (["vectors", "sessions", "flows"].includes(path[0])) {
+        if (["vectors", "sessions", "flows", "directory"].includes(path[0])) {
           return undefined;
         }
         const input = copied[0] as RecordValue;
@@ -342,6 +342,9 @@ function workerContext(options: {
       return task;
     };
     const scoped = {
+      directory: {
+        command: (...args: unknown[]) => stage(["directory", "command"], args),
+      },
       sessions: {
         create: (...args: unknown[]) => stage(["sessions", "create"], args),
         revoke: (...args: unknown[]) => stage(["sessions", "revoke"], args),
@@ -465,7 +468,13 @@ function workerContext(options: {
     adapters: registry.adapters,
     actions,
     collections: collections(),
-    directory: { get: (...args: unknown[]) => rpc(["directory", "get"], args) },
+    authentication: {
+      verify: (...args: unknown[]) => rpc(["authentication", "verify"], args),
+    },
+    directory: {
+      get: (...args: unknown[]) => rpc(["directory", "get"], args),
+      command: (...args: unknown[]) => rpc(["directory", "command"], args),
+    },
     content: {
       ...methods([
         "authorize",

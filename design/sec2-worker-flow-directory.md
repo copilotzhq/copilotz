@@ -1,5 +1,10 @@
 # Worker authority, flow descendants and directory reads
 
+Round 4 extends these contracts with owner-verified identity evidence, atomic
+directory service commands and bounded Processor projections. See
+[the Round 4 design](sec2-owner-identity-directory-processors.md) for the
+current extensions and validation results.
+
 ## Current state
 
 - `runtime/execution/owner-capability-worker.ts:616` calls every worker user

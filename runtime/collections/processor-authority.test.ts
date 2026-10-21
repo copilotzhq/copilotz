@@ -146,6 +146,11 @@ Deno.test("static processor uses frozen event body and captures input in a child
             { collections, relations, vectors, sessions, flows },
           ) =>
             await execute(Object.freeze({
+              directory: {
+                command: () => {
+                  throw new Error("Directory unavailable in this fixture.");
+                },
+              },
               collections,
               relations,
               vectors,

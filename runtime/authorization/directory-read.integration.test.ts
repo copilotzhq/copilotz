@@ -64,7 +64,7 @@ Deno.test("declared directory reads enforce both owner policies, freshness, proj
           input: { alias?: string; id?: string },
           ctx: ActionContext,
         ) {
-          assertEquals(Object.keys(ctx.directory), ["get"]);
+          assertEquals(Object.keys(ctx.directory).sort(), ["command", "get"]);
           retained = () => ctx.directory.get("routing", "route");
           return await ctx.directory.get(
             input.alias ?? "routing",

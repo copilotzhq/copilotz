@@ -395,7 +395,7 @@ test("URL state: an admin query waits for Load and a refused View stays in its p
     assert.doesNotMatch(document.body.textContent, /Spoofed/);
     await click("Load");
     await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-    assert.deepEqual(calls.map((call) => call.id), ["copilotz.admin.threads"]);
+    assert.deepEqual(calls.map((call) => call.id), ["adminThreads"]);
     assert.match(document.querySelector("main")!.textContent, /Loaded thread/);
   } finally {
     console.error = original;

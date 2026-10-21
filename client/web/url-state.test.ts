@@ -222,7 +222,7 @@ test("query reads from URL state wait for a user gesture unless the View declare
     // The user gesture: an event handler calls refresh() on the held state.
     output.getSnapshot().load();
     await tick();
-    assert.deepEqual(calls, [{ id: "app.lookup", input: { id: "from-url" } }]);
+    assert.deepEqual(calls, [{ id: "lookup", input: { id: "from-url" } }]);
     assert.equal(output.getSnapshot().label, "from-url:ready");
     // In-app navigation and a View declaring queries "run" start immediately.
     for (

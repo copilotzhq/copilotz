@@ -299,7 +299,7 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             {inSpace && nav.spaceId && (
               <SpaceMark id={nav.spaceId} name={title} size="md" />
             )}
-            <h1 className="min-w-0 truncate text-sm font-semibold sm:text-[15px]">
+            <h1 className="min-w-0 shrink truncate text-sm font-semibold sm:text-[15px]">
               {title}
             </h1>
             {!inSpace && threadSpace && threadSpaceId && (
@@ -320,7 +320,13 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
               </button>
             )}
             {!inSpace && thread && (
-              <div className="ml-1 min-w-0 shrink-0">
+              // The title keeps its width first; the selector takes what is
+              // left (at least an icon) and collapses through the `agents`
+              // container query, as an app's own selector can too.
+              <div
+                data-slot="agent-selector"
+                className="@container/agents ml-1 flex min-w-9 flex-1 basis-0 items-center"
+              >
                 {showSafely(
                   ctx,
                   { shows: "agentSelector", value: { threadId: thread.id } },

@@ -399,6 +399,17 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    name: "14b-long-title",
+    path: "/?chat=t-plan&stream=0",
+    steps: async () => {
+      // The title keeps its width; the agent selector collapses beside it.
+      await evaluate(
+        `demo.live.patch("thread", "t-plan", { name: "Quarterly launch plan kickoff with pricing and onboarding" })`,
+      );
+      await wait(400);
+    },
+  },
+  {
     name: "15-admin-overview",
     path: "/?chat=t-plan&stream=0",
     steps: async () => {

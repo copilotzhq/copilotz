@@ -984,6 +984,28 @@ test("a JSON tool result is read on demand, bounded, and reaches the step and th
   }
 });
 
+test("the header title keeps priority; the agent selector slot collapses by container width", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    const slot = document.querySelector('[data-slot="agent-selector"]')!;
+    // The slot takes the width the title leaves (at least an icon) and is a
+    // size container, so the core selector (and an app's) collapses inside it.
+    for (const name of ["@container/agents", "flex-1", "basis-0", "min-w-9"]) {
+      assert.ok(slot.className.split(/\s+/).includes(name), name);
+    }
+    const title = document.querySelector('[data-slot="shell-header"] h1')!;
+    assert.ok(!title.className.includes("shrink-0"));
+    const button = slot.querySelector("button")!;
+    assert.match(
+      button.getAttribute("aria-label") ?? "",
+      /^Agents in this conversation: North$/,
+      "collapsed to an icon, it keeps its name",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
 test("search finds chats by title and by Space name", async () => {
   const shell = await mount("https://app.example/?chat=t1");
   try {

@@ -9,6 +9,7 @@ import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import {
   Button,
+  cn,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -67,27 +68,32 @@ function Selector(
           aria-label={`Agents in this conversation: ${
             agents.map((agent) => agent.name).join(", ") || "none"
           }`}
-          className="gap-1.5 px-2"
+          className="max-w-full min-w-0 gap-1.5 px-2"
         >
-          {shown.length
-            ? (
-              <span className="flex -space-x-1.5">
-                {shown.map((agent) => (
-                  <SenderAvatar
-                    key={agent.id}
-                    sender={agent}
-                    size="sm"
-                    letters={1}
-                    className="ring-background ring-2"
-                  />
-                ))}
-              </span>
-            )
-            : <Users className="text-muted-foreground" />}
-          <span className="hidden text-sm sm:inline">
+          {/* Narrow: an icon; wider: avatars, then the chevron, then a label. */}
+          <Users
+            className={cn(
+              "text-muted-foreground",
+              shown.length && "@min-[4.5rem]/agents:hidden",
+            )}
+          />
+          {shown.length > 0 && (
+            <span className="hidden -space-x-1.5 @min-[4.5rem]/agents:flex">
+              {shown.map((agent) => (
+                <SenderAvatar
+                  key={agent.id}
+                  sender={agent}
+                  size="sm"
+                  letters={1}
+                  className="ring-background ring-2"
+                />
+              ))}
+            </span>
+          )}
+          <span className="hidden truncate text-sm @min-[10rem]/agents:inline">
             {agents.length === 1 ? agents[0].name : `${agents.length} agents`}
           </span>
-          <ChevronDown className="text-muted-foreground size-3.5" />
+          <ChevronDown className="text-muted-foreground hidden size-3.5 shrink-0 @min-[6.5rem]/agents:block" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">

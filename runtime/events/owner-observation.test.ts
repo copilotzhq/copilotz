@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { createSqlSession } from "./session.ts";
 import {
   createSchemaCommandRunner,
   openDatabaseOwner,
@@ -35,7 +36,7 @@ async function fixture() {
     run: createSchemaCommandRunner(db, schema),
     store: createEventStore({ session: db, schema }),
     async close() {
-      owner.stop();
+      await owner.close();
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },
@@ -230,7 +231,7 @@ Deno.test("body revisions survive dropped final hints without advancing semantic
 
 Deno.test("body watches share one owner across session objects and isolate identical IDs across schemas", async () => {
   const f = await fixture();
-  const alias = { query: f.db.query, transaction: f.db.transaction };
+  const alias = createSqlSession(f.db);
   const shared = await openDatabaseOwner(alias, f.schema);
   assertEquals(shared, f.owner);
   const otherSchema = `${f.schema}_other`;
@@ -371,8 +372,7 @@ Deno.test("engine durable repair scans bounded pages once and discovers a lost f
   let loads = 0;
   const loaded = Promise.withResolvers<void>();
   const engine = await createCopilotzEngine({
-    session: {
-      ...f.db,
+    session: Object.assign(createSqlSession(f.db), {
       async query<
         TRow extends Record<string, unknown> = Record<string, unknown>,
       >(sql: string, params?: unknown[]) {
@@ -385,7 +385,7 @@ Deno.test("engine durable repair scans bounded pages once and discovers a lost f
         }
         return result;
       },
-    },
+    }),
     defaultDatabaseSchema: f.schema,
     registry: createPluginRegistry({}),
   });

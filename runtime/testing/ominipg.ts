@@ -1,3 +1,4 @@
+import { bindSqlDatabaseIdentity } from "../events/database-identity.ts";
 import {
   type CopilotzOminipgOptions,
   openManagedOminipgDatabase,
@@ -16,16 +17,19 @@ export async function createTestDatabase(
   options: CopilotzOminipgOptions = {},
 ): Promise<TestDatabase> {
   const managed = await openManagedOminipgDatabase(options);
-  return ({
-    session: managed.session,
-    query: managed.session.query,
-    transaction: managed.session.transaction,
-    ...(managed.session.withReadSnapshot
-      ? { withReadSnapshot: managed.session.withReadSnapshot }
-      : {}),
-    ...(managed.session.readSnapshot
-      ? { readSnapshot: managed.session.readSnapshot }
-      : {}),
-    close: managed.close,
-  } as const);
+  return bindSqlDatabaseIdentity(
+    {
+      session: managed.session,
+      query: managed.session.query,
+      transaction: managed.session.transaction,
+      ...(managed.session.withReadSnapshot
+        ? { withReadSnapshot: managed.session.withReadSnapshot }
+        : {}),
+      ...(managed.session.readSnapshot
+        ? { readSnapshot: managed.session.readSnapshot }
+        : {}),
+      close: managed.close,
+    } as const,
+    managed.session,
+  );
 }

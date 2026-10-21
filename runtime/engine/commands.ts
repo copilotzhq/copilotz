@@ -1,3 +1,7 @@
+import {
+  bindSqlDatabaseIdentity,
+  sqlDatabaseIdentity,
+} from "../events/database-identity.ts";
 import { encodeJsonValue } from "../json.ts";
 import {
   isOwnerAuthorizationRefusal,
@@ -82,7 +86,7 @@ const executingCommand = /* @__PURE__ */ createAsyncContextStorage<
 /** Capabilities with external effects cannot join an owner transaction. */
 export const currentOwnerCommand = () => executingCommand.getStore();
 
-/** Join an already attached local owner through its durable database identity. */
+/** Join an attached owner in this transaction's database instance and durable epoch. */
 export async function attachedDatabaseOwner(
   transaction: SqlExecutor,
   schema: string,
@@ -91,9 +95,12 @@ export async function attachedDatabaseOwner(
     (await transaction.query<{ epoch: number | string; holder: string }>(
       `UPDATE "${schema}".owner_epochs SET holder=holder WHERE owner='schema' RETURNING epoch,holder`,
     )).rows[0];
-  const owner = row && localOwners.get(row.holder)?.deref()?.owner;
+  const owner = databaseOwners.get(sqlDatabaseIdentity(transaction))?.get(
+    schema,
+  )?.entry?.owner;
   if (
-    !owner || owner.state === "stopped" || owner.epoch !== Number(row.epoch)
+    !row || !owner || owner.state === "stopped" ||
+    owner.holderId !== row.holder || owner.epoch !== Number(row.epoch)
   ) {
     throw new Error("Directory owner is not attached to this database.");
   }
@@ -820,55 +827,97 @@ type OwnerEntry = {
   references: number;
   activation?: Promise<void>;
   closing?: Promise<void>;
+  scope?: OwnerScope;
 };
-const localOwners = new Map<string, WeakRef<OwnerEntry>>();
+type OwnerScope = {
+  entry?: OwnerEntry;
+  opening?: Promise<DatabaseOwner>;
+};
+const ownerEntries = new WeakMap<DatabaseOwner, OwnerEntry>();
+const databaseOwners = new WeakMap<object, Map<string, OwnerScope>>();
 function ownerEntry(owner: DatabaseOwner): OwnerEntry {
-  let entry = localOwners.get(owner.holderId)?.deref();
+  let entry = ownerEntries.get(owner);
   if (!entry) {
     entry = { owner, references: 1 };
-    localOwners.set(owner.holderId, new WeakRef(entry));
+    ownerEntries.set(owner, entry);
   }
   return entry;
 }
+function ownerScope(session: SqlExecutor, schema: string): OwnerScope {
+  const identity = sqlDatabaseIdentity(session);
+  let schemas = databaseOwners.get(identity);
+  if (!schemas) databaseOwners.set(identity, schemas = new Map());
+  let scope = schemas.get(schema);
+  if (!scope) schemas.set(schema, scope = {});
+  return scope;
+}
 
-/** The durable holder row identifies a database/schema across connection objects. */
+/** Explicit runtime attachments share only one database instance and schema. */
 export async function openDatabaseOwner(
   session: SqlSession,
   schema: string,
   clock: { now?: () => Date; alarmScheduler?: OwnerAlarmScheduler } = {},
 ): Promise<DatabaseOwner> {
-  const tables = createCoreTableNames(schema);
-  const observed = await session.query<
-    { epoch: string | number; holder: string }
-  >(
-    `SELECT epoch,holder FROM ${tables.owner_epochs} WHERE owner=$1`,
-    ["schema"],
-  );
-  const row = observed.rows[0];
-  const existingEntry = row && localOwners.get(row.holder)?.deref();
-  if (existingEntry?.closing) {
-    await existingEntry.closing;
-    return await openDatabaseOwner(session, schema, clock);
+  return await acquireDatabaseOwner(session, schema, clock, true);
+}
+
+function acquireDatabaseOwner(
+  session: SqlSession,
+  schema: string,
+  clock: { now?: () => Date; alarmScheduler?: OwnerAlarmScheduler },
+  attachment: boolean,
+): Promise<DatabaseOwner> {
+  const scope = ownerScope(session, schema);
+  // Repository helpers borrow an attachment; constructing another SQL adapter
+  // must not silently add a reference with no matching runtime release.
+  if (!attachment && scope.entry && scope.entry.owner.state !== "stopped") {
+    return Promise.resolve(scope.entry.owner);
   }
-  const existing = existingEntry && existingEntry.owner;
-  if (
-    existing && existing.state !== "stopped" &&
-    existing.epoch === Number(row.epoch)
-  ) {
-    ownerEntry(existing).references++;
-    bindOwner(session, schema, existing);
-    return existing;
+  if (scope.opening) {
+    return attachment
+      ? scope.opening.then(() =>
+        acquireDatabaseOwner(session, schema, clock, true)
+      )
+      : scope.opening;
   }
-  const owner = createOwnerCommands({
-    session,
-    schema,
-    handlers: {},
-    ...clock,
+  const opening = (async () => {
+    if (scope.entry?.closing) await scope.entry.closing;
+    if (!attachment) await provisionCopilotzSchema(session, schema);
+    const tables = createCoreTableNames(schema);
+    const row =
+      (await session.query<{ epoch: string | number; holder: string }>(
+        `SELECT epoch,holder FROM ${tables.owner_epochs} WHERE owner=$1`,
+        ["schema"],
+      )).rows[0];
+    const entry = scope.entry;
+    if (entry?.closing) await entry.closing;
+    const existing = entry?.owner;
+    if (
+      entry && existing && existing.state !== "stopped" &&
+      existing.holderId === row?.holder && existing.epoch === Number(row.epoch)
+    ) {
+      if (attachment) entry.references++;
+      return existing;
+    }
+    const owner = createOwnerCommands({
+      session,
+      schema,
+      handlers: {},
+      ...clock,
+    });
+    await owner.acquire(Number(row?.epoch ?? 0));
+    const created = ownerEntry(owner);
+    // Bootstrap helpers hold no runtime attachment to release at shutdown.
+    created.references = attachment ? 1 : 0;
+    created.scope = scope;
+    scope.entry = created;
+    return owner;
+  })();
+  scope.opening = opening;
+  // Clear only this acquisition; failures do not poison the instance's registry.
+  return opening.finally(() => {
+    if (scope.opening === opening) scope.opening = undefined;
   });
-  await owner.acquire(Number(row?.epoch ?? 0));
-  ownerEntry(owner);
-  bindOwner(session, schema, owner);
-  return owner;
 }
 
 /** A shared owner keeps the remaining runtime's alarm handlers alive. */
@@ -882,15 +931,11 @@ export function releaseDatabaseOwner(owner: DatabaseOwner): Promise<void> {
   if (entry.closing) return entry.closing;
   if (--entry.references > 0) return Promise.resolve();
   entry.closing = owner.close().finally(() => {
-    localOwners.delete(owner.holderId);
+    if (entry.scope?.entry === entry) entry.scope.entry = undefined;
   });
   return entry.closing;
 }
 
-const schemaOwners = new WeakMap<
-  SqlSession,
-  Map<string, OwnerEntry | Promise<DatabaseOwner>>
->();
 const commandContexts = new WeakMap<SqlExecutor, {
   schema: string;
   ownerId: string;
@@ -912,26 +957,16 @@ export function afterCommandAuthorization(
 
 /** Repositories retain the owner selected at construction or first admission. */
 export function bindSchemaOwner(session: SqlSession, schema: string) {
-  let owners = schemaOwners.get(session);
-  if (!owners) schemaOwners.set(session, owners = new Map());
+  const scope = ownerScope(session, schema);
   const selected = () => {
-    const entry = owners!.get(schema);
-    if (entry instanceof Promise) return entry;
-    const owner = entry?.owner;
+    const owner = scope.entry?.owner;
     return owner && owner.state !== "stopped"
       ? Promise.resolve(owner)
-      : undefined;
+      : scope.opening;
   };
   let acquired = selected();
   return () =>
-    acquired ??= selected() ?? (() => {
-      const opening = (async () => {
-        await provisionCopilotzSchema(session, schema);
-        return await openDatabaseOwner(session, schema);
-      })();
-      owners!.set(schema, opening);
-      return opening;
-    })();
+    acquired ??= selected() ?? acquireDatabaseOwner(session, schema, {}, false);
 }
 
 /** Capture once: an old repository never retargets authority to a successor. */
@@ -945,16 +980,6 @@ export function createSchemaExecutionAuthority(
   };
 }
 
-function bindOwner(
-  session: SqlSession,
-  schema: string,
-  owner: DatabaseOwner,
-): void {
-  let owners = schemaOwners.get(session);
-  if (!owners) schemaOwners.set(session, owners = new Map());
-  owners.set(schema, ownerEntry(owner));
-}
-
 /** Package-only query handle association; never grants session acquisition. */
 export function bindCommandExecutorAlias(
   executor: SqlExecutor,
@@ -963,6 +988,7 @@ export function bindCommandExecutorAlias(
 ): void {
   assertCommandTransaction(transaction);
   const source = commandSource(transaction);
+  bindSqlDatabaseIdentity(executor, source);
   commandContexts.set(executor, {
     ...commandContexts.get(source)!,
     source,

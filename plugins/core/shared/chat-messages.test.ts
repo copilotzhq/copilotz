@@ -283,3 +283,46 @@ test("JSON tool results pass through: a resolved value as data, a reference to r
   });
   assert.equal(reply.activity[1].data, undefined);
 });
+
+test("text a budgeted read deferred stays in order, to load on demand", () => {
+  const deferredText = (assetId: string) => ({
+    assetId,
+    kind: "text",
+    role: "body",
+    mediaType: "text/markdown",
+    resolve: false,
+    deferred: "budget",
+    byteLength: 4096,
+  });
+  const senders: Record<string, ChatSender> = {
+    north,
+    tool: sender("tool", "tool", "search"),
+  };
+  const messages = projectMessages([
+    {
+      id: "a",
+      senderId: "north",
+      content: [text("First"), deferredText("later")],
+      metadata: { llmToolCalls: [{ id: "c1", action: "search", input: {} }] },
+    },
+    { id: "b", senderId: "north", content: [deferredText("only")] },
+    {
+      id: "r",
+      senderId: "tool",
+      content: [deferredText("result")],
+      metadata: { toolInvocation: { id: "c1" }, toolStatus: "completed" },
+    },
+  ], (id) => senders[id]);
+  assert.deepEqual(messages.map((message) => message.id), ["a", "b"]);
+  assert.equal(messages[0].text, "First");
+  assert.deepEqual(messages[0].pending, [
+    { text: "First" },
+    { assetId: "later", byteLength: 4096 },
+  ]);
+  assert.equal(messages[1].text, "", "kept, though nothing is read yet");
+  assert.deepEqual(messages[0].activity[0].resultRef, {
+    messageId: "r",
+    assetId: "result",
+    kind: "text",
+  });
+});

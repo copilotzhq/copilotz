@@ -52,7 +52,7 @@ export type ChatActivity = Readonly<{
    * A JSON result the window read leaves as a reference; it is read on
    * demand (`chatLoadToolResult`), bounded, when the step or renderer shows.
    */
-  resultRef?: Readonly<{ messageId: string; assetId: string }>;
+  resultRef?: ToolResultRef;
   /** Why a referenced result is not shown yet. */
   resultStatus?: ToolResultStatus;
   error?: string;
@@ -62,11 +62,28 @@ export type ChatActivity = Readonly<{
 /** A referenced JSON result while it loads, or why it cannot show. */
 export type ToolResultStatus = "loading" | "too-large" | "unavailable";
 
+/** A text body the window read deferred (over its budget), to load on demand. */
+export type ChatDeferredBody = Readonly<{
+  assetId: string;
+  byteLength?: number;
+  /** Set once a load starts: still loading, too large to show, or failed. */
+  status?: "loading" | "too-large" | "unavailable";
+}>;
+
+/** A message's text in order: text already read, or a body still to load. */
+export type ChatTextPart = Readonly<{ text: string }> | ChatDeferredBody;
+
 export type ChatMessage = Readonly<{
   id: string;
   role: "user" | "assistant";
   sender: ChatSender;
+  /** The text read so far (see `pending`). */
   text: string;
+  /**
+   * Present while part of the text is deferred: every part in order, so the
+   * loaded bodies (`chatLoadBody`) join the text where they belong.
+   */
+  pending?: readonly ChatTextPart[];
   createdAt: string;
   attachments: readonly ChatAttachment[];
   activity: readonly ChatActivity[];
@@ -135,9 +152,13 @@ function entries(content: unknown): readonly ContentEntry[] {
     : [];
 }
 
-/** The readable text of a message body; reasoning and assets stay out. */
-export function messageText(content: unknown): string {
-  return entries(content).flatMap((entry) => {
+/**
+ * A message body's text parts in order: read text, or a text body the read
+ * left as a reference (deferred over its budget). Reasoning and assets stay
+ * out.
+ */
+export function messageTextParts(content: unknown): ChatTextPart[] {
+  return entries(content).flatMap((entry): ChatTextPart[] => {
     const role = typeof entry.role === "string" ? entry.role : "";
     if (role.startsWith("reasoning")) return [];
     const kind = entry.kind ?? (entry as { type?: unknown }).type;
@@ -145,8 +166,29 @@ export function messageText(content: unknown): string {
     const value = typeof entry.value === "string"
       ? entry.value
       : (entry as { text?: unknown }).text;
-    return typeof value === "string" && value.trim() ? [value] : [];
-  }).join("\n\n");
+    if (typeof value === "string") return value.trim() ? [{ text: value }] : [];
+    const deferred = entry as { resolve?: unknown; byteLength?: unknown };
+    return deferred.resolve === false && typeof entry.assetId === "string"
+      ? [{
+        assetId: entry.assetId,
+        ...(typeof deferred.byteLength === "number"
+          ? { byteLength: deferred.byteLength }
+          : {}),
+      }]
+      : [];
+  });
+}
+
+/** Joins the text parts that are read. */
+export function joinText(parts: readonly ChatTextPart[]): string {
+  return parts.flatMap((part) => "text" in part ? [part.text] : []).join(
+    "\n\n",
+  );
+}
+
+/** The readable text of a message body; reasoning and assets stay out. */
+export function messageText(content: unknown): string {
+  return joinText(messageTextParts(content));
 }
 
 /** Image, audio, video and file entries, as references for previews. */
@@ -189,9 +231,16 @@ type ToolResult = {
   status: ChatActivityStatus;
   result?: string;
   data?: unknown;
-  resultRef?: { messageId: string; assetId: string };
+  resultRef?: ToolResultRef;
   error?: string;
 };
+
+/** A tool result body the read left as a reference: JSON, or deferred text. */
+export type ToolResultRef = Readonly<{
+  messageId: string;
+  assetId: string;
+  kind?: "json" | "text";
+}>;
 
 /**
  * A tool's JSON result: its value when the read resolved it, otherwise a
@@ -220,7 +269,19 @@ function toolResult(row: Row): [string, ToolResult] | undefined {
   const id = text(record(metadata.toolInvocation).id);
   if (!id) return undefined;
   const status = metadata.toolStatus;
-  const body = messageText(row.content);
+  const parts = messageTextParts(row.content);
+  const body = joinText(parts);
+  // A text result the window read deferred is read on demand, like JSON.
+  const later = parts.find((part) => "assetId" in part);
+  const deferredText = !body && later && "assetId" in later
+    ? {
+      resultRef: {
+        messageId: String(row.id),
+        assetId: later.assetId,
+        kind: "text" as const,
+      },
+    }
+    : {};
   return [id, {
     status: status === "completed"
       ? "complete"
@@ -228,6 +289,7 @@ function toolResult(row: Row): [string, ToolResult] | undefined {
       ? "failed"
       : "active",
     ...(body ? { result: body } : {}),
+    ...deferredText,
     ...jsonResult(row),
     ...(status === "cancelled"
       ? { error: "Cancelled." }
@@ -346,15 +408,20 @@ export function projectMessages(
         ...(result?.error ? { error: result.error } : {}),
       });
     }
-    const body = messageText(row.content);
+    const parts = messageTextParts(row.content);
+    const body = joinText(parts);
+    const pending = parts.some((part) => "assetId" in part) ? parts : undefined;
     const attachments = messageAttachments(row.content);
     const human = sender.type === "human";
-    if (!human && !body && !attachments.length && !activity.length) continue;
+    if (
+      !human && !body && !pending && !attachments.length && !activity.length
+    ) continue;
     messages.push({
       id: row.id,
       role: human ? "user" : "assistant",
       sender,
       text: body,
+      ...(pending ? { pending } : {}),
       createdAt: String(row.createdAt ?? ""),
       attachments,
       activity,

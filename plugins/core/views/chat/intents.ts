@@ -165,6 +165,8 @@ export async function loadToolResult(
     threadId: string;
     messageId: string;
     assetId: string;
+    /** `text` for a text result the window read deferred; JSON otherwise. */
+    kind?: "json" | "text";
   },
   ctx: BrowserActionContext,
 ): Promise<void> {
@@ -183,7 +185,45 @@ export async function loadToolResult(
       ctx.signal,
     );
     if (body.size > TOOL_RESULT_BYTES) return set({ status: "too-large" });
-    set({ status: "ready", value: JSON.parse(await body.text()) });
+    const text = await body.text();
+    set(
+      input.kind === "text"
+        ? { status: "ready", text }
+        : { status: "ready", value: JSON.parse(text) },
+    );
+  } catch {
+    set({ status: "unavailable" });
+  }
+}
+
+/** The largest message text body read on demand; larger ones say so. */
+export const MESSAGE_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Reads a message text body the window read deferred (over its budget), once,
+ * through the host's message asset capability, and keeps it in `messageBody`
+ * by asset id.
+ */
+export async function loadMessageBody(
+  input: { threadId: string; messageId: string; assetId: string },
+  ctx: BrowserActionContext,
+): Promise<void> {
+  const current = ctx.collections.messageBody?.get(input.assetId).value;
+  if (current && current.status !== "unavailable") return;
+  const set = (row: Record<string, unknown>) =>
+    ctx.command("messageBody", input.assetId, "set", row);
+  const host = feed(ctx);
+  if (!host?.asset) return set({ status: "unavailable" });
+  set({ status: "loading" });
+  try {
+    const body = await host.asset(
+      input.threadId,
+      input.messageId,
+      input.assetId,
+      ctx.signal,
+    );
+    if (body.size > MESSAGE_BODY_BYTES) return set({ status: "too-large" });
+    set({ status: "ready", text: await body.text() });
   } catch {
     set({ status: "unavailable" });
   }

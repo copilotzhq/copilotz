@@ -1006,6 +1006,56 @@ test("the header title keeps priority; the agent selector slot collapses by cont
   }
 });
 
+test("message text a window read deferred loads when it shows; too long says so", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    shell.feed.bodies.set("long-a", "The **rest** of a long answer.");
+    shell.feed.bodies.set("long-b", "x".repeat(1024 * 1024 + 1));
+    const deferred = (assetId: string) => ({
+      assetId,
+      kind: "text",
+      role: "body",
+      mediaType: "text/markdown",
+      resolve: false,
+      deferred: "budget",
+      byteLength: 4096,
+    });
+    await act(async () => {
+      shell.live.put(
+        "message",
+        {
+          id: "m-long-a",
+          threadId: "t1",
+          senderId: "p-north",
+          createdAt: "2026-10-21T10:03:00.000Z",
+          content: [deferred("long-a")],
+          metadata: {},
+        },
+        {
+          id: "m-long-b",
+          threadId: "t1",
+          senderId: "p-north",
+          createdAt: "2026-10-21T10:04:00.000Z",
+          content: [deferred("long-b")],
+          metadata: {},
+        },
+      );
+      await settle();
+    });
+    await act(async () => {
+      await settle();
+    });
+    assert.match(main(), /The rest of a long answer\./);
+    assert.match(main(), /This message is too long to show here\./);
+    assert.deepEqual(shell.feed.assetReads.sort(), [
+      "m-long-a/long-a",
+      "m-long-b/long-b",
+    ]);
+  } finally {
+    await shell.dispose();
+  }
+});
+
 test("search finds chats by title and by Space name", async () => {
   const shell = await mount("https://app.example/?chat=t1");
   try {

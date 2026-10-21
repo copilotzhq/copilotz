@@ -486,11 +486,14 @@ fetched when the browser is idle. `preloadMarkdown()` loads both at once, for
 server rendering and tests.
 
 Chat opts into the existing Collection content read contract for text bodies,
-with an aggregate 256 KiB limit. Non-text assets remain explicit references that
-the message View loads on demand through `adapters.core.feed.asset`. The live
-port must honor the read's `content` selection as well as authorization;
-snapshots and deltas carry resolved text entries
-(`kind: "text", value: string`).
+with an aggregate 256 KiB budget, 64 KiB per body and `overflow: "defer"`: the
+newest bodies resolve, and a body over the budget stays a reference that the
+message loads when it shows (`chatLoadBody`, up to 1 MiB) through
+`adapters.core.feed.asset`. A thread's window therefore never fails because its
+messages are long. Non-text assets remain explicit references that the message
+View loads on demand through the same capability. The live port must honor the
+read's `content` selection as well as authorization; snapshots and deltas carry
+resolved text entries (`kind: "text", value: string`).
 
 ## Kit components and source packaging
 

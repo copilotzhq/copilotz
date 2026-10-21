@@ -226,6 +226,12 @@ runtime keeping a live refusal's code. Screenshots: `contracts/web-demo` at
   (`intentServerActions`; the unused `deleteThreadMessages` alias is gone); the
   header title keeps priority over the `agents` slot; the kit vendors KaTeX's
   CSS and fonts.
+- 2026-10-21 (content budget): a window read never fails for size. Content reads
+  take `bodyByteLimit` and `overflow: "defer"` (bodies resolve in read order
+  while they fit; the rest stay `resolve: false` references marked `deferred`
+  with `byteLength`); live subscription windows defer by default. The chat's
+  message selection defers, and `chatLoadBody` reads deferred text when it shows
+  (`messageBody`, `ChatMessage.pending`).
 
 ## Held reads in nested Views
 

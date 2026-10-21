@@ -209,7 +209,9 @@ their tracked Views when owner frames apply. Optimistic commands are projected
 over SDK-owned layers; only the SDK decides when each read has covered the
 Action sequence. `ActionTransport` accepts decimal-string sequences as well as
 safe integers. Content selections are forwarded and resolved using the existing
-Collection content reader, with its declared fields and byte budget.
+Collection content reader, with its declared fields and byte budget. A window
+defers bodies over its budget instead of failing (`overflow: "defer"` unless the
+subscriber asks to reject; see [Content and assets](./content-assets.md)).
 
 For query invalidation without records, use
 `client.collections.observe(name, {}, {progressOnly:true})`. This is the same

@@ -338,7 +338,7 @@ async function createThreadMessageAttempt(
       optionalText(existingSender?.id),
     )).map((recipient) => recipient.id);
   const content = decodeGeneratedContent(data.content ?? []);
-  await context.transaction(async (tx) => {
+  const written = await context.transaction(async (tx) => {
     const collections = tx.collections;
     if (!collections.message) {
       throw new Error("Collection 'message' is not bound.");
@@ -440,7 +440,13 @@ async function createThreadMessageAttempt(
     }
     return created;
   });
-  const created = await context.collections.message.get({ id });
+  // The committed create already returns the canonical record; read it back
+  // only when the write path returned something else.
+  const created = written && typeof written === "object" &&
+      (written as CollectionRecord).id === id &&
+      typeof (written as CollectionRecord).createdAt === "string"
+    ? written as CollectionRecord
+    : await context.collections.message.get({ id });
   if (!created) {
     throw new Error(`Message '${id}' was not created.`);
   }

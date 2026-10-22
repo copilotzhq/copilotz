@@ -360,6 +360,6 @@ New tests: `runtime/engine/deadline-batch.test.ts`,
 result check for a primitive read.
 
 Also added `scripts/benchmark-turn.ts`, `scripts/report-turn.ts`, this report
-and five compact JSON results under `(local results, not committed) `.
+and five compact JSON results under `(local results, not committed)`.
 `runtime/content/catalog.ts` and the retirement loop in `database-repository.ts`
 were not edited.

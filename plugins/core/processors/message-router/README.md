@@ -27,3 +27,10 @@ If preparation exhausts its delivery retries before the LLM Action starts,
 `onError` settles an owned Ask through the same deferred Tool-plan mechanism as
 an LLM failure. Temporary preparation failures retain normal retries; unrelated
 or unauthorized failures retain dead-letter handling.
+
+Each Agent recipient has a stable, independent Action identity. Input
+preparation is serialized within a routing invocation so snapshot ownership and
+compaction remain ordered; provider execution may overlap once the inputs are
+captured. The router awaits every recipient's settlement before propagating a
+retryable failure. Delivery retries replay completed peers and retry only
+unfinished turns.

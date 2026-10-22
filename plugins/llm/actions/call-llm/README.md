@@ -45,11 +45,27 @@ Each provider candidate uses the Action's durable external-effect protocol. The
 normalized completion is confirmed before stream draining, sealing, capture and
 promotion. Delivery retries reuse that response, including text, tools,
 reasoning and usage, without resolving credentials or calling the provider
-again. Credential skips and received failures are checkpointed too, so resuming
-a fallback does not select a different provider or repeat earlier requests. A
-dispatch with no confirmed outcome remains indeterminate and is never blindly
-repeated. The checkpoint follows the existing 1 MiB effect outcome limit; an
-oversized outcome fails visibly instead of risking rebilling.
+again. Credential skips and permanent failures are retained too. A known
+incomplete network/TLS/reset, provider timeout, HTTP 429 or 5xx attempt closes
+its individual dispatch with a retry receipt. A later delivery uses a fresh
+attempt step; it never rethrows that receipt as a permanent result. Before
+dispatch, the Action checks all candidates for an already completed response,
+including a fallback. Missing fallback credentials never replace the primary
+provider error.
+
+Explicit retryable failures leave the logical Action open until its retained
+delivery budget is exhausted. Delivery scheduling applies bounded exponential
+backoff and a Retry-After hint (seconds or HTTP date, capped at 30 seconds and
+the configured retry cap). Backoff does not hold a worker slot. Permanent auth,
+invalid-request and refusal errors settle immediately. Terminal failure text
+identifies the provider problem and, after exhaustion, the delivery attempt
+count.
+
+An interrupted dispatch with no confirmed outcome remains indeterminate and is
+never blindly repeated. A received incomplete response is retryable under this
+policy; it cannot prove that the remote provider charged nothing. The completion
+checkpoint follows the existing 1 MiB effect outcome limit; an oversized outcome
+fails visibly instead of risking a duplicate completed request.
 
 Physical stream incarnations belong to delivery attempts. Their failure does not
 settle a chat reply: the feed waits for a durable Action or operation terminal.

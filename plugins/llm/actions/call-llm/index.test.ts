@@ -1120,7 +1120,7 @@ Deno.test("settled attempts remain accounted when later credentials are unavaila
         }],
       }, test.context),
     Error,
-    "No LLM credential is available",
+    "primary failed",
   );
   assertEquals(test.progressValues(), [{
     schema: "copilotz.llm.attempt-accounting.v1",
@@ -4162,4 +4162,214 @@ Deno.test("retry preserves credential skips before a completed paid fallback", a
   assertEquals(output.connection, "backup");
   assertEquals(resolutions, 1);
   assertEquals(calls, 1);
+});
+
+for (const status of [429, 503, 408, 401, 400]) {
+  Deno.test(`provider HTTP ${status} uses a fresh dispatch only for retryable failures`, async () => {
+    let calls = 0;
+    const test = fixture({
+      llmConnections: { primary: { adapter: "provider" } },
+      adapters: {
+        provider: {
+          call() {
+            calls++;
+            return invocation(
+              calls === 1
+                ? Promise.reject(
+                  Object.assign(new Error("provider rejected request"), {
+                    status,
+                    retryAfterMs: 1234,
+                  }),
+                )
+                : {
+                  content: "full answer",
+                  attempts: [{ status: "completed" }],
+                },
+            );
+          },
+        },
+      },
+    });
+    const failure = await assertRejects(() =>
+      Promise.resolve(callLlmAction.execute(baseInput, test.context))
+    ) as Error & { retryable: boolean; retryAfterMs: number };
+    const retryable = [429, 503, 408].includes(status);
+    assertEquals(failure.retryable, retryable);
+    assertEquals(failure.retryAfterMs, 1234);
+    if (retryable) {
+      await callLlmAction.execute(baseInput, test.context);
+      await callLlmAction.execute(baseInput, test.context);
+      assertEquals(calls, 2);
+    } else {
+      await assertRejects(() =>
+        Promise.resolve(callLlmAction.execute(baseInput, test.context))
+      );
+      assertEquals(calls, 1);
+    }
+  });
+}
+
+Deno.test("a paid fallback is reused before retrying an earlier transient provider failure", async () => {
+  let primaryCalls = 0, backupCalls = 0, failedCapture = false;
+  const test = fixture({
+    llmConnections: {
+      primary: { adapter: "primary" },
+      backup: { adapter: "backup" },
+    },
+    adapters: {
+      primary: {
+        call() {
+          primaryCalls++;
+          return invocation(Promise.reject(new TypeError("fetch failed")));
+        },
+      },
+      backup: {
+        call() {
+          backupCalls++;
+          return invocation({
+            content: "paid fallback",
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+    onCapture() {
+      if (!failedCapture) {
+        failedCapture = true;
+        throw new Error("capture lost");
+      }
+    },
+  });
+  const input = {
+    ...baseInput,
+    models: [{ connection: "primary", model: "first" }, {
+      connection: "backup",
+      model: "second",
+    }] as const,
+  };
+  await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(input, test.context))
+  );
+  const output = await callLlmAction.execute(input, test.context);
+  assertEquals(output.connection, "backup");
+  assertEquals(output.attempts?.map((a) => a.status), ["failed", "completed"]);
+  assertEquals(primaryCalls, 1);
+  assertEquals(backupCalls, 1);
+});
+
+Deno.test("a provider timeout before completion retries without becoming cancellation", async () => {
+  const { LLMStreamTimeoutError } = await import("../../shared/errors.ts");
+  let calls = 0;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call() {
+          calls++;
+          return invocation(
+            calls === 1
+              ? Promise.reject(new LLMStreamTimeoutError("first_token", 100))
+              : {
+                content: "answer after timeout",
+                attempts: [{ status: "completed" }],
+              },
+          );
+        },
+      },
+    },
+  });
+  const error = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(baseInput, test.context))
+  ) as Error & { retryable: boolean; code: string };
+  assertEquals(error.code, "llm_provider_timeout");
+  assertEquals(error.retryable, true);
+  await callLlmAction.execute(baseInput, test.context);
+  assertEquals(calls, 2);
+});
+
+Deno.test("an interrupted visible stream retries with the full replacement answer", async () => {
+  const failedResult = Promise.withResolvers<LlmAdapterResult>();
+  let calls = 0;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call() {
+          calls++;
+          return calls === 1
+            ? invocation(
+              failedResult.promise,
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue({
+                    lane: "content",
+                    mediaType: "text/plain",
+                    bytes: encoder.encode("discarded partial"),
+                  });
+                  controller.close();
+                },
+              }),
+            )
+            : invocation({
+              content: "The complete replacement answer.",
+              attempts: [{ status: "completed" }],
+            });
+        },
+      },
+    },
+    onAppend() {
+      failedResult.reject(new TypeError("fetch failed"));
+    },
+  });
+  const input = { ...baseInput, stream: { id: "reply" } };
+  const error = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(input, test.context))
+  ) as Error & { retryable: boolean };
+  assertEquals(error.retryable, true);
+  assertEquals(test.opened.length, 1);
+  assertEquals(test.opened[0].aborted, true);
+  await callLlmAction.execute(input, test.context);
+  assertEquals(calls, 2);
+  assertEquals(
+    decoder.decode(test.captured.at(-1)!.assets[0].body),
+    "The complete replacement answer.",
+  );
+});
+
+Deno.test("credential resolution failure cannot mask a later provider rejection", async () => {
+  const test = fixture({
+    llmConnections: {
+      missing: {
+        provider: "openai",
+        auth: {
+          resolve() {
+            throw new Error("account unavailable");
+          },
+        },
+      },
+      primary: { adapter: "provider" },
+    },
+    adapters: {
+      provider: {
+        call() {
+          return invocation(
+            Promise.reject(
+              Object.assign(new Error("bad key"), { status: 401 }),
+            ),
+          );
+        },
+      },
+    },
+  });
+  const failure = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute({
+      ...baseInput,
+      models: [{ connection: "missing", model: "first" }, {
+        connection: "primary",
+        model: "second",
+      }],
+    }, test.context))
+  ) as Error & { code: string; retryable: boolean };
+  assertEquals(failure.code, "llm_provider_auth_error");
+  assertEquals(failure.retryable, false);
 });

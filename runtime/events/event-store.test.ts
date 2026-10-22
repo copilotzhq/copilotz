@@ -1634,3 +1634,44 @@ Deno.test("A55 event core is runtime-neutral and factory-first", async () => {
     );
   }
 });
+
+Deno.test("delivery backoff honors a bounded provider Retry-After hint", async () => {
+  const schema = `retry_hint_${crypto.randomUUID().replaceAll("-", "")}`;
+  const f = await createFixture(
+    Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    schema,
+  );
+  try {
+    for (
+      const [hint, expected] of [[2000, 2000], [999999, 30000], [-1, 0], [
+        NaN,
+        0,
+      ]]
+    ) {
+      const appended = await f.store.append({
+        type: "retry.hint",
+        namespace: "test",
+        payload: {},
+      }, ["worker"]);
+      const id = appended.deliveries[0].id;
+      await f.store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 });
+      const delivery = await f.store.failDelivery({
+        id,
+        owner: "worker",
+        error: Object.assign(new Error("provider unavailable"), {
+          retryable: true,
+          retryAfterMs: hint,
+        }),
+      });
+      assertEquals(delivery?.status, "retry_wait");
+      const row = (await f.session.query<{ delay: number }>(
+        `SELECT EXTRACT(EPOCH FROM (available_at-updated_at))*1000 AS delay FROM "${schema}".event_deliveries WHERE id=$1`,
+        [id],
+      )).rows[0];
+      assertEquals(Number(row.delay), expected);
+    }
+  } finally {
+    await f.db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await closeFixture(f);
+  }
+});

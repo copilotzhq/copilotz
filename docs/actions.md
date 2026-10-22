@@ -575,6 +575,19 @@ a newer deployment. Old attempts without the original replay contract cannot
 acquire it retroactively. Swallowing an effect error does not permit a
 successful Action terminal.
 
+An Action error explicitly marked `retryable: true` leaves its lifecycle open
+when an owner-retained delivery has attempts remaining. It emits no failed or
+cancelled Action event until terminal exhaustion. Ordinary unclassified errors
+and direct calls without a delivery budget keep immediate settlement. All begun
+effects must still have confirmed outcomes; retryability never overrides an
+indeterminate external effect. A bounded `retryAfterMs` error hint can delay the
+next delivery without occupying execution capacity.
+
+The LLM Action distinguishes an observed incomplete transient response from an
+interrupted dispatch of unknown outcome. It retains a retry receipt for the
+former, uses a fresh candidate attempt on the next delivery, and reuses any
+completed candidate before considering further provider requests.
+
 Built-in channel delivery, command execution, file mutation, mutating HTTP and
 unknown MCP calls use this protocol. Read-only filesystem tools, HTTP
 GET/HEAD/OPTIONS and terminal inspection/export keep ordinary retry behavior.

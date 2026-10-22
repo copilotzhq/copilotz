@@ -1,3 +1,4 @@
+import { providerRetryAfter } from "../../shared/provider-failure.ts";
 // =============================================================================
 // REQUEST CONNECTOR - HTTP client based on fetch with streaming support
 // =============================================================================
@@ -36,6 +37,7 @@ export interface StreamResponse {
 export interface RequestError extends Error {
   status?: number;
   statusText?: string;
+  retryAfterMs?: number;
   response?: Response;
   data?: unknown;
 }
@@ -111,6 +113,9 @@ export async function request<T = unknown>(
           `Request failed with status ${response.status}`,
         ) as RequestError;
         error.status = response.status;
+        error.retryAfterMs = providerRetryAfter(
+          response.headers.get("retry-after"),
+        );
         error.statusText = response.statusText;
         error.response = response;
 

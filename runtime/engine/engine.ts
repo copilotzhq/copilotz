@@ -859,6 +859,10 @@ export async function createCopilotzEngine(
           event: base.event,
           signal: base.signal,
           executionIncarnationId: base.dispatchAttemptId,
+          deliveryAttempt: {
+            attempts: base.delivery.attempts,
+            maxAttempts: base.delivery.maxAttempts,
+          },
           settlementScopeId: base.settlementScopeId,
           actionScopeId: base.actionScopeId,
           idempotencyKey: base.idempotencyKey,

@@ -1658,9 +1658,15 @@ export function createEventStore(
             retryBaseMs * (2 ** Math.max(0, current.attempts - 1)),
           );
           const jitter = Math.min(1, Math.max(0, random()));
+          const hint = failure.error && typeof failure.error === "object"
+            ? (failure.error as { retryAfterMs?: unknown }).retryAfterMs
+            : undefined;
+          const retryAfterMs = typeof hint === "number" && Number.isFinite(hint)
+            ? Math.min(retryCapMs, Math.max(0, hint))
+            : 0;
           const backoffMs = boundedInteger(
             failure.backoffMs,
-            Math.floor(exponential * jitter),
+            Math.max(retryAfterMs, Math.floor(exponential * jitter)),
             0,
           );
           const retryable = failure.retryable ??

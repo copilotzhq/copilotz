@@ -198,6 +198,11 @@ export function observeAuthorizationWrites(
           }
           continue;
         }
+        // An opaque event deletion can cascade to its delivery rows. Known
+        // event appends use row hints and do not disturb existing leases.
+        if (table === "events" && /\bDELETE\s+FROM\b/i.test(sql)) {
+          keys.push(tableKey(schema, "event_deliveries"));
+        }
         if (
           table === "nodes" && changes &&
           !sql.includes("projection_manifest_inserted")
@@ -322,4 +327,31 @@ export function reportAuthorizationCache(
   result: string,
 ): void {
   contexts.get(transaction)?.owner.observe?.(cache, result);
+}
+
+/** Immutable owner-observed facts, invalidated by the same writes as decisions. */
+const recordReads = { cache: "authorization-record" };
+export async function readAuthorizationRecord<T>(
+  transaction: SqlExecutor,
+  schema: string,
+  dependency: AuthorityDependency,
+  read: () => Promise<T>,
+): Promise<T> {
+  const key = JSON.stringify([schema, dependency]);
+  const saved = cachedAuthorization<{ value: T }>(
+    transaction,
+    recordReads,
+    key,
+  );
+  if (saved) return structuredClone(saved.value);
+  const context = contexts.get(transaction);
+  const keys = authorizationDependencyKeys(schema, [dependency]);
+  const stamp = context?.owner.stamp(keys);
+  const value = await memoAuthorizationRead(transaction, key, keys, read);
+  if (stamp && context?.owner.valid(stamp)) {
+    rememberAuthorization(transaction, recordReads, key, {
+      value: structuredClone(value),
+    }, keys);
+  }
+  return value;
 }

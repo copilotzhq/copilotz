@@ -257,8 +257,8 @@ staff-directory reads and verifier evidence reads retain fresh evaluation
 because they lack the required local dependency fence; declaring an unused
 evidence reader does not disable reuse. Directory commands also retain fresh
 evaluation. The internal cache observer distinguishes absent and stale entries,
-and reports decisions that cannot be retained (staff, evidence, directory or
-expired deadlines).
+and reports decisions that cannot be retained (staff, evidence, directory,
+command-time reads, no tracked local facts, or expired deadlines).
 
 Within one owner command, session lookups and policy `read.get` calls share
 pending reads keyed by schema, namespace, collection and record ID (session keys
@@ -1119,3 +1119,43 @@ continues to v14:
   [0.90.0 policy changes](upgrading.md#upgrading-to-0900).
 - Reference: [Subscriptions](subscriptions.md) covers live-read admission and
   limits.
+
+### Reusing Collection read and observation decisions
+
+Collection read admission and its result phase share owner-local decisions
+across commands. Their key contains the entire retained authority and canonical
+intent, including principal, authority basis, validity, policy revision, request
+facts, provenance, invocation, phase, arguments, current record and disclosed
+result. Keeping the full record value (including its version fields) in the
+result key prevents a different record version from inheriting an earlier result
+decision. Point reads also depend on their record key, including negative reads.
+List, aggregate, search and selector decisions depend on the collection set, so
+an insertion or removal invalidates existing results even when individual
+surviving records have not changed.
+
+The decision retains all policy-read dependencies and the session/flow fences.
+Attempt validity uses the owner's current lease facts and command time. Policy
+replacement or revision changes and owner restart invalidate reuse. Decisions
+and cached authorization-only record reads are copied before use and only
+published after commit; speculative rollback state cannot become a shared grant.
+Opaque SQL still invalidates conservatively. Known event appends invalidate only
+their own source row; opaque event deletes also fence lease state because event
+deletion can cascade to deliveries.
+
+`observation | operations | attach` reuses its policy decision under the same
+rules. Channel registration, expiry alarms and checks of selected operations or
+records still execute. Collection mutations and their post-commit disclosures
+retain fresh policy evaluation. Policies with no tracked local reads, actual
+remote staff/evidence reads, policies that inspect command time and directory
+delegation remain uncached. Mutable policy logic must use a new
+registration/revision; all changing authorization facts must be read through
+tracked sources.
+
+A warm worker Collection `get` needs no policy evaluation, session lookup,
+authorization-only record read or invocation-liveness query. It still reads the
+actual record and enters the serialized owner command. That fence protects
+cross-process owner takeover and the disclosure boundary. The existing
+repeatable read snapshot API is not a substitute for current authority:
+PostgreSQL snapshots can expose historical records, and protected PGlite
+snapshots themselves use an owner command. This optimization therefore retains
+that boundary.

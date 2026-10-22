@@ -32,7 +32,10 @@ import {
   type AuthenticatedAuthority,
   credentialValidity,
 } from "../authorization/authority.ts";
-import { observeAuthorizationCache } from "../authorization/cache.ts";
+import {
+  observeAuthorizationCache,
+  readAuthorizationRecord,
+} from "../authorization/cache.ts";
 import { assertCachedOwnerInvocationLive } from "../engine/invocation-liveness.ts";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext } from "../actions/types.ts";
@@ -306,10 +309,36 @@ Deno.test("Collection decisions reuse each phase; record versions, dependencies 
     const afterAppend = f.sql.length;
     await f.get();
     assertEquals(f.sql.length - afterAppend, 2);
+    let recordReads = 0;
+    const readRecord = () =>
+      f.run(
+        "read-record",
+        {},
+        (_, c) =>
+          readAuthorizationRecord(c.transaction, "public", {
+            owner: "schema",
+            namespace: "space",
+            collection: "record",
+            id: "record",
+          }, async () => {
+            recordReads++;
+            return (await c.transaction.query(
+              "SELECT data FROM public.nodes WHERE id='record'",
+            )).rows[0];
+          }),
+      );
+    await readRecord();
+    const readsBeforeWrite = recordReads;
+    const recordHits = f.counts["authorization-record.hit"] ?? 0;
     await f.write("record", "other", { visible: true, value: 1 }, true);
+    await readRecord();
+    assertEquals(recordReads, readsBeforeWrite);
+    assertEquals(f.counts["authorization-record.hit"], recordHits + 1);
     await f.get();
     assertEquals(f.phases.length, 2);
     await f.write("record", "record", { visible: true, value: 2 });
+    await readRecord();
+    assertEquals(recordReads, readsBeforeWrite + 1);
     await f.get();
     assertEquals(f.phases.length, 4);
     await f.list();
@@ -324,6 +353,96 @@ Deno.test("Collection decisions reuse each phase; record versions, dependencies 
     await f.write("record", "record", { visible: true });
     await f.get();
     await f.write("fact", "fact-3", { allowed: false });
+    await assertRejects(f.get);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("manifest projections invalidate asset points and sets while unrelated records stay warm", async () => {
+  const f = await fixture();
+  const reads: Record<string, number> = {};
+  const assets = (id?: string) =>
+    f.run(
+      "read-assets",
+      {},
+      (_, c) =>
+        readAuthorizationRecord(c.transaction, "public", {
+          owner: "schema",
+          namespace: "space",
+          collection: "asset",
+          ...(id ? { id } : {}),
+        }, async () => {
+          const key = id ?? "all";
+          reads[key] = (reads[key] ?? 0) + 1;
+          return (await c.transaction.query(
+            "SELECT id FROM public.nodes WHERE namespace='space' AND type='asset'" +
+              (id ? " AND id=$1" : ""),
+            id ? [id] : [],
+          )).rows;
+        }),
+    );
+  try {
+    await f.get();
+    assertEquals(await assets("body-A"), []);
+    assertEquals(await assets("body-B"), []);
+    assertEquals(await assets(), []);
+    await f.run("project-manifest", {}, (_, c) =>
+      projectCollectionEvent(
+        { transaction: c.transaction, tables: f.store.tables },
+        f.records,
+        {
+          operation: "create",
+          intent: { operation: "create", input: { id: "other" } },
+          record: {
+            id: "other",
+            namespace: "space",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          assets: [{
+            assetId: "body-A",
+            bodyId: "bytes-A",
+            mediaType: "text/plain",
+            byteLength: 0,
+            digest: `sha256:${"0".repeat(64)}`,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }],
+        },
+      ));
+    assertEquals(await assets("body-A"), [{ id: "body-A" }]);
+    assertEquals(await assets(), [{ id: "body-A" }]);
+    assertEquals(await assets("body-B"), []);
+    assertEquals(reads, { "body-A": 2, "body-B": 1, all: 2 });
+    await f.get();
+    assertEquals(f.phases, ["read", "result"]);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("a Collection notice is not a complete SQL write set", async () => {
+  const f = await fixture();
+  try {
+    await f.get();
+    await f.store.commitMutation({
+      draft: { namespace: "space", type: "opaque.changed", payload: {} },
+      consumers: [],
+      collectionChange: { collection: "record", id: "other", record: null },
+      statement: (_param, tables) => ({
+        ctes: [],
+        gate: "TRUE",
+        effects: (source) => [
+          `opaque_write AS (
+            UPDATE ${tables.nodes} SET data='{"allowed":false}'::jsonb
+            WHERE namespace='space' AND id='fact-3'
+            AND EXISTS(SELECT 1 FROM ${source})
+          )`,
+        ],
+        report: "'{}'::jsonb",
+        resolve: () => undefined,
+      }),
+    });
     await assertRejects(f.get);
   } finally {
     await f.close();

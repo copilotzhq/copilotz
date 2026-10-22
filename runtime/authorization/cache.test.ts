@@ -1,7 +1,9 @@
 import { assertEquals } from "@std/assert";
 import {
+  authorizationDependencyKeys,
   authorizationRowKeys,
   authorizationTableKey,
+  hintAuthorizationChanges,
   hintAuthorizationRows,
   observeAuthorizationWrites,
   OwnerAuthorizationCache,
@@ -108,6 +110,54 @@ Deno.test("returned write sets fence pending reads and invalidate only returned 
       await failing.query(`DELETE FROM public.event_deliveries RETURNING id`)
         .catch(() => {});
       assertEquals(owner.valid(b), false);
+    },
+  );
+});
+
+Deno.test("complete manifest write sets invalidate records and sets without fencing unrelated records", async () => {
+  const owner = new OwnerAuthorizationCache();
+  const raw: SqlExecutor = {
+    query: () => Promise.resolve({ rows: [], rowCount: 0 }),
+  };
+  const record = (collection: string, id?: string) => ({
+    owner: "schema",
+    namespace: "space",
+    collection,
+    ...(id ? { id } : {}),
+  });
+  const stamp = (collection: string, id?: string) =>
+    owner.stamp(
+      authorizationDependencyKeys("public", [record(collection, id)]),
+    );
+  await runSqlTransaction(
+    { transaction: (run) => run(raw) },
+    async (managed) => {
+      const tx = observeAuthorizationWrites(managed, owner, "public", 1);
+      const message = stamp("message", "A");
+      const asset = stamp("asset", "body-A");
+      const messages = stamp("message");
+      const assets = stamp("asset");
+      const other = stamp("message", "B");
+      const otherAsset = stamp("asset", "body-B");
+      hintAuthorizationChanges(tx, [
+        record("message", "A"),
+        record("asset", "body-A"),
+      ]);
+      await tx.query(
+        `WITH projection_manifest_inserted AS (
+          INSERT INTO public.nodes(id,type) VALUES('body-A','asset')
+        ) INSERT INTO public.nodes(id,type) VALUES('A','message')`,
+      );
+      for (const changed of [message, asset, messages, assets]) {
+        assertEquals(owner.valid(changed), false);
+      }
+      for (const unchanged of [other, otherAsset]) {
+        assertEquals(owner.valid(unchanged), true);
+      }
+      // Hints apply to one complete statement only; opaque writes stay coarse.
+      await tx.query("UPDATE public.nodes SET data='{}' WHERE id='B'");
+      assertEquals(owner.valid(other), false);
+      assertEquals(owner.valid(otherAsset), false);
     },
   );
 });

@@ -1,3 +1,4 @@
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import {
   ensureOwnerDataKey,
   ownerDataCipher,
@@ -217,6 +218,12 @@ async function insertOwner(
     throw new Error("Protected body has entered irreversible retirement.");
   }
   const expected = nodeData(ref);
+  hintAuthorizationChanges(context.transaction, [{
+    owner: "schema",
+    namespace,
+    collection: PROTECTED_VALUE_NODE_TYPE,
+    id: ref.ownerNodeId,
+  }]);
   await context.transaction.query(
     `INSERT INTO ${context.tables.nodes} (
        id, namespace, type, name, data, created_at, updated_at

@@ -203,10 +203,7 @@ export function observeAuthorizationWrites(
         if (table === "events" && /\bDELETE\s+FROM\b/i.test(sql)) {
           keys.push(tableKey(schema, "event_deliveries"));
         }
-        if (
-          table === "nodes" && changes &&
-          !sql.includes("projection_manifest_inserted")
-        ) {
+        if (table === "nodes" && changes) {
           for (const change of changes) {
             keys.push(
               recordKey(schema, change),

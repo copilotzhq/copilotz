@@ -1,3 +1,4 @@
+import type { AuthorityDependency } from "../authorization/authority.ts";
 import {
   rememberOwnerDelivery,
   writeOwnerDeliveries,
@@ -124,6 +125,9 @@ export type EventMutationContext = {
 export type EventStatement<T> = Readonly<{
   /** The statement creates or changes catalog content deadlines. */
   invalidatesContent?: boolean;
+  /** Complete possible nodes write set, supplied only by the trusted SQL composer.
+   * Omission retains table-wide invalidation; collectionChange is a notice, not a write set. */
+  nodeChanges?: readonly AuthorityDependency[];
   /** CTEs evaluated before the event insert. */
   ctes: readonly string[];
   /** The event is inserted only when this condition holds. */
@@ -1013,13 +1017,8 @@ export function createEventStore(
       // Delivery rows come back as JSON because a statement returns one row
       // shape. With a statement, the row exists even when no event was
       // inserted, to carry its report.
-      if (mutation.collectionChange) {
-        hintAuthorizationChanges(executor, [{
-          owner: "schema",
-          namespace: draft.namespace,
-          collection: mutation.collectionChange.collection,
-          id: mutation.collectionChange.id,
-        }]);
+      if (statement?.nodeChanges) {
+        hintAuthorizationChanges(executor, statement.nodeChanges);
       }
       if (!additionalWrites.some(({ table }) => table === "events")) {
         hintAuthorizationRows(executor, databaseSchema, "events", [eventId]);

@@ -1,3 +1,4 @@
+import { readAuthorizationRecord } from "../authorization/cache.ts";
 import { withTransactionEffects } from "./transaction-effects.ts";
 import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
@@ -1105,7 +1106,12 @@ export function createCollectionKernel(
         ...(id
           ? {
             current: (tx: SqlExecutor) =>
-              loadCollectionRecord(tx, tables, namespace, name, id),
+              readAuthorizationRecord(tx, options.eventStore.databaseSchema, {
+                owner: "schema",
+                namespace,
+                collection: name,
+                id,
+              }, () => loadCollectionRecord(tx, tables, namespace, name, id)),
           }
           : {}),
       }, authority)
@@ -1143,7 +1149,18 @@ export function createCollectionKernel(
           ...(recordId
             ? {
               current: (tx: SqlExecutor) =>
-                loadCollectionRecord(tx, tables, namespace, name, recordId),
+                readAuthorizationRecord(
+                  tx,
+                  options.eventStore.databaseSchema,
+                  {
+                    owner: "schema",
+                    namespace,
+                    collection: name,
+                    id: recordId,
+                  },
+                  () =>
+                    loadCollectionRecord(tx, tables, namespace, name, recordId),
+                ),
             }
             : {}),
         }, authority);

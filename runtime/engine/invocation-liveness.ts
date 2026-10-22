@@ -1,3 +1,14 @@
+import {
+  authorizationRowKeys,
+  authorizationTableKey,
+  cachedAuthorization,
+  rememberAuthorization,
+} from "../authorization/cache.ts";
+import {
+  ownerDeliveryLive,
+  readOwnerDelivery,
+} from "../authorization/leases.ts";
+import { stableStringify } from "../collections/equal.ts";
 /** Current execution fence over the existing operation, lease and Action rows. */
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import { createCoreTableNames } from "../events/schema.ts";
@@ -90,4 +101,65 @@ export async function assertOwnerInvocationLive(
     );
   }
   retainDeadline?.(live.rows[0].expires_at ?? undefined);
+}
+
+/** Collection reads reuse owner-observed liveness, including their open Action. */
+const liveScopes = new WeakMap<object, object>();
+const unscopedLive = { cache: "invocation" };
+export async function assertCachedOwnerInvocationLive(
+  read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,
+  binding: OwnerInvocationLiveness,
+): Promise<void> {
+  let scope = unscopedLive;
+  if (binding.operationCatalog) {
+    let saved = liveScopes.get(binding.operationCatalog);
+    if (!saved) {
+      saved = { cache: "invocation" };
+      liveScopes.set(binding.operationCatalog, saved);
+    }
+    scope = saved as typeof unscopedLive;
+  }
+  const { operationCatalog: _catalog, ...identity } = binding;
+  const key = stableStringify(identity);
+  let sourceEventId = binding.eventId;
+  if (binding.writer) {
+    const lease = await readOwnerDelivery(
+      read.transaction,
+      binding.databaseSchema,
+      binding.writer.deliveryId,
+    );
+    sourceEventId ??= lease?.event_id;
+    if (
+      !ownerDeliveryLive(
+        read.transaction,
+        lease,
+        binding.writer.leaseOwner,
+        read.commandTime,
+      ) ||
+      binding.eventId && lease?.event_id !== binding.eventId ||
+      binding.operationId && lease?.settlement_scope_id !== binding.operationId
+    ) {
+      throw new ActionOwnershipLost(
+        binding.action?.runId ?? binding.writer.deliveryId,
+      );
+    }
+  }
+  if (cachedAuthorization<boolean>(read.transaction, scope, key)) return;
+  await assertOwnerInvocationLive(read, binding);
+  rememberAuthorization(read.transaction, scope, key, true, [
+    ...(binding.operationId
+      ? authorizationRowKeys(
+        binding.databaseSchema,
+        "copilotz_operations",
+        binding.operationId,
+      )
+      : []),
+    ...(binding.action
+      ? [authorizationTableKey(binding.databaseSchema, "open_actions")]
+      : []),
+    // Events are immutable, but opaque deletion must not retain source authority.
+    ...(sourceEventId
+      ? authorizationRowKeys(binding.databaseSchema, "events", sourceEventId)
+      : []),
+  ]);
 }

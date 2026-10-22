@@ -1,3 +1,4 @@
+import { createDecisionReuse } from "./decision-cache.ts";
 import { ownerAttemptLive } from "./leases.ts";
 import {
   authorizationDependencyKeys,
@@ -348,6 +349,7 @@ export function createOwnerEvaluator(
 ): OwnerEvaluator {
   const { registration, collections, databaseSchema } = options;
   const tables = createCoreTableNames(databaseSchema);
+  const reuse = createDecisionReuse(databaseSchema);
   return async function evaluate(
     value: AuthenticatedAuthority,
     intent: AuthorizationIntent,
@@ -385,12 +387,31 @@ export function createOwnerEvaluator(
         Date.parse(authority.validity.admittedAt) >
           Date.parse(command.commandTime))
     ) authorizationRefused();
-    const dependencies: AuthorityDependency[] = [...authority.dependencies];
+    const reuseKey = !directory ? reuse.key(authority, intent) : undefined;
+    if (reuseKey) {
+      const saved = await reuse.get(
+        command.transaction,
+        reuseKey,
+        policy,
+        command.commandTime,
+      );
+      if (saved) {
+        command.signal.throwIfAborted();
+        reuseDeadlines.set(saved.decision, saved.until);
+        return saved.decision;
+      }
+    }
+    const dependencies: AuthorityDependency[] = [
+      ...authority.dependencies,
+      ...reuse.dependencies(authority, intent),
+    ];
     let reusableUntil = authority.validity.kind === "credential"
       ? Date.parse(authority.validity.expiresAt)
       : Infinity;
     const staffReads: Array<Record<string, unknown>> = [];
     let evidenceRead = false;
+    let localPolicyReads = 0;
+    let commandTimeRead = false;
     let active = true;
     let failed = false;
     const pending: Promise<unknown>[] = [];
@@ -410,6 +431,7 @@ export function createOwnerEvaluator(
       if (typeof declared !== "string") return declared;
       const definition = collections[alias];
       if (!definition) authorizationRefused();
+      localPolicyReads++;
       dependencies.push({
         owner: authority.scope.owner,
         namespace,
@@ -543,7 +565,10 @@ export function createOwnerEvaluator(
               }
               : {}),
             intent: captureHostCommandJson(intent) as AuthorizationIntent,
-            commandTime: command.commandTime,
+            get commandTime() {
+              commandTimeRead = true;
+              return command.commandTime;
+            },
             signal: command.signal,
             evidence: {
               get(alias) {
@@ -716,11 +741,23 @@ export function createOwnerEvaluator(
         ])).values()],
       };
       // Remote staff reads and verifier evidence have no local write fence.
+      // Time-dependent policies and policies with no tracked facts stay fresh.
       if (
-        !staffReads.length && !evidenceRead &&
-        !directory
+        !staffReads.length && !evidenceRead && !directory && localPolicyReads &&
+        !commandTimeRead
       ) {
         reuseDeadlines.set(decision, reusableUntil);
+        if (
+          reuseKey && reusableUntil > Date.parse(command.commandTime)
+        ) {
+          reuse.remember(
+            command.transaction,
+            reuseKey,
+            policy,
+            decision,
+            reusableUntil,
+          );
+        }
       } else {
         reportAuthorizationCache(
           command.transaction,
@@ -729,7 +766,11 @@ export function createOwnerEvaluator(
             ? "staff-read"
             : evidenceRead
             ? "evidence-read"
-            : "directory",
+            : directory
+            ? "directory"
+            : commandTimeRead
+            ? "command-time"
+            : "untracked-policy",
         );
       }
       return decision;

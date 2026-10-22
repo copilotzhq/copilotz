@@ -17,7 +17,7 @@ import {
   SERVER_COLLECTION_MUTATION_RELAY_CONSUMER,
 } from "../application/ingress/contracts.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
-import { assertOwnerInvocationLive } from "./invocation-liveness.ts";
+import { assertCachedOwnerInvocationLive } from "./invocation-liveness.ts";
 import { canRecoverCollectionReceipt } from "../collections/receipt-authority.ts";
 import {
   resolveProtectedActionIngress,
@@ -450,7 +450,7 @@ export async function createCopilotzEngine(
             },
             signal: base.signal,
             assertCurrent: (read, invocation) =>
-              assertOwnerInvocationLive(read, {
+              assertCachedOwnerInvocationLive(read, {
                 databaseSchema: base.databaseSchema,
                 namespace: base.event.namespace,
                 operationCatalog: scopedOperationCatalog,

@@ -1021,6 +1021,9 @@ export function createEventStore(
           id: mutation.collectionChange.id,
         }]);
       }
+      if (!additionalWrites.some(({ table }) => table === "events")) {
+        hintAuthorizationRows(executor, databaseSchema, "events", [eventId]);
+      }
       if (!additionalWrites.some(({ table }) => table === "event_deliveries")) {
         hintAuthorizationRows(
           executor,

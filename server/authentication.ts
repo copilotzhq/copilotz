@@ -145,8 +145,9 @@ export async function authenticateHttpRequest(
   }
   const sessionToken = sessionCookies[0]?.slice(cookieName.length + 1);
   const authenticationContext = {
-    lookup: (scope: ServerAuthorizedScope) =>
-      createHttpReads(application, scope),
+    lookup: (
+      scope: Pick<ServerAuthorizedScope, "namespace" | "databaseSchema">,
+    ) => createHttpReads(application, scope),
     endpoint: match.endpoint,
     params: match.params,
     defaultNamespace: application.config.namespace,
@@ -241,6 +242,27 @@ export async function authenticateHttpRequest(
       status: 403,
     });
   }
+  // Only owner-verified authority reaches the app's identity projection. Validate
+  // its result with the same rules as actors supplied during authentication.
+  const resolveActor = facade.resolveActor;
+  const resolvedScope = resolveActor
+    ? authorizedScope({
+      ...scope,
+      authority,
+      actor: await withTrustedCollectionPolicyRead(async () =>
+        await resolveActor({
+          scope: { ...scope, authority },
+          read: await authenticationContext.lookup({
+            namespace: scope.namespace,
+            databaseSchema: scope.databaseSchema,
+          }),
+          endpoint: match.endpoint,
+          params: match.params,
+        })
+      ),
+    })
+    : { ...scope, authority };
+  const actor = resolvedScope.actor;
   const result = withFacadeIngress(
     {
       ...(scope.context ?? {}),
@@ -248,14 +270,16 @@ export async function authenticateHttpRequest(
       ...(invalidSessionCookie ? { invalidSessionCookie } : {}),
       ...(receiptAuthority ? { receiptAuthority } : {}),
       serverScope: {
-        ...scope,
-        authority,
+        ...resolvedScope,
       },
       serverRequest: request,
       namespace: scope.namespace,
       databaseSchema: scope.databaseSchema,
       serverEndpointKey: match.endpoint.key,
       serverParams: match.params,
+      // Raw admission metadata must remain stable across credential transitions
+      // (notably logout replay). Owner policy supplies credential-derived Action
+      // metadata; the resolved actor belongs to the scope and ingress proof.
       serverActionMetadata: {
         ...scope.actionMetadata,
         ...(scope.actor ? { httpActor: scope.actor } : {}),
@@ -267,7 +291,7 @@ export async function authenticateHttpRequest(
       serverIdentity: scope.identity ?? ({} as const),
       serverSignal: request.signal,
     } as const,
-    authorityIngressProof(authority, scope.actor),
+    authorityIngressProof(authority, actor),
   );
   return result;
 }

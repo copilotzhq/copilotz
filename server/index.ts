@@ -25,6 +25,7 @@ export type {
   ServerExposureOptions,
   ServerFacadeResource,
   ServerPatternPolicy,
+  ServerResolveActor,
   ServerRouteMatch,
   SessionCookieOptions,
 } from "../plugins/server/index.ts";

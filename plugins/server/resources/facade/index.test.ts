@@ -76,3 +76,21 @@ Deno.test("SEC3 facade validates canonical origins and default Host cookie attri
     );
   }
 });
+
+Deno.test("defineServerFacade retains and validates the trusted actor resolver", () => {
+  const authenticate = () => new Response(null, { status: 401 });
+  const resolveActor = () => ({ id: "participant" });
+  assertEquals(
+    defineServerFacade({ authenticate, resolveActor }).resolveActor,
+    resolveActor,
+  );
+  assertThrows(
+    () =>
+      defineServerFacade({
+        authenticate,
+        resolveActor: "invalid" as unknown as typeof resolveActor,
+      }),
+    TypeError,
+    "resolveActor",
+  );
+});

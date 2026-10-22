@@ -99,6 +99,21 @@ export type ServerAuthenticate = (
   | ServerAuthorizedScope
   | Response
   | Promise<ServerAuthorizedScope | Response>;
+/** Owner-trusted identity projection after native credentials have been verified.
+ * Runs for every authentication path. Reads use the selected tenant scope;
+ * returning undefined deliberately leaves the request without an actor.
+ * The result populates the HTTP scope and ingress proof. Credential-dependent
+ * Action/operation metadata belongs in owner policy so retries remain stable.
+ */
+export type ServerResolveActor = (
+  context: Readonly<{
+    scope: ServerAuthorizedScope;
+    read: import("../authoring/http-adapter/index.ts").HttpReadServices;
+    endpoint: ServerEndpointDescriptor;
+    params: Readonly<Record<string, string>>;
+  }>,
+) => ServerAuthorizedScope["actor"] | Promise<ServerAuthorizedScope["actor"]>;
+
 export type SessionCookieOptions = Readonly<{
   name?: string;
   path?: string;
@@ -126,6 +141,7 @@ export type ServerFacadeResource = Readonly<{
     channels: boolean | ServerPatternPolicy;
   }>;
   authenticate: ServerAuthenticate;
+  resolveActor?: ServerResolveActor;
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
@@ -144,6 +160,7 @@ export type DefineServerFacadeInput = Readonly<{
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
   authenticate: ServerAuthenticate;
+  resolveActor?: ServerResolveActor;
 }>;
 
 export {

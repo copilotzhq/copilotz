@@ -16,6 +16,16 @@ import {
   mapThreadRecord,
 } from "../../../../core/index.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
+function viewerParticipantId(context: HttpHandlerContext): string {
+  const id = context.scope.actor?.id;
+  if (!id) {
+    throw Object.assign(new Error("A viewer actor is required."), {
+      status: 403,
+      code: "actor_required",
+    });
+  }
+  return id;
+}
 function query(
   context: HttpHandlerContext,
 ): import("@copilotz/copilotz/core/client").ThreadQuery {
@@ -136,6 +146,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
         method: "GET",
         path: "/threads/:id/messages",
         async handler(context) {
+          const viewerId = viewerParticipantId(context);
           await thread(context, context.params.id);
           // Capture before the read. Live discovery replays every overlapping operation,
           // including ones that start and settle while history is being projected.
@@ -154,7 +165,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
             ...input,
             threadId: context.params.id,
             content: true,
-            viewerParticipantIds: [context.scope.actor!.id],
+            viewerParticipantIds: [viewerId],
             limit,
             overfetch: true,
           });
@@ -215,13 +226,14 @@ export function createCoreHttpAdapter(): HttpAdapter {
         method: "GET",
         path: "/threads/:id/messages/:messageId/assets/:assetId",
         async handler(context) {
+          const viewerId = viewerParticipantId(context);
           await thread(context, context.params.id);
           const [message] = await context.read.query("message", "history", {
             threadId: context.params.id,
             messageId: context.params.messageId,
             // Retained revisions remain readable through the authorized all-history view.
             view: "all",
-            viewerParticipantIds: [context.scope.actor!.id],
+            viewerParticipantIds: [viewerId],
           });
           const refs = message
             ? [

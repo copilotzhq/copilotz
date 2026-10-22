@@ -132,7 +132,10 @@ Deno.test("Core message history reads each unique sender once", async () => {
 });
 
 Deno.test("Core round trip keeps stored history, actor identity, and multipart bytes", async () => {
-  const database = await createTestDatabase({ url: ":memory:" });
+  const database = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `actor_core_${crypto.randomUUID().replaceAll("-", "")}`;
   const adapter: LlmAdapter = {
     call() {
       const bytes = new TextEncoder().encode("Hello 🌎");
@@ -163,7 +166,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
   const application = await createCopilotzApplication({
     database,
     namespace: "tenant",
-    databaseSchema: "core_http_contract",
+    databaseSchema: schema,
     engine: { retryBaseMs: 0, random: () => 0 },
     plugins: [
       corePlugin,
@@ -564,6 +567,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     );
   } finally {
     await application.close();
+    await database.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await database.close();
   }
 });

@@ -11,7 +11,9 @@ import type {
 
 export async function createHttpReads(
   application: InternalCopilotzApplication,
-  scope: ServerAuthorizedScope,
+  scope:
+    & Pick<ServerAuthorizedScope, "namespace" | "databaseSchema">
+    & Partial<Pick<ServerAuthorizedScope, "authority">>,
   host: Readonly<{ context?: FacadeContext }> = {},
 ): Promise<HttpReadServices> {
   const runtime = scope.databaseSchema &&

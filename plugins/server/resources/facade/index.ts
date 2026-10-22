@@ -125,7 +125,8 @@ export function defineServerFacade(
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" && key !== "sessionCookie" &&
-      key !== "authenticate" && key !== "allowedOrigins" &&
+      key !== "authenticate" && key !== "resolveActor" &&
+      key !== "allowedOrigins" &&
       key !== "deviceLimits" &&
       key !== "maxAssetUploadBytes"
     )
@@ -134,6 +135,11 @@ export function defineServerFacade(
     if (typeof input[key] !== "function") {
       throw new TypeError(`Server ${key} must be a function.`);
     }
+  }
+  if (
+    input.resolveActor !== undefined && typeof input.resolveActor !== "function"
+  ) {
+    throw new TypeError("Server resolveActor must be a function.");
   }
   const expose = input.expose === undefined
     ? {}
@@ -205,6 +211,7 @@ export function defineServerFacade(
         | ServerPatternPolicy,
     } as const,
     authenticate: input.authenticate,
+    ...(input.resolveActor ? { resolveActor: input.resolveActor } : {}),
   } as const);
 }
 
@@ -221,5 +228,6 @@ export type {
   ServerExposureOptions,
   ServerFacadeResource,
   ServerPatternPolicy,
+  ServerResolveActor,
   SessionCookieOptions,
 } from "../../shared/contracts.ts";

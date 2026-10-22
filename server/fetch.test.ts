@@ -362,3 +362,96 @@ Deno.test("direct operation multipart advances global and operation event positi
   assertEquals(cursor.eventPosition, "2");
   assertEquals(cursor.operationEventPositions?.[operationId], "2");
 });
+
+Deno.test("Fetch logs unexpected failures once without request secrets and keeps responses generic", async () => {
+  const logs: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  try {
+    const error = Object.assign(new TypeError("Forced route failure"), {
+      body: "error-body-secret",
+      headers: { authorization: "error-header-secret" },
+      cause: new Error("cause-secret"),
+    });
+    const app: HttpApplication = {
+      handle() {
+        throw error;
+      },
+    };
+    const request = () =>
+      new Request(
+        "https://example.test/api/items/private-id?token=query-secret",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer header-secret",
+            cookie: "session=cookie-secret",
+          },
+          body: JSON.stringify({ password: "body-secret" }),
+        },
+      );
+    for (const phase of ["handler", "authentication", "observer"] as const) {
+      const handle = createHttpFetchHandler(app, {
+        errorRoute: () => "/api/items/:id",
+        ...(phase === "authentication"
+          ? {
+            resolveContext() {
+              throw error;
+            },
+          }
+          : {}),
+        ...(phase === "observer"
+          ? {
+            onError() {
+              throw new Error("Observer failed");
+            },
+          }
+          : {}),
+      });
+      logs.length = 0;
+      const response = await handle(request());
+      assertEquals(response.status, 500);
+      assertEquals(await response.json(), {
+        error: {
+          code: "internal_error",
+          message: "Internal application error.",
+        },
+      });
+      assertEquals(logs, [[{
+        event: "http.server_error",
+        route: "/api/items/:id",
+        name: "TypeError",
+        message: error.message,
+        stack: error.stack,
+      }]]);
+      assert(!JSON.stringify(logs).includes("secret"));
+      assert(!JSON.stringify(logs).includes("private-id"));
+    }
+    logs.length = 0;
+    let observed = 0;
+    const custom = createHttpFetchHandler(app, {
+      onError(value) {
+        assertEquals(value, error);
+        observed++;
+      },
+    });
+    assertEquals((await custom(request())).status, 500);
+    assertEquals(observed, 1);
+    assertEquals(logs.length, 0);
+    const denied = createHttpFetchHandler({
+      handle() {
+        throw Object.assign(new Error("Denied"), {
+          status: 403,
+          code: "forbidden",
+        });
+      },
+    });
+    assertEquals((await denied(request())).status, 403);
+    assertEquals(logs.length, 0);
+  } finally {
+    console.error = original;
+  }
+});

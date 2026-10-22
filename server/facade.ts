@@ -50,6 +50,7 @@ export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   >;
   admit?: () => void | Promise<void>;
   responseHeaders?: Readonly<Record<string, string>>;
+  /** Overrides the default structured 5xx logger. */
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -222,8 +223,8 @@ export function createServerFacadeFetchHandler(
             serverActionMetadata: {
               ...context.serverActionMetadata,
               ...options.actionMetadata,
-              ...(context.serverScope.actor
-                ? { httpActor: context.serverScope.actor }
+              ...(context.serverActionMetadata.httpActor
+                ? { httpActor: context.serverActionMetadata.httpActor }
                 : {}),
             },
           })).data;
@@ -661,6 +662,11 @@ export function createServerFacadeFetchHandler(
       });
     },
     onError: options.onError,
+    errorRoute: (request) =>
+      routes.match(
+        request.method,
+        new URL(request.url).pathname,
+      )?.endpoint.path,
     rawBody(_request, context) {
       const key = (context as FacadeContext | undefined)?.serverEndpointKey;
       const endpoint = routes.routes.find((route) => route.endpoint.key === key)

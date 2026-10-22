@@ -36,6 +36,9 @@ export type CreateHttpFetchHandlerOptions = Readonly<{
     response: Response,
     context: HttpRequest["context"] | undefined,
   ) => Response;
+  /** Safe route template for default diagnostics; omit query strings and parameters. */
+  errorRoute?: (request: Request) => string | undefined;
+  /** Overrides default 5xx logging. A failing observer falls back to the default. */
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -305,6 +308,19 @@ function errorResponse(
   });
 }
 
+function logServerError(error: unknown, route: string): void {
+  // Never serialize the request, arbitrary thrown objects, or error causes.
+  console.error({
+    event: "http.server_error",
+    route,
+    name: error instanceof Error ? error.name : "UnknownError",
+    message: error instanceof Error
+      ? error.message
+      : "Unexpected server error.",
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+}
+
 /** Adapts the compiled HTTP application to the Web Fetch contract. */
 export function createHttpFetchHandler(
   app: HttpApplication,
@@ -357,8 +373,26 @@ export function createHttpFetchHandler(
       });
       return finish(await jsonResponse(result, options, request));
     } catch (error) {
-      await options.onError?.(error, request);
-      return finish(errorResponse(error, options));
+      const response = errorResponse(error, options);
+      let reported = false;
+      if (options.onError) {
+        try {
+          await options.onError(error, request);
+          reported = true;
+        } catch {
+          // Diagnostics must neither hide the original failure nor break Fetch.
+        }
+      }
+      if (!reported && response.status >= 500) {
+        let route = "unmatched";
+        try {
+          route = options.errorRoute?.(request) ?? route;
+        } catch {
+          // Malformed routes must still produce diagnostics and a response.
+        }
+        logServerError(error, route);
+      }
+      return finish(response);
     } finally {
       if (!request.bodyUsed) void request.body?.cancel().catch(() => undefined);
     }

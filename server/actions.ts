@@ -62,12 +62,7 @@ export async function actionResponse(
       causationId: context.serverIdentity.causationId,
       deduplicationId: context.serverIdentity.deduplicationId ??
         header(request.headers, "idempotency-key") ?? requestId,
-      operationMetadata: {
-        ...context.operationMetadata,
-        ...(context.serverScope.actor
-          ? { actorId: context.serverScope.actor.id }
-          : {}),
-      },
+      operationMetadata: context.operationMetadata,
       metadata: {
         ...httpIngressMetadata(application, context.operationMetadata),
         ...({ sourceAdapter: "server" } as const),

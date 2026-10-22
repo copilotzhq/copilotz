@@ -10,13 +10,22 @@ export function localStorageAdapter(
   storage: Pick<Storage, "getItem" | "setItem">,
   prefix = "copilotz:",
 ): StorageAdapter {
+  // Browser storage is a convenience: it can be unavailable (private mode,
+  // blocked site data), full, or hold a corrupted value. None of that may stop
+  // the app, so a failed read is "nothing stored" and a failed write is skipped.
   return {
     load(key) {
-      const value = storage.getItem(prefix + key);
-      return value === null ? undefined : JSON.parse(value);
+      try {
+        const value = storage.getItem(prefix + key);
+        return value === null ? undefined : JSON.parse(value);
+      } catch {
+        return undefined;
+      }
     },
     save(key, rows) {
-      storage.setItem(prefix + key, JSON.stringify(rows));
+      try {
+        storage.setItem(prefix + key, JSON.stringify(rows));
+      } catch { /* Storage unavailable or full: keep running in memory. */ }
     },
   };
 }

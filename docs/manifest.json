@@ -169,6 +169,11 @@
           "description": "Automatic replacement of a fenced owner, retryable 503 admission and lease timing."
         },
         {
+          "title": "Execution Liveness",
+          "slug": "execution-liveness",
+          "description": "Inactivity-based stall detection for model calls, the delivery safety ceiling and deliveryTimeoutMs."
+        },
+        {
           "title": "Content and Assets",
           "slug": "content-assets",
           "description": "Namespace-scoped Assets, content references and budgeted reads."

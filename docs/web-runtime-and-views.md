@@ -257,20 +257,24 @@ neither imports UI libraries nor obtains browser capabilities on its own.
 
 `uiWebPlugin({ navigation, preferences, core })` is one responsive layout:
 sidebar (or icon rail), header, main and a resizable right panel. The sidebar
-lists Spaces and their chats (or chats by date; the choice is remembered). A
-Space's name opens its SpaceView in main; its chevron expands its chats; a chat
-opens in main. While a chat is open, the header's panel toggle shows that chat's
-Space sections in the right panel. On a narrow screen the sidebar becomes the
-icon rail and expands as an overlay, and the panel overlays main with the same
-resize handle and width; only its toggle or Escape closes it. The same state
-drives every width: nothing reads the window width and nothing closes itself on
-navigation.
+lists Spaces and their chats (or chats by date; the choice is remembered). Chats
+without a Space form a No Space group. Every group starts collapsed with a
+count, the current chat's group opens, and each person's open groups are
+remembered. A Space's name opens its SpaceView in main; its chevron expands its
+chats; a chat opens in main. While a chat is open, the header's panel toggle
+shows that chat's Space sections in the right panel. On a narrow screen the
+sidebar becomes the icon rail and expands as an overlay, and the panel overlays
+main with the same resize handle and width; only its toggle or Escape closes it.
+On a phone (below 768 px) the sidebar is an off-canvas drawer instead (menu
+button, backdrop, swipe or Escape to close, focus kept inside) that closes when
+a destination is picked, and the panel is a full-screen sheet.
 
 `navigation` and `preferences` name the storage adapters for the `shell` row
 (the URL) and the `shellPreferences` row (per device: sidebar mode, grouping,
-panel width, theme, expanded Spaces). `core` is the app's Core plugin instance
-when it configures one with `createCoreWebPlugin`. The shell also keeps
-`shellOverlay` (palette, dialog, New Space) and `shellToasts` in memory.
+panel width and theme; per person: open sidebar groups and **Show technical
+details**). `core` is the app's Core plugin instance when it configures one with
+`createCoreWebPlugin`. The shell also keeps `shellOverlay` (palette, dialog, New
+Space, phone drawer) and `shellToasts` in memory.
 
 Navigation is a set of browser Actions: `shellOpenThread {threadId}`,
 `shellOpenSpace {spaceId, section?}`, `shellCloseSpace`,
@@ -306,9 +310,18 @@ and the shell returns where it was.
 `space` live, and keeps `draft`, `outbox`, `threadFeed`, `threadRun`,
 `threadOutputs` and `threadWindow` in the browser. Messages are grouped by
 sender with names and avatars; the reader's own messages sit in a bubble, agent
-replies read as prose with highlighted code and math. Tool calls and reasoning
-show as a compact activity timeline, and an app's tool renderer replaces a
-step's default presentation.
+replies read as prose with highlighted code and math. Bubbles size to their
+content up to their maximum width and wrap at word boundaries.
+
+A reply's background tool calls and reasoning collapse into one quiet row ("Used
+3 tools · 4s") that opens to plain-language steps. **View details** on a step
+loads its Input and Result tree on request, only for a reader who may read the
+output; for anyone else the step shows its status only. A call left without a
+terminal status settles as done once its agent has moved on. Apps add per-tool
+summaries and renderers through `resources.toolRenderers` (see
+[Tool renderers](#tool-renderers)). **Show technical details** in the user menu
+is a per-person choice that opens technical live output and step details by
+default; renderers read it as `ChatConfig.technical`.
 
 The Views call intents, browser Actions over the composed server aliases:
 `chatSend`, `chatDiscard`, `chatRevise`, `chatCreateThread`, `chatRenameThread`,
@@ -324,9 +337,9 @@ declares no `spaces` proxy.
 Tool results fold into the call that requested them. Text results arrive with
 the message window; Core stores object tool output as JSON content, which the
 window read leaves as a reference. `chatLoadToolResult` reads it once, through
-`adapters.core.feed.asset`, when its step or renderer shows; results over 256
-KiB say so instead. A renderer receives the parsed value as `data`, with
-`resultStatus` while it loads or when it can't show.
+`adapters.core.feed.asset`, when its details open or a renderer that needs it
+shows; results over 256 KiB say so instead. A renderer receives the parsed value
+as `data`, with `resultStatus` while it loads or when it can't show.
 
 `chatSend` shows the message at once from the `outbox` (a failed send keeps
 Retry and Discard), uploads attachments through `adapters.core.feed.upload`
@@ -384,7 +397,7 @@ components.
 | User menu        | `resources.userMenu.<id>` (same shape)                                                                                       | `{}`, or the page value                                       |
 | Pages            | a menu item's `page: "<kind>"`, or `ctx.show(ref, { source: "link", region: "main" })`                                       | `{section}` or `null`, mode `full`                            |
 | Agent selector   | a View for `agentSelector` plus `resources.views.prefer`; collapse it with the `agents` container query                      | `{threadId}`                                                  |
-| Tool renderers   | `resources.toolRenderers.<toolName> {view, inline?}`; the View declares mode `inline`                                        | `ToolCallView` (status, input, result, `data`, live `output`) |
+| Tool renderers   | `resources.toolRenderers.<toolName>` (see [Tool renderers](#tool-renderers)); the Views declare mode `inline`                | `ToolCallView` (status, input, result, `data`, live `output`) |
 | Admin sections   | `resources.adminSections.<id> {label, icon?, order?, description?, view?, requires?}`; `null` hides a built-in               | `{section}`, mode `full`                                      |
 | Markdown plugins | `adapters.markdown.<alias> {remarkPlugins?, rehypePlugins?}`                                                                 | —                                                             |
 | Images           | `resources.markdown.imageOrigins`                                                                                            | —                                                             |
@@ -406,6 +419,32 @@ The header gives the title priority: the agent selector slot takes the width
 left (at least an icon) and is a size container named `agents`, so a selector
 collapses with `@max-[8rem]/agents:` variants, as the core one does. Section,
 panel and page Views must declare `url: true` to render from a link.
+
+### Tool renderers
+
+`resources.toolRenderers.<toolName>` describes how one tool reads in a reply.
+Every field is optional; a tool without a renderer reads as a generic step
+("Used kanban").
+
+- `summary` names a View that states what the call did in plain words ("Searched
+  memory: no notes found") for the reply's activity row and its steps. It
+  receives a `ToolSummaryView`. With `batch`, one summary speaks for consecutive
+  calls to the same tool and receives them as `calls`; the step is running while
+  any runs and failed when any failed. `summaryResult` says the summary reads
+  the result, which then loads when the steps open, never for the collapsed row.
+- `view` names a View that draws the call. Without other flags it shows in the
+  step's **View details**. `inline` replaces the step with it for good, as `ask`
+  does. `live` draws it in the message while the call runs, then settles it into
+  a compact card that expands to the full run. `audience` is `everyone` (the
+  default) or `technical`; a technical live View, such as a terminal, starts as
+  a slim status strip unless the reader turned on **Show technical details**.
+  `icon`, a kit icon name, marks the settled card.
+
+A live View can call `useToolDisplay()` from `/core/web`. It returns `mode`
+(`live` while the call runs, `card` once it settles, `full` when the reader
+expands it or outside a live frame), `framed` (the chat's frame already names
+the call) and `expand()`. A View that reads it draws its own compact card;
+otherwise the frame clips it.
 
 ### Build a chat app
 
@@ -496,7 +535,14 @@ export const appPlugin: BrowserPlugin = {
         tools: ["kanban"],
       },
     },
-    toolRenderers: { terminal: { view: "appTerminal" } },
+    toolRenderers: {
+      terminal: {
+        view: "appTerminal",
+        live: true,
+        audience: "technical",
+        icon: "terminal",
+      },
+    },
     headerMenu: {
       export: {
         label: "Export",

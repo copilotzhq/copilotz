@@ -60,6 +60,8 @@ Each page below is the main reference for its topic.
   facts, retries, settlement and reconnection.
 - [Owner recovery](owner-recovery.md): fencing, bounded admission and production
   lease timing.
+- [Execution liveness](execution-liveness.md): inactivity detection for model
+  calls and the delivery safety ceiling.
 - [Content and assets](content-assets.md) and [progressive streams](streams.md).
 - [Views](views.md) and [Web runtime and Views](web-runtime-and-views.md):
   presentations, the browser runtime, the chat shell and the shared UI kit.

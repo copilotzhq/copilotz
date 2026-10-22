@@ -37,13 +37,9 @@ All recorded commands used `nice -n 10`, but this sandbox prints
 `setpriority: Operation not permitted`; lowered priority could not be confirmed.
 Workloads were bounded and never ran concurrently. No full test suite was run.
 
-The full runner is also copied to
-`~/Code/copilotz/plan/perf/turn/benchmark-turn.ts`; its README supplies the
-repository config path. Full SQL histograms, per-command durations, delivery
-diagnostics, CPU profile, logs, and original/optimized source snapshots live
-there. Compact before/after data are retained in
-[before-pglite.json](benchmarks/turn/before-pglite.json) and
-[after-pglite.json](benchmarks/turn/after-pglite.json).
+Full SQL histograms, per-command durations, delivery diagnostics, CPU profiles
+and logs from these runs are kept outside the repository; rerun the commands
+above to reproduce them.
 
 ## Composition and measurement contract
 

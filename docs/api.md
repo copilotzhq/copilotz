@@ -44,15 +44,17 @@ factory. Its `role` option selects what the returned object can do:
 | `"worker"`              | `{ ready, closed, close }` only | execution of deliveries placed on its worker |
 
 Every role accepts the same composition: `namespace`, `databaseSchema`,
-`plugins`, `collections`, `actions`, `processors`, `views`, `resources` and
-`adapters`. Each database schema has one **owner**, a single serialized writer,
-and the embedded or Gateway role holds it. Only those roles accept persistence
-options (`database`, or a shared `persistence` created by
-`createCopilotzPersistence()`), `assets`, `authorization` and `databaseScopes`.
-A Worker rejects them: it executes Processors and Actions without a database
-connection, and its reads, writes and Action calls go to the owner. Plugin code
-is the same in every role. The creator of a shared persistence facade closes it
-after closing the roles that use it. Role placement is covered in
+`plugins`, `collections`, `actions`, `processors`, `views`, `resources`,
+`adapters` and `deliveryTimeoutMs`, the delivery safety ceiling (six hours by
+default; see [Execution liveness](execution-liveness.md)). Each database schema
+has one **owner**, a single serialized writer, and the embedded or Gateway role
+holds it. Only those roles accept persistence options (`database`, or a shared
+`persistence` created by `createCopilotzPersistence()`), `assets`,
+`authorization` and `databaseScopes`. A Worker rejects them: it executes
+Processors and Actions without a database connection, and its reads, writes and
+Action calls go to the owner. Plugin code is the same in every role. The creator
+of a shared persistence facade closes it after closing the roles that use it.
+Role placement is covered in
 [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
 
 A Worker result has no operation methods. Await `worker.ready` before relying on

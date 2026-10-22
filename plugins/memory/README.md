@@ -22,7 +22,7 @@ Configure `resources.memory.config`; optionally supply embeddings through
 `inspect_memory` and `retire_memory`. `remember({ text, scope })` writes
 immediately to personal, current Core space, or thread scope (default). Personal
 scope follows the human initiator. The profile uses the same notes. See
-[upgrading and owner policies](../../docs/upgrading.md#upgrading-to-0910).
+[upgrading and owner policies](../../docs/upgrading.md#memory-scopes).
 
 For conversation compaction the agent writes
 `{ continuity, remember?, retire? }` through `consolidate_memory`, and reads

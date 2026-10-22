@@ -101,6 +101,17 @@ stable `id`, `key` and route `metadata`), its `params`, and the application's
 - optional trusted `operationMetadata`, `actionMetadata`, `identity` and a
   host-only `context`.
 
+The owner verifies an Action-session cookie after `authenticate` returns, so
+`authenticate` cannot supply that request's actor. The optional
+`resolveActor({ scope, read, endpoint, params })` runs after verification on
+every authentication path, with tenant-scoped `read` services, and its result
+replaces `actor`: return `scope.actor` to keep the one `authenticate` verified,
+or `undefined` for none. The resolved actor sets the request scope and the
+ingress proof; credential-dependent Action metadata still comes from the owner
+policy's `actionMetadata`. Core routes that need a viewer, such as message and
+message-asset reads, refuse a request without an actor with
+`403 actor_required`.
+
 A namespace is a tenant, not a permission: two users of one tenant can still
 read each other's operations unless the policy constrains them.
 
@@ -217,6 +228,12 @@ errors can reject submission; final-record and relation errors reject the
 recorded result read. Unexpected mutation execution failures remain
 `collection_mutation_failed` / `Collection mutation did not complete.`. Error
 reporting does not bypass authentication, authorization or result-read scope.
+
+An unexpected 5xx error returns a generic body and writes one structured
+`console.error` line (`event: "http.server_error"`, the route template, error
+name, message and stack) without request data. An `onError` option passed to
+`createServerFacadeFetchHandler` replaces that line; if it throws, the line is
+still written.
 
 `client.operations.observe({ operationIds, onFrame })` streams multipart frames
 for 1–32 concurrently selected operations and resolves with a checkpoint for

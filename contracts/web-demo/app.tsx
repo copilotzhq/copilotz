@@ -308,6 +308,8 @@ export const demoApp: BrowserPlugin = {
         destructive: true,
       },
     },
-    toolRenderers: { terminal: { view: "terminalToolCall" } },
+    toolRenderers: {
+      terminal: { view: "terminalToolCall", live: true, audience: "technical" },
+    },
   },
 };

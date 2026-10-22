@@ -1,3 +1,11 @@
+---
+title: "Execution Liveness"
+description: "How Copilotz detects stalled model calls by inactivity, the six-hour delivery safety ceiling and deliveryTimeoutMs, and what recovers interrupted work."
+section: Runtime
+order: 47
+status: stable
+---
+
 # Execution liveness
 
 Deliveries and worker-to-owner host calls use a six-hour safety backstop by
@@ -88,41 +96,18 @@ renewal API. Reissuing a call would lose the in-flight execution and is not a
 safe renewal strategy. Copilotz therefore raises the safety ceilings without
 pretending the installed transport timer is renewable.
 
-The companion `plan/par/DEADLINE-oxian.patch` adds optional `idleTimeoutMs` to
-Oxian's worker and host call settings. Delivered stream frames, successful
-writes, and accepted/successfully written heartbeats renew the idle window.
-Expiry has a typed `idle_timeout` code; late or discarded frames cannot
-resurrect a call. `timeoutMs` and explicit `deadlineAtMs` remain absolute upper
-bounds. Configure the idle window on both peers, above their heartbeat interval,
-after upgrading Oxian. This patch is not applied to the pinned dependency by
-these changes.
+A proposed Oxian change adds optional `idleTimeoutMs` to Oxian's worker and host
+call settings. Delivered stream frames, successful writes, and
+accepted/successfully written heartbeats would renew the idle window. Expiry
+would have a typed `idle_timeout` code; late or discarded frames could not
+resurrect a call. `timeoutMs` and explicit `deadlineAtMs` would remain absolute
+upper bounds, and both peers would configure the idle window above their
+heartbeat interval. The pinned Oxian 0.23.1 does not include it.
 
-## Durable provider jobs
+## Next steps
 
-A future OpenAI Responses adapter can submit with `background: true`, persist
-the response ID, and resume retrieval after a restart. The API supports polling,
-cancellation, and cursor-based stream resumption for responses initially created
-with streaming. Retention depends on account and `store` settings, so retrieval
-availability must be part of the durable-job contract.
-[OpenAI background-mode documentation](https://developers.openai.com/api/docs/guides/background).
-
-Proposed implementation:
-
-1. Persist a submission intent under the Action effect key. Submit once, then
-   persist the response ID and provider connection identity before yielding the
-   delivery. A crash between provider acceptance and saving the ID is still an
-   indeterminate submission; do not blindly resubmit or claim exactly-once
-   billing without provider reconciliation guarantees.
-2. Schedule short, leased polling continuations. Persist status and the next
-   poll time. A worker restart resumes the same response ID. Poll success
-   establishes provider reachability; queued/in-progress status is not proof of
-   new output.
-3. Persist terminal output and usage through the existing completion checkpoint,
-   then project once. If streaming is needed, persist the last committed
-   provider event cursor with the corresponding output append; do not advance it
-   merely because an event was received.
-4. Keep durable cancellation separate from transport disconnect, and handle
-   retention expiry as an explicit unrecoverable job result.
-
-This needs a durable submission/polling state machine and reconciliation tests;
-it is not implemented as part of the timeout change.
+- [Owner recovery](owner-recovery.md): fenced owner replacement and lease timing
+  on loaded hosts.
+- [Events, deliveries and recovery](events-deliveries-recovery.md): retries,
+  settlement and recovery of delivered work.
+- [Models](models.md): provider connections and their request options.

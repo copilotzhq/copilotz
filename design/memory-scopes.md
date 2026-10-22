@@ -1,4 +1,4 @@
-# Memory scopes (0.91.0)
+# Memory scopes (0.90.0)
 
 Reuse immutable `memoryNote` records and `memorySpace` containers. Canonical IDs
 are `memory-space:personal:<participantId>`, `memory-space:space:<spaceId>` and
@@ -27,7 +27,7 @@ system prompt.
 Lazily import legacy participant memory with deterministic per-item IDs and
 idempotent creates; retain the original metadata for recovery. Reads, prompt
 preparation and the profile must trigger import. The profile uses personal notes
-and retirement. Remove `update_user_memory` in 0.91.0 with an explicit upgrade
+and retirement. Remove `update_user_memory` in 0.90.0 with an explicit upgrade
 note: apps must install Memory and expose `remember` (`scope: "personal"`). This
 avoids a second plugin dependency and a misleading compatibility write path.
 

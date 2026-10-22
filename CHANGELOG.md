@@ -1,24 +1,13 @@
-## 0.91.0 — 2026-10-22
-
-- Unify personal, Core space and thread memory in immutable note records, with
-  immediate `remember`, atomic corrections and permanent `retire_memory`.
-- Add initiator-scoped search, cache-stable personal prompt context, safe lazy
-  import of participant memories, and profile retirement controls.
-- Remove the automatic user metadata dump. Curated personal memory and mutable
-  agent configuration render before the newest message, outside the system
-  prompt; hosts can opt in to selected user facts with context contributors.
-- Retain scheduled-job creator attribution across dispatch. Replace
-  `update_user_memory`; see
-  [the upgrade guide](docs/upgrading.md#upgrading-to-0910) for application
-  policy changes and retained custom-space handling.
-
-## 0.90.0 — 2026-10-21
+## 0.90.0 — 2026-10-22
 
 Browsers now read live data. The owner pushes Collection changes over an
 authenticated device socket to a framework-neutral web runtime, and the chat UX
-ships as Copilotz's React front-end plugins. This release also includes the
-security review's hardening, exact credential grants, owner-verified identity
-evidence and owner schema **v14**.
+ships as Copilotz's React front-end plugins. Agent memory becomes one store with
+personal, space and thread scopes. Model calls fail on inactivity instead of a
+fixed deadline, and the owner reuses authorization decisions, which removes most
+policy evaluations and authorization SQL from an agent turn. This release also
+includes the security review's hardening, exact credential grants,
+owner-verified identity evidence and owner schema **v14**.
 
 Read [Upgrading to 0.90.0](docs/upgrading.md#upgrading-to-0900) before you
 upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
@@ -31,7 +20,8 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   - adds the private credential-effect storage with its accepted continuation
     operation and indexed run and operation lookups;
   - keys nodes by `(namespace, id)` with cascading composite edge references;
-  - puts `COLLATE "C"` on every text identity column.
+  - puts `COLLATE "C"` on every text identity column and rebuilds the
+    ready-content reference index with it.
 
   It advances the owner epoch once, preserves sessions and retained authority,
   and is idempotent. Fresh provisioning installs the same v14. No step runs at
@@ -50,25 +40,39 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   verification counts as absent and is cleared.
 - A message that names no recipients now addresses the thread's agents; pass
   `recipientIds: []` to address nobody.
+- **`update_user_memory` is removed.** Agents save personal facts with Memory's
+  `remember({ text, scope: "personal" })` and remove them with `retire_memory`.
+  Applications that install Memory compose `memoryScopeConstraints` into the
+  owner policies bound to `memoryNote`, `memorySpace`, `memorySpaceAccess` and
+  `longTermMemory`. See [Memory scopes](docs/upgrading.md#memory-scopes).
+- **Core no longer emits `## USER METADATA`.** The system prompt no longer
+  carries the first human's participant metadata, and there is no switch to
+  restore it. Apps that relied on a field register an explicit context
+  contributor; see [Prompt context](docs/upgrading.md#prompt-context).
 - Apps that adopt the new device socket, web runtime, Action sessions or shard
   role, or that built on a pre-release, follow the second part of the guide:
   browsers send `credentials: { cookie: true }` in the device hello,
   cross-origin clients need `allowedOrigins`, Views a link may open declare
-  `url`, and shard controllers authenticate from headers.
+  `url`, Action-session apps supply `resolveActor`, tool renderers that should
+  show while a call runs declare `live: true`, and shard controllers
+  authenticate from headers.
 
 ### Changed
 
 - **Action results arrive at Action completion.** Browser
-  `ActionHandle.result()` and trusted host Action calls no longer wait for
-  downstream delivery settlement. A failed Action still rejects; a later
-  downstream failure cannot change an accepted result. Use `handle.settled()`
-  when the entire scope must succeed, or `client.operations.settled(id)` and
-  inspect its outcome. The final observation frame is now `operation.settled`
-  with `outcome: completed | failed | cancelled`; durable Action lifecycle
-  outputs still arrive as they are recorded. HTTP operation status uses
-  `state: settled`, `outcome` and `settledAt`. Checkpoints, idempotent result
-  replay and durable `awaitOperation` settlement are unchanged.
-
+  `ActionHandle.result()`, `client.actions.invoke`, `GET /operations/:id/result`
+  and host `app.actions.*` calls resolve once the invoked Action's durable
+  result exists, without waiting for downstream deliveries and streams. A
+  create-then-send flow drops from about 1.6 s to 0.29 s. A failed Action still
+  rejects; a later downstream failure cannot change an accepted result. Use
+  `handle.settled()` or `client.operations.settled(id)` when the whole scope
+  must finish, and inspect its `outcome`; `awaitOperation`, `app.send().done`
+  and `app.attach().done` still wait for the scope. The final observation frame
+  is now `operation.settled` with `outcome: completed | failed | cancelled`;
+  durable Action lifecycle outputs still arrive as they are recorded. HTTP
+  operation status uses `state: settled`, `outcome` and `settledAt`. Custom
+  `ActionTransport`s implement `settled(operationId, signal)`. Checkpoints and
+  idempotent result replay are unchanged.
 - **Security review hardening.** The device socket, live subscriptions, Action
   sessions and the shard role ship with these protections, and HTTP
   authentication gains the stale-cookie rule.
@@ -150,9 +154,107 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
     oldest first. The composer and Revise write time-ordered IDs.
   - Generated IDs are monotonic ULIDs. Duplicate IDs within a namespace raise a
     typed, namespace-local conflict.
-  - Delivery dispatch and worker host calls allow 15 minutes. A transport
-    deadline is an interruption, not an Action failure.
+  - Delivery dispatch and worker host calls share the delivery safety ceiling
+    (see **Liveness**). 0.89.0 cut worker host calls off after 30 seconds on the
+    worker and 120 seconds on the owner, which interrupted long agent steps. A
+    transport deadline is an interruption, not an Action failure.
+  - The router runs independent agent recipients concurrently. Inputs are
+    prepared in order, provider calls overlap, and the delivery waits for every
+    recipient before it fails. A retry replays the recipients that completed.
   - The feed treats stream errors as provisional until the operation settles.
+- **Liveness.** Stalled work is detected by inactivity, and wall-clock limits
+  are safety ceilings. See [execution liveness](docs/execution-liveness.md).
+  - A provider call fails after 90 s without provider activity before visible
+    content, or 120 s after it, with "The model stopped responding." Metadata,
+    reasoning, content, stream data and SSE heartbeat comments renew the window.
+    It also covers request preparation, waiting for headers and the final usage
+    drain. `streamIdleTimeoutMs` now starts at the first visible content.
+  - The absolute provider backstops are four hours per attempt
+    (`attemptTimeoutMs`, was 30 minutes) and five hours per logical call
+    (`totalTimeoutMs`, was one hour).
+  - Deliveries and worker host calls stop at a six-hour safety ceiling. Set
+    `deliveryTimeoutMs` in `createCopilotz`, identically on every role, to
+    change it; `defineAction({ deliveryTimeoutMs })` declares a larger minimum
+    for one Action. Worker leases and checkpointed provider completions remain
+    the recovery mechanisms.
+- **Provider failures.** Only a completed provider response is checkpointed and
+  reused. Network and TLS errors, resets, HTTP 429 and 5xx responses and
+  timeouts before completion are retried by the next delivery attempt with a
+  fresh request, after bounded backoff that honors `Retry-After` up to 30 s and
+  holds no worker. Authentication, invalid-request and refusal errors settle
+  immediately. An Action error marked `retryable: true` keeps the Action open
+  while delivery attempts remain. The terminal failure names the provider
+  problem and, after exhaustion, the attempt count.
+- **Performance.**
+  - **Authorization decisions are reused while they stay valid.** The owner
+    keeps committed grants in owner-local memory and invalidates them from its
+    own writes: exact records and collection sets for Collection, Asset and
+    protected-value writes, the whole table for unclassified writes, plus
+    session and flow changes, credential deadlines, lease loss, policy revisions
+    and owner replacement. An Action run is authorized once at capture, and its
+    capability calls reuse that decision, including agent work bound to a
+    delivery attempt while its lease holds. In a Processor-turn benchmark with
+    26 capability calls, policy evaluations fall from 82 to 1 and SQL statements
+    from 690 to 68. Collection read and result decisions and operation
+    observation attaches are reused across commands, matched on the authority,
+    request-fact and intent fields the policy read and on the record version. A
+    warm worker `get` falls from 18 SQL statements and two evaluations to three
+    and none. Collection mutations, staff-directory and verifier-evidence reads,
+    directory delegation and policies that read `commandTime` keep fresh
+    evaluation. See
+    [Authorization reuse](docs/authorization.md#authorization-reuse-during-an-action-run).
+  - **Fewer owner commands per agent turn.** Delivery claims and settlements
+    update their deadlines in the same statement, revision acknowledgments are
+    batched, and an authorized primitive read takes one owner command. With a
+    zero-latency model on PostgreSQL, a plain turn falls from 524 to 470 SQL
+    statements (65 to 62 owner commands) and settles in about 197 ms; a tool
+    turn falls from 1,125 to 986 statements (148 to 135 commands).
+    `scripts/benchmark-turn.ts` measures each stage of a turn. Core also loads
+    thread participants, missing senders and history participants with one
+    batched read instead of one read each, and `createThreadMessage` reuses the
+    record its create returned.
+  - **No owner work at idle.** Content retirement applies the same protection
+    rules as its alarm. A copy still protected by a ready Asset or
+    protected-value reference, or by unexpired pending content, is retried when
+    the protection expires or is released, instead of every second; each such
+    body used to cost one owner command per second indefinitely.
+- **Tool output visibility.** Tool calls and results record
+  `visibility.initiatorId`, the human participant whose message started the
+  turn, and keep it across agent-to-agent work. Output is readable under
+  `public`, by the requesting agent, and by the initiator under `public_status`,
+  the default; `requester_only` stays agent-only. One rule now covers message
+  content and assets, history and feed projections, Collection reads and
+  subscriptions, live tool streams, retained stream assets and operation
+  results. A viewer who may not read a result still receives the result message,
+  with `content: []` and `metadata.toolStatus` (`completed`, `failed` or
+  `cancelled`), so a visible call always settles. Messages stored without
+  `initiatorId` grant the initiator nothing; nothing is backfilled. HTTP
+  adapters can apply domain rules of this kind through the new
+  `createHttpAdapter` hooks `reads`, `authorizeAsset`, `authorizeActionResult`
+  and `projectOutput`.
+- **Memory.**
+  - Core space membership selects a dedicated space memory. Joining, leaving,
+    moving and archiving change access on the next read or write. Thread notes
+    stay private to their thread, also between threads of one space. Legacy
+    custom spaces and `memorySpaceAccess` grants stay stored but no longer widen
+    what agents see.
+  - Consolidation writes the thread scope; `remember` writes the space or
+    personal scope explicitly.
+  - Scheduled jobs record their creator in `metadata.creatorParticipantId` and
+    dispatch with that human as the initiator.
+- **Prompt context.**
+  - Core no longer copies the first human's participant metadata into the system
+    prompt. Hosts add selected user facts with a `defineContextResource`
+    contributor placed `before_latest_message`.
+  - With Memory installed, the initiator's personal notes render as one bounded
+    block (at most 20 items and 8,000 characters, in stable ID order)
+    immediately before the newest message, only when the initiator is the
+    thread's sole human.
+  - Agent `workingMemory`, `expertise` and `learnedPreferences` render as
+    `## AGENT CONFIGURATION` at the same position, instead of
+    `## YOUR PERSISTENT MEMORY` in the system prompt. Later changes to them
+    leave the system prompt, tools and earlier history byte-identical; the
+    upgrade itself changes the cached prefix once.
 
 ### Added
 
@@ -170,10 +272,26 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 - **Chat UI as React front-end plugins.**
   - `/ui/web` (`uiWebPlugin({ navigation, preferences, core })`) is the shell: a
     sidebar grouped by Space, a header, a resizable panel, SpaceView, pages, a
-    palette and keyboard navigation.
+    palette and keyboard navigation. Chats without a Space form a collapsible No
+    Space group; groups start collapsed with a count, the current chat's group
+    opens, and each person's open groups are remembered. Below 768 px the
+    sidebar is an off-canvas drawer and the panel a full-screen sheet.
   - `/core/web` (`createCoreWebPlugin`, `threadFeedAdapter(client)`) holds the
     chat Views, live streaming replies, tool activity, attachments and the
     composer.
+  - Tool activity is one quiet row per reply ("Used 3 tools · 4s") that opens to
+    plain-language steps. **View details** loads a call's Input and Result tree
+    on request, only for viewers who may read the output; others see a
+    status-only step. A call left without a terminal status settles as done once
+    its agent moves on. **Show technical details**, a per-person choice in the
+    user menu, opens technical live output and step details by default.
+  - Tool renderers (`resources.toolRenderers.<toolId>`) take `summary` (a View
+    that states the step in plain words), `batch` (one summary for consecutive
+    calls), `summaryResult` (the summary reads the result), `view`, `inline`
+    (the View replaces the step), `live` (the View draws in the message while
+    the call runs, then settles into a compact card), `audience` (`everyone` or
+    `technical`) and `icon`. `useToolDisplay()` tells a renderer whether it
+    draws `live`, as a `card` or `full`.
   - `/admin/web` is one administration page with section tabs.
   - Extension points: `resources.shell.*`, `resources.chat.*`,
     `resources.spaceSections`, `resources.adminSections`,
@@ -221,6 +339,22 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   Action's writes. The HTTP transport projects the session as an HttpOnly cookie
   (`sessionCookie` on the facade). Flow credentials are signed, short-lived and
   limited to their continuation.
+- **Actors for owner-verified credentials.**
+  `defineServerFacade({ resolveActor })` maps a verified request, including an
+  Action-session cookie that the owner verifies after `authenticate`, to its
+  actor using tenant-scoped reads. Core routes that need a viewer refuse a
+  request without one with `403 actor_required`.
+- **Memory scopes.** `remember({ text, scope })` appends an immutable note
+  immediately to `personal` (the turn's human initiator, across threads and
+  agent chains), `space` (the thread's current Core space) or `thread` (the
+  default). Parallel appends cannot overwrite each other. `replaces: id`
+  corrects a note atomically, and `retire_memory({ id, reason })` retires one
+  permanently, keeping an audit record. `search_memory` searches every scope
+  visible to the turn, by text when no embeddings exist.
+  `memoryScopeConstraints` from `/memory` gives owner policies the scope
+  predicates. The profile lists personal notes with **Forget** (the
+  `personal_memory` Action). Legacy `participant.metadata.memories.items` import
+  lazily into personal notes; no SQL upgrade is needed.
 - **Trusted tool origins.** `trustedCoreToolOrigin(context)` from `/core`
   returns a tool call's origin after checking it against owner-retained
   provenance. App metadata keys no longer invalidate Core's tool and LLM
@@ -243,6 +377,10 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 - Dead-lettered deliveries write one structured `console.error` line naming the
   consumer, operation, delivery, attempts and the masked error. It never
   includes the Event or its input.
+- Unexpected HTTP 5xx errors write one structured `console.error` line
+  (`event: "http.server_error"`, route template, error name, message and stack)
+  without request data. The response stays generic. An `onError` callback
+  replaces the line; if it throws, the line is still written.
 
 ### Fixed
 
@@ -268,6 +406,24 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 - Oxian 0.23.1 provides portable route WebSocket upgrades and CLI shutdown, and
   closing a route WebSocket no longer interrupts unrelated HTTP streams.
   Observation no longer fails with 500 or 503 after logout or on page load.
+- A fallback candidate skipped for a missing credential no longer replaces the
+  primary provider's real error, and the user-facing failure appears only once
+  it is terminal.
+- A routine device-channel renewal (lifetime, reauthentication, authority or
+  capacity change) re-attaches live queries from their checkpoint at once.
+  Before, it failed the channel and spent retries, so views stayed stale behind
+  "Reconnecting" until a reload.
+- Core's message and message-asset routes failed with a `TypeError` (HTTP 500)
+  for an Action-session request, which arrived without an actor, and hid tool
+  results. See `resolveActor` above.
+- `localStorageAdapter` treats unavailable, blocked, full or corrupted browser
+  storage as empty and skips failed writes, so the app starts with in-memory
+  preferences instead of failing.
+- Message bubbles size to their content up to their maximum width and wrap only
+  at word boundaries; short messages no longer wrap mid-word.
+- A PostgreSQL database opened with `pgPoolMax: 1` uses the fenced owner
+  snapshot for Collection snapshots instead of failing native snapshot
+  admission, which needs two connections.
 
 ### Removed
 
@@ -275,6 +431,9 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 - Stable Action IDs as configuration keys; use composition aliases.
 - Generic Server's Core imports and the 25 ms handler `invoke` polling loop;
   handler invocation waits for operation changes.
+- `update_user_memory` from Built-in Tools; use Memory's `remember` with
+  `scope: "personal"`.
+- Core's `## USER METADATA` system-prompt section.
 
 ## 0.89.0 — 2026-10-19
 

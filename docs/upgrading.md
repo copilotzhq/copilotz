@@ -8,134 +8,6 @@ status: stable
 
 # Upgrading and Data Safety
 
-## Upgrading to 0.91.0
-
-### One memory, three scopes
-
-Install `memoryPlugin` from `@copilotz/copilotz/memory`. Grant agents
-`remember`, `search_memory`, `inspect_memory`, and `retire_memory` in
-`capabilities.tools`. `remember({ text, scope })` appends immediately:
-`personal` belongs to the human initiator, `space` to the thread's current Core
-space, and `thread` (the default) to the conversation. Correct with
-`remember({ text, scope, replaces: id })`; retire with
-`retire_memory({ id, reason })`. Text is immutable. Retirement keeps an audit
-record; it is not erasure. Direct/imported notes have
-`lineage.checkpointId: null`; note results now include `scope`.
-
-**`update_user_memory` is removed in this release.** Replace
-`update_user_memory({ content })` with
-`remember({ text: content, scope: "personal" })`. Replace `operation: "remove"`
-with `retire_memory`; obtain the new ID from search or the profile. Remove the
-old alias from tool grants, prompts, action policies and imports. There is no
-alias: the old action belonged to Built-in Tools and mutated participant
-metadata; keeping it would couple that plugin to Memory and preserve an
-incompatible result/category contract. `update_my_memory` (agent configuration
-metadata) is unchanged.
-
-Core space membership now selects a dedicated `memory-space:space:<spaceId>`.
-Joining exposes it; leaving, moving or archiving removes access. Thread notes
-stay private to their thread, including when two threads share a Core space.
-Legacy custom spaces and explicit `memorySpaceAccess` sharing grants remain
-stored but no longer expand agent visibility. Review and copy any facts that
-should be shared into the chosen new space scope; do not blindly publish old
-thread notes. Existing checkpoints and canonical thread notes stay in place. The
-canonical thread write grant remains an internal consolidation fence.
-
-### Retained personal data
-
-No retained SQL schema upgrade is needed. The first personal write, search,
-inspection, ordinary prompt preparation or profile opening lazily imports valid
-`participant.metadata.memories.items` into personal notes. Each item gets a
-SHA-256 ID from its participant and complete legacy value. Concurrent/repeated
-imports converge; retired imports are never recreated. The original metadata
-(including category and malformed entries) is retained for recovery, and is
-excluded from Core's system prompt. Imported text is available through ordinary
-text search without embeddings. Stop all old-version writers before rollout;
-editing legacy metadata afterward is not a supported memory interface.
-
-The profile lists personal notes and offers **Forget** via the `personal_memory`
-Action (`operation: "import" | "retire"`). Set `resources.chat.sender.id` to the
-canonical participant ID (an authorized `externalId` lookup is also supported).
-Register these leaves in the app's browser plugin (server policies still control
-all access):
-
-```ts
-collections: { memoryNote: { placement: "server" } },
-actions: {
-  personal_memory: { id: "copilotz.memory.personal", placement: "server" },
-},
-```
-
-### Application policy changes
-
-The library cannot authenticate an application's humans or choose its access
-policy. Keep those checks in the existing owner policy and compose
-`memoryScopeConstraints(read, { threadId, initiatorParticipantId })`, exported
-from `@copilotz/copilotz/memory`, after resolving trusted Core provenance. Bind
-that policy to `memoryNote`, `memorySpace`, `memorySpaceAccess`, and
-`longTermMemory`. Declare `thread`, `space`, and `participant` policy sources.
-The helper provides read predicates and separate mutation constraints;
-membership is re-read by the owner at authorization/commit. Merge these
-constraints with the app's existing grants; do not replace them with
-unrestricted collection access.
-
-- For agent Actions and prompt preparation, derive the initiator from the
-  authenticated Core workflow/tool-plan provenance, never model input or an
-  arbitrary human in the thread. Preserve it across nested agents. Bind the
-  thread to authorized work; a valid ID alone grants nothing.
-- Permit the personal import's participant read and scoped note/container
-  creates, including in the message router's context preparation. Do not permit
-  metadata writes for personal memory. Keep ordinary Core collection grants.
-- For profile calls, expose `personal_memory` and bind
-  `actionMetadata.initiatorParticipantId` to the authenticated participant. Use
-  `memoryScopeConstraints(read, { initiatorParticipantId })` without a thread;
-  constrain browser `memoryNote` reads the same way. Never accept a participant
-  ID from the action input as authority.
-- Scheduled tool creation captures `metadata.creatorParticipantId` from trusted
-  action metadata and preserves it on updates. Dispatch uses that stored human
-  as initiator. Host-authored jobs must supply this server-derived metadata;
-  backfill existing jobs only when the creator is known. Protect this field in
-  custom job-write policies. Unknown/non-human creators get no personal scope.
-- Keep Memory tools' `requester_only` history visibility. Apply the app's usual
-  message, asset and operation policies to retained tool results and agent
-  replies; scope authorization does not erase information already published in
-  conversation history.
-
-Automatic personal context is independent of the consolidation threshold. It is
-omitted unless all thread participants can be resolved and the initiator is the
-only human. At most 20 active items, in stable ID order and at most 8,000 text
-characters, are inserted immediately before the latest message. The system,
-tools and preceding history remain unchanged. In shared threads the initiating
-human's personal scope is available only through explicit tools.
-
-### Prompt metadata compatibility
-
-**Core no longer emits `## USER METADATA`.** Previously it selected the first
-human in a thread and copied arbitrary metadata into the system prompt. There is
-no compatibility switch for that dump. Installing Memory supplies the curated,
-initiator-based personal block described above; without Memory, Core does not
-automatically supply personal facts.
-
-If an app relied on other metadata fields (for example, a preferred language),
-register an explicit `defineContextResource` under `resources.promptContext`.
-Use `initiatorParticipantId`, authorized collection reads, an allowlist of
-fields and values, and the app's shared-thread disclosure policy. Return
-`placement: "before_latest_message"` so changing facts leave the system, tools
-and preceding history unchanged. Do not stringify a whole participant or its
-metadata, and do not fall back to the first human. See the
-[curated contributor example](../plugins/core/authoring/define-context/README.md#curated-user-facts).
-Grant that contributor only the participant/thread reads its policy needs.
-
-Agent `workingMemory`, `expertise` and `learnedPreferences` remain agent
-configuration, separate from the three memory scopes. `update_my_memory` keeps
-its existing storage/API. Core now renders those three fields as
-`## AGENT CONFIGURATION` before the latest message, instead of
-`## YOUR PERSISTENT MEMORY` in the system prompt. Object keys are sorted for
-stable bytes; unrelated agent metadata is not included. Agent resource identity
-and instructions remain in the system prompt. These placement changes incur a
-one-time prefix change on upgrade; later metadata/configuration changes do not
-invalidate that prefix.
-
 ## Upgrading to 0.90.0
 
 0.90.0 refuses several configurations and requests that 0.89.0 accepted. The
@@ -161,6 +33,9 @@ rejects failed/cancelled settlement. SDK callers use
 response also includes the final owner `seq`. Live reads must still apply
 through that sequence before their projection is current. Browser-local wrappers
 must explicitly await their child server handle's `settled()` when needed.
+Custom `ActionTransport` implementations resolve `invoke()` at Action completion
+and implement `settled(operationId, signal)` for the scope wait; without it,
+`handle.settled()` rejects as unsupported.
 
 The final observe descriptor changes from `operation.completed`,
 `operation.failed` and `operation.cancelled` to `operation.settled` with
@@ -194,7 +69,9 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
      continuation operation and indexed run and operation lookups;
    - keys graph nodes by `(namespace, id)`, with cascading composite edge
      references;
-   - puts `COLLATE "C"` on every text identity column.
+   - puts `COLLATE "C"` on every text identity column;
+   - rebuilds the ready-content reference index with `COLLATE "C"`, so content
+     retirement's protection check is an index lookup.
 
    It advances the owner epoch once, preserves sessions and retained authority,
    and is idempotent. Validate, then start the application. Schemas older than
@@ -260,10 +137,26 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
    accepted. Stable IDs still name durable lifecycle events, and
    `intent.invocation.id` still carries the executing Action's or Processor's
    stable ID.
+6. **Read `commandTime` and the policy context selectively.** The owner now
+   reuses authorization decisions while their tracked dependencies stay
+   unchanged (see
+   [Authorization reuse](./authorization.md#authorization-reuse-during-an-action-run)).
+   A decision that reads `context.commandTime` is never reused; destructuring it
+   at function entry or spreading `{ ...context }` counts as reading it.
+   Spreading, enumerating or serializing `authority`, `requestFacts` or the
+   intent binds the decision to every field in that subtree, so requests that
+   differ anywhere in it, such as by request or run ID, no longer share it. Such
+   policies stay correct but evaluate more often. Read `commandTime` only in the
+   branches that compare times, read only the fields a decision needs, and copy
+   the context with property descriptors when an adapter must enrich authority
+   (see [What `evaluate` receives](./authorization.md#what-evaluate-receives)).
+   Read changing facts through declared `sources`, and register changed logic
+   under a new revision: untracked closure state does not invalidate a reused
+   decision.
 
 #### HTTP
 
-6. **Handle 401 and 403 separately.** An anonymous request refused by an Action
+7. **Handle 401 and 403 separately.** An anonymous request refused by an Action
    policy, including Core HTTP Actions, returns **401**. A credential that was
    presented and refused keeps **403**. A session cookie that fails verification
    (revoked, expired, unknown or malformed) now counts as absent: the request
@@ -274,27 +167,176 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
 
 #### Core behavior
 
-7. **Pass `recipientIds: []` to address nobody.** A message that names no
+8. **Pass `recipientIds: []` to address nobody.** A message that names no
    recipients now addresses the thread's agent participants other than the
    sender. Seeds, imports and notices that must not wake an agent pass an
    explicit empty list. Human recipients no longer start model calls.
+9. **Expect tool output to reach the turn's initiator.** New tool calls and
+   results record `visibility.initiatorId`, the human whose message started the
+   turn, and keep it across agent-to-agent work. Under `public_status`, the
+   default result policy, that person now reads the output. Other viewers
+   receive the result message with `content: []` and `metadata.toolStatus`
+   (`completed`, `failed` or `cancelled`); treat it as a settled status, not a
+   failure or a pending call. `requester_only` stays agent-only. Messages stored
+   before this release have no `initiatorId` and gain no initiator access;
+   nothing is backfilled.
+
+#### Execution limits
+
+10. **Size the delivery ceiling for long work.** Deliveries and worker host
+    calls now stop only at a six-hour safety ceiling, and a stalled model call
+    fails by inactivity (90 s before visible content, 120 s after) with "The
+    model stopped responding." If an Action can run longer, declare
+    `defineAction({ deliveryTimeoutMs })`, or set `deliveryTimeoutMs` in
+    `createCopilotz`. Configure the same value on the Gateway, every Worker and
+    every shard: each peer applies its own limit. A provider that reasons
+    silently for more than 90 s needs a larger `firstTokenTimeoutMs`. See
+    [Execution liveness](./execution-liveness.md).
 
 #### Operations
 
-8. **Use the migration API instead of the scripts' internals.**
-   `@copilotz/copilotz/migration` exports `exportOwnerBundle`,
-   `importOwnerBundle`, `relocateOwnerSchema`, `migrateOwnerKeys`, the
-   transfer-body readers and the restore helpers. The offline scripts are thin
-   callers of it. See
-   [Moving retained tenant data](./retained-data-migration.md).
-9. **Align Oxian.** Copilotz depends on Oxian 0.23.1. Hosts that import Oxian
-   directly use the same version.
+11. **Use the migration API instead of the scripts' internals.**
+    `@copilotz/copilotz/migration` exports `exportOwnerBundle`,
+    `importOwnerBundle`, `relocateOwnerSchema`, `migrateOwnerKeys`, the
+    transfer-body readers and the restore helpers. The offline scripts are thin
+    callers of it. See
+    [Moving retained tenant data](./retained-data-migration.md).
+12. **Align Oxian.** Copilotz depends on Oxian 0.23.1. Hosts that import Oxian
+    directly use the same version.
+
+#### Memory scopes
+
+Memory (`memoryPlugin` from `@copilotz/copilotz/memory`) now keeps immutable
+notes in three scopes. Grant agents `remember`, `search_memory`,
+`inspect_memory` and `retire_memory` in `capabilities.tools`.
+`remember({ text, scope })` appends immediately: `personal` belongs to the human
+initiator, `space` to the thread's current Core space, and `thread` (the
+default) to the conversation. Correct with
+`remember({ text, scope, replaces: id })`; retire with
+`retire_memory({ id, reason })`. Text is immutable. Retirement keeps an audit
+record; it is not erasure. Direct and imported notes have
+`lineage.checkpointId: null`, and note results now include `scope`.
+
+**Replace `update_user_memory`.** It is removed, with no alias. Replace
+`update_user_memory({ content })` with
+`remember({ text: content, scope: "personal" })`, and `operation: "remove"` with
+`retire_memory`, taking the note ID from search or the profile. Remove the old
+name from tool grants, prompts, Action policies and imports. Agents that used it
+need Memory installed. The old Action belonged to Built-in Tools and wrote
+participant metadata; an alias would couple that plugin to Memory and keep an
+incompatible result and category contract. `update_my_memory` (agent
+configuration metadata) is unchanged.
+
+Core space membership now selects a dedicated `memory-space:space:<spaceId>`.
+Joining exposes it; leaving, moving or archiving removes access. Thread notes
+stay private to their thread, including when two threads share a Core space.
+Legacy custom spaces and explicit `memorySpaceAccess` sharing grants remain
+stored but no longer expand agent visibility. Review and copy any facts that
+should be shared into the chosen new space scope; do not blindly publish old
+thread notes. Existing checkpoints and canonical thread notes stay in place. The
+canonical thread write grant remains an internal consolidation fence.
+
+#### Retained personal memory
+
+No retained SQL schema upgrade is needed. The first personal write, search,
+inspection, ordinary prompt preparation or profile opening lazily imports valid
+`participant.metadata.memories.items` into personal notes. Each item gets a
+SHA-256 ID from its participant and complete legacy value. Concurrent or
+repeated imports converge, and retired imports are never recreated. The original
+metadata (including category and malformed entries) is retained for recovery and
+excluded from Core's system prompt. Imported text is available through ordinary
+text search without embeddings. Stop all old-version writers before rollout;
+editing legacy metadata afterward is not a supported memory interface.
+
+The profile lists personal notes and offers **Forget** via the `personal_memory`
+Action (`operation: "import" | "retire"`). Set `resources.chat.sender.id` to the
+canonical participant ID (an authorized `externalId` lookup is also supported).
+Register these leaves in the app's browser plugin (server policies still control
+all access):
+
+```ts
+collections: { memoryNote: { placement: "server" } },
+actions: {
+  personal_memory: { id: "copilotz.memory.personal", placement: "server" },
+},
+```
+
+#### Memory policies
+
+The library cannot authenticate an application's humans or choose its access
+policy. Keep those checks in the existing owner policy and compose
+`memoryScopeConstraints(read, { threadId, initiatorParticipantId })`, exported
+from `@copilotz/copilotz/memory`, after resolving trusted Core provenance. Bind
+that policy to `memoryNote`, `memorySpace`, `memorySpaceAccess` and
+`longTermMemory`, and declare `thread`, `space` and `participant` policy
+sources. The helper provides read predicates and separate mutation constraints;
+the owner re-reads membership at authorization and commit. Merge these
+constraints with the app's existing grants; do not replace them with
+unrestricted collection access.
+
+- For agent Actions and prompt preparation, derive the initiator from the
+  authenticated Core workflow or tool-plan provenance, never from model input or
+  an arbitrary human in the thread. Preserve it across nested agents. Bind the
+  thread to authorized work; a valid ID alone grants nothing.
+- Permit the personal import's participant read and scoped note and container
+  creates, including in the message router's context preparation. Do not permit
+  metadata writes for personal memory. Keep ordinary Core collection grants.
+- For profile calls, expose `personal_memory` and bind
+  `actionMetadata.initiatorParticipantId` to the authenticated participant. Use
+  `memoryScopeConstraints(read, { initiatorParticipantId })` without a thread,
+  and constrain browser `memoryNote` reads the same way. Never accept a
+  participant ID from the Action input as authority.
+- Scheduled tool creation captures `metadata.creatorParticipantId` from trusted
+  Action metadata and preserves it on updates. Dispatch uses that stored human
+  as initiator. Host-authored jobs must supply this server-derived metadata;
+  backfill existing jobs only when the creator is known. Protect this field in
+  custom job-write policies. Unknown or non-human creators get no personal
+  scope.
+- Keep Memory tools' `requester_only` history visibility. Apply the app's usual
+  message, asset and operation policies to retained tool results and agent
+  replies; scope authorization does not erase information already published in
+  conversation history.
+
+Automatic personal context is independent of the consolidation threshold. It is
+omitted unless all thread participants can be resolved and the initiator is the
+only human. At most 20 active items, in stable ID order and at most 8,000 text
+characters, are inserted immediately before the latest message. The system,
+tools and preceding history remain unchanged. In shared threads the initiating
+human's personal scope is available only through explicit tools.
+
+#### Prompt context
+
+**Core no longer emits `## USER METADATA`.** Previously it selected the first
+human in a thread and copied arbitrary metadata into the system prompt. There is
+no compatibility switch for that dump. Installing Memory supplies the curated,
+initiator-based personal block described above; without Memory, Core does not
+automatically supply personal facts.
+
+If an app relied on other metadata fields (for example, a preferred language),
+register an explicit `defineContextResource` under `resources.promptContext`.
+Use `initiatorParticipantId`, authorized collection reads, an allowlist of
+fields and values, and the app's shared-thread disclosure policy. Return
+`placement: "before_latest_message"` so changing facts leave the system, tools
+and preceding history unchanged. Do not stringify a whole participant or its
+metadata, and do not fall back to the first human. See the
+[curated contributor example](../plugins/core/authoring/define-context/README.md#curated-user-facts).
+Grant that contributor only the participant and thread reads its policy needs.
+
+Agent `workingMemory`, `expertise` and `learnedPreferences` remain agent
+configuration, separate from the three memory scopes. `update_my_memory` keeps
+its existing storage and API. Core now renders those three fields as
+`## AGENT CONFIGURATION` before the latest message, instead of
+`## YOUR PERSISTENT MEMORY` in the system prompt. Object keys are sorted for
+stable bytes; unrelated agent metadata is not included. Agent resource identity
+and instructions remain in the system prompt. These placement changes incur a
+one-time prefix change on upgrade; later metadata and configuration changes do
+not invalidate that prefix.
 
 ### New surfaces in 0.90.0
 
 #### Device sockets and live reads
 
-10. **Send cookie credentials explicitly on the device socket.** Browsers that
+13. **Send cookie credentials explicitly on the device socket.** Browsers that
     authenticate with the HttpOnly session cookie select it in the hello:
 
     ```ts
@@ -307,13 +349,13 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
     Header-token clients send a nonempty `authorization` or `x-api-key` value
     instead. Empty credentials are refused, and so is a cookie on a socket whose
     `Origin` was missing or not allowed.
-11. **List cross-origin clients in `allowedOrigins`.** `/device` refuses a
+14. **List cross-origin clients in `allowedOrigins`.** `/device` refuses a
     foreign or opaque `Origin` before upgrading. Same-origin sockets need no
     configuration. Other origins are listed as canonical HTTP(S) origins:
     `defineServerFacade({ allowedOrigins: ["https://app.example"] })`.
     Non-browser clients that send no `Origin` authenticate with header
     credentials only.
-12. **Expect bounded live reads.** Each device socket holds at most 16
+15. **Expect bounded live reads.** Each device socket holds at most 16
     subscriptions by default (`deviceLimits.maxSubscriptions`), and each
     principal 32 attached reads. Filters are limited to 64 predicate nodes and
     32 `in` values. `jsonEquals`, `eqIgnoreCase` and `inIgnoreCase` are refused
@@ -324,30 +366,56 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
 
 #### Action sessions
 
-13. **Check the session cookie name.** The Action-session cookie, new in this
+16. **Check the session cookie name.** The Action-session cookie, new in this
     release, defaults to `__Host-copilotz_session`: Secure, HttpOnly, `Path=/`,
     no `Domain`. A `__Host-` name refuses a `domain`, `secure: false` or another
     `path`, so pick a different `sessionCookie.name` if you need those. Update
     proxies, tests and host `authenticate` callbacks that read the cookie by
     name. A request that carries the configured cookie twice is refused with
     `duplicate_session_cookie`.
+17. **Resolve the actor for Action-session requests.** The owner verifies an
+    Action-session cookie after `authenticate` returns, so `authenticate` cannot
+    supply that request's actor. Add `resolveActor` to the facade. It runs after
+    verification on every authentication path, receives the verified `scope` and
+    tenant-scoped `read` services, and its result replaces the actor
+    `authenticate` returned:
+
+    ```ts
+    defineServerFacade({
+      authenticate,
+      async resolveActor({ scope, read }) {
+        // Keep the actor that authenticate verified for other credentials.
+        if (scope.authority.principal.kind !== "session") return scope.actor;
+        const [participant] = await read.list("participant", {
+          where: { externalId: scope.authority.principal.id },
+        });
+        return participant ? { id: participant.id } : undefined;
+      },
+    });
+    ```
+
+    The resolved actor sets the request scope that Core routes read and the
+    ingress proof. Credential-dependent Action metadata still comes from the
+    owner policy's `actionMetadata`. Core routes that need a viewer, such as the
+    message and message-asset reads, refuse a request without an actor with
+    `403 actor_required` instead of failing with 500.
 
 #### Browser runtime and chat UI
 
-14. **Declare `url` on Views a link may open.** A View is addressable from URL
+18. **Declare `url` on Views a link may open.** A View is addressable from URL
     state only when its definition sets `url: true` or
     `url: { queries: "run" }`. URL values carry identifiers only: a scalar, or a
     flat record of scalars.
-15. **Start held reads from a user gesture.** In a View opened from a URL, and
+19. **Start held reads from a user gesture.** In a View opened from a URL, and
     in every View it nests, `ctx.readAction` returns status `held` and calls
     nothing until a user gesture calls `refresh()`. `ReadStatus` renders a Load
     button for it. `url: { queries: "run" }` opts a View out when no query input
     derives from the URL value.
-16. **Handle `ReadState` `failed`.** A one-shot query read whose attempt failed
+20. **Handle `ReadState` `failed`.** A one-shot query read whose attempt failed
     is `failed` and waits for `refresh()`. `stale` now means only a read that
     recovers by itself, such as a reconnecting live read. `ReadStatus` renders
     `failed` with Try again.
-17. **Compose the chat shell.** Pre-release builds' focus/context workspace is
+21. **Compose the chat shell.** Pre-release builds' focus/context workspace is
     removed: `workspace`, `workspaceNavigation`, `workspaceUrlStorageAdapter`,
     the `ui*` workspace Actions, the navigator and the `resources.navigation`
     entries.
@@ -369,19 +437,44 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
       when the session is revoked.
 
     See [Web runtime and Views](./web-runtime-and-views.md).
+22. **Mark tool renderers that should show while a call runs.** A reply's tool
+    calls now collapse into one quiet activity row. A renderer registered as
+    `{ view }` alone shows only under its step's **View details**; it no longer
+    opens while the call runs. Add `live: true` to draw it in the message while
+    the call runs and settle it into a compact card, and set its `audience`:
+    `everyone` (the default) or `technical`, which starts as a slim strip unless
+    the person turned on **Show technical details**. `inline: true` still
+    replaces the step, as `ask` does.
+
+    ```ts
+    toolRenderers: {
+      terminal: {
+        view: "appTerminal",
+        live: true,
+        audience: "technical",
+        icon: "terminal",
+      },
+    },
+    ```
+
+    Optionally add `summary`, a View that states the step in plain words.
+    `batch` lets one summary speak for consecutive calls to the same tool, and
+    `summaryResult` loads the result for it. A live View can call
+    `useToolDisplay()` from `/core/web` to draw its compact `card`. See
+    [Tool renderers](./web-runtime-and-views.md#tool-renderers).
 
 #### Shard hosts
 
 Pre-release builds of the shard role (`@copilotz/copilotz/shard`) change as
 follows:
 
-18. **Authenticate shard controllers from headers.**
+23. **Authenticate shard controllers from headers.**
     `createShardControllerHandler` requires `authenticate(request)`, which runs
     on a bodyless copy of the request before the body is read. A refusal cancels
     the body and returns 403. Move the bearer or identity check from `authorize`
     into `authenticate`; keep `authorize(request, input)` for the parsed work's
     scope.
-19. **Namespace non-worker sessions.** Computers, browsers and connectors occupy
+24. **Namespace non-worker sessions.** Computers, browsers and connectors occupy
     reserved session IDs, `shard:<kind>:<id>`, built by
     `shardSessionId(kind, id)`:
     - pass `kind: "computer" | "browser" | "connector"` to `createShardWorker`
@@ -438,11 +531,12 @@ their next step; never relabel a schema or skip a step.
    invalidates old transport attachments, and fences the old owner epoch.
 6. The same call then commits v13 → v14 in one transaction: private credential
    effect storage, indexed run/operation lookup, accepted flow continuation
-   bindings, namespace-local `(namespace, id)` node identity and `COLLATE "C"`
-   on text identity columns. It rechecks drain, advances the owner epoch once,
-   and preserves sessions and retained authority. Starting at v13, call
-   `upgradeActionLifecycle(session, schema)` without new key or manifest inputs.
-   Validate the v14 schema and catalog, then start the application.
+   bindings, namespace-local `(namespace, id)` node identity, and `COLLATE "C"`
+   on text identity columns and the ready-content reference index. It rechecks
+   drain, advances the owner epoch once, and preserves sessions and retained
+   authority. Starting at v13, call `upgradeActionLifecycle(session, schema)`
+   without new key or manifest inputs. Validate the v14 schema and catalog, then
+   start the application.
 
 When all reviewed inputs are already available,
 `upgradeActionLifecycle(session, schema, { plan, reviewedFingerprint,

@@ -254,21 +254,21 @@ Completed-result replay retains its fresh authorization boundary.
 
 The cache belongs to one owner incarnation. The owner observes SQL mutations
 before executing them, including mutations inside a command or writable CTE.
-Collection projections invalidate the exact record and collection-set keys;
-missing-record and empty-list dependencies are covered. Raw writes and
-projections with additional asset nodes conservatively invalidate their table.
-Session writes and flow-effect writes invalidate their grants. Flow descendant
-receipts are also tracked. The hit checks credential, session and flow
-deadlines, policy identity/revision, owner lifetime and invocation cancellation.
-Delivery liveness is cached separately by delivery ID. Lease, heartbeat,
-settlement, recovery and cancellation commands retain the returned row's worker,
-epoch, status and expiry in owner memory. Both attempt authority and writer
-liveness check those facts against the command clock on every hit; renewal
-extends the lease without rerunning policy. Operation admission is cached
-against the specific operation row. Writes to unrelated deliveries or operations
-do not invalidate these entries. Unclassified writes retain the table-wide
-fallback; returned write sets temporarily fence reads until the affected IDs are
-known.
+Collection projections, including the Assets their manifests add, and Asset and
+protected-value writes invalidate the exact record and collection-set keys;
+missing-record and empty-list dependencies are covered. Unclassified raw writes
+conservatively invalidate their table. Session writes and flow-effect writes
+invalidate their grants. Flow descendant receipts are also tracked. The hit
+checks credential, session and flow deadlines, policy identity/revision, owner
+lifetime and invocation cancellation. Delivery liveness is cached separately by
+delivery ID. Lease, heartbeat, settlement, recovery and cancellation commands
+retain the returned row's worker, epoch, status and expiry in owner memory. Both
+attempt authority and writer liveness check those facts against the command
+clock on every hit; renewal extends the lease without rerunning policy.
+Operation admission is cached against the specific operation row. Writes to
+unrelated deliveries or operations do not invalidate these entries. Unclassified
+writes retain the table-wide fallback; returned write sets temporarily fence
+reads until the affected IDs are known.
 
 Only confirmed commits publish new grants to the owner cache. Uncommitted grants
 stay inside their command, and rollback discards them. A write may
@@ -291,6 +291,73 @@ need no local memoization for repeated point reads within a command. Policy
 changes must use a new registration/revision, and mutable authorization facts
 must be read through the tracked sources; changing an untracked closure variable
 is not an invalidation signal.
+
+### Reusing Collection read and observation decisions
+
+Collection read admission and its result phase share owner-local decisions
+across commands. The evaluator supplies read-only JSON views and records the
+paths inspected in `authority` and `intent`, including nested request facts,
+arguments and invocation fields. Entries are grouped by the security scope,
+principal, session/credential basis, retained dependencies, policy, resource,
+operation and phase, then by their read-path signature (at most eight signatures
+per group). A lookup compares only the values at those paths. Different request
+IDs or Action run IDs can therefore share a decision when policy does not read
+them; inspecting those fields makes their values part of the match.
+
+Object enumeration, spreads, property descriptors and `JSON.stringify` observe
+the whole enumerated subtree, including values and property order. Reflecting on
+the context observes all its JSON inputs. Descriptor copying preserves lazy
+clock access but does not hide input reads. Access to unsupported values,
+mutation attempts, returned proxy references and later use of escaped views
+prevent reuse. Non-JSON inputs and policy exceptions fail closed. Policy views
+must stay within evaluation; copying data out must use JSON values rather than
+retaining views. Signal inspection also prevents decision reuse.
+
+Result matching always includes the actual current/disclosed record, with its
+version fields, independently of which fields policy reads. Point decisions also
+depend on their record key, including negative reads. List, aggregate, search
+and selector decisions depend on the collection set, so insertion or removal
+invalidates results even when surviving records have not changed. Session
+identity remains a mandatory fence. Session-stamped expiry metadata normalizes
+the incoming credential just as a cold evaluation would, and every hit checks
+its deadline. Across attempts, the current worker/epoch/lease is validated even
+if policy ignores its ID. A reused decision carries the current request's
+authority, never the previous request's authority. Action capture grants remain
+isolated by run: sharing read decisions does not transfer capture receipts or
+broaden an Action's retained authority.
+
+Query/result record and collection-set stamps belong to the decision cache, not
+to the authorization dependencies retained by live readers. Ordinary data
+commits update subscription windows without reauthorizing each reader. A policy
+that actually reads that record or collection still tracks it as an
+authorization fact, and changes trigger notice reauthorization.
+
+The decision retains all policy-read dependencies and the session/flow fences.
+Attempt validity uses the owner's current lease facts and command time. Policy
+replacement or revision changes and owner restart invalidate reuse. Decisions
+and cached authorization-only record reads are copied before use and only
+published after commit; speculative rollback state cannot become a shared grant.
+Opaque SQL still invalidates conservatively. Known event appends invalidate only
+their own source row; opaque event deletes also fence lease state because event
+deletion can cascade to deliveries.
+
+`observation | operations | attach` reuses its policy decision under the same
+rules. Channel registration, expiry alarms and checks of selected operations or
+records still execute. Collection mutations and their post-commit disclosures
+retain fresh policy evaluation. Policies with no tracked local reads, actual
+remote staff/evidence reads, policies that inspect command time and directory
+delegation remain uncached. Mutable policy logic must use a new
+registration/revision; all changing authorization facts must be read through
+tracked sources.
+
+A warm worker Collection `get` needs no policy evaluation, session lookup,
+authorization-only record read or invocation-liveness query. It still reads the
+actual record and enters the serialized owner command. That fence protects
+cross-process owner takeover and the disclosure boundary. The existing
+repeatable read snapshot API is not a substitute for current authority:
+PostgreSQL snapshots can expose historical records, and protected PGlite
+snapshots themselves use an owner command. This optimization therefore retains
+that boundary.
 
 ### What `evaluate` returns
 
@@ -1142,70 +1209,3 @@ continues to v14:
   [0.90.0 policy changes](upgrading.md#upgrading-to-0900).
 - Reference: [Subscriptions](subscriptions.md) covers live-read admission and
   limits.
-
-### Reusing Collection read and observation decisions
-
-Collection read admission and its result phase share owner-local decisions
-across commands. The evaluator supplies read-only JSON views and records the
-paths inspected in `authority` and `intent`, including nested request facts,
-arguments and invocation fields. Entries are grouped by the security scope,
-principal, session/credential basis, retained dependencies, policy, resource,
-operation and phase, then by their read-path signature (at most eight signatures
-per group). A lookup compares only the values at those paths. Different request
-IDs or Action run IDs can therefore share a decision when policy does not read
-them; inspecting those fields makes their values part of the match.
-
-Object enumeration, spreads, property descriptors and `JSON.stringify` observe
-the whole enumerated subtree, including values and property order. Reflecting on
-the context observes all its JSON inputs. Descriptor copying preserves lazy
-clock access but does not hide input reads. Access to unsupported values,
-mutation attempts, returned proxy references and later use of escaped views
-prevent reuse. Non-JSON inputs and policy exceptions fail closed. Policy views
-must stay within evaluation; copying data out must use JSON values rather than
-retaining views. Signal inspection also prevents decision reuse.
-
-Result matching always includes the actual current/disclosed record, with its
-version fields, independently of which fields policy reads. Point decisions also
-depend on their record key, including negative reads. List, aggregate, search
-and selector decisions depend on the collection set, so insertion or removal
-invalidates results even when surviving records have not changed. Session
-identity remains a mandatory fence. Session-stamped expiry metadata normalizes
-the incoming credential just as a cold evaluation would, and every hit checks
-its deadline. Across attempts, the current worker/epoch/lease is validated even
-if policy ignores its ID. A reused decision carries the current request's
-authority, never the previous request's authority. Action capture grants remain
-isolated by run: sharing read decisions does not transfer capture receipts or
-broaden an Action's retained authority.
-
-Query/result record and collection-set stamps belong to the decision cache, not
-to the authorization dependencies retained by live readers. Ordinary data
-commits update subscription windows without reauthorizing each reader. A policy
-that actually reads that record or collection still tracks it as an
-authorization fact, and changes trigger notice reauthorization.
-
-The decision retains all policy-read dependencies and the session/flow fences.
-Attempt validity uses the owner's current lease facts and command time. Policy
-replacement or revision changes and owner restart invalidate reuse. Decisions
-and cached authorization-only record reads are copied before use and only
-published after commit; speculative rollback state cannot become a shared grant.
-Opaque SQL still invalidates conservatively. Known event appends invalidate only
-their own source row; opaque event deletes also fence lease state because event
-deletion can cascade to deliveries.
-
-`observation | operations | attach` reuses its policy decision under the same
-rules. Channel registration, expiry alarms and checks of selected operations or
-records still execute. Collection mutations and their post-commit disclosures
-retain fresh policy evaluation. Policies with no tracked local reads, actual
-remote staff/evidence reads, policies that inspect command time and directory
-delegation remain uncached. Mutable policy logic must use a new
-registration/revision; all changing authorization facts must be read through
-tracked sources.
-
-A warm worker Collection `get` needs no policy evaluation, session lookup,
-authorization-only record read or invocation-liveness query. It still reads the
-actual record and enters the serialized owner command. That fence protects
-cross-process owner takeover and the disclosure boundary. The existing
-repeatable read snapshot API is not a substitute for current authority:
-PostgreSQL snapshots can expose historical records, and protected PGlite
-snapshots themselves use an owner command. This optimization therefore retains
-that boundary.

@@ -63,8 +63,8 @@ Personal notes contribute a bounded, stable block immediately before the newest
 message, only when the initiator is the thread's sole human. Shared threads use
 explicit tools for personal memory. Legacy participant items import lazily and
 remain retained in metadata. The profile reads the same store and can retire
-items. See
-[the 0.91.0 upgrade and policy guide](upgrading.md#upgrading-to-0910).
+items. See [Memory scopes](upgrading.md#memory-scopes) and
+[Memory policies](upgrading.md#memory-policies) in the 0.90.0 upgrade guide.
 
 ### Compose it in the host
 

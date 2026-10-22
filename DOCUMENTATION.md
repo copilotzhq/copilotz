@@ -162,7 +162,7 @@ from their plugin entrypoints in the form their current signatures accept.
 ## Versions and installs
 
 - Installation examples use one caret range for the planned release (currently
-  `^0.89.0`). All subpaths come from the same package version.
+  `^0.90.0`). All subpaths come from the same package version.
 - Before release, recheck that range against the `version` in `deno.json` and
   the published registry. Never publish an example pinned ahead of an available
   release.

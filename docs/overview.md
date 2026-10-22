@@ -95,9 +95,9 @@ Install the package before running the entrypoint:
 
 ```sh
 # Deno: add the runtime package to deno.json.
-deno add jsr:@copilotz/copilotz@^0.89.0
+deno add jsr:@copilotz/copilotz@^0.90.0
 # Node 24+: add the same package from JSR.
-npx jsr add @copilotz/copilotz@^0.89.0
+npx jsr add @copilotz/copilotz@^0.90.0
 ```
 
 `overview.ts` is an **entrypoint**. It makes the host choices, sends one input

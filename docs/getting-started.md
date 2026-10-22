@@ -150,7 +150,7 @@ keeps the normal delay. See the
 
 ```sh
 # Add Copilotz to deno.jsonc, with import mappings for its plugin subpaths.
-deno add jsr:@copilotz/copilotz@^0.89.0
+deno add jsr:@copilotz/copilotz@^0.90.0
 ```
 
 ### Node
@@ -164,7 +164,7 @@ npm init -y
 # Treat .ts files as ES modules so Node 24+ runs the examples directly.
 npm pkg set type=module
 # Install Copilotz from JSR and record it in package.json.
-npx jsr add @copilotz/copilotz@^0.89.0
+npx jsr add @copilotz/copilotz@^0.90.0
 # Install PGlite, the database the runtime opens for in-memory and local data.
 npm i @electric-sql/pglite
 ```

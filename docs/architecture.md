@@ -133,7 +133,7 @@ for semantic views.
 
 `architecture.ts` reuses `notes-plugin.ts` and `composition.ts` exactly as
 [Chapter 7](getting-started/part-2-verify-and-recover/07-persist-and-recover.md)
-leaves them, with `@copilotz/copilotz@^0.89.0` installed. It admits one input
+leaves them, with `@copilotz/copilotz@^0.90.0` installed. It admits one input
 twice with the same identity, then replays the operation.
 
 ```ts

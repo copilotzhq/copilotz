@@ -50,8 +50,55 @@ export type ToolCallView = Readonly<{
   output?: Readonly<Record<string, string>>;
 }>;
 
-/** A registered tool renderer: `resources.toolRenderers.<toolId>`. */
-export type ToolRenderer = Readonly<{ view: string; inline?: boolean }>;
+/**
+ * What a summary View receives: the call, and when the renderer batches
+ * (`batch`), every consecutive call to the same tool in the reply that reads
+ * as this one step, oldest first. The call's `status` is then the run's:
+ * running while any runs, failed when any failed.
+ */
+export type ToolSummaryView =
+  & ToolCallView
+  & Readonly<{
+    calls?: readonly ToolCallView[];
+  }>;
+
+/**
+ * Who a live renderer is for: `everyone` draws in full in the message;
+ * `technical` (a terminal) shows a slim status strip that opens to it, open
+ * from the start for people who chose "Show technical details".
+ */
+export type ToolAudience = "everyone" | "technical";
+
+/**
+ * A registered tool renderer: `resources.toolRenderers.<toolId>`. Every part
+ * is optional; a tool with none reads as a generic step ("Used kanban").
+ *
+ * - `summary`: a View (`shows`) given a {@link ToolSummaryView} that says in
+ *   plain words what the call did ("Searched memory: no notes found"), for
+ *   the reply's activity row and its steps. `batch` lets one summary speak
+ *   for a run of consecutive calls ("Added 3 cards to Launch plan");
+ *   `summaryResult` says it reads the result, which then loads when the
+ *   steps open (never for the collapsed row).
+ * - `view`: a View (`shows`) given a {@link ToolCallView} that draws the
+ *   call. `inline` replaces the step with it for good (the call is the
+ *   message, such as `ask`). `live` draws it in the message while the call
+ *   runs, streaming, then settles it into a compact card that expands to the
+ *   full run, for its `audience` (default `everyone`); see `useToolDisplay`.
+ *   `icon` (a kit icon name, such as `terminal`) marks its settled card, so
+ *   its summary says the outcome ("`npm test` exited with 1"), and
+ *   `summaryResult` reads its result as soon as the card shows. Otherwise
+ *   the View shows in the step's details.
+ */
+export type ToolRenderer = Readonly<{
+  view?: string;
+  inline?: boolean;
+  live?: boolean;
+  audience?: ToolAudience;
+  icon?: string;
+  summary?: string;
+  batch?: boolean;
+  summaryResult?: boolean;
+}>;
 
 export type ChatLabels = ActivityLabels & {
   composerPlaceholder?: string;
@@ -69,6 +116,12 @@ export type ChatSelf = Readonly<{
 }>;
 
 export type ChatConfig = Readonly<{
+  /**
+   * The person chose "Show technical details": technical live views start
+   * open and each reply's steps show with their details one click away.
+   * The shell keeps it per person (`shellPreferences.technical`).
+   */
+  technical: boolean;
   imageOrigins: readonly string[];
   plugins: readonly MarkdownPlugin[];
   labels: ChatLabels;
@@ -95,7 +148,9 @@ export function chatConfig(ctx: BrowserViewContext): ChatConfig {
   const features = record(shell.features);
   const sender = record(record(ctx.resources.chat).sender);
   const feed = ctx.adapters.core?.feed;
+  const self = Object.keys(sender).length ? sender as ChatSelf : undefined;
   return {
+    technical: technicalDetails(ctx, self),
     imageOrigins: strings(record(ctx.resources.markdown).imageOrigins),
     plugins: markdownPlugins(ctx.adapters),
     labels: Object.fromEntries(
@@ -106,12 +161,28 @@ export function chatConfig(ctx: BrowserViewContext): ChatConfig {
       attachments: features.attachments !== false,
       voice: features.voice !== false,
     },
-    ...(Object.keys(sender).length ? { self: sender as ChatSelf } : {}),
+    ...(self ? { self } : {}),
     ...(feed && typeof feed === "object"
       ? { feed: feed as ThreadFeedAdapter }
       : {}),
     branding: record(shell.branding) as ChatConfig["branding"],
   };
+}
+
+/**
+ * Whether this person chose "Show technical details". The shell keeps the
+ * choice per person, as the person ids in `shellPreferences.technical`
+ * (people sharing a browser keep their own); without a shell it is off.
+ */
+export function technicalDetails(
+  ctx: BrowserViewContext,
+  self: ChatSelf | undefined,
+): boolean {
+  const preferences = record(
+    ctx.collections.shellPreferences?.get("main").value,
+  );
+  const person = self?.id ?? self?.externalId ?? "";
+  return strings(preferences.technical).includes(person);
 }
 
 /**
@@ -132,17 +203,31 @@ export function toolRenderers(
   ctx: BrowserViewContext,
 ): ReadonlyMap<string, ToolRenderer> {
   const registered = record(ctx.resources.toolRenderers);
+  const name = (value: unknown) =>
+    typeof value === "string" && value ? value : undefined;
   return new Map(
     Object.entries(registered).flatMap(([toolId, value]) => {
       const entry = record(value);
-      return typeof entry.view === "string"
-        ? [
-          [toolId, {
-            view: entry.view,
-            inline: entry.inline === true,
-          }] as const,
-        ]
-        : [];
+      const view = name(entry.view);
+      const summary = name(entry.summary);
+      if (!view && !summary) return [];
+      const renderer: ToolRenderer = {
+        ...(view ? { view } : {}),
+        ...(summary ? { summary } : {}),
+        ...(view && entry.inline === true ? { inline: true } : {}),
+        ...(view && entry.inline !== true && entry.live === true
+          ? {
+            live: true,
+            audience: entry.audience === "technical" ? "technical" : "everyone",
+          }
+          : {}),
+        ...(view && entry.live === true && name(entry.icon)
+          ? { icon: name(entry.icon) }
+          : {}),
+        ...(entry.batch === true ? { batch: true } : {}),
+        ...(entry.summaryResult === true ? { summaryResult: true } : {}),
+      };
+      return [[toolId, renderer] as const];
     }),
   );
 }
@@ -153,9 +238,39 @@ function status(item: ChatActivity): ToolCallView["status"] {
   return item.input ? "running" : "streaming";
 }
 
+function callView(
+  item: ChatActivity,
+  message: ChatMessage,
+  threadId: string,
+): ToolCallView {
+  return {
+    toolId: item.toolId ?? "tool",
+    callId: item.id,
+    threadId,
+    ...(message.id.startsWith("live:") ? {} : { messageId: message.id }),
+    status: status(item),
+    ...(item.input ? { input: item.input } : {}),
+    ...(item.rawInput !== undefined ? { rawInput: item.rawInput } : {}),
+    ...(item.result !== undefined ? { result: item.result } : {}),
+    ...(item.data !== undefined ? { data: item.data } : {}),
+    ...(item.resultStatus ? { resultStatus: item.resultStatus } : {}),
+    ...(item.error !== undefined ? { error: item.error } : {}),
+  };
+}
+
+/** A run of calls as one: running while any runs, failed when any failed. */
+function runStatus(calls: readonly ToolCallView[]): ToolCallView["status"] {
+  if (calls.some((call) => call.status === "streaming")) return "streaming";
+  if (calls.some((call) => call.status === "running")) return "running";
+  return calls.some((call) => call.status === "failed")
+    ? "failed"
+    : "completed";
+}
+
 /**
- * Renders each tool call that has an app renderer, as a nested View. Call
- * during View rendering so each renderer tracks its own reads.
+ * Renders each tool call that has an app renderer: its summary line (once
+ * per batched run) and its View. Call during View rendering so each renders
+ * as a nested View that tracks its own reads.
  */
 export function presentTools(
   ctx: BrowserViewContext,
@@ -165,41 +280,66 @@ export function presentTools(
   const renderers = toolRenderers(ctx);
   const tools = new Map<string, ToolPresentation>();
   if (!renderers.size) return tools;
+  const show = (shows: string, value: unknown): React.ReactNode | undefined => {
+    try {
+      return ctx.show({ shows, value }, { mode: "inline" }) as React.ReactNode;
+    } catch {
+      return undefined; // A missing View falls back to the generic step.
+    }
+  };
   for (const message of messages) {
-    for (const item of message.activity) {
-      if (item.kind !== "tool" || !item.toolId) continue;
-      const renderer = renderers.get(item.toolId);
-      if (!renderer) continue;
-      const value: ToolCallView = {
-        toolId: item.toolId,
-        callId: item.id,
-        threadId,
-        ...(message.id.startsWith("live:") ? {} : { messageId: message.id }),
-        status: status(item),
-        ...(item.input ? { input: item.input } : {}),
-        ...(item.rawInput !== undefined ? { rawInput: item.rawInput } : {}),
-        ...(item.result !== undefined ? { result: item.result } : {}),
-        ...(item.data !== undefined ? { data: item.data } : {}),
-        ...(item.resultStatus ? { resultStatus: item.resultStatus } : {}),
-        ...(item.error !== undefined ? { error: item.error } : {}),
-      };
-      let node: React.ReactNode;
-      try {
-        node = ctx.show({
-          shows: "chatToolCall",
-          value: { ...value, view: renderer.view },
-        }, { mode: "inline" }) as React.ReactNode;
-      } catch {
-        continue; // A missing renderer falls back to the plain details.
+    const items = message.activity;
+    for (let index = 0; index < items.length;) {
+      const item = items[index];
+      const renderer = item.kind === "tool" && item.toolId
+        ? renderers.get(item.toolId)
+        : undefined;
+      if (!renderer) {
+        index++;
+        continue;
       }
-      tools.set(item.id, {
-        node: (
-          <PaneBoundary key={item.id} label={`The ${item.toolId} view`}>
-            {node}
-          </PaneBoundary>
-        ),
-        inline: renderer.inline === true,
+      // Consecutive background calls to a batching tool read as one step.
+      let end = index + 1;
+      if (renderer.batch && !renderer.inline && !renderer.live) {
+        while (
+          end < items.length && items[end].kind === "tool" &&
+          items[end].toolId === item.toolId
+        ) end++;
+      }
+      const run = items.slice(index, end);
+      const calls = run.map((call) => callView(call, message, threadId));
+      const value: ToolSummaryView = calls.length > 1
+        ? { ...calls.at(-1)!, status: runStatus(calls), calls }
+        : calls[0];
+      const summary = renderer.summary
+        ? show(renderer.summary, value)
+        : undefined;
+      const group = run.length > 1 ? run.map((call) => call.id) : undefined;
+      run.forEach((call, offset) => {
+        const node = renderer.view
+          ? show("chatToolCall", { ...calls[offset], view: renderer.view })
+          : undefined;
+        tools.set(call.id, {
+          ...(node !== undefined
+            ? {
+              node: (
+                <PaneBoundary key={call.id} label={`The ${call.toolId} view`}>
+                  {node}
+                </PaneBoundary>
+              ),
+            }
+            : {}),
+          ...(summary !== undefined ? { summary } : {}),
+          inline: renderer.inline === true && node !== undefined,
+          ...(renderer.live && node !== undefined
+            ? { live: renderer.audience ?? "everyone" }
+            : {}),
+          ...(renderer.icon ? { icon: renderer.icon } : {}),
+          ...(group ? { group } : {}),
+          ...(renderer.summaryResult ? { summaryResult: true } : {}),
+        });
       });
+      index = end;
     }
   }
   return tools;

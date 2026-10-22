@@ -4,6 +4,7 @@
  * and grouping by consecutive speaker.
  * @module
  */
+import { canReadToolOutput } from "./tool-visibility.ts";
 import type { FeedAttempt } from "./chat-feed.ts";
 
 type Row = Readonly<{ id: string; [field: string]: unknown }>;
@@ -62,6 +63,22 @@ export type ChatActivity = Readonly<{
   resultStatus?: ToolResultStatus;
   error?: string;
   reasoning?: string;
+  /** When the call was made: the time of the message that requested it. */
+  startedAt?: string;
+  /** When the call settled: the time of its result. */
+  endedAt?: string;
+  /**
+   * This viewer may see that the call ran (and its input) but not its
+   * output, by the call's visibility. Known before it settles when the
+   * visibility arrives early, so a live view can show its status alone.
+   */
+  withheld?: true;
+  /**
+   * The person who may read a withheld output besides the requesting agent
+   * (the `public_status` initiator), by display name. Absent, only the agent
+   * reads it.
+   */
+  readableBy?: string;
 }>;
 
 /**
@@ -253,6 +270,10 @@ type ToolResult = {
   resultRef?: ToolResultRef;
   resultStatus?: ToolResultStatus;
   error?: string;
+  endedAt?: string;
+  withheld?: true;
+  /** The `public_status` initiator who may read the output, by id. */
+  initiatorId?: string;
 };
 
 /** A tool result body the read left as a reference: JSON, or deferred text. */
@@ -287,7 +308,7 @@ function jsonResult(
 /**
  * Whether a tool result's output is withheld from this viewer: its
  * visibility shares the status only (`public_status`, or `requester_only`
- * as read by someone else) and the viewer is not the requester.
+ * as read by someone else) and the viewer has no output grant.
  */
 function outputWithheld(
   row: Row,
@@ -297,8 +318,7 @@ function outputWithheld(
   if (visibility.kind !== "tool" || visibility.policy === "public") {
     return false;
   }
-  const requester = text(visibility.requesterId);
-  return !requester || !(viewerIds ?? []).includes(requester);
+  return !canReadToolOutput(visibility, viewerIds ?? []);
 }
 
 function toolResult(
@@ -316,14 +336,22 @@ function toolResult(
     : status === "failed" || status === "cancelled"
     ? "failed"
     : "active";
+  // When it settled, for how long the reply's tools took.
+  const endedAt = settled !== "active" && text(row.createdAt)
+    ? { endedAt: text(row.createdAt) }
+    : {};
   // Status only: no output to read, and nothing to retry. What the read did
   // deliver (an inline body) still shows.
   const json = jsonResult(row);
   if (
     outputWithheld(row, viewerIds) && !body && json.data === undefined
   ) {
+    const initiator = sharedWith(row.visibility);
     return [id, {
       status: settled,
+      ...endedAt,
+      withheld: true,
+      ...(initiator ? { initiatorId: initiator } : {}),
       ...(settled !== "active" ? { resultStatus: "restricted" as const } : {}),
       ...(status === "cancelled" ? { error: "Cancelled." } : {}),
     }];
@@ -341,6 +369,7 @@ function toolResult(
     : {};
   return [id, {
     status: settled,
+    ...endedAt,
     ...(body ? { result: body } : {}),
     ...deferredText,
     ...json,
@@ -350,6 +379,35 @@ function toolResult(
       ? { error: body || "The tool failed." }
       : {}),
   }];
+}
+
+/** The `public_status` initiator a withheld output is shared with, if any. */
+function sharedWith(visibility: unknown): string | undefined {
+  const value = record(visibility);
+  return value.kind === "tool" && value.policy === "public_status"
+    ? text(value.initiatorId)
+    : undefined;
+}
+
+/**
+ * The people tool outputs in these rows are shared with (`public_status`
+ * initiators), by participant id: read them to name who may see a withheld
+ * output.
+ */
+export function toolReaderIds(rows: readonly Row[]): string[] {
+  const ids = new Set<string>();
+  const add = (visibility: unknown) => {
+    const id = sharedWith(visibility);
+    if (id) ids.add(id);
+  };
+  for (const row of rows) {
+    add(row.visibility);
+    const calls = record(row.metadata).llmToolCalls;
+    for (const call of Array.isArray(calls) ? calls : []) {
+      add(record(call).visibility);
+    }
+  }
+  return [...ids];
 }
 
 function workflow(row: Row): Record<string, unknown> {
@@ -474,17 +532,36 @@ export function projectMessages(
       const id = text(value.id);
       if (!id) continue;
       const result = results.get(id);
+      // A visibility on the call itself says, before any result, whether
+      // this viewer will read its output.
+      const early = outputWithheld(
+          { id, visibility: value.visibility },
+          options.viewerIds,
+        )
+        ? { withheld: true as const, initiatorId: sharedWith(value.visibility) }
+        : undefined;
+      const withheld = result ? result.withheld : early?.withheld;
+      const initiator = result ? result.initiatorId : early?.initiatorId;
+      const reader = initiator ? senderOf(initiator) : undefined;
       activity.push({
         id,
         kind: "tool",
         status: result?.status ?? "active",
         toolId: text(value.action) ?? text(value.name) ?? "tool",
         input: record(value.input),
+        ...(text(row.createdAt) ? { startedAt: text(row.createdAt) } : {}),
+        ...(result?.endedAt ? { endedAt: result.endedAt } : {}),
         ...(result?.result ? { result: result.result } : {}),
         ...(result?.data !== undefined ? { data: result.data } : {}),
         ...(result?.resultRef ? { resultRef: result.resultRef } : {}),
         ...(result?.resultStatus ? { resultStatus: result.resultStatus } : {}),
         ...(result?.error ? { error: result.error } : {}),
+        ...(withheld ? { withheld } : {}),
+        // Named only when the person is known; otherwise the note stays
+        // general rather than guess.
+        ...(reader?.type === "human" && !reader.unknown
+          ? { readableBy: reader.name }
+          : {}),
       });
     }
     const parts = messageTextParts(row.content);
@@ -566,6 +643,49 @@ export function liveMessage(
     status: attempt.status === "streaming" ? "streaming" : "sent",
     attemptId: attempt.attemptId,
   };
+}
+
+/**
+ * Replies that finished, with every step settled: a tool call whose result
+ * never reached this viewer (a status a server does not send it yet) reads
+ * as done, its output the agent's alone, never as still running.
+ */
+export function settleFinished(
+  messages: readonly ChatMessage[],
+  finished: (message: ChatMessage, index: number) => boolean,
+): ChatMessage[] {
+  return messages.map((message, index) => {
+    if (
+      !message.activity.some((item) => item.status === "active") ||
+      !finished(message, index)
+    ) return message;
+    return {
+      ...message,
+      activity: message.activity.map((item): ChatActivity =>
+        item.status !== "active"
+          ? item
+          : item.kind === "tool"
+          ? { ...item, status: "complete", resultStatus: "restricted" }
+          : { ...item, status: "complete" }
+      ),
+    };
+  });
+}
+
+/**
+ * Whether each agent reply finished: the thread is idle, or the same agent
+ * wrote again after it (it only continues once its tools settled).
+ */
+export function finishedReplies(
+  messages: readonly ChatMessage[],
+  idle: boolean,
+): (message: ChatMessage, index: number) => boolean {
+  const last = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (message.role === "assistant") last.set(message.sender.id, index);
+  });
+  return (message, index) =>
+    idle || (last.get(message.sender.id) ?? index) > index;
 }
 
 /** Consecutive messages from the same speaker share one header. */

@@ -210,6 +210,13 @@ export type ShellPreferences = Readonly<{
    */
   expanded: readonly string[];
   collapsed: readonly string[];
+  /**
+   * The people (by participant id) who chose "Show technical details":
+   * technical live views start open and each reply's steps show with their
+   * details one click away. Off by default; the chat reads it as
+   * `ChatConfig.technical`.
+   */
+  technical: readonly string[];
 }>;
 
 export const defaultPreferences: ShellPreferences = {
@@ -220,6 +227,7 @@ export const defaultPreferences: ShellPreferences = {
   archived: false,
   expanded: [],
   collapsed: [],
+  technical: [],
 };
 
 export function shellPreferences(value: unknown): ShellPreferences {
@@ -241,7 +249,41 @@ export function shellPreferences(value: unknown): ShellPreferences {
     archived: row.archived === true,
     expanded: list(row.expanded),
     collapsed: list(row.collapsed),
+    technical: list(row.technical),
   };
+}
+
+/**
+ * The signed-in person's key for per-person preferences: their participant
+ * id (or external id) from `resources.chat.sender`; empty when unknown.
+ */
+export function preferencePerson(sender: unknown): string {
+  const value = sender && typeof sender === "object"
+    ? sender as Record<string, unknown>
+    : {};
+  return typeof value.id === "string"
+    ? value.id
+    : typeof value.externalId === "string"
+    ? value.externalId
+    : "";
+}
+
+/** Whether a person chose "Show technical details". */
+export function showsTechnicalDetails(
+  preferences: ShellPreferences,
+  person: string,
+): boolean {
+  return preferences.technical.includes(person);
+}
+
+/** The preference patch that turns one person's technical details on or off. */
+export function toggleTechnicalDetails(
+  preferences: ShellPreferences,
+  person: string,
+  on: boolean,
+): Pick<ShellPreferences, "technical"> {
+  const others = preferences.technical.filter((value) => value !== person);
+  return { technical: on ? [...others, person] : others };
 }
 
 /** The sidebar group of conversations without a Space (Spaces use their id). */

@@ -8,15 +8,18 @@ import {
   menuItems,
   NO_SPACE_GROUP,
   openGroups,
+  preferencePerson,
   resolveDarkMode,
   revealGroup,
   type ShellHistory,
   shellPreferences,
   shellState,
   shellUrlStorageAdapter,
+  showsTechnicalDetails,
   spaceDragScrollSpeed,
   spaceSections,
   toggleGroup,
+  toggleTechnicalDetails,
   touchSpaceDrag,
 } from "../model.ts";
 
@@ -138,11 +141,36 @@ test("preferences default to Spaces, auto sidebar and a sane panel width", () =>
     archived: false,
     expanded: [],
     collapsed: [],
+    technical: [],
   });
   assert.equal(shellPreferences({ panelWidth: 12 }).panelWidth, 420);
   assert.equal(shellPreferences({ groupBy: "date" }).groupBy, "date");
   assert.equal(clampPanelWidth(900, 600), 600);
   assert.equal(clampPanelWidth(100, 600), 280);
+});
+
+test("technical details are off by default and each person's own", () => {
+  let preferences = shellPreferences({});
+  assert.equal(showsTechnicalDetails(preferences, "ana"), false);
+  preferences = shellPreferences({
+    ...preferences,
+    ...toggleTechnicalDetails(preferences, "ana", true),
+  });
+  assert.equal(showsTechnicalDetails(preferences, "ana"), true);
+  assert.equal(showsTechnicalDetails(preferences, "bo"), false, "not Bo's");
+  preferences = shellPreferences({
+    ...preferences,
+    ...toggleTechnicalDetails(preferences, "ana", true),
+  });
+  assert.deepEqual(preferences.technical, ["ana"], "once");
+  assert.deepEqual(
+    toggleTechnicalDetails(preferences, "ana", false).technical,
+    [],
+  );
+  assert.deepEqual(shellPreferences({ technical: ["a", 3] }).technical, ["a"]);
+  assert.equal(preferencePerson({ id: "p1", externalId: "x" }), "p1");
+  assert.equal(preferencePerson({ externalId: "x" }), "x");
+  assert.equal(preferencePerson(undefined), "");
 });
 
 test("shell state keeps identifiers only", () => {

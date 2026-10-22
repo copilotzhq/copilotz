@@ -5,12 +5,20 @@
 /** The account menu at the foot of the sidebar. @module */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { ChevronsUpDown, Monitor, Moon, Sun, User } from "lucide-react";
+import {
+  ChevronsUpDown,
+  CodeXml,
+  Monitor,
+  Moon,
+  Sun,
+  User,
+} from "lucide-react";
 import {
   Avatar,
   AvatarFallback,
   cn,
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -24,10 +32,13 @@ import {
 import type { MenuItem } from "../model.ts";
 
 export function UserMenu(
-  { user, theme, onTheme, onProfile, items, onItem }: {
+  { user, theme, onTheme, technical, onTechnical, onProfile, items, onItem }: {
     user?: Readonly<{ name?: string; email?: string }>;
     theme: "light" | "dark" | "system";
     onTheme(theme: "light" | "dark" | "system"): void;
+    /** "Show technical details": tool steps and live output open by default. */
+    technical?: boolean;
+    onTechnical?(on: boolean): void;
     onProfile?(): void;
     items: readonly MenuItem[];
     onItem(item: MenuItem): void;
@@ -108,6 +119,26 @@ export function UserMenu(
             <Monitor /> System
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
+        {onTechnical && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={technical === true}
+              // The menu stays open, so the change reads at once.
+              onSelect={(event) => event.preventDefault()}
+              onCheckedChange={(checked) => onTechnical(checked === true)}
+              className="items-start"
+            >
+              <CodeXml className="mt-0.5" />
+              <span className="grid gap-0.5">
+                <span>Show technical details</span>
+                <span className="text-muted-foreground text-xs leading-snug">
+                  Open tool steps and live output in replies
+                </span>
+              </span>
+            </DropdownMenuCheckboxItem>
+          </>
+        )}
         {items.some((item) => item.destructive) && (
           <>
             <DropdownMenuSeparator />

@@ -359,7 +359,9 @@ const app: BrowserPlugin = {
       fork: { label: "Fork", icon: "git-branch", action: "threadFork" },
       share: { label: "Share", icon: "share", dialog: "testShare" },
     },
-    toolRenderers: { terminal: { view: "testTerminal" } },
+    toolRenderers: {
+      terminal: { view: "testTerminal", live: true, audience: "technical" },
+    },
     userMenu: {
       settings: { label: "Settings", icon: "settings", page: "testSettings" },
     },
@@ -886,10 +888,16 @@ test("live replies stream with tool activity and app tool renderers; Stop cancel
     const live = () =>
       document.querySelector('[data-slot="thread-live"]')?.textContent ?? "";
     assert.match(live(), /North/);
-    assert.match(live(), /Using terminal/);
     assert.match(live(), /Running the suite/);
+    // A technical live view is a slim strip until the reader watches it.
+    const frame = () =>
+      document.querySelector('[data-slot="live-tool"][data-tool="terminal"]');
+    assert.match(frame()?.textContent ?? "", /Using terminal…/);
+    assert.match(frame()?.textContent ?? "", /Watch/);
+    assert.doesNotMatch(frame()?.textContent ?? "", /4 passing/);
+    await click(byText("button", "Watch"));
     assert.match(
-      document.querySelector('[data-tool="terminal"]')?.textContent ?? "",
+      frame()?.textContent ?? "",
       /\$ npm test \[running\] 4 passing/,
     );
     assert.ok(
@@ -1215,18 +1223,24 @@ test("a JSON tool result is read on demand, bounded, and reaches the step and th
       !shell.feed.assetReads.includes("r-c-big/json-big"),
       "a closed step reads nothing",
     );
-    // The terminal renderer shows (a running tool's step opens by itself):
-    // its JSON result loads once and reaches the renderer.
-    if (!document.querySelector('[data-tool="terminal"]')) {
-      await click(byText("button", "Used terminal"));
-    }
+    // The settled terminal is a strip; shown, its card reads its JSON
+    // result once and the renderer draws it.
+    assert.ok(!shell.feed.assetReads.includes("r-c-run/json-run"));
+    await click(byText("button", "Show"));
     await settle();
     assert.match(
-      document.querySelector('[data-tool="terminal"]')?.textContent ?? "",
+      document.querySelector('[data-slot="live-tool"][data-tool="terminal"]')
+        ?.textContent ?? "",
       /14 passed \(exit 0\)/,
     );
-    // A default step shows the JSON; one over the bound says so instead.
-    await click(byText("button", "Used search"));
+    // A reply's one background step is its row; its details read the
+    // JSON, and one over the bound says so instead.
+    assert.match(
+      document.querySelector('[data-slot="activity"]')?.textContent ?? "",
+      /Used search · 1s/,
+    );
+    assert.ok(!shell.feed.assetReads.includes("r-c-big/json-big"));
+    await click(byText("button", "View details"));
     await settle();
     assert.match(main(), /The result is too large to show here\./);
     assert.deepEqual(shell.feed.assetReads, [
@@ -1291,25 +1305,124 @@ test("a tool's output the viewer may not see says so quietly, with no read and n
       );
       await settle();
     });
-    const steps = all("button").filter((button) =>
-      button.textContent === "Used search memory"
-    ) as unknown as { click(): void }[];
-    assert.equal(steps.length, 2);
-    await click(steps[0]);
-    await click(steps[1]);
+    // Each reply's row is its one step, with how long it took. Status
+    // only: no details to open, and a quiet note says whose they are.
+    const rows = all('[data-slot="activity"]').map((row) => row.textContent);
+    assert.equal(rows.length, 2);
+    assert.match(rows[0] ?? "", /Used search memory · 1s/);
+    assert.match(rows[0] ?? "", /Output visible to the agent only$/);
+    assert.match(rows[1] ?? "", /View details$/);
+    assert.equal(
+      all("button").filter((button) => button.textContent === "View details")
+        .length,
+      1,
+    );
+    // The other result says so once its read is refused.
+    await click(byText("button", "View details"));
     await settle();
     const text = main();
-    assert.equal(
-      text.match(/Output visible to the agent only\./g)?.length,
-      2,
-      text,
-    );
+    assert.match(text, /Output visible to the agent only\./);
     assert.doesNotMatch(text, /couldn't be loaded|Try again/);
     assert.match(text, /limit: 20/, "the input the read delivered shows");
     assert.deepEqual(
       shell.feed.assetReads,
       ["r-c-refused/json-hidden"],
       "metadata decides up front; a refused read is not retried",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("Show technical details is each person's: it opens the steps and technical live views", async () => {
+  const local = memory();
+  const shell = await mount("https://app.example/?chat=t1", { local });
+  try {
+    shell.feed.bodies.set(
+      "json-run",
+      JSON.stringify({ stdout: "14 passed", exitCode: 0 }),
+    );
+    await act(async () => {
+      shell.live.put("participant", {
+        id: "p-tool",
+        participantType: "tool",
+        name: "tool",
+      });
+      shell.live.put(
+        "message",
+        {
+          id: "m-work",
+          threadId: "t1",
+          senderId: "p-north",
+          createdAt: "2026-10-21T10:01:00.000Z",
+          content: [{ kind: "text", value: "All set." }],
+          metadata: {
+            llmToolCalls: [
+              { id: "c-find", action: "search_memory", input: { q: "x" } },
+              { id: "c-web", action: "web_search", input: { query: "y" } },
+              { id: "c-run", action: "terminal", input: { stdin: "ls" } },
+            ],
+          },
+        },
+        ...[["c-find", "completed"], ["c-web", "failed"], [
+          "c-run",
+          "completed",
+        ]].map(([id, status], index) => ({
+          id: `r-${id}`,
+          threadId: "t1",
+          senderId: "p-tool",
+          createdAt: `2026-10-21T10:01:0${index + 2}.000Z`,
+          content: id === "c-run"
+            ? [{
+              assetId: "json-run",
+              kind: "json",
+              role: "tool.output",
+              mediaType: "application/json",
+              resolve: false,
+            }]
+            : [{
+              kind: "text",
+              value: status === "failed" ? "Timed out" : "[]",
+            }],
+          metadata: { toolInvocation: { id }, toolStatus: status },
+        })),
+      );
+      await settle();
+    });
+    // Calm by default: one row for the background work, a closed strip.
+    const row = () =>
+      document.querySelector('[data-slot="activity"] > button')!;
+    assert.equal(row().getAttribute("aria-expanded"), "false");
+    assert.match(row().textContent ?? "", /Used 2 tools · 1 failed · 3s/);
+    const strip = () =>
+      document.querySelector('[data-slot="live-tool"] > button')!;
+    assert.equal(strip().getAttribute("aria-expanded"), "false");
+    assert.deepEqual(shell.feed.assetReads, [], "nothing read while closed");
+    await pointer(byLabel("Account: Ana"));
+    const toggle = all('[role="menuitemcheckbox"]').find((item) =>
+      item.textContent?.startsWith("Show technical details")
+    );
+    assert.ok(toggle, "the account menu offers the preference");
+    assert.equal(toggle.getAttribute("aria-checked"), "false");
+    await click(toggle as unknown as { click(): void });
+    assert.deepEqual(
+      shell.runtime.collections.shellPreferences.get("main").value!.technical,
+      ["ana"],
+      "kept for this person",
+    );
+    assert.equal(row().getAttribute("aria-expanded"), "true");
+    assert.match(main(), /Used web search · failed/);
+    // Each step's details, and the terminal's raw input and result.
+    assert.equal(
+      all("button").filter((button) => button.textContent === "View details")
+        .length,
+      3,
+    );
+    assert.equal(strip().getAttribute("aria-expanded"), "true");
+    await settle();
+    assert.match(
+      document.querySelector('[data-slot="live-tool"]')?.textContent ?? "",
+      /14 passed \(exit 0\)/,
     );
   } finally {
     await shell.dispose();

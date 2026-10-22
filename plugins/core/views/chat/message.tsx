@@ -66,6 +66,8 @@ export interface MessageGroupProps {
   /** Rendered tool Views, by activity id. */
   tools?: ReadonlyMap<string, ToolPresentation>;
   labels?: ActivityLabels;
+  /** The person chose "Show technical details" (see `ChatConfig`). */
+  technical?: boolean;
   loadAsset?: AssetLoader;
   /** Read a tool's referenced JSON result, when its step or renderer shows. */
   onLoadResult?(item: ChatActivity): void;
@@ -485,6 +487,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
       markdownPlugins,
       tools,
       labels,
+      technical,
       loadAsset,
       onLoadResult,
       onLoadBody,
@@ -596,6 +599,8 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                     items={message.activity}
                     tools={tools}
                     labels={labels}
+                    technical={technical}
+                    agent={group.sender.name}
                     onLoadResult={onLoadResult}
                   />
                 )}

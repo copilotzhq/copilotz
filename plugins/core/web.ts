@@ -219,16 +219,25 @@ export {
 export type {
   ChatConfig,
   ChatLabels,
+  ToolAudience,
   ToolCallView,
   ToolRenderer,
+  ToolSummaryView,
 } from "./views/chat/context.tsx";
 export {
   chatConfig,
   readSenders,
+  technicalDetails,
   toolRenderers,
   withLoadedBodies,
   withLoadedResults,
 } from "./views/chat/context.tsx";
+export {
+  type ToolDisplay,
+  type ToolDisplayMode,
+  ToolDisplayProvider,
+  useToolDisplay,
+} from "./views/chat/tool-display.tsx";
 export { SenderAvatar, senderColor } from "./views/chat/identity.tsx";
 export { draftKey } from "./views/composer/index.tsx";
 export {
@@ -240,6 +249,7 @@ export {
   type ChatSender,
   chatSender,
   type ChatTextPart,
+  finishedReplies,
   groupMessages,
   joinText,
   liveMessage,
@@ -249,6 +259,8 @@ export {
   ownMessagePredicate,
   parseToolInput,
   projectMessages,
+  settleFinished,
+  toolReaderIds,
   type ToolResultRef,
   type ToolResultStatus,
 } from "./shared/chat-messages.ts";
@@ -262,7 +274,9 @@ export {
 export { MessageGroup, type MessageGroupProps } from "./views/chat/message.tsx";
 export {
   type ActivityLabels,
+  ActivityMemory,
   AssistantActivity,
+  formatElapsed,
   toolLabel,
   type ToolPresentation,
 } from "./views/chat/activity.tsx";

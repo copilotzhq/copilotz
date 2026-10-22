@@ -15,9 +15,12 @@ import {
 import {
   type ChatMessage,
   type ChatSender,
+  finishedReplies,
   groupMessages,
   ownMessagePredicate,
   projectMessages,
+  settleFinished,
+  toolReaderIds,
 } from "../../shared/chat-messages.ts";
 import { projectActiveMessageBranch } from "../../shared/projections.ts";
 import {
@@ -34,6 +37,7 @@ import {
   withLoadedResults,
 } from "../chat/context.tsx";
 import { MessageGroup } from "../chat/message.tsx";
+import { ActivityMemory } from "../chat/activity.tsx";
 import { type LogItem, MessageLog } from "../chat/list.tsx";
 import type { MessageBranch } from "../../shared/contracts.ts";
 
@@ -181,12 +185,12 @@ const view: ViewDefinition<
       ...people,
       ...readSenders(
         ctx,
-        rows.map((row) => String(row.senderId)).filter((sender) =>
-          !people.has(sender)
-        ),
+        // Senders, and whoever a withheld tool output is shared with.
+        [...rows.map((row) => String(row.senderId)), ...toolReaderIds(rows)]
+          .filter((sender) => !people.has(sender)),
       ),
     ]);
-    const persisted = withLoadedBodies(
+    const projected = withLoadedBodies(
       ctx,
       withLoadedResults(
         ctx,
@@ -202,6 +206,16 @@ const view: ViewDefinition<
           },
         ),
       ),
+    );
+    // A reply that finished never shows a step still running: the thread is
+    // idle, or its agent wrote again (it continues once its tools settle).
+    const run = ctx.collections.threadRun?.get(id).value;
+    const idle = run?.status === "unavailable" ||
+      (run?.status === "live" &&
+        !(Array.isArray(run.active) && run.active.length));
+    const persisted = settleFinished(
+      projected,
+      finishedReplies(projected, idle),
     );
     const known = new Set(rows.map((row) => row.id));
     const self = config.self;
@@ -234,7 +248,16 @@ const view: ViewDefinition<
     );
     const live = ctx.show({
       shows: "threadLive",
-      value: { threadId: id, settled },
+      value: {
+        threadId: id,
+        settled,
+        // A reply's own running step already says the agent is at work.
+        ...(persisted.some((message) =>
+            message.activity.some((item) => item.status === "active")
+          )
+          ? { working: true }
+          : {}),
+      },
     }, { mode: ctx.hints.mode }) as React.ReactNode;
     const loadAsset = config.feed?.asset
       ? (messageId: string, assetId: string, signal: AbortSignal) =>
@@ -249,6 +272,7 @@ const view: ViewDefinition<
           markdownPlugins={config.plugins}
           tools={tools}
           labels={config.labels}
+          technical={config.technical}
           loadAsset={loadAsset}
           onLoadBody={(messageId, assetId) =>
             void ctx.actions.chatLoadBody?.({
@@ -316,34 +340,37 @@ const view: ViewDefinition<
                   <ReadStatus state={messages} noun="messages" />
                 </div>
               )}
-              <MessageLog
-                resetKey={id}
-                items={loading || empty ? [] : items}
-                busy={false}
-                hasOlder={current.status === "ready" &&
-                  current.value.length >= limit}
-                loadingOlder={current !== messages}
-                onLoadOlder={() =>
-                  void ctx.actions.chatLoadOlder?.({ threadId: id }).result()}
-                empty={loading ? <LoadingRows /> : (
-                  <>
-                    <ConversationStart
-                      title={config.labels.emptyTitle ??
-                        "Start the conversation"}
-                      hint={config.labels.emptyHint ??
-                        "Ask a question, share a file, or @mention an agent."}
-                      suggestions={config.suggestions}
-                      logoUrl={undefined}
-                      onSuggestion={ctx.actions.chatSend
-                        ? (text) =>
-                          void ctx.actions.chatSend({ threadId: id, text })
-                            .result().catch(() => {})
-                        : undefined}
-                    />
-                    {live}
-                  </>
-                )}
-              />
+              {/* What the reader opened stays open as replies grow. */}
+              <ActivityMemory key={id}>
+                <MessageLog
+                  resetKey={id}
+                  items={loading || empty ? [] : items}
+                  busy={false}
+                  hasOlder={current.status === "ready" &&
+                    current.value.length >= limit}
+                  loadingOlder={current !== messages}
+                  onLoadOlder={() =>
+                    void ctx.actions.chatLoadOlder?.({ threadId: id }).result()}
+                  empty={loading ? <LoadingRows /> : (
+                    <>
+                      <ConversationStart
+                        title={config.labels.emptyTitle ??
+                          "Start the conversation"}
+                        hint={config.labels.emptyHint ??
+                          "Ask a question, share a file, or @mention an agent."}
+                        suggestions={config.suggestions}
+                        logoUrl={undefined}
+                        onSuggestion={ctx.actions.chatSend
+                          ? (text) =>
+                            void ctx.actions.chatSend({ threadId: id, text })
+                              .result().catch(() => {})
+                          : undefined}
+                      />
+                      {live}
+                    </>
+                  )}
+                />
+              </ActivityMemory>
               {ctx.show({
                 shows: "composer",
                 value: { threadId: id },

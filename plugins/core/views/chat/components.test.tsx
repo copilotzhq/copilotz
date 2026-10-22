@@ -14,7 +14,8 @@ import {
   normalizeMathDelimiters,
   preloadMarkdown,
 } from "@copilotz/copilotz/web/kit";
-import { AssistantActivity, toolLabel } from "./activity.tsx";
+import { AssistantActivity, formatElapsed, toolLabel } from "./activity.tsx";
+import { useToolDisplay } from "./tool-display.tsx";
 import {
   describeJson,
   parseStructured,
@@ -26,6 +27,7 @@ import { activeMention, mentionedTargets } from "./composer.tsx";
 import { titleFrom } from "./intents.ts";
 import { prependScrollTop } from "./list.tsx";
 import {
+  type ChatActivity,
   type ChatMessage,
   type ChatSender,
   groupMessages,
@@ -49,43 +51,227 @@ const message = (
   ...patch,
 });
 
-test("activity steps name the tool and their state, with disclosure semantics", () => {
-  const html = renderToStaticMarkup(
-    <AssistantActivity
-      items={[
-        {
-          id: "t",
-          kind: "thinking",
-          status: "complete",
-          reasoning: "Split the plan",
-        },
-        {
-          id: "k",
-          kind: "tool",
-          status: "complete",
-          toolId: "kanban",
-          input: { name: "Cycle" },
-        },
-        { id: "s", kind: "tool", status: "failed", toolId: "web_search" },
-        { id: "r", kind: "tool", status: "active", toolId: "terminal" },
-      ]}
-    />,
+const steps: ChatActivity[] = [
+  {
+    id: "t",
+    kind: "thinking",
+    status: "complete",
+    reasoning: "Split the plan",
+  },
+  {
+    id: "k",
+    kind: "tool",
+    status: "complete",
+    toolId: "kanban",
+    input: { name: "Cycle" },
+  },
+  {
+    id: "s",
+    kind: "tool",
+    status: "failed",
+    toolId: "web_search",
+    error: "Timed out",
+  },
+  {
+    id: "r",
+    kind: "tool",
+    status: "active",
+    toolId: "terminal",
+    input: { stdin: "ls" },
+  },
+];
+
+test("background work is one quiet row while it runs, opening to plain-language steps", () => {
+  const html = renderToStaticMarkup(<AssistantActivity items={steps} />);
+  assert.match(html, /data-state="working"/);
+  assert.ok(html.includes("Working…"), html);
+  assert.ok(html.includes("Using terminal…"), "the current step");
+  assert.match(html, /aria-expanded="false"/, "a disclosure, closed");
+  assert.ok(!html.includes("Used kanban"), "steps stay folded");
+  // With "Show technical details" the steps show, details one click away.
+  const open = renderToStaticMarkup(
+    <AssistantActivity items={steps} technical />,
   );
   for (
     const label of [
-      "Thought through request",
+      "Thought through the request",
       "Used kanban",
-      "web search failed",
-      "Using terminal",
+      "Used web search · failed",
+      "Using terminal…",
+      "View thinking",
     ]
-  ) assert.ok(html.includes(label), `${label}: ${html}`);
-  assert.equal(
-    html.match(/aria-expanded="false"/g)?.length,
-    2,
-    "expandable rows are disclosure buttons",
-  );
-  assert.ok(html.includes("aria-controls="));
+  ) assert.ok(open.includes(label), `${label}: ${open}`);
+  assert.equal(open.match(/>View details</g)?.length, 3, open);
+  assert.ok(!open.includes('data-slot="tool-details"'), "never preloaded");
   assert.equal(toolLabel("sharedDocument"), "shared document");
+});
+
+test("a settled reply reads as Used N tools with its time, or its one step's line", () => {
+  const at = (seconds: number) =>
+    `2026-10-21T10:00:${String(seconds).padStart(2, "0")}.000Z`;
+  const done = (id: string, status: "complete" | "failed" = "complete") => ({
+    id,
+    kind: "tool" as const,
+    status,
+    toolId: id,
+    startedAt: at(0),
+    endedAt: at(id === "c" ? 4 : 2),
+  });
+  const many = renderToStaticMarkup(
+    <AssistantActivity items={[done("a"), done("b", "failed"), done("c")]} />,
+  );
+  assert.match(many, /data-state="done"/);
+  assert.ok(many.includes("Used 3 tools · 1 failed"), many);
+  assert.ok(many.includes("· 4s"), "from the first call to the last result");
+  const one = renderToStaticMarkup(
+    <AssistantActivity
+      items={[done("search_memory")]}
+      tools={new Map([["search_memory", {
+        inline: false,
+        summary: <>Searched memory: no notes found</>,
+      }]])}
+    />,
+  );
+  assert.ok(one.includes("Searched memory: no notes found"), one);
+  assert.ok(!one.includes("Used 1 tool"));
+  assert.equal(formatElapsed(900), undefined, "nothing under a second");
+  assert.equal(formatElapsed(72_000), "1m 12s");
+});
+
+test("a batched run reads as one step, its summary speaking for every call", () => {
+  const html = renderToStaticMarkup(
+    <AssistantActivity
+      technical
+      items={["a", "b", "c"].map((id) => ({
+        id,
+        kind: "tool" as const,
+        status: "complete" as const,
+        toolId: "kanban",
+      }))}
+      tools={new Map(["a", "b", "c"].map((id) => [id, {
+        inline: false,
+        group: ["a", "b", "c"],
+        summary: <>Added 3 cards to Launch plan</>,
+      }]))}
+    />,
+  );
+  assert.equal(html.match(/data-slot="activity-step"/g)?.length, 1, html);
+  assert.ok(html.includes("Added 3 cards to Launch plan"));
+});
+
+test("output the viewer may not read says whose it is, with no details to open", () => {
+  const html = renderToStaticMarkup(
+    <AssistantActivity
+      technical
+      items={[
+        {
+          id: "a",
+          kind: "tool",
+          status: "complete",
+          toolId: "search_memory",
+          input: { query: "x" },
+          resultStatus: "restricted",
+          withheld: true,
+          readableBy: "Ana",
+        },
+        {
+          id: "b",
+          kind: "tool",
+          status: "complete",
+          toolId: "search_memory",
+          resultStatus: "restricted",
+        },
+      ]}
+    />,
+  );
+  assert.ok(html.includes("Only Ana can see these details"), html);
+  assert.ok(html.includes("Output visible to the agent only"));
+  assert.ok(!html.includes("View details"));
+});
+
+test("a live renderer streams in the message; a technical one is a strip until watched", () => {
+  const running: ChatActivity = {
+    id: "r",
+    kind: "tool",
+    status: "active",
+    toolId: "terminal",
+    input: { stdin: "npm test" },
+  };
+  function Probe(): React.ReactElement {
+    const display = useToolDisplay();
+    return <pre>{`mode=${display.mode} framed=${display.framed}`}</pre>;
+  }
+  const tool = (live: "everyone" | "technical") =>
+    new Map([["r", {
+      inline: false,
+      live,
+      node: <Probe />,
+      summary: (
+        <>
+          Running <code>npm test</code>
+        </>
+      ),
+    }]]);
+  const everyone = renderToStaticMarkup(
+    <AssistantActivity items={[running]} tools={tool("everyone")} />,
+  );
+  assert.match(everyone, /data-slot="live-tool"/);
+  assert.ok(everyone.includes("mode=live framed=true"), everyone);
+  assert.ok(everyone.includes("<code>npm test</code>"));
+  const strip = renderToStaticMarkup(
+    <AssistantActivity items={[running]} tools={tool("technical")} />,
+  );
+  assert.ok(strip.includes("Watch"), strip);
+  assert.ok(!strip.includes("mode=live"), "the strip draws no live view");
+  assert.match(strip, /data-mode="closed"/);
+  assert.ok(!strip.includes('data-slot="activity"'), "not a background step");
+  const watched = renderToStaticMarkup(
+    <AssistantActivity items={[running]} tools={tool("technical")} technical />,
+  );
+  assert.ok(watched.includes("mode=live"), "open from the start");
+  // Settled, it is a compact card.
+  const card = renderToStaticMarkup(
+    <AssistantActivity
+      items={[{ ...running, status: "complete" }]}
+      tools={tool("everyone")}
+    />,
+  );
+  assert.ok(card.includes("mode=card framed=true"), card);
+  assert.equal(
+    renderToStaticMarkup(<Probe />),
+    "<pre>mode=full framed=false</pre>",
+    "outside a frame a renderer draws in full",
+  );
+});
+
+test("a live call the viewer may not read shows its status alone", () => {
+  const item: ChatActivity = {
+    id: "r",
+    kind: "tool",
+    status: "active",
+    toolId: "terminal",
+    withheld: true,
+    readableBy: "Ana",
+  };
+  const tools = new Map([["r", {
+    inline: false,
+    live: "everyone" as const,
+    node: <pre>secret output</pre>,
+  }]]);
+  const html = renderToStaticMarkup(
+    <AssistantActivity items={[item]} tools={tools} agent="North" />,
+  );
+  assert.ok(html.includes("North is using the terminal…"), html);
+  assert.ok(!html.includes("secret output"));
+  const done = renderToStaticMarkup(
+    <AssistantActivity
+      items={[{ ...item, status: "complete", resultStatus: "restricted" }]}
+      tools={tools}
+      agent="North"
+    />,
+  );
+  assert.ok(done.includes("North used the terminal · Done"), done);
+  assert.ok(done.includes("Only Ana can see these details"));
 });
 
 test("a structured tool result shows as JSON in its step", () => {
@@ -156,21 +342,6 @@ test("results say when they are empty; JSON text reads as structure, other text 
   );
 });
 
-test("a settled timeline of more than three steps folds into one summary", () => {
-  const html = renderToStaticMarkup(
-    <AssistantActivity
-      items={["a", "b", "c", "d"].map((id) => ({
-        id,
-        kind: "tool" as const,
-        status: "complete" as const,
-        toolId: id,
-      }))}
-    />,
-  );
-  assert.ok(html.includes("Worked through 4 steps"), html);
-  assert.ok(!html.includes("Used a"));
-});
-
 test("an inline tool presentation replaces its step", () => {
   const html = renderToStaticMarkup(
     <AssistantActivity
@@ -183,6 +354,7 @@ test("an inline tool presentation replaces its step", () => {
   );
   assert.ok(html.includes("Asking @South"));
   assert.ok(!html.includes("Using ask"));
+  assert.ok(!html.includes('data-slot="activity"'), "no row for it");
 });
 
 test("own messages sit in a bubble on the right; agents read as prose with their color", () => {

@@ -40,11 +40,11 @@ function Working(): React.ReactElement {
  * View re-renders as text streams; the persisted history does not.
  */
 const view: ViewDefinition<
-  { threadId: string; settled?: readonly string[] },
+  { threadId: string; settled?: readonly string[]; working?: boolean },
   React.ReactNode,
   BrowserViewContext
 > = defineView<
-  { threadId: string; settled?: readonly string[] },
+  { threadId: string; settled?: readonly string[]; working?: boolean },
   React.ReactNode,
   BrowserViewContext
 >({
@@ -52,7 +52,7 @@ const view: ViewDefinition<
   shows: "threadLive",
   renderer: "react",
   modes: ["full", "panel"],
-  render({ threadId, settled = [] }, ctx) {
+  render({ threadId, settled = [], working = false }, ctx) {
     const feed = ctx.collections.threadFeed?.get(threadId).value;
     const run = ctx.collections.threadRun?.get(threadId).value;
     const done = new Set(settled);
@@ -60,7 +60,7 @@ const view: ViewDefinition<
       (Array.isArray(feed?.attempts) ? feed.attempts as FeedAttempt[] : [])
         .filter((attempt) => !done.has(attempt.attemptId));
     const active = Array.isArray(run?.active) && run.active.length > 0;
-    if (!attempts.length) return active ? <Working /> : null;
+    if (!attempts.length) return active && !working ? <Working /> : null;
     const config = chatConfig(ctx);
     const messages = attempts.map((attempt) => {
       const sender: ChatSender = {
@@ -82,6 +82,7 @@ const view: ViewDefinition<
             markdownPlugins={config.plugins}
             tools={tools}
             labels={config.labels}
+            technical={config.technical}
           />
         ))}
       </div>

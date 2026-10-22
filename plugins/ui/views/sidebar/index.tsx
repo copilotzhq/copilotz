@@ -13,10 +13,13 @@ import {
   menuItems,
   NO_SPACE_GROUP,
   openGroups,
+  preferencePerson,
   revealGroup,
   shellPreferences,
   shellState,
+  showsTechnicalDetails,
   toggleGroup,
+  toggleTechnicalDetails,
 } from "../../model.ts";
 import { Sidebar } from "../../components/sidebar.tsx";
 import { UserMenu } from "../../components/user-menu.tsx";
@@ -105,11 +108,7 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
           : NO_SPACE_GROUP
         : undefined;
       // Group state is each person's own, so people sharing a browser keep theirs.
-      const person = typeof sender.id === "string"
-        ? sender.id
-        : typeof sender.externalId === "string"
-        ? sender.externalId
-        : "";
+      const person = preferencePerson(sender);
       const expanded = openGroups(preferences, person, [
         nav.spaceId,
         currentGroup,
@@ -253,6 +252,11 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
                 }}
                 theme={preferences.theme}
                 onTheme={(theme) => actions.shellPreference({ theme })}
+                technical={showsTechnicalDetails(preferences, person)}
+                onTechnical={(on) =>
+                  actions.shellPreference(
+                    toggleTechnicalDetails(preferences, person, on),
+                  )}
                 onProfile={Object.keys(sender).length
                   ? leave(() =>
                     actions.shellDialog({

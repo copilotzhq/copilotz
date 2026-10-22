@@ -4,6 +4,7 @@
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import {
+  CodeXml,
   MessageSquare,
   Monitor,
   Moon,
@@ -17,7 +18,13 @@ import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext } from "@copilotz/copilotz/web";
 import { readSpaces, readThreads } from "@copilotz/copilotz/core/web";
 import { formatRelative } from "@copilotz/copilotz/web/kit";
-import { shellPreferences, shellState } from "../../model.ts";
+import {
+  preferencePerson,
+  shellPreferences,
+  shellState,
+  showsTechnicalDetails,
+  toggleTechnicalDetails,
+} from "../../model.ts";
 import {
   type Command,
   CommandPalette,
@@ -47,6 +54,10 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
         ctx.collections.shellPreferences.get("main").value,
       );
       const actions = ctx.actions;
+      const person = preferencePerson(
+        (ctx.resources.chat as Record<string, unknown> | undefined)?.sender,
+      );
+      const technical = showsTechnicalDetails(preferences, person);
       const spaces = readSpaces(ctx).value.filter((space) =>
         space.status !== "archived"
       );
@@ -107,6 +118,19 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             : <Monitor />,
           run: () => actions.shellPreference({ theme }),
         })),
+        {
+          id: "technical-details",
+          group: "Actions",
+          label: technical
+            ? "Hide technical details"
+            : "Show technical details",
+          keywords: "tools terminal output developer debug",
+          icon: <CodeXml />,
+          run: () =>
+            actions.shellPreference(
+              toggleTechnicalDetails(preferences, person, !technical),
+            ),
+        },
         ...spaces.map((space) => ({
           id: `space-${space.id}`,
           group: "Spaces",

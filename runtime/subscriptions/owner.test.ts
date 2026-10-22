@@ -451,3 +451,35 @@ Deno.test("progress-only subscriptions scan no rows, resume progress and revoke 
     await f.close();
   }
 });
+
+Deno.test("query cache stamps do not add per-reader authorization or SQL to ordinary commits", async () => {
+  const f = await fixture();
+  const subscriptions: Awaited<ReturnType<typeof f.observe>>[] = [];
+  try {
+    const commit = async (id: string) => {
+      const before = f.counters();
+      await f.collections.entry.create({ id });
+      await f.run("barrier", {}, () => undefined);
+      const after = f.counters();
+      return {
+        evaluations: after.evaluations - before.evaluations,
+        statements: after.statements - before.statements,
+      };
+    };
+    const withoutReaders = await commit("before-readers");
+    for (let i = 0; i < 6; i++) {
+      subscriptions.push(await f.observe(f.authority, "entry"));
+    }
+    const readers = subscriptions.map(reader);
+    for (const r of readers) assertEquals((await r.next()).t, "snapshot");
+    assertEquals(await commit("with-readers"), withoutReaders);
+    for (const r of readers) assertEquals((await r.next()).t, "batch");
+
+    // Actual policy facts still fence every reader, including cached admissions.
+    await f.collections.member.update({ id: "key", set: { allowed: false } });
+    for (const r of readers) assertEquals((await r.next()).t, "revoked");
+  } finally {
+    for (const sub of subscriptions) sub.detach();
+    await f.close();
+  }
+});

@@ -1,3 +1,4 @@
+import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
 import type { WorkHandle } from "../../dependencies/oxian-work.ts";
 import {
   createHypervisor,
@@ -134,7 +135,9 @@ export function createShardDispatcher(options: {
       maxPerConnection: 128,
       maxRequestBytes: 1024 * 1024,
       maxResponseBytes: 1024 * 1024,
-      timeoutMs: 120_000,
+      // Host calls carry whole deliveries (nested LLM calls); Oxian uses the
+      // lower of both sides' limits, so match the worker's delivery deadline.
+      timeoutMs: DELIVERY_DEADLINE_MS,
       admitUnassigned(binding) {
         if (
           binding.workload !== RELAY ||

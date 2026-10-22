@@ -1,3 +1,4 @@
+import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import { registerRemoteAdmission } from "../execution/remote-admission.ts";
 import { hostDatabaseScopes } from "./database-scopes.ts";
@@ -206,7 +207,9 @@ export async function createCopilotzGateway(
     maxPerConnection: 128,
     maxRequestBytes: 1024 * 1024,
     maxResponseBytes: 1024 * 1024,
-    timeoutMs: 120_000,
+    // Host calls carry whole deliveries (nested LLM calls); Oxian uses the
+    // lower of both sides' limits, so match the worker's delivery deadline.
+    timeoutMs: DELIVERY_DEADLINE_MS,
   };
   const workerLifecycle: HypervisorLifecycleCallbacks = {
     async onReady(event) {

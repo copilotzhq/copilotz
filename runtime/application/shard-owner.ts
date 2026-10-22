@@ -1,3 +1,4 @@
+import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
 import {
   createWorker,
   type Worker,
@@ -85,6 +86,8 @@ export function shardOwnerCalls<T>(options: {
     maxResponseBytes: 1024 * 1024,
     maxConcurrent: 1024,
     maxPerConnection: 128,
-    timeoutMs: 120_000,
+    // Host calls carry whole deliveries (nested LLM calls); Oxian uses the
+    // lower of both sides' limits, so match the worker's delivery deadline.
+    timeoutMs: DELIVERY_DEADLINE_MS,
   };
 }

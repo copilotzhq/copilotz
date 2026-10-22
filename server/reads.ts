@@ -147,7 +147,7 @@ export async function createHttpReads(
     },
   } as const;
   if (host.domainProjection === false) return read;
-  return Object.values(application.plugins?.adapters.http ?? {}).reduce<
+  return Object.values(application.plugins?.adapters?.http ?? {}).reduce<
     HttpReadServices
   >(
     (current, adapter) =>
@@ -174,7 +174,7 @@ export async function authorizeHttpAsset(
     databaseSchema: scope.databaseSchema,
   }, { domainProjection: false });
   const adapters = Object.values(
-    application.plugins?.adapters.http ?? {},
+    application.plugins?.adapters?.http ?? {},
   ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
   await withoutCollectionPolicyInvocation(async () => {
     for (const adapter of adapters) {

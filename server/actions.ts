@@ -137,7 +137,7 @@ export async function operationResult(
         operationId,
       );
     const domainAdapters = Object.values(
-      application.plugins?.adapters.http ?? {},
+      application.plugins?.adapters?.http ?? {},
     ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
     let request: Record<string, unknown> | undefined;
     if (

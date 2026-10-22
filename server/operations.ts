@@ -27,7 +27,7 @@ export async function createHttpOperations(
   scope: ServerAuthorizedScope,
   read: HttpReadServices,
   adapters = Object.values(
-    application.plugins?.adapters.http ?? {},
+    application.plugins?.adapters?.http ?? {},
   ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[],
   receiptAuthority?:
     import("../runtime/authorization/authority.ts").AuthenticatedAuthority,

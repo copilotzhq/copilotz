@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { nativeChatFixture } from "../testing/native-chat.ts";
+import { nativeChatFixture } from "./native-chat-fixture.test.ts";
 import type {
   LlmAdapterResult,
   LlmInvocation,

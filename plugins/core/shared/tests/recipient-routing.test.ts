@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { message } from "@copilotz/copilotz/core";
-import { nativeChatFixture as fixture } from "../testing/native-chat.ts";
+import { nativeChatFixture as fixture } from "./native-chat-fixture.test.ts";
 
 const sender = {
   id: "sender",

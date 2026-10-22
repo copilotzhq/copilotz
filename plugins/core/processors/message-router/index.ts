@@ -327,6 +327,28 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           : `${record.id}:${recipientId}`;
         try {
           const prepare = async () => {
+            const initiatorParticipantId = coreMessageOrigin({
+              id: record.id,
+              senderId: String(record.senderId),
+              metadata: record.metadata,
+            }).initiatorParticipantId;
+            for (
+              const resource of Object.values(
+                context.resources.promptContext ?? {},
+              )
+            ) {
+              if (
+                isContextResource(resource) &&
+                resource.purposes.includes("conversation")
+              ) {
+                await resource.prepare?.({
+                  context,
+                  threadId: String(record.threadId),
+                  initiatorParticipantId,
+                  ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                });
+              }
+            }
             const compactedBoundaries = new Set<string>();
             for (;;) {
               context.signal.throwIfAborted();
@@ -438,6 +460,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                         agent: resolved.agent,
                         participant: mapParticipantRecord(participant),
                         thread: metadata.thread,
+                        initiatorParticipantId,
                         ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
                       },
                     )

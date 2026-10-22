@@ -3,54 +3,66 @@ import { definePlugin, type DefinedPlugin } from "@copilotz/copilotz/authoring";
 import entry0 from "./actions/consolidate-memory/index.ts";
 import entry1 from "./actions/inspect-memory/index.ts";
 import entry2 from "./actions/list-knowledge-spaces/index.ts";
-import entry3 from "./actions/produce-checkpoint/index.ts";
-import entry4 from "./actions/search-memory/index.ts";
-import entry5 from "./collections/long-term-memory/index.ts";
-import entry6 from "./collections/memory-note/index.ts";
-import entry7 from "./collections/memory-space-access/index.ts";
-import entry8 from "./collections/memory-space/index.ts";
-import entry9 from "./processors/dispatch-consolidation/index.ts";
-import entry10 from "./processors/settle-consolidation/index.ts";
-import entry11 from "./resources/memory/config/index.ts";
-import entry12 from "./resources/promptContext/memory/index.ts";
-import entry13 from "./resources/tools/consolidate-memory/index.ts";
-import entry14 from "./resources/tools/inspect-memory/index.ts";
-import entry15 from "./resources/tools/list-knowledge-spaces/index.ts";
-import entry16 from "./resources/tools/search-memory/index.ts";
+import entry3 from "./actions/personal-memory/index.ts";
+import entry4 from "./actions/produce-checkpoint/index.ts";
+import entry5 from "./actions/remember/index.ts";
+import entry6 from "./actions/retire-memory/index.ts";
+import entry7 from "./actions/search-memory/index.ts";
+import entry8 from "./collections/long-term-memory/index.ts";
+import entry9 from "./collections/memory-note/index.ts";
+import entry10 from "./collections/memory-space-access/index.ts";
+import entry11 from "./collections/memory-space/index.ts";
+import entry12 from "./processors/dispatch-consolidation/index.ts";
+import entry13 from "./processors/settle-consolidation/index.ts";
+import entry14 from "./resources/memory/config/index.ts";
+import entry15 from "./resources/promptContext/memory/index.ts";
+import entry16 from "./resources/promptContext/personal-memory/index.ts";
+import entry17 from "./resources/tools/consolidate-memory/index.ts";
+import entry18 from "./resources/tools/inspect-memory/index.ts";
+import entry19 from "./resources/tools/list-knowledge-spaces/index.ts";
+import entry20 from "./resources/tools/remember/index.ts";
+import entry21 from "./resources/tools/retire-memory/index.ts";
+import entry22 from "./resources/tools/search-memory/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
 const definition: {
   readonly id: "@copilotz/core-long-term-memory";
   readonly version: "5.0.0";
   readonly plugins: readonly [typeof dependency0];
   readonly collections: {
-    readonly "longTermMemory": typeof entry5;
-    readonly "memoryNote": typeof entry6;
-    readonly "memorySpaceAccess": typeof entry7;
-    readonly "memorySpace": typeof entry8;
+    readonly "longTermMemory": typeof entry8;
+    readonly "memoryNote": typeof entry9;
+    readonly "memorySpaceAccess": typeof entry10;
+    readonly "memorySpace": typeof entry11;
   };
   readonly actions: {
     readonly "consolidate_memory": typeof entry0;
     readonly "inspect_memory": typeof entry1;
     readonly "list_knowledge_spaces": typeof entry2;
-    readonly "produceCheckpoint": typeof entry3;
-    readonly "search_memory": typeof entry4;
+    readonly "personal_memory": typeof entry3;
+    readonly "produceCheckpoint": typeof entry4;
+    readonly "remember": typeof entry5;
+    readonly "retire_memory": typeof entry6;
+    readonly "search_memory": typeof entry7;
   };
   readonly processors: {
-    readonly "dispatchConsolidation": typeof entry9;
-    readonly "settleConsolidation": typeof entry10;
+    readonly "dispatchConsolidation": typeof entry12;
+    readonly "settleConsolidation": typeof entry13;
   };
   readonly resources: {
     readonly "memory": {
-      readonly "config": typeof entry11;
+      readonly "config": typeof entry14;
     };
     readonly "promptContext": {
-      readonly "memory": typeof entry12;
+      readonly "memory": typeof entry15;
+      readonly "personalMemory": typeof entry16;
     };
     readonly "tools": {
-      readonly "consolidate_memory": typeof entry13;
-      readonly "inspect_memory": typeof entry14;
-      readonly "list_knowledge_spaces": typeof entry15;
-      readonly "search_memory": typeof entry16;
+      readonly "consolidate_memory": typeof entry17;
+      readonly "inspect_memory": typeof entry18;
+      readonly "list_knowledge_spaces": typeof entry19;
+      readonly "remember": typeof entry20;
+      readonly "retire_memory": typeof entry21;
+      readonly "search_memory": typeof entry22;
     };
   };
 } = {
@@ -58,34 +70,40 @@ const definition: {
   version: "5.0.0",
   plugins: [dependency0],
   collections: {
-    "longTermMemory": entry5,
-    "memoryNote": entry6,
-    "memorySpaceAccess": entry7,
-    "memorySpace": entry8,
+    "longTermMemory": entry8,
+    "memoryNote": entry9,
+    "memorySpaceAccess": entry10,
+    "memorySpace": entry11,
   },
   actions: {
     "consolidate_memory": entry0,
     "inspect_memory": entry1,
     "list_knowledge_spaces": entry2,
-    "produceCheckpoint": entry3,
-    "search_memory": entry4,
+    "personal_memory": entry3,
+    "produceCheckpoint": entry4,
+    "remember": entry5,
+    "retire_memory": entry6,
+    "search_memory": entry7,
   },
   processors: {
-    "dispatchConsolidation": entry9,
-    "settleConsolidation": entry10,
+    "dispatchConsolidation": entry12,
+    "settleConsolidation": entry13,
   },
   resources: {
     "memory": {
-      "config": entry11,
+      "config": entry14,
     },
     "promptContext": {
-      "memory": entry12,
+      "memory": entry15,
+      "personalMemory": entry16,
     },
     "tools": {
-      "consolidate_memory": entry13,
-      "inspect_memory": entry14,
-      "list_knowledge_spaces": entry15,
-      "search_memory": entry16,
+      "consolidate_memory": entry17,
+      "inspect_memory": entry18,
+      "list_knowledge_spaces": entry19,
+      "remember": entry20,
+      "retire_memory": entry21,
+      "search_memory": entry22,
     },
   },
 } as const;

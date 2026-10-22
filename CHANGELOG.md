@@ -1,3 +1,17 @@
+## 0.91.0 — 2026-10-22
+
+- Unify personal, Core space and thread memory in immutable note records, with
+  immediate `remember`, atomic corrections and permanent `retire_memory`.
+- Add initiator-scoped search, cache-stable personal prompt context, safe lazy
+  import of participant memories, and profile retirement controls.
+- Remove the automatic user metadata dump. Curated personal memory and mutable
+  agent configuration render before the newest message, outside the system
+  prompt; hosts can opt in to selected user facts with context contributors.
+- Retain scheduled-job creator attribution across dispatch. Replace
+  `update_user_memory`; see
+  [the upgrade guide](docs/upgrading.md#upgrading-to-0910) for application
+  policy changes and retained custom-space handling.
+
 ## 0.90.0 — 2026-10-21
 
 Browsers now read live data. The owner pushes Collection changes over an

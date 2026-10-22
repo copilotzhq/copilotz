@@ -6,6 +6,7 @@ export const inspectMemoryTool: ToolResource<"inspect_memory"> = defineTool(
   "inspect_memory",
   inspectMemoryAction,
   {
+    history: { visibility: "requester_only" },
     name: "Inspect Memory",
     description:
       "Inspect accessible notes by their IDs, including full text, checkpoint lineage and retirement details.",

@@ -1,3 +1,4 @@
+import { importPersonalMemory } from "../../shared/personal.ts";
 /** Inspects a bounded set of notes; missing and inaccessible IDs are indistinguishable. @module */
 import {
   type ActionDefinition,
@@ -43,7 +44,17 @@ export const inspectMemoryAction: ActionDefinition<
   async execute(raw, context) {
     const ids = record(raw).ids as string[];
     const provenance = memoryActionProvenance(context);
-    const spaces = await threadMemorySpaces(context, provenance.threadId);
+    if (provenance.initiatorParticipantId) {
+      const human = await context.collections.participant.get({
+        id: provenance.initiatorParticipantId,
+      });
+      if (human) await importPersonalMemory(context.collections, human);
+    }
+    const spaces = await threadMemorySpaces(
+      context,
+      provenance.threadId,
+      provenance.initiatorParticipantId,
+    );
     const values = spaces.length
       ? await context.collections.memoryNote.list({
         filter: { and: [memoryFilter(spaces, true), { field: "id", in: ids }] },

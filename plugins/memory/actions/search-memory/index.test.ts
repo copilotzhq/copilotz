@@ -7,7 +7,7 @@ Deno.test("no readable memory space returns before embedding or vector queries",
     action: { metadata: { threadId: "thread", agentId: "agent" } },
     collections: {
       memorySpaceAccess: { list: () => Promise.resolve([]) },
-      thread: { get: () => Promise.resolve({ id: "thread" }) },
+      thread: { get: () => Promise.resolve(null) },
     },
     adapters: {
       memoryEmbedding: {

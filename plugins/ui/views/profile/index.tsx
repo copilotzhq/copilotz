@@ -1,7 +1,6 @@
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
 /** @jsxFrag React.Fragment */
-// deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { Brain, Mail } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
@@ -19,8 +18,7 @@ import {
 
 /**
  * The signed-in person and what agents remember. Memories are the Memory
- * plugin's notes (`memoryNote`), read-only and only those the server lets
- * this person read; without that Collection the section is omitted.
+ * plugin's personal notes, constrained by the authenticated owner policy.
  */
 const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
   defineView<unknown, React.ReactNode, BrowserViewContext>({
@@ -33,13 +31,26 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
         ?.sender ?? {}) as Record<string, unknown>;
       const name = String(sender.name ?? sender.email ?? "You");
       const email = typeof sender.email === "string" ? sender.email : undefined;
-      const notes = ctx.collections.memoryNote?.list({
-        order: { field: "id", direction: "desc" },
-        limit: 50,
-      });
+      const participantId = typeof sender.id === "string"
+        ? sender.id
+        : typeof sender.externalId === "string"
+        ? ctx.collections.participant?.list({
+          where: { externalId: sender.externalId, participantType: "human" },
+          limit: 1,
+        }).value[0]?.id
+        : undefined;
+      const notes = participantId
+        ? ctx.collections.memoryNote?.list({
+          where: { memorySpaceId: `memory-space:personal:${participantId}` },
+          filter: { field: "retirement", eq: null },
+          order: { field: "id", direction: "desc" },
+          limit: 100,
+        })
+        : undefined;
       const active = notes?.value.filter((note) => !note.retirement) ?? [];
       return (
         <div className="grid gap-5">
+          <MemoryImport ctx={ctx} participantId={participantId} />
           <DialogHeader>
             <DialogTitle>Profile</DialogTitle>
             <DialogDescription>
@@ -67,8 +78,8 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
                 <Brain aria-hidden="true" className="size-4" /> Memories
               </h3>
               <p className="text-muted-foreground text-xs">
-                Notes agents kept from your conversations. They update as you
-                talk.
+                Facts and preferences agents remember about you across
+                conversations.
               </p>
               {notes.status !== "ready"
                 ? <ReadStatus state={notes} noun="memories" compact />
@@ -83,6 +94,9 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
                         <p className="leading-relaxed">
                           {String(note.text ?? "")}
                         </p>
+                        {ctx.actions.personal_memory && (
+                          <ForgetMemory ctx={ctx} id={note.id} />
+                        )}
                         {typeof note.createdAt === "string" && (
                           <p className="text-muted-foreground mt-1 text-xs">
                             {formatRelative(note.createdAt)}
@@ -105,3 +119,54 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
   });
 
 export default view;
+
+function MemoryImport(
+  { ctx, participantId }: { ctx: BrowserViewContext; participantId?: string },
+) {
+  const [error, setError] = React.useState<string>();
+  const action = ctx.actions.personal_memory;
+  React.useEffect(() => {
+    if (!participantId || !action) return;
+    let active = true;
+    action({ operation: "import" }).result().catch(() => {
+      if (active) {
+        setError(
+          "Could not load older memories. Reopen your profile to retry.",
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [participantId, action]);
+  return error ? <p role="alert">{error}</p> : null;
+}
+
+function ForgetMemory({ ctx, id }: { ctx: BrowserViewContext; id: string }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string>();
+  return (
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        className="text-muted-foreground mt-1 text-xs underline"
+        onClick={async () => {
+          setBusy(true);
+          setError(undefined);
+          try {
+            await ctx.actions.personal_memory({ operation: "retire", id })
+              .result();
+          } catch {
+            setError("Could not forget this memory. Try again.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Forgetting…" : "Forget"}
+      </button>
+      {error && <p role="alert">{error}</p>}
+    </>
+  );
+}

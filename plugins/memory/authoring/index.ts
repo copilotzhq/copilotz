@@ -23,3 +23,9 @@ export type {
   MemoryResources,
   MemoryRuntimeContext,
 } from "./contracts/index.ts";
+
+export {
+  type MemoryScope,
+  memoryScopeConstraints,
+  memorySpaceId,
+} from "./scopes/index.ts";

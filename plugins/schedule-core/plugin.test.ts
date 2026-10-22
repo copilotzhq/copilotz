@@ -744,7 +744,10 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
         event.id,
         await processor.actions.scheduled_jobs(request.tool, {
           operationKey: `${processor.operationKey}:scheduled_jobs`,
-          metadata: { threadId: request.threadId },
+          metadata: {
+            threadId: request.threadId,
+            initiatorParticipantId: "recipient-tool",
+          },
           signal: processor.signal,
         }),
       );
@@ -796,6 +799,7 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       action: "create",
       jobId: "tool-job",
       name: "Tool Job",
+      metadata: { creatorParticipantId: "forged" },
       schedule: { expression: "* * * * *", timezone: "UTC" },
       run: {
         content: "Run from the Tool",
@@ -810,6 +814,21 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       }).payload.type,
       CORE_SCHEDULED_MESSAGE_PAYLOAD_TYPE,
     );
+    assertEquals(
+      (created.job as { metadata: Record<string, unknown> }).metadata
+        .creatorParticipantId,
+      "recipient-tool",
+    );
+    const updated = await invoke({
+      action: "update",
+      jobId: "tool-job",
+      metadata: { creatorParticipantId: "forged-again" },
+    });
+    assertEquals(
+      (updated.job as { metadata: Record<string, unknown> }).metadata
+        .creatorParticipantId,
+      "recipient-tool",
+    );
     const listed = await invoke({ action: "list" });
     assertEquals(
       (listed.jobs as readonly {
@@ -818,9 +837,17 @@ Deno.test("scheduled_jobs Action manages only Core scheduled-message jobs", asyn
       "tool-job",
     );
     await invoke({ action: "run_now", jobId: "tool-job" });
+    const delivered = await projectMessages(
+      application,
+      NAMESPACE,
+      "thread-tool",
+    );
+    assertEquals(delivered.length, 1);
     assertEquals(
-      (await projectMessages(application, NAMESPACE, "thread-tool")).length,
-      1,
+      (delivered[0].metadata.copilotzWorkflow as {
+        initiatorParticipantId: string;
+      }).initiatorParticipantId,
+      "recipient-tool",
     );
   } finally {
     await application.shutdown();

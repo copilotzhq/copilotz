@@ -14,6 +14,7 @@ import type {
   CollectionMutationRef,
   CollectionRecord,
 } from "@copilotz/copilotz/collections";
+import { withWorkflowMetadata } from "@copilotz/copilotz/core";
 import type { CoreResources } from "@copilotz/copilotz/core";
 import type {
   CoreScheduledMessageOccurrence,
@@ -288,7 +289,12 @@ async function dispatchScheduledMessage(
   if (!item.content) {
     throw new TypeError("A Core scheduled message requires durable content.");
   }
-  const metadata = {
+  const job = await context.collections.scheduledJob.get({ id: item.jobId });
+  const creatorId = text(record(job?.metadata).creatorParticipantId);
+  const creator = creatorId
+    ? await context.collections.participant.get({ id: creatorId })
+    : null;
+  const baseMetadata = {
     scheduledJob: {
       jobId: item.jobId,
       jobName: item.jobName,
@@ -300,6 +306,12 @@ async function dispatchScheduledMessage(
       metadata: structuredClone(item.payload.metadata ?? {}),
     },
   };
+  const metadata = creator?.participantType === "human"
+    ? withWorkflowMetadata(baseMetadata, {
+      kind: "continuation",
+      initiatorParticipantId: creator.id,
+    })
+    : baseMetadata;
   const descriptor = item.payload.thread;
   const result = await context.transaction(async (transaction) => {
     const ownership = await checkSpaceOwnership(item, context, transaction);

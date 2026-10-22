@@ -1,4 +1,4 @@
-import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "../execution/deadlines.ts";
 import {
   createWorker,
   type Worker,
@@ -23,6 +23,10 @@ export function connectShardOwner(
 ): ShardOwnerConnection {
   const worker = createWorker({
     ...options,
+    hostCalls: {
+      ...options.hostCalls,
+      timeoutMs: resolveDeliveryTimeoutMs(options.hostCalls?.timeoutMs),
+    },
     workloads: { "copilotz.shard.control.v1": () => undefined },
   });
   return {
@@ -46,6 +50,7 @@ export function connectShardOwner(
 }
 /** Admission supplies identity. The callback payload cannot override it. */
 export function shardOwnerCalls<T>(options: {
+  deliveryTimeoutMs?: number;
   authorize(context: WorkerCallContext): T | undefined;
   invoke(
     identity: T,
@@ -88,6 +93,6 @@ export function shardOwnerCalls<T>(options: {
     maxPerConnection: 128,
     // Host calls carry whole deliveries (nested LLM calls); Oxian uses the
     // lower of both sides' limits, so match the worker's delivery deadline.
-    timeoutMs: DELIVERY_DEADLINE_MS,
+    timeoutMs: resolveDeliveryTimeoutMs(options.deliveryTimeoutMs),
   };
 }

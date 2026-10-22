@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { providerFailure, providerRetryAfter } from "./provider-failure.ts";
-import { LLMProviderError } from "./errors.ts";
+import { LLMProviderError, LLMStreamTimeoutError } from "./errors.ts";
 import { LlmAdapterCallError } from "./contracts.ts";
 
 Deno.test("incomplete provider failures retain retry disposition through adapter causes", () => {
@@ -100,4 +100,26 @@ Deno.test("content refusal remains permanent even if an earlier transport reason
   });
   assertEquals(providerFailure(error)?.code, "llm_provider_provider_error");
   assertEquals(providerFailure(error)?.retryable, false);
+});
+
+Deno.test("typed model stalls retain a specific safe message through adapter wrapping", () => {
+  for (const kind of ["first_token", "idle", "attempt", "total"] as const) {
+    const failure = providerFailure(
+      new LlmAdapterCallError("generic", {
+        cause: new LLMProviderError("generic", {
+          provider: "openai",
+          reason: "timeout",
+          cause: new LLMStreamTimeoutError(kind, 10),
+        }),
+      }),
+    );
+    assertEquals(failure?.code, "llm_provider_timeout");
+    assertEquals(failure?.retryable, true);
+    assertEquals(
+      failure?.message,
+      kind === "first_token" || kind === "idle"
+        ? "The model stopped responding."
+        : "The model exceeded its configured safety backstop.",
+    );
+  }
 });

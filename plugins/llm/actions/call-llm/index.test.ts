@@ -4077,6 +4077,14 @@ for (const loss of ["seal", "confirmation receipt"] as const) {
         new TextEncoder().encode(answer).length,
       );
       assertEquals(output.usage?.outputTokens, 51);
+      // A duplicated delivery after recovery must also reuse the one receipt.
+      await caller(retry.context)({ ...baseInput, stream: { id: "reply" } });
+      assertEquals(calls, 1);
+      assertEquals(
+        [...receipts.values()].filter((event) => event.status === "completed")
+          .length,
+        1,
+      );
     } finally {
       await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await db.close();
@@ -4282,6 +4290,7 @@ Deno.test("a provider timeout before completion retries without becoming cancell
     Promise.resolve(callLlmAction.execute(baseInput, test.context))
   ) as Error & { retryable: boolean; code: string };
   assertEquals(error.code, "llm_provider_timeout");
+  assertEquals(error.message, "The model stopped responding.");
   assertEquals(error.retryable, true);
   await callLlmAction.execute(baseInput, test.context);
   assertEquals(calls, 2);

@@ -1,5 +1,5 @@
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
-import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import {
   bindWorkerCollectionInvocation,
   closeCollectionPolicyInvocation,
@@ -584,8 +584,13 @@ export function createOwnerWorkerWorkloads(
   options: Readonly<{
     registry: PluginRegistry;
     workloads?: readonly string[];
+    deliveryTimeoutMs?: number;
   }>,
 ): Readonly<Record<string, WorkerWorkHandler>> {
+  const deliveryTimeoutMs = resolveDeliveryTimeoutMs(
+    options.deliveryTimeoutMs,
+    options.registry.actions,
+  );
   const execute: WorkerWorkHandler = async (work) => {
     const abort = new AbortController();
     const signal = AbortSignal.any([work.signal, abort.signal]);
@@ -598,7 +603,7 @@ export function createOwnerWorkerWorkloads(
           signal: callSignal,
           // Action calls remain open through nested provider work and its
           // durable finalization; Oxian's short RPC default is insufficient.
-          deadlineAtMs: Date.now() + DELIVERY_DEADLINE_MS,
+          deadlineAtMs: Date.now() + deliveryTimeoutMs,
         });
         const response = await readCapability(handle.output) as {
           value?: unknown;

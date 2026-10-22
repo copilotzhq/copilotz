@@ -1,3 +1,4 @@
+import { resolveDeliveryTimeoutMs } from "../execution/deadlines.ts";
 import {
   createHypervisor,
   type Hypervisor,
@@ -36,6 +37,7 @@ export type ShardWorkInput =
     requireConnected?: boolean;
   }>;
 export type CreateCopilotzShardOptions = Readonly<{
+  deliveryTimeoutMs?: number;
   id: string;
   shardIds?: readonly string[];
   transports: HypervisorOptions["transports"];
@@ -242,6 +244,7 @@ export function createCopilotzShard(
       return selected;
     },
     workerCalls: {
+      timeoutMs: resolveDeliveryTimeoutMs(options.deliveryTimeoutMs),
       ...options.calls,
       admit: admitCall(true),
       admitUnassigned: admitCall(false),

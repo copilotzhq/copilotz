@@ -605,9 +605,17 @@ export async function processStream(
     return false;
   };
 
+  const parseActiveLine = (line: string) => {
+    const data = parseLine(line, format);
+    if (data || (format === "sse" && line.trimStart().startsWith(":"))) {
+      options?.onActivity?.();
+    }
+    return data;
+  };
+
   /** After a stop, events only update metadata; their text is discarded. */
   const observeAfterStop = (line: string) => {
-    const data = parseLine(line, format);
+    const data = parseActiveLine(line);
     if (!data) return;
     observeMetadata(data);
     if (stopDebug) stopDebug.afterStop(extractContent(data));
@@ -676,7 +684,7 @@ export async function processStream(
 
   try {
     for (let line; (line = await lines.next()) !== undefined;) {
-      const data = parseLine(line, format);
+      const data = parseActiveLine(line);
       if (!data) continue;
       observeMetadata(data);
       const parts = extractContent(data);

@@ -412,11 +412,17 @@ export async function createCopilotzApplication(
   const constructEngine = (replacing = false) =>
     createCopilotzEngine({
       ...(options.engine ?? {}),
-      ...(options.onDeliveryDiagnostic
+      ...(options.onDeliveryDiagnostic ||
+          options.deliveryTimeoutMs !== undefined
         ? {
           execution: {
             ...(options.engine?.execution ?? {}),
-            onDiagnostic: options.onDeliveryDiagnostic,
+            ...(options.onDeliveryDiagnostic
+              ? { onDiagnostic: options.onDeliveryDiagnostic }
+              : {}),
+            ...(options.deliveryTimeoutMs !== undefined
+              ? { deliveryTimeoutMs: options.deliveryTimeoutMs }
+              : {}),
           },
         }
         : {}),

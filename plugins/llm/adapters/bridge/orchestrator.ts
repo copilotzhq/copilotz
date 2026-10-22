@@ -440,7 +440,7 @@ export async function chat(
     });
   };
 
-  const DEFAULT_TOTAL_TIMEOUT_MS = 3_600_000;
+  const DEFAULT_TOTAL_TIMEOUT_MS = 5 * 60 * 60_000;
   const configuredTotalTimeoutMs = baseConfig.totalTimeoutMs === undefined
     ? DEFAULT_TOTAL_TIMEOUT_MS
     : Number.isFinite(baseConfig.totalTimeoutMs) &&

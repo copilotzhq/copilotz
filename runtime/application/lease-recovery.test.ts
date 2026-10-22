@@ -20,6 +20,7 @@ for (const mode of ["in-process", "websocket"] as const) {
       config: { topic: crypto.randomUUID() },
     } as const;
     const entered = Promise.withResolvers<void>();
+    const interrupted = Promise.withResolvers<void>();
     const reconnected = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const timers = new Map<object, { callback(): void; delay: number }>();
@@ -30,6 +31,7 @@ for (const mode of ["in-process", "websocket"] as const) {
     const actions = {
       echo: defineAction({
         id: "lease.echo",
+        deliveryTimeoutMs: 8 * 60 * 60_000,
         async execute(input: { wait?: boolean }, context) {
           if (input.wait && ++executions === 1) {
             entered.resolve();
@@ -39,7 +41,10 @@ for (const mode of ["in-process", "websocket"] as const) {
                 if (context.signal.aborted) reject(context.signal.reason);
                 else {context.signal.addEventListener(
                     "abort",
-                    () => reject(context.signal.reason),
+                    () => {
+                      interrupted.resolve();
+                      reject(context.signal.reason);
+                    },
                     { once: true },
                   );}
               }),
@@ -52,10 +57,12 @@ for (const mode of ["in-process", "websocket"] as const) {
     const gateway = await createCopilotzGateway({
       database,
       databaseSchema: schema,
+      deliveryTimeoutMs: 7 * 60 * 60_000,
       namespace: "scope",
       actions,
       target: { workerId: "worker" },
       dispatcher({ workerCalls, lifecycle }) {
+        assertEquals(workerCalls.timeoutMs, 8 * 60 * 60_000);
         hypervisor = createHypervisor({
           transports: [
             mode === "in-process"
@@ -190,6 +197,7 @@ for (const mode of ["in-process", "websocket"] as const) {
       if (mode === "websocket") {
         await bounded(reconnected.promise, "reconnected");
         assert(disconnects.includes("lease_expired"));
+        await bounded(interrupted.promise, "mid-host-call cancellation");
       } else {
         assertEquals(disconnects, []);
         assertEquals(

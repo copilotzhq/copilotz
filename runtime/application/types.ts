@@ -137,10 +137,12 @@ export type ApplicationOperationStatus = Readonly<{
   operationId: string;
   namespace: string;
   correlationId: string;
+  /** Scope settlement state; Action completion is its own durable lifecycle. */
   state: OperationState;
   metadata: Readonly<Record<string, unknown>>;
   acceptedAt: string;
   updatedAt: string;
+  /** Time the scope settled (the retained catalog's completed_at). */
   completedAt?: string;
 }>;
 
@@ -220,7 +222,7 @@ type ApplicationUnresolvedReadOptions =
   & ApplicationScope
   & Pick<ScopedCollectionReadOptions, "signal">;
 
-/** Each Action caller admits one operation and returns its recorded output. */
+/** Admits one operation and returns the Action's durable output before scope settlement. */
 export type ApplicationActions<TActions extends ActionMap = ActionMap> =
   Readonly<
     {

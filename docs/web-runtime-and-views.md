@@ -147,6 +147,17 @@ namespace, so a later plugin overrides an earlier one's entry by alias (and
 contain browser-safe leaves and server Action contracts, never server execute
 closures.
 
+An Action handle's `result()` resolves when that Action's durable result exists,
+and its `status` becomes `completed`. A failed Action rejects. Inherited
+deliveries and streams can still be pending: `await handle.settled()` waits for
+the whole scope and returns the same value, rejecting failed or cancelled
+settlement. A later downstream failure leaves the successful `result()` and
+`status` unchanged. Browser-local Actions settle when execute finishes; a local
+wrapper must await its child server handle's `settled()` if it needs that scope.
+Custom `ActionTransport` implementations resolve `invoke()` at Action completion
+and implement `settled(operationId, signal)` for the separate scope wait. A
+server transport without that method rejects `handle.settled()` as unsupported.
+
 ## Live reads and optimism
 
 Reads expose `value`, `status`, `pending` and, when stale, failed or denied,
@@ -175,8 +186,8 @@ subscription. `/core/web` builds on that (see
 
 An Action's `optimistic` declaration names a Collection, pure command and
 record-ID selector. Each invocation has its own layer. Failure removes only that
-layer; concurrent server state survives. A successful operation records its
-terminal owner `seq`. Each read retires the layer after applying through that
+layer; concurrent server state survives. A successful Action result carries its
+completion owner `seq`. Each read retires the layer after applying through that
 seq, including an empty progress batch or a replacement snapshot. Acceptance is
 never settlement.
 

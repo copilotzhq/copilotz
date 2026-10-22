@@ -489,7 +489,8 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
       try {
         const pending = ctx.collections.pendingThread?.get(threadId).value;
         if (pending && pending.created !== true) {
-          // An existing thread (an earlier attempt that did create it) is done.
+          // The thread exists at Action completion; sending does not depend on
+          // downstream thread.created projections or channel deliveries.
           await call(ctx, aliases.createThread, {
             id: threadId,
             name: String(pending.name ?? "New conversation"),

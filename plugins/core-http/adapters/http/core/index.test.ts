@@ -341,7 +341,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         ) replayed.push(...frame.bytes);
         if (
           frame.kind === "output" &&
-          frame.output.type === "operation.completed" &&
+          frame.output.type === "operation.settled" &&
           frame.output.operationId === followup.operationId
         ) {
           completed = true;

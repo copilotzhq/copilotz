@@ -1155,7 +1155,7 @@ Deno.test("thread changes use indexed hints and idle followers avoid rediscovery
       observation,
       () =>
         outputs.some((output) =>
-          output.type === "operation.completed" && output.operationId === id
+          output.type === "operation.settled" && output.operationId === id
         ),
     );
     const requests = f.counts.changes;
@@ -1185,12 +1185,12 @@ Deno.test("120 completed operations paginate discovery and retire replay state w
     await waitOutput(
       observation,
       () =>
-        outputs.filter((output) => output.type === "operation.completed")
+        outputs.filter((output) => output.type === "operation.settled")
           .length === 120,
       6000,
     );
     const completed = outputs.filter((output) =>
-      output.type === "operation.completed"
+      output.type === "operation.settled"
     ).map((output) => output.operationId);
     assertEquals(new Set(completed), new Set(ids));
     const tracker = createOperationReplayCursorTracker({
@@ -1208,7 +1208,7 @@ Deno.test("120 completed operations paginate discovery and retire replay state w
           position: frame.selectionPosition,
           operationIds: frame.operationIds,
         }]);
-      } else if (output.type === "operation.completed") {
+      } else if (output.type === "operation.settled") {
         tracker.commit([{
           kind: "retire",
           operationId: output.operationId!,
@@ -1262,7 +1262,7 @@ Deno.test("a lost final selection push repairs from heartbeat head mismatch with
     await until(
       () =>
         outputs.some((output) =>
-          output.type === "operation.completed" && output.operationId === id
+          output.type === "operation.settled" && output.operationId === id
         ),
       6000,
     );
@@ -1563,7 +1563,7 @@ Deno.test("operation terminal forwarding preserves queued payloads until drain o
           }
           if (
             frame.kind === "output" &&
-            frame.output.type === "operation.completed"
+            frame.output.type === "operation.settled"
           ) {
             terminal = true;
             break;

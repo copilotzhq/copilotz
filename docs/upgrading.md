@@ -19,6 +19,42 @@ you adopt them, or if you built on a pre-release. The
 
 ### Every application
 
+#### Action completion and scope settlement
+
+`ActionHandle.result()` now resolves as soon as the invoked Action's durable
+result exists. `status` becomes `completed` then, even while inherited
+deliveries or streams are pending. A failed Action still rejects. A downstream
+dead letter cannot reject a successful result retroactively.
+
+Use `await handle.settled()` before work that requires downstream projections or
+all inherited deliveries to succeed. It returns the Action value on success and
+rejects failed/cancelled settlement. SDK callers use
+`await client.operations.settled(operationId)` and inspect its `outcome`; the
+response also includes the final owner `seq`. Live reads must still apply
+through that sequence before their projection is current. Browser-local wrappers
+must explicitly await their child server handle's `settled()` when needed.
+
+The final observe descriptor changes from `operation.completed`,
+`operation.failed` and `operation.cancelled` to `operation.settled` with
+`state: "settled"` and `outcome: "completed" | "failed" | "cancelled"`. Do not
+retire observation on an Action's `*.completed` or `*.failed` event; those
+durable lifecycle outputs arrive before scope settlement. HTTP operation status
+uses `state: "settled"`, `outcome` and `settledAt`. Checkpoint/resume and
+retirement boundaries are unchanged. Submission receipt `status` also uses
+`settled` for a finished scope; retrieve its outcome separately rather than
+interpreting that receipt as an Action result.
+
+`GET /operations/:id/result`, SDK `actions.invoke`, and host `app.actions.*`
+return the invoked Action result without waiting for the whole scope.
+`awaitOperation`, `app.send().done` and `app.attach().done` still wait for scope
+settlement. The retained catalog's state/timestamp representation is unchanged,
+so the migration API requires no new schema step. An early Action result is not
+a safe drain barrier for an offline migration.
+
+Core chat deliberately keeps `createThread(...).result()` before sending the
+first message: the thread is committed by that Action. Core/UI callers that use
+returned IDs, direct mutations or live subscriptions need no settlement wait.
+
 #### Database
 
 1. **Upgrade every owner schema from v13 to v14, offline.** Stop admission,

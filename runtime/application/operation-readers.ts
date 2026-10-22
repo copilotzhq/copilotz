@@ -1206,14 +1206,15 @@ function terminalOutput(status: ApplicationOperationStatus): ApplicationOutput {
   const state = status.state as "completed" | "failed" | "cancelled";
   return {
     durable: false,
-    type: `operation.${state}`,
+    type: "operation.settled",
     namespace: status.namespace,
     correlationId: status.correlationId,
-    payload: { status: state },
-    data: { status: state },
-    metadata: { operationId: status.operationId, status: state },
+    payload: { outcome: state },
+    data: { outcome: state },
+    metadata: { operationId: status.operationId },
     createdAt: status.completedAt ?? status.updatedAt,
     operationId: status.operationId,
-    state,
+    state: "settled",
+    outcome: state,
   } as ApplicationOutput;
 }

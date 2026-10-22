@@ -43,6 +43,7 @@ export type ObservationFrame = Exclude<
 export type OperationReceipt = Readonly<{
   operationId: string;
   correlationId: string;
+  /** Scope phase at admission/replay: accepted, running or settled. */
   status: string;
   acceptedAt: string;
   checkpoint?: string;
@@ -71,6 +72,13 @@ export type ObserveOptions = Readonly<{
   checkpoint?: string;
   signal?: AbortSignal;
   onFrame(frame: ObservationFrame): void | Promise<void>;
+}>;
+/** A scope outcome, independent of the invoked Action's result. */
+export type OperationSettlement = Readonly<{
+  operationId: string;
+  state: "settled";
+  outcome: "completed" | "failed" | "cancelled";
+  seq: string;
 }>;
 export type ClientOptions = Readonly<{
   baseUrl: string;
@@ -417,6 +425,43 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     operations: {
       get: (id: string) => json(`/operations/${segment(id)}`),
       result,
+      async settled(
+        id: string,
+        signal?: AbortSignal,
+      ): Promise<OperationSettlement> {
+        let settlement: OperationSettlement | undefined;
+        await observe("/operations/observe", { operationIds: [id] }, {
+          signal,
+          onFrame(frame) {
+            if (
+              frame.kind !== "output" ||
+              frame.output.type !== "operation.settled"
+            ) return;
+            const output = frame.output;
+            if (
+              output.operationId !== id ||
+              output.state !== "settled" ||
+              !["completed", "failed", "cancelled"].includes(
+                String(output.outcome),
+              ) ||
+              typeof output.seq !== "string" ||
+              !/^(0|[1-9][0-9]*)$/.test(output.seq)
+            ) throw new ProtocolError("Invalid operation settlement.");
+            settlement = {
+              operationId: id,
+              state: "settled",
+              outcome: output.outcome as OperationSettlement["outcome"],
+              seq: output.seq,
+            };
+          },
+        });
+        if (!settlement) {
+          throw new ProtocolError(
+            "Observation ended without operation settlement.",
+          );
+        }
+        return settlement;
+      },
       cancel: (id: string) =>
         json(`/operations/${segment(id)}`, { method: "DELETE" }),
       observe: (
@@ -551,6 +596,7 @@ export type CopilotzClient = Readonly<{
   operations: Readonly<{
     get(id: string): Promise<unknown>;
     result(id: string, signal?: AbortSignal): Promise<OperationResult>;
+    settled(id: string, signal?: AbortSignal): Promise<OperationSettlement>;
     cancel(id: string): Promise<unknown>;
     observe(
       options: ObserveOptions & { operationIds: readonly string[] },

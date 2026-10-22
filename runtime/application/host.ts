@@ -99,32 +99,39 @@ export function createHostServices(
     handle: ApplicationSendHandle,
     boundary: ApplicationScope,
   ) => {
-    // Result-only callers own no progressive readers. Drain observations while
-    // settlement runs, releasing each subscriber-owned byte stream immediately.
+    const app = application();
     const drained = (async () => {
       for await (const output of handle.outputs) {
         if (isStreamOutput(output)) await output.payload.cancel();
       }
     })();
+    void drained.catch(() => {});
+    void handle.done.catch(() => {});
+    let closeWatch = () => {};
     try {
-      const settled = await Promise.allSettled([handle.done, drained]);
-      const recorded = await recordedOperationResult(
-        application(),
-        boundary,
-        handle.operationId,
-        "host",
-      );
-      for (const value of settled) {
-        if (value.status === "rejected") throw value.reason;
+      const runtime = await app.databaseScope(boundary.databaseSchema!);
+      // Subscribe before reading, including when completion preceded this call.
+      const changes = await runtime.operations.watch(handle.operationId, {
+        namespace: boundary.namespace!,
+      });
+      closeWatch = () => changes.close();
+      for (;;) {
+        const recorded = await recordedOperationResult(
+          app,
+          boundary,
+          handle.operationId,
+          "host",
+        );
+        if (!recorded.pending) return recorded.value;
+        await changes.wait();
       }
-      if (recorded.pending) {
-        throw new Error("Operation result is not yet recorded.");
-      }
-      return recorded.value;
     } finally {
+      closeWatch();
       await handle.detach("host_result_returned");
+      await drained.catch(() => {});
     }
   };
+
   const mutate = async (
     alias: string,
     operation: ServerCollectionMutationRequest["operation"],

@@ -210,7 +210,7 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
   } as StreamOutput);
   const terminal = Object.freeze({
     ...createEphemeralEvent({
-      type: "operation.completed",
+      type: "operation.settled",
       namespace: "tenant-a",
       correlationId: "operation-a",
       payload: { status: "completed" },
@@ -249,7 +249,7 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
       "stream.output",
       "stream-chunk",
       "stream-end",
-      "operation.completed",
+      "operation.settled",
     ],
   );
 });

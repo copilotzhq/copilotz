@@ -294,15 +294,6 @@ Deno.test("only pending exact-scope result branches consult retained obligation 
       streams: [],
     },
     {
-      name: "unfinished stream",
-      type: SERVER_ACTION_REQUEST_EVENT_TYPE,
-      events: [lifecycle("completed"), lifecycle("completed", true)],
-      streams: [{
-        state: "open",
-        descriptor: { metadata: { sourceActionRunId: targetRun } },
-      }],
-    },
-    {
       name: "collection",
       type: SERVER_COLLECTION_MUTATION_REQUEST_EVENT_TYPE,
       events: [],
@@ -363,6 +354,11 @@ Deno.test("accepted terminal and standard denial precede unrelated pending-work 
     const app = fixture([lifecycle(status), lifecycle("completed", true)]);
     Object.assign(app, {
       operationStatus: () => Promise.resolve({ namespace, state: "running" }),
+    });
+    Object.assign(app.operations, {
+      listStreams() {
+        throw new Error("Action results must not wait for stream settlement");
+      },
     });
     Object.assign(app.events, {
       outstanding() {

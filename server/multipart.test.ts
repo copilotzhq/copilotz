@@ -502,7 +502,7 @@ Deno.test("multipart truncation rejects the observation after its last applied d
   );
 });
 
-Deno.test("an Action result waits for its own streams while operation completion waits for all streams", async () => {
+Deno.test("an Action result precedes blocked own streams while settlement waits for all streams", async () => {
   let release!: () => void;
   const blocked = new Promise<void>((resolve) => release = resolve);
   const stream = (id: string, run: string, wait = false): StreamOutput => ({
@@ -542,13 +542,13 @@ Deno.test("an Action result waits for its own streams while operation completion
     cancel: () => Promise.resolve(),
     outputs: new ReadableStream({
       start(controller) {
-        controller.enqueue(stream("a", "run-a"));
+        controller.enqueue(stream("a", "run-a", true));
         controller.enqueue(stream("b", "run-b", true));
         controller.enqueue(
           event("test.action.completed", { actionRunId: "run-a" }),
         );
         controller.enqueue(
-          event("operation.completed", { status: "completed" }),
+          event("operation.settled", { status: "completed" }),
         );
         controller.close();
       },
@@ -561,15 +561,17 @@ Deno.test("an Action result waits for its own streams while operation completion
       if (
         frame.kind === "output" && frame.output.type === "test.action.completed"
       ) {
-        assertEquals(order, ["bytes:a"]);
+        assertEquals(order, []);
         order.push("result:a");
         release();
       }
       if (
-        frame.kind === "output" && frame.output.type === "operation.completed"
+        frame.kind === "output" && frame.output.type === "operation.settled"
       ) order.push("operation:end");
     }
-    assertEquals(order, ["bytes:a", "result:a", "bytes:b", "operation:end"]);
+    assertEquals(order[0], "result:a");
+    assertEquals(order.slice(1, 3).sort(), ["bytes:a", "bytes:b"]);
+    assertEquals(order.at(-1), "operation:end");
   } finally {
     release();
   }
@@ -715,7 +717,7 @@ Deno.test("terminal checkpoints retire more than 32 sequential selected operatio
     );
     outputs.push(
       {
-        type: "operation.completed",
+        type: "operation.settled",
         operationId,
         durable: true,
         position: String(index * 100),
@@ -738,7 +740,7 @@ Deno.test("terminal checkpoints retire more than 32 sequential selected operatio
   let count = 0;
   for await (const frame of decodeObservation(response)) {
     if (
-      frame.kind === "output" && frame.output.type === "operation.completed"
+      frame.kind === "output" && frame.output.type === "operation.settled"
     ) {
       count++;
       assertEquals(decodeOperationReplayCursor(frame.checkpoint), {
@@ -821,7 +823,7 @@ Deno.test("blocked frame handler renews and resumes a partial lane from its proc
             if (!first) {
               controller.enqueue(
                 {
-                  type: "operation.completed",
+                  type: "operation.settled",
                   operationId: "op",
                 } as unknown as ApplicationOutput,
               );
@@ -996,7 +998,7 @@ Deno.test("terminal frames keep a bounded tombstone until discovery covers the f
       operationIds: ["op"],
     },
     {
-      type: "operation.completed",
+      type: "operation.settled",
       operationId: "op",
       durable: true,
       position: "999",

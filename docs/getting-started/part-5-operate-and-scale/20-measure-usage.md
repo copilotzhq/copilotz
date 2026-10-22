@@ -392,7 +392,7 @@ than combining their counts.
 The Usage Processors inherit the operation's settlement; they are not detached.
 Streamed reply text can reach a client before the rows are written, so a query
 made while a turn is still running can miss its rows. Once Chapter 17's
-observation reports `operation.completed`, the recording handlers for that turn
+observation reports `operation.settled`, the recording handlers for that turn
 have finished. If recording fails, it can fail the operation instead of silently
 losing a row. A host's `onRecord` hook or disabled config can still drop rows on
 purpose. Recording costs database writes per attempt and query load per report,

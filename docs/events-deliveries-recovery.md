@@ -135,9 +135,9 @@ work that keeps its causation but does not block or fail the operation.
 | `app.send(input)`             | What happens while you watch. A deduplicated resend sees only live outputs | Resolves on `completed`; **rejects** when the operation fails or is cancelled |
 | `app.attach({ operationId })` | Replays recorded Events from the start, then follows until final           | Resolves when replay reaches **any** final state; check that state yourself   |
 
-A replay ends with one unstored output, `operation.completed`,
-`operation.failed` or `operation.cancelled`. `app.operationStatus` returns the
-recorded state, or `null` when the namespace has no such operation.
+A replay ends with one unstored output, `operation.settled` with an `outcome` of
+`completed`, `failed` or `cancelled`. `app.operationStatus` returns the recorded
+state, or `null` when the namespace has no such operation.
 
 Read `outputs` while waiting for `done`; a stream nobody reads can hold
 settlement back.

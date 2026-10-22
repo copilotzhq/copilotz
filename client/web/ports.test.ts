@@ -104,7 +104,7 @@ Deno.test("SDK browser ports preserve exact seq, share device reads and settle o
     });
     assertEquals(observed.getSnapshot().pending, false);
     assertEquals(observed.getSnapshot().value?.value, 2);
-    assertEquals(calls.length, 2);
+    assertEquals(calls.length, 1);
     await ports.actions.cancel("op");
     assertEquals(calls.at(-1), "op");
   } finally {

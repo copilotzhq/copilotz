@@ -18,7 +18,10 @@ Stop intake, every owner attachment, maintenance and physical body producers
 before exporting or rewriting data. Await each runtime's `close()` before
 closing its database. SQL locks and durable drain checks cannot stop external
 producers. Keep a verified backup and hold the write freeze through routing
-cutover.
+cutover. An Action's `result()` is no longer a drain barrier: it can resolve
+while inherited deliveries and streams are pending. Wait for scope settlement
+and use `inspectRetainedDataDrain(session, schema)` before migration. The
+migration API and retained catalog format are unchanged.
 
 ## Moving a complete tenant schema
 

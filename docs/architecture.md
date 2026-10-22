@@ -60,9 +60,10 @@ flowchart LR
    trusted host can also call `app.actions.<alias>(input, options)` or mutate
    through `app.collections.<alias>.create/update/delete` or `commands.<name>`.
    Both use the same durable ingress as HTTP, with an optional `idempotencyKey`,
-   and return the recorded result after settlement. Reads through
-   `app.collections.<alias>.get/list/aggregate/queries` create no operation.
-   Within an Action or Processor, the matching `context.actions` and
+   and return recorded results. Action calls return at the Action's own durable
+   completion; Collection mutations retain their scope settlement boundary.
+   Reads through `app.collections.<alias>.get/list/aggregate/queries` create no
+   operation. Within an Action or Processor, the matching `context.actions` and
    `context.collections` calls use `operationKey` within the current delivery
    and operation; host Action and mutation calls admit their own.
 2. **Delivery.** Each Processor whose filter matches a durable Event gets a
@@ -214,8 +215,8 @@ try {
 Run it with `deno run -A architecture.ts` or `node architecture.ts`. Expect
 `same operation: true`, a replay that includes `notes.capture.requested`,
 `note.created` and `notes.save.completed`, ending with the live
-`operation.completed`, and `operation completed`. Running the script a second
-time against the same `./data` directory reuses the same deduplicated operation.
+`operation.settled`, and `operation completed`. Running the script a second time
+against the same `./data` directory reuses the same deduplicated operation.
 
 ### Placement
 

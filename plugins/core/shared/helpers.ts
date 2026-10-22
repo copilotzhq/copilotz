@@ -58,11 +58,10 @@ export async function loadCoreThreadMetadata(
     id: threadId,
   });
   if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
-  const participantRecords = (await Promise.all(
-    stringArray(thread.participantIds)
-      .map((id) => requireCollection(context, "participant").get({ id })),
-  ))
-    .filter((item): item is CollectionRecord => Boolean(item));
+  const participantRecords = await loadParticipantsByIds(
+    context,
+    stringArray(thread.participantIds),
+  );
   return ({
     thread: mapThreadRecord(
       thread,
@@ -178,14 +177,9 @@ export async function loadCoreThreadMessageSnapshot(
       !participantRecords.has(id)
     ),
   );
-  const missingSenders = await Promise.all(
-    [...missingSenderIds].map((id) =>
-      requireCollection(context, "participant").get({ id })
-    ),
-  );
-  for (const sender of missingSenders) {
-    if (sender) participantRecords.set(String(sender.id), sender);
-  }
+  for (
+    const sender of await loadParticipantsByIds(context, [...missingSenderIds])
+  ) participantRecords.set(String(sender.id), sender);
   const mappedParticipants = new Map(
     [...participantRecords].map(([id, record]) => [
       id,
@@ -256,6 +250,28 @@ export function toolsForAgent(
     alias: tool.id,
     resource: tool.resource,
   } as const));
+}
+
+/** One batched read per 1,000 ids, in the requested order; missing ids are skipped. */
+export async function loadParticipantsByIds(
+  context: Pick<ProcessorContext, "collections">,
+  ids: readonly string[],
+): Promise<CollectionRecord[]> {
+  const unique = [...new Set(ids)];
+  const found = new Map<string, CollectionRecord>();
+  for (let offset = 0; offset < unique.length; offset += 1_000) {
+    const batch = unique.slice(offset, offset + 1_000);
+    for (
+      const record of await requireCollection(context, "participant").list({
+        where: { id: { in: batch } },
+        limit: batch.length,
+      })
+    ) found.set(String(record.id), record);
+  }
+  return ids.flatMap((id) => {
+    const record = found.get(id);
+    return record ? [record] : [];
+  });
 }
 
 export async function loadParticipant(

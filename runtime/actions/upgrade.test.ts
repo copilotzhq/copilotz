@@ -676,6 +676,10 @@ async function credentialUpgradeFixture(seedOfflineOwner = true) {
       `ALTER TABLE "${schema}"."${column.table_name}" ALTER COLUMN "${column.column_name}" TYPE TEXT COLLATE "default"`,
     );
   }
+  await db.query(`DROP INDEX "${schema}".nodes_ready_content_body_idx`);
+  await db.query(`CREATE INDEX nodes_ready_content_body_idx
+    ON ${tables.nodes} ((data->>'bodyId'))
+    WHERE type IN ('asset','protected_value') AND data->>'state'='ready'`);
   await db.query(`ALTER TABLE ${tables.nodes} ADD PRIMARY KEY(id)`);
   for (const key of keys) {
     const definition = key.table_name === "edges"

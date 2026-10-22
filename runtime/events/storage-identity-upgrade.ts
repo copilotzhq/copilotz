@@ -1,3 +1,4 @@
+import { readyContentBodyIndexStatement } from "../content/catalog-schema.ts";
 import { STORAGE_IDENTITY_COLUMNS } from "./storage-identity.ts";
 /** Storage changes in the single drained v13 -> v14 transaction. */
 import type { SqlExecutor } from "./session.ts";
@@ -65,6 +66,12 @@ export async function upgradeStorageIdentity(
       } TYPE TEXT COLLATE "C"`,
     );
   }
+  // JSON expressions do not inherit the collation changes on identity columns.
+  // Rebuild this reference index so body_id joins use an Index Cond, not a filter.
+  await tx.query(
+    `DROP INDEX IF EXISTS "${schema}".nodes_ready_content_body_idx`,
+  );
+  await tx.query(readyContentBodyIndexStatement(schema));
   await tx.query(`ALTER TABLE ${tables.nodes} ADD PRIMARY KEY (namespace,id)`);
   for (const key of foreignKeys) {
     const definition = key.node_column

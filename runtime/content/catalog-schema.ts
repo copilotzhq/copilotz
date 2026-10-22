@@ -93,3 +93,10 @@ export function contentCatalogStatements(schema: string): readonly string[] {
     )`,
   ];
 }
+
+/** Match the bytewise body_id identity collation, including expression lookups. */
+export function readyContentBodyIndexStatement(schema: string): string {
+  return `CREATE INDEX IF NOT EXISTS "nodes_ready_content_body_idx"
+    ON "${schema}"."nodes" ((data ->> 'bodyId') COLLATE "C")
+    WHERE type IN ('asset','protected_value') AND data ->> 'state' = 'ready'`;
+}

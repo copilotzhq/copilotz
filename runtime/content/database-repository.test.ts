@@ -865,6 +865,9 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
         await transaction.query(
           `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second'`,
         );
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second'`,
+        );
       },
     );
 
@@ -878,6 +881,16 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     const pendingBody = await memory.head({ bodyId: key });
     const orphanBody = await memory.head({ bodyId: orphanKey });
     assertEquals(Number(pendingBody !== null) + Number(orphanBody !== null), 1);
+    // A retry is due only after its persisted deadline, even on manual maintenance.
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.retryDue",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second' WHERE state='retiring'`,
+        );
+      },
+    );
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
@@ -917,6 +930,7 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
           key: bodyId,
           backendKind: memory.kind,
           backendId: memory.backendId,
+          collectable: true,
         },
         protectForMs: 0,
       });
@@ -938,11 +952,23 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
       () => memory,
     );
     assertEquals(recovered.terminated, 2);
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.retentionDue",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second'`,
+        );
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()+INTERVAL '1 day' WHERE body_id=$1`,
+          [retainedId],
+        );
+      },
+    );
 
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
-        isBodyRetained: (bodyId) => Promise.resolve(bodyId === retainedId),
       }),
       { orphanedBodiesDeleted: 1 },
     );
@@ -952,10 +978,19 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
       "open",
     );
 
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.releaseRetention",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second' WHERE body_id=$1`,
+          [retainedId],
+        );
+      },
+    );
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
-        isBodyRetained: () => Promise.resolve(false),
       }),
       { orphanedBodiesDeleted: 1 },
     );

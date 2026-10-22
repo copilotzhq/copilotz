@@ -1891,7 +1891,7 @@ export function createDatabaseAssetRepository(
             const owned = (await transaction.query<
               { id: string; type: "asset" | "protected_value" }
             >(
-              `SELECT id,type FROM ${tables.nodes} WHERE type IN ('asset','protected_value') AND data->>'state'='ready' AND data->>'bodyId'=$1 LIMIT 1`,
+              `SELECT id,type FROM ${tables.nodes} WHERE type IN ('asset','protected_value') AND data->>'state'='ready' AND (data->>'bodyId') COLLATE "C"=$1 LIMIT 1`,
               [body.bodyId],
             )).rows[0];
             if (owned) {
@@ -2337,36 +2337,28 @@ export function createDatabaseAssetRepository(
       let orphanedBodiesDeleted = 0;
       await catalog.expireReservations();
       const attemptedCopies = new Set<string>();
-      const tracked = await options.session.query<
-        {
-          copy_key: string;
-          backend_kind: string;
-          backend_id: string;
-          state: string;
-          body_id: string;
-        }
-      >(
-        `SELECT copy_key,backend_kind,backend_id,state,body_id FROM ${tables.content_copies} WHERE ($1::text IS NULL OR copy_key>$1) ORDER BY copy_key LIMIT $2`,
-        [
-          catalogMaintenanceAfter ?? null,
-          Math.min(10000, Math.max(limit * 4, 100)),
-        ],
-      );
-      for (const copy of tracked.rows) {
-        catalogMaintenanceAfter = copy.copy_key;
-        if (
-          copy.state === "current" && maintenance.isBodyRetained &&
-          await maintenance.isBodyRetained(copy.body_id)
-        ) continue;
-        attemptedCopies.add(copy.copy_key);
+      const pageSize = Math.min(10000, Math.max(limit * 4, 100));
+      const tracked = await catalog.retirementCandidates({
+        after: catalogMaintenanceAfter,
+        limit: pageSize,
+        now: maintenanceNow,
+      });
+      for (const copy of tracked) {
+        catalogMaintenanceAfter = copy.key;
+        // Catalog selection is authoritative, including stream cleanup state.
+        // The legacy store-discovery callback must not override a due claim.
+        attemptedCopies.add(copy.key);
         try {
           const store = storeForCopy({
-            key: copy.copy_key,
-            backendKind: copy.backend_kind,
-            backendId: copy.backend_id,
+            key: copy.key,
+            backendKind: copy.backendKind,
+            backendId: copy.backendId,
           });
-          if (!store.conditionalDelete) continue;
-          const head = await store.head({ bodyId: copy.copy_key });
+          if (!store.conditionalDelete) {
+            await catalog.deferRetirement(copy.key);
+            continue;
+          }
+          const head = await store.head({ bodyId: copy.key });
           if (head) {
             const result = await retireBody(
               { store, body: head },
@@ -2374,41 +2366,48 @@ export function createDatabaseAssetRepository(
             );
             if (result.status === "deleted") orphanedBodiesDeleted++;
             else if (result.status === "blocked") {
-              await catalog.deferRetirement(copy.copy_key);
+              await catalog.deferRetirement(copy.key);
             }
           } else if (!head) {
-            await runCommand("content.confirmAbsentRetirement", {
-              copyKey: copy.copy_key,
-            }, async (input, { transaction }) => {
-              invalidateOwnerAlarm(
-                transaction,
-                options.databaseSchema,
-                "content",
-              );
-              const claimed = await transaction.query(
-                `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
-                [
-                  input.copyKey,
-                  store.kind,
-                  store.kind === "database" ? "" : store.backendId,
-                ],
-              );
-              if (claimed.rows.length) {
-                await transaction.query(
-                  `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1`,
-                  [input.copyKey],
+            const confirmed = await runCommand(
+              "content.confirmAbsentRetirement",
+              {
+                copyKey: copy.key,
+              },
+              async (input, { transaction }) => {
+                invalidateOwnerAlarm(
+                  transaction,
+                  options.databaseSchema,
+                  "content",
                 );
-              }
-            });
+                const claimed = await transaction.query(
+                  `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
+                  [
+                    input.copyKey,
+                    store.kind,
+                    store.kind === "database" ? "" : store.backendId,
+                  ],
+                );
+                if (claimed.rows.length) {
+                  await transaction.query(
+                    `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1`,
+                    [input.copyKey],
+                  );
+                }
+                return claimed.rows.length > 0;
+              },
+            );
+            // Absence without a durable claim is not proof of retirement.
+            if (!confirmed) await catalog.deferRetirement(copy.key);
           }
         } catch {
           await catalog.deferRetirement(
-            copy.copy_key,
+            copy.key,
           ); /* The durable retry deadline does not slide on unrelated commands. */
         }
         if (orphanedBodiesDeleted >= limit) break;
       }
-      if (tracked.rows.length < Math.min(10000, Math.max(limit * 4, 100))) {
+      if (tracked.length < pageSize) {
         catalogMaintenanceAfter = undefined;
       }
       if (storage.writer && orphanedBodiesDeleted < limit) {
@@ -2445,12 +2444,19 @@ export function createDatabaseAssetRepository(
             bodyMaintenanceAfter = undefined;
             break;
           }
+          // Store discovery only owns untracked uploads. Tracked copies must
+          // obey catalog retention and retry deadlines, even on another page.
+          const known = await options.session.query<{ copy_key: string }>(
+            `SELECT copy_key FROM ${tables.content_copies} WHERE copy_key=ANY($1::text[])`,
+            [candidates.bodies.map((body) => body.bodyId)],
+          );
+          const knownCopies = new Set(known.rows.map((copy) => copy.copy_key));
           for (const body of candidates.bodies) {
             scanned += 1;
             bodyMaintenanceAfter = body.bodyId;
             if (
               !body.bodyId.startsWith(prefix) ||
-              attemptedCopies.has(body.bodyId)
+              attemptedCopies.has(body.bodyId) || knownCopies.has(body.bodyId)
             ) continue;
             attemptedCopies.add(body.bodyId);
             if (body.state !== "ready" && body.state !== "incomplete") {

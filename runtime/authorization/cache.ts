@@ -11,6 +11,8 @@ export type AuthorizationCacheEntry<T> = { value: T; stamp: Stamp };
 export class OwnerAuthorizationCache {
   private versions = new Map<string, number>();
   private generation = 0;
+  readonly pending = new Map<string, number>();
+  observe?: (cache: string, result: string) => void;
   readonly grants = new Map<
     object,
     Map<string, AuthorizationCacheEntry<unknown>>
@@ -23,6 +25,7 @@ export class OwnerAuthorizationCache {
   }
   valid(stamp: Stamp): boolean {
     return stamp.every(([key, version]) =>
+      !this.pending.has(key) &&
       version === (key === "*" ? this.generation : this.versions.get(key) ?? 0)
     );
   }
@@ -41,6 +44,11 @@ export class OwnerAuthorizationCache {
 type Context = {
   owner: OwnerAuthorizationCache;
   changes?: readonly AuthorityDependency[];
+  rowChanges?: Map<
+    string,
+    readonly string[] | ((rows: Record<string, unknown>[]) => readonly string[])
+  >;
+  epoch?: number;
   reads: Map<string, AuthorizationCacheEntry<Promise<unknown>>>;
   grants: Map<object, Map<string, AuthorizationCacheEntry<unknown>>>;
 };
@@ -77,6 +85,34 @@ export function authorizationDependencyKeys(
 }
 export const authorizationTableKey = tableKey;
 
+/** The table key is only a fallback fence for unclassified writes. */
+export function authorizationRowKeys(
+  schema: string,
+  table: string,
+  id: string,
+): string[] {
+  return [tableKey(schema, table), JSON.stringify([schema, table, id])];
+}
+export function authorizationOwnerEpoch(
+  transaction: SqlExecutor,
+): number | undefined {
+  return contexts.get(transaction)?.epoch;
+}
+/** Classify the next SQL statement from the command that owns its write set. */
+export function hintAuthorizationRows(
+  transaction: SqlExecutor,
+  schema: string,
+  table: string,
+  ids:
+    | readonly string[]
+    | ((rows: Record<string, unknown>[]) => readonly string[]),
+): void {
+  const context = contexts.get(transaction);
+  if (context) {
+    (context.rowChanges ??= new Map()).set(tableKey(schema, table), ids);
+  }
+}
+
 /** Known Collection projections supply exact point/set invalidation; raw writes fall back to the table. */
 export function hintAuthorizationChanges(
   transaction: SqlExecutor,
@@ -92,17 +128,55 @@ export function bindAuthorizationCacheAlias(
   const context = contexts.get(source);
   if (context) contexts.set(alias, context);
 }
+/** Mutation targets, including writable CTEs; row identities come from owning commands. */
+export function authorizationSqlWrites(
+  sql: string,
+  defaultSchema: string,
+): { schema: string; table: string }[] {
+  const writes: { schema: string; table: string }[] = [];
+  for (
+    const match of sql.matchAll(
+      /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:("\w+"|\w+)\s*\.\s*)?("\w+"|\w+)/gi,
+    )
+  ) {
+    // ON CONFLICT ... DO UPDATE SET belongs to the INSERT target.
+    if (/^UPDATE\s+SET\b/i.test(match[0])) continue;
+    const identifier = (value: string) =>
+      value.startsWith('"') ? value.slice(1, -1) : value.toLowerCase();
+    writes.push({
+      schema: match[1] ? identifier(match[1]) : defaultSchema,
+      table: identifier(match[2]),
+    });
+  }
+  return writes;
+}
+
 export function observeAuthorizationWrites(
   transaction: SqlExecutor,
   owner: OwnerAuthorizationCache,
   defaultSchema: string,
+  epoch?: number,
 ): SqlExecutor {
   if (contexts.get(transaction)?.owner === owner) return transaction;
-  const context: Context = { owner, reads: new Map(), grants: new Map() };
+  const context: Context = {
+    owner,
+    epoch,
+    reads: new Map(),
+    grants: new Map(),
+  };
   const observed: SqlExecutor = {
-    query(sql, params) {
+    async query<TRow extends Record<string, unknown>>(
+      sql: string,
+      params?: unknown[],
+    ) {
       const changes = context.changes;
       context.changes = undefined;
+      const rowChanges = context.rowChanges;
+      context.rowChanges = undefined;
+      const pending = new Map<
+        string,
+        (rows: Record<string, unknown>[]) => readonly string[]
+      >();
       const keys: string[] = [];
       // Maintenance/DDL can affect several tables or invoke opaque mutations.
       if (/^\s*(?:TRUNCATE|ALTER|DROP|MERGE|CALL|DO)\b/i.test(sql)) {
@@ -111,11 +185,19 @@ export function observeAuthorizationWrites(
       // Observe both direct mutations and writable CTEs. Unqualified tables
       // belong to this owner; manifest projections may change additional nodes.
       for (
-        const match of sql.matchAll(
-          /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(?:ONLY\s+)?(?:"?(\w+)"?\.)?"?(\w+)"?/gi,
-        )
+        const { schema, table } of authorizationSqlWrites(sql, defaultSchema)
       ) {
-        const schema = match[1] ?? defaultSchema, table = match[2];
+        const fallback = tableKey(schema, table);
+        const rows = rowChanges?.get(fallback);
+        if (rows !== undefined) {
+          if (typeof rows === "function") pending.set(fallback, rows);
+          else {
+            for (const id of rows) {
+              keys.push(JSON.stringify([schema, table, id]));
+            }
+          }
+          continue;
+        }
         if (
           table === "nodes" && changes &&
           !sql.includes("projection_manifest_inserted")
@@ -131,7 +213,30 @@ export function observeAuthorizationWrites(
       // Invalidate before issuing SQL, including failed/rolled-back mutations.
       // This also prevents a concurrent read in this command from reusing stale data.
       owner.invalidate(keys);
-      return transaction.query(sql, params);
+      // Returned write sets (e.g. scope cancellation) are unknown until SQL
+      // completes. Fence reuse while pending, then invalidate only those rows.
+      for (const key of pending.keys()) {
+        owner.pending.set(key, (owner.pending.get(key) ?? 0) + 1);
+      }
+      try {
+        const result = await transaction.query<TRow>(sql, params);
+        for (const [key, ids] of pending) {
+          const [schema, table] = JSON.parse(key) as [string, string];
+          owner.invalidate(
+            ids(result.rows).map((id) => JSON.stringify([schema, table, id])),
+          );
+        }
+        return result;
+      } catch (error) {
+        owner.invalidate([...pending.keys()]);
+        throw error;
+      } finally {
+        for (const key of pending.keys()) {
+          const count = owner.pending.get(key)! - 1;
+          if (count) owner.pending.set(key, count);
+          else owner.pending.delete(key);
+        }
+      }
     },
   };
   bindSqlTransactionAlias(observed, transaction);
@@ -166,9 +271,12 @@ export function cachedAuthorization<T>(
   const context = contexts.get(transaction);
   const entry = context?.grants.get(scope)?.get(key) ??
     context?.owner.grants.get(scope)?.get(key);
-  return entry && context!.owner.valid(entry.stamp)
-    ? entry.value as T
-    : undefined;
+  const valid = entry && context!.owner.valid(entry.stamp);
+  context?.owner.observe?.(
+    (scope as { cache?: string }).cache ?? "other",
+    !entry ? "absent" : valid ? "hit" : "stale",
+  );
+  return valid ? entry.value as T : undefined;
 }
 export function rememberAuthorization<T>(
   transaction: SqlExecutor,
@@ -193,4 +301,25 @@ export function rememberAuthorization<T>(
     if (context.owner.grants.size > 1024) context.owner.clear();
     shared.set(key, entry);
   });
+}
+
+/** Package-only diagnostic seam; observation grants no SQL or authorization authority. */
+export function observeAuthorizationCache(
+  transaction: SqlExecutor,
+  observer: (cache: string, result: string) => void,
+): () => void {
+  const owner = contexts.get(transaction)?.owner;
+  if (!owner) throw new Error("An owner command is required.");
+  const previous = owner.observe;
+  owner.observe = observer;
+  return () => {
+    owner.observe = previous;
+  };
+}
+export function reportAuthorizationCache(
+  transaction: SqlExecutor,
+  cache: string,
+  result: string,
+): void {
+  contexts.get(transaction)?.owner.observe?.(cache, result);
 }

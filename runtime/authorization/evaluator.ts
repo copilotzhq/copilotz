@@ -1,7 +1,9 @@
+import { ownerAttemptLive } from "./leases.ts";
 import {
   authorizationDependencyKeys,
   authorizationTableKey,
   memoAuthorizationRead,
+  reportAuthorizationCache,
 } from "./cache.ts";
 import { defineDatabaseDirectoryCommand } from "./directory-command.ts";
 import {
@@ -388,6 +390,7 @@ export function createOwnerEvaluator(
       ? Date.parse(authority.validity.expiresAt)
       : Infinity;
     const staffReads: Array<Record<string, unknown>> = [];
+    let evidenceRead = false;
     let active = true;
     let failed = false;
     const pending: Promise<unknown>[] = [];
@@ -428,16 +431,14 @@ export function createOwnerEvaluator(
     };
     try {
       if (!directory && authority.validity.kind === "attempt") {
-        const live = await command.transaction.query(
-          `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 AND lease_owner=$2 AND owner_epoch=$3::bigint AND status='leased' AND lease_expires_at>$4::timestamptz`,
-          [
-            authority.validity.attempt,
-            authority.validity.worker,
-            authority.validity.epoch,
+        if (
+          !await ownerAttemptLive(
+            command.transaction,
+            databaseSchema,
+            authority.validity,
             command.commandTime,
-          ],
-        );
-        if (!live.rows.length) authorizationRefused();
+          )
+        ) authorizationRefused();
       }
       if (!directory) await checkFlow(authority, intent, command);
       if (authority.flow) {
@@ -551,6 +552,7 @@ export function createOwnerEvaluator(
                   failed = true;
                   authorizationRefused();
                 }
+                evidenceRead = true;
                 return track(() =>
                   directory
                     ? directory.evidence.get(alias)
@@ -715,10 +717,20 @@ export function createOwnerEvaluator(
       };
       // Remote staff reads and verifier evidence have no local write fence.
       if (
-        !staffReads.length && !policy.evidence?.length &&
-        authority.validity.kind !== "attempt" && !directory
+        !staffReads.length && !evidenceRead &&
+        !directory
       ) {
         reuseDeadlines.set(decision, reusableUntil);
+      } else {
+        reportAuthorizationCache(
+          command.transaction,
+          "decision",
+          staffReads.length
+            ? "staff-read"
+            : evidenceRead
+            ? "evidence-read"
+            : "directory",
+        );
       }
       return decision;
     } catch (error) {

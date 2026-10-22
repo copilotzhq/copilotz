@@ -1,3 +1,11 @@
+import {
+  rememberOwnerDelivery,
+  writeOwnerDeliveries,
+} from "../authorization/leases.ts";
+import {
+  authorizationSqlWrites,
+  hintAuthorizationRows,
+} from "../authorization/cache.ts";
 import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { ActionError, standardActionError } from "../actions/errors.ts";
@@ -87,6 +95,7 @@ type DeliveryRow = Record<string, unknown> & {
   attempts: number;
   max_attempts: number;
   available_at: string | Date;
+  owner_epoch: number | string;
   lease_owner: string | null;
   lease_expires_at: string | Date | null;
   last_error: unknown;
@@ -993,7 +1002,14 @@ export function createEventStore(
       if (indexOperationEventSql) {
         ctes.push(indexOperationEventSql(indexInput, param));
       }
-      ctes.push(...statement?.effects("inserted_event") ?? []);
+      const effects = statement?.effects("inserted_event") ?? [];
+      ctes.push(...effects);
+      // A custom mutation statement can write beyond this event's owned rows.
+      // Its mutations retain the conservative fallback for those tables.
+      const additionalWrites = authorizationSqlWrites(
+        [...statement?.ctes ?? [], ...effects].join(" "),
+        databaseSchema,
+      );
       // Delivery rows come back as JSON because a statement returns one row
       // shape. With a statement, the row exists even when no event was
       // inserted, to carry its report.
@@ -1004,6 +1020,22 @@ export function createEventStore(
           collection: mutation.collectionChange.collection,
           id: mutation.collectionChange.id,
         }]);
+      }
+      if (!additionalWrites.some(({ table }) => table === "event_deliveries")) {
+        hintAuthorizationRows(
+          executor,
+          databaseSchema,
+          "event_deliveries",
+          deliveryRows.map((row) => row.id),
+        );
+      }
+      if (
+        !additionalWrites.some(({ table }) => table === "copilotz_operations")
+      ) {
+        hintAuthorizationRows(executor, databaseSchema, "copilotz_operations", [
+          settlementScopeId,
+          ...deliveryRows.map((row) => row.scopeId),
+        ]);
       }
       const inserted = await executor.query<
         EventRow & {
@@ -1068,8 +1100,12 @@ export function createEventStore(
           createdAt: event.createdAt,
         });
       }
+      const retainedDeliveries = parseJsonRows(deliveryJson) as DeliveryRow[];
+      for (const row of retainedDeliveries) {
+        rememberOwnerDelivery(executor, databaseSchema, row);
+      }
       const deliveryById = new Map(
-        (parseJsonRows(deliveryJson) as DeliveryRow[]).map((row) => [
+        retainedDeliveries.map((row) => [
           String(row.id),
           row,
         ]),
@@ -1321,7 +1357,10 @@ export function createEventStore(
       "delivery.claim",
       claim,
       async (_input, context) => {
-        const result = await context.transaction.query<DeliveryRow>(
+        const result = await writeOwnerDeliveries<DeliveryRow>(
+          context.transaction,
+          databaseSchema,
+          [claim.id],
           `WITH claimed AS (UPDATE ${tables.event_deliveries}
        SET status = 'leased', attempts = attempts + 1, owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'),
            lease_owner = $2,
@@ -1436,7 +1475,10 @@ export function createEventStore(
           ? "status = 'leased'"
           : "status IN ('pending', 'leased', 'retry_wait')";
         return await settle(async (transaction) => {
-          const result = await transaction.query<DeliveryRow>(
+          const result = await writeOwnerDeliveries<DeliveryRow>(
+            transaction,
+            databaseSchema,
+            [id],
             `UPDATE ${tables.event_deliveries}
          SET status = $2, lease_owner = NULL, lease_expires_at = NULL,
              updated_at = $3::timestamptz, settled_at = $3::timestamptz
@@ -1628,16 +1670,19 @@ export function createEventStore(
               if (!(error instanceof ActionOwnershipLost)) throw error;
             }
           }
-          const result = await context.transaction.query<
-            { id: string; owner: string }
+          const result = await writeOwnerDeliveries<
+            DeliveryRow & { owner: string }
           >(
+            context.transaction,
+            databaseSchema,
+            live.map((a) => a.id),
             `UPDATE ${tables.event_deliveries} AS delivery
            SET lease_expires_at=$4::timestamptz + requested.lease_ms * INTERVAL '1 millisecond', updated_at=$4::timestamptz
            FROM unnest($1::text[],$2::text[],$3::bigint[]) AS requested(id,owner,lease_ms)
            WHERE delivery.id=requested.id AND delivery.lease_owner=requested.owner
              AND delivery.status='leased' AND delivery.lease_expires_at > $4::timestamptz
              AND delivery.owner_epoch=(SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')
-           RETURNING delivery.id,delivery.lease_owner AS owner`,
+           RETURNING delivery.*,delivery.lease_owner AS owner`,
             [
               live.map((a) => a.id),
               live.map((a) => a.owner),
@@ -1652,7 +1697,7 @@ export function createEventStore(
           return result;
         },
       );
-      return result.rows;
+      return result.rows.map(({ id, owner }) => ({ id, owner }));
     },
     readRemoteClaim: (id, owner, consume = false) =>
       readAdmissionClaim(id, owner, true, consume),
@@ -1697,7 +1742,10 @@ export function createEventStore(
           const retryable = failure.retryable ??
             errorRetryability(failure.error) ?? true;
           return await settle(async (transaction) => {
-            const result = await transaction.query<DeliveryRow>(
+            const result = await writeOwnerDeliveries<DeliveryRow>(
+              transaction,
+              databaseSchema,
+              [failure.id],
               `UPDATE ${tables.event_deliveries}
          SET status = CASE WHEN $5 = FALSE OR attempts >= max_attempts
                            THEN 'dead_letter' ELSE 'retry_wait' END,
@@ -1749,7 +1797,10 @@ export function createEventStore(
             databaseSchema,
           );
           return await settle(async (transaction) => {
-            const result = await transaction.query<DeliveryRow>(
+            const result = await writeOwnerDeliveries<DeliveryRow>(
+              transaction,
+              databaseSchema,
+              [row.id],
               `UPDATE ${tables.event_deliveries}
              SET status = 'dead_letter', lease_owner = NULL, lease_expires_at = NULL,
                last_error = $2::jsonb, updated_at = $3::timestamptz, settled_at = $3::timestamptz
@@ -1889,14 +1940,17 @@ export function createEventStore(
         "delivery.cancelScope",
         { namespace, settlementScopeId, reason },
         async (_input, { transaction, commandTime }) => {
-          const cancelled = await transaction.query<{ id: string }>(
+          const cancelled = await writeOwnerDeliveries<DeliveryRow>(
+            transaction,
+            databaseSchema,
+            undefined,
             `UPDATE ${tables.event_deliveries} AS delivery
            SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL,
              last_error = $3::jsonb, updated_at = $4::timestamptz, settled_at = $4::timestamptz
            FROM ${tables.events} AS event
            WHERE delivery.event_id = event.id AND event.namespace = $1
              AND delivery.settlement_scope_id = $2 AND delivery.status IN ('pending','leased','retry_wait')
-           RETURNING delivery.id`,
+           RETURNING delivery.*`,
             [
               namespace,
               settlementScopeId,
@@ -1943,6 +1997,12 @@ export function createEventStore(
         "delivery.compact",
         { cutoff, limit },
         async (_input, { transaction }) => {
+          hintAuthorizationRows(
+            transaction,
+            databaseSchema,
+            "event_deliveries",
+            (rows) => rows.map((row) => String(row.id)),
+          );
           const deliveries = await transaction.query<{ id: string }>(
             `WITH candidates AS (
              SELECT delivery.id

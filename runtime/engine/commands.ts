@@ -571,6 +571,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
             tx,
             authorizationCache,
             options.schema,
+            binding.epoch,
           );
         }
         const callbacks: Array<() => void | Promise<void>> = [];

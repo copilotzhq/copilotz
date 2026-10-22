@@ -70,7 +70,7 @@ export function createDecisionReuse(schema: string) {
         intent.resource,
         intent.operation,
         phase ?? null,
-        this.dependencies(authority, intent),
+        this.targetDependencies(authority, intent),
         // A disclosure is always bound to the actual result/current version.
         phase === "result"
           ? [
@@ -82,7 +82,7 @@ export function createDecisionReuse(schema: string) {
         authority.flow ? [authority, intent] : null,
       ]);
     },
-    dependencies(
+    targetDependencies(
       authority: AuthenticatedAuthority,
       intent: AuthorizationIntent,
     ): AuthorityDependency[] {
@@ -177,6 +177,7 @@ export function createDecisionReuse(schema: string) {
       key: string,
       policy: OwnerPolicy,
       decision: AuthorizationDecision,
+      intent: AuthorizationIntent,
       until: number,
       sessionExpiresAt: string | undefined,
       observations: {
@@ -214,7 +215,12 @@ export function createDecisionReuse(schema: string) {
           lifetime: observations.lifetime,
         },
         [
-          ...authorizationDependencyKeys(schema, decision.dependencies),
+          // Result membership/version invalidates a cached query, but is not
+          // itself a policy fact that should reauthorize an attached reader.
+          ...authorizationDependencyKeys(schema, [
+            ...decision.dependencies,
+            ...this.targetDependencies(decision.authority, intent),
+          ]),
           ...(decision.authority.flow
             ? [authorizationTableKey(schema, "owner_receipts")]
             : []),

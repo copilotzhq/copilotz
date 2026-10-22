@@ -1177,6 +1177,12 @@ authority, never the previous request's authority. Action capture grants remain
 isolated by run: sharing read decisions does not transfer capture receipts or
 broaden an Action's retained authority.
 
+Query/result record and collection-set stamps belong to the decision cache, not
+to the authorization dependencies retained by live readers. Ordinary data
+commits update subscription windows without reauthorizing each reader. A policy
+that actually reads that record or collection still tracks it as an
+authorization fact, and changes trigger notice reauthorization.
+
 The decision retains all policy-read dependencies and the session/flow fences.
 Attempt validity uses the owner's current lease facts and command time. Policy
 replacement or revision changes and owner restart invalidate reuse. Decisions

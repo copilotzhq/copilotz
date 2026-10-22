@@ -405,10 +405,9 @@ export function createOwnerEvaluator(
         return saved.decision;
       }
     }
-    const dependencies: AuthorityDependency[] = [
-      ...authority.dependencies,
-      ...reuse.dependencies(authority, intent),
-    ];
+    // These dependencies drive live authorization notices as well as grants.
+    // Query/result cache stamps must not subscribe readers to ordinary data writes.
+    const dependencies: AuthorityDependency[] = [...authority.dependencies];
     let reusableUntil = authority.validity.kind === "credential"
       ? Date.parse(authority.validity.expiresAt)
       : Infinity;
@@ -779,6 +778,7 @@ export function createOwnerEvaluator(
             reuseKey,
             policy,
             decision,
+            intent,
             reusableUntil,
             sessionExpiresAt,
             observations,

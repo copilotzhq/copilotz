@@ -46,3 +46,27 @@ Deno.test("Core metadata extraction separates app fields but preserves strict or
     ]
   ) assertEquals(coreToolActionMetadata({ ...metadata, ...patch }), null);
 });
+
+Deno.test("Tool visibility metadata preserves the initiator and rejects malformed grants", () => {
+  const visibility = {
+    kind: "tool" as const,
+    policy: "public_status" as const,
+    requesterId: "agent-participant",
+    initiatorId: "human",
+  };
+  const metadata = defineCoreToolActionMetadata({
+    ...origin,
+    responseVisibility: visibility,
+    outputVisibility: visibility,
+  });
+  assertEquals(coreToolActionOrigin(metadata)?.outputVisibility, visibility);
+  for (const initiatorId of ["", null, 42]) {
+    assertEquals(
+      coreToolActionMetadata({
+        ...origin,
+        responseVisibility: { ...visibility, initiatorId },
+      }),
+      null,
+    );
+  }
+});

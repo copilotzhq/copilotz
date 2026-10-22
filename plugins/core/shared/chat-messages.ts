@@ -85,7 +85,7 @@ export type ChatActivity = Readonly<{
  * A referenced JSON result while it loads, or why it cannot show:
  * `restricted` when the tool's visibility lets this viewer see that it ran
  * (and its input) but not its output (`public_status` for anyone but the
- * requesting agent).
+ * requesting agent or initiating human).
  */
 export type ToolResultStatus =
   | "loading"
@@ -474,7 +474,7 @@ export function projectMessages(
   options: Readonly<{
     /**
      * The viewer's participant ids: a tool result whose visibility shares
-     * only its status shows its output to its requester alone.
+     * only its status shows its output to its requester or authorized initiator.
      */
     viewerIds?: readonly string[];
   }> = {},

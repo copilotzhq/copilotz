@@ -16,7 +16,7 @@ import type { FacadeContext } from "./context.ts";
 import { authenticateHttpRequest } from "./authentication.ts";
 import { createHttpOperations } from "./operations.ts";
 import { applicationOutputsMultipartResponse } from "./multipart.ts";
-import { createHttpReads } from "./reads.ts";
+import { authorizeHttpAsset, createHttpReads } from "./reads.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
 import type {
   HttpAdapter,
@@ -317,6 +317,7 @@ export function createServerFacadeFetchHandler(
                 context.serverScope.authority!,
                 id,
               );
+              await authorizeHttpAsset(application, context.serverScope, id);
               const content = await runtime.content.assets.read(
                 context.namespace!,
                 id,
@@ -325,6 +326,7 @@ export function createServerFacadeFetchHandler(
                 context.serverScope.authority!,
                 id,
               );
+              await authorizeHttpAsset(application, context.serverScope, id);
               return new Response(content.bytes.slice(), {
                 headers: {
                   "content-type": content.asset.mediaType,
@@ -546,12 +548,22 @@ export function createServerFacadeFetchHandler(
           context.serverScope.authority!,
           context.serverParams.id,
         );
+        await authorizeHttpAsset(
+          application,
+          context.serverScope,
+          context.serverParams.id,
+        );
         const content = await physical.content.assets.read(
           context.namespace!,
           context.serverParams.id,
         );
         await physical.authorization.asset(
           context.serverScope.authority!,
+          context.serverParams.id,
+        );
+        await authorizeHttpAsset(
+          application,
+          context.serverScope,
           context.serverParams.id,
         );
         return {

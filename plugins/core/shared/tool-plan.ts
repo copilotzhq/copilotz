@@ -71,6 +71,9 @@ export type CoreToolPlanBase = Readonly<{
   agentId: string;
   agentParticipantId: string;
   initiatorParticipantId: string;
+  /** Human initiator captured when this plan is created; never inferred for old plans. */
+  initiatorId?: string;
+  outputVisibilityVersion?: 1;
   originMessageId?: string;
   availableToolIds: readonly string[];
   responseVisibility: EventVisibility;
@@ -208,6 +211,16 @@ export function toolActionMetadataAt(
     ...(plan.originMessageId ? { originMessageId: plan.originMessageId } : {}),
     availableToolIds: plan.availableToolIds,
     responseVisibility: plan.responseVisibility,
+    ...(plan.outputVisibilityVersion === 1
+      ? {
+        outputVisibility: toolStageVisibility(
+          plan,
+          call,
+          planIndex,
+          stageIndex,
+        ),
+      }
+      : {}),
     parentLlmActionRunId: plan.parentLlmActionRunId,
     ...(plan.agentTurn ? { agentTurn: plan.agentTurn } : {}),
     ...(plan.ask ? { ask: plan.ask } : {}),
@@ -462,6 +475,16 @@ async function stageResult(
   );
   const operationKey =
     `tool-plan:${planId}:${branchIndex}:${stageIndex}:result`;
+  const plan = await context.collections.toolPlan?.get({ id: planId });
+  if (!plan) throw new Error("Tool plan was not found.");
+  const base = baseFrom(plan);
+  const loaded = await loadPlan(context, base);
+  const visibility = toolStageVisibility(
+    base,
+    loaded.calls[branchIndex],
+    branchIndex,
+    stageIndex,
+  );
   await retryCoreMutation(() =>
     collection.create({
       id,
@@ -470,7 +493,7 @@ async function stageResult(
       stageIndex,
       content: terminalContent(terminal),
       outputContent: terminalOutputContent(terminal),
-      metadata: {},
+      metadata: base.outputVisibilityVersion === 1 ? { visibility } : {},
     }, { operationKey, identity: { deduplicationId: operationKey } })
   );
   // A deterministic id makes post-create/pre-settle recovery idempotent. It
@@ -1040,7 +1063,9 @@ export async function projectAndAdvanceToolPlan(
         stageIndex: metadata.stageIndex,
         content: terminalContent(terminal),
         outputContent: terminalOutputContent(terminal),
-        metadata: {},
+        metadata: metadata.outputVisibility
+          ? { visibility: metadata.outputVisibility }
+          : {},
       }, { operationKey: resultKey, identity: { deduplicationId: resultKey } });
       await branches.commands.settleStage({
         id: targetBranch.id,
@@ -1273,15 +1298,19 @@ function intersectVisibility(
   base: EventVisibility,
   policy: unknown,
   requester: string,
+  initiatorId?: string,
 ): EventVisibility {
-  const tool = configuredVisibility(policy, requester);
+  const tool = {
+    ...configuredVisibility(policy, requester),
+    ...(initiatorId ? { initiatorId } : {}),
+  };
   if (base.kind === "internal") return { kind: "internal" };
   if (base.kind === "public") return tool;
   if (base.kind === "participants") {
     return base.participantIds.includes(requester)
       ? (tool.policy === "public"
         ? base
-        : { kind: "tool", policy: "requester_only", requesterId: requester })
+        : { ...tool, policy: "requester_only" })
       : { kind: "internal" };
   }
   if (base.requesterId !== requester) return { kind: "internal" };
@@ -1294,7 +1323,27 @@ function intersectVisibility(
     kind: "tool",
     policy: ranks[base.policy] < ranks[tool.policy] ? base.policy : tool.policy,
     requesterId: requester,
+    ...(initiatorId ? { initiatorId } : {}),
   };
+}
+export function toolStageVisibility(
+  base: CoreToolPlanBase,
+  call: LlmToolCall,
+  index: number,
+  lastStage: number,
+): EventVisibility {
+  let visibility = base.responseVisibility;
+  for (let stageIndex = 0; stageIndex <= lastStage; stageIndex++) {
+    if (stages(call)[stageIndex]?.type === "tool") {
+      visibility = intersectVisibility(
+        visibility,
+        base.stageHistoryVisibility[index][stageIndex],
+        base.agentParticipantId,
+        base.initiatorId,
+      );
+    }
+  }
+  return visibility;
 }
 function resultContent(
   terminal: ToolTerminal,
@@ -1374,17 +1423,12 @@ export async function projectDurableToolPlan(
       text(current?.finalResultId, "Final stage result ID"),
       { planId: base.planId, branchIndex: index },
     );
-    let visibility = base.responseVisibility;
-    for (let stageIndex = 0; stageIndex <= result.stageIndex; stageIndex++) {
-      const stage = stages(call)[stageIndex];
-      if (stage?.type === "tool") {
-        visibility = intersectVisibility(
-          visibility,
-          base.stageHistoryVisibility[index][stageIndex],
-          base.agentParticipantId,
-        );
-      }
-    }
+    const visibility = toolStageVisibility(
+      base,
+      call,
+      index,
+      result.stageIndex,
+    );
     const root = base.rootTools[index];
     if (!root || root.alias !== call.action) {
       throw new Error("Tool-plan root presentation snapshot is invalid.");

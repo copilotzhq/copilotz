@@ -137,13 +137,28 @@ export const projectTextResultProcessor: Processor<
     if (typeof createMessage !== "function") {
       throw new Error("Core requires the createThreadMessage Action.");
     }
+    const initiator = toolCalls.length
+      ? await loadParticipant(context, metadata.initiatorParticipantId)
+      : undefined;
+    const initiatorId = initiator?.participantType === "human"
+      ? initiator.id
+      : undefined;
+    const callVisibility =
+      toolCalls.length && metadata.responseVisibility.kind === "public"
+        ? {
+          kind: "tool" as const,
+          policy: "public" as const,
+          requesterId: metadata.agentParticipantId,
+          ...(initiatorId ? { initiatorId } : {}),
+        }
+        : metadata.responseVisibility;
     const outputMessage = await createMessage({
       id: planMessageId,
       threadId: metadata.threadId,
       sender: participant,
       recipientIds: outputAsk ? [outputAsk.askingParticipantId] : [],
       content: output.content,
-      visibility: structuredClone(metadata.responseVisibility),
+      visibility: structuredClone(callVisibility),
       metadata: scopedMessageMetadata,
       ...(metadata.agentTurn ? { historyScopeId: metadata.agentTurn.id } : {}),
     }, {
@@ -153,6 +168,7 @@ export const projectTextResultProcessor: Processor<
     if (!toolCalls.length || !planId) return;
 
     const plan: CoreToolPlanBase = {
+      outputVisibilityVersion: 1,
       planId,
       planMessageId: String(outputMessage.id),
       planSize: toolCalls.length,
@@ -161,6 +177,7 @@ export const projectTextResultProcessor: Processor<
       agentId: metadata.agentId,
       agentParticipantId: metadata.agentParticipantId,
       initiatorParticipantId: metadata.initiatorParticipantId,
+      ...(initiatorId ? { initiatorId } : {}),
       ...(metadata.originMessageId
         ? { originMessageId: metadata.originMessageId }
         : {}),

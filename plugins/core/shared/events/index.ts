@@ -6,6 +6,7 @@ export type EventVisibility =
     kind: "tool";
     policy: "requester_only" | "public_status" | "public";
     requesterId: string;
+    initiatorId?: string;
   }
   | { kind: "internal" };
 

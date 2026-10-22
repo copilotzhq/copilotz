@@ -1,4 +1,10 @@
 import {
+  authorizeCoreActionResult,
+  authorizeCoreAsset,
+  coreVisibilityReads,
+  projectCoreOutput,
+} from "../../../shared/tool-visibility.ts";
+import {
   coreThreadObservationKey,
   coreThreadObservationMetadata,
 } from "@copilotz/copilotz/core";
@@ -86,6 +92,10 @@ async function project(
 /** Core conversation routes use ordinary authorized participant reads. */
 export function createCoreHttpAdapter(): HttpAdapter {
   return createHttpAdapter({
+    reads: coreVisibilityReads,
+    authorizeAsset: authorizeCoreAsset,
+    authorizeActionResult: authorizeCoreActionResult,
+    projectOutput: projectCoreOutput,
     collections: ["thread", "participant", "message"],
     observations: {
       thread: {

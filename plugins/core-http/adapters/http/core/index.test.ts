@@ -436,6 +436,117 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         ),
       CopilotzHttpError,
     );
+    await records.thread.commands.ensureMembership({
+      id: result.threadId,
+      participantIds: ["foreign-human"],
+    });
+    await records.message.update({
+      id: "status-result",
+      set: {
+        visibility: {
+          kind: "tool",
+          policy: "public_status",
+          requesterId: "support",
+          initiatorId: "person",
+        },
+      },
+    });
+    const initiated = (await core.threads.messages(result.threadId)).data.find(
+      (message) => message.id === "status-result",
+    )!;
+    assertEquals(initiated.visibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "support",
+      initiatorId: "person",
+    });
+    assertEquals(
+      await (await core.messages.asset(
+        result.threadId,
+        initiated.id,
+        page.data[1].content[0].assetId,
+      )).text(),
+      "Hello 🌎",
+    );
+    const toolAssetUrl =
+      `https://test/api/threads/${result.threadId}/messages/status-result/assets/${
+        page.data[1].content[0].assetId
+      }`;
+    assertEquals(
+      (await handler(
+        new Request(toolAssetUrl, { headers: { "x-user": "foreign-human" } }),
+      )).status,
+      404,
+    );
+    await records.message.create({
+      id: "tool-plan-visible",
+      threadId: result.threadId,
+      senderId: support[0].id,
+      recipientIds: [],
+      content: [],
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    });
+    await records.message.update({
+      id: "status-result",
+      set: {
+        visibility: {
+          kind: "tool",
+          policy: "requester_only",
+          requesterId: support[0].id,
+          initiatorId: "person",
+        },
+        metadata: {
+          toolStatus: "cancelled",
+          toolId: "test-tool",
+          toolInvocation: { id: "call", args: "SECRET" },
+          copilotzWorkflow: { sourceMessageId: "tool-plan-visible" },
+        },
+      },
+    });
+    assertEquals((await handler(new Request(toolAssetUrl))).status, 404);
+    for (const viewer of ["person", "foreign-human"]) {
+      const response = await handler(
+        new Request(`https://test/api/threads/${result.threadId}/messages`, {
+          headers: { "x-user": viewer },
+        }),
+      );
+      const body = await response.json();
+      const terminal = body.data.find((message: { id: string }) =>
+        message.id === "status-result"
+      );
+      assertEquals(terminal.metadata.toolStatus, "cancelled");
+      assertEquals(terminal.content, []);
+      assertEquals(terminal.visibility.policy, "requester_only");
+      assertEquals(JSON.stringify(terminal).includes("SECRET"), false);
+      const direct = await handler(
+        new Request("https://test/api/collections/message/status-result", {
+          headers: { "x-user": viewer },
+        }),
+      );
+      assertEquals(direct.status, 200);
+      assertEquals((await direct.json()).data.content, []);
+      const forgedHistory = await handler(
+        new Request("https://test/api/collections/message/queries/history", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-user": viewer },
+          body: JSON.stringify({
+            threadId: result.threadId,
+            messageId: "status-result",
+            viewerParticipantIds: [support[0].id],
+            content: true,
+          }),
+        }),
+      );
+      assertEquals(forgedHistory.status, 200);
+      assertEquals((await forgedHistory.json()).data[0].content, []);
+    }
+    // Restore the foreign participant's original isolation for the admission tests.
+    const members = (await records.thread.get({ id: result.threadId }))!
+      .participantIds as string[];
+    await records.thread.update({
+      id: result.threadId,
+      set: { participantIds: members.filter((id) => id !== "foreign-human") },
+    });
     // Membership cannot invite a human from another thread, or partially enroll
     // valid selections before rejecting a forged selection.
     const answer = page.data[1];
@@ -559,7 +670,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       () => client.operations.result(rejected.operationId),
       CopilotzHttpError,
     );
-    assertEquals((await core.threads.messages(result.threadId)).data.length, 5);
+    assertEquals((await core.threads.messages(result.threadId)).data.length, 6);
     assertEquals(
       ((await records.thread.get({ id: result.threadId }))
         ?.participantIds as string[]).includes("foreign-human"),

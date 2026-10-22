@@ -1,3 +1,4 @@
+import { createHttpReads } from "./reads.ts";
 import { credentialHeaders } from "./session-cookie.ts";
 import { facadeIngress } from "./context.ts";
 import { httpIngressMetadata } from "./adapter-metadata.ts";
@@ -135,6 +136,27 @@ export async function operationResult(
         authority,
         operationId,
       );
+    const domainAdapters = Object.values(
+      application.plugins?.adapters.http ?? {},
+    ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
+    let request: Record<string, unknown> | undefined;
+    if (
+      domainAdapters.some((adapter) =>
+        adapter.authorizeActionResult || adapter.reads
+      )
+    ) {
+      await authorize();
+      request = (await runtime.events.resolve(
+        context.namespace ?? application.config.namespace!,
+        operationId,
+      ))?.data as Record<string, unknown> | undefined;
+      for (const adapter of domainAdapters) {
+        adapter.authorizeActionResult?.(
+          (request?.actionMetadata ?? {}) as Record<string, unknown>,
+          context.serverScope,
+        );
+      }
+    }
     const result = await recordedOperationResult(
       application,
       context,
@@ -159,7 +181,17 @@ export async function operationResult(
           ...credentialHeaders(effects, context.sessionCookie),
         },
       }),
-      data: result.value,
+      data: result.kind === "collection" && !result.pending &&
+          request?.operation !== "delete" &&
+          typeof request?.collectionAlias === "string" &&
+          domainAdapters.some((adapter) => adapter.reads)
+        ? await (await createHttpReads(application, context.serverScope, {
+          context,
+        })).get(
+          request.collectionAlias,
+          String((result.value as { id: string }).id),
+        )
+        : result.value,
       ...(!result.pending
         ? {
           seq: await runtime.operations.resultSequence(

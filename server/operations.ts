@@ -1,3 +1,4 @@
+import { createHttpActionOrigins } from "./action-origins.ts";
 import { createEphemeralEvent } from "../runtime/events/index.ts";
 import { watchSelection } from "./selection-watch.ts";
 
@@ -580,6 +581,7 @@ export async function createHttpOperations(
           } as unknown as ApplicationOutput,
         );
       };
+      const actionOrigins = createHttpActionOrigins(runtime, namespace);
       const attach = async (id: string) => {
         if (abort.signal.aborted || attachments.has(id) || attaching.has(id)) {
           return;
@@ -600,8 +602,28 @@ export async function createHttpOperations(
           draining.add(attachment);
           void attachment.drained.then(() => draining.delete(attachment));
           const pump = (async () => {
-            for await (const output of attachment.outputs) {
+            for await (const rawOutput of attachment.outputs) {
               if (abort.signal.aborted) break;
+              let output: ApplicationOutput | null = rawOutput;
+              for (const adapter of adapters) {
+                if (output && adapter.projectOutput) {
+                  output = await adapter.projectOutput(
+                    output,
+                    scope,
+                    read,
+                    (runId) => actionOrigins(id, runId),
+                  );
+                }
+              }
+              if (!output) {
+                if (rawOutput.type === "stream.output") {
+                  const stream =
+                    rawOutput as import("../runtime/streams/types.ts").StreamOutput;
+                  await stream.payload.cancel("output_not_visible");
+                  void stream.terminal.catch(() => undefined);
+                }
+                continue;
+              }
               const attributed = {
                 ...output,
                 operationId: id,

@@ -98,12 +98,30 @@ export async function completeOwnerDeadline(
   deadline: OwnerDeadline,
   owner = "schema",
 ): Promise<void> {
+  await completeOwnerDeadlines(transaction, schema, [deadline], owner);
+}
+
+/** One wake consumes its selected revisions in one statement, without erasing re-arms. */
+export async function completeOwnerDeadlines(
+  transaction: SqlExecutor,
+  schema: string,
+  deadlines: readonly OwnerDeadline[],
+  owner = "schema",
+): Promise<void> {
   assertSchemaCommandTransaction(transaction, schema);
+  if (!deadlines.length) return;
   invalidateOwnerAlarm(transaction, schema);
   await transaction.query(
-    `DELETE FROM ${createCoreTableNames(schema).owner_deadlines}
-     WHERE owner=$1 AND source=$2 AND key=$3 AND revision=$4::bigint`,
-    [owner, deadline.source, deadline.key, deadline.revision],
+    `DELETE FROM ${createCoreTableNames(schema).owner_deadlines} AS deadline
+     USING unnest($2::text[],$3::text[],$4::bigint[]) AS selected(source,key,revision)
+     WHERE deadline.owner=$1 AND deadline.source=selected.source
+       AND deadline.key=selected.key AND deadline.revision=selected.revision`,
+    [
+      owner,
+      deadlines.map((d) => d.source),
+      deadlines.map((d) => d.key),
+      deadlines.map((d) => d.revision),
+    ],
   );
 }
 

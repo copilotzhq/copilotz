@@ -7,11 +7,7 @@ import {
 import { canonicalJson as encodeCanonicalJson } from "../data-only-json.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
-import {
-  invalidateOwnerAlarm,
-  reconciliationAlarmKey,
-  writeOwnerDeadline,
-} from "../engine/alarms.ts";
+import { invalidateOwnerAlarm, writeOwnerDeadline } from "../engine/alarms.ts";
 import {
   assertSchemaCommandTransaction,
   bindSchemaOwner,
@@ -674,7 +670,25 @@ export function createEventStore(
     databaseSchema,
     acquireOwner,
   );
-  const syncDeliveryAlarms = async (
+  // Consume UPDATE ... RETURNING when called from a delivery transition: sibling
+  // CTEs cannot see the updated table through PostgreSQL's statement snapshot.
+  const deliveryAlarmCtes = (selection: string) =>
+    `alarm_deliveries AS MATERIALIZED (${selection}),
+      alarm_due AS (
+        SELECT d.id,e.namespace,
+          CASE WHEN d.status='leased' THEN d.lease_expires_at ELSE d.available_at END AS due_at
+        FROM alarm_deliveries d JOIN ${tables.events} e ON e.id=d.event_id
+        WHERE (d.status IN ('pending','retry_wait') AND d.attempts<d.max_attempts)
+          OR (d.status='leased' AND d.lease_expires_at IS NOT NULL)
+      ), alarm_removed AS (
+        DELETE FROM ${tables.owner_deadlines} WHERE owner='schema' AND source='deliveries'
+          AND key IN (SELECT id FROM alarm_deliveries) AND key NOT IN (SELECT id FROM alarm_due)
+      ), alarm_saved AS (
+        INSERT INTO ${tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
+        SELECT 'schema','deliveries',id,namespace,due_at,jsonb_build_object('deliveryId',id) FROM alarm_due
+        ON CONFLICT (owner,source,key) DO UPDATE SET due_at=EXCLUDED.due_at,namespace=EXCLUDED.namespace,payload=EXCLUDED.payload,revision=EXCLUDED.revision
+      )`;
+  const deliveryAlarmsChanged = (
     transaction: SqlExecutor,
     ids: readonly string[],
   ) => {
@@ -683,21 +697,41 @@ export function createEventStore(
     afterSqlCommit(transaction, () => {
       for (const id of ids) unstartedClaims.delete(id);
     });
+  };
+  const syncDeliveryAlarms = async (
+    transaction: SqlExecutor,
+    ids: readonly string[],
+    settled?: EventDelivery,
+  ) => {
+    if (!ids.length) return;
+    deliveryAlarmsChanged(transaction, ids);
+    const reconcile = settled && options.settleActionOwners &&
+      ["succeeded", "cancelled", "dead_letter"].includes(settled.status);
     await transaction.query(
-      `WITH due AS (
-        SELECT d.id,e.namespace,
-          CASE WHEN d.status='leased' THEN d.lease_expires_at ELSE d.available_at END AS due_at
-        FROM ${tables.event_deliveries} d JOIN ${tables.events} e ON e.id=d.event_id
-        WHERE d.id=ANY($1::text[]) AND ((d.status IN ('pending','retry_wait') AND d.attempts<d.max_attempts)
-          OR (d.status='leased' AND d.lease_expires_at IS NOT NULL))
-      ), removed AS (
-        DELETE FROM ${tables.owner_deadlines} WHERE owner='schema' AND source='deliveries'
-          AND key=ANY($1::text[]) AND key NOT IN (SELECT id FROM due)
-      )
-      INSERT INTO ${tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
-      SELECT 'schema','deliveries',id,namespace,due_at,jsonb_build_object('deliveryId',id) FROM due
-      ON CONFLICT (owner,source,key) DO UPDATE SET due_at=EXCLUDED.due_at,namespace=EXCLUDED.namespace,payload=EXCLUDED.payload,revision=EXCLUDED.revision`,
-      [ids],
+      `WITH ${
+        deliveryAlarmCtes(
+          `SELECT * FROM ${tables.event_deliveries} WHERE id=ANY($1::text[])`,
+        )
+      }
+      ${
+        reconcile
+          ? `INSERT INTO ${tables.owner_deadlines} (owner,source,key,namespace,due_at,payload)
+        SELECT 'schema','reconciliation',
+          array_to_json(ARRAY['reconciliation','schema','operation',e.namespace,$2::text])::text,
+          e.namespace,$3::timestamptz,jsonb_build_object('operationId',$2::text)
+        FROM ${tables.events} e WHERE e.id=$4
+        ON CONFLICT (owner,source,key) DO UPDATE SET namespace=EXCLUDED.namespace,
+          due_at=EXCLUDED.due_at,payload=EXCLUDED.payload,revision=EXCLUDED.revision`
+          : "SELECT 1"
+      }`,
+      reconcile
+        ? [
+          ids,
+          settled.settlementScopeId,
+          schemaCommandContext(transaction, databaseSchema).commandTime,
+          settled.eventId,
+        ]
+        : [ids],
     );
   };
   const runCommand = command;
@@ -1279,7 +1313,7 @@ export function createEventStore(
       claim,
       async (_input, context) => {
         const result = await context.transaction.query<DeliveryRow>(
-          `UPDATE ${tables.event_deliveries}
+          `WITH claimed AS (UPDATE ${tables.event_deliveries}
        SET status = 'leased', attempts = attempts + 1, owner_epoch = (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema'),
            lease_owner = $2,
            lease_expires_at = CASE WHEN $3::bigint IS NULL THEN NULL ELSE $4::timestamptz + ($3 * INTERVAL '1 millisecond') END,
@@ -1289,10 +1323,11 @@ export function createEventStore(
            (status IN ('pending', 'retry_wait') AND available_at <= $4::timestamptz)
            OR (status = 'leased' AND (lease_expires_at <= $4::timestamptz OR owner_epoch < (SELECT epoch FROM ${tables.owner_epochs} WHERE owner='schema')))
          )
-       RETURNING *`,
+       RETURNING *), ${deliveryAlarmCtes("SELECT * FROM claimed")}
+       SELECT * FROM claimed`,
           [...params, context.commandTime, context.caller.epoch],
         );
-        await syncDeliveryAlarms(
+        deliveryAlarmsChanged(
           context.transaction,
           result.rows.map((row) => row.id),
         );
@@ -1329,7 +1364,11 @@ export function createEventStore(
             handler(command, context.transaction, async (update) => {
               const settled = await update(context.transaction);
               if (settled) {
-                await syncDeliveryAlarms(context.transaction, [settled.id]);
+                await syncDeliveryAlarms(
+                  context.transaction,
+                  [settled.id],
+                  settled,
+                );
               }
               if (settled?.status === "dead_letter") {
                 deadLetters.set(settled.id, settled);
@@ -1345,29 +1384,6 @@ export function createEventStore(
                   settled,
                 );
                 if (publish) publications.push(publish);
-                if (options.settleActionOwners) {
-                  const event = await context.transaction.query<
-                    { namespace: string }
-                  >(`SELECT namespace FROM ${tables.events} WHERE id=$1`, [
-                    settled.eventId,
-                  ]);
-                  const namespace = event.rows[0]?.namespace ?? null;
-                  await writeOwnerDeadline(
-                    context.transaction,
-                    databaseSchema,
-                    {
-                      source: "reconciliation",
-                      key: reconciliationAlarmKey("schema", {
-                        kind: "operation",
-                        namespace,
-                        id: settled.settlementScopeId,
-                      }),
-                      namespace,
-                      dueAt: context.commandTime,
-                      payload: { operationId: settled.settlementScopeId },
-                    },
-                  );
-                }
               }
               return settled;
             }),

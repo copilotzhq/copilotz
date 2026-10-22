@@ -243,7 +243,6 @@ Deno.test({
             assertEquals(seen.filter((item) => item.startsWith("b:")), [
               "b:read",
               "b:result",
-              "b:result",
             ]);
             published.resolve();
           } catch (error) {

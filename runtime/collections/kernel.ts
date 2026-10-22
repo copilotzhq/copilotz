@@ -1187,6 +1187,12 @@ export function createCollectionKernel(
                   await policy?.authorize(command, "read");
                   const value = await load(policy?.args());
                   await disclose(command, value);
+                  // Primitive reads and their relation reads are wholly inside
+                  // this owner command. Check all descendants at this same
+                  // result boundary; a second command would only reread them.
+                  // Named selectors below still need a fresh command after any
+                  // external hydration or separately admitted nested reads.
+                  if (disclosureRoot) await discloseAll(command);
                   if (snapshot && snapshot.state !== "open") {
                     throw new Error("Read snapshot access has already closed.");
                   }
@@ -1198,6 +1204,7 @@ export function createCollectionKernel(
           );
         },
       );
+    if (disclosureRoot && method !== "query") return result;
     disclosure.checks.push((read) => disclose(read, result));
     // Hydrated endpoints and named-query reads share the root's final fresh gate.
     // An unprotected root cannot disclose a protected descendant on an old check.

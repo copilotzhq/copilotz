@@ -175,7 +175,14 @@ export function createDeviceTransport(
           ) return;
           try {
             if (frame.t === "renew") {
-              channel.stop(new Error("Device channel renewed"));
+              // Routine re-admission, not a failure: subscribers re-attach.
+              channel.stop(
+                Object.assign(new Error("Device channel renewed"), {
+                  code: "renewed",
+                  retryable: true,
+                  reason: frame.reason,
+                }),
+              );
               return;
             }
             if (frame.t === "eof") {

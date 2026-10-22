@@ -253,3 +253,79 @@ Deno.test("F6 deltas reconstruct a descending limited window without repeating u
   assertEquals(live.rows.map((r) => r.id), ["c", "b"]);
   live.close();
 });
+
+Deno.test("a renewed channel re-attaches from its checkpoint without a retry or stale state", async () => {
+  const cursors: (string | undefined)[] = [];
+  const statuses: string[] = [];
+  let attaches = 0;
+  const live = createLiveQuery(
+    {
+      async observe(
+        _name: string,
+        _query: unknown,
+        options: { checkpoint?: string },
+      ) {
+        await Promise.resolve();
+        cursors.push(options.checkpoint);
+        const attempt = ++attaches;
+        return {
+          frames: {
+            async *[Symbol.asyncIterator]() {
+              if (attempt === 1) {
+                yield snapshot();
+                // The server rolls the channel over (e.g. lifetime).
+                throw Object.assign(new Error("Device channel renewed"), {
+                  code: "renewed",
+                  retryable: true,
+                  reason: "lifetime",
+                });
+              }
+              yield batch("1", "2");
+            },
+          },
+          detach() {},
+        };
+      },
+    },
+    "entry",
+    {},
+    { onChange: () => void statuses.push(live.status) },
+  );
+  await live.done;
+  assertEquals(attaches, 2);
+  assertEquals(cursors, [undefined, "s1"]);
+  assertEquals(live.status, "ready");
+  assertEquals(live.error, undefined);
+  assert(!statuses.includes("stale"));
+  live.close();
+});
+
+Deno.test("endless renewals are bounded and then follow the retry policy", async () => {
+  let attaches = 0;
+  const live = createLiveQuery(
+    {
+      async observe() {
+        await Promise.resolve();
+        attaches++;
+        return {
+          frames: {
+            // deno-lint-ignore require-yield
+            async *[Symbol.asyncIterator]() {
+              throw Object.assign(new Error("Device channel renewed"), {
+                code: "renewed",
+                retryable: true,
+              });
+            },
+          },
+          detach() {},
+        };
+      },
+    },
+    "entry",
+    {},
+  );
+  await assertRejects(() => live.done, Error, "renewed");
+  // 21 free renewals, then the normal four attempts.
+  assert(attaches > 20 && attaches <= 25);
+  live.close();
+});

@@ -215,6 +215,7 @@ export function createLiveQuery(
     attached?.detach();
     running = true;
     try {
+      let renewals = 0;
       for (let retries = 0; retries <= 3; retries++) {
         signal.throwIfAborted();
         let applying = false, reset = false;
@@ -236,10 +237,22 @@ export function createLiveQuery(
               break;
             }
             retries = 0;
+            renewals = 0;
           }
           if (!reset) return;
         } catch (error) {
           if (applying) resync = true;
+          // The server renews channels routinely (lifetime, reauthentication,
+          // authority or capacity changes). Re-admit from the checkpoint at
+          // once: it is not a failure, a retry or a stale view.
+          // Bounded so a server that renews every admission cannot spin.
+          if (
+            (error as { code?: string }).code === "renewed" &&
+            !signal.aborted && renewals++ < 20
+          ) {
+            retries = -1;
+            continue;
+          }
           failure = error;
           if (
             ["revoked", "forbidden"].includes(

@@ -2177,6 +2177,7 @@ export function createCollectionKernel(
                 : undefined;
               return {
                 invalidatesContent: adopts,
+                nodeChanges: projection.nodeChanges,
                 ctes: [...adoption?.ctes ?? [], ...projection.ctes],
                 gate: adoption
                   ? `(${adoption.gate}) AND (${projection.gate})`

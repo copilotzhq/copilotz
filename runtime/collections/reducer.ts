@@ -1,3 +1,4 @@
+import type { AuthorityDependency } from "../authorization/authority.ts";
 import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import { createCollectionConflictError } from "./errors.ts";
 import { queryCollectionRows } from "./read-rows.ts";
@@ -384,6 +385,8 @@ export type ProjectionGuard = Readonly<{
 
 /** SQL that applies one Collection event body to the graph. */
 export type ProjectionStatement = Readonly<{
+  /** Complete record and manifest-asset write set for cache invalidation. */
+  nodeChanges: readonly AuthorityDependency[];
   /** Read-and-lock CTEs the gate and report are computed from. */
   ctes: readonly string[];
   /** True when every check passes; nothing is written otherwise. */
@@ -728,6 +731,20 @@ export function composeCollectionProjection(
 
   const label = `'${projection.type}' '${projection.id}'`;
   return {
+    nodeChanges: [
+      {
+        owner: "schema",
+        namespace: body.record.namespace,
+        collection: definition.name,
+        id: body.record.id,
+      },
+      ...projection.manifest.map((asset) => ({
+        owner: "schema",
+        namespace: body.record.namespace,
+        collection: "asset",
+        id: asset.id,
+      })),
+    ],
     ctes,
     gate: gates.length
       ? gates.map((gate) => `(${gate})`).join(" AND ")
@@ -825,6 +842,12 @@ export async function projectAssetManifestEntry(
     );
   }
   if (!row) {
+    hintAuthorizationChanges(context.transaction, [{
+      owner: "schema",
+      namespace,
+      collection: "asset",
+      id: entry.assetId,
+    }]);
     await context.transaction.query(
       `INSERT INTO ${context.tables.nodes} (
          id, namespace, type, name, data, source_type, source_id,
@@ -862,12 +885,7 @@ export async function projectCollectionEvent(
     param,
     guard,
   );
-  hintAuthorizationChanges(context.transaction, [{
-    owner: "schema",
-    namespace: body.record.namespace,
-    collection: definition.name,
-    id: body.record.id,
-  }]);
+  hintAuthorizationChanges(context.transaction, statement.nodeChanges);
   const result = await context.transaction.query<
     { applied: boolean; report: unknown }
   >(

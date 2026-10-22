@@ -16,8 +16,13 @@ import {
   type OwnerPolicy,
 } from "../authorization/evaluator.ts";
 
-for (const selective of [false, true]) {
-  Deno.test(`native Processor session turns and concurrent UI reads: ${selective ? "selective forwarding across requests" : "descriptor forwarding"}`, async () => {
+for (
+  const { selective, writes } of [{ selective: false, writes: false }, {
+    selective: true,
+    writes: false,
+  }, { selective: true, writes: true }]
+) {
+  Deno.test(`native Processor session turns and concurrent UI reads: ${selective ? "selective forwarding across requests" : "descriptor forwarding"}${writes ? " with content writes" : ""}`, async () => {
     const db = await createOwnerTestDatabase();
     const calls = 24;
     const turns = selective ? 2 : 1;
@@ -48,11 +53,45 @@ for (const selective of [false, true]) {
       name: "fact",
       schema: { type: "object" },
     });
+    const messages = defineCollection({
+      name: "message",
+      schema: { type: "object" },
+      content: { fields: ["content"] },
+    });
+    const threads = defineCollection({
+      name: "thread",
+      schema: { type: "object" },
+      commands: {
+        recordMessage: {
+          mutate: ({ input }) => ({
+            set: { lastMessageId: (input as { messageId: string }).messageId },
+          }),
+        },
+      },
+    });
+    const perTurn: Record<string, number>[] = [];
     const model = defineAction({
       id: "agent.model",
       async execute(_input: unknown, ctx: ActionContext) {
         for (let count = 0; count < calls; count++) {
           const i = nextCall++;
+          if (writes && count % 4 === 0) {
+            await ctx.collections.messages.create({
+              id: `message-${i}`,
+              content: `message ${i}`,
+            });
+            await ctx.transaction(async ({ collections }) => {
+              await collections.threads.commands.recordMessage({
+                id: "writing-thread",
+                messageId: `message-${i}`,
+              });
+            }, { operationKey: `record-message-${i}` });
+            await ctx.content.publish({
+              id: `standalone-${i}`,
+              mediaType: "text/plain",
+              body: new TextEncoder().encode(`body ${i}`),
+            }, { operationKey: `asset-${i}` });
+          }
           ready[i].resolve();
           assertEquals(
             (await ctx.collections.records.get({ id: "record" }))?.value,
@@ -106,14 +145,18 @@ for (const selective of [false, true]) {
       }
       return {
         actions: { model: {} },
-        collections: { records: {} },
-        collectionMutations: { records: { create: {} } },
+        collections: { records: {}, messages: {}, threads: {} },
+        collectionMutations: {
+          records: { create: {} },
+          messages: { create: {} },
+          threads: { commands: { recordMessage: {} } },
+        },
       };
     };
     const app = await createCopilotz({
       namespace: "space",
       database: db,
-      collections: { records, facts },
+      collections: { records, facts, messages, threads },
       actions: { model },
       processors: { agent: processor },
       authorization: {
@@ -130,7 +173,11 @@ for (const selective of [false, true]) {
               ),
           },
         },
-        collections: { records: { id: "fixture", revision: "1" } },
+        collections: {
+          records: { id: "fixture", revision: "1" },
+          messages: { id: "fixture", revision: "1" },
+          threads: { id: "fixture", revision: "1" },
+        },
         actions: { model: { id: "fixture", revision: "1" } },
       },
     });
@@ -156,12 +203,16 @@ for (const selective of [false, true]) {
           `INSERT INTO public.authorization_sessions(namespace,tenant,id,principal,expires_at) VALUES('space','fixture','session','member',$1)`,
           [new Date(Date.now() + 600_000).toISOString()],
         );
+        await c.transaction.query(
+          `INSERT INTO public.nodes(id,namespace,type,name,data) VALUES('writing-thread','space','thread','thread','{"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}')`,
+        );
         observeAuthorizationCache(c.transaction, (scope, outcome) => {
           const key = `${scope}.${outcome}`;
           counts[key] = (counts[key] ?? 0) + 1;
         });
       });
       for (let turn = 0; turn < turns; turn++) {
+        const startCounts = { ...counts };
         const request = (nonce: string) =>
           bindTestActions(app.collections, {
             ...authority,
@@ -183,11 +234,20 @@ for (const selective of [false, true]) {
             }
           })(),
         ]);
+        perTurn.push(
+          Object.fromEntries(
+            Object.entries(counts).map((
+              [key, count],
+            ) => [key, count - (startCounts[key] ?? 0)]),
+          ),
+        );
       }
       console.log(
         JSON.stringify({
           nativeTurn: {
             selective,
+            writes,
+            perTurn,
             turns,
             calls,
             evaluations,
@@ -198,7 +258,8 @@ for (const selective of [false, true]) {
       );
       if (
         Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1" &&
-        Deno.env.get("AUTHZ_READSET_BASELINE") !== "1"
+        Deno.env.get("AUTHZ_READSET_BASELINE") !== "1" &&
+        Deno.env.get("AUTHZ_WRITESET_BASELINE") !== "1"
       ) {
         assertEquals(evaluations["action|model|capture|"], turns);
         assertEquals(evaluations["action|model|authorize|"] ?? 0, 0);
@@ -211,6 +272,9 @@ for (const selective of [false, true]) {
           2,
         );
         assert((counts["evaluation.hit"] ?? 0) >= 4 * (total - 1));
+        for (const scope of ["action", "authorization-record", "evaluation"]) {
+          assertEquals(counts[`${scope}.stale`] ?? 0, 0, scope);
+        }
       }
     } finally {
       for (const gate of read) gate.resolve();

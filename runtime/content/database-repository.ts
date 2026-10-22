@@ -1,3 +1,5 @@
+import type { AuthorityDependency } from "../authorization/authority.ts";
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import { createCollectionConflictError } from "../collections/errors.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { invalidateOwnerAlarm } from "../engine/alarms.ts";
@@ -171,6 +173,7 @@ export type DatabaseAssetRepository =
  * optionally the asset nodes, only while nothing already holds their identity.
  */
 export type AssetAdoptionStatement = Readonly<{
+  nodeChanges: readonly AuthorityDependency[];
   invalidatesContent: boolean;
   ctes: readonly string[];
   /** Holds while no asset, key or body already occupies the adoption. */
@@ -1248,6 +1251,12 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id, cause },
       );
     }
+    hintAuthorizationChanges(context.transaction, [{
+      owner: "schema",
+      namespace,
+      collection: "asset",
+      id: asset.id,
+    }]);
     const result = await context.transaction.query<AssetNodeRow>(
       `INSERT INTO ${context.tables.nodes} (
          id, namespace, type, name, data, source_type, source_id,
@@ -1464,6 +1473,16 @@ export function createDatabaseAssetRepository(
       ),
     );
     return {
+      nodeChanges: nodes
+        ? plans.flatMap((plan) =>
+          plan.adoptions.map(({ asset }) => ({
+            owner: "schema",
+            namespace: asset.namespace,
+            collection: "asset",
+            id: asset.id,
+          }))
+        )
+        : [],
       invalidatesContent: hasDatabase,
       ctes: [
         `adoption_rows AS (SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(id text,namespace text,key text,media_type text,created_at timestamptz,data jsonb,database boolean,physical_key text,backend_id text,collectable boolean,token text,parts jsonb))`,
@@ -2268,6 +2287,12 @@ export function createDatabaseAssetRepository(
             ? currentRow.source_id
             : undefined;
           const deletedAt = now().toISOString();
+          hintAuthorizationChanges(transaction, [{
+            owner: "schema",
+            namespace,
+            collection: "asset",
+            id: assetId,
+          }]);
           const updated = await transaction.query<AssetNodeRow>(
             `UPDATE ${names.nodes}
              SET data = (COALESCE(data, '{}'::jsonb) - 'body') || $1::jsonb,

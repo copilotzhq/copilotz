@@ -57,7 +57,10 @@ function fakeCollection(
       if (counts) counts.lists++;
       let selected = [...records.values()].filter((record) =>
         Object.entries(query.where ?? {}).every(([key, value]) =>
-          record[key] === value
+          value && typeof value === "object" &&
+            Array.isArray((value as { in?: unknown }).in)
+            ? (value as { in: unknown[] }).in.includes(record[key])
+            : record[key] === value
         )
       );
       selected.sort((left, right) => {
@@ -210,7 +213,9 @@ Deno.test("Core history selects all authorized records while validating its trig
   ]);
   assertEquals(snapshot.records.at(-1)?.id, records.at(-1)?.id);
   assertEquals(counts.messages.lists, 2);
-  assertEquals(counts.participants.gets, 3);
+  // Participants load in one batched read, not one get each.
+  assertEquals(counts.participants.gets, 0);
+  assertEquals(counts.participants.lists, 1);
 });
 
 Deno.test("Core history ignores a queued trigger superseded by the active branch", async () => {

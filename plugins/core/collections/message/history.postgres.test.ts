@@ -187,7 +187,10 @@ Deno.test({
               list({ where: { id }, limit: 1 }).then((r) => r[0] ?? null),
           },
           thread: { get: () => Promise.resolve(thread) },
-          participant: { get: () => Promise.resolve(null) },
+          participant: {
+            get: () => Promise.resolve(null),
+            list: () => Promise.resolve([]),
+          },
         } as unknown as Record<string, ScopedCollection>,
       };
       const queryStart = captured.length;

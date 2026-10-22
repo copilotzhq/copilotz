@@ -82,6 +82,8 @@ test("primitive authoring runtime closure excludes persistence and protected-val
     "runtime/content/schema.ts",
     "runtime/data-only-json.ts",
     "runtime/events/types.ts",
+    // Pure delivery-timeout constant and validator; no imports.
+    "runtime/execution/deadlines.ts",
     "runtime/failure.ts",
     "runtime/json.ts",
     "runtime/plugins/contribution.ts",

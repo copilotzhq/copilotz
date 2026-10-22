@@ -112,6 +112,32 @@ export type HttpObservationSelection = Readonly<{
   outputMetadata?(id: string): Readonly<Record<string, unknown>>;
 }>;
 export type HttpAdapter = Readonly<{
+  /** Domain read projection, applied to every HTTP/device collection read. */
+  reads?(
+    read: HttpReadServices,
+    scope: ServerAuthorizedScope,
+  ): HttpReadServices;
+  /** Domain content authorization in addition to the owner's asset grant. */
+  authorizeAsset?(
+    id: string,
+    scope: ServerAuthorizedScope,
+    read: HttpReadServices,
+  ): Promise<void>;
+  /** Authorize a retained Action result from its admitted invocation metadata. */
+  authorizeActionResult?(
+    metadata: Readonly<Record<string, unknown>>,
+    scope: ServerAuthorizedScope,
+  ): void;
+  /** Domain projection shared by explicit operation and record observations. */
+  projectOutput?(
+    output: import("@copilotz/copilotz/streams").ApplicationOutput,
+    scope: ServerAuthorizedScope,
+    read: HttpReadServices,
+    origins: (
+      actionRunId: string,
+    ) => Promise<readonly Readonly<Record<string, unknown>>[]>,
+  ): Promise<import("@copilotz/copilotz/streams").ApplicationOutput | null>;
+
   /** Domain-owned selection keys, indexed by the authorized Collection alias. */
   observations?: Readonly<Record<string, HttpObservationSelection>>;
   /** Domain metadata for durable HTTP ingress, derived from trusted scope metadata. */

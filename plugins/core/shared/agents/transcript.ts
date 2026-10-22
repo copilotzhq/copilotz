@@ -1,3 +1,4 @@
+import { canReadToolOutput } from "../tool-visibility.ts";
 import type { ConversationMessage } from "../contracts.ts";
 import type {
   LlmJsonObject,
@@ -198,6 +199,7 @@ function projectAgentMessage(
 function peerToolStatus(
   message: ConversationMessage,
   requesterName: string,
+  viewerId: string,
 ): PeerToolStatus | undefined {
   const visibility = message.metadata.historyVisibility;
   const toolId = optionalText(message.metadata.toolId);
@@ -208,7 +210,9 @@ function peerToolStatus(
   ) return undefined;
   return {
     line: `[${requesterName} used ${toolId}: ${status}]`,
-    showsOutput: visibility === "public",
+    showsOutput: message.visibility?.kind === "tool"
+      ? canReadToolOutput(message.visibility, [viewerId])
+      : visibility === "public",
   };
 }
 
@@ -236,11 +240,13 @@ function projectToolMessage(
   const requesterId = optionalText(message.metadata.requesterId) ??
     workflowMetadata(message.metadata)?.agentParticipantId;
   const callId = toolCallId(message);
-  if (callId && requesterId === viewerId) {
+  const readable = message.visibility?.kind !== "tool" ||
+    canReadToolOutput(message.visibility, [viewerId]);
+  if (callId && requesterId === viewerId && readable) {
     return { message: toolTurn(message, callId) };
   }
   const status = requesterId
-    ? peerToolStatus(message, names.get(requesterId) ?? requesterId)
+    ? peerToolStatus(message, names.get(requesterId) ?? requesterId, viewerId)
     : undefined;
   if (status) {
     return {
@@ -254,7 +260,7 @@ function projectToolMessage(
       peerToolStatus: status,
     };
   }
-  return message.metadata.historyVisibility === "public"
+  return message.metadata.historyVisibility === "public" && readable
     ? { message: userTurn(message) }
     : null;
 }

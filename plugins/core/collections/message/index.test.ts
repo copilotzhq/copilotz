@@ -19,11 +19,14 @@ async function fixture(
   records: Record<string, unknown>[],
   branch?: Record<string, string>,
 ) {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const session = createSqlSession(db);
-  const tables = { nodes: "history_nodes", edges: "unused_edges" };
+  const table = `toolvis_history_${crypto.randomUUID().replaceAll("-", "")}`;
+  const tables = { nodes: table, edges: "unused_edges" };
   await session.query(
-    `CREATE TABLE history_nodes (id text, namespace text, type text, data jsonb, created_at timestamptz, updated_at timestamptz, content text)`,
+    `CREATE TABLE ${table} (id text, namespace text, type text, data jsonb, created_at timestamptz, updated_at timestamptz, content text)`,
   );
   const rows = records.map((record, index) => ({
     namespace: "tenant",
@@ -35,7 +38,7 @@ async function fixture(
     ...record,
   }));
   await session.query(
-    `INSERT INTO history_nodes SELECT r->>'id', r->>'namespace', 'message', r, (r->>'createdAt')::timestamptz, (r->>'createdAt')::timestamptz, '' FROM jsonb_array_elements($1::jsonb) r`,
+    `INSERT INTO ${table} SELECT r->>'id', r->>'namespace', 'message', r, (r->>'createdAt')::timestamptz, (r->>'createdAt')::timestamptz, '' FROM jsonb_array_elements($1::jsonb) r`,
     [JSON.stringify(rows)],
   );
   const assets = createMemoryAssetRepository();
@@ -73,7 +76,7 @@ async function fixture(
       if (options?.content) await beforeResolve?.();
       return list(query, options);
     },
-    async aggregate() {
+    aggregate() {
       throw new Error("Message history fixture does not support aggregation.");
     },
   };
@@ -84,7 +87,7 @@ async function fixture(
     },
     async patch(id: string, patch: Record<string, unknown>) {
       await session.query(
-        "UPDATE history_nodes SET data = data || $1::jsonb WHERE id = $2",
+        `UPDATE ${table} SET data = data || $1::jsonb WHERE id = $2`,
         [JSON.stringify(patch), id],
       );
     },
@@ -100,6 +103,7 @@ async function fixture(
         read,
       }),
     async [Symbol.asyncDispose]() {
+      await session.query(`DROP TABLE ${table}`);
       await db.close();
     },
   };
@@ -525,4 +529,86 @@ Deno.test("private terminal status recovery never resolves private assets", asyn
     );
   }
   assertEquals(f.assetReads, []);
+});
+
+Deno.test("tool visibility grants only the original human initiator public-status content", async () => {
+  const ref = {
+    assetId: "output",
+    kind: "text",
+    role: "tool.output",
+    mediaType: "text/plain",
+  };
+  await using f = await fixture([
+    {
+      id: "plan",
+      senderId: "agent",
+      visibility: { kind: "public" },
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    },
+    ...["public_status", "requester_only", "public"].flatMap((policy) =>
+      ["completed", "failed", "cancelled"].map((toolStatus) => ({
+        id: `${policy}-${toolStatus}`,
+        senderId: "tool",
+        content: [ref],
+        visibility: {
+          kind: "tool",
+          policy,
+          requesterId: "agent",
+          initiatorId: "human",
+        },
+        metadata: {
+          toolStatus,
+          toolId: "lookup",
+          toolInvocation: { id: "call", args: "SECRET" },
+          copilotzWorkflow: { sourceMessageId: "plan" },
+          diagnostic: "SECRET",
+        },
+      }))
+    ),
+    {
+      id: "legacy",
+      content: [ref],
+      visibility: {
+        kind: "tool",
+        policy: "public_status",
+        requesterId: "agent",
+      },
+      metadata: { toolStatus: "completed" },
+    },
+  ]);
+  await f.assets.publish({
+    id: "output",
+    namespace: "tenant",
+    mediaType: "text/plain",
+    body: new TextEncoder().encode("SECRET"),
+  });
+  for (const viewer of ["human", "second-human", "agent"]) {
+    for (const policy of ["public_status", "requester_only", "public"]) {
+      for (const status of ["completed", "failed", "cancelled"]) {
+        const [row] = await f.select({
+          messageId: `${policy}-${status}`,
+          viewerParticipantIds: [viewer],
+          content: true,
+        });
+        const readable = policy === "public" || viewer === "agent" ||
+          policy === "public_status" && viewer === "human";
+        assertEquals(row.visibility, {
+          kind: "tool",
+          policy,
+          requesterId: "agent",
+          initiatorId: "human",
+        });
+        assertEquals(
+          (row.metadata as Record<string, unknown>).toolStatus,
+          status,
+        );
+        assertEquals(JSON.stringify(row).includes("SECRET"), readable);
+        assertEquals((row.content as unknown[]).length, readable ? 1 : 0);
+      }
+    }
+  }
+  assertEquals(
+    (await f.select({ messageId: "legacy", content: true }))[0].content,
+    [],
+  );
 });

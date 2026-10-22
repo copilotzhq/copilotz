@@ -147,6 +147,8 @@ export type CoreToolActionOrigin = Readonly<{
   /** Stable initiating Message, retained across Tools and nested Asks. */
   originMessageId?: string;
   availableToolIds: readonly string[];
+  /** Immutable output audience for this Tool stage, absent on legacy cursors. */
+  outputVisibility?: EventVisibility;
   /** Original response audience retained across every Tool continuation. */
   responseVisibility: EventVisibility;
   parentLlmActionRunId: string;
@@ -761,9 +763,12 @@ function coreEventVisibility(value: unknown): value is EventVisibility {
       keys[1] === "participantIds" &&
       validStringArray(candidate.participantIds);
   }
-  return candidate.kind === "tool" && keys.length === 3 &&
-    keys[0] === "kind" && keys[1] === "policy" &&
-    keys[2] === "requesterId" &&
+  return candidate.kind === "tool" &&
+    keys.every((key) =>
+      ["kind", "policy", "requesterId", "initiatorId"].includes(key)
+    ) &&
+    (candidate.initiatorId === undefined ||
+      Boolean(optionalMetadataText(candidate.initiatorId))) &&
     (candidate.policy === "requester_only" ||
       candidate.policy === "public_status" || candidate.policy === "public") &&
     Boolean(optionalMetadataText(candidate.requesterId));
@@ -793,6 +798,7 @@ function validPlanPosition(candidate: Record<string, unknown>): boolean {
 }
 
 const TOOL_ACTION_ORIGIN_KEYS = new Set([
+  "outputVisibility",
   "schema",
   "planId",
   "planMessageId",
@@ -852,6 +858,10 @@ function validToolActionOrigin(
   if (
     agentTurn?.completeOn &&
     !candidate.availableToolIds.includes(agentTurn.completeOn.action)
+  ) return null;
+  if (
+    candidate.outputVisibility !== undefined &&
+    !coreEventVisibility(candidate.outputVisibility)
   ) return null;
   return candidate as CoreToolActionOrigin;
 }

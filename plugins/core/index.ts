@@ -66,6 +66,7 @@ export {
 } from "./shared/agents/prepared-transcript.ts";
 
 export * from "./shared/events/index.ts";
+export * from "./shared/tool-visibility.ts";
 export * from "./processors/message-input/input/index.ts";
 export * from "./shared/capabilities/grants.ts";
 export * from "./shared/capabilities/selection.ts";

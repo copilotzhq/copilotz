@@ -1,5 +1,9 @@
 /** Defines the canonical Core Message Collection. @module */
 
+import {
+  canReadToolOutput,
+  toolOutputReadFilter,
+} from "../../shared/tool-visibility.ts";
 import { contentSequenceSchema } from "@copilotz/copilotz/content";
 import {
   type CollectionContentOptions,
@@ -134,8 +138,7 @@ function projectHistoryRecord(
   const visibility = record.visibility as Record<string, unknown> | undefined;
   if (
     !viewers || visibility?.kind !== "tool" ||
-    visibility.policy !== "public_status" ||
-    viewers.includes(String(visibility.requesterId))
+    canReadToolOutput(visibility, viewers)
   ) return record;
   const metadata = record.metadata as Record<string, unknown>;
   const invocation = metadata.toolInvocation as
@@ -182,7 +185,7 @@ function privateToolStatusCandidate(
   const visibility = record.visibility as Record<string, unknown> | undefined;
   if (
     visibility?.kind !== "tool" || visibility.policy !== "requester_only" ||
-    viewers.includes(String(visibility.requesterId))
+    canReadToolOutput(visibility, viewers)
   ) return false;
   return true;
 }
@@ -240,14 +243,7 @@ function projectPrivateToolStatus(
   const metadata = record.metadata as Record<string, unknown>;
   const invocation = (metadata.toolInvocation ?? {}) as Record<string, unknown>;
   const sourceMessageId = statusSourceId(record);
-  const projected = {
-    ...record,
-    visibility: {
-      kind: "tool",
-      policy: "public_status",
-      requesterId: visibility.requesterId,
-    },
-  };
+  const projected = record;
   // Keep the source lookup explicit so a future caller cannot accidentally
   // treat an unrelated private result as a public status row.
   if (
@@ -513,22 +509,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
                 and: [
                   filter,
                   publicHistoryFilter(viewers),
-                  ...(viewers
-                    ? [{
-                      not: {
-                        and: [
-                          { field: "visibility.kind", eq: "tool" },
-                          { field: "visibility.policy", eq: "public_status" },
-                          {
-                            not: {
-                              field: "visibility.requesterId",
-                              in: viewers,
-                            },
-                          },
-                        ],
-                      },
-                    }]
-                    : []),
+                  ...(viewers ? [toolOutputReadFilter(viewers)] : []),
                   { field: "id", in: batch.map((record) => record.id) },
                 ],
               },

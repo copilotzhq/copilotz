@@ -4,6 +4,7 @@
  * and grouping by consecutive speaker.
  * @module
  */
+import { canReadToolOutput } from "./tool-visibility.ts";
 import type { FeedAttempt } from "./chat-feed.ts";
 
 type Row = Readonly<{ id: string; [field: string]: unknown }>;
@@ -68,7 +69,7 @@ export type ChatActivity = Readonly<{
  * A referenced JSON result while it loads, or why it cannot show:
  * `restricted` when the tool's visibility lets this viewer see that it ran
  * (and its input) but not its output (`public_status` for anyone but the
- * requesting agent).
+ * requesting agent or initiating human).
  */
 export type ToolResultStatus =
   | "loading"
@@ -287,7 +288,7 @@ function jsonResult(
 /**
  * Whether a tool result's output is withheld from this viewer: its
  * visibility shares the status only (`public_status`, or `requester_only`
- * as read by someone else) and the viewer is not the requester.
+ * as read by someone else) and the viewer has no output grant.
  */
 function outputWithheld(
   row: Row,
@@ -297,8 +298,7 @@ function outputWithheld(
   if (visibility.kind !== "tool" || visibility.policy === "public") {
     return false;
   }
-  const requester = text(visibility.requesterId);
-  return !requester || !(viewerIds ?? []).includes(requester);
+  return !canReadToolOutput(visibility, viewerIds ?? []);
 }
 
 function toolResult(
@@ -416,7 +416,7 @@ export function projectMessages(
   options: Readonly<{
     /**
      * The viewer's participant ids: a tool result whose visibility shares
-     * only its status shows its output to its requester alone.
+     * only its status shows its output to its requester or authorized initiator.
      */
     viewerIds?: readonly string[];
   }> = {},

@@ -1,4 +1,6 @@
 /** Scoped, bounded read capabilities; policy predicates reach SQL before pagination. */
+import { createHttpActionOrigins } from "./action-origins.ts";
+import { withoutCollectionPolicyInvocation } from "../runtime/authorization/invocation.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
 import type { FacadeContext } from "./context.ts";
@@ -13,8 +15,8 @@ export async function createHttpReads(
   application: InternalCopilotzApplication,
   scope:
     & Pick<ServerAuthorizedScope, "namespace" | "databaseSchema">
-    & Partial<Pick<ServerAuthorizedScope, "authority">>,
-  host: Readonly<{ context?: FacadeContext }> = {},
+    & Partial<Pick<ServerAuthorizedScope, "authority" | "actor">>,
+  host: Readonly<{ context?: FacadeContext; domainProjection?: boolean }> = {},
 ): Promise<HttpReadServices> {
   const runtime = scope.databaseSchema &&
       scope.databaseSchema !== application.config.databaseSchema
@@ -144,5 +146,66 @@ export async function createHttpReads(
       return value;
     },
   } as const;
-  return read;
+  if (host.domainProjection === false) return read;
+  return Object.values(application.plugins?.adapters.http ?? {}).reduce<
+    HttpReadServices
+  >(
+    (current, adapter) =>
+      (adapter as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter)
+        .reads?.(current, scope as ServerAuthorizedScope) ?? current,
+    read,
+  );
+}
+
+/** Domain checks inspect canonical metadata, not the viewer's filtered evidence.
+ * They may only narrow an asset grant already approved by the owner. */
+export async function authorizeHttpAsset(
+  application: InternalCopilotzApplication,
+  scope: ServerAuthorizedScope,
+  id: string,
+): Promise<void> {
+  const runtime = scope.databaseSchema &&
+      scope.databaseSchema !== application.config.databaseSchema
+    ? await application.databaseScope(scope.databaseSchema)
+    : application;
+  const namespace = scope.namespace ?? application.config.namespace!;
+  const read = await createHttpReads(application, {
+    namespace,
+    databaseSchema: scope.databaseSchema,
+  }, { domainProjection: false });
+  const adapters = Object.values(
+    application.plugins?.adapters.http ?? {},
+  ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
+  await withoutCollectionPolicyInvocation(async () => {
+    for (const adapter of adapters) {
+      await adapter.authorizeAsset?.(id, scope, read);
+    }
+  });
+  // A closed live stream also has a canonical Asset. Reuse its descriptor's
+  // source ancestry so knowing that Asset id cannot bypass stream visibility.
+  const asset = await runtime.content.assets.get(namespace, id);
+  const streamId = asset?.metadata?.streamId;
+  if (typeof streamId === "string") {
+    const stream = await runtime.operations.findStream(namespace, streamId);
+    if (stream) {
+      const origins = createHttpActionOrigins(runtime, namespace);
+      for (const adapter of adapters) {
+        if (
+          adapter.projectOutput &&
+          !await adapter.projectOutput(
+            stream
+              .descriptor as import("../runtime/streams/types.ts").ApplicationOutput,
+            scope,
+            read,
+            (run) => origins(stream.operationId, run),
+          )
+        ) {
+          throw Object.assign(new Error("Message content was not found."), {
+            status: 404,
+            code: "message_content_not_found",
+          });
+        }
+      }
+    }
+  }
 }

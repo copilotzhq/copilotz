@@ -81,6 +81,9 @@ function visibility(value: unknown): EventVisibility | undefined {
     return {
       kind: "tool",
       policy,
+      ...(optionalText(record.initiatorId)
+        ? { initiatorId: optionalText(record.initiatorId) }
+        : {}),
       requesterId: requiredText(
         record.requesterId,
         "Tool visibility requesterId",

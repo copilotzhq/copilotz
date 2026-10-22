@@ -154,7 +154,9 @@ async function createFixture(
 ): Promise<Fixture> {
   markExecutions.splice(0);
   const outputs: RuntimeOutputDescriptor[] = [];
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const app = definePlugin({
     id: "test.core-ask.resources",
     version: "1.0.0",
@@ -183,7 +185,9 @@ async function createFixture(
   const engine = await createCopilotzEngine({
     session: createSqlSession(db),
     registry,
-    defaultDatabaseSchema: TEST_SCHEMA,
+    defaultDatabaseSchema: `toolvis_ask_${
+      crypto.randomUUID().replaceAll("-", "")
+    }`,
     retryBaseMs: 0,
     random: () => 0,
     execution: { capacity: 1 },
@@ -604,6 +608,35 @@ Deno.test("asked Agent Tool Actions retain the root human initiator", async () =
     assertEquals(provenance.agentParticipantId, "agent-b");
     assertEquals(provenance.initiatorParticipantId, "user-a");
     assertEquals(provenance.originMessageId, "message:user");
+    assertEquals(provenance.outputVisibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "agent-b",
+      initiatorId: "user-a",
+    });
+    const messages = await projectMessages(
+      fixture.engine,
+      NAMESPACE,
+      "thread-a",
+    );
+    const call = messages.find((message) =>
+      (message.metadata.llmToolCalls as { id: string }[] | undefined)?.some(
+        (call) => call.id === "asked-agent-mark",
+      )
+    );
+    const result = messages.find((message) =>
+      (message.metadata.toolInvocation as { id?: string } | undefined)?.id ===
+        "asked-agent-mark"
+    );
+    assertExists(call);
+    assertExists(result);
+    assertEquals(call.visibility?.initiatorId, "user-a");
+    assertEquals(result.visibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "agent-b",
+      initiatorId: "user-a",
+    });
   } finally {
     await fixture.close();
   }
@@ -707,7 +740,9 @@ Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () =>
     resolveAskedAgent = resolve;
   });
   markExecutions.splice(0);
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
   const app = definePlugin({
     id: "test.core-ask.lifecycle-authority",
     version: "1.0.0",

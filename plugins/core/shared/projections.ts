@@ -148,6 +148,7 @@ export function mapMessageRecord(
     recipientIds: stringArray(record.recipientIds),
     content: contentSequence(record.content),
     metadata: asRecord(record.metadata),
+    ...(record.visibility ? { visibility: asRecord(record.visibility) } : {}),
     ...(record.revision && typeof record.revision === "object"
       ? { revision: record.revision as ConversationMessage["revision"] }
       : {}),

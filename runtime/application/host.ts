@@ -100,22 +100,27 @@ export function createHostServices(
     boundary: ApplicationScope,
   ) => {
     const app = application();
+    let changed = Promise.withResolvers<void>();
+    let ended = false;
+    let interrupted: unknown;
+    const notify = () => changed.resolve();
+    // Admission already subscribed before dispatch. Use that subscription for
+    // both completion hints and owner-loss errors, without another owner command.
     const drained = (async () => {
       for await (const output of handle.outputs) {
         if (isStreamOutput(output)) await output.payload.cancel();
+        notify();
       }
-    })();
-    void drained.catch(() => {});
-    void handle.done.catch(() => {});
-    let closeWatch = () => {};
+    })().catch((error) => {
+      interrupted = error;
+    }).finally(() => {
+      ended = true;
+      notify();
+    });
     try {
-      const runtime = await app.databaseScope(boundary.databaseSchema!);
-      // Subscribe before reading, including when completion preceded this call.
-      const changes = await runtime.operations.watch(handle.operationId, {
-        namespace: boundary.namespace!,
-      });
-      closeWatch = () => changes.close();
       for (;;) {
+        const next = changed;
+        if (interrupted !== undefined) throw interrupted;
         const recorded = await recordedOperationResult(
           app,
           boundary,
@@ -123,12 +128,17 @@ export function createHostServices(
           "host",
         );
         if (!recorded.pending) return recorded.value;
-        await changes.wait();
+        if (interrupted !== undefined) throw interrupted;
+        if (ended) {
+          await handle.done;
+          throw new Error("Operation result is not yet recorded.");
+        }
+        await next.promise;
+        changed = Promise.withResolvers<void>();
       }
     } finally {
-      closeWatch();
       await handle.detach("host_result_returned");
-      await drained.catch(() => {});
+      await drained;
     }
   };
 

@@ -1,3 +1,4 @@
+import { hintAuthorizationRows } from "../authorization/cache.ts";
 import { authorizationRefused } from "../authorization/evaluator.ts";
 import type { OwnerIngressProof } from "../application/ingress/authority.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
@@ -252,6 +253,9 @@ export async function startAwaitedOperation(
       existing,
     );
     const catalogTables = createOperationCatalogTables(store.databaseSchema);
+    hintAuthorizationRows(tx, store.databaseSchema, "copilotz_operations", [
+      childId,
+    ]);
     await tx.query(
       `WITH linked AS (
     UPDATE ${operations} SET parent_operation_id = COALESCE(parent_operation_id, $3),

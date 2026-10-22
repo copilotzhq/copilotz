@@ -1,8 +1,16 @@
 import {
+  ownerAttemptLive,
+  ownerDeliveryLive,
+  readOwnerDelivery,
+} from "../authorization/leases.ts";
+import { ActionOwnershipLost } from "./ownership.ts";
+import {
   authorizationDependencyKeys,
+  authorizationRowKeys,
   authorizationTableKey,
   cachedAuthorization,
   rememberAuthorization,
+  reportAuthorizationCache,
 } from "../authorization/cache.ts";
 import type { OwnerPolicy } from "../authorization/evaluator.ts";
 import type { AuthorityDependency } from "../authorization/authority.ts";
@@ -91,6 +99,10 @@ export function createAuthorizedActions(
       databaseSchema,
     });
   type Reuse = {
+    attempt?: Extract<
+      import("../authorization/authority.ts").AuthorityValidity,
+      { kind: "attempt" }
+    >;
     policyId: string;
     dependencies: readonly AuthorityDependency[];
     flow: boolean;
@@ -99,7 +111,7 @@ export function createAuthorizedActions(
     revision: string;
     admittedAt: number;
   };
-  const cacheScope = {};
+  const cacheScope = { cache: "action" };
   const cacheKey = (
     frame: Pick<
       ActionInvocationFrame,
@@ -120,7 +132,14 @@ export function createAuthorizedActions(
     >,
     reuse?: Reuse,
   ) => {
-    if (!reuse || reuse.until <= Date.parse(command.commandTime)) return;
+    if (!reuse || reuse.until <= Date.parse(command.commandTime)) {
+      reportAuthorizationCache(
+        command.transaction,
+        "remember",
+        reuse ? "expired" : "no-reusable-decision",
+      );
+      return;
+    }
     rememberAuthorization(
       command.transaction,
       cacheScope,
@@ -159,7 +178,7 @@ export function createAuthorizedActions(
   // Completed results are fresh disclosures, outside the running Action's
   // capability lifetime. Preserve their full replay authorization boundary.
   const terminalRuns = new Set<string>();
-  const livenessScope = {};
+  const livenessScope = { cache: "writer" };
   const authority = async (
     command: CommandContext,
     frame: Pick<ActionInvocationFrame, "actionRunId" | "actionId" | "signal">,
@@ -172,16 +191,33 @@ export function createAuthorizedActions(
       }
       // Input capture precedes the open Action obligation, and a completed
       // child may be replayed by its still-live parent delivery.
-      const live = !terminalRuns.has(frame.actionRunId) &&
-        cachedAuthorization<{ until: number }>(
+      const terminal = terminalRuns.has(frame.actionRunId);
+      const lease = terminal ? undefined : await readOwnerDelivery(
+        command.transaction,
+        databaseSchema,
+        options.writer.deliveryId,
+      );
+      if (
+        !terminal &&
+        (!ownerDeliveryLive(
+          command.transaction,
+          lease,
+          options.writer.leaseOwner,
+          command.commandTime,
+        ) ||
+          lease!.event_id !== options.source.eventId ||
+          options.source.operationId &&
+            lease!.settlement_scope_id !== options.source.operationId)
+      ) {
+        throw new ActionOwnershipLost(frame.actionRunId);
+      }
+      const live = !terminal &&
+        cachedAuthorization<boolean>(
           command.transaction,
           livenessScope,
           "writer",
         );
-      if (live && Date.parse(command.commandTime) < live.until) {
-        return live.until;
-      }
-      let until = Infinity;
+      if (live) return;
       await assertOwnerInvocationLive(command, {
         databaseSchema,
         namespace,
@@ -189,16 +225,22 @@ export function createAuthorizedActions(
         operationId: options.source.operationId,
         eventId: options.source.eventId,
         writer: options.writer,
-      }, (deadline) => {
-        until = deadline ? Date.parse(deadline) : Infinity;
       });
-      rememberAuthorization(command.transaction, livenessScope, "writer", {
-        until,
-      }, [
-        authorizationTableKey(databaseSchema, "event_deliveries"),
-        authorizationTableKey(databaseSchema, "copilotz_operations"),
-      ]);
-      return until;
+      rememberAuthorization(
+        command.transaction,
+        livenessScope,
+        "writer",
+        true,
+        [
+          ...(options.source.operationId
+            ? authorizationRowKeys(
+              databaseSchema,
+              "copilotz_operations",
+              options.source.operationId,
+            )
+            : []),
+        ],
+      );
     } else if (options.writer) {
       throw new Error("Protected Action hooks require an active execution.");
     }
@@ -314,6 +356,9 @@ export function createAuthorizedActions(
       options.authorization!.policies[decision.authority.policy.id];
     const until = authorizationReuseDeadline(decision);
     const reuse = until === undefined ? undefined : {
+      ...(decision.authority.validity.kind === "attempt"
+        ? { attempt: decision.authority.validity }
+        : {}),
       policyId: decision.authority.policy.id,
       dependencies: decision.dependencies,
       flow: !!decision.authority.flow,
@@ -569,6 +614,15 @@ export function createAuthorizedActions(
           reference?.revision === saved.revision &&
           now >= saved.admittedAt && now < saved.until
         ) {
+          if (
+            saved.attempt &&
+            !await ownerAttemptLive(
+              tx,
+              databaseSchema,
+              saved.attempt,
+              command.commandTime,
+            )
+          ) authorizationRefused();
           await authority(command, frame);
           return;
         }

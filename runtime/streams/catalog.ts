@@ -1,3 +1,4 @@
+import { hintAuthorizationRows } from "../authorization/cache.ts";
 import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import {
   CONTENT_REPLAY_RETENTION_MS,
@@ -1933,6 +1934,12 @@ export function createOperationCatalog(
       const ctes = indexEventCtes(input, param, {
         position: `${param(input.position)}::bigint`,
       });
+      hintAuthorizationRows(
+        transaction,
+        databaseSchema,
+        "copilotz_operations",
+        [input.operationId],
+      );
       const indexed = await transaction.query(
         `WITH ${ctes} SELECT * FROM indexed_event`,
         params,
@@ -2313,6 +2320,12 @@ export function createOperationCatalog(
     async requestCancellation(transaction, namespace, operationId, reason) {
       assertSchemaCommandTransaction(transaction, databaseSchema);
       const { commandTime } = schemaCommandContext(transaction, databaseSchema);
+      hintAuthorizationRows(
+        transaction,
+        databaseSchema,
+        "copilotz_operations",
+        [operationId],
+      );
       await transaction.query(
         `UPDATE ${tables.operations} SET cancellation_requested_at = COALESCE(cancellation_requested_at, $4::timestamptz),
           cancellation_reason = COALESCE(cancellation_reason, $3), updated_at = $4::timestamptz
@@ -2548,6 +2561,13 @@ export function createOperationCatalog(
               } as const);
             }
             const ordinal = String(operation.rows[0].next_stream_ordinal);
+            // Allocating a stream ordinal cannot change operation admission.
+            hintAuthorizationRows(
+              transaction,
+              databaseSchema,
+              "copilotz_operations",
+              [],
+            );
             await transaction.query(
               `UPDATE ${tables.operations}
               SET next_stream_ordinal = next_stream_ordinal + 1,
@@ -3264,6 +3284,12 @@ export function createOperationCatalog(
               async (_input, { transaction, commandTime }) => {
                 // Output draining ran outside the command loop. Reread readiness
                 // inside this serialized command so newly admitted work prevents settlement.
+                hintAuthorizationRows(
+                  transaction,
+                  databaseSchema,
+                  "copilotz_operations",
+                  ids,
+                );
                 const settled = await transaction.query<
                   { operation_id: string; namespace: string }
                 >(
@@ -3431,6 +3457,12 @@ export function createOperationCatalog(
               `DELETE FROM ${tables.selectionOperations}
             WHERE namespace = $1 AND operation_id = $2`,
               [candidate.namespace, candidate.operation_id],
+            );
+            hintAuthorizationRows(
+              transaction,
+              databaseSchema,
+              "copilotz_operations",
+              [candidate.operation_id],
             );
             const removedOperation = await transaction.query<{
               operation_id: string;

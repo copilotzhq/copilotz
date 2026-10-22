@@ -1,3 +1,4 @@
+import { writeOwnerDeliveries } from "../authorization/leases.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { readActionEffectInventory } from "./effect-commands.ts";
 import { createOperationCatalogTables } from "../streams/catalog.ts";
@@ -56,10 +57,13 @@ export async function cancelScopeActions(
   );
   const flushes: (() => Promise<void>)[] = [];
   for (const child of children.rows) {
-    await transaction.query(
+    await writeOwnerDeliveries(
+      transaction,
+      options.store.databaseSchema,
+      undefined,
       `UPDATE ${options.store.tables.event_deliveries} SET status = 'cancelled', lease_owner = NULL,
       lease_expires_at = NULL, settled_at = NOW(), updated_at = NOW()
-      WHERE settlement_scope_id = $1 AND status IN ('pending','leased','retry_wait')`,
+      WHERE settlement_scope_id = $1 AND status IN ('pending','leased','retry_wait') RETURNING *`,
       [child.operation_id],
     );
     flushes.push(

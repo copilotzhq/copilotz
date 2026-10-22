@@ -1,3 +1,4 @@
+import { writeOwnerDeliveries } from "../authorization/leases.ts";
 import { registerDirectoryCollections } from "../authorization/directory-collections.ts";
 import { bindFlowOperation } from "../authorization/flow.ts";
 import { isOwnerAuthorizationRefusal } from "./authorization-refusal.ts";
@@ -1425,10 +1426,13 @@ export function createDatabaseScope(
           {},
           async (_input, { transaction, caller }) => {
             invalidateOwnerAlarm(transaction, databaseSchema, "content");
-            await transaction.query(
+            await writeOwnerDeliveries(
+              transaction,
+              databaseSchema,
+              undefined,
               `UPDATE ${store.tables.event_deliveries}
           SET lease_expires_at=NOW(), updated_at=NOW()
-          WHERE status='leased' AND owner_epoch < $1`,
+          WHERE status='leased' AND owner_epoch < $1 RETURNING *`,
               [caller.epoch],
             );
             await transaction.query(

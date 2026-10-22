@@ -237,16 +237,28 @@ projections with additional asset nodes conservatively invalidate their table.
 Session writes and flow-effect writes invalidate their grants. Flow descendant
 receipts are also tracked. The hit checks credential, session and flow
 deadlines, policy identity/revision, owner lifetime and invocation cancellation.
-Delivery liveness is cached separately with its lease deadline and write
-dependencies, so a heartbeat need not rerun the policy.
+Delivery liveness is cached separately by delivery ID. Lease, heartbeat,
+settlement, recovery and cancellation commands retain the returned row's worker,
+epoch, status and expiry in owner memory. Both attempt authority and writer
+liveness check those facts against the command clock on every hit; renewal
+extends the lease without rerunning policy. Operation admission is cached
+against the specific operation row. Writes to unrelated deliveries or operations
+do not invalidate these entries. Unclassified writes retain the table-wide
+fallback; returned write sets temporarily fence reads until the affected IDs are
+known.
 
 Only confirmed commits publish new grants to the owner cache. Uncommitted grants
 stay inside their command, and rollback discards them. A write may
 conservatively evict an older grant even when it rolls back. Restart and
 takeover start cold; an old captured policy binding cannot acquire a new
-revision's authority. Staff-directory reads, verifier evidence and
-attempt-scoped authority retain fresh evaluation because they lack the required
-local dependency fence.
+revision's authority. Attempt-bound authority is reusable only while its
+original worker and owner epoch still hold the live lease. Actual
+staff-directory reads and verifier evidence reads retain fresh evaluation
+because they lack the required local dependency fence; declaring an unused
+evidence reader does not disable reuse. Directory commands also retain fresh
+evaluation. The internal cache observer distinguishes absent and stale entries,
+and reports decisions that cannot be retained (staff, evidence, directory or
+expired deadlines).
 
 Within one owner command, session lookups and policy `read.get` calls share
 pending reads keyed by schema, namespace, collection and record ID (session keys

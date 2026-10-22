@@ -1,3 +1,4 @@
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import { isOwnerAuthorizationRefusal } from "../engine/authorization-refusal.ts";
 import { ActionError, standardActionError } from "../actions/errors.ts";
 import {
@@ -962,6 +963,14 @@ export function createEventStore(
       // Delivery rows come back as JSON because a statement returns one row
       // shape. With a statement, the row exists even when no event was
       // inserted, to carry its report.
+      if (mutation.collectionChange) {
+        hintAuthorizationChanges(executor, [{
+          owner: "schema",
+          namespace: draft.namespace,
+          collection: mutation.collectionChange.collection,
+          id: mutation.collectionChange.id,
+        }]);
+      }
       const inserted = await executor.query<
         EventRow & {
           deliveries: unknown;

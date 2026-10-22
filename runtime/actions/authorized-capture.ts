@@ -1,3 +1,11 @@
+import {
+  authorizationDependencyKeys,
+  authorizationTableKey,
+  cachedAuthorization,
+  rememberAuthorization,
+} from "../authorization/cache.ts";
+import type { OwnerPolicy } from "../authorization/evaluator.ts";
+import type { AuthorityDependency } from "../authorization/authority.ts";
 import { captureCollectionInvocation } from "../authorization/invocation.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { assertOwnerInvocationLive } from "../engine/invocation-liveness.ts";
@@ -5,6 +13,7 @@ import type { OperationCatalog } from "../streams/catalog.ts";
 
 import {
   authorizationRefused,
+  authorizationReuseDeadline,
   createOwnerEvaluator,
 } from "../authorization/evaluator.ts";
 
@@ -81,6 +90,56 @@ export function createAuthorizedActions(
       collections: options.collections,
       databaseSchema,
     });
+  type Reuse = {
+    policyId: string;
+    dependencies: readonly AuthorityDependency[];
+    flow: boolean;
+    until: number;
+    policy: OwnerPolicy;
+    revision: string;
+    admittedAt: number;
+  };
+  const cacheScope = {};
+  const cacheKey = (
+    frame: Pick<
+      ActionInvocationFrame,
+      "actionId" | "actionRunId" | "parentActionRunId"
+    >,
+  ) =>
+    JSON.stringify([
+      namespace,
+      frame.actionId,
+      frame.actionRunId,
+      frame.parentActionRunId ?? null,
+    ]);
+  const remember = (
+    command: CommandContext,
+    frame: Pick<
+      ActionInvocationFrame,
+      "actionId" | "actionRunId" | "parentActionRunId"
+    >,
+    reuse?: Reuse,
+  ) => {
+    if (!reuse || reuse.until <= Date.parse(command.commandTime)) return;
+    rememberAuthorization(
+      command.transaction,
+      cacheScope,
+      cacheKey(frame),
+      reuse,
+      [
+        ...authorizationDependencyKeys(
+          databaseSchema,
+          reuse.dependencies,
+        ),
+        ...(reuse.flow
+          ? [
+            authorizationTableKey(databaseSchema, "authorization_effects"),
+            authorizationTableKey(databaseSchema, "owner_receipts"),
+          ]
+          : []),
+      ],
+    );
+  };
   const binding = (action: AnyActionDefinition) => ({
     databaseSchema,
     namespace,
@@ -97,6 +156,10 @@ export function createAuthorizedActions(
       binding(action),
     );
   };
+  // Completed results are fresh disclosures, outside the running Action's
+  // capability lifetime. Preserve their full replay authorization boundary.
+  const terminalRuns = new Set<string>();
+  const livenessScope = {};
   const authority = async (
     command: CommandContext,
     frame: Pick<ActionInvocationFrame, "actionRunId" | "actionId" | "signal">,
@@ -109,6 +172,16 @@ export function createAuthorizedActions(
       }
       // Input capture precedes the open Action obligation, and a completed
       // child may be replayed by its still-live parent delivery.
+      const live = !terminalRuns.has(frame.actionRunId) &&
+        cachedAuthorization<{ until: number }>(
+          command.transaction,
+          livenessScope,
+          "writer",
+        );
+      if (live && Date.parse(command.commandTime) < live.until) {
+        return live.until;
+      }
+      let until = Infinity;
       await assertOwnerInvocationLive(command, {
         databaseSchema,
         namespace,
@@ -116,7 +189,16 @@ export function createAuthorizedActions(
         operationId: options.source.operationId,
         eventId: options.source.eventId,
         writer: options.writer,
+      }, (deadline) => {
+        until = deadline ? Date.parse(deadline) : Infinity;
       });
+      rememberAuthorization(command.transaction, livenessScope, "writer", {
+        until,
+      }, [
+        authorizationTableKey(databaseSchema, "event_deliveries"),
+        authorizationTableKey(databaseSchema, "copilotz_operations"),
+      ]);
+      return until;
     } else if (options.writer) {
       throw new Error("Protected Action hooks require an active execution.");
     }
@@ -161,6 +243,7 @@ export function createAuthorizedActions(
       data.actionId !== action.id ||
       data.actionRunId !== runId
     ) throw new Error("Protected Action input capture is invalid.");
+    if (data.status !== "invoked") terminalRuns.add(runId);
     return data;
   };
   const authorize = async (
@@ -172,7 +255,7 @@ export function createAuthorizedActions(
     input: unknown,
     source: ProtectedActionSourceBinding,
     firstCapture = false,
-  ) => {
+  ): Promise<{ input: unknown; metadata: unknown; reuse?: Reuse }> => {
     await authority(command, frame);
     if (!evaluate) authorizationRefused();
     const resolved = await resolveProtectedActionSource({
@@ -227,12 +310,26 @@ export function createAuthorizedActions(
     const policy = decision.constraints.actions?.[alias(frame.actionId)!];
     if (!policy) authorizationRefused();
     await authority(command, frame);
+    const currentPolicy =
+      options.authorization!.policies[decision.authority.policy.id];
+    const until = authorizationReuseDeadline(decision);
+    const reuse = until === undefined ? undefined : {
+      policyId: decision.authority.policy.id,
+      dependencies: decision.dependencies,
+      flow: !!decision.authority.flow,
+      policy: currentPolicy,
+      revision: currentPolicy.revision,
+      until,
+      admittedAt: decision.authority.validity.kind === "credential"
+        ? Date.parse(decision.authority.validity.admittedAt)
+        : -Infinity,
+    };
     const metadata = captureHostCommandJson({
       ...("metadata" in frame ? frame.metadata as Record<string, unknown> : {}),
       ...decision.constraints.actionMetadata,
     });
     if (!firstCapture) {
-      return { input: captureHostCommandJson(input), metadata };
+      return { input: captureHostCommandJson(input), metadata, reuse };
     }
     await command.transaction.query(
       `INSERT INTO ${store.tables.authorization_invocations}(namespace,run_id,source_event_id,authority) VALUES($1,$2,$3,$4::jsonb)`,
@@ -247,7 +344,7 @@ export function createAuthorizedActions(
       ],
     );
     if (!policy.input) {
-      return { input: captureHostCommandJson(input), metadata };
+      return { input: captureHostCommandJson(input), metadata, reuse };
     }
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       authorizationRefused();
@@ -264,6 +361,7 @@ export function createAuthorizedActions(
     return {
       input: captureHostCommandJson({ ...candidate, ...policy.input }),
       metadata,
+      reuse,
     };
   };
   const prepareInput = (
@@ -345,7 +443,13 @@ export function createAuthorizedActions(
               current: options.source,
             });
             const captured = captureHostCommandJson(existing.input);
-            await authorize(command, frame, captured, prior.result.source);
+            const checked = await authorize(
+              command,
+              frame,
+              captured,
+              prior.result.source,
+            );
+            remember(command, frame, checked.reuse);
             return {
               input: captured,
               claimed: false,
@@ -408,6 +512,8 @@ export function createAuthorizedActions(
               await awaitEventPublication(captured);
             });
           }
+          await authority(command, frame);
+          remember(command, frame, decision.reuse);
           return { input: prepared, claimed: true, metadata };
         },
       );
@@ -446,13 +552,34 @@ export function createAuthorizedActions(
     };
     return {
       authorize: async (tx: SqlExecutor) => {
+        const command = schemaCommandContext(tx, databaseSchema);
+        options.signal.throwIfAborted();
+        frame.signal.throwIfAborted();
+        command.signal.throwIfAborted();
+        const saved = !terminalRuns.has(frame.actionRunId) &&
+          cachedAuthorization<Reuse>(tx, cacheScope, cacheKey(frame));
+        const reference = definition(frame.actionId);
+        const currentPolicy = reference &&
+          options.authorization?.policies[reference.id];
+        const now = Date.parse(command.commandTime);
+        if (
+          saved && saved.policy === currentPolicy &&
+          saved.revision === currentPolicy?.revision &&
+          reference?.id === saved.policyId &&
+          reference?.revision === saved.revision &&
+          now >= saved.admittedAt && now < saved.until
+        ) {
+          await authority(command, frame);
+          return;
+        }
         const value = await captured(tx);
-        await authorize(
-          schemaCommandContext(tx, databaseSchema),
+        const checked = await authorize(
+          command,
           frame,
           value.input,
           value.source,
         );
+        remember(command, frame, checked.reuse);
       },
     };
   };

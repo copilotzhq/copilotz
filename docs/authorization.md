@@ -220,6 +220,43 @@ if (intent.kind === "collection") {
 }
 ```
 
+### Authorization reuse during an Action run
+
+The schema owner keeps a successful capture (or the first successful
+`authorize`) in memory for that run and its captured authority and policy
+revision. Capability calls reuse it without reading the protected-input receipt,
+input event/body, or invocation row and without invoking the Action policy
+again. Collection and other capability-specific policies still apply.
+Completed-result replay retains its fresh authorization boundary.
+
+The cache belongs to one owner incarnation. The owner observes SQL mutations
+before executing them, including mutations inside a command or writable CTE.
+Collection projections invalidate the exact record and collection-set keys;
+missing-record and empty-list dependencies are covered. Raw writes and
+projections with additional asset nodes conservatively invalidate their table.
+Session writes and flow-effect writes invalidate their grants. Flow descendant
+receipts are also tracked. The hit checks credential, session and flow
+deadlines, policy identity/revision, owner lifetime and invocation cancellation.
+Delivery liveness is cached separately with its lease deadline and write
+dependencies, so a heartbeat need not rerun the policy.
+
+Only confirmed commits publish new grants to the owner cache. Uncommitted grants
+stay inside their command, and rollback discards them. A write may
+conservatively evict an older grant even when it rolls back. Restart and
+takeover start cold; an old captured policy binding cannot acquire a new
+revision's authority. Staff-directory reads, verifier evidence and
+attempt-scoped authority retain fresh evaluation because they lack the required
+local dependency fence.
+
+Within one owner command, session lookups and policy `read.get` calls share
+pending reads keyed by schema, namespace, collection and record ID (session keys
+also include tenant and principal). Each policy receives a detached copy. Writes
+invalidate these reads before the next evaluation. Product policies therefore
+need no local memoization for repeated point reads within a command. Policy
+changes must use a new registration/revision, and mutable authorization facts
+must be read through the tracked sources; changing an untracked closure variable
+is not an invalidation signal.
+
 ### What `evaluate` returns
 
 `ServerConstraints`, exported from `@copilotz/copilotz` and

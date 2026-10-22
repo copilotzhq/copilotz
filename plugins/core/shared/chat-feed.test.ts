@@ -171,7 +171,7 @@ test("only terminal LLM and operation events settle replies across failed stream
       ?.status,
     "streaming",
   );
-  feed.apply(event("operation.cancelled"));
+  feed.apply(event("operation.settled", { outcome: "cancelled" }));
   const status = Object.fromEntries(
     feed.snapshot().attempts.map((
       attempt,

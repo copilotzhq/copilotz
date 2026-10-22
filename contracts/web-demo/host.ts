@@ -286,7 +286,11 @@ export async function playLaunchReply(
     createdAt: now,
     updatedAt: now,
   });
-  feed.event(thread, { type: "operation.completed", operationId: op });
+  feed.event(thread, {
+    type: "operation.settled",
+    outcome: "completed",
+    operationId: op,
+  });
 }
 
 const replies = [
@@ -346,9 +350,8 @@ async function reply(feed: DemoFeed, threadId: string, operationId: string) {
   });
   feed.live.patch("thread", threadId, { updatedAt: now });
   feed.event(threadId, {
-    type: feed.cancelled.has(operationId)
-      ? "operation.cancelled"
-      : "operation.completed",
+    type: "operation.settled",
+    outcome: feed.cancelled.has(operationId) ? "cancelled" : "completed",
     operationId,
   });
 }
@@ -456,173 +459,203 @@ export function demoActions(
 ): ActionTransport {
   let sequence = 1000;
   let failCreate = behavior.failFirstCreate ?? false;
+  const scopes = new Map<string, Promise<void>>();
   const done = (value: unknown = {}) =>
     Promise.resolve({ value, seq: ++sequence });
   return {
     async invoke(alias, input, options) {
       const operationId = `op-${crypto.randomUUID()}`;
+      const scope = Promise.withResolvers<void>();
+      scopes.set(operationId, scope.promise);
+      void scope.promise.catch(() => {});
+      let downstream = Promise.resolve();
       options.accepted(operationId);
-      await sleep(120);
-      const data = (input ?? {}) as Record<string, unknown>;
-      const now = new Date().toISOString();
-      switch (alias) {
-        case "createThread": {
-          // Creating an existing id conflicts, as on the server.
-          if (live.rows("thread").some((row) => row.id === data.id)) {
-            throw Object.assign(new Error("Record already exists."), {
-              code: "collection_conflict",
-              status: 409,
-            });
-          }
-          if (behavior.createLatency) await sleep(behavior.createLatency);
-          const participants =
-            (data.participants as Record<string, unknown>[] ?? [])
-              .map((participant) =>
-                participant.participantType === "agent"
-                  ? `p-${participant.agentId}`
-                  : "p-ana"
-              );
-          live.put("thread", {
-            id: String(data.id),
-            name: String(data.name ?? "New conversation"),
-            status: "active",
-            ...(data.spaceId ? { spaceId: data.spaceId } : {}),
-            participantIds: [...new Set(["p-ana", ...participants])],
-            metadata: {},
-            createdAt: now,
-            updatedAt: now,
-          });
-          if (failCreate) {
-            failCreate = false;
-            throw new Error("The connection closed before the reply.");
-          }
-          return done({ id: data.id });
-        }
-        case "createThreadMessage": {
-          const threadId = String(data.threadId);
-          live.put("message", {
-            id: String(data.id),
-            threadId,
-            senderId: "p-ana",
-            recipientIds: data.recipientIds ?? [],
-            content: (data.content as Record<string, unknown>[]).map((part) =>
-              part.type === "text"
-                ? {
-                  assetId: `text-${data.id}`,
-                  kind: "text",
-                  role: "body",
-                  mediaType: "text/markdown",
-                  value: part.text,
-                }
-                : {
-                  assetId: `asset-${crypto.randomUUID()}`,
-                  kind: part.type ?? part.kind,
-                  role: "attachment",
-                  mediaType: part.mediaType,
-                  name: part.name,
-                }
-            ),
-            metadata: {},
-            createdAt: now,
-            updatedAt: now,
-          });
-          live.patch("thread", threadId, { updatedAt: now });
-          feed.event(threadId, { type: "message.created", operationId });
-          void reply(feed, threadId, operationId);
-          return done({ id: data.id });
-        }
-        case "updateConversation":
-          live.patch("thread", String(data.threadId), {
-            ...(data.patch as object),
-            updatedAt: now,
-          });
-          return done();
-        case "deleteConversation":
-          live.remove("thread", String(data.threadId));
-          return done();
-        case "reviseMessage":
-          live.patch("message", String(data.messageId), {
-            content: [{
-              assetId: `text-${data.id}`,
-              kind: "text",
-              role: "body",
-              mediaType: "text/markdown",
-              value: (data.content as { text: string }[])[0]?.text ?? "",
-            }],
-            revision: { previousRevisionMessageId: data.messageId },
-          });
-          return done();
-        case "spaces": {
-          const spaceId = String(data.spaceId ?? "");
-          if (data.operation === "create") {
-            const id = `sp-${crypto.randomUUID().slice(0, 8)}`;
-            live.put("space", {
-              id,
-              name: data.name,
-              description: data.description ?? "",
-              ownerId: "p-ana",
-              memberIds: ["p-ana"],
+      try {
+        await sleep(120);
+        const data = (input ?? {}) as Record<string, unknown>;
+        const now = new Date().toISOString();
+        switch (alias) {
+          case "createThread": {
+            // Creating an existing id conflicts, as on the server.
+            if (live.rows("thread").some((row) => row.id === data.id)) {
+              throw Object.assign(new Error("Record already exists."), {
+                code: "collection_conflict",
+                status: 409,
+              });
+            }
+            if (behavior.createLatency) await sleep(behavior.createLatency);
+            const participants =
+              (data.participants as Record<string, unknown>[] ?? [])
+                .map((participant) =>
+                  participant.participantType === "agent"
+                    ? `p-${participant.agentId}`
+                    : "p-ana"
+                );
+            live.put("thread", {
+              id: String(data.id),
+              name: String(data.name ?? "New conversation"),
               status: "active",
-              revision: 0,
+              ...(data.spaceId ? { spaceId: data.spaceId } : {}),
+              participantIds: [...new Set(["p-ana", ...participants])],
+              metadata: {},
               createdAt: now,
               updatedAt: now,
             });
-            return done({ spaceId: id, operation: "create" });
+            if (failCreate) {
+              failCreate = false;
+              throw new Error("The connection closed before the reply.");
+            }
+            return done({ id: data.id });
           }
-          if (data.operation === "update") {
-            live.patch("space", spaceId, {
-              ...(data.name !== undefined ? { name: data.name } : {}),
-              ...(data.description !== undefined
-                ? { description: data.description }
-                : {}),
+          case "createThreadMessage": {
+            const threadId = String(data.threadId);
+            live.put("message", {
+              id: String(data.id),
+              threadId,
+              senderId: "p-ana",
+              recipientIds: data.recipientIds ?? [],
+              content: (data.content as Record<string, unknown>[]).map((part) =>
+                part.type === "text"
+                  ? {
+                    assetId: `text-${data.id}`,
+                    kind: "text",
+                    role: "body",
+                    mediaType: "text/markdown",
+                    value: part.text,
+                  }
+                  : {
+                    assetId: `asset-${crypto.randomUUID()}`,
+                    kind: part.type ?? part.kind,
+                    role: "attachment",
+                    mediaType: part.mediaType,
+                    name: part.name,
+                  }
+              ),
+              metadata: {},
+              createdAt: now,
               updatedAt: now,
             });
-          } else if (data.operation === "remove") {
-            for (const thread of live.rows("thread")) {
-              if (thread.spaceId === spaceId) {
+            live.patch("thread", threadId, { updatedAt: now });
+            feed.event(threadId, { type: "message.created", operationId });
+            downstream = reply(feed, threadId, operationId);
+            return done({ id: data.id });
+          }
+          case "updateConversation":
+            live.patch("thread", String(data.threadId), {
+              ...(data.patch as object),
+              updatedAt: now,
+            });
+            return done();
+          case "deleteConversation":
+            live.remove("thread", String(data.threadId));
+            return done();
+          case "reviseMessage":
+            live.patch("message", String(data.messageId), {
+              content: [{
+                assetId: `text-${data.id}`,
+                kind: "text",
+                role: "body",
+                mediaType: "text/markdown",
+                value: (data.content as { text: string }[])[0]?.text ?? "",
+              }],
+              revision: { previousRevisionMessageId: data.messageId },
+            });
+            return done();
+          case "spaces": {
+            const spaceId = String(data.spaceId ?? "");
+            if (data.operation === "create") {
+              const id = `sp-${crypto.randomUUID().slice(0, 8)}`;
+              live.put("space", {
+                id,
+                name: data.name,
+                description: data.description ?? "",
+                ownerId: "p-ana",
+                memberIds: ["p-ana"],
+                status: "active",
+                revision: 0,
+                createdAt: now,
+                updatedAt: now,
+              });
+              return done({ spaceId: id, operation: "create" });
+            }
+            if (data.operation === "update") {
+              live.patch("space", spaceId, {
+                ...(data.name !== undefined ? { name: data.name } : {}),
+                ...(data.description !== undefined
+                  ? { description: data.description }
+                  : {}),
+                updatedAt: now,
+              });
+            } else if (data.operation === "remove") {
+              for (const thread of live.rows("thread")) {
+                if (thread.spaceId === spaceId) {
+                  const { spaceId: _gone, ...rest } = thread;
+                  live.put("thread", rest);
+                }
+              }
+              live.remove("space", spaceId);
+            } else if (data.operation === "attach") {
+              live.patch("thread", String(data.recordId), { spaceId });
+            } else if (data.operation === "detach") {
+              const thread = live.get("thread", String(data.recordId));
+              if (thread) {
                 const { spaceId: _gone, ...rest } = thread;
                 live.put("thread", rest);
               }
+            } else if (data.operation === "removeMember") {
+              const space = live.get("space", spaceId);
+              live.patch("space", spaceId, {
+                memberIds: (space?.memberIds as string[] ?? []).filter((id) =>
+                  id !== data.participantId
+                ),
+              });
             }
-            live.remove("space", spaceId);
-          } else if (data.operation === "attach") {
-            live.patch("thread", String(data.recordId), { spaceId });
-          } else if (data.operation === "detach") {
-            const thread = live.get("thread", String(data.recordId));
-            if (thread) {
-              const { spaceId: _gone, ...rest } = thread;
-              live.put("thread", rest);
-            }
-          } else if (data.operation === "removeMember") {
-            const space = live.get("space", spaceId);
-            live.patch("space", spaceId, {
-              memberIds: (space?.memberIds as string[] ?? []).filter((id) =>
-                id !== data.participantId
-              ),
-            });
+            return done({ spaceId });
           }
-          return done({ spaceId });
+          case "addThreadParticipant": {
+            const thread = live.get("thread", String(data.threadId));
+            const participant = data.participant as Record<string, unknown>;
+            live.patch("thread", String(data.threadId), {
+              participantIds: [
+                ...(thread?.participantIds as string[] ?? []),
+                `p-${participant.agentId}`,
+              ],
+            });
+            return done();
+          }
+          case "adminOverview":
+          case "adminAgents":
+          case "adminThreads":
+          case "adminParticipants":
+          case "adminActivity":
+          case "adminUsage":
+            return done({ status: 200, data: adminData(live, alias) });
+          default:
+            return done({ ok: true });
         }
-        case "addThreadParticipant": {
-          const thread = live.get("thread", String(data.threadId));
-          const participant = data.participant as Record<string, unknown>;
-          live.patch("thread", String(data.threadId), {
-            participantIds: [
-              ...(thread?.participantIds as string[] ?? []),
-              `p-${participant.agentId}`,
-            ],
-          });
-          return done();
-        }
-        case "adminOverview":
-        case "adminAgents":
-        case "adminThreads":
-        case "adminParticipants":
-        case "adminActivity":
-        case "adminUsage":
-          return done({ status: 200, data: adminData(live, alias) });
-        default:
-          return done({ ok: true });
+      } finally {
+        void downstream.then(() => {
+          if (feed.cancelled.has(operationId)) {
+            scope.reject(new Error("Operation settlement cancelled."));
+          } else scope.resolve();
+        }, scope.reject);
+      }
+    },
+    async settled(operationId, signal) {
+      signal.throwIfAborted();
+      const scope = scopes.get(operationId);
+      if (!scope) throw new Error("Unknown demo operation");
+      let abort!: () => void;
+      try {
+        await Promise.race([
+          scope,
+          new Promise<never>((_resolve, reject) => {
+            abort = () => reject(signal.reason);
+            signal.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+      } finally {
+        signal.removeEventListener("abort", abort);
       }
     },
     cancel(operationId) {

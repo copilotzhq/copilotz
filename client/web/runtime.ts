@@ -577,8 +577,8 @@ export async function createBrowserRuntime(
         notify(`action:${id}`);
         emit(`action.${next}`, undefined, id);
       };
-      const settlement = Promise.withResolvers<OperationResult>();
-      void settlement.promise.catch(() => {});
+      const completion = Promise.withResolvers<OperationResult>();
+      void completion.promise.catch(() => {});
       if (definition.optimistic) {
         const optimistic = definition.optimistic;
         const layer = {
@@ -595,10 +595,10 @@ export async function createBrowserRuntime(
             `Unknown optimistic command '${layer.collection}.${layer.command}'`,
           );
         }
-        pendingLayers.set(id, { layer, result: settlement.promise });
+        pendingLayers.set(id, { layer, result: completion.promise });
         for (const entry of entries.values()) {
           if (entry.request.collection === layer.collection) {
-            entry.live?.optimistic(id, layer, settlement.promise);
+            entry.live?.optimistic(id, layer, completion.promise);
           }
         }
       }
@@ -620,7 +620,7 @@ export async function createBrowserRuntime(
             for (const collection of batch) persist(collection);
           }
           signal.throwIfAborted();
-          settlement.resolve({ value, seq: "0" });
+          completion.resolve({ value, seq: "0" });
           transition("completed");
           return value;
         }
@@ -640,7 +640,7 @@ export async function createBrowserRuntime(
         signal.throwIfAborted();
         const seq = ownerSequence(terminal.seq);
         rejectActionFailure(terminal.value);
-        settlement.resolve({
+        completion.resolve({
           value: terminal.value,
           seq: String(seq),
         });
@@ -648,7 +648,7 @@ export async function createBrowserRuntime(
         return terminal.value;
       }).catch((cause) => {
         error = cause;
-        settlement.reject(cause);
+        completion.reject(cause);
         transition(signal.aborted ? "cancelled" : "failed");
         throw cause;
       }).finally(() => {
@@ -657,6 +657,7 @@ export async function createBrowserRuntime(
       });
       // Handles are observable even when the caller deliberately ignores result().
       result.catch(() => {});
+      let settled: Promise<unknown> | undefined;
       const handle: ActionHandle = {
         id,
         get status() {
@@ -668,6 +669,24 @@ export async function createBrowserRuntime(
           return error;
         },
         result: () => result,
+        settled: () => {
+          settled ??= (async () => {
+            // Observation is lazy and separately cancellable through the runtime
+            // lifetime. Its failure must never change the Action's result/status.
+            const operationId = await receipt;
+            if (definition.placement === "server" && operationId) {
+              if (!options.actions?.settled) {
+                throw new TypeError(
+                  "Action transport does not support settlement",
+                );
+              }
+              await options.actions.settled(operationId, signal);
+            }
+            return await result;
+          })();
+          void settled.catch(() => {});
+          return settled;
+        },
         async cancel() {
           if (["completed", "failed", "cancelled"].includes(status)) return;
           if (definition.placement !== "server") {

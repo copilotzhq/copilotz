@@ -207,7 +207,7 @@ export function createFeedProjector(
         const output = frame.output;
         const operationId = text(output.operationId);
         const type = output.type;
-        if (/^operation\.(completed|failed|cancelled)$/.test(type)) {
+        if (type === "operation.settled") {
           if (!operationId) return false;
           active.delete(operationId);
           settled.add(operationId);
@@ -216,7 +216,7 @@ export function createFeedProjector(
               attempt.operationId === operationId &&
               attempt.status === "streaming"
             ) {
-              attempt.status = type === "operation.completed"
+              attempt.status = output.outcome === "completed"
                 ? "complete"
                 : "failed";
               attempt.updatedAt = now();

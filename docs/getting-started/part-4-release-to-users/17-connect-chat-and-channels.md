@@ -532,12 +532,11 @@ The flow:
 2. `client.operations.observe` follows the work this operation carries,
    including the assistant's turn; detached background work settles separately.
    The script reads only output descriptor types: the operation's terminal
-   descriptor (`operation.completed`, `operation.failed` or
-   `operation.cancelled`) and `llm.call.failed`. A well-formed observation can
-   end without a terminal descriptor, so the script treats that as a premature
-   end, not success. And as in Chapter 8, an operation can complete even though
-   the model call failed, so completion alone does not prove the assistant
-   replied.
+   descriptor (`operation.settled` with an `outcome` of `completed`, `failed` or
+   `cancelled`) and `llm.call.failed`. A well-formed observation can end without
+   a terminal descriptor, so the script treats that as a premature end, not
+   success. And as in Chapter 8, an operation can complete even though the model
+   call failed, so completion alone does not prove the assistant replied.
 3. `client.operations.result` returns `{ value, seq }`, where `value` is the
    send Action's `{ threadId, message }` output. That result is available as
    soon as the message is recorded; it does not wait for the assistant's turn.
@@ -592,10 +591,9 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
         // The operation's terminal state, after the work it carries, including
         // the assistant's turn. Detached background work settles separately.
         if (
-          type === "operation.completed" || type === "operation.failed" ||
-          type === "operation.cancelled"
+          type === "operation.settled"
         ) {
-          terminal = type;
+          terminal = String(frame.output.outcome);
         }
         // A model call that ended in failure. Keep consuming frames.
         if (type === "llm.call.failed") modelCallFailed = true;
@@ -618,7 +616,7 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
     return 1;
   }
   // The operation failed or was cancelled.
-  if (terminal !== "operation.completed") {
+  if (terminal !== "completed") {
     console.error(`operation ended: ${terminal}`);
     return 1;
   }
@@ -742,7 +740,7 @@ node chat-client.ts "Save a note: ship chat." chat-017
 Expected facts, not exact text:
 
 - an `operation …` line, then the script exits with status 0: the operation
-  reached `operation.completed` and no `llm.call.failed` was observed;
+  reached `operation.settled` and no `llm.call.failed` was observed;
 - the script prints a bounded page of the latest messages visible to
   `local-guide-user` on its `team-notes-chat` thread, ending with the
   assistant's reply. With Chapter 9's tool or Chapter 12's specialist, extra

@@ -553,7 +553,7 @@ Deno.test("Action login replay projects only cookies; logout revokes an open cha
     for await (const frame of decodeObservation(observed)) {
       assert(!JSON.stringify(frame).includes(token));
       if (
-        frame.kind === "output" && frame.output.type === "operation.completed"
+        frame.kind === "output" && frame.output.type === "operation.settled"
       ) break;
     }
     await assertRejects(() =>
@@ -721,7 +721,7 @@ Deno.test("Flow credential is signed, tenant-bound, operation-bound and single-u
     assertEquals(observed.status, 200);
     for await (const frame of decodeObservation(observed)) {
       if (
-        frame.kind === "output" && frame.output.type === "operation.completed"
+        frame.kind === "output" && frame.output.type === "operation.settled"
       ) break;
     }
     await forbidden(await f.request("/collections/entries", undefined, flow));
@@ -1303,17 +1303,23 @@ Deno.test("SEC3 Action cookie rejects cross-site device upgrades and duplicate c
       sockets.push(socket);
       const admitted = await new Promise<number>((resolve) => {
         socket.on("open", () => resolve(101));
-        socket.on("unexpected-response", (_req, response) => {
-          response.resume();
-          socket.terminate();
-          resolve(response.statusCode!);
-        });
+        socket.on(
+          "unexpected-response",
+          (_req: unknown, response: import("node:http").IncomingMessage) => {
+            response.resume();
+            socket.terminate();
+            resolve(response.statusCode!);
+          },
+        );
         socket.on("error", () => {});
       });
       assertEquals(admitted, allowed ? 101 : 403);
       if (allowed) {
         const welcome = new Promise<Record<string, unknown>>((resolve) =>
-          socket.once("message", (data) => resolve(JSON.parse(String(data))))
+          socket.once(
+            "message",
+            (data: unknown) => resolve(JSON.parse(String(data))),
+          )
         );
         socket.send(
           JSON.stringify({
@@ -1391,8 +1397,11 @@ Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation t
         socket(url) {
           const peer = new Socket(url, { headers: { origin, cookie } });
           peers.push(peer);
-          peer.on("message", (data) => frames.push(JSON.parse(String(data))));
-          peer.on("close", (code) => closed.resolve(code));
+          peer.on(
+            "message",
+            (data: unknown) => frames.push(JSON.parse(String(data))),
+          );
+          peer.on("close", (code: number) => closed.resolve(code));
           return peer as unknown as WebSocket;
         },
       });
@@ -1428,7 +1437,7 @@ Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation t
         if (frame.kind === "output") clientOutputs.push(frame.output.type);
       },
     });
-    assertEquals(clientOutputs.at(-1), "operation.completed");
+    assertEquals(clientOutputs.at(-1), "operation.settled");
     const observed = await f.request("/operations/observe", {
       operationIds: [logoutId],
     }, { cookie });
@@ -1437,7 +1446,7 @@ Deno.test("SEC3 two tabs: logout receipt is proof-bound and session revocation t
     for await (const frame of decodeObservation(observed)) {
       if (frame.kind === "output") outputs.push(frame.output.type);
     }
-    assertEquals(outputs, ["operation.completed"]);
+    assertEquals(outputs, ["operation.settled"]);
     const result = await f.result(logoutId, { cookie });
     assertEquals(result.status, 200, await result.clone().text());
     assertEquals((await result.json()).data, { ok: true });
@@ -1644,7 +1653,7 @@ for (const path of ["result", "observe"] as const) {
         for await (const frame of decodeObservation(response)) {
           if (frame.kind === "output") outputs.push(frame.output.type);
         }
-        assertEquals(outputs, ["operation.completed"]);
+        assertEquals(outputs, ["operation.settled"]);
       }
       finish.resolve();
       assertEquals((await f.result(id, { cookie })).status, 200);

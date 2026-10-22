@@ -83,7 +83,7 @@ Deno.test("real facade and browser client share durable Action submission and re
         if (frame.kind === "output") outputs.push(frame.output.type);
       },
     });
-    assertEquals(outputs.includes("operation.completed"), true);
+    assertEquals(outputs.includes("operation.settled"), true);
     const result = await client.operations.result(receipt.operationId);
     assertEquals(result.value, { echoed: "observe" });
     assertEquals(

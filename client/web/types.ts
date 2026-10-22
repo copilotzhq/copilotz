@@ -77,6 +77,8 @@ export interface ActionHandle {
   readonly status: ActionStatus;
   readonly error: unknown;
   result(): Promise<unknown>;
+  /** Wait for the whole scope; reject if the Action or a downstream delivery fails. */
+  settled(): Promise<unknown>;
   cancel(): Promise<void>;
 }
 export interface BrowserViewContext extends ViewEnvironment {
@@ -127,7 +129,7 @@ export interface BrowserPlugin {
   adapters?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 export interface ActionTransport {
-  /** Invoke a composition alias; resolve at terminal with the last owner sequence. */
+  /** Resolve when the Action's own durable result exists, with its owner sequence. */
   invoke(
     alias: string,
     input: unknown,
@@ -137,6 +139,8 @@ export interface ActionTransport {
       accepted(operationId: string): void;
     },
   ): Promise<{ value: unknown; seq: number | string | bigint }>;
+  /** Required to wait for server scope settlement. Independent of invoke(). */
+  settled?(operationId: string, signal: AbortSignal): Promise<void>;
   cancel(operationId: string): Promise<void>;
 }
 export interface ClientEvent {

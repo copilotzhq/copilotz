@@ -1,4 +1,8 @@
-/** Offline retained-owner operations. Stop intake, owners and body producers first. @module */
+/** Offline retained-owner operations. Stop intake, owners and body producers first.
+ * Action result completion is not a drain barrier: inherited work can remain.
+ * Confirm the retained-data drain before exporting, relocating or upgrading.
+ * @module
+ */
 export {
   exportOwnerBundle,
   importOwnerBundle,

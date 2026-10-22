@@ -170,14 +170,35 @@ Large or binary content belongs in Assets; see
 ### Results and observation
 
 `client.operations.result(id)` returns `{ value, seq }` once the target Action
-and its own streams are complete. `value` is the Action output and `seq` is the
-owner sequence used for optimistic subscription settlement. It does not wait for
+has a durable result. `value` is the Action output and `seq` is the owner
+sequence used for optimistic subscription settlement. It does not wait for
 descendant work: for a Core `sendConversation`, its `value` contains
 `{ threadId, message }` possibly before any model output, and the enclosing
-operation may still fail later. When you need full completion, observe the
-operation until a terminal status and handle semantic failures such as
-`llm.call.failed` yourself. `client.actions.invoke` returns the Action value
-with the same completion boundary.
+operation may still fail later. Use `client.operations.settled(id)` for the
+whole scope. It resolves to `{ operationId, state: "settled", outcome, seq }`;
+inspect `outcome` for `completed`, `failed` or `cancelled`. Observation ends
+with the same `operation.settled` descriptor. Action lifecycle outputs
+(`*.completed`, `*.failed`, `*.cancelled`) remain durable events and stream as
+they are recorded. Handle semantic failures such as `llm.call.failed` yourself.
+`client.actions.invoke` returns the Action value with the same completion
+boundary.
+
+Browser `ActionHandle.result()` and `status` track the Action's completion.
+`await handle.settled()` returns the same value after scope settlement and
+rejects if the Action fails or the scope fails/is cancelled. A downstream
+failure does not change an already completed handle's result, status or error.
+Browser-local Actions settle when their execute function finishes; wrappers
+needing a child server scope must await that child's `settled()` explicitly.
+
+`GET /operations/:id` reports scope state `accepted`, `running` or `settled`; a
+settled scope also has `outcome` and `settledAt`. The retained catalog and
+in-process `operationStatus` keep their existing settlement-state values
+(`completed`, `failed`, `cancelled`) and `completedAt` storage name. These do
+not describe the invoked Action's completion. No catalog migration is required.
+Event and Collection mutation result reads retain their existing scope boundary.
+Submission receipts report the scope phase in `status`; a replay of a settled
+operation reports `settled`. Read `operations.result` for the Action output and
+`operations.settled` for the scope outcome.
 
 Action submissions still return `202` receipts. A failed Action's result read
 returns `422` with an `error` body containing code `action_failed` and message
@@ -516,9 +537,9 @@ and successful responses do not trigger the legacy abort warning. See
 
 A completed self-logout receipt remains observable with its initiating
 `x-copilotz-credential-proof`, even after the authenticating session is revoked.
-The observation returns only `operation.completed`; retrieve the authorized
-Action result through `/operations/:id/result`. A wrong proof, different tenant,
-other operation or multi-operation selection gains no recovery access. The SDK
+The observation returns only `operation.settled`; retrieve the authorized Action
+result through `/operations/:id/result`. A wrong proof, different tenant, other
+operation or multi-operation selection gains no recovery access. The SDK
 re-admits a single-operation observation once if it is revoked during logout.
 
 ### Invalid session cookies

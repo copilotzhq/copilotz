@@ -107,6 +107,10 @@ export type OperationSelectionHead = Readonly<{
 }>;
 export type OperationSelectionChange = OperationRecord & OperationSelectionHead;
 
+/** Retained scope settlement state, not the invoked Action lifecycle state.
+ * The storage values/timestamps remain stable for offline owner transfers.
+ * Observation represents terminal values as operation.settled + outcome.
+ */
 export type OperationState =
   | "accepted"
   | "running"

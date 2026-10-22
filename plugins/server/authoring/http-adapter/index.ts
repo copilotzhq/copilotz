@@ -58,6 +58,7 @@ export type HttpHandlerContext = Readonly<{
     }
   >;
   read: HttpReadServices;
+  /** Returns the Action's durable result; observe its operation for scope settlement. */
   invoke(
     actionAlias: string,
     input: unknown,

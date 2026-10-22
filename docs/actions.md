@@ -108,8 +108,9 @@ the `id` (`notes.save`).
 ### Call from a host
 
 `app.actions.saveNote({ text }, options)` starts a new recorded operation and
-returns the Action output after inherited work settles. The alias is `saveNote`;
-the durable Events still use `notes.save.invoked` and `notes.save.completed` (or
+returns the Action output as soon as its durable lifecycle result exists.
+Inherited downstream work may still be pending. The alias is `saveNote`; the
+durable Events still use `notes.save.invoked` and `notes.save.completed` (or
 `failed`/`cancelled`). Invalid input is rejected before those Events exist. An
 identical `idempotencyKey` restores the recorded output or failure without
 executing the Action again. Host calls run as the trusted host: the owner

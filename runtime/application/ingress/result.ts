@@ -468,23 +468,6 @@ async function readRecordedOperationResult(
       throw actionFailure(direct.error, audience);
     }
     if (direct.status === "completed") {
-      let afterStreamOrdinal: string | undefined;
-      for (;;) {
-        const streams = await scoped.operations.listStreams({
-          namespace: status.namespace,
-          operationId,
-          afterStreamOrdinal,
-          limit: 256,
-        });
-        if (
-          streams.some((stream) =>
-            stream.descriptor.metadata.sourceActionRunId ===
-              direct.actionRunId && stream.state !== "terminal"
-          )
-        ) return pending();
-        if (streams.length < 256) break;
-        afterStreamOrdinal = streams.at(-1)!.streamOrdinal;
-      }
       return { kind: "action", pending: false, value: direct.output };
     }
   }
@@ -546,27 +529,6 @@ async function readRecordedOperationResult(
       return pending();
     }
     throw appError(409, "action_not_completed", "Action did not complete.");
-  }
-  let afterStreamOrdinal: string | undefined;
-  for (;;) {
-    const streams = await scoped.operations.listStreams({
-      namespace: status.namespace,
-      operationId,
-      afterStreamOrdinal,
-      limit: 256,
-    });
-    if (
-      streams.some((stream) =>
-        stream.descriptor.metadata.sourceActionRunId ===
-          terminal.targetActionRunId && stream.state !== "terminal"
-      )
-    ) {
-      return pending();
-    }
-    if (streams.length < 256) {
-      break;
-    }
-    afterStreamOrdinal = streams.at(-1)!.streamOrdinal;
   }
   return {
     kind: "action",

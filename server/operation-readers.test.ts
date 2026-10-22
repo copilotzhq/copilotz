@@ -987,7 +987,7 @@ Deno.test("scoped result refusal releases shared readers without emitting operat
     assertEquals(scopes, [["tenant", "op"]]);
     assertEquals(
       observed.some((type) =>
-        ["operation.completed", "operation.failed", "operation.cancelled"]
+        ["operation.settled"]
           .includes(type)
       ),
       false,

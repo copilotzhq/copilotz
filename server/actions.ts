@@ -105,7 +105,11 @@ export async function actionResponse(
     data: {
       operationId: handle.operationId,
       correlationId: handle.correlationId,
-      status: status?.state ?? "accepted",
+      status: !status || status.state === "accepted"
+        ? "accepted"
+        : status.state === "running"
+        ? "running"
+        : "settled",
       checkpoint: handle.replayCursor,
       acceptedAt: status?.acceptedAt,
     },

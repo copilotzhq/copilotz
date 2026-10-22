@@ -56,8 +56,8 @@ local disk, and read earlier operations back by their ID with two public calls:
 
 Attaching only reads. It records nothing, and it never runs the `notes.capture`
 Processor again. A finished operation's replay ends with one output that is not
-stored, `operation.completed` (or `operation.failed` or `operation.cancelled`),
-that reports the final state.
+stored, `operation.settled` (with `outcome: "completed"`, `"failed"` or
+`"cancelled"`), that reports the final state.
 
 Copilotz on Deno and Node opens the local database with PGlite, which stores it
 in a directory. On Node, the setup step already installed
@@ -243,12 +243,12 @@ error once `finally` has closed the application. Calling `app.attach` directly
 with an unknown ID rejects with an error whose `code` is `operation_not_found`.
 If the replay itself fails, `attachment.done` rejects. Each case exits with a
 non-zero status. An operation that ended as `failed` still replays: its last
-output is `operation.failed`, and the final status line reports `failed`. The
-two `done` promises mean different things: a send handle's `done` rejects when
-the operation fails, but an attachment's `done` resolves once the replay reaches
-any final state, so check the final `operation.failed` or `operation.cancelled`
-output, or `operationStatus`, before treating an attached operation as
-successful.
+output is `operation.settled` with `outcome: "failed"`, and the final status
+line reports `failed`. The two `done` promises mean different things: a send
+handle's `done` rejects when the operation fails, but an attachment's `done`
+resolves once the replay reaches any final state, so check the final
+`operation.settled` output's `outcome`, or `operationStatus`, before treating an
+attached operation as successful.
 
 ### How recovery uses stable keys
 
@@ -353,7 +353,7 @@ event notes.capture.requested id=3f6c… position=1
 event notes.save.invoked id=7c42… position=2
 event note.created id=8d2a… position=3 note=5b91… text="Prepare the release."
 event notes.save.completed id=a1e0… position=4 note=5b91… text="Prepare the release."
-live operation.completed data={"status":"completed"}
+live operation.settled data={"outcome":"completed"}
 replayed operation 3f6c…: completed
 ```
 
@@ -367,7 +367,7 @@ Check these facts:
   new writes.
 - Exactly one `note.created` line appears. Reopening the database did not run
   the `notes.capture` Processor again.
-- The last replayed output is `live operation.completed`, and the final line
+- The last replayed output is `live operation.settled`, and the final line
   reports `completed`.
 
 Run `recover.ts` with the same ID again: it prints the same Events, because

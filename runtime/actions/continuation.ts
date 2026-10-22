@@ -33,6 +33,9 @@ export type AwaitingAction = Readonly<
   { status: "awaiting"; actionRunId: string }
 >;
 const continuations = new WeakSet<object>();
+/** Suspend until the child scope settles, including inherited deliveries.
+ * This durable continuation intentionally differs from ActionHandle.result().
+ */
 export function awaitOperation(input: AwaitOperationInput): ActionContinuation {
   if (
     !input || (input.start !== undefined) === (input.operationId !== undefined)

@@ -312,7 +312,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
       }
     }
     await attachment.done;
-    assertEquals(types, ["test.root", "stream.output", "operation.completed"]);
+    assertEquals(types, ["test.root", "stream.output", "operation.settled"]);
     assertEquals(streamListings, 3);
   } finally {
     await application.shutdown();

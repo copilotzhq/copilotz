@@ -51,12 +51,17 @@ export async function createHttpOperations(
       operationId: record.operationId,
       namespace: record.namespace,
       correlationId: record.correlationId,
-      state: record.state,
+      state: ["accepted", "running"].includes(record.state)
+        ? record.state
+        : "settled",
+      ...(["accepted", "running"].includes(record.state)
+        ? {}
+        : { outcome: record.state }),
       metadata: record.metadata.operationMetadata as Record<string, unknown> ??
         {},
       acceptedAt: record.acceptedAt,
       updatedAt: record.updatedAt,
-      ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+      ...(record.completedAt ? { settledAt: record.completedAt } : {}),
     };
   };
   type RecordSelection = Readonly<{ collection: string; id: string }>;
@@ -211,14 +216,16 @@ export async function createHttpOperations(
         }
         const output = {
           ...createEphemeralEvent({
-            type: "operation.completed",
+            type: "operation.settled",
             namespace,
             correlationId: receipt.correlationId,
-            payload: { status: "completed" },
+            payload: { outcome: "completed" },
           }),
           operationId: receipt.operationId,
-          state: "completed",
-          data: { status: "completed" },
+          state: "settled",
+          outcome: "completed",
+          data: { outcome: "completed" },
+          seq: await runtime.operations.resultSequence(namespace, operationId),
         } as ApplicationOutput;
         return {
           type: HTTP_OBSERVATION,
@@ -606,11 +613,7 @@ export async function createHttpOperations(
               };
               if (
                 selection.record &&
-                [
-                  "operation.completed",
-                  "operation.failed",
-                  "operation.cancelled",
-                ].includes(output.type)
+                output.type === "operation.settled"
               ) {
                 terminal.set(id, attributed);
                 notify();

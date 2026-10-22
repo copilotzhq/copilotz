@@ -133,7 +133,11 @@ previous applied checkpoint. `optimisticLayers` retains each layer until the
 subscription applies through its operation result's `seq`, or the operation
 fails. A replacement snapshot also settles covered layers. Action `invoke`
 continues returning the Action's value; `operations.result` returns
-`{ value, seq }`.
+`{ value, seq }` at Action completion. That sequence covers the Action's
+committed mutations, not necessarily downstream projections. For a projection
+that requires all inherited work, await `client.operations.settled(id)` and
+inspect its `outcome`; use its `seq` as the subscription barrier. Settlement
+alone does not guarantee a browser subscription has applied that sequence.
 
 After clean EOF, `await handle.reconnect()` resumes from that handle's applied
 checkpoint. Persist rows, sequence and checkpoint together to restore a new

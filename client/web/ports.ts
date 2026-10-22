@@ -83,7 +83,7 @@ export function readFailure(cause: unknown): ReadFailure {
   });
 }
 
-/** One SDK client supplies live Collections and terminal Action proxies. */
+/** One SDK client supplies live Collections and Action completion/settlement. */
 export function createBrowserPorts(
   client: CopilotzClient,
 ): Required<Pick<BrowserRuntimeOptions, "live" | "actions">> {
@@ -91,18 +91,21 @@ export function createBrowserPorts(
     async invoke(id, input, options) {
       const receipt = await client.actions.submit(id, input, options);
       options.accepted(receipt.operationId);
-      // The existing operation observer follows the operation to terminal without polling.
-      await client.operations.observe({
-        operationIds: [receipt.operationId],
-        signal: options.signal,
-        onFrame() {},
-      });
       const outcome = await client.operations.result(
         receipt.operationId,
         options.signal,
       );
       rejectActionFailure(outcome.value);
       return { value: outcome.value, seq: ownerSequence(outcome.seq) };
+    },
+    async settled(id, signal) {
+      const settlement = await client.operations.settled(id, signal);
+      if (settlement.outcome !== "completed") {
+        throw new ActionFailure(
+          `operation_${settlement.outcome}`,
+          `Operation settlement ${settlement.outcome}.`,
+        );
+      }
     },
     async cancel(id) {
       await client.operations.cancel(id);

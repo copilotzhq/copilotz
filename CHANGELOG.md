@@ -44,6 +44,17 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 
 ### Changed
 
+- **Action results arrive at Action completion.** Browser
+  `ActionHandle.result()` and trusted host Action calls no longer wait for
+  downstream delivery settlement. A failed Action still rejects; a later
+  downstream failure cannot change an accepted result. Use `handle.settled()`
+  when the entire scope must succeed, or `client.operations.settled(id)` and
+  inspect its outcome. The final observation frame is now `operation.settled`
+  with `outcome: completed | failed | cancelled`; durable Action lifecycle
+  outputs still arrive as they are recorded. HTTP operation status uses
+  `state: settled`, `outcome` and `settledAt`. Checkpoints, idempotent result
+  replay and durable `awaitOperation` settlement are unchanged.
+
 - **Security review hardening.** The device socket, live subscriptions, Action
   sessions and the shard role ship with these protections, and HTTP
   authentication gains the stale-cookie rule.

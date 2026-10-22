@@ -6,6 +6,7 @@ import {
 import {
   CONTENT_CATALOG_COLUMNS,
   contentCatalogStatements,
+  readyContentBodyIndexStatement,
 } from "../content/catalog-schema.ts";
 import type { SqlExecutor, SqlSession } from "./session.ts";
 
@@ -502,9 +503,7 @@ export function createCoreSchemaStatements(
     `CREATE INDEX IF NOT EXISTS "nodes_ready_asset_body_idx"
       ON ${tables.nodes} (namespace, (data ->> 'bodyId'))
       WHERE type = 'asset' AND data ->> 'state' = 'ready'`,
-    `CREATE INDEX IF NOT EXISTS "nodes_ready_content_body_idx"
-      ON ${tables.nodes} ((data ->> 'bodyId'))
-      WHERE type IN ('asset','protected_value') AND data ->> 'state' = 'ready'`,
+    readyContentBodyIndexStatement(schemaId),
     `CREATE INDEX IF NOT EXISTS "nodes_data_gin_idx"
       ON ${tables.nodes} USING GIN (data)`,
     `CREATE TABLE IF NOT EXISTS ${tables.edges} (

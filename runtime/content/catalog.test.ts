@@ -587,6 +587,8 @@ Deno.test("catalog alarm query has indexed due branches and bounded candidate me
       // Prove all lookups have an indexed path, independently of the cost
       // preference for sequential scans in this intentionally tiny fixture.
       await tx.query("SET LOCAL enable_seqscan=off");
+      await tx.query("SET LOCAL enable_hashjoin=off");
+      await tx.query("SET LOCAL enable_mergejoin=off");
       const statements: string[] = [];
       const query: typeof tx.query = (sql, parameters) => {
         statements.push(sql);
@@ -596,6 +598,26 @@ Deno.test("catalog alarm query has indexed due branches and bounded candidate me
       const sql = statements.find((sql) => sql.includes("MIN(deadline)"))!;
       const explained = await tx.query(`EXPLAIN (FORMAT JSON) ${sql}`);
       const plan = JSON.stringify(explained.rows);
+      const referenceLookups: Record<string, unknown>[] = [];
+      const visit = (value: unknown) => {
+        if (!value || typeof value !== "object") return;
+        const node = value as Record<string, unknown>;
+        if (node["Index Name"] === "nodes_ready_content_body_idx") {
+          referenceLookups.push(node);
+        }
+        for (const child of Object.values(node)) visit(child);
+      };
+      visit(explained.rows);
+      assertEquals(referenceLookups.length > 0, true);
+      for (const lookup of referenceLookups) {
+        // An index scan with only a Filter still walks every ready asset for
+        // each candidate. The identity collation must permit a keyed lookup.
+        assertEquals(
+          String(lookup["Index Cond"]).includes("body_id"),
+          true,
+          JSON.stringify(lookup),
+        );
+      }
       // PostgreSQL may introduce another Limit for the MIN expression's
       // init-plan. The six explicit branches, each LIMIT 1, are the bound.
       assertEquals((sql.match(/LIMIT 1/g) ?? []).length, 6);

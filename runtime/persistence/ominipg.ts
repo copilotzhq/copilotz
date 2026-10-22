@@ -106,9 +106,16 @@ export async function openManagedOminipgDatabase(
     Object.defineProperty(adapted, "withReadSnapshot", { value: snapshot });
     // Custom providers/hooks and background sync retain native admission checks;
     // they are not evidence of a private, exclusively owned physical connection.
+    const postgres = /^postgres(?:ql)?:/.test(url);
+    // Ominipg's native PostgreSQL snapshot reserves a reader/current pair.
+    // With one connection, Collections must use their existing fenced owner
+    // command snapshot instead; attempting a pair always fails admission.
     if (
-      !/^postgres(?:ql)?:/.test(url) && !options.syncUrl &&
-      options.pgliteProvider === undefined && options.pgliteConfig === undefined
+      !options.syncUrl &&
+      (postgres
+        ? options.pgPoolMax === 1 && options.pgProvider === undefined
+        : options.pgliteProvider === undefined &&
+          options.pgliteConfig === undefined)
     ) markExclusiveReadSnapshot(snapshot);
   }
   const session = createOminipgSqlSession(adapted);

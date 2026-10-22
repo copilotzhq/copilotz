@@ -328,6 +328,8 @@ export type ActionDefinition<
   TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
 > = Readonly<{
   id: string;
+  /** Minimum delivery safety backstop required by this Action, in milliseconds. */
+  deliveryTimeoutMs?: number;
   content?: ActionContentDeclaration;
   inputSchema?: TInputSchema;
   outputSchema?: TOutputSchema;
@@ -356,6 +358,8 @@ export type ActionDefinition<
 
 export type AnyActionDefinition = Readonly<{
   id: string;
+  /** Minimum delivery safety backstop required by this Action, in milliseconds. */
+  deliveryTimeoutMs?: number;
   content?: ActionContentDeclaration;
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;

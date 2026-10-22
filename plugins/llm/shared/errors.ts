@@ -210,7 +210,11 @@ export class LLMStreamTimeoutError extends Error {
       : kind === "attempt"
       ? "provider attempt timeout"
       : "logical chat timeout";
-    super(`LLM ${label} after ${timeoutMs}ms`);
+    super(
+      kind === "idle" || kind === "first_token"
+        ? `The model stopped responding (${label} after ${timeoutMs}ms).`
+        : `The model exceeded its configured safety backstop (${label} after ${timeoutMs}ms).`,
+    );
     this.name = "AbortError";
     this.kind = kind;
     this.timeoutMs = timeoutMs;

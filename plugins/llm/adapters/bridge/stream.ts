@@ -20,7 +20,7 @@ import { streamPost, type StreamResponse } from "./http.ts";
 
 const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 90_000;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 120_000;
-const DEFAULT_ATTEMPT_TIMEOUT_MS = 1_800_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 4 * 60 * 60_000;
 const SAFE_RESPONSE_ID_HEADERS = [
   "x-request-id",
   "request-id",
@@ -167,12 +167,16 @@ export async function runProviderStream(
   ) => {
     if (streamTimeout) return;
     streamTimeout = { kind, timeoutMs };
-    abortController.abort();
+    const failure = new LLMStreamTimeoutError(kind, timeoutMs);
+    rejectTimeout?.(failure);
+    abortController.abort(failure);
     void reader?.cancel().catch(() => undefined);
-    rejectTimeout?.(new LLMStreamTimeoutError(kind, timeoutMs));
   };
   const abortForExternalSignal = () => {
-    abortController.abort();
+    const reason = signal?.reason ??
+      new DOMException("LLM request aborted", "AbortError");
+    rejectTimeout?.(reason);
+    abortController.abort(reason);
     void reader?.cancel().catch(() => undefined);
   };
   if (signal?.aborted) {
@@ -216,6 +220,13 @@ export async function runProviderStream(
     resetStreamIdleTimer();
   };
 
+  let backgroundDrain = false;
+  const cleanup = () => {
+    clearFirstTokenTimer();
+    clearStreamIdleTimer();
+    clearAttemptTimer();
+    signal?.removeEventListener("abort", abortForExternalSignal);
+  };
   startFirstTokenTimer();
   if (attemptTimeoutMs) {
     attemptTimer = setTimeout(() => {
@@ -224,17 +235,23 @@ export async function runProviderStream(
   }
   try {
     response = await Promise.race([
-      streamPost(
-        providerAPI.endpoint,
-        await providerAPI.body(
+      (async () => {
+        const body = await providerAPI.body(
           Array.isArray(finalMessages) ? finalMessages : messages,
           requestConfig,
-        ),
-        {
-          headers: providerAPI.headers(requestConfig),
-          signal: abortController.signal,
-        },
-      ) as Promise<StreamResponse>,
+        );
+        abortController.signal.throwIfAborted();
+        return streamPost(
+          providerAPI.endpoint,
+          body,
+          {
+            // The bridge owns inactivity and safety timers, including header wait.
+            timeout: 0,
+            headers: providerAPI.headers(requestConfig),
+            signal: abortController.signal,
+          },
+        ) as Promise<StreamResponse>;
+      })(),
       timeoutPromise,
     ]);
     responseHeadersAtMs = Date.now();
@@ -269,6 +286,7 @@ export async function runProviderStream(
       },
       {
         ...providerAPI.streamOptions,
+        onActivity: recordStreamActivity,
         config,
         extractedBlockTags: extractTags,
         extractUsage: providerAPI.extractUsage,
@@ -309,6 +327,19 @@ export async function runProviderStream(
       : undefined;
     return {
       ...streamResult,
+      ...(streamResult.usageFinalized
+        ? {
+          usageFinalized: (() => {
+            backgroundDrain = true;
+            const finalized = Promise.race([
+              streamResult.usageFinalized,
+              timeoutPromise,
+            ]).finally(cleanup);
+            void finalized.catch(() => undefined);
+            return finalized;
+          })(),
+        }
+        : {}),
       ...(nativeReasoning ? { nativeReasoning } : {}),
       ...(nativeReasoningFinalized ? { nativeReasoningFinalized } : {}),
     };
@@ -355,9 +386,6 @@ export async function runProviderStream(
     }
     throw withStreamDiagnostics(error);
   } finally {
-    clearFirstTokenTimer();
-    clearStreamIdleTimer();
-    clearAttemptTimer();
-    signal?.removeEventListener("abort", abortForExternalSignal);
+    if (!backgroundDrain) cleanup();
   }
 }

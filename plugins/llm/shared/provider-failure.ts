@@ -1,3 +1,5 @@
+import { LLMStreamTimeoutError } from "./errors.ts";
+
 /** Safe retry disposition for an incomplete provider invocation. */
 export type ProviderFailure = Readonly<{
   code: string;
@@ -36,8 +38,10 @@ export function providerFailure(error: unknown): ProviderFailure | undefined {
   let current = error;
   const visited = new Set<object>();
   let reason: string | undefined, retryAfterMs: number | undefined;
+  let timeoutKind: LLMStreamTimeoutError["kind"] | undefined;
   while (current && typeof current === "object" && !visited.has(current)) {
     visited.add(current);
+    if (current instanceof LLMStreamTimeoutError) timeoutKind = current.kind;
     const value = current as Record<string, unknown>;
     if (
       typeof value.retryAfterMs === "number" &&
@@ -86,7 +90,11 @@ export function providerFailure(error: unknown): ProviderFailure | undefined {
   if (!reason) return undefined;
   return {
     code: `llm_provider_${reason}`,
-    message: messages[reason],
+    message: reason === "timeout" && timeoutKind
+      ? timeoutKind === "first_token" || timeoutKind === "idle"
+        ? "The model stopped responding."
+        : "The model exceeded its configured safety backstop."
+      : messages[reason],
     retryable: ["network", "timeout", "rate_limit", "server_error"].includes(
       reason,
     ),

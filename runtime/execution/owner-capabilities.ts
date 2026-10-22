@@ -1,4 +1,4 @@
-import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import {
@@ -255,6 +255,7 @@ export function createOwnerCapabilityHost(
       identity: WorkerCallContext["fence"]["identity"],
       input: unknown,
     ): Promise<unknown>;
+    deliveryTimeoutMs?: number;
     resourceIdleMs?: number;
     resourceLifetimeMs?: number;
     onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
@@ -1432,7 +1433,10 @@ export function createOwnerCapabilityHost(
       maxPerConnection: 128,
       maxRequestBytes: OWNER_CAPABILITY_BYTES,
       maxResponseBytes: OWNER_CAPABILITY_BYTES,
-      timeoutMs: DELIVERY_DEADLINE_MS,
+      timeoutMs: resolveDeliveryTimeoutMs(
+        options.deliveryTimeoutMs,
+        options.registry.actions,
+      ),
     },
     lifecycle: {
       onDisconnect(event) {

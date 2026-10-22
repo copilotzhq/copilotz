@@ -6,13 +6,14 @@ import type {
   WorkerResult,
 } from "../../dependencies/oxian-worker.ts";
 import { createOwnerWorkerWorkloads } from "../execution/owner-capability-worker.ts";
-import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "../execution/deadlines.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import type { CreateCopilotzApplicationOptions } from "./types.ts";
 
 export type CreateCopilotzWorkerOptions =
   & Pick<
     CreateCopilotzApplicationOptions,
+    | "deliveryTimeoutMs"
     | "namespace"
     | "databaseSchema"
     | "plugins"
@@ -70,8 +71,13 @@ export async function createCopilotzWorker(
     resources: options.resources,
     adapters: options.adapters,
   });
+  const deliveryTimeoutMs = resolveDeliveryTimeoutMs(
+    options.deliveryTimeoutMs ?? options.hostCalls?.timeoutMs,
+    registry.actions,
+  );
   const workloads = createOwnerWorkerWorkloads({
     registry,
+    deliveryTimeoutMs,
   });
   const worker = createWorker({
     id: options.id,
@@ -93,7 +99,7 @@ export async function createCopilotzWorker(
     hostCalls: {
       ...options.hostCalls,
       maxConcurrent: options.hostCalls?.maxConcurrent ?? 128,
-      timeoutMs: options.hostCalls?.timeoutMs ?? DELIVERY_DEADLINE_MS,
+      timeoutMs: deliveryTimeoutMs,
     },
     workloads,
   }, lifecycle);

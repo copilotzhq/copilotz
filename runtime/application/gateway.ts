@@ -1,4 +1,4 @@
-import { DELIVERY_DEADLINE_MS } from "../execution/deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "../execution/deadlines.ts";
 import { createPluginRegistry } from "../plugins/index.ts";
 import { registerRemoteAdmission } from "../execution/remote-admission.ts";
 import { hostDatabaseScopes } from "./database-scopes.ts";
@@ -172,7 +172,7 @@ export async function createCopilotzGateway(
   );
   // Refuse an invalid composition before opening persistence or a Hypervisor,
   // so a refusal never waits on cleanup of resources it should not have made.
-  createPluginRegistry({
+  const registry = createPluginRegistry({
     plugins: options.plugins,
     collections: options.collections,
     actions: options.actions,
@@ -181,6 +181,10 @@ export async function createCopilotzGateway(
     resources: options.resources,
     adapters: options.adapters,
   });
+  const deliveryTimeoutMs = resolveDeliveryTimeoutMs(
+    options.deliveryTimeoutMs,
+    registry.actions,
+  );
   const persistence = await openCopilotzPersistence(options);
   const transports = options.dispatcher
     ? ([] as const)
@@ -209,7 +213,7 @@ export async function createCopilotzGateway(
     maxResponseBytes: 1024 * 1024,
     // Host calls carry whole deliveries (nested LLM calls); Oxian uses the
     // lower of both sides' limits, so match the worker's delivery deadline.
-    timeoutMs: DELIVERY_DEADLINE_MS,
+    timeoutMs: deliveryTimeoutMs,
   };
   const workerLifecycle: HypervisorLifecycleCallbacks = {
     async onReady(event) {
@@ -283,6 +287,7 @@ export async function createCopilotzGateway(
         resources: options.resources,
         adapters: options.adapters,
         assets: options.assets,
+        deliveryTimeoutMs,
         onDeliveryDiagnostic: options.onDeliveryDiagnostic,
         database: persistence.database,
         databaseRecovery: options.databaseRecovery,
@@ -299,6 +304,7 @@ export async function createCopilotzGateway(
       async (engine) => {
         await ownerCapabilities?.close("persistence_owner_replaced");
         ownerCapabilities = createOwnerCapabilityHost({
+          deliveryTimeoutMs,
           onDiagnostic: options.onDeliveryDiagnostic,
           registry: engine.plugins,
           sessions,

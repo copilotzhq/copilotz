@@ -125,11 +125,11 @@ export interface ProviderConfigBase {
   stream?: boolean;
   /** Abort a provider attempt if no model stream activity arrives before this many milliseconds. Defaults to 90_000. Set <= 0 to disable. */
   firstTokenTimeoutMs?: number;
-  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first activity. Defaults to 120_000. Set <= 0 to disable. */
+  /** Abort a provider attempt if model stream activity stalls for this many milliseconds after the first visible content. Defaults to 120_000. Set <= 0 to disable. */
   streamIdleTimeoutMs?: number;
-  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Defaults to 1_800_000. Set <= 0 to disable. */
+  /** Abort one provider attempt after this absolute duration even while reasoning/activity continues. Safety backstop; defaults to 14_400_000 (four hours). Set <= 0 to disable. */
   attemptTimeoutMs?: number;
-  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Defaults to 3_600_000. Set <= 0 to disable. */
+  /** Bound the complete logical chat, including retries, fallbacks, and routing correction. Safety backstop; defaults to 18_000_000 (five hours). Set <= 0 to disable. */
   totalTimeoutMs?: number;
   outputReasoning?: boolean; // Whether to output thinking/reasoning tokens during stream (default true)
   estimateCost?: boolean; // Whether to estimate cost using OpenRouter pricing data (default true)
@@ -563,6 +563,8 @@ export interface CostBreakdown {
 
 // Options for the shared processStream in utils.ts
 export interface ProcessStreamOptions {
+  /** Complete provider frames and SSE comments, including the final usage drain. */
+  onActivity?: () => void;
   config?: ProviderConfig;
   /** 'sse' (default) for `data: {...}` lines, 'jsonl' for raw JSON-per-line (Ollama). */
   format?: "sse" | "jsonl";

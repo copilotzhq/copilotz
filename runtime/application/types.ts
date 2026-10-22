@@ -44,6 +44,8 @@ export type CreateCopilotzApplicationOptions =
     /** Default tenant namespace used when run/connect omit one. */
     namespace?: string;
     databaseSchema?: string;
+    /** Delivery safety backstop (default six hours). Configure identically on all roles. */
+    deliveryTimeoutMs?: number;
     /** Trusted owner-only Collection authorization callbacks. */
     authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
 
@@ -76,6 +78,7 @@ export type CreateCopilotzApplicationOptions =
 /** Plain application semantics that can be shared by Gateway and Worker roles. */
 export type CopilotzComposition = Pick<
   CreateCopilotzApplicationOptions,
+  | "deliveryTimeoutMs"
   | "plugins"
   | "collections"
   | "actions"

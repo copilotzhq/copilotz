@@ -1,5 +1,5 @@
 import { remoteClaimSession } from "./remote-admission.ts";
-import { DELIVERY_DEADLINE_MS } from "./deadlines.ts";
+import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import { localDispatcher } from "./local.ts";
 import type { DurableEvent, EventDelivery } from "../events/index.ts";
 import {
@@ -54,6 +54,10 @@ export function createDeliveryExecutor(
   options: CreateDeliveryExecutorOptions,
 ): DeliveryExecutor {
   options = captureRegistration(options);
+  const deliveryTimeoutMs = resolveDeliveryTimeoutMs(
+    options.deliveryTimeoutMs,
+    options.registry.actions,
+  );
   const capturedTarget = captureTarget(options.target);
   const capturedTargets = Object.entries(
     captureRegistration(options.workloadTargets ?? {}),
@@ -464,7 +468,7 @@ export function createDeliveryExecutor(
       try {
         dispatched = await dispatcher.dispatch({
           workload,
-          deadlineAtMs: Date.now() + DELIVERY_DEADLINE_MS,
+          deadlineAtMs: Date.now() + deliveryTimeoutMs,
           ...(remoteSession && preclaim
             ? { target: { workerId: remoteSession.identity.workerId } }
             : target
@@ -613,6 +617,7 @@ export function createDeliveryExecutor(
     ownership,
     workload,
     workloads: createOwnerWorkerWorkloads({
+      deliveryTimeoutMs,
       registry: options.registry,
       workloads: [workload, ...Object.keys(additionalWorkloads)],
     }),

@@ -1,3 +1,4 @@
+import { trackPolicyReads } from "./policy-reads.ts";
 import { createDecisionReuse } from "./decision-cache.ts";
 import { ownerAttemptLive } from "./leases.ts";
 import {
@@ -358,6 +359,7 @@ export function createOwnerEvaluator(
     >,
   ): Promise<AuthorizationDecision> {
     let authority = retainedAuthority(value);
+    intent = captureHostCommandJson(intent) as AuthorizationIntent;
     const directory = options.directory;
     if (directory && intent.kind !== "collection") authorizationRefused();
     const reference = directory
@@ -394,6 +396,8 @@ export function createOwnerEvaluator(
         reuseKey,
         policy,
         command.commandTime,
+        authority,
+        intent,
       );
       if (saved) {
         command.signal.throwIfAborted();
@@ -409,9 +413,11 @@ export function createOwnerEvaluator(
       ? Date.parse(authority.validity.expiresAt)
       : Infinity;
     const staffReads: Array<Record<string, unknown>> = [];
+    let sessionExpiresAt: string | undefined;
     let evidenceRead = false;
     let localPolicyReads = 0;
     let commandTimeRead = false;
+    let observed: ReturnType<typeof trackPolicyReads> | undefined;
     let active = true;
     let failed = false;
     const pending: Promise<unknown>[] = [];
@@ -540,6 +546,7 @@ export function createOwnerEvaluator(
             },
           });
         }
+        sessionExpiresAt = session.expires_at;
         reusableUntil = Math.min(reusableUntil, Date.parse(session.expires_at));
         // Logout completion is intentionally checked again: it is a narrow
         // per-invocation exception, not a reusable session grant.
@@ -551,10 +558,17 @@ export function createOwnerEvaluator(
           id: authority.authorityBasis.id,
         });
       }
+      if (reuseKey) observed = trackPolicyReads({ authority, intent });
+      const wrapContext = <T extends object>(context: T): T =>
+        observed ? observed.context(context) : context;
       const constraints = await withOwnerAuthorizationPhase(() =>
         withOwnerPolicyRefusal(() => {
-          const result = policy.evaluate({
-            authority,
+          const result = policy.evaluate(wrapContext({
+            get authority() {
+              return observed
+                ? observed.value<AuthenticatedAuthority>("authority")
+                : authority;
+            },
             ...(directory
               ? {
                 directory: {
@@ -564,12 +578,19 @@ export function createOwnerEvaluator(
                 },
               }
               : {}),
-            intent: captureHostCommandJson(intent) as AuthorizationIntent,
+            get intent() {
+              return observed
+                ? observed.value<AuthorizationIntent>("intent")
+                : captureHostCommandJson(intent) as AuthorizationIntent;
+            },
             get commandTime() {
               commandTimeRead = true;
               return command.commandTime;
             },
-            signal: command.signal,
+            get signal() {
+              if (observed) observed.lifetime.valid = false;
+              return command.signal;
+            },
             evidence: {
               get(alias) {
                 assertActive();
@@ -665,7 +686,7 @@ export function createOwnerEvaluator(
                 );
               },
             },
-          });
+          }));
           if (!(result instanceof Promise)) active = false;
           return result;
         }, command.signal)
@@ -720,6 +741,7 @@ export function createOwnerEvaluator(
           ],
         );
       }
+      observed?.escapes(constraints);
       let captured: ServerConstraints;
       try {
         captured = captureHostCommandJson(constraints) as ServerConstraints;
@@ -740,15 +762,17 @@ export function createOwnerEvaluator(
           dependency,
         ])).values()],
       };
+      const observations = observed?.finish();
       // Remote staff reads and verifier evidence have no local write fence.
       // Time-dependent policies and policies with no tracked facts stay fresh.
       if (
         !staffReads.length && !evidenceRead && !directory && localPolicyReads &&
-        !commandTimeRead
+        !commandTimeRead && (!observations || observations.lifetime.valid)
       ) {
         reuseDeadlines.set(decision, reusableUntil);
         if (
-          reuseKey && reusableUntil > Date.parse(command.commandTime)
+          reuseKey && observations &&
+          reusableUntil > Date.parse(command.commandTime)
         ) {
           reuse.remember(
             command.transaction,
@@ -756,6 +780,8 @@ export function createOwnerEvaluator(
             policy,
             decision,
             reusableUntil,
+            sessionExpiresAt,
+            observations,
           );
         }
       } else {
@@ -770,6 +796,8 @@ export function createOwnerEvaluator(
             ? "directory"
             : commandTimeRead
             ? "command-time"
+            : observations && !observations.lifetime.valid
+            ? "untrackable-input"
             : "untracked-policy",
         );
       }
@@ -783,6 +811,7 @@ export function createOwnerEvaluator(
       if (isOwnerAuthorizationRefusal(error)) authorizationRefused();
       throw new Error("Owner authorization could not be completed.");
     } finally {
+      observed?.finish();
       active = false;
       await Promise.allSettled(pending);
     }

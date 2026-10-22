@@ -187,6 +187,11 @@ runs in the owner's command:
   });
   ```
 
+  Descriptor copying avoids reading the clock, but enumerates all JSON inputs
+  for Collection decision matching. To preserve narrower field tracking, forward
+  the context directly and read only the fields needed by the policy. A spread
+  of `authority` or `requestFacts` also observes that entire subtree.
+
   Cache diagnostics distinguish `decision.command-time` and
   `remember.no-reusable-decision` from key misses. Include these diagnostic
   events when investigating repeated `action.absent` or `evaluation.absent`
@@ -1141,15 +1146,36 @@ continues to v14:
 ### Reusing Collection read and observation decisions
 
 Collection read admission and its result phase share owner-local decisions
-across commands. Their key contains the entire retained authority and canonical
-intent, including principal, authority basis, validity, policy revision, request
-facts, provenance, invocation, phase, arguments, current record and disclosed
-result. Keeping the full record value (including its version fields) in the
-result key prevents a different record version from inheriting an earlier result
-decision. Point reads also depend on their record key, including negative reads.
-List, aggregate, search and selector decisions depend on the collection set, so
-an insertion or removal invalidates existing results even when individual
-surviving records have not changed.
+across commands. The evaluator supplies read-only JSON views and records the
+paths inspected in `authority` and `intent`, including nested request facts,
+arguments and invocation fields. Entries are grouped by the security scope,
+principal, session/credential basis, retained dependencies, policy, resource,
+operation and phase, then by their read-path signature (at most eight signatures
+per group). A lookup compares only the values at those paths. Different request
+IDs or Action run IDs can therefore share a decision when policy does not read
+them; inspecting those fields makes their values part of the match.
+
+Object enumeration, spreads, property descriptors and `JSON.stringify` observe
+the whole enumerated subtree, including values and property order. Reflecting on
+the context observes all its JSON inputs. Descriptor copying preserves lazy
+clock access but does not hide input reads. Access to unsupported values,
+mutation attempts, returned proxy references and later use of escaped views
+prevent reuse. Non-JSON inputs and policy exceptions fail closed. Policy views
+must stay within evaluation; copying data out must use JSON values rather than
+retaining views. Signal inspection also prevents decision reuse.
+
+Result matching always includes the actual current/disclosed record, with its
+version fields, independently of which fields policy reads. Point decisions also
+depend on their record key, including negative reads. List, aggregate, search
+and selector decisions depend on the collection set, so insertion or removal
+invalidates results even when surviving records have not changed. Session
+identity remains a mandatory fence. Session-stamped expiry metadata normalizes
+the incoming credential just as a cold evaluation would, and every hit checks
+its deadline. Across attempts, the current worker/epoch/lease is validated even
+if policy ignores its ID. A reused decision carries the current request's
+authority, never the previous request's authority. Action capture grants remain
+isolated by run: sharing read decisions does not transfer capture receipts or
+broaden an Action's retained authority.
 
 The decision retains all policy-read dependencies and the session/flow fences.
 Attempt validity uses the owner's current lease facts and command time. Policy

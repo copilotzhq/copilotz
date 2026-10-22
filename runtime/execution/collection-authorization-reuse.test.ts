@@ -196,77 +196,87 @@ async function fixture(
   };
 }
 
-Deno.test("WebSocket worker get: end-to-end authorization reuse over the connected gateway", async () => {
-  let evaluations = 0;
-  const samples: {
-    ms: number;
-    sql: number;
-    evals: number;
-    transactions: number;
-  }[] = [];
-  const run = defineAction({
-    id: "agent.read",
-    async execute(_input: unknown, ctx: ActionContext) {
-      for (let i = 0; i < 21; i++) {
-        const start = performance.now(),
-          sql = f.queries.length,
-          evals = evaluations,
-          transactions = f.transactions;
-        await ctx.collections.records.get({ id: "record" });
-        samples.push({
-          ms: performance.now() - start,
-          sql: f.queries.length - sql,
-          evals: evaluations - evals,
-          transactions: f.transactions - transactions,
-        });
-      }
-      return "done";
-    },
-  });
-  const f = await fixture("websocket", {
-    actions: { run },
-    authorization: {
-      policies: {
-        fixture: {
-          revision: "1",
-          sources: ["facts"],
-          async evaluate({ intent, read }) {
-            if (intent.kind === "collection") evaluations++;
-            for (let i = 0; i < 10; i++) await read.get("facts", `fact-${i}`);
-            return { actions: { run: {} }, collections: { records: {} } };
+for (const acrossRuns of [false, true]) {
+  Deno.test(`WebSocket worker get: end-to-end authorization reuse ${acrossRuns ? "across Action runs" : "within an Action run"}`, async () => {
+    let evaluations = 0;
+    const samples: {
+      ms: number;
+      sql: number;
+      evals: number;
+      transactions: number;
+    }[] = [];
+    const run = defineAction({
+      id: "agent.read",
+      async execute(_input: unknown, ctx: ActionContext) {
+        for (let i = 0; i < (acrossRuns ? 1 : 21); i++) {
+          const start = performance.now(),
+            sql = f.queries.length,
+            evals = evaluations,
+            transactions = f.transactions;
+          await ctx.collections.records.get({ id: "record" });
+          samples.push({
+            ms: performance.now() - start,
+            sql: f.queries.length - sql,
+            evals: evaluations - evals,
+            transactions: f.transactions - transactions,
+          });
+        }
+        return "done";
+      },
+    });
+    const f = await fixture("websocket", {
+      actions: { run },
+      authorization: {
+        policies: {
+          fixture: {
+            revision: "1",
+            sources: ["facts"],
+            async evaluate({ intent, read }) {
+              if (intent.kind === "collection") evaluations++;
+              for (let i = 0; i < 10; i++) await read.get("facts", `fact-${i}`);
+              return { actions: { run: {} }, collections: { records: {} } };
+            },
           },
         },
+        actions: { run: { id: "fixture", revision: "1" } },
+        collections: { records: { id: "fixture", revision: "1" } },
       },
-      actions: { run: { id: "fixture", revision: "1" } },
-      collections: { records: { id: "fixture", revision: "1" } },
-    },
-  });
-  try {
-    assertEquals(
-      await f.gateway.actions.run({}, { idempotencyKey: "get-benchmark" }),
-      "done",
-    );
-    const warm = samples.slice(1);
-    const times = warm.map((s) => s.ms).sort((a, b) => a - b);
-    console.log(
-      JSON.stringify({
-        connectedGet: {
-          first: samples[0],
-          warm,
-          medianMs: times[Math.floor(times.length / 2)],
-          evaluations,
-        },
-      }),
-    );
-    assertEquals(samples.length, 21);
-    if (Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1") {
-      assertEquals(evaluations, 2);
-      assertEquals(warm.map((s) => s.evals), Array(20).fill(0));
-      // Background owner work may add statements; the median isolates a get.
-      const sql = warm.map((s) => s.sql).sort((a, b) => a - b);
-      assertEquals(sql[Math.floor(sql.length / 2)], 3);
+    });
+    try {
+      for (let run = 0; run < (acrossRuns ? 21 : 1); run++) {
+        assertEquals(
+          await f.gateway.actions.run({}, {
+            idempotencyKey: `get-benchmark-${run}`,
+          }),
+          "done",
+        );
+      }
+      const warm = samples.slice(1);
+      const times = warm.map((s) => s.ms).sort((a, b) => a - b);
+      console.log(
+        JSON.stringify({
+          connectedGet: {
+            acrossRuns,
+            first: samples[0],
+            warm,
+            medianMs: times[Math.floor(times.length / 2)],
+            evaluations,
+          },
+        }),
+      );
+      assertEquals(samples.length, 21);
+      if (
+        Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1" &&
+        Deno.env.get("AUTHZ_READSET_BASELINE") !== "1"
+      ) {
+        assertEquals(evaluations, 2);
+        assertEquals(warm.map((s) => s.evals), Array(20).fill(0));
+        // Background owner work may add statements; the median isolates a get.
+        const sql = warm.map((s) => s.sql).sort((a, b) => a - b);
+        assertEquals(sql[Math.floor(sql.length / 2)], acrossRuns ? 4 : 3);
+      }
+    } finally {
+      await f.close();
     }
-  } finally {
-    await f.close();
-  }
-});
+  });
+}

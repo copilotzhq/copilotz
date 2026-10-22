@@ -217,6 +217,7 @@ async function fixture(attempt = false) {
     counts,
     get,
     invoke,
+    invocation,
     scoped,
     records,
     store,
@@ -469,7 +470,14 @@ Deno.test("real observation attach reuses policy while retaining channel writes 
       } as unknown as OperationCatalog,
     });
     for (let i = 0; i < 20; i++) {
-      await authorization.observe(f.authority, {}, () => {});
+      await authorization.observe(
+        {
+          ...f.authority,
+          requestFacts: { ...f.authority.requestFacts, input: { request: i } },
+        },
+        {},
+        () => {},
+      );
     }
     assertEquals(f.phases, ["attach"]);
     assertEquals(f.counts["evaluation.hit"], 19);
@@ -488,7 +496,7 @@ function body(bytes: Uint8Array) {
     },
   });
 }
-Deno.test("worker get benchmark: real capability host and worker reuse both Collection phases", async () => {
+Deno.test("worker get benchmark: cross-request capability calls reuse both Collection phases", async () => {
   const f = await fixture();
   const samples: {
     ms: number;
@@ -527,7 +535,19 @@ Deno.test("worker get benchmark: real capability host and worker reuse both Coll
             sql = f.sql.length,
             evals = f.phases.length,
             transactions = f.transactions;
-          const result = await f.get();
+          const request = samples.length;
+          const result = await withOwnerCollectionInvocation({
+            ...f.invocation,
+            authority: {
+              ...f.authority,
+              requestFacts: { ...f.authority.requestFacts, input: { request } },
+            },
+            invocation: {
+              kind: "processor",
+              id: "agent",
+              runId: `request-${request}`,
+            },
+          }, () => f.scoped.record.get({ id: "record" }));
           samples.push({
             ms: performance.now() - start,
             sql: f.sql.length - sql,
@@ -618,7 +638,10 @@ Deno.test("worker get benchmark: real capability host and worker reuse both Coll
       }),
     );
     assertEquals(samples.length, 21);
-    if (Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1") {
+    if (
+      Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1" &&
+      Deno.env.get("AUTHZ_READSET_BASELINE") !== "1"
+    ) {
       assertEquals(f.phases.length, 2);
       assertEquals(warm.map((s) => s.sql), Array(20).fill(2));
       assertEquals(warm.map((s) => s.evals), Array(20).fill(0));
@@ -651,5 +674,162 @@ Deno.test("Time-dependent policies remain fresh across commands", async () => {
     await assertRejects(f.get);
   } finally {
     await f.close();
+  }
+});
+
+Deno.test("Policy read sets distinguish inspected fields and share unread request/run fields", async (t) => {
+  for (
+    const mode of [
+      "unread",
+      "run",
+      "fact",
+      "spread",
+      "keys",
+      "json",
+      "context",
+      "descriptors",
+    ] as const
+  ) {
+    await t.step(mode, async () => {
+      const f = await fixture();
+      try {
+        const policy = f.registration.policies.fixture;
+        f.registration.policies.fixture = {
+          ...policy,
+          async evaluate(context) {
+            if (
+              mode === "run" && context.intent.invocation?.runId === "blocked"
+            ) authorizationRefused();
+            if (
+              mode === "fact" &&
+              (context.authority.requestFacts.input as { nonce: string })
+                  .nonce === "blocked"
+            ) authorizationRefused();
+            if (mode === "spread") void { ...context.authority };
+            if (mode === "keys") {
+              Object.keys(context.authority.requestFacts.input as object);
+            }
+            if (mode === "json") JSON.stringify(context.intent);
+            if (mode === "context") Object.keys(context);
+            if (mode === "descriptors") {
+              Object.getOwnPropertyDescriptors(context);
+            }
+            return await policy.evaluate(context);
+          },
+        };
+        const get = (nonce: string) =>
+          withOwnerCollectionInvocation({
+            ...f.invocation,
+            authority: {
+              ...f.authority,
+              requestFacts: { ...f.authority.requestFacts, input: { nonce } },
+            },
+            invocation: { kind: "processor", id: "agent", runId: nonce },
+          }, () => f.scoped.record.get({ id: "record" }));
+        await get("one");
+        await get("one");
+        assertEquals(f.phases.length, 2);
+        await get("two");
+        assertEquals(f.phases.length, mode === "unread" ? 2 : 4);
+        if (mode === "run" || mode === "fact") {
+          await assertRejects(() => get("blocked"));
+        }
+        if (mode === "unread") {
+          await f.write("fact", "fact-0", { allowed: false });
+          await assertRejects(() => get("three"));
+        }
+      } finally {
+        await f.close();
+      }
+    });
+  }
+});
+
+Deno.test("Read sets bind current authority and validate a new attempt even when its ID is unread", async () => {
+  const f = await fixture(true);
+  try {
+    const evaluate = createOwnerEvaluator({
+      registration: f.registration,
+      collections: {
+        facts: defineCollection({ name: "fact", schema: { type: "object" } }),
+      },
+      databaseSchema: "public",
+    });
+    const call = (authority: AuthenticatedAuthority) =>
+      f.run("read", {}, (_, c) =>
+        evaluate(authority, {
+          kind: "collection",
+          resource: "records",
+          operation: "get",
+          input: {
+            phase: "read",
+            collection: { name: "record" },
+            args: { id: "record" },
+          },
+        }, c));
+    await call(f.authority);
+    const next = await f.store.append({
+      namespace: "space",
+      type: "next",
+      payload: {},
+    }, ["agent"]);
+    const id = next.deliveries[0].id;
+    await f.store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 });
+    const authority: AuthenticatedAuthority = {
+      ...f.authority,
+      authorityBasis: { kind: "attempt", id },
+      validity: {
+        kind: "attempt",
+        attempt: id,
+        worker: "worker",
+        epoch: String(f.owner.epoch),
+      },
+    };
+    const decision = await call(authority);
+    assertEquals(decision.authority, authority);
+    assertEquals(f.phases, ["read"]);
+    await f.store.succeedDelivery(f.deliveryId, "worker");
+    await assertRejects(() => call(f.authority));
+    await call(authority);
+    assertEquals(f.phases, ["read"]);
+    await f.store.succeedDelivery(id, "worker");
+    await assertRejects(() => call(authority));
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("Untrackable policy views cannot retain a decision; detached audit reads remain compatible", async (t) => {
+  for (const mode of ["signal", "mutation", "output", "late"] as const) {
+    await t.step(mode, async () => {
+      const f = await fixture();
+      const views: AuthenticatedAuthority[] = [];
+      try {
+        const policy = f.registration.policies.fixture;
+        f.registration.policies.fixture = {
+          ...policy,
+          async evaluate(context) {
+            if (mode === "signal") void context.signal.aborted;
+            if (mode === "mutation") {
+              Reflect.set(context.authority.scope, "tenant", "forged");
+            }
+            if (mode === "late") views.push(context.authority);
+            const result = await policy.evaluate(context);
+            return mode === "output"
+              ? {
+                ...result,
+                operations: { metadata: context.authority.scope.bindings },
+              }
+              : result;
+          },
+        };
+        await f.get();
+        for (const view of views) assertEquals(view.principal.id, "member");
+        await f.get();
+        assertEquals(f.phases.length, 4);
+      } finally {
+        await f.close();
+      }
+    });
   }
 });

@@ -166,14 +166,14 @@ export function encodeCapability(value: unknown): Uint8Array {
       ) {
         throw capabilityError("owner_data_invalid");
       }
-      const nonRetryable = () => {
+      const disposition = () => {
         let current: unknown = value, causeDepth = depth;
         const seen = new Set<object>();
         while (
           current &&
           (typeof current === "object" || typeof current === "function")
         ) {
-          if (seen.has(current)) return false;
+          if (seen.has(current)) return null;
           seen.add(current);
           if (
             current !== value &&
@@ -187,17 +187,24 @@ export function encodeCapability(value: unknown): Uint8Array {
             throw capabilityError("owner_data_invalid");
           }
           if (marker && typeof marker.value === "boolean") {
-            return marker.value === false;
+            return marker.value;
           }
           const cause = Object.getOwnPropertyDescriptor(current, "cause");
-          if (!cause) return false;
+          if (!cause) return null;
           if (!("value" in cause)) throw capabilityError("owner_data_invalid");
           current = cause.value;
         }
-        return false;
+        return null;
       };
-      const retryable = nonRetryable();
-      charge(8 + String(retryable).length + String(status).length);
+      const retryable = disposition();
+      const hint = property("retryAfterMs", null);
+      const retryAfterMs = typeof hint === "number" && Number.isFinite(hint)
+        ? Math.min(30_000, Math.max(0, hint))
+        : null;
+      charge(
+        9 + String(retryable).length + String(status).length +
+          String(retryAfterMs).length,
+      );
       string(name);
       string(message);
       if (typeof code === "string") string(code);
@@ -209,6 +216,7 @@ export function encodeCapability(value: unknown): Uint8Array {
         typeof code === "string" ? code : null,
         retryable,
         status,
+        retryAfterMs,
       ];
     }
     if (!value || typeof value !== "object" || ancestors.has(value)) {
@@ -294,8 +302,12 @@ export function decodeCapability(bytes: Uint8Array): unknown {
       return Uint8Array.from(atob(body), (byte) => byte.charCodeAt(0));
     }
     if (
-      tag === 5 && value.length === 6 && typeof body === "string" &&
-      typeof value[2] === "string"
+      tag === 5 && value.length === 7 && typeof body === "string" &&
+      typeof value[2] === "string" &&
+      (value[4] === null || typeof value[4] === "boolean") &&
+      (value[6] === null ||
+        typeof value[6] === "number" && Number.isFinite(value[6]) &&
+          value[6] >= 0 && value[6] <= 30_000)
     ) {
       const error = Object.assign(
         body === "ActionError" && typeof value[3] === "string" &&
@@ -307,7 +319,12 @@ export function decodeCapability(bytes: Uint8Array): unknown {
           ...(typeof value[3] === "string" ? { code: value[3] } : {}),
         },
       );
-      return value[4] === true ? markNonRetryable(error) : error;
+      if (value[6] !== null) Object.assign(error, { retryAfterMs: value[6] });
+      return value[4] === false
+        ? markNonRetryable(error)
+        : value[4] === true
+        ? Object.assign(error, { retryable: true })
+        : error;
     }
     if (value.length !== 2 || !Array.isArray(body)) {
       throw capabilityError("owner_data_invalid");

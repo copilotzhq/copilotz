@@ -80,6 +80,8 @@ export type EngineContextSeed = Readonly<{
   signal: AbortSignal;
   /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
   executionIncarnationId?: string;
+  /** Retained delivery retry budget, absent for live/direct execution. */
+  deliveryAttempt?: Readonly<{ attempts: number; maxAttempts: number }>;
   settlementScopeId?: string;
   /** Action lineage carried by durable execution. */
   actionScopeId?: string;

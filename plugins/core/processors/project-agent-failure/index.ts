@@ -115,7 +115,11 @@ export const projectAgentFailureProcessor: Processor<CoreToolProcessorContext> =
         threadId: metadata.threadId,
         sender: participant,
         recipientIds: [],
-        content: "I couldn't complete that response. Please try again.",
+        content:
+          /^llm_provider_(network|timeout|rate_limit|server_error|auth_error|billing_error|provider_error)$/
+              .test(lifecycle.error.code ?? "")
+            ? `${lifecycle.error.message} Please try again.`
+            : "I couldn't complete that response. Please try again.",
         visibility: { kind: "public" },
         metadata: failureMetadata,
       }, {

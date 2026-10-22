@@ -67,7 +67,14 @@ import {
 } from "../../adapters/index.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
 import { deriveChatGptCodexCacheKey } from "../../shared/internal-cache-key.ts";
-import { ContextInputLimitError } from "../../shared/errors.ts";
+import {
+  providerFailure,
+  providerFailureError,
+} from "../../shared/provider-failure.ts";
+import {
+  ContextInputLimitError,
+  LLMStreamTimeoutError,
+} from "../../shared/errors.ts";
 
 export const LLM_CALL_ACTION_ID = "llm.call";
 export const LLM_CALL_ACTION_ALIAS = "callLlm";
@@ -313,7 +320,8 @@ function throwIfAborted(signal: AbortSignal): void {
 function isAbort(error: unknown, signal: AbortSignal): boolean {
   return signal.aborted ||
     (error instanceof DOMException && error.name === "AbortError") ||
-    (error instanceof Error && error.name === "AbortError");
+    (error instanceof Error && error.name === "AbortError" &&
+      !(error instanceof LLMStreamTimeoutError));
 }
 
 function managedInput(body: ReadableStream<Uint8Array>): ManagedInput {
@@ -2797,6 +2805,31 @@ function restoredCompletion(value: unknown): LlmAdapterResult {
   });
 }
 
+/** Retry receipts close a known incomplete dispatch; they never replay as results. */
+async function providerCheckpoint(index: number, context: LlmActionContext) {
+  let step = `provider:${index}`;
+  let retries = 0;
+  let previous: Record<string, unknown> | undefined;
+  while (true) {
+    const saved = await context.effect.inspect(step);
+    let replay = saved.status === "replay"
+      ? plainRecord(saved.outcome, "LLM provider checkpoint")
+      : undefined;
+    if (replay?.status === "retry") {
+      previous = { ...replay, status: "failed" };
+      step = `provider:${index}:retry:${++retries}`;
+      continue;
+    }
+    if (replay?.status === "completed") {
+      const rejected = await context.effect.inspect(`${step}:rejected`);
+      if (rejected.status === "replay") {
+        replay = plainRecord(rejected.outcome, "LLM rejected checkpoint");
+      }
+    }
+    return { step, replay, previous };
+  }
+}
+
 async function executeLlmCall(
   rawInput: LlmCallInput,
   context: LlmActionContext,
@@ -2809,6 +2842,26 @@ async function executeLlmCall(
     Promise<LlmAuthResolution | undefined>
   >();
 
+  // Find a paid fallback before retrying any earlier incomplete candidate.
+  const checkpoints = [];
+  for (let index = 0; index < plan.length; index++) {
+    checkpoints.push(await providerCheckpoint(index, context));
+  }
+  const completedIndex = checkpoints.findIndex((entry) =>
+    entry.replay?.status === "completed"
+  );
+  let preferredFailure: unknown;
+  let credentialFailure: unknown;
+  const rememberFailure = (failure: unknown) => {
+    if (
+      preferredFailure === undefined ||
+      (providerFailure(failure)?.retryable &&
+        !providerFailure(preferredFailure)?.retryable)
+    ) {
+      preferredFailure = failure;
+    }
+    return preferredFailure;
+  };
   for (let index = 0; index < plan.length; index += 1) {
     if (context.signal.aborted) {
       await failWithAttemptAccounting(
@@ -2817,19 +2870,9 @@ async function executeLlmCall(
         context,
       );
     }
-    const effectStep = `provider:${index}`;
-    const saved = await context.effect.inspect(effectStep);
-    let replay = saved.status === "replay"
-      ? plainRecord(saved.outcome, "LLM provider checkpoint")
-      : undefined;
-    if (replay?.status === "completed") {
-      // Validation can reject a completed response's frame stream. Preserve
-      // that fallback decision across a later delivery retry as well.
-      const rejected = await context.effect.inspect(`${effectStep}:rejected`);
-      if (rejected.status === "replay") {
-        replay = plainRecord(rejected.outcome, "LLM rejected checkpoint");
-      }
-    }
+    const { step: effectStep } = checkpoints[index];
+    const replay = checkpoints[index].replay ??
+      (completedIndex > index ? checkpoints[index].previous : undefined);
     const prepared: ConnectionAttemptModel = replay
       ? replay.status === "credential_unavailable"
         ? { kind: "unavailable" }
@@ -2879,8 +2922,13 @@ async function executeLlmCall(
         failure,
       );
       if (index === plan.length - 1) {
-        await failWithAttemptAccounting(failure, attempts, context);
+        await failWithAttemptAccounting(
+          preferredFailure ?? failure,
+          attempts,
+          context,
+        );
       }
+      credentialFailure ??= failure;
       continue;
     }
     const candidate = prepared.candidate;
@@ -3049,7 +3097,7 @@ async function executeLlmCall(
       if (attemptInput) disposeWithoutWaiting(attemptInput.dispose, error);
       const cancelled = isAbort(error, context.signal);
       await abortWriters(streams, error, cancelled ? "cancelled" : "failed");
-      let failure = error;
+      let failure = cancelled ? error : providerFailureError(error);
       const evidence = rejectedAttemptEvidence(error);
       let reported: readonly LlmAdapterAttempt[] = [] as const;
       try {
@@ -3059,8 +3107,17 @@ async function executeLlmCall(
       }
       const failedCheckpoint = () =>
         canonicalJson({
-          status: "failed",
-          error: errorDetails(failure),
+          status: !confirmed && providerFailure(failure)?.retryable
+            ? "retry"
+            : "failed",
+          error: {
+            ...errorDetails(failure),
+            retryable: !confirmed &&
+              (providerFailure(failure)?.retryable ?? false),
+            ...(providerFailure(failure)?.retryAfterMs === undefined
+              ? {}
+              : { retryAfterMs: providerFailure(failure)!.retryAfterMs }),
+          },
           attempts: reported,
           visible: streams.visible,
           ...(evidence ? { rejectedAttemptEvidence: evidence } : {}),
@@ -3068,8 +3125,8 @@ async function executeLlmCall(
       if (
         dispatched && !confirmed && !checkpointing && !context.signal.aborted
       ) {
-        // A received failure is also a durable outcome: replay it rather than
-        // repeating a paid request while resuming a later fallback candidate.
+        // A known incomplete transient response closes this dispatch with a
+        // retry receipt. Only completion/permanent failures are reusable.
         await context.effect.confirm(effectStep, failedCheckpoint());
       } else if (
         confirmed && !replay && !cancelled &&
@@ -3091,12 +3148,17 @@ async function executeLlmCall(
         failure,
       );
       await reportRejectedAttemptEvidence(evidence, attempts.at(-1), context);
+      rememberFailure(failure);
       const terminalFailure = cancelled ||
         (checkpointing && !confirmed) ||
         streams.visible ||
         index === plan.length - 1;
       if (terminalFailure) {
-        await failWithAttemptAccounting(failure, attempts, context);
+        await failWithAttemptAccounting(
+          cancelled ? failure : preferredFailure,
+          attempts,
+          context,
+        );
       }
       continue;
     }
@@ -3179,7 +3241,10 @@ async function executeLlmCall(
   }
 
   return await failWithAttemptAccounting(
-    new Error("No LLM credential is available for the configured selections."),
+    preferredFailure ?? credentialFailure ??
+      new Error(
+        "No LLM credential is available for the configured selections.",
+      ),
     attempts,
     context,
   );

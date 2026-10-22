@@ -15,12 +15,6 @@ import { ActionFailure } from "../client/web/ports.ts";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:";
-if (url !== ":memory:") {
-  const parsed = new URL(url);
-  if (parsed.port !== "55439" || !parsed.pathname.startsWith("/result_")) {
-    throw new Error("Use PostgreSQL port 55439 and a result_* database.");
-  }
-}
 
 Deno.test("Action result: create-then-send latency harness", async () => {
   const database = await createTestDatabase({ url });

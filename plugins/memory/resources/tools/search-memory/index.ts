@@ -6,9 +6,10 @@ export const searchMemoryTool: ToolResource<"search_memory"> = defineTool(
   "search_memory",
   searchMemoryAction,
   {
+    history: { visibility: "requester_only" },
     name: "Search Memory",
     description:
-      "Search accessible memory notes. Active notes are returned by default; includeRetired also searches their audit history.",
+      "Search the initiating human's personal memory, this thread's current Core space memory, and this thread's continuity notes. Active notes are returned by default; includeRetired also searches their audit history.",
   },
 );
 

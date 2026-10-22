@@ -6,8 +6,7 @@ import entry2 from "./resources/tools/fetch-asset/index.ts";
 import entry3 from "./resources/tools/get-current-time/index.ts";
 import entry4 from "./resources/tools/save-asset/index.ts";
 import entry5 from "./resources/tools/update-my-memory/index.ts";
-import entry6 from "./resources/tools/update-user-memory/index.ts";
-import entry7 from "./resources/tools/wait/index.ts";
+import entry6 from "./resources/tools/wait/index.ts";
 const definition: {
   readonly id: "@copilotz/built-in-tools";
   readonly version: "3.0.0";
@@ -19,8 +18,7 @@ const definition: {
       readonly "get_current_time": typeof entry3;
       readonly "save_asset": typeof entry4;
       readonly "update_my_memory": typeof entry5;
-      readonly "update_user_memory": typeof entry6;
-      readonly "wait": typeof entry7;
+      readonly "wait": typeof entry6;
     };
   };
 } = {
@@ -34,8 +32,7 @@ const definition: {
       "get_current_time": entry3,
       "save_asset": entry4,
       "update_my_memory": entry5,
-      "update_user_memory": entry6,
-      "wait": entry7,
+      "wait": entry6,
     },
   },
 } as const;

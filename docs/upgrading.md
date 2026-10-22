@@ -8,6 +8,134 @@ status: stable
 
 # Upgrading and Data Safety
 
+## Upgrading to 0.91.0
+
+### One memory, three scopes
+
+Install `memoryPlugin` from `@copilotz/copilotz/memory`. Grant agents
+`remember`, `search_memory`, `inspect_memory`, and `retire_memory` in
+`capabilities.tools`. `remember({ text, scope })` appends immediately:
+`personal` belongs to the human initiator, `space` to the thread's current Core
+space, and `thread` (the default) to the conversation. Correct with
+`remember({ text, scope, replaces: id })`; retire with
+`retire_memory({ id, reason })`. Text is immutable. Retirement keeps an audit
+record; it is not erasure. Direct/imported notes have
+`lineage.checkpointId: null`; note results now include `scope`.
+
+**`update_user_memory` is removed in this release.** Replace
+`update_user_memory({ content })` with
+`remember({ text: content, scope: "personal" })`. Replace `operation: "remove"`
+with `retire_memory`; obtain the new ID from search or the profile. Remove the
+old alias from tool grants, prompts, action policies and imports. There is no
+alias: the old action belonged to Built-in Tools and mutated participant
+metadata; keeping it would couple that plugin to Memory and preserve an
+incompatible result/category contract. `update_my_memory` (agent configuration
+metadata) is unchanged.
+
+Core space membership now selects a dedicated `memory-space:space:<spaceId>`.
+Joining exposes it; leaving, moving or archiving removes access. Thread notes
+stay private to their thread, including when two threads share a Core space.
+Legacy custom spaces and explicit `memorySpaceAccess` sharing grants remain
+stored but no longer expand agent visibility. Review and copy any facts that
+should be shared into the chosen new space scope; do not blindly publish old
+thread notes. Existing checkpoints and canonical thread notes stay in place. The
+canonical thread write grant remains an internal consolidation fence.
+
+### Retained personal data
+
+No retained SQL schema upgrade is needed. The first personal write, search,
+inspection, ordinary prompt preparation or profile opening lazily imports valid
+`participant.metadata.memories.items` into personal notes. Each item gets a
+SHA-256 ID from its participant and complete legacy value. Concurrent/repeated
+imports converge; retired imports are never recreated. The original metadata
+(including category and malformed entries) is retained for recovery, and is
+excluded from Core's system prompt. Imported text is available through ordinary
+text search without embeddings. Stop all old-version writers before rollout;
+editing legacy metadata afterward is not a supported memory interface.
+
+The profile lists personal notes and offers **Forget** via the `personal_memory`
+Action (`operation: "import" | "retire"`). Set `resources.chat.sender.id` to the
+canonical participant ID (an authorized `externalId` lookup is also supported).
+Register these leaves in the app's browser plugin (server policies still control
+all access):
+
+```ts
+collections: { memoryNote: { placement: "server" } },
+actions: {
+  personal_memory: { id: "copilotz.memory.personal", placement: "server" },
+},
+```
+
+### Application policy changes
+
+The library cannot authenticate an application's humans or choose its access
+policy. Keep those checks in the existing owner policy and compose
+`memoryScopeConstraints(read, { threadId, initiatorParticipantId })`, exported
+from `@copilotz/copilotz/memory`, after resolving trusted Core provenance. Bind
+that policy to `memoryNote`, `memorySpace`, `memorySpaceAccess`, and
+`longTermMemory`. Declare `thread`, `space`, and `participant` policy sources.
+The helper provides read predicates and separate mutation constraints;
+membership is re-read by the owner at authorization/commit. Merge these
+constraints with the app's existing grants; do not replace them with
+unrestricted collection access.
+
+- For agent Actions and prompt preparation, derive the initiator from the
+  authenticated Core workflow/tool-plan provenance, never model input or an
+  arbitrary human in the thread. Preserve it across nested agents. Bind the
+  thread to authorized work; a valid ID alone grants nothing.
+- Permit the personal import's participant read and scoped note/container
+  creates, including in the message router's context preparation. Do not permit
+  metadata writes for personal memory. Keep ordinary Core collection grants.
+- For profile calls, expose `personal_memory` and bind
+  `actionMetadata.initiatorParticipantId` to the authenticated participant. Use
+  `memoryScopeConstraints(read, { initiatorParticipantId })` without a thread;
+  constrain browser `memoryNote` reads the same way. Never accept a participant
+  ID from the action input as authority.
+- Scheduled tool creation captures `metadata.creatorParticipantId` from trusted
+  action metadata and preserves it on updates. Dispatch uses that stored human
+  as initiator. Host-authored jobs must supply this server-derived metadata;
+  backfill existing jobs only when the creator is known. Protect this field in
+  custom job-write policies. Unknown/non-human creators get no personal scope.
+- Keep Memory tools' `requester_only` history visibility. Apply the app's usual
+  message, asset and operation policies to retained tool results and agent
+  replies; scope authorization does not erase information already published in
+  conversation history.
+
+Automatic personal context is independent of the consolidation threshold. It is
+omitted unless all thread participants can be resolved and the initiator is the
+only human. At most 20 active items, in stable ID order and at most 8,000 text
+characters, are inserted immediately before the latest message. The system,
+tools and preceding history remain unchanged. In shared threads the initiating
+human's personal scope is available only through explicit tools.
+
+### Prompt metadata compatibility
+
+**Core no longer emits `## USER METADATA`.** Previously it selected the first
+human in a thread and copied arbitrary metadata into the system prompt. There is
+no compatibility switch for that dump. Installing Memory supplies the curated,
+initiator-based personal block described above; without Memory, Core does not
+automatically supply personal facts.
+
+If an app relied on other metadata fields (for example, a preferred language),
+register an explicit `defineContextResource` under `resources.promptContext`.
+Use `initiatorParticipantId`, authorized collection reads, an allowlist of
+fields and values, and the app's shared-thread disclosure policy. Return
+`placement: "before_latest_message"` so changing facts leave the system, tools
+and preceding history unchanged. Do not stringify a whole participant or its
+metadata, and do not fall back to the first human. See the
+[curated contributor example](../plugins/core/authoring/define-context/README.md#curated-user-facts).
+Grant that contributor only the participant/thread reads its policy needs.
+
+Agent `workingMemory`, `expertise` and `learnedPreferences` remain agent
+configuration, separate from the three memory scopes. `update_my_memory` keeps
+its existing storage/API. Core now renders those three fields as
+`## AGENT CONFIGURATION` before the latest message, instead of
+`## YOUR PERSISTENT MEMORY` in the system prompt. Object keys are sorted for
+stable bytes; unrelated agent metadata is not included. Agent resource identity
+and instructions remain in the system prompt. These placement changes incur a
+one-time prefix change on upgrade; later metadata/configuration changes do not
+invalidate that prefix.
+
 ## Upgrading to 0.90.0
 
 0.90.0 refuses several configurations and requests that 0.89.0 accepted. The

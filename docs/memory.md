@@ -47,6 +47,25 @@ Actions and Tools listed below, and the Processors that run consolidation. It
 requires Core; runtime-only applications without Core and an agent cannot run
 it.
 
+### Immediate memory
+
+`remember({ text, scope: "personal" | "space" | "thread" })` saves one immutable
+note immediately; the default is `thread`. Personal memory belongs to the turn's
+human initiator across agent chains and threads. Space memory belongs to a Core
+space, and thread memory provides conversation continuity. `search_memory`
+searches all three scopes currently visible to the turn. Correct with
+`remember({ text, scope, replaces: id })`, or use
+`retire_memory({ id, reason })`. Parallel appends cannot overwrite each other.
+Text search also covers immediate and imported notes when embeddings have not
+been produced.
+
+Personal notes contribute a bounded, stable block immediately before the newest
+message, only when the initiator is the thread's sole human. Shared threads use
+explicit tools for personal memory. Legacy participant items import lazily and
+remain retained in metadata. The profile reads the same store and can retire
+items. See
+[the 0.91.0 upgrade and policy guide](upgrading.md#upgrading-to-0910).
+
 ### Compose it in the host
 
 This is the Chapter 13 configuration of the harness host module `agent.ts`.
@@ -74,9 +93,9 @@ memory: {
     // Recent history kept raw outside the checkpoint. The library default is
     // 0; this application keeps about the latest exchange verbatim.
     retainRecentEstimatedTokens: 2000,
-    // One shared allowance for continuity, own notes, peer notes and framing.
+    // One shared allowance for continuity, thread notes, space notes and framing.
     maxContentEstimatedTokens: 12000,
-    // Recent active candidates per own/peer group for prompt context.
+    // Recent active candidates per retrieval group for prompt context.
     // search_memory has its own limit input.
     retrievalLimit: 20,
   },
@@ -173,10 +192,11 @@ Processor calling the Action lacks that provenance and produces no memory.
 
 Later turns of the owning agent receive the certified checkpoint's `continuity`
 summary as context. It belongs to that agent in that thread, like saved
-conversation messages: losing access to a peer's memory does not discard the
-summary or restart history consolidation. It can retain peer information already
-incorporated while access was granted. Future semantic-memory reads use current
-permissions instead of a cached copy of peer records in the checkpoint.
+conversation messages: losing access to space memory does not discard the
+summary or restart history consolidation. It can retain space information
+already incorporated while access was granted. Future semantic-memory reads use
+current permissions instead of a cached copy of shared records in the
+checkpoint.
 
 Only certified coverage lets Core trim raw history. Certification requires
 coverage that matches the agent, visibility scope, active branch and source
@@ -186,10 +206,10 @@ beginning of eligible history; later ranges continue after the previous
 boundary. Certification proves source, visibility and provenance, not that the
 model's claims are true.
 
-`maxContentEstimatedTokens` is one allowance for continuity, own notes, peer
+`maxContentEstimatedTokens` is one allowance for continuity, thread notes, space
 notes and framing. Continuity comes first. The plugin selects recent active
-notes (own scope before peers), then renders the selection chronologically with
-stable IDs. Notes that do not fit are omitted whole, with a disclosure and
+thread and space notes, then renders the selection chronologically with stable
+IDs. Notes that do not fit are omitted whole, with a disclosure and
 `search_memory` available to retrieve them. It never clips a procedure or note.
 An oversized continuity proposal must be repaired before it can commit. If the
 configured allowance is reduced below an already saved summary, its continuity
@@ -231,8 +251,8 @@ Completion usually warrants a replacement recording the result.
 Exact text reuse applies only to active notes in the same writable space, with
 no whitespace normalization, semantic deduplication or cross-space merging.
 Optional validated sources are appended. A retired note is never reactivated.
-The plugin chooses the checkpoint's default writable space; the model cannot
-select another destination. Peer notes cannot be replaced or retired.
+Consolidation writes the thread scope; use `remember` for explicit space or
+personal writes.
 
 ### Sources and audiences
 
@@ -256,7 +276,8 @@ pointers to the original note.
 Existing `long_term_memory` checkpoints, continuity, source references and saved
 history boundaries stay in place. Newly written notes use `memory_note`. Old
 `memory_record` graph rows remain stored but are not converted or returned by
-the new note APIs. No memory data migration or re-embedding is performed.
+the new note APIs. Legacy participant memory imports lazily into personal notes;
+no re-embedding is required for text search.
 
 ### Background work, waits and errors
 
@@ -287,23 +308,19 @@ the new note APIs. No memory data migration or re-embedding is performed.
 
 ### Scope and sharing
 
-- **Prompt context:** later turns of the same agent in the same thread use that
-  agent's certified continuity for the active branch and visibility scope. Other
-  agents in the thread don't receive it as their own checkpoint. Current memory
-  grants control live semantic records, not ownership of this continuity.
-- **Search:** `search_memory` returns notes from every memory space the caller
-  can read, including spaces shared through explicit access and
-  [Spaces](spaces.md) attachments. A stored fact is not necessarily private to
-  one agent.
-- **Shared peer memory:** when an explicit Space attachment gives a thread read
-  access to a peer thread's memory space, its active notes join the same bounded
-  memory contribution as read-only peer notes.
-- **Access removal:** detaching, moving, archiving or removing a Space stops
-  future peer-memory reads. Already incorporated conversation continuity stays
-  available, including any peer information it summarized. This is retention of
-  existing conversation context, not a grant to read new peer records.
-- Beyond such explicit access, nothing is shared across all threads, tenants or
-  namespaces.
+- `personal:<participantId>` follows the original human initiator. Without one,
+  no personal scope exists. Automatic injection is suppressed in shared threads.
+- `space:<spaceId>` follows the thread's current active Core space. Joining,
+  leaving, moving and archiving change access on the next authorized read/write.
+- `thread:<threadId>` contains local notes and checkpoints. Other threads never
+  gain its notes merely by joining the same Core space. Certified continuity
+  still belongs to its agent, branch and visibility scope.
+- Canonical container IDs prefix these keys with `memory-space:`. Old custom
+  grants no longer expand visibility. Already published conversation context is
+  retained; detaching does not erase earlier messages or summaries.
+- Owner policies can compose the public `memoryScopeConstraints` helper with the
+  application's authenticated Core provenance and collection constraints.
+  Sources, tool results and operations retain their own authorization.
 
 Raw in-process observation (`app.observe`, operation streams) is trusted host
 diagnostics and may include internal maintenance traffic; it is not a
@@ -311,27 +328,29 @@ participant view.
 
 ## Reference
 
-| Tool alias              | Purpose                                                                     |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `search_memory`         | Search readable active notes (or include retired audit)                     |
-| `consolidate_memory`    | Finish a maintenance turn, or consolidate on demand during an ordinary turn |
-| `inspect_memory`        | Inspect notes by ID with lineage and permitted source pointers              |
-| `list_knowledge_spaces` | List memory spaces the caller can read                                      |
+| Tool alias              | Purpose                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `remember`              | Append immediately to personal, space or thread scope; optionally replace an item |
+| `retire_memory`         | Permanently retire an item in a currently writable scope                          |
+| `search_memory`         | Search readable active notes (or include retired audit)                           |
+| `consolidate_memory`    | Finish a maintenance turn, or consolidate on demand during an ordinary turn       |
+| `inspect_memory`        | Inspect notes by ID with lineage and permitted source pointers                    |
+| `list_knowledge_spaces` | List memory spaces the caller can read                                            |
 
 Every alias must be granted explicitly in `capabilities.tools`. `search_memory`
 has a separate `limit` input: it defaults to 20 and accepts up to 100 results.
-`retrievalLimit` below bounds prompt candidates per own/peer group, not the
+`retrievalLimit` below bounds prompt candidates per retrieval group, not the
 search limit. `inspect_memory({ids})` accepts up to 100 IDs; inaccessible and
 missing IDs both appear in `unavailableIds`. `invalidate_memory` and
 `set_memory_status` are removed; use explicit retirement or replacement.
 
-| `resources.memory.config`     | Default | Meaning                                                                   |
-| ----------------------------- | ------- | ------------------------------------------------------------------------- |
-| `enabled`                     | `true`  | Automatic maintenance and memory prompt context; granted tools still work |
-| `triggerEstimatedTokens`      | 20000   | Prepared history size that reserves a checkpoint                          |
-| `retainRecentEstimatedTokens` | 0       | Recent history kept raw                                                   |
-| `maxContentEstimatedTokens`   | 12000   | Shared continuity, notes and framing allowance                            |
-| `retrievalLimit`              | 20      | Recent active prompt candidates per own/peer group                        |
+| `resources.memory.config`     | Default | Meaning                                                                                 |
+| ----------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `enabled`                     | `true`  | Automatic continuity maintenance/context; personal context and granted tools still work |
+| `triggerEstimatedTokens`      | 20000   | Prepared history size that reserves a checkpoint                                        |
+| `retainRecentEstimatedTokens` | 0       | Recent history kept raw                                                                 |
+| `maxContentEstimatedTokens`   | 12000   | Shared continuity, notes and framing allowance                                          |
+| `retrievalLimit`              | 20      | Recent active prompt candidates per retrieval group                                     |
 
 **Vector retrieval (optional).** Supply an embedding function as
 `adapters.memoryEmbedding.default` and declare

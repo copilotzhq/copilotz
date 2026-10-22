@@ -7,6 +7,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import {
+  type ContextResource,
   corePlugin,
   defineAgent,
   defineContextResource,
@@ -40,8 +41,6 @@ import { projectMessages } from "../core/shared/testing/projections.ts";
 import { createTestDomainContext } from "../core/shared/testing/context.ts";
 import AjvModule from "ajv";
 import { consolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
-import { inspectMemoryAction } from "./actions/inspect-memory/index.ts";
-import { searchMemoryAction } from "./actions/search-memory/index.ts";
 import { toolSourceHandle } from "./shared/evidence.ts";
 import { memoryPlugin } from "./plugin.ts";
 import { builtInToolsPlugin } from "@copilotz/copilotz/tools/builtin";
@@ -182,14 +181,16 @@ async function fixture(
     statements?: { sql: string; params?: unknown[] }[];
     dynamicInstructions?: boolean;
     tools?: readonly string[];
+    peerAgent?: boolean;
+    userFacts?: ContextResource;
   }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({
     url: options.vectors
       ? Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")!
-      : ":memory:",
+      : Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
   });
-  const schema = options.vectors
+  const schema = options.vectors || Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")
     ? `${SCHEMA}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
     : SCHEMA;
   const inputs: LlmAdapterCallInput[] = [];
@@ -238,6 +239,22 @@ async function fixture(
         config: mutableMemoryConfig,
       },
       agents: {
+        ...(options.peerAgent
+          ? {
+            south: defineAgent({
+              id: "south",
+              name: "South",
+              role: "assistant",
+              models: {
+                generate: [{
+                  connection: "test_model",
+                  model: "native-memory-model",
+                }],
+              },
+              capabilities: { tools: ["search_memory"] },
+            }),
+          }
+          : {}),
         north: defineAgent({
           id: "north",
           name: "North",
@@ -282,13 +299,17 @@ async function fixture(
               }]),
             ],
           },
-          capabilities: { tools: options.tools ?? ["consolidate_memory"] },
+          capabilities: {
+            tools: options.tools ?? ["consolidate_memory"],
+            ...(options.peerAgent ? { agents: ["south"] } : {}),
+          },
         }),
       },
       llmConnections: {
         test_model: { adapter: "test" },
       },
       promptContext: {
+        ...(options.userFacts ? { userFacts: options.userFacts } : {}),
         fixture: defineContextResource({
           id: "fixture.context",
           type: "context",
@@ -348,7 +369,9 @@ async function fixture(
     },
     async close() {
       await engine.shutdown();
-      if (options.vectors) await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+      if (options.vectors || Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
+        await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+      }
       await db.close();
     },
   });
@@ -552,7 +575,10 @@ Deno.test("memory composes Core-native dispatch and settlement without a model s
     "consolidate_memory",
     "inspect_memory",
     "list_knowledge_spaces",
+    "personal_memory",
     "produceCheckpoint",
+    "remember",
+    "retire_memory",
     "search_memory",
   ]);
   assertEquals(Object.keys(plugin.processors).sort(), [
@@ -1776,7 +1802,34 @@ Deno.test({
         operationKey: "vector-search-revoked",
         metadata: { threadId: "thread-a", agentId: "north" },
       }) as typeof result;
-      assertEquals(revoked.notes, []);
+      // A legacy grant does not own canonical thread visibility anymore.
+      assertEquals(revoked.notes.map((note) => note.id), [records[0].id]);
+      const direct = await context.actions.remember({
+        text: "Immediate unembedded preference",
+        scope: "personal",
+      }, {
+        metadata: {
+          threadId: "thread-a",
+          agentId: "north",
+          initiatorParticipantId: "human-a",
+        },
+      }) as { id: string };
+      const hybrid = await context.actions.search_memory({
+        query: "Immediate unembedded",
+      }, {
+        metadata: {
+          threadId: "thread-a",
+          agentId: "north",
+          initiatorParticipantId: "human-a",
+        },
+      }) as typeof result;
+      assert(hybrid.notes.some((note) => note.id === direct.id));
+      const nonHuman = await context.actions.search_memory({
+        query: "Immediate unembedded",
+      }, {
+        metadata: { threadId: "thread-a", agentId: "north" },
+      }) as typeof result;
+      assert(!nonHuman.notes.some((note) => note.id === direct.id));
     } finally {
       await run.close();
     }
@@ -2325,6 +2378,393 @@ Deno.test("terminal dispatch failure settles its checkpoint after retries", asyn
       dispatchErrors.attempts > 1,
       "Transient failures retain delivery retries",
     );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("personal memory native prompt preserves history prefix, imports once and excludes shared threads", async () => {
+  const run = await fixture(() => stop("Acknowledged."), { enabled: false });
+  try {
+    await setupThread(run);
+    await collection(run, "participant").update({
+      id: "human-a",
+      set: {
+        metadata: {
+          billingSecret: "RAW_HUMAN_A_SECRET",
+          _private: "PRIVATE_HUMAN_A_SECRET",
+          memories: {
+            items: [
+              {
+                id: "legacy",
+                content: "PERSONAL_PRIVATE_FACT",
+                category: "fact",
+              },
+            ],
+          },
+        },
+      },
+    });
+    await createHumanMessage(run, { id: "old-1", text: "Older history one." });
+    await createHumanMessage(run, { id: "old-2", text: "Older history two." });
+    await createHumanMessage(run, {
+      id: "turn-1",
+      text: "Newest question one.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length === 1);
+    const first = run.inputs[0].request;
+    const body = (value: unknown) => JSON.stringify(value);
+    assert(!body(first.instructions).includes("PERSONAL_PRIVATE_FACT"));
+    assertStringIncludes(body(first.messages.at(-2)), "PERSONAL_PRIVATE_FACT");
+    assertStringIncludes(body(first.messages.at(-1)), "Newest question one.");
+    assertStringIncludes(
+      body(first.messages.slice(0, -2)),
+      "Older history one.",
+    );
+    await eventually(
+      run,
+      async () =>
+        (await projectMessages(run.engine, NAMESPACE, "thread-a")).some((m) =>
+          m.sender.participantType === "agent"
+        ),
+    );
+    await createHumanMessage(run, {
+      id: "turn-2",
+      text: "Newest question two.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length === 2);
+    const second = run.inputs[1].request;
+    assertEquals(second.instructions, first.instructions);
+    assertEquals(second.tools, first.tools);
+    assertEquals(body(second.messages.at(-2)), body(first.messages.at(-2)));
+    assertEquals(
+      second.messages.slice(0, first.messages.length - 2),
+      first.messages.slice(0, -2),
+    );
+    assertEquals((await collection(run, "memory_note").list()).length, 1);
+    // Another agent participant inherits the same human and gets the same block.
+    await collection(run, "participant").create({
+      id: "agent-peer",
+      externalId: "peer",
+      participantType: "agent",
+      agentId: "north",
+    });
+    await collection(run, "thread").commands.addParticipant({
+      id: "thread-a",
+      participantId: "agent-peer",
+    });
+    await createHumanMessage(run, {
+      id: "turn-peer",
+      text: "Peer question.",
+      recipientIds: ["agent-peer"],
+    });
+    await eventually(run, () => run.inputs.length === 3);
+    assertEquals(
+      body(run.inputs[2].request.messages.at(-2)),
+      body(first.messages.at(-2)),
+    );
+    await collection(run, "participant").create({
+      id: "human-b",
+      externalId: "human-b",
+      participantType: "human",
+      metadata: {
+        appSecret: "RAW_HUMAN_B_SECRET",
+        memories: { items: [{ id: "other", content: "OTHER_PRIVATE_FACT" }] },
+      },
+    });
+    await collection(run, "thread").commands.addParticipant({
+      id: "thread-a",
+      participantId: "human-b",
+    });
+    await createHumanMessage(run, {
+      id: "shared-1",
+      text: "Shared question.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length === 4);
+    assert(!body(run.inputs[3].request).includes("PERSONAL_PRIVATE_FACT"));
+    await createHumanMessage(run, {
+      id: "shared-2",
+      text: "Other human question.",
+      senderId: "human-b",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length === 5);
+    assert(!body(run.inputs[4].request).includes("PERSONAL_PRIVATE_FACT"));
+    for (const input of run.inputs) {
+      assert(!body(input.request).includes("RAW_HUMAN_"));
+      assert(!body(input.request).includes("PRIVATE_HUMAN_A_SECRET"));
+      assert(!body(input.request).includes("OTHER_PRIVATE_FACT"));
+      assert(!body(input.request).includes("USER METADATA"));
+    }
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("personal memory keeps the original human through an agent Ask and tool continuation", async () => {
+  const run = await fixture((input, call) => {
+    assertStringIncludes(
+      JSON.stringify(input.request.messages.at(-2)),
+      "CHAIN_PRIVATE_FACT",
+    );
+    if (call === 1) {
+      return {
+        content: [],
+        toolCalls: [{
+          id: "ask-peer",
+          action: "ask",
+          input: { target: "south", message: "Check your memory." },
+        }],
+        attempts: [{ status: "completed" }],
+        finishReason: "tool_calls",
+      };
+    }
+    if (call === 2) {
+      assertStringIncludes(input.request.instructions ?? "", "You are South");
+      return {
+        content: [],
+        toolCalls: [{ id: "search-own", action: "search_memory", input: {} }],
+        attempts: [{ status: "completed" }],
+        finishReason: "tool_calls",
+      };
+    }
+    if (call === 3) {
+      assertStringIncludes(
+        JSON.stringify(input.request.messages.at(-1)),
+        "CHAIN_PRIVATE_FACT",
+      );
+    }
+    return stop("Research complete.");
+  }, { enabled: false, tools: ["ask", "search_memory"], peerAgent: true });
+  try {
+    await setupThread(run);
+    await collection(run, "participant").create({
+      id: "agent-south",
+      externalId: "south",
+      agentId: "south",
+      participantType: "agent",
+    });
+    await collection(run, "thread").commands.addParticipant({
+      id: "thread-a",
+      participantId: "agent-south",
+    });
+    await collection(run, "participant").update({
+      id: "human-a",
+      set: {
+        metadata: {
+          memories: {
+            items: [
+              { id: "chain", content: "CHAIN_PRIVATE_FACT" },
+            ],
+          },
+        },
+      },
+    });
+    await createHumanMessage(run, {
+      id: "chain-start",
+      text: "Delegate this work.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length >= 4);
+    assertEquals(run.inputs.length, 4);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("personal memory and agent configuration changes preserve the native system and history prefix", async () => {
+  const run = await fixture(() => stop("Acknowledged."), { enabled: false });
+  try {
+    await setupThread(run);
+    const context = createTestDomainContext(run.engine, NAMESPACE);
+    const remember = (text: string) =>
+      context.actions.remember({ text, scope: "personal" }, {
+        metadata: {
+          threadId: "thread-a",
+          agentId: "north",
+          initiatorParticipantId: "human-a",
+        },
+      });
+    await remember("ORIGINAL_PERSONAL_FACT");
+    await collection(run, "participant").update({
+      id: "agent-north",
+      set: {
+        metadata: {
+          workingMemory: "ORIGINAL_AGENT_CONFIG",
+          expertise: ["planning"],
+          learnedPreferences: {
+            tone: "brief",
+            format: { tables: true, lists: false },
+          },
+          appSecret: "RAW_AGENT_SECRET",
+        },
+      },
+    });
+    await createHumanMessage(run, { id: "prefix", text: "Stable history." });
+    const turn = async (number: number) => {
+      await createHumanMessage(run, {
+        id: `cache-${number}`,
+        text: `Question ${number}.`,
+        recipientIds: ["agent-north"],
+      });
+      await eventually(run, () => run.inputs.length === number);
+      await eventually(
+        run,
+        async () =>
+          (await projectMessages(run.engine, NAMESPACE, "thread-a"))
+            .filter((message) => message.sender.participantType === "agent")
+            .length === number,
+      );
+      return run.inputs[number - 1].request;
+    };
+    const first = await turn(1);
+    await remember("ADDED_PERSONAL_FACT");
+    await collection(run, "participant").update({
+      id: "human-a",
+      set: {
+        metadata: {
+          arbitrary: "RAW_HUMAN_CHANGED_SECRET",
+          locale: "RAW_LOCALE_SECRET",
+        },
+      },
+    });
+    await collection(run, "participant").update({
+      id: "agent-north",
+      set: {
+        metadata: {
+          workingMemory: "CHANGED_AGENT_CONFIG",
+          expertise: ["planning"],
+          learnedPreferences: {
+            tone: "brief",
+            format: { tables: true, lists: false },
+          },
+          appSecret: "RAW_AGENT_CHANGED_SECRET",
+        },
+      },
+    });
+    const second = await turn(2);
+    // Equivalent configuration in a different object order has identical bytes.
+    await collection(run, "participant").update({
+      id: "agent-north",
+      set: {
+        metadata: {
+          learnedPreferences: {
+            format: { lists: false, tables: true },
+            tone: "brief",
+          },
+          expertise: ["planning"],
+          workingMemory: "CHANGED_AGENT_CONFIG",
+        },
+      },
+    });
+    const third = await turn(3);
+    const body = (value: unknown) => JSON.stringify(value);
+    assertStringIncludes(body(first.messages.at(-2)), "ORIGINAL_AGENT_CONFIG");
+    assertStringIncludes(body(second.messages.at(-2)), "CHANGED_AGENT_CONFIG");
+    assertStringIncludes(body(second.messages.at(-2)), "ADDED_PERSONAL_FACT");
+    assert(!body(first.messages.at(-2)).includes("ADDED_PERSONAL_FACT"));
+    assertEquals(third.messages.at(-2), second.messages.at(-2));
+    for (const [index, request] of [first, second, third].entries()) {
+      assertEquals(request.instructions, first.instructions);
+      assertEquals(request.tools, first.tools);
+      assertEquals(
+        request.messages.slice(0, first.messages.length - 2),
+        first.messages.slice(0, -2),
+      );
+      assertStringIncludes(
+        body(request.messages.at(-1)),
+        `Question ${index + 1}.`,
+      );
+      assert(!body(request.instructions).includes("PERSONAL_FACT"));
+      assert(!body(request.instructions).includes("AGENT_CONFIG"));
+      assert(!body(request).includes("RAW_"));
+      assert(!body(request).includes("USER METADATA"));
+    }
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("personal memory supports explicit curated host facts for the turn initiator", async () => {
+  const run = await fixture(() => stop("Acknowledged."), {
+    enabled: false,
+    userFacts: defineContextResource({
+      id: "test.user_facts",
+      type: "context",
+      purposes: ["conversation"],
+      async contribute(input) {
+        if (!input.initiatorParticipantId || input.historyScopeId) return null;
+        const participant = await input.collections.participant.get({
+          id: input.initiatorParticipantId,
+        });
+        if (participant?.participantType !== "human") return null;
+        const language =
+          (participant.metadata as Record<string, unknown>).preferredLanguage;
+        if (language !== "en" && language !== "pt") return null;
+        // This host explicitly permits these two language values in shared threads.
+        return {
+          id: "language",
+          title: "USER LANGUAGE",
+          role: "context",
+          placement: "before_latest_message",
+          content: { type: "text", text: `Preferred language: ${language}` },
+        };
+      },
+    }),
+  });
+  try {
+    await setupThread(run);
+    await collection(run, "participant").update({
+      id: "human-a",
+      set: {
+        metadata: { preferredLanguage: "en", appSecret: "RAW_FIRST_HUMAN" },
+      },
+    });
+    await collection(run, "participant").create({
+      id: "human-b",
+      externalId: "human-b",
+      participantType: "human",
+      metadata: { preferredLanguage: "pt", appSecret: "RAW_INITIATOR" },
+    });
+    await collection(run, "thread").commands.addParticipant({
+      id: "thread-a",
+      participantId: "human-b",
+    });
+    await createHumanMessage(run, {
+      id: "host-history",
+      text: "Earlier history.",
+    });
+    await createHumanMessage(run, {
+      id: "host-turn",
+      senderId: "human-b",
+      text: "Initiator question.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(run, () => run.inputs.length === 1);
+    const request = run.inputs[0].request;
+    assertStringIncludes(
+      JSON.stringify(request.messages.at(-2)),
+      "Preferred language: pt",
+    );
+    assertStringIncludes(
+      JSON.stringify(request.messages.at(-1)),
+      "Initiator question.",
+    );
+    assertStringIncludes(
+      JSON.stringify(request.messages.slice(0, -2)),
+      "Earlier history.",
+    );
+    assert(!JSON.stringify(request.instructions).includes("USER LANGUAGE"));
+    assert(!JSON.stringify(request).includes("Preferred language: en"));
+    assert(!JSON.stringify(request).includes("RAW_"));
+    assert(!JSON.stringify(request).includes("USER METADATA"));
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

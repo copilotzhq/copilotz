@@ -404,6 +404,11 @@ async function mount(
       invocation.accepted(`op-${calls.length + 1}`);
       calls.push({ alias, input: input as Record<string, unknown> });
       const data = input as Record<string, unknown>;
+      if (alias === "personal_memory" && data.operation === "retire") {
+        live.patch("memoryNote", String(data.id), {
+          retirement: { reason: "Removed by owner" },
+        });
+      }
       if (alias === "createThread") {
         const id = String(data.id);
         if (live.get("thread", id)) {
@@ -1920,6 +1925,80 @@ test("an app replaces the agent selector with its own View", async () => {
       document.querySelector('[data-slot="shell-header"]')!.textContent!,
       /Team for t1/,
     );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("profile lists only personal memory and imports and forgets through the owner action", async () => {
+  const live = new FixtureLive({
+    ...tables(),
+    memoryNote: [
+      {
+        id: "own",
+        memorySpaceId: "memory-space:personal:p-ana",
+        text: "Prefers short replies",
+        retirement: null,
+      },
+      {
+        id: "other",
+        memorySpaceId: "memory-space:personal:other",
+        text: "OTHER_PRIVATE_FACT",
+        retirement: null,
+      },
+      {
+        id: "thread-note",
+        memorySpaceId: "memory-space:thread:t1",
+        text: "THREAD_FACT",
+        retirement: null,
+      },
+      {
+        id: "old",
+        memorySpaceId: "memory-space:personal:p-ana",
+        text: "RETIRED_FACT",
+        retirement: { reason: "old" },
+      },
+    ],
+  });
+  const shell = await mount("https://app.example/?chat=t1", {
+    live,
+    extra: {
+      id: "test-profile",
+      collections: { memoryNote: { placement: "server" } },
+      actions: {
+        personal_memory: {
+          id: "copilotz.memory.personal",
+          placement: "server",
+        },
+      },
+      resources: { chat: { sender: { id: "p-ana", name: "Ana" } } },
+    },
+  });
+  try {
+    await act(async () => {
+      await shell.runtime.actions.shellDialog({
+        reference: { shows: "userProfile", value: null },
+      }).result();
+    });
+    assert.match(document.body.textContent!, /Prefers short replies/);
+    assert.doesNotMatch(
+      document.body.textContent!,
+      /OTHER_PRIVATE_FACT|THREAD_FACT|RETIRED_FACT/,
+    );
+    assert.equal(
+      shell.calls.filter((c) =>
+        c.alias === "personal_memory" && c.input.operation === "import"
+      ).length,
+      1,
+    );
+    await click(byText("button", "Forget"));
+    assert.deepEqual(
+      shell.calls.find((c) =>
+        c.alias === "personal_memory" && c.input.operation === "retire"
+      )?.input,
+      { operation: "retire", id: "own" },
+    );
+    assert.doesNotMatch(document.body.textContent!, /Prefers short replies/);
   } finally {
     await shell.dispose();
   }

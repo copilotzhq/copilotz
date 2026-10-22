@@ -5,17 +5,18 @@ export const PUBLIC_MEMORY_RESULT_LIMIT = 100;
 const noteSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["id", "text", "state", "lineage"],
+  required: ["id", "text", "state", "scope", "lineage"],
   properties: {
     id: { type: "string" },
     text: { type: "string" },
+    scope: { enum: ["personal", "space", "thread"] },
     state: { enum: ["active", "retired"] },
     lineage: {
       type: "object",
       additionalProperties: false,
       required: ["checkpointId", "createdAt"],
       properties: {
-        checkpointId: { type: "string" },
+        checkpointId: { type: ["string", "null"] },
         createdAt: { type: "string" },
       },
     },
@@ -67,6 +68,11 @@ export function publicMemoryNote(
   return {
     id: note.id,
     text: note.text,
+    scope: note.memorySpaceId.startsWith("memory-space:personal:")
+      ? "personal" as const
+      : note.memorySpaceId.startsWith("memory-space:space:")
+      ? "space" as const
+      : "thread" as const,
     state: note.retirement ? "retired" as const : "active" as const,
     lineage: { checkpointId: note.consolidationId, createdAt: note.createdAt },
     ...(detailed

@@ -47,6 +47,9 @@ export function frozenSnapshot(
         ),
         title: requiredText(input.title, "Frozen context title"),
         role,
+        ...(input.placement === "before_latest_message"
+          ? { placement: "before_latest_message" as const }
+          : {}),
         content: structuredClone(input.content) as ContentRef[],
         ...(input.source
           ? { source: structuredClone(input.source) as ContextSourceRef }
@@ -111,6 +114,7 @@ export async function captureContextSnapshot(
       resourceId: item.resourceId,
       title: item.title,
       role: item.role,
+      ...(item.placement ? { placement: item.placement } : {}),
       content: prepared[index].content,
       ...(item.source ? { source: structuredClone(item.source) } : {}),
       capturedAt: item.capturedAt ?? capturedAt,

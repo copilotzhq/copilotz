@@ -195,6 +195,11 @@ const view: ViewDefinition<
           (sender) =>
             senders.get(sender) ??
               { id: sender, type: "system", name: "Unknown" },
+          {
+            viewerIds: [config.self?.id, config.self?.externalId].filter((
+              value,
+            ): value is string => typeof value === "string" && value !== ""),
+          },
         ),
       ),
     );

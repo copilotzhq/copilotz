@@ -11,10 +11,12 @@ import {
   CircleAlert,
   CircleCheck,
   LoaderCircle,
+  Lock,
   Wrench,
 } from "lucide-react";
 import { cn } from "@copilotz/copilotz/web/kit";
 import type { ChatActivity } from "../../shared/chat-messages.ts";
+import { ToolPayload } from "./tool-output.tsx";
 
 /** Labels with `{{tool}}` placeholders; see `resources.shell.labels`. */
 export interface ActivityLabels {
@@ -99,28 +101,14 @@ function StepIcon({ item }: { item: ChatActivity }): React.ReactElement {
     : <Wrench aria-hidden="true" className={className} />;
 }
 
-function json(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-/** Structured results show as JSON, cut short past this many characters. */
+/** Text results show in full up to this many characters. */
 const RESULT_PREVIEW = 20_000;
-
-function preview(value: unknown): string {
-  const text = json(value);
-  return text.length > RESULT_PREVIEW
-    ? `${text.slice(0, RESULT_PREVIEW)}\n…`
-    : text;
-}
 
 const resultNotes: Record<NonNullable<ChatActivity["resultStatus"]>, string> = {
   loading: "Loading the result…",
   "too-large": "The result is too large to show here.",
   unavailable: "The result couldn't be loaded.",
+  restricted: "Output visible to the agent only.",
 };
 
 /** Reads a referenced JSON result once its renderer or step is on screen. */
@@ -153,81 +141,116 @@ function Details(
       </div>
     );
   }
-  const blocks: React.ReactNode[] = [];
-  if (item.reasoning) {
-    blocks.push(
-      <p
-        key="reasoning"
-        className="text-muted-foreground leading-relaxed whitespace-pre-wrap"
-      >
+  const reasoning = item.reasoning
+    ? (
+      <p className="text-muted-foreground leading-relaxed whitespace-pre-wrap">
         {item.reasoning}
-      </p>,
+      </p>
+    )
+    : null;
+  const parts: React.ReactNode[] = [];
+  if (item.input && Object.keys(item.input).length) {
+    parts.push(
+      <ToolPayload
+        key="input"
+        label="Input"
+        value={item.input}
+        describe={false}
+      />,
+    );
+  } else if (item.rawInput) {
+    // Arguments still being written: text until they parse.
+    parts.push(
+      <ToolPayload
+        key="input"
+        label="Input"
+        text={item.rawInput}
+        describe={false}
+      />,
     );
   }
-  const input = item.input && Object.keys(item.input).length
-    ? json(item.input)
-    : item.rawInput;
-  if (input) {
-    blocks.push(
-      <figure key="input" className="grid gap-1">
-        <figcaption className="text-muted-foreground text-xs font-medium">
-          Input
-        </figcaption>
-        <pre className="bg-muted/60 max-h-64 overflow-auto rounded-md p-2.5 font-mono text-xs leading-relaxed">
-          {input}
-        </pre>
-      </figure>,
-    );
-  }
-  blocks.push(
-    <LoadResult key="load" item={item} onLoadResult={onLoadResult} />,
-  );
-  const result = item.data !== undefined ? preview(item.data) : item.result;
-  if (result) {
-    blocks.push(
-      <figure key="result" className="grid gap-1">
-        <figcaption className="text-muted-foreground text-xs font-medium">
-          Result
-        </figcaption>
-        <pre className="bg-muted/60 max-h-64 overflow-auto rounded-md p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-          {result}
-        </pre>
-      </figure>,
-    );
-  } else if (item.resultRef) {
-    const status = item.resultStatus ?? "loading";
-    blocks.push(
-      <p
+  // A failed call's text is its error, shown once as the error.
+  const resultText = item.status === "failed" && item.result === item.error
+    ? undefined
+    : item.result;
+  if (item.data !== undefined) {
+    parts.push(<ToolPayload key="result" label="Result" value={item.data} />);
+  } else if (resultText !== undefined) {
+    parts.push(
+      <ToolPayload
         key="result"
-        role="status"
-        className="text-muted-foreground flex items-center gap-2 text-xs"
-      >
-        {resultNotes[status]}
-        {status === "unavailable" && onLoadResult && (
-          <button
-            type="button"
-            className="hover:text-foreground focus-visible:ring-ring/45 rounded underline underline-offset-4 outline-none focus-visible:ring-[3px]"
-            onClick={() => onLoadResult(item)}
-          >
-            Try again
-          </button>
-        )}
-      </p>,
+        label="Result"
+        text={resultText.length > RESULT_PREVIEW
+          ? `${resultText.slice(0, RESULT_PREVIEW)}\n…`
+          : resultText}
+      />,
+    );
+  } else if (item.resultRef || item.resultStatus === "restricted") {
+    const status = item.resultStatus ?? "loading";
+    parts.push(
+      <ToolPayload key="result" label="Result">
+        <p
+          role="status"
+          className="text-muted-foreground flex items-center gap-2 text-xs"
+        >
+          {status === "loading" && (
+            <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
+          )}
+          {status === "restricted" && (
+            <Lock aria-hidden="true" className="size-3 shrink-0" />
+          )}
+          {resultNotes[status]}
+          {status === "unavailable" && onLoadResult && (
+            <button
+              type="button"
+              className="hover:text-foreground focus-visible:ring-ring/45 rounded underline underline-offset-4 outline-none focus-visible:ring-[3px]"
+              onClick={() => onLoadResult(item)}
+            >
+              Try again
+            </button>
+          )}
+        </p>
+      </ToolPayload>,
     );
   }
   if (item.error && item.kind !== "failure") {
-    blocks.push(
-      <p key="error" className="text-destructive">{item.error}</p>,
+    parts.push(
+      <ToolPayload key="error" label="Error" text={item.error} tone="error" />,
     );
   }
-  if (blocks.length === 1) return <>{blocks}</>;
-  return <div className="grid gap-2.5 pt-1.5 pb-1 text-sm">{blocks}</div>;
+  const load = <LoadResult item={item} onLoadResult={onLoadResult} />;
+  if (!parts.length) {
+    return reasoning
+      ? (
+        <div className="pt-1 pb-1.5 text-sm">
+          {load}
+          {reasoning}
+        </div>
+      )
+      : load;
+  }
+  return (
+    <div className="grid gap-2 pt-1.5 pb-1 text-sm">
+      {load}
+      {reasoning}
+      <div
+        data-slot="tool-details"
+        className={cn(
+          "bg-muted/35 divide-border grid min-w-0 divide-y overflow-hidden rounded-lg border",
+          item.status === "failed" && "border-destructive/30",
+        )}
+      >
+        {parts}
+      </div>
+    </div>
+  );
 }
 
 function hasDetails(item: ChatActivity, tool?: ToolPresentation): boolean {
   return Boolean(
     tool || item.reasoning || item.rawInput || item.result ||
       item.data !== undefined || item.resultRef ||
+      item.resultStatus === "restricted" ||
       (item.input && Object.keys(item.input).length) ||
       (item.error && item.kind !== "failure"),
   );

@@ -222,8 +222,14 @@ export async function loadToolResult(
         ? { status: "ready", text }
         : { status: "ready", value: JSON.parse(text) },
     );
-  } catch {
-    set({ status: "unavailable" });
+  } catch (cause) {
+    // Content this viewer may not see is not a failure to retry.
+    const code = (cause as { code?: unknown } | undefined)?.code;
+    set({
+      status: code === "message_content_not_found"
+        ? "restricted"
+        : "unavailable",
+    });
   }
 }
 

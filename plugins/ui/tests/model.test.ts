@@ -6,13 +6,17 @@ import {
   groupThreadsByRecency,
   groupThreadsBySpace,
   menuItems,
+  NO_SPACE_GROUP,
+  openGroups,
   resolveDarkMode,
+  revealGroup,
   type ShellHistory,
   shellPreferences,
   shellState,
   shellUrlStorageAdapter,
   spaceDragScrollSpeed,
   spaceSections,
+  toggleGroup,
   touchSpaceDrag,
 } from "../model.ts";
 
@@ -274,4 +278,42 @@ test("sections declare the URL parameters they own; the codec drops the ones to 
   assert.equal(url.searchParams.get("card"), null);
   assert.equal(url.searchParams.get("ref"), "mail");
   assert.equal(url.searchParams.get("chat"), "t1");
+});
+
+test("sidebar groups start collapsed, No Space too; each person keeps their own", () => {
+  let preferences = shellPreferences({});
+  assert.deepEqual([...openGroups(preferences, "ana")], []);
+  // The open conversation's group (and an open Space) shows by itself.
+  assert.deepEqual(
+    [...openGroups(preferences, "ana", [NO_SPACE_GROUP, null])],
+    [NO_SPACE_GROUP],
+  );
+  preferences = shellPreferences({
+    ...preferences,
+    ...toggleGroup(preferences, "ana", "s1", true),
+  });
+  preferences = shellPreferences({
+    ...preferences,
+    ...toggleGroup(preferences, "ana", NO_SPACE_GROUP, false),
+  });
+  assert.deepEqual([...openGroups(preferences, "ana")], ["s1"]);
+  assert.deepEqual(
+    [...openGroups(preferences, "ana", [NO_SPACE_GROUP])],
+    ["s1"],
+    "a group the person collapsed stays collapsed while current",
+  );
+  assert.deepEqual(
+    [...openGroups(preferences, "ben", [NO_SPACE_GROUP])],
+    [NO_SPACE_GROUP],
+    "another person on the same browser keeps their own",
+  );
+  // Opening another conversation in it shows it again.
+  const reveal = revealGroup(preferences, "ana", NO_SPACE_GROUP);
+  assert.ok(reveal);
+  preferences = shellPreferences({ ...preferences, ...reveal });
+  assert.deepEqual(
+    [...openGroups(preferences, "ana", [NO_SPACE_GROUP])].sort(),
+    ["s1", NO_SPACE_GROUP].sort(),
+  );
+  assert.equal(revealGroup(preferences, "ana", NO_SPACE_GROUP), undefined);
 });

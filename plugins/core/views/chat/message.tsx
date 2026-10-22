@@ -582,9 +582,11 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                 key={message.id}
                 data-message-id={message.id}
                 tabIndex={-1}
+                // Full width, so a bubble's max width is a share of the
+                // column, not of its own text (which would wrap any text).
                 className={cn(
                   "outline-none",
-                  "group/body flex max-w-full min-w-0 flex-col gap-2",
+                  "group/body flex w-full min-w-0 flex-col gap-2",
                   human && "items-end",
                   human && !own && "items-start",
                 )}
@@ -600,8 +602,9 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                 {human
                   ? (message.text || message.pending || attachments) && (
                     <div
+                      data-slot="message-bubble"
                       className={cn(
-                        "flex max-w-[min(42rem,88%)] flex-col gap-2 rounded-2xl px-3.5 py-2.5",
+                        "flex max-w-[min(42rem,88%)] min-w-0 flex-col gap-2 rounded-2xl px-3.5 py-2.5",
                         own
                           ? "bubble bg-bubble text-bubble-foreground rounded-tr-md"
                           : "bg-muted rounded-tl-md",

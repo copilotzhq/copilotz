@@ -194,13 +194,20 @@ export function shellUrlStorageAdapter(
 
 /** Per-device preferences, kept in local storage by the host. */
 export type ShellPreferences = Readonly<{
-  /** `auto` is expanded from `lg` up and the icon rail below it. */
+  /**
+   * `auto` is expanded from `lg` up and the icon rail below it. Phones never
+   * show either: the sidebar is a drawer there (see `shellOverlay.drawer`).
+   */
   sidebar: "auto" | "expanded" | "rail";
   groupBy: "space" | "date";
   panelWidth: number;
   theme: "light" | "dark" | "system";
   archived: boolean;
-  /** Spaces whose conversations the reader expanded or collapsed. */
+  /**
+   * Sidebar groups each person expanded or collapsed, as
+   * `groupPreferenceKey(person, group)`: people sharing a browser keep
+   * their own.
+   */
   expanded: readonly string[];
   collapsed: readonly string[];
 }>;
@@ -235,6 +242,84 @@ export function shellPreferences(value: unknown): ShellPreferences {
     expanded: list(row.expanded),
     collapsed: list(row.collapsed),
   };
+}
+
+/** The sidebar group of conversations without a Space (Spaces use their id). */
+export const NO_SPACE_GROUP = "~none";
+
+/** A sidebar group's entry in `expanded`/`collapsed`, for one person. */
+export function groupPreferenceKey(person: string, group: string): string {
+  return `${person}/${group}`;
+}
+
+/** The groups one person expanded and collapsed. */
+function personGroups(
+  preferences: ShellPreferences,
+  person: string,
+): { expanded: Set<string>; collapsed: Set<string> } {
+  const prefix = groupPreferenceKey(person, "");
+  const mine = (list: readonly string[]) =>
+    new Set(
+      list.filter((key) => key.startsWith(prefix)).map((key) =>
+        key.slice(prefix.length)
+      ),
+    );
+  return {
+    expanded: mine(preferences.expanded),
+    collapsed: mine(preferences.collapsed),
+  };
+}
+
+/**
+ * The sidebar groups open for a person: those they expanded, plus the
+ * current ones (the open conversation's group, the open Space) unless they
+ * collapsed them. Every group starts collapsed, No Space too.
+ */
+export function openGroups(
+  preferences: ShellPreferences,
+  person: string,
+  current: readonly (string | null | undefined)[] = [],
+): Set<string> {
+  const { expanded, collapsed } = personGroups(preferences, person);
+  for (const group of current) {
+    if (group && !collapsed.has(group)) expanded.add(group);
+  }
+  return expanded;
+}
+
+/** The preference patch that expands or collapses one person's group. */
+export function toggleGroup(
+  preferences: ShellPreferences,
+  person: string,
+  group: string,
+  open: boolean,
+): Pick<ShellPreferences, "expanded" | "collapsed"> {
+  const key = groupPreferenceKey(person, group);
+  const without = (list: readonly string[]) =>
+    list.filter((value) => value !== key);
+  return {
+    expanded: open
+      ? [...without(preferences.expanded), key]
+      : without(preferences.expanded),
+    collapsed: open
+      ? without(preferences.collapsed)
+      : [...without(preferences.collapsed), key],
+  };
+}
+
+/**
+ * Show a group again once a conversation in it opens, even if the person
+ * collapsed it earlier; `undefined` when it already shows.
+ */
+export function revealGroup(
+  preferences: ShellPreferences,
+  person: string,
+  group: string,
+): Pick<ShellPreferences, "collapsed"> | undefined {
+  const key = groupPreferenceKey(person, group);
+  return preferences.collapsed.includes(key)
+    ? { collapsed: preferences.collapsed.filter((value) => value !== key) }
+    : undefined;
 }
 
 /** Whether the page should be dark for a preference and the system setting. */

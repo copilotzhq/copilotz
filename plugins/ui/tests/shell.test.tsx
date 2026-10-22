@@ -51,10 +51,15 @@ Object.defineProperty(globalThis, "window", {
   configurable: true,
 });
 let wideScreen = true;
+let phoneScreen = false;
 Object.defineProperty(globalThis, "matchMedia", {
   configurable: true,
   value: (query: string) => ({
-    matches: query.includes("min-width") ? wideScreen : false,
+    matches: query.includes("min-width")
+      ? wideScreen
+      : query.includes("max-width: 767px")
+      ? phoneScreen
+      : false,
     addEventListener() {},
     removeEventListener() {},
   }),
@@ -174,6 +179,8 @@ class TestFeed implements ThreadFeedAdapter {
   }
   /** Asset bodies by id, for results and attachments read on demand. */
   bodies = new Map<string, string>();
+  /** Error codes by asset id, as Core HTTP refuses a read. */
+  refusals = new Map<string, string>();
   assetReads: string[] = [];
   asset(
     _threadId: string,
@@ -182,6 +189,12 @@ class TestFeed implements ThreadFeedAdapter {
   ): Promise<Blob> {
     this.assetReads.push(`${messageId}/${assetId}`);
     const body = this.bodies.get(assetId);
+    const code = this.refusals.get(assetId);
+    if (code) {
+      return Promise.reject(
+        Object.assign(new Error("Not found"), { status: 404, code }),
+      );
+    }
     return body === undefined
       ? Promise.reject(new Error("Not found"))
       : Promise.resolve(new Blob([body], { type: "application/json" }));
@@ -521,17 +534,37 @@ const main = () => document.querySelector("#shell-main")!.textContent ?? "";
 const nav = (mounted: Mounted) =>
   mounted.runtime.collections.shell.get("main").value!;
 
-test("sidebar groups by Space with No Space; the chevron expands and the name opens the Space", async () => {
+test("sidebar groups by Space, No Space too; the chevron expands and the name opens the Space", async () => {
   const shell = await mount("https://app.example/?chat=t1");
   try {
-    const sidebar = document.querySelector('nav[aria-label="Conversations"]')!
-      .textContent!;
+    const sidebar = () =>
+      document.querySelector('nav[aria-label="Conversations"]')!.textContent!;
     assert.match(
-      sidebar,
-      /Ops.*Research.*Interview plan.*No Space.*Loose idea/s,
+      sidebar(),
+      /Ops.*Research.*Interview plan.*No Space.*New Space/s,
     );
-    assert.doesNotMatch(sidebar, /Deploy checklist/, "Ops starts collapsed");
+    assert.doesNotMatch(sidebar(), /Deploy checklist/, "Ops starts collapsed");
+    assert.doesNotMatch(sidebar(), /Loose idea/, "No Space starts collapsed");
+    const noSpace = byText("nav button", "No Space") as unknown as {
+      getAttribute(name: string): string | null;
+      click(): void;
+      closest(selector: string): { textContent: string | null };
+    };
+    assert.equal(noSpace.getAttribute("aria-expanded"), "false");
+    assert.match(
+      noSpace.closest("div")!.textContent ?? "",
+      /No Space1$/,
+      "a collapsed group shows a count of its chats",
+    );
     assert.match(main(), /Who should we interview first\?/);
+    // No Space has no page: its name shows its chats, as a chevron does.
+    await click(noSpace);
+    assert.match(sidebar(), /No Space.*Loose idea.*New Space/s);
+    assert.deepEqual(
+      shell.runtime.collections.shellPreferences.get("main").value!.expanded,
+      ["ana/~none"],
+      "remembered for this person",
+    );
 
     await click(byLabel("Show conversations in Ops"));
     assert.match(
@@ -606,7 +639,7 @@ test("the side panel shows the conversation's Space sections and restores its wi
   }
 });
 
-test("a narrow screen keeps the same model: nothing closes on navigation", async () => {
+test("a tablet keeps the same model: nothing closes on navigation", async () => {
   wideScreen = false;
   const shell = await mount("https://app.example/?chat=t1&panel=1");
   try {
@@ -614,12 +647,108 @@ test("a narrow screen keeps the same model: nothing closes on navigation", async
     const preferences = () =>
       shell.runtime.collections.shellPreferences.get("main").value!;
     assert.equal(preferences().sidebar, "expanded", "it overlays when narrow");
+    await click(byLabel("Show conversations in No Space"));
     await click(byText("nav button", "Loose idea"));
     assert.equal(preferences().sidebar, "expanded");
     assert.equal(nav(shell).panel, true, "the panel stays open");
     assert.equal(nav(shell).threadId, "t3");
   } finally {
     wideScreen = true;
+    await shell.dispose();
+  }
+});
+
+test("on a phone the sidebar is a drawer: the menu opens it, picking a chat, Escape or its close button closes it", async () => {
+  wideScreen = false;
+  phoneScreen = true;
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    const drawer = () => document.querySelector("#shell-sidebar")!;
+    const overlay = () =>
+      shell.runtime.collections.shellOverlay.get("main").value!;
+    const inert = () =>
+      document.querySelector("#shell-main")!.closest("[inert]") !== null;
+    assert.equal(drawer().getAttribute("data-state"), "closed");
+    assert.equal(drawer().getAttribute("role"), null, "no dialog while hidden");
+    assert.ok(!inert());
+    const menu = byLabel("Open menu") as unknown as {
+      click(): void;
+      getAttribute(name: string): string | null;
+    };
+    assert.equal(menu.getAttribute("aria-controls"), "shell-sidebar");
+    await click(menu);
+    assert.equal(overlay().drawer, true);
+    assert.equal(drawer().getAttribute("role"), "dialog");
+    assert.equal(drawer().getAttribute("aria-modal"), "true");
+    assert.ok(inert(), "the page behind is inert");
+    // Showing a group's chats keeps it open; picking a chat closes it.
+    await click(byLabel("Show conversations in Ops"));
+    assert.equal(overlay().drawer, true);
+    await click(byText("nav button", "Deploy checklist"));
+    assert.equal(overlay().drawer, false);
+    assert.equal(nav(shell).threadId, "t2");
+    assert.ok(!inert());
+
+    await click(menu);
+    await act(async () => {
+      // The shell listens on the global, as it does on a page's window; the
+      // global's own event class (Event itself is the DOM's here) carries it.
+      globalThis.dispatchEvent(
+        Object.assign(new MessageEvent("keydown", { cancelable: true }), {
+          key: "Escape",
+        }),
+      );
+      await settle();
+    });
+    assert.equal(overlay().drawer, false, "Escape closes it");
+
+    await click(menu);
+    await click(byLabel("Close menu"));
+    assert.equal(overlay().drawer, false);
+    assert.equal(
+      shell.runtime.collections.shellPreferences.get("main").value!.sidebar,
+      "auto",
+      "the rail preference is the desktop's alone",
+    );
+
+    // The side panel is a full-screen sheet over an inert page.
+    await click(byLabel("Show the side panel"));
+    const panel = document.querySelector('aside[aria-label="Side panel"]')!;
+    assert.match(panel.className, /max-md:fixed/);
+    assert.match(panel.className, /max-md:inset-0/);
+    assert.ok(inert(), "the sheet covers the page");
+  } finally {
+    wideScreen = true;
+    phoneScreen = false;
+    await shell.dispose();
+  }
+});
+
+test("opening a chat shows its group again, and each group's state is remembered", async () => {
+  const local = memory();
+  let shell = await mount("https://app.example/?chat=t3", { local });
+  const list = () =>
+    document.querySelector('nav[aria-label="Conversations"]')!.textContent!;
+  try {
+    assert.match(list(), /Loose idea/, "the open chat's group shows");
+    await click(byLabel("Hide conversations in No Space"));
+    assert.doesNotMatch(list(), /Loose idea/, "until the person hides it");
+    await click(byLabel("Show conversations in Ops"));
+    await act(async () => {
+      shell.runtime.actions.shellOpenThread({ threadId: "t1" });
+      await settle();
+    });
+    await act(async () => {
+      shell.runtime.actions.shellOpenThread({ threadId: "t3" });
+      await settle();
+    });
+    assert.match(list(), /Loose idea/, "opening it again shows it");
+    await shell.runtime.flushStorage();
+    await shell.dispose();
+    shell = await mount("https://app.example/?chat=t1", { local });
+    assert.match(list(), /Deploy checklist/, "Ops stays expanded");
+    assert.doesNotMatch(list(), /Loose idea/);
+  } finally {
     await shell.dispose();
   }
 });
@@ -1104,6 +1233,84 @@ test("a JSON tool result is read on demand, bounded, and reaches the step and th
       "r-c-run/json-run",
       "r-c-big/json-big",
     ]);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a tool's output the viewer may not see says so quietly, with no read and no retry", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    shell.feed.refusals.set("json-hidden", "message_content_not_found");
+    const call = (id: string, at: string) => ({
+      id: `m-${id}`,
+      threadId: "t1",
+      senderId: "p-north",
+      createdAt: at,
+      content: [],
+      metadata: {
+        llmToolCalls: [{ id, action: "search_memory", input: { limit: 20 } }],
+      },
+    });
+    const result = (
+      id: string,
+      at: string,
+      visibility?: Record<string, unknown>,
+    ) => ({
+      id: `r-${id}`,
+      threadId: "t1",
+      senderId: "p-tool",
+      createdAt: at,
+      ...(visibility ? { visibility } : {}),
+      content: [{
+        assetId: id === "c-status" ? "json-status" : "json-hidden",
+        kind: "json",
+        role: "tool.output",
+        mediaType: "application/json",
+        resolve: false,
+      }],
+      metadata: { toolInvocation: { id }, toolStatus: "completed" },
+    });
+    await act(async () => {
+      shell.live.put("participant", {
+        id: "p-tool",
+        participantType: "tool",
+        name: "search_memory",
+      });
+      shell.live.put(
+        "message",
+        call("c-status", "2026-10-21T10:01:00.000Z"),
+        // Status only: the agent asked, so only the agent sees the output.
+        result("c-status", "2026-10-21T10:01:01.000Z", {
+          kind: "tool",
+          policy: "public_status",
+          requesterId: "p-north",
+        }),
+        call("c-refused", "2026-10-21T10:02:00.000Z"),
+        result("c-refused", "2026-10-21T10:02:01.000Z"),
+      );
+      await settle();
+    });
+    const steps = all("button").filter((button) =>
+      button.textContent === "Used search memory"
+    ) as unknown as { click(): void }[];
+    assert.equal(steps.length, 2);
+    await click(steps[0]);
+    await click(steps[1]);
+    await settle();
+    const text = main();
+    assert.equal(
+      text.match(/Output visible to the agent only\./g)?.length,
+      2,
+      text,
+    );
+    assert.doesNotMatch(text, /couldn't be loaded|Try again/);
+    assert.match(text, /limit: 20/, "the input the read delivered shows");
+    assert.deepEqual(
+      shell.feed.assetReads,
+      ["r-c-refused/json-hidden"],
+      "metadata decides up front; a refused read is not retried",
+    );
   } finally {
     await shell.dispose();
   }

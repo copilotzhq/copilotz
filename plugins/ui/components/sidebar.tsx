@@ -25,6 +25,7 @@ import {
   Search,
   SquarePen,
   Trash2,
+  X,
 } from "lucide-react";
 import type { Row } from "@copilotz/copilotz/web";
 import {
@@ -48,9 +49,10 @@ import {
 import {
   groupThreadsByRecency,
   groupThreadsBySpace,
+  NO_SPACE_GROUP,
   type ThreadGroup,
 } from "../model.ts";
-import { SpaceDot, SpaceMark, ThreadMark } from "./space-mark.tsx";
+import { NoSpaceMark, SpaceDot, SpaceMark, ThreadMark } from "./space-mark.tsx";
 import { MovePicker } from "./move-picker.tsx";
 import { useTouchSpaceDrag } from "./touch-drag.ts";
 
@@ -68,7 +70,8 @@ export interface SidebarHandlers {
   onNewChat(spaceId?: string): void;
   onOpenThread(threadId: string): void;
   onOpenSpace(spaceId: string): void;
-  onToggleSpace(spaceId: string, open: boolean): void;
+  /** Show or hide a group's chats: a Space id, or `NO_SPACE_GROUP`. */
+  onToggleSpace(group: string, open: boolean): void;
   onGroupBy(groupBy: "space" | "date"): void;
   onShowArchived(show: boolean): void;
   onToggleSidebar(): void;
@@ -99,7 +102,7 @@ export interface SidebarProps extends SidebarHandlers {
   currentSpaceId: string | null;
   groupBy: "space" | "date";
   showArchived: boolean;
-  /** Spaces whose conversations are shown. */
+  /** Groups whose conversations are shown: Space ids and `NO_SPACE_GROUP`. */
   expanded: ReadonlySet<string>;
   spacesEnabled: boolean;
   labels?: SidebarLabels;
@@ -111,6 +114,8 @@ export interface SidebarProps extends SidebarHandlers {
   announce?(text: string, tone?: "info" | "error"): void;
   /** The New Space dialog, when another control (⌘K) opens it. */
   creatingSpace?: boolean;
+  /** Shown as the phone drawer: its corner button closes it. */
+  drawer?: boolean;
   onCreatingSpace?(open: boolean): void;
 }
 
@@ -237,7 +242,11 @@ function ThreadRow(
           transfer(event.dataTransfer).setData(DRAG_TYPE, thread.id);
           transfer(event.dataTransfer).effectAllowed = "move";
         }}
-        className="focus-visible:ring-sidebar-ring/50 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md pr-8 pl-2 text-left text-sm outline-none focus-visible:ring-2"
+        className={cn(
+          "focus-visible:ring-sidebar-ring/50 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md pr-8 pl-2 text-left text-sm outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-10",
+          // The touch handle and the menu both sit at the end.
+          props.onMove && "[@media(pointer:coarse)]:pr-[4.25rem]",
+        )}
       >
         <ThreadMark title={title(thread)} />
         <span
@@ -262,8 +271,9 @@ function ThreadRow(
       {props.onMove && (
         <button
           type="button"
+          data-no-swipe=""
           aria-label={`Move ${title(thread)} to a Space`}
-          className="text-muted-foreground/60 hover:bg-sidebar-accent absolute right-8 hidden size-7 touch-none items-center justify-center rounded-md [@media(pointer:coarse)]:flex"
+          className="text-muted-foreground/60 hover:bg-sidebar-accent absolute right-9 hidden size-8 touch-none items-center justify-center rounded-md [@media(pointer:coarse)]:flex"
           onPointerDown={(event) => touch.start(event, thread.id, spaceId)}
           onContextMenu={(event) => event.preventDefault()}
           onClick={(event) => {
@@ -282,7 +292,7 @@ function ThreadRow(
             type="button"
             aria-label={`Options for ${title(thread)}`}
             className={cn(
-              "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 data-[state=open]:bg-sidebar-accent absolute right-1 flex size-7 items-center justify-center rounded-md opacity-0 outline-none group-focus-within/row:opacity-100 group-hover/row:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100",
+              "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 data-[state=open]:bg-sidebar-accent absolute right-1 flex size-7 items-center justify-center rounded-md opacity-0 outline-none group-focus-within/row:opacity-100 group-hover/row:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100 [@media(pointer:coarse)]:size-8 [@media(pointer:coarse)]:opacity-100",
               selected && "opacity-100",
             )}
           >
@@ -369,9 +379,23 @@ function SpaceGroup(
   const space = group.space;
   const id = group.spaceId;
   const key = id ?? "none";
+  /** The group's key for expanding and collapsing it. */
+  const groupId = id ?? NO_SPACE_GROUP;
   const selected = Boolean(id && props.currentSpaceId === id);
   const listId = `space-${key}`;
   const droppable = Boolean(props.onMove) && !group.unavailable;
+  const menu = Boolean(id && space && !group.unavailable);
+  const toggle = (next: boolean) => props.onToggleSpace(groupId, next);
+  // Right shows the group's chats, Left hides them.
+  const arrows = (event: React.KeyboardEvent) => {
+    if (event.key === "ArrowRight" && !open) {
+      event.preventDefault();
+      toggle(true);
+    } else if (event.key === "ArrowLeft" && open) {
+      event.preventDefault();
+      toggle(false);
+    }
+  };
   return (
     <li
       className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-0.5"
@@ -413,7 +437,7 @@ function SpaceGroup(
     >
       <div
         className={cn(
-          "group/space flex h-8 items-center gap-0.5 rounded-md pr-1",
+          "group/space flex h-8 items-center gap-0.5 rounded-md pr-1 [@media(pointer:coarse)]:h-10",
           selected && "bg-sidebar-accent text-sidebar-accent-foreground",
           dropTarget === key && "ring-sidebar-ring bg-sidebar-accent/60 ring-2",
         )}
@@ -425,67 +449,75 @@ function SpaceGroup(
           aria-label={`${
             open ? "Hide" : "Show"
           } conversations in ${group.label}`}
-          onClick={() => id && props.onToggleSpace(id, !open)}
-          disabled={!id}
-          className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 flex size-7 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 disabled:pointer-events-none"
+          onClick={() => toggle(!open)}
+          className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 flex size-7 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2 [@media(pointer:coarse)]:size-9"
         >
           <ChevronRight
             aria-hidden="true"
             className={cn(
-              "size-3.5 transition-transform",
+              "size-3.5 transition-transform duration-150",
               open && "rotate-90",
-              !id && "opacity-0",
             )}
           />
         </button>
-        {id && space && !group.unavailable
+        {menu && id
           ? (
             <button
               type="button"
               data-nav-item=""
               aria-current={selected ? "page" : undefined}
               onClick={() => props.onOpenSpace(id)}
-              onKeyDown={(event) => {
-                // Right shows the Space's chats, Left hides them.
-                if (event.key === "ArrowRight" && !open) {
-                  event.preventDefault();
-                  props.onToggleSpace(id, true);
-                } else if (event.key === "ArrowLeft" && open) {
-                  event.preventDefault();
-                  props.onToggleSpace(id, false);
-                }
-              }}
-              className="focus-visible:ring-sidebar-ring/50 hover:bg-sidebar-accent/70 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-sm font-medium outline-none focus-visible:ring-2"
+              onKeyDown={arrows}
+              className="focus-visible:ring-sidebar-ring/50 hover:bg-sidebar-accent/70 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-sm font-medium outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-9"
             >
               <SpaceMark id={id} name={group.label} />
               <span className="min-w-0 flex-1 truncate">{group.label}</span>
             </button>
           )
-          : (
-            <span
-              className={cn(
-                "flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-sm",
-                id
-                  ? "text-muted-foreground italic"
-                  : "text-muted-foreground font-medium",
-              )}
+          : !id
+          ? (
+            // No Space has no page of its own: its name shows and hides it.
+            <button
+              type="button"
+              data-nav-item=""
+              aria-expanded={open}
+              aria-controls={listId}
+              onClick={() => toggle(!open)}
+              onKeyDown={arrows}
+              className="focus-visible:ring-sidebar-ring/50 hover:bg-sidebar-accent/70 text-sidebar-foreground/90 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-sm font-medium outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-9"
             >
+              <NoSpaceMark />
+              <span className="min-w-0 flex-1 truncate">{group.label}</span>
+            </button>
+          )
+          : (
+            <span className="text-muted-foreground flex h-7 min-w-0 flex-1 items-center gap-2 px-1.5 text-sm italic">
               <span className="min-w-0 flex-1 truncate">{group.label}</span>
             </span>
           )}
         {!open && group.threads.length > 0 && (
-          <span className="text-muted-foreground px-1 text-[11px] tabular-nums group-focus-within/space:hidden group-hover/space:hidden">
+          <span
+            aria-label={`${group.threads.length} conversation${
+              group.threads.length === 1 ? "" : "s"
+            }`}
+            className={cn(
+              "bg-sidebar-accent text-muted-foreground mr-1 inline-flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full px-1.5 text-[10.5px] font-medium tabular-nums",
+              // A Space's menu takes the badge's place on hover.
+              menu &&
+                "group-focus-within/space:hidden group-hover/space:hidden [@media(pointer:coarse)]:hidden",
+            )}
+          >
             {group.threads.length}
           </span>
         )}
-        {id && space && !group.unavailable && (
+        {menu && id && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 aria-label={`Options for ${group.label}`}
                 className={cn(
-                  "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 data-[state=open]:bg-sidebar-accent flex size-7 shrink-0 items-center justify-center rounded-md opacity-0 outline-none group-focus-within/space:opacity-100 group-hover/space:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100",
+                  "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent focus-visible:ring-sidebar-ring/50 data-[state=open]:bg-sidebar-accent flex size-7 shrink-0 items-center justify-center rounded-md opacity-0 outline-none group-focus-within/space:opacity-100 group-hover/space:opacity-100 focus-visible:ring-2 data-[state=open]:opacity-100 [@media(pointer:coarse)]:size-8 [@media(pointer:coarse)]:opacity-100",
                   selected && "opacity-100",
                 )}
               >
@@ -624,7 +656,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
       <button
         type="button"
         onClick={() => setCreating(true)}
-        className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/60 focus-visible:ring-sidebar-ring/50 flex h-8 w-full items-center gap-2 rounded-md pr-2 pl-2.5 text-left text-sm outline-none focus-visible:ring-2"
+        className="text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/60 focus-visible:ring-sidebar-ring/50 flex h-8 w-full items-center gap-2 rounded-md pr-2 pl-2.5 text-left text-sm outline-none focus-visible:ring-2 [@media(pointer:coarse)]:h-10"
       >
         <Plus aria-hidden="true" className="size-4" />
         {labels.newSpace ?? "New Space"}
@@ -632,7 +664,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
     </li>
   );
   const isOpen = (group: ThreadGroup) =>
-    !group.spaceId || expanded.has(group.spaceId);
+    expanded.has(group.spaceId ?? NO_SPACE_GROUP);
   return (
     <div
       data-slot="sidebar"
@@ -671,13 +703,28 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
           </span>
         </button>
         <span className="@max-[12rem]/sidebar:hidden">
-          <IconButton
-            label="Collapse sidebar"
-            shortcut="⌘B"
-            onClick={props.onToggleSidebar}
-          >
-            <PanelLeft />
-          </IconButton>
+          {props.drawer
+            ? (
+              <IconButton
+                // Its own instance: no tooltip carries over between the two.
+                key="close"
+                label="Close menu"
+                onClick={props.onToggleSidebar}
+                className="[@media(pointer:coarse)]:size-10"
+              >
+                <X />
+              </IconButton>
+            )
+            : (
+              <IconButton
+                key="collapse"
+                label="Collapse sidebar"
+                shortcut="⌘B"
+                onClick={props.onToggleSidebar}
+              >
+                <PanelLeft />
+              </IconButton>
+            )}
         </span>
       </div>
 
@@ -764,7 +811,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
             <span className="min-w-0 flex-1 truncate">
               {labels.search ?? "Search"}
             </span>
-            <Kbd>⌘K</Kbd>
+            <Kbd className="[@media(pointer:coarse)]:hidden">⌘K</Kbd>
           </button>
           {props.spacesEnabled && (
             <div
@@ -795,7 +842,7 @@ export function Sidebar(props: SidebarProps): React.ReactElement {
         </div>
         <nav
           aria-label="Conversations"
-          className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
           onKeyDown={(event) => {
             // Up and Down move between Spaces and chats; Home and End jump.
             const target = dom(event.target);

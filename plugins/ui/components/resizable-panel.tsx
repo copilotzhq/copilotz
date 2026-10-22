@@ -2,7 +2,11 @@
 /** @jsx React.createElement */
 /** @jsxFrag React.Fragment */
 "use client";
-/** The right panel: beside main from `lg`, overlaying it below, resizable at every width. @module */
+/**
+ * The right panel: beside main from `lg`, overlaying it below and resizable
+ * at those widths; on phones a full-screen sheet.
+ * @module
+ */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
@@ -33,8 +37,10 @@ export function ResizablePanel(
     const measure = () => {
       // Overlaying (below lg) the panel may use the whole area; beside main
       // it leaves main its minimum. The stylesheet decides which applies.
-      const overlay = panel.current &&
-        browser.getComputedStyle?.(panel.current).position === "absolute";
+      const position = panel.current
+        ? browser.getComputedStyle?.(panel.current).position
+        : undefined;
+      const overlay = position === "absolute" || position === "fixed";
       setRoom(parent.clientWidth - (overlay ? 0 : MAIN_MIN));
     };
     measure();
@@ -57,9 +63,13 @@ export function ResizablePanel(
       ref={panel}
       aria-label={label}
       data-slot="side-panel"
+      // Focusable, so a phone sheet can take focus when it opens.
+      tabIndex={-1}
       style={{ width: shown }}
       className={cn(
-        "bg-background absolute inset-y-0 right-0 z-30 flex max-w-full min-w-0 shrink-0 flex-col border-l shadow-float lg:relative lg:z-auto lg:shadow-none",
+        "bg-background absolute inset-y-0 right-0 z-30 flex max-w-full min-w-0 shrink-0 flex-col border-l shadow-float outline-none lg:relative lg:z-auto lg:shadow-none",
+        // Phones: a full-screen sheet over the page, rising into place.
+        "max-md:animate-in max-md:slide-in-from-bottom-6 max-md:fade-in-0 max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-auto! max-md:border-l-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-none max-md:duration-200",
         live !== null && "select-none",
         className,
       )}
@@ -72,7 +82,7 @@ export function ResizablePanel(
         aria-valuemax={Math.max(280, Math.round(room))}
         aria-valuenow={shown}
         tabIndex={0}
-        className="group/handle focus-visible:ring-ring/45 absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-col-resize touch-none items-center justify-center outline-none focus-visible:ring-[3px]"
+        className="group/handle focus-visible:ring-ring/45 absolute inset-y-0 -left-1.5 z-20 flex w-3 cursor-col-resize touch-none items-center justify-center outline-none focus-visible:ring-[3px] max-md:hidden"
         onPointerDown={(event) => {
           if (domEvent(event).button !== 0) return;
           event.preventDefault();

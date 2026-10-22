@@ -15,6 +15,12 @@ import {
   preloadMarkdown,
 } from "@copilotz/copilotz/web/kit";
 import { AssistantActivity, toolLabel } from "./activity.tsx";
+import {
+  describeJson,
+  parseStructured,
+  previewJson,
+  ToolPayload,
+} from "./tool-output.tsx";
 import { MessageGroup } from "./message.tsx";
 import { activeMention, mentionedTargets } from "./composer.tsx";
 import { titleFrom } from "./intents.ts";
@@ -97,6 +103,59 @@ test("a structured tool result shows as JSON in its step", () => {
   assert.match(html, /aria-expanded="false"/, "the step has details");
 });
 
+test("a structured result reads as named fields: short values inline, nested ones open near the top", () => {
+  const html = renderToStaticMarkup(
+    <ToolPayload
+      label="Result"
+      value={{
+        query: "launch",
+        total: 2,
+        notes: [
+          { id: "n7", text: "Thursdays", tags: ["cadence"], score: 0.92 },
+          { id: "n3", text: "Channel", tags: [], score: 0.64 },
+        ],
+      }}
+    />,
+  );
+  assert.match(html, /data-slot="tool-payload"/);
+  assert.match(html, /Result<\/span>/);
+  assert.match(html, /3 fields/, "the caption says what it holds");
+  for (const part of ["query", "&quot;launch&quot;", "total", "notes"]) {
+    assert.ok(html.includes(part), part);
+  }
+  assert.match(
+    html,
+    /aria-expanded="true"[^>]*aria-label="Collapse notes, 2 items"/,
+  );
+  assert.match(html, /&quot;cadence&quot;/, "nested values show");
+});
+
+test("results say when they are empty; JSON text reads as structure, other text as text", () => {
+  const render = (props: Parameters<typeof ToolPayload>[0]) =>
+    renderToStaticMarkup(<ToolPayload {...props} />);
+  assert.match(
+    render({ label: "Result", value: [] }),
+    /No items\. The tool returned an empty list\./,
+  );
+  assert.match(
+    render({ label: "Result", value: {} }),
+    /No fields\. The tool returned an empty object\./,
+  );
+  assert.match(render({ label: "Result", value: null }), /Nothing returned\./);
+  assert.match(render({ label: "Result", text: "  " }), /returned no text/);
+  assert.match(render({ label: "Result", text: '{"ok":true}' }), /json-tree/);
+  const plain = render({ label: "Result", text: "Saved 3 notes." });
+  assert.ok(plain.includes("Saved 3 notes.") && !plain.includes("json-tree"));
+  const error = render({ label: "Error", text: "Timed out.", tone: "error" });
+  assert.match(error, /data-tone="error"/);
+  assert.equal(parseStructured("[1, 2"), undefined, "broken JSON stays text");
+  assert.equal(describeJson([1, 2, 3]), "3 items");
+  assert.equal(
+    previewJson({ id: "n7", text: "x".repeat(60), tags: ["a"] }),
+    `{ id: "n7", text: "${"x".repeat(40)}…", tags: [1] }`,
+  );
+});
+
 test("a settled timeline of more than three steps folds into one summary", () => {
   const html = renderToStaticMarkup(
     <AssistantActivity
@@ -139,6 +198,20 @@ test("own messages sit in a bubble on the right; agents read as prose with their
   assert.ok(agent.includes("<strong>Done</strong>"));
   assert.ok(!agent.includes("data-own"));
   assert.match(agent, /style="color:#[0-9a-f]{6}"/);
+});
+
+test("a bubble's width is a share of the column, so short text never wraps", () => {
+  const [group] = groupMessages([message("and now?", ana)], () => true);
+  const html = renderToStaticMarkup(<MessageGroup group={group} />);
+  // The message box spans the column; the bubble inside sizes to its text.
+  assert.match(
+    html,
+    /data-message-id="and now\?"[^>]*class="[^"]*\bw-full\b[^"]*items-end/,
+  );
+  assert.match(
+    html,
+    /data-slot="message-bubble"[^>]*max-w-\[min\(42rem,88%\)\]/,
+  );
 });
 
 test("pending and failed sends say so, with Retry and Discard", () => {

@@ -64,8 +64,17 @@ export type ChatActivity = Readonly<{
   reasoning?: string;
 }>;
 
-/** A referenced JSON result while it loads, or why it cannot show. */
-export type ToolResultStatus = "loading" | "too-large" | "unavailable";
+/**
+ * A referenced JSON result while it loads, or why it cannot show:
+ * `restricted` when the tool's visibility lets this viewer see that it ran
+ * (and its input) but not its output (`public_status` for anyone but the
+ * requesting agent).
+ */
+export type ToolResultStatus =
+  | "loading"
+  | "too-large"
+  | "unavailable"
+  | "restricted";
 
 /** A text body the window read deferred (over its budget), to load on demand. */
 export type ChatDeferredBody = Readonly<{
@@ -242,6 +251,7 @@ type ToolResult = {
   result?: string;
   data?: unknown;
   resultRef?: ToolResultRef;
+  resultStatus?: ToolResultStatus;
   error?: string;
 };
 
@@ -274,13 +284,50 @@ function jsonResult(
   return {};
 }
 
-function toolResult(row: Row): [string, ToolResult] | undefined {
+/**
+ * Whether a tool result's output is withheld from this viewer: its
+ * visibility shares the status only (`public_status`, or `requester_only`
+ * as read by someone else) and the viewer is not the requester.
+ */
+function outputWithheld(
+  row: Row,
+  viewerIds: readonly string[] | undefined,
+): boolean {
+  const visibility = record(row.visibility);
+  if (visibility.kind !== "tool" || visibility.policy === "public") {
+    return false;
+  }
+  const requester = text(visibility.requesterId);
+  return !requester || !(viewerIds ?? []).includes(requester);
+}
+
+function toolResult(
+  row: Row,
+  viewerIds?: readonly string[],
+): [string, ToolResult] | undefined {
   const metadata = record(row.metadata);
   const id = text(record(metadata.toolInvocation).id);
   if (!id) return undefined;
   const status = metadata.toolStatus;
   const parts = messageTextParts(row.content);
   const body = joinText(parts);
+  const settled = status === "completed"
+    ? "complete"
+    : status === "failed" || status === "cancelled"
+    ? "failed"
+    : "active";
+  // Status only: no output to read, and nothing to retry. What the read did
+  // deliver (an inline body) still shows.
+  const json = jsonResult(row);
+  if (
+    outputWithheld(row, viewerIds) && !body && json.data === undefined
+  ) {
+    return [id, {
+      status: settled,
+      ...(settled !== "active" ? { resultStatus: "restricted" as const } : {}),
+      ...(status === "cancelled" ? { error: "Cancelled." } : {}),
+    }];
+  }
   // A text result the window read deferred is read on demand, like JSON.
   const later = parts.find((part) => "assetId" in part);
   const deferredText = !body && later && "assetId" in later
@@ -293,14 +340,10 @@ function toolResult(row: Row): [string, ToolResult] | undefined {
     }
     : {};
   return [id, {
-    status: status === "completed"
-      ? "complete"
-      : status === "failed" || status === "cancelled"
-      ? "failed"
-      : "active",
+    status: settled,
     ...(body ? { result: body } : {}),
     ...deferredText,
-    ...jsonResult(row),
+    ...json,
     ...(status === "cancelled"
       ? { error: "Cancelled." }
       : status === "failed"
@@ -370,12 +413,19 @@ function inferSender(sender: ChatSender, row: Row): ChatSender {
 export function projectMessages(
   rows: readonly Row[],
   senderOf: (id: string) => ChatSender,
+  options: Readonly<{
+    /**
+     * The viewer's participant ids: a tool result whose visibility shares
+     * only its status shows its output to its requester alone.
+     */
+    viewerIds?: readonly string[];
+  }> = {},
 ): ChatMessage[] {
   const results = new Map<string, ToolResult>();
   for (const row of rows) {
     const sender = inferSender(senderOf(String(row.senderId ?? "")), row);
     if (sender.type !== "tool") continue;
-    const result = toolResult(row);
+    const result = toolResult(row, options.viewerIds);
     if (result) results.set(result[0], result[1]);
   }
   const messages: ChatMessage[] = [];
@@ -433,6 +483,7 @@ export function projectMessages(
         ...(result?.result ? { result: result.result } : {}),
         ...(result?.data !== undefined ? { data: result.data } : {}),
         ...(result?.resultRef ? { resultRef: result.resultRef } : {}),
+        ...(result?.resultStatus ? { resultStatus: result.resultStatus } : {}),
         ...(result?.error ? { error: result.error } : {}),
       });
     }

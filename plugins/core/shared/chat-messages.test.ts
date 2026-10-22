@@ -289,6 +289,59 @@ test("JSON tool results pass through: a resolved value as data, a reference to r
   assert.equal(reply.activity[1].data, undefined);
 });
 
+test("a status-only tool result keeps its input and status, and withholds its output from anyone but the requester", () => {
+  const senders: Record<string, ChatSender> = {
+    north,
+    tool: sender("tool", "tool", "search_memory"),
+  };
+  const rows = [
+    {
+      id: "a",
+      senderId: "north",
+      content: [],
+      metadata: {
+        llmToolCalls: [
+          { id: "c1", action: "search_memory", input: { limit: 20 } },
+          { id: "c2", action: "search_memory", input: { limit: 5 } },
+        ],
+      },
+    },
+    ...["c1", "c2"].map((id) => ({
+      id: `r-${id}`,
+      senderId: "tool",
+      visibility: {
+        kind: "tool",
+        policy: id === "c1" ? "public_status" : "public",
+        requesterId: "north",
+      },
+      content: [{
+        assetId: `j-${id}`,
+        kind: "json",
+        role: "tool.output",
+        mediaType: "application/json",
+        resolve: false,
+      }],
+      metadata: { toolInvocation: { id }, toolStatus: "completed" },
+    })),
+  ];
+  const [person] = projectMessages(rows, (id) => senders[id], {
+    viewerIds: ["ana", "ext-ana"],
+  });
+  assert.equal(person.activity[0].status, "complete");
+  assert.deepEqual(person.activity[0].input, { limit: 20 });
+  assert.equal(person.activity[0].resultStatus, "restricted");
+  assert.equal(person.activity[0].resultRef, undefined, "nothing to read");
+  assert.ok(person.activity[1].resultRef, "a public result reads as before");
+  const [agent] = projectMessages(rows, (id) => senders[id], {
+    viewerIds: ["north"],
+  });
+  assert.equal(agent.activity[0].resultStatus, undefined);
+  assert.deepEqual(agent.activity[0].resultRef, {
+    messageId: "r-c1",
+    assetId: "j-c1",
+  });
+});
+
 test("text a budgeted read deferred stays in order, to load on demand", () => {
   const deferredText = (assetId: string) => ({
     assetId,

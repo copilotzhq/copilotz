@@ -175,6 +175,7 @@ function SpaceLayout(
                   size="icon-xs"
                   aria-label={`Open ${name} in the main area`}
                   onClick={onExpand}
+                  className="[@media(pointer:coarse)]:size-9"
                 >
                   <Maximize2 />
                 </Button>
@@ -191,6 +192,7 @@ function SpaceLayout(
                   size="icon-xs"
                   aria-label="Close the side panel"
                   onClick={onClose}
+                  className="[@media(pointer:coarse)]:size-9"
                 >
                   <X />
                 </Button>

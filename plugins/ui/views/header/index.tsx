@@ -9,6 +9,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   ArrowRightLeft,
+  Menu,
   MoreHorizontal,
   PanelRight,
   Pencil,
@@ -209,6 +210,26 @@ function ThreadMenu(
   );
 }
 
+/** Phones only: opens the sidebar drawer. */
+function MenuButton({ ctx }: { ctx: BrowserViewContext }): React.ReactElement {
+  const open = ctx.collections.shellOverlay?.get("main").value?.drawer === true;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Open menu"
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      aria-controls="shell-sidebar"
+      onClick={() => ctx.actions.shellOverlay({ drawer: true })}
+      className="-ml-0.5 shrink-0 md:hidden [@media(pointer:coarse)]:size-10"
+    >
+      <Menu />
+    </Button>
+  );
+}
+
 /** The bar above main: where you are, who is here, and what you can do. */
 const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
   defineView<unknown, React.ReactNode, BrowserViewContext>({
@@ -245,6 +266,7 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             data-slot="shell-header"
             className="bg-background/95 supports-[backdrop-filter]:bg-background/80 relative z-20 flex h-14 shrink-0 items-center gap-1.5 border-b px-2 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-3"
           >
+            <MenuButton ctx={ctx} />
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -291,6 +313,7 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
           data-slot="shell-header"
           className="bg-background/95 supports-[backdrop-filter]:bg-background/80 relative z-20 flex h-14 shrink-0 items-center gap-1.5 border-b px-2 pt-[env(safe-area-inset-top)] backdrop-blur sm:px-3"
         >
+          <MenuButton ctx={ctx} />
           {inSpace && nav.threadId && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -333,12 +356,14 @@ const view: ViewDefinition<unknown, React.ReactNode, BrowserViewContext> =
             )}
             {!inSpace && thread && (
               // The title keeps its width first; the selector takes what is
-              // left (at least an icon) and collapses through the `agents`
-              // container query, as an app's own selector can too. Whatever
-              // still does not fit is clipped, never drawn over the toggles.
+              // left (at least an icon; two on phones, where an app's selector
+              // and the agents both fold to icons) and collapses through the
+              // `agents` container query, as an app's own selector can too.
+              // Whatever still does not fit is clipped, never drawn over the
+              // toggles.
               <div
                 data-slot="agent-selector"
-                className="@container/agents ml-1 flex min-w-9 flex-1 basis-0 items-center overflow-x-clip [overflow-clip-margin:4px]"
+                className="@container/agents ml-1 flex min-w-9 flex-1 basis-0 items-center overflow-x-clip [overflow-clip-margin:4px] max-md:ml-0 max-md:min-w-[4.25rem]"
               >
                 {showSafely(
                   ctx,

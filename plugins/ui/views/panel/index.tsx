@@ -34,6 +34,7 @@ function NoSpace(
           size="icon-xs"
           aria-label="Close the side panel"
           onClick={() => ctx.actions.shellPanel({ open: false })}
+          className="[@media(pointer:coarse)]:size-9"
         >
           <X />
         </Button>

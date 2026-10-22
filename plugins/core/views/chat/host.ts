@@ -96,7 +96,19 @@ export function threadFeedAdapter(client: CopilotzClient): ThreadFeedAdapter {
         }`,
         signal ? { signal } : {},
       );
-      if (!response.ok) throw new Error("The attachment is unavailable.");
+      if (!response.ok) {
+        // The status and code say why (such as content this viewer may not see).
+        const body = await response.json().catch(() => undefined) as
+          | Record<string, unknown>
+          | undefined;
+        const error = body?.error && typeof body.error === "object"
+          ? body.error as Record<string, unknown>
+          : body;
+        throw Object.assign(new Error("The attachment is unavailable."), {
+          status: response.status,
+          ...(typeof error?.code === "string" ? { code: error.code } : {}),
+        });
+      }
       return await response.blob();
     },
   };

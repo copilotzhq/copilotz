@@ -94,7 +94,7 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
         initial: [{ id: "main", ...shellPreferences({}) }],
         commands: { set },
       },
-      // Memory only: open dialogs, the palette, toasts.
+      // Memory only: open dialogs, the palette, the phone drawer, toasts.
       shellOverlay: {
         placement: "browser",
         initial: [{
@@ -102,6 +102,7 @@ export function uiWebPlugin(options: UiWebOptions = {}): BrowserPlugin {
           palette: false,
           dialog: null,
           createSpace: false,
+          drawer: false,
         }],
         commands: { set },
       },

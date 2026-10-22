@@ -173,7 +173,25 @@ runs in the owner's command:
     `create` or `revoke`; flows `start`; Asset intents `read`. Directory intents
     name the declared read or command alias, and identity intents the verifier
     alias.
-- `commandTime` and `signal` are the command's time and cancellation.
+- `commandTime` and `signal` are the command's time and cancellation. Reading
+  `commandTime` marks a decision as time-dependent and prevents reuse, including
+  Action capture reuse. Read it only inside branches that need time;
+  destructuring it at function entry also counts as a read. A policy adapter
+  that enriches authority should preserve context property descriptors instead
+  of spreading the context: `{ ...context }` evaluates its getters. For example:
+
+  ```ts
+  const adapted = Object.defineProperties({}, {
+    ...Object.getOwnPropertyDescriptors(context),
+    authority: { value: enrichedAuthority, enumerable: true },
+  });
+  ```
+
+  Cache diagnostics distinguish `decision.command-time` and
+  `remember.no-reusable-decision` from key misses. Include these diagnostic
+  events when investigating repeated `action.absent` or `evaluation.absent`
+  entries.
+
 - `read.get(alias, id)` and `read.list(alias, query)` read only the declared
   `sources`, in the binding's namespace, inside the command's transaction. Each
   read is a dependency, including a missing record or an empty result; a

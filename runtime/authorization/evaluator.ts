@@ -1,3 +1,8 @@
+import {
+  authorizationDependencyKeys,
+  authorizationTableKey,
+  memoAuthorizationRead,
+} from "./cache.ts";
 import { defineDatabaseDirectoryCommand } from "./directory-command.ts";
 import {
   defineIdentityVerifier,
@@ -120,6 +125,13 @@ export type AuthorizationDecision = Readonly<{
   constraints: ServerConstraints;
   dependencies: readonly AuthorityDependency[];
 }>;
+const reuseDeadlines = new WeakMap<AuthorizationDecision, number>();
+/** Private owner metadata, never serialized or accepted as retained authority. */
+export function authorizationReuseDeadline(
+  decision: AuthorizationDecision,
+): number | undefined {
+  return reuseDeadlines.get(decision);
+}
 export function authorizationRefused(): never {
   throw markOwnerAuthorizationRefusal(
     standardActionError({ code: "forbidden", status: 403 })!,
@@ -371,7 +383,10 @@ export function createOwnerEvaluator(
         Date.parse(authority.validity.admittedAt) >
           Date.parse(command.commandTime))
     ) authorizationRefused();
-    const dependencies: AuthorityDependency[] = [];
+    const dependencies: AuthorityDependency[] = [...authority.dependencies];
+    let reusableUntil = authority.validity.kind === "credential"
+      ? Date.parse(authority.validity.expiresAt)
+      : Infinity;
     const staffReads: Array<Record<string, unknown>> = [];
     let active = true;
     let failed = false;
@@ -425,19 +440,44 @@ export function createOwnerEvaluator(
         if (!live.rows.length) authorizationRefused();
       }
       if (!directory) await checkFlow(authority, intent, command);
+      if (authority.flow) {
+        reusableUntil = Math.min(
+          reusableUntil,
+          Date.parse(authority.flow.expiresAt),
+        );
+        dependencies.push({
+          owner: authority.scope.owner,
+          namespace,
+          collection: "@authorization/flow",
+          id: authority.flow.id,
+        });
+      }
       if (!directory && authority.authorityBasis.kind === "session") {
-        const rows = await command.transaction.query<
-          { expires_at: string; revoked_at: string | null }
-        >(
-          `SELECT expires_at::text,revoked_at::text FROM "${
-            databaseSchema.replaceAll('"', '""')
-          }".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4`,
-          [
+        const rows = await memoAuthorizationRead(
+          command.transaction,
+          JSON.stringify([
+            databaseSchema,
+            "session",
             authority.scope.namespace,
             authority.scope.tenant,
             authority.authorityBasis.id,
             authority.principal.id,
-          ],
+          ]),
+          [authorizationTableKey(databaseSchema, "authorization_sessions")],
+          () =>
+            command.transaction.query<
+              { expires_at: string; revoked_at: string | null }
+            >(
+              `SELECT expires_at::text,revoked_at::text FROM "${
+                databaseSchema.replaceAll('"', '""')
+              }".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4`,
+              [
+                authority.scope.namespace,
+                authority.scope.tenant,
+                authority.authorityBasis.id,
+                authority.principal.id,
+              ],
+            ),
         );
         const session = rows.rows[0];
         let completingLogout = false;
@@ -477,6 +517,10 @@ export function createOwnerEvaluator(
             },
           });
         }
+        reusableUntil = Math.min(reusableUntil, Date.parse(session.expires_at));
+        // Logout completion is intentionally checked again: it is a narrow
+        // per-invocation exception, not a reusable session grant.
+        if (session.revoked_at) reusableUntil = -Infinity;
         dependencies.push({
           owner: authority.scope.owner,
           namespace: authority.scope.namespace,
@@ -533,13 +577,31 @@ export function createOwnerEvaluator(
                     readStaffSource(definition, { id }, command, databaseSchema)
                   ) as Promise<CollectionRecord | null>;
                 }
+                const dependency = {
+                  owner: authority.scope.owner,
+                  namespace,
+                  collection: definition.name,
+                  id,
+                };
                 return track(() =>
-                  loadCollectionRecord(
+                  memoAuthorizationRead(
                     command.transaction,
-                    tables,
-                    namespace,
-                    definition.name,
-                    id,
+                    JSON.stringify([
+                      databaseSchema,
+                      "record",
+                      namespace,
+                      definition.name,
+                      id,
+                    ]),
+                    authorizationDependencyKeys(databaseSchema, [dependency]),
+                    () =>
+                      loadCollectionRecord(
+                        command.transaction,
+                        tables,
+                        namespace,
+                        definition.name,
+                        id,
+                      ),
                   )
                 );
               },
@@ -638,11 +700,27 @@ export function createOwnerEvaluator(
       } catch {
         authorizationRefused();
       }
-      return {
+      const decision: AuthorizationDecision = {
         authority,
         constraints: captured,
-        dependencies,
+        dependencies: [...new Map(dependencies.map((dependency) => [
+          JSON.stringify([
+            dependency.owner,
+            dependency.namespace,
+            dependency.collection,
+            dependency.id ?? null,
+          ]),
+          dependency,
+        ])).values()],
       };
+      // Remote staff reads and verifier evidence have no local write fence.
+      if (
+        !staffReads.length && !policy.evidence?.length &&
+        authority.validity.kind !== "attempt" && !directory
+      ) {
+        reuseDeadlines.set(decision, reusableUntil);
+      }
+      return decision;
     } catch (error) {
       if (failed) {
         throw new Error("Owner authorization could not be completed.", {

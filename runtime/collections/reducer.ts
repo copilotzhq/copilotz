@@ -1,3 +1,4 @@
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import { createCollectionConflictError } from "./errors.ts";
 import { queryCollectionRows } from "./read-rows.ts";
 import { createCollectionValidationError } from "./errors.ts";
@@ -861,6 +862,12 @@ export async function projectCollectionEvent(
     param,
     guard,
   );
+  hintAuthorizationChanges(context.transaction, [{
+    owner: "schema",
+    namespace: body.record.namespace,
+    collection: definition.name,
+    id: body.record.id,
+  }]);
   const result = await context.transaction.query<
     { applied: boolean; report: unknown }
   >(

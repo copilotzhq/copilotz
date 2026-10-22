@@ -1,4 +1,9 @@
 import {
+  bindAuthorizationCacheAlias,
+  observeAuthorizationWrites,
+  OwnerAuthorizationCache,
+} from "../authorization/cache.ts";
+import {
   bindSqlDatabaseIdentity,
   sqlDatabaseIdentity,
 } from "../events/database-identity.ts";
@@ -227,6 +232,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   alarmScheduler?: OwnerAlarmScheduler;
   onPublicationError?: (error: unknown) => void;
 }): OwnerCommands<T> {
+  const authorizationCache = new OwnerAuthorizationCache();
   const tables = createCoreTableNames(options.schema);
   const owner = options.ownerId ?? "schema";
   const holder = options.holderId ?? crypto.randomUUID();
@@ -287,6 +293,9 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
   const pending: Pending[] = [];
   const publications: Array<Array<() => void | Promise<void>>> = [];
   const lifetime = new AbortController();
+  lifetime.signal.addEventListener("abort", () => authorizationCache.clear(), {
+    once: true,
+  });
   const stopped = Promise.withResolvers<void>();
   const readiness = Promise.withResolvers<void>();
   // Admission may not yet be waiting when acquisition fails.
@@ -557,6 +566,13 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
       resolve: (value) => completion.resolve(value as Output),
       reject: completion.reject,
       async run(tx, joined) {
+        if (!joined) {
+          tx = observeAuthorizationWrites(
+            tx,
+            authorizationCache,
+            options.schema,
+          );
+        }
         const callbacks: Array<() => void | Promise<void>> = [];
         const finalizers: Array<() => Promise<void>> = [];
         const commandTime = joined?.commandTime ?? adopted?.commandTime ??
@@ -704,6 +720,7 @@ export function createOwnerCommands<T extends CommandTypes>(options: {
         query: (sql, params) => adopted.transaction.query(sql, params),
       };
       bindSqlTransactionAlias(transaction, adopted.transaction);
+      bindAuthorizationCacheAlias(transaction, adopted.transaction);
       joinedInFlight++;
       afterSqlSettlement(transaction, () => {
         joinedInFlight--;
@@ -994,6 +1011,7 @@ export function bindCommandExecutorAlias(
   assertCommandTransaction(transaction);
   const source = commandSource(transaction);
   bindSqlDatabaseIdentity(executor, source);
+  bindAuthorizationCacheAlias(executor, source);
   commandContexts.set(executor, {
     ...commandContexts.get(source)!,
     source,

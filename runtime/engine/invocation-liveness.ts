@@ -24,6 +24,7 @@ export type OwnerInvocationLiveness = Readonly<{
 export async function assertOwnerInvocationLive(
   read: Readonly<{ transaction: SqlExecutor; commandTime: string }>,
   binding: OwnerInvocationLiveness,
+  retainDeadline?: (expiresAt: string | undefined) => void,
 ): Promise<void> {
   const tables = createCoreTableNames(binding.databaseSchema);
   const params: unknown[] = [];
@@ -71,10 +72,15 @@ export async function assertOwnerInvocationLive(
     }
   }
   if (!gates.length) return;
-  const live = await read.transaction.query(
-    `${ctes.length ? `WITH ${ctes.join(",")}` : ""} SELECT 1 AS live WHERE ${
-      gates.join(" AND ")
-    }`,
+  const deadline = retainDeadline && binding.writer
+    ? `(SELECT lease_expires_at::text FROM ${tables.event_deliveries} WHERE id=${
+      param(binding.writer.deliveryId)
+    })`
+    : "NULL";
+  const live = await read.transaction.query<{ expires_at: string | null }>(
+    `${ctes.length ? `WITH ${ctes.join(",")}` : ""} SELECT 1 AS live${
+      retainDeadline ? `, ${deadline} AS expires_at` : ""
+    } WHERE ${gates.join(" AND ")}`,
     params,
   );
   if (live.rows.length !== 1) {
@@ -83,4 +89,5 @@ export async function assertOwnerInvocationLive(
         binding.operationId ?? "invocation",
     );
   }
+  retainDeadline?.(live.rows[0].expires_at ?? undefined);
 }

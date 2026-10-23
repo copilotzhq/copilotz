@@ -1,4 +1,4 @@
-## 0.90.0 — 2026-10-22
+## 0.90.0 — 2026-10-23
 
 Browsers now read live data. The owner pushes Collection changes over an
 authenticated device socket to a framework-neutral web runtime, and the chat UX

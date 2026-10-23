@@ -2,13 +2,18 @@
 import {
   canReadToolOutput,
   coreToolActionMetadata,
+  projectToolOutput,
   toolOutputReadFilter,
 } from "@copilotz/copilotz/core";
 import type {
   HttpAdapter,
   HttpReadServices,
 } from "../../server/authoring/http-adapter/index.ts";
-import type { CollectionRecord } from "@copilotz/copilotz/collections";
+import type {
+  CollectionContentOptions,
+  CollectionRecord,
+  ScopedCollectionReadOptions,
+} from "@copilotz/copilotz/collections";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -20,6 +25,7 @@ const viewers = (scope: Parameters<NonNullable<HttpAdapter["reads"]>>[1]) =>
 export const coreVisibilityReads: NonNullable<HttpAdapter["reads"]> = (
   read,
   scope,
+  resolve,
 ) => {
   const ids = viewers(scope);
   const privateCollections = new Set([
@@ -35,20 +41,29 @@ export const coreVisibilityReads: NonNullable<HttpAdapter["reads"]> = (
       });
     }
   };
-  const project = async (
-    row: CollectionRecord,
-    content?: unknown,
-  ): Promise<CollectionRecord | null> => {
-    if (typeof row.threadId !== "string") return null;
-    const [visible] = await read.query("message", "history", {
-      threadId: row.threadId,
-      messageId: row.id,
-      view: "all",
-      viewerParticipantIds: ids,
-      ...(content ? { content } : {}),
-    });
-    return visible as CollectionRecord ?? null;
-  };
+  // Only narrow rows the owner already authorized. Redact before resolving so
+  // unreadable bodies/reasoning never reach the resolver or consume its budget.
+  const project = (
+    rows: readonly CollectionRecord[],
+    options?: ScopedCollectionReadOptions,
+  ): Promise<readonly CollectionRecord[]> =>
+    resolve(
+      "message",
+      rows.flatMap((row) => {
+        const visibility = record(row.visibility);
+        if (
+          typeof row.threadId !== "string" ||
+          typeof row.historyScopeId === "string" &&
+            !!row.historyScopeId.trim() ||
+          visibility.kind === "internal" ||
+          visibility.kind === "participants" &&
+            !(Array.isArray(visibility.participantIds) &&
+              visibility.participantIds.some((id) => ids.includes(id)))
+        ) return [];
+        return [projectToolOutput(row, ids)];
+      }),
+      options,
+    );
   const result: HttpReadServices = {
     ...read,
     aggregate(name, query, options) {
@@ -72,37 +87,30 @@ export const coreVisibilityReads: NonNullable<HttpAdapter["reads"]> = (
     async get(name, id, options) {
       denyPrivate(name);
       if (name !== "message") return read.get(name, id, options);
-      const row = await read.get(name, id);
-      return row ? project(row, options?.content) : null;
+      const row = await read.get(name, id, { ...options, content: false });
+      return row ? (await project([row], options))[0] ?? null : null;
     },
     async list(name, query, options) {
       denyPrivate(name);
       if (name !== "message") return read.list(name, query, options);
-      const rows = await read.list(name, query);
-      const projected = await Promise.all(
-        rows.map((row) => project(row, options?.content)),
+      return project(
+        await read.list(name, query, { ...options, content: false }),
+        options,
       );
-      return projected.filter((row): row is CollectionRecord => row !== null);
     },
     async query(name, queryName, input) {
       denyPrivate(name);
       if (name !== "message") return read.query(name, queryName, input);
-      if (queryName === "history") {
-        return read.query(name, queryName, {
-          ...input,
-          viewerParticipantIds: ids,
-        });
-      }
-      // Never accept caller-supplied viewer identity or omission as authority.
+      // The requested query still needs owner authorization. Projection never
+      // invokes a second named query or accepts caller-supplied viewer authority.
       const rows = await read.query(name, queryName, {
         ...input,
         viewerParticipantIds: ids,
         content: false,
       });
-      const projected = await Promise.all(
-        rows.map((row) => project(row as CollectionRecord, input.content)),
-      );
-      return projected.filter((row): row is CollectionRecord => row !== null);
+      return project(rows as readonly CollectionRecord[], {
+        content: input.content as CollectionContentOptions | undefined,
+      });
     },
     async observe(name, query, options) {
       denyPrivate(name);
@@ -116,26 +124,34 @@ export const coreVisibilityReads: NonNullable<HttpAdapter["reads"]> = (
         frames: {
           async *[Symbol.asyncIterator]() {
             for await (const frame of subscription.frames) {
+              const selection = options?.content;
+              const content = selection === true
+                ? { overflow: "defer" as const }
+                : selection
+                ? { overflow: "defer" as const, ...selection }
+                : selection;
               if (frame.t === "snapshot") {
-                const rows = await Promise.all(
-                  frame.rows.map((row) => project(row, options?.content)),
-                );
                 yield {
                   ...frame,
-                  rows: rows.filter((row): row is CollectionRecord =>
-                    row !== null
-                  ),
+                  rows: await project(frame.rows, { ...options, content }),
                 };
               } else if (frame.t === "batch") {
-                const changes = await Promise.all(
-                  frame.changes.map(async (change) => ({
+                const rows = await project(
+                  frame.changes.flatMap((change) =>
+                    change.record ? [change.record] : []
+                  ),
+                  { ...options, content },
+                );
+                const byId = new Map(rows.map((row) => [row.id, row]));
+                yield {
+                  ...frame,
+                  changes: frame.changes.map((change) => ({
                     ...change,
                     record: change.record
-                      ? await project(change.record, options?.content)
+                      ? byId.get(change.record.id) ?? null
                       : null,
                   })),
-                );
-                yield { ...frame, changes };
+                };
               } else yield frame;
             }
           },
@@ -262,11 +278,9 @@ export const projectCoreOutput: NonNullable<HttpAdapter["projectOutput"]> =
       if (typeof row.id !== "string" || typeof row.threadId !== "string") {
         return null;
       }
-      const [visible] = await read.query("message", "history", {
-        threadId: row.threadId,
-        messageId: row.id,
-        view: "all",
-        viewerParticipantIds: ids,
+      const [visible] = await read.list("message", {
+        where: { threadId: row.threadId, id: row.id },
+        limit: 1,
       });
       if (!visible) return null;
       // Intent, set and assets also carry bodies; emit only the authorized record.

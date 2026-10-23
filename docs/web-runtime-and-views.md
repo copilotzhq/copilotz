@@ -410,6 +410,17 @@ renderers re-render while text streams. A reply settles when its LLM call or
 operation ends, and gives way to its persisted message. Without the adapter the
 chat still works from live Collections, without progressive replies or Stop.
 
+The feed also says who is at work before any reply streams. Each participant a
+message in a running operation addresses has a turn (`threadFeed.turns`) until
+their reply without tool calls, or until the operation settles. The live tail
+shows one row per agent with its avatar, name and color, such as "North is
+replying" or "South is answering North", so agents that work at once read as
+working together. The person's latest message says "Sent" until a reply to it
+begins (`threadRun.replied`). A conversation started in the browser is followed
+once Core has created it, so its first turn streams like any other. The
+`replying`, `answering` and `workingReply` labels in `resources.shell.labels`
+change the rows' words; `{{agent}}` and `{{asker}}` stand for the names.
+
 ## Extension points
 
 An app extends the shell with inert data and Views; it never edits shell
@@ -462,11 +473,13 @@ Every field is optional; a tool without a renderer reads as a generic step
   the result, which then loads when the steps open, never for the collapsed row.
 - `view` names a View that draws the call. Without other flags it shows in the
   step's **View details**. `inline` replaces the step with it for good, as `ask`
-  does. `live` draws it in the message while the call runs, then settles it into
-  a compact card that expands to the full run. `audience` is `everyone` (the
-  default) or `technical`; a technical live View, such as a terminal, starts as
-  a slim status strip unless the reader turned on **Show technical details**.
-  `icon`, a kit icon name, marks the settled card.
+  does; while `ask` is drawn inline, the question message Core records for the
+  call is left out, so each question shows once, as its card. `live` draws it in
+  the message while the call runs, then settles it into a compact card that
+  expands to the full run. `audience` is `everyone` (the default) or
+  `technical`; a technical live View, such as a terminal, starts as a slim
+  status strip unless the reader turned on **Show technical details**. `icon`, a
+  kit icon name, marks the settled card.
 
 A live View can call `useToolDisplay()` from `/core/web`. It returns `mode`
 (`live` while the call runs, `card` once it settles, `full` when the reader

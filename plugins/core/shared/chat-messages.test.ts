@@ -7,6 +7,7 @@ import {
   finishedReplies,
   groupMessages,
   liveMessage,
+  markDelivered,
   messageAttachments,
   messageText,
   ownMessagePredicate,
@@ -574,4 +575,111 @@ test("unread senders take a neutral identity from what their message says", () =
       ["agent", "Agent"],
     ],
   );
+});
+
+test("an ask's question shows once, as its call; without the call it stays a message", () => {
+  const west = sender("west", "agent", "West");
+  const senders: Record<string, ChatSender> = {
+    ana,
+    north,
+    south,
+    west,
+    tool: sender("tool", "tool", "ask"),
+  };
+  const question = (to: string, call: string) => ({
+    id: `q-${to}`,
+    senderId: "north",
+    recipientIds: [to],
+    content: [text("Please name one fruit.")],
+    metadata: { copilotzAsk: { phase: "question", toolCallId: call } },
+  });
+  const rows = [
+    { id: "u", senderId: "ana", content: [text("Ask them")] },
+    {
+      id: "calls",
+      senderId: "north",
+      content: [],
+      visibility: { kind: "tool" },
+      metadata: {
+        copilotzWorkflow: { kind: "agent_output" },
+        llmToolCalls: [
+          {
+            id: "c1",
+            action: "ask",
+            input: { target: "South", message: "Please name one fruit." },
+          },
+          {
+            id: "c2",
+            action: "ask",
+            input: { target: "West", message: "Please name one fruit." },
+          },
+        ],
+      },
+    },
+    question("south", "c1"),
+    question("west", "c2"),
+    {
+      id: "a-south",
+      senderId: "south",
+      content: [text("Mango.")],
+      metadata: { copilotzAsk: { phase: "answer", toolCallId: "c1" } },
+    },
+    {
+      id: "a-west",
+      senderId: "west",
+      content: [text("Apple.")],
+      metadata: { copilotzAsk: { phase: "answer", toolCallId: "c2" } },
+    },
+  ];
+  const ids = (options: Parameters<typeof projectMessages>[2], from = rows) =>
+    projectMessages(from, (id) => senders[id], options).map((value) =>
+      value.id
+    );
+  // Drawn inline, each call is the question: no second copy under North.
+  assert.deepEqual(ids({ inlineAsk: true }), [
+    "u",
+    "calls",
+    "a-south",
+    "a-west",
+  ]);
+  // An app that does not draw the call keeps the question as a message.
+  assert.deepEqual(ids({}), [
+    "u",
+    "calls",
+    "q-south",
+    "q-west",
+    "a-south",
+    "a-west",
+  ]);
+  // A question whose call is outside the window still shows.
+  assert.deepEqual(
+    ids({ inlineAsk: true }, rows.filter((row) => row.id !== "calls")),
+    ["u", "q-south", "q-west", "a-south", "a-west"],
+  );
+});
+
+test("the person's latest message says Sent until a reply to it begins", () => {
+  const own = (value: ChatSender) => value.id === "ana";
+  const marks = (list: readonly ChatMessage[], replied: string[] = []) =>
+    markDelivered(list, own, new Set(replied)).map((value) =>
+      `${value.id}:${value.delivered ?? "-"}`
+    );
+  const first = message("m1", ana);
+  const latest = message("m2", ana);
+  assert.deepEqual(marks([first, latest]), ["m1:-", "m2:true"]);
+  // A reply began: in the feed, or in the history after it.
+  assert.deepEqual(marks([first, latest], ["m2"]), ["m1:-", "m2:false"]);
+  assert.deepEqual(marks([latest, message("r", north)]), ["m2:false", "r:-"]);
+  // Another person writing after it does not answer it.
+  assert.deepEqual(marks([latest, message("b", ben)]), ["m2:true", "b:-"]);
+  // Sending or failed messages have their own state, and no mark.
+  assert.deepEqual(marks([first, { ...latest, status: "sending" }]), [
+    "m1:-",
+    "m2:-",
+  ]);
+  assert.deepEqual(marks([first, { ...latest, status: "failed" }]), [
+    "m1:-",
+    "m2:-",
+  ]);
+  assert.deepEqual(marks([message("r", north)]), ["r:-"]);
 });

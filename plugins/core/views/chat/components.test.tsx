@@ -407,6 +407,49 @@ test("pending and failed sends say so, with Retry and Discard", () => {
   assert.ok(html.includes("Offline."));
   assert.ok(html.includes("Retry"));
   assert.ok(html.includes("Discard"));
+  assert.ok(!html.includes(">Sent<"), "neither says Sent");
+});
+
+test("the person's latest message says Sent quietly, then fades once a reply begins", () => {
+  const render = (patch: Partial<ChatMessage>) =>
+    renderToStaticMarkup(
+      <MessageGroup
+        group={{
+          id: "x",
+          sender: ana,
+          role: "user",
+          own: true,
+          messages: [message("earlier", ana), message("latest", ana, patch)],
+        }}
+      />,
+    );
+  const slots = (html: string) =>
+    [...html.matchAll(/data-slot="message-delivery" data-state="(\w+)"/g)]
+      .map((match) => match[1]);
+  const sent = render({ delivered: true });
+  assert.deepEqual(slots(sent), ["sent"], "only on the latest message");
+  assert.match(sent, /role="status"[^>]*data-slot="message-delivery"/);
+  assert.ok(sent.includes("Sent"), sent);
+  // Once a reply began it fades in place: hidden from screen readers too.
+  const settled = render({ delivered: false });
+  assert.deepEqual(slots(settled), ["settled"]);
+  assert.match(settled, /data-state="settled" class="[^"]*opacity-0/);
+  assert.match(settled, /aria-hidden="true"[^>]*>.*Sent/);
+  // The same slot said Sending… first, so the change is announced once.
+  assert.deepEqual(slots(render({ status: "sending" })), ["sending"]);
+  // Other people's messages carry no delivery state.
+  const theirs = renderToStaticMarkup(
+    <MessageGroup
+      group={{
+        id: "y",
+        sender: ana,
+        role: "user",
+        own: false,
+        messages: [message("theirs", ana, { delivered: true })],
+      }}
+    />,
+  );
+  assert.deepEqual(slots(theirs), []);
 });
 
 test("a voice message is a compact player with its transcript one click away", () => {

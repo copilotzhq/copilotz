@@ -107,6 +107,12 @@ export type ChatLabels = ActivityLabels & {
   footer?: string;
   emptyTitle?: string;
   emptyHint?: string;
+  /** An agent at work before its reply shows: "{{agent}} is replying". */
+  replying?: string;
+  /** An agent answering another's question: "{{agent}} is answering {{asker}}". */
+  answering?: string;
+  /** Work going on for no agent this viewer knows: "Working on a reply". */
+  workingReply?: string;
 };
 
 export type ChatSelf = Readonly<{

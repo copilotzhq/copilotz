@@ -1,3 +1,23 @@
+## 0.90.1 — 2026-10-23
+
+- A new chat's first turn is live again: dots, who is replying, streaming text,
+  thinking and tool rows. The thread View followed the feed before Core had
+  created the thread, the feed refused, and a refusal is final. The View now
+  follows once the thread exists. A refusal for a thread the reader can't read
+  is still final.
+- An agent's `ask` shows its question once, as its card. The card names and
+  colors the asked agent and says whether it is waiting, answered or failed. The
+  question message Core records is left out while the call shows inline; without
+  the call (outside the window, or no inline renderer) it still shows.
+- The live tail says who is at work: one row per agent, with its avatar, name
+  and color ("North is replying", "South is answering North"), so parallel asks
+  and messages to several agents read as concurrent. The feed projector adds
+  `turns`, `routed` and `replied`. Rows are a status region; the dots are still
+  when the reader prefers reduced motion.
+- The person's latest message says "Sent" once delivered, and the mark fades
+  when a reply to it begins. "Sending…" and the failed state with Retry and
+  Discard are unchanged.
+
 ## 0.90.0 — 2026-10-23
 
 Browsers now read live data. The owner pushes Collection changes over an

@@ -163,10 +163,23 @@ class TestFeed implements ThreadFeedAdapter {
   upload?: ThreadFeedAdapter["upload"];
   cancelled: string[] = [];
   position = 0;
+  /** Each observe, by thread id, refused or not. */
+  observed: string[] = [];
+  /** As Core HTTP does, a thread the reader can't read refuses its feed. */
+  constructor(readonly exists: (threadId: string) => boolean = () => true) {}
   observe(
-    _threadId: string,
+    threadId: string,
     options: Parameters<ThreadFeedAdapter["observe"]>[1],
   ): Promise<string | undefined> {
+    this.observed.push(threadId);
+    if (!this.exists(threadId)) {
+      return Promise.reject(
+        Object.assign(new Error("Forbidden"), {
+          status: 403,
+          code: "forbidden",
+        }),
+      );
+    }
     this.observers.add(options.onFrame);
     return new Promise((resolve) =>
       options.signal.addEventListener("abort", () => {
@@ -377,6 +390,8 @@ type Mounted = {
   calls: { alias: string; input: Record<string, unknown> }[];
   /** Fail the next createThread after creating it (an observe error). */
   failCreateOnce?: () => boolean;
+  /** The next createThread starts once this settles. */
+  createHold?: Promise<void>;
   /** The app's voice Action fails while this says so. */
   failVoice?: () => boolean;
   /** The app's voice Action finishes once this settles. */
@@ -403,7 +418,9 @@ async function mount(
 ): Promise<Mounted> {
   let current = new URL(href);
   const live = options.live ?? new FixtureLive(tables());
-  const feed = new TestFeed();
+  const feed = new TestFeed((threadId) =>
+    Boolean(live.get("thread", threadId))
+  );
   if (options.upload) {
     feed.upload = (_file, upload) =>
       Promise.resolve({
@@ -431,6 +448,11 @@ async function mount(
   const hooks: Partial<Mounted> = {};
   const actions: ActionTransport = {
     invoke(alias, input, invocation) {
+      if (alias === "createThread" && hooks.createHold) {
+        const hold = hooks.createHold;
+        hooks.createHold = undefined;
+        return hold.then(() => actions.invoke(alias, input, invocation));
+      }
       invocation.accepted(`op-${calls.length + 1}`);
       calls.push({ alias, input: input as Record<string, unknown> });
       const data = input as Record<string, unknown>;
@@ -1838,6 +1860,242 @@ test("a new chat shows its first message at once and a retry continues the same 
     assert.equal(sends.length, 1);
     assert.equal(sends[0].input.threadId, threadId);
     assert.doesNotMatch(main(), /Retry/);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+/** Frames as Core's thread feed sends them. */
+const feedFrames = (feed: TestFeed) => ({
+  created: (operationId: string, row: Record<string, unknown>) =>
+    feed.emit({
+      kind: "output",
+      output: {
+        type: "message.created",
+        operationId,
+        data: { operation: "create", id: row.id, record: row },
+      },
+    } as never),
+  lane: (
+    operationId: string,
+    streamId: string,
+    attempt: string,
+    agent: { id: string; name: string },
+    lane = "content",
+  ) =>
+    feed.emit({
+      kind: "output",
+      output: {
+        type: "stream.output",
+        operationId,
+        streamId,
+        role: "text",
+        kind: "text",
+        mediaType: "text/plain",
+        metadata: {
+          llmAttemptId: attempt,
+          lane,
+          providerAttemptIndex: 0,
+          copilotzCore: { schema: "copilotz.core.llm-stream.v1", agent },
+        },
+      },
+    } as never),
+  chunk: (streamId: string, offset: number, text: string) =>
+    feed.emit({
+      kind: "stream-chunk",
+      streamId,
+      offset,
+      bytes: new TextEncoder().encode(text),
+    } as never),
+});
+/** The feed commits at most every 50 ms. */
+const flushFeed = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  await settle();
+};
+const working = () =>
+  all('[data-slot="agent-working"] p').map((line) => line.textContent?.trim());
+const delivery = () =>
+  document.querySelector('[data-slot="message-delivery"]')?.getAttribute(
+    "data-state",
+  );
+const liveText = () =>
+  document.querySelector('[data-slot="thread-live"]')?.textContent ?? "";
+
+test("a new chat follows its feed once Core creates it, so its first turn is live", async () => {
+  const shell = await mount("https://app.example/");
+  try {
+    let create!: () => void;
+    shell.createHold = new Promise((resolve) => {
+      create = resolve;
+    });
+    await (await typeAndSend("Plan the launch")).submit();
+    const threadId = String(nav(shell).threadId);
+    assert.match(main(), /Plan the launch/, "the message shows at once");
+    // Until Core creates it, its feed refuses, and a refusal is final.
+    assert.deepEqual(shell.feed.observed, [], "it waits for the thread");
+    await act(async () => {
+      create();
+      await settle();
+    });
+    assert.deepEqual(shell.feed.observed, [threadId], "followed, not refused");
+    assert.equal(
+      shell.runtime.collections.threadRun.get(threadId).value?.status,
+      "live",
+    );
+    const sent = shell.calls.find((call) =>
+      call.alias === "createThreadMessage"
+    )!;
+    const frames = feedFrames(shell.feed);
+    await act(async () => {
+      await frames.created("op-send", {
+        id: sent.input.id,
+        threadId,
+        senderId: "p-ana",
+        recipientIds: ["p-north"],
+        metadata: {},
+      });
+      await flushFeed();
+    });
+    // The first turn reads like any other: delivered, and who replies.
+    assert.equal(delivery(), "sent");
+    assert.deepEqual(working(), ["North is replying"]);
+    await act(async () => {
+      await frames.lane("op-send", "answer", "run-1", {
+        id: "north",
+        name: "North",
+      });
+      await frames.chunk("answer", 0, "Here is the plan");
+      await flushFeed();
+    });
+    assert.match(liveText(), /North/);
+    assert.match(liveText(), /Here is the plan/);
+    assert.deepEqual(working(), [], "the streaming reply says who");
+    assert.equal(delivery(), "settled", "Sent gives way to the reply");
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a feed refused for a thread the reader can't read stays refused", async () => {
+  const shell = await mount("https://app.example/?chat=t-elsewhere");
+  try {
+    await act(async () => {
+      await flushFeed();
+    });
+    assert.deepEqual(shell.feed.observed, ["t-elsewhere"]);
+    // Refused is final: no reconnecting loop.
+    assert.equal(
+      shell.runtime.collections.threadRun.get("t-elsewhere").value?.status,
+      "unavailable",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a parallel ask shows each question once, and both asked agents at work at once", async () => {
+  const base = tables();
+  const agentRow = (name: string) => ({
+    id: `p-${name.toLowerCase()}`,
+    externalId: name.toLowerCase(),
+    agentId: name.toLowerCase(),
+    participantType: "agent",
+    name,
+  });
+  const question = (to: string, call: string) => ({
+    id: `q-${to}`,
+    threadId: "t1",
+    senderId: "p-north",
+    recipientIds: [`p-${to}`],
+    createdAt: "2026-10-21T10:00:03.000Z",
+    content: [{
+      assetId: `q-${to}`,
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+      value: "Please name one fruit.",
+    }],
+    metadata: {
+      copilotzAsk: { phase: "question", toolCallId: call },
+    },
+  });
+  const live = new FixtureLive({
+    ...base,
+    thread: base.thread.map((thread) =>
+      thread.id === "t1"
+        ? {
+          ...thread,
+          participantIds: ["p-ana", "p-north", "p-south", "p-west"],
+        }
+        : thread
+    ),
+    participant: [...base.participant, agentRow("South"), agentRow("West")],
+    message: [
+      ...base.message,
+      {
+        id: "calls",
+        threadId: "t1",
+        senderId: "p-north",
+        createdAt: "2026-10-21T10:00:02.000Z",
+        visibility: { kind: "tool" },
+        content: [],
+        metadata: {
+          copilotzWorkflow: { kind: "agent_output", llmAttemptId: "run-n" },
+          llmToolCalls: ["South", "West"].map((target, index) => ({
+            id: `c${index + 1}`,
+            action: "ask",
+            input: { target, message: "Please name one fruit." },
+          })),
+        },
+      },
+      question("south", "c1"),
+      question("west", "c2"),
+    ],
+  });
+  const shell = await mount("https://app.example/?chat=t1", { live });
+  try {
+    const frames = feedFrames(shell.feed);
+    await act(async () => {
+      await frames.created("op-a", {
+        id: "m1",
+        senderId: "p-ana",
+        recipientIds: ["p-north"],
+      });
+      await frames.created("op-b", question("south", "c1"));
+      await frames.created("op-c", question("west", "c2"));
+      await flushFeed();
+    });
+    // Each question shows once: as its card, naming who was asked.
+    assert.equal(main().split("Please name one fruit.").length - 1, 2);
+    const cards = all('[data-slot="ask-tool"]').map((card) =>
+      card.textContent ?? ""
+    );
+    assert.equal(cards.length, 2);
+    assert.match(cards[0], /Asking South.*Waiting/);
+    assert.match(cards[1], /Asking West.*Waiting/);
+    // North's waiting cards say it is at work; both asked agents get a row.
+    assert.deepEqual(working(), [
+      "South is answering North",
+      "West is answering North",
+    ]);
+    assert.equal(
+      document.querySelector('[data-slot="agents-working"]')?.getAttribute(
+        "role",
+      ),
+      "status",
+    );
+    // Once South's reply streams, it shows under South's name instead.
+    await act(async () => {
+      await frames.lane("op-b", "south-think", "run-s", {
+        id: "south",
+        name: "South",
+      }, "reasoning");
+      await frames.chunk("south-think", 0, "A common fruit");
+      await flushFeed();
+    });
+    assert.match(liveText(), /South/);
+    assert.deepEqual(working(), ["West is answering North"]);
   } finally {
     await shell.dispose();
   }

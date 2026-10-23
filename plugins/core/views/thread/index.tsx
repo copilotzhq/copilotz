@@ -3,7 +3,7 @@
 /** @jsxFrag React.Fragment */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { MessageSquare, Sparkles } from "lucide-react";
 import { defineView, type ViewDefinition } from "@copilotz/copilotz/views";
 import type { BrowserViewContext, Row } from "@copilotz/copilotz/web";
@@ -17,6 +17,7 @@ import {
   type ChatSender,
   finishedReplies,
   groupMessages,
+  markDelivered,
   ownMessagePredicate,
   projectMessages,
   settleFinished,
@@ -33,6 +34,7 @@ import {
   type ChatSelf,
   presentTools,
   readSenders,
+  toolRenderers,
   withLoadedBodies,
   withLoadedResults,
 } from "../chat/context.tsx";
@@ -111,13 +113,30 @@ export function ConversationStart(
   );
 }
 
+/**
+ * Follows the thread's live feed once the thread exists. A conversation
+ * started here has its id before Core creates it, and its feed refuses (a
+ * final answer) until then, so its first turn waits for the thread rather
+ * than give up on it.
+ */
 function Follow(
-  { threadId, ctx }: { threadId: string; ctx: BrowserViewContext },
+  { threadId, exists, ctx }: {
+    threadId: string;
+    exists: boolean;
+    ctx: BrowserViewContext;
+  },
 ): null {
+  // Once followed, a thread stays followed while it shows.
+  const [followed, setFollowed] = useState<string | undefined>(
+    exists ? threadId : undefined,
+  );
+  if (exists && followed !== threadId) setFollowed(threadId);
+  const following = followed === threadId;
   useEffect(() => {
+    if (!following) return;
     const follow = ctx.actions.chatFollow?.({ threadId });
     return () => void follow?.cancel().catch(() => {});
-  }, [threadId]);
+  }, [threadId, following]);
   return null;
 }
 
@@ -153,11 +172,12 @@ const view: ViewDefinition<
   render({ id }, ctx) {
     const config = chatConfig(ctx);
     const thread = readThread(ctx, id);
+    const pending = ctx.collections.pendingThread?.get(id).value;
     // A conversation started here shows its first message while Core
     // creates it; it is never "not found" in the meantime.
-    const starting = thread.value
-      ? undefined
-      : ctx.collections.pendingThread?.get(id).value;
+    const starting = thread.value ? undefined : pending;
+    const exists = Boolean(thread.value) || !pending ||
+      pending.created === true;
     const title = String(
       thread.value?.name ?? starting?.name ?? "Conversation",
     );
@@ -204,6 +224,8 @@ const view: ViewDefinition<
               value,
             ): value is string => typeof value === "string" && value !== ""),
             transcriptLabel: config.voice?.transcriptLabel,
+            // The ask card is the question; its message would repeat it.
+            inlineAsk: toolRenderers(ctx).get("ask")?.inline === true,
           },
         ),
       ),
@@ -243,7 +265,7 @@ const view: ViewDefinition<
         !(row.transcribe === true && Array.isArray(row.assetIds) &&
           row.assetIds.some((asset) => carried.has(String(asset))))
       );
-    const pending: ChatMessage[] = outbox.map((row: Row) => ({
+    const outgoing: ChatMessage[] = outbox.map((row: Row) => ({
       id: row.id,
       role: "user",
       sender: me,
@@ -265,24 +287,33 @@ const view: ViewDefinition<
         : {}),
       ...(typeof row.error === "string" ? { error: row.error } : {}),
     }));
-    const all = [...persisted, ...pending];
     const isOwn = ownMessagePredicate([...senders.values(), me], self);
+    const all = markDelivered(
+      [...persisted, ...outgoing],
+      isOwn,
+      new Set(Array.isArray(run?.replied) ? run.replied.map(String) : []),
+    );
     const groups = groupMessages(all, isOwn);
     const tools = presentTools(ctx, id, persisted);
     const settled = persisted.flatMap((message) =>
       message.attemptId ? [message.attemptId] : []
     );
+    // A reply's own running step already says its agent is at work.
+    const busy = [
+      ...new Set(
+        persisted.flatMap((message) =>
+          message.activity.some((item) => item.status === "active")
+            ? [message.sender.id]
+            : []
+        ),
+      ),
+    ];
     const live = ctx.show({
       shows: "threadLive",
       value: {
         threadId: id,
         settled,
-        // A reply's own running step already says the agent is at work.
-        ...(persisted.some((message) =>
-            message.activity.some((item) => item.status === "active")
-          )
-          ? { working: true }
-          : {}),
+        ...(busy.length ? { working: true, busy } : {}),
       },
     }, { mode: ctx.hints.mode }) as React.ReactNode;
     const loadAsset = config.feed?.asset
@@ -352,7 +383,7 @@ const view: ViewDefinition<
         data-density={ctx.hints.mode}
         className="flex h-full min-h-0 flex-col"
       >
-        <Follow threadId={id} ctx={ctx} />
+        <Follow threadId={id} exists={exists} ctx={ctx} />
         {!embedded && (
           <header className="flex h-12 shrink-0 items-center border-b px-4">
             <h1 className="truncate text-sm font-semibold">

@@ -1,4 +1,6 @@
 /** Offline retained-history pruning. No runtime activation or schema migration. */
+import { digestContent } from "../runtime/content/digest.ts";
+import { unterminatedInvocationsSql } from "../runtime/actions/upgrade-history.ts";
 import { quoteEventIdentifier as quote } from "../runtime/events/schema.ts";
 import type { SqlExecutor, SqlSession } from "../runtime/events/session.ts";
 import { openManagedOminipgDatabase } from "../runtime/persistence/ominipg.ts";
@@ -10,6 +12,8 @@ type Row = {
   hash: string;
   bytes: number;
   data: Data;
+  refs: string[];
+  pairs: Record<string, string | undefined>;
 };
 type ForeignKey = {
   source_schema: string;
@@ -19,9 +23,29 @@ type ForeignKey = {
   target_columns: string[];
   definition: string;
 };
+export type UnterminatedListing = {
+  schema: string;
+  version: number;
+  invocations: {
+    namespace: string;
+    bodyId: string;
+    actionId: string | null;
+    runId: string;
+    time: unknown;
+    events: { eventId: string; time: unknown }[];
+    closure: { table: string; tid: string; hash: string; identity: Data }[];
+    retainedReference: boolean;
+    refusals: string[];
+  }[];
+  digest: string;
+  /** Optional reviewed subset; omit to select every listed body. */
+  bodyIds?: string[];
+};
 export type PruneOptions = {
   schema: string;
   eventTypes: readonly string[];
+  listUnterminated?: boolean;
+  abandoned?: UnterminatedListing;
   actionIds?: readonly string[];
   apply?: boolean;
   writersStopped?: boolean;
@@ -51,6 +75,7 @@ export type PruneReport = {
   vacuumCommands: string[];
   committedBatches: number;
   elapsedMs: number;
+  unterminated?: UnterminatedListing;
 };
 const terminal = new Set(["completed", "failed", "cancelled"]);
 function object(value: unknown): Data {
@@ -115,7 +140,8 @@ export async function pruneRetainedHistory(
   const schema = quote(options.schema);
   const table = (name: string) => `${schema}.${quote(name)}`;
   if (
-    !options.eventTypes.length ||
+    (!options.eventTypes.length && !options.listUnterminated &&
+      !options.abandoned) ||
     options.eventTypes.some((p) =>
       !p || p === "*" || p.slice(0, -1).includes("*")
     )
@@ -128,7 +154,38 @@ export async function pruneRetainedHistory(
     throw new Error("batchSize must be a positive integer.");
   }
   const progress = options.progress ?? ((message) => console.error(message));
+  if (options.listUnterminated && options.abandoned) {
+    throw new Error("Choose listing or retirement, not both.");
+  }
+  if (options.listUnterminated && options.apply) {
+    throw new Error("Listing is read-only.");
+  }
+  if (
+    (options.listUnterminated || options.abandoned) && options.eventTypes.length
+  ) {
+    throw new Error("Retirement and event-type pruning are separate reviews.");
+  }
+  const listingDigest = (listing: Omit<UnterminatedListing, "digest">) =>
+    digestContent(new TextEncoder().encode(JSON.stringify({
+      schema: listing.schema,
+      version: listing.version,
+      invocations: listing.invocations,
+    })));
+  if (
+    options.abandoned && (options.abandoned.schema !== options.schema ||
+      !Array.isArray(options.abandoned.invocations) ||
+      await listingDigest(options.abandoned) !== options.abandoned.digest)
+  ) {
+    throw new Error("Abandoned listing digest or schema does not match.");
+  }
   const rows: Row[] = [];
+  const runBodyCounts = new Map<string, number>();
+  let incomplete: {
+    namespace: string;
+    event_body_id: string;
+    run_id: string;
+    action_id: string | null;
+  }[] = [];
   const byTable = new Map<string, number[]>();
   let version = 0;
   let fks: ForeignKey[] = [];
@@ -202,6 +259,11 @@ export async function pruneRetainedHistory(
       [options.schema],
     )).rows;
     relationBytesBefore = await size(tx);
+    if (options.listUnterminated || options.abandoned) {
+      incomplete = (await tx.query<typeof incomplete[number]>(
+        unterminatedInvocationsSql(options.schema),
+      )).rows;
+    }
     const sources = new Map(localTables.map((name) => [name, table(name)]));
     for (const fk of fks) {
       if (fk.source_schema !== options.schema) {
@@ -223,23 +285,168 @@ export async function pruneRetainedHistory(
         );
       }
     }
+    // First gather the identity universe, then discard all other strings while
+    // streaming full rows. Large bodies and arbitrary graph payloads never survive a page.
+    const universe = new Set<string>();
+    const identityColumns: Record<string, string[]> = {
+      events: ["id", "subject_id"],
+      event_bodies: ["namespace", "event_body_id"],
+      copilotz_operations: ["operation_id"],
+      event_deliveries: ["id"],
+      copilotz_operation_streams: ["stream_id"],
+      owner_receipts: ["key"],
+      authorization_effects: ["effect_key"],
+      authorization_invocations: ["run_id"],
+      copilotz_operation_selection_heads: ["selection_key"],
+    };
+    for (const [name, columns] of Object.entries(identityColumns)) {
+      if (!localTables.includes(name)) continue;
+      const extra = name === "event_bodies"
+        ? ",body->>'actionRunId' AS run"
+        : "";
+      await tx.query(
+        `DECLARE prune_ids NO SCROLL CURSOR FOR SELECT ${
+          columns.map(quote).join(",")
+        }${extra} FROM ${table(name)}`,
+      );
+      while (true) {
+        const page = (await tx.query<Data>("FETCH 5000 FROM prune_ids")).rows;
+        for (const row of page) {
+          if (
+            name === "event_bodies" && row.run != null &&
+            (options.listUnterminated || options.abandoned)
+          ) {
+            const k = JSON.stringify([row.namespace, row.run]);
+            runBodyCounts.set(k, (runBodyCounts.get(k) ?? 0) + 1);
+          }
+          for (const value of Object.values(row)) {
+            if (typeof value === "string" && value) universe.add(value);
+          }
+        }
+        if (page.length < 5000) break;
+      }
+      await tx.query("CLOSE prune_ids");
+    }
+    const ownedTables = new Set([
+      "events",
+      "event_bodies",
+      "copilotz_operations",
+      "event_deliveries",
+      "copilotz_operation_events",
+      "copilotz_operation_streams",
+      "copilotz_operation_selections",
+      "copilotz_operation_selection_heads",
+      "owner_receipts",
+      "action_effects",
+      "authorization_effects",
+      "authorization_invocations",
+    ]);
+    const emptyData: Data = {},
+      emptyRefs: string[] = [],
+      emptyPairs: Row["pairs"] = {};
+    const fields = [
+      "namespace",
+      "id",
+      "type",
+      "subject_id",
+      "event_body_id",
+      "operation_id",
+      "root_event_id",
+      "event_id",
+      "stream_id",
+      "state",
+      "status",
+      "operation_id",
+      "accepted_operation",
+      "consumed_run",
+      "run_id",
+      "action_run_id",
+      "selection_key",
+      "key",
+      "effect_key",
+      "created_at",
+      "step",
+      "owner",
+      "domain",
+    ];
     for (const [name, qualified] of sources) {
       progress(`Inventory ${name}`);
       const indices: number[] = [];
+      const ownable = ownedTables.has(name);
       byTable.set(name, indices);
       // A cursor keeps transfer bounded without OFFSET scans or dependence on a PK.
       await tx.query(`DECLARE prune_inventory NO SCROLL CURSOR FOR
         SELECT ctid::text AS tid, md5(to_jsonb(t)::text) AS hash,
           pg_column_size(t) AS bytes, to_jsonb(t) AS data FROM ${qualified} t`);
       while (true) {
-        const page = (await tx.query<Omit<Row, "table">>(
-          "FETCH 5000 FROM prune_inventory",
+        const page = (await tx.query<
+          { tid: string; hash: string; bytes: number; data: Data }
+        >(
+          "FETCH 1000 FROM prune_inventory",
         )).rows;
         for (const row of page) {
           indices.push(rows.length);
-          rows.push({ ...row, bytes: Number(row.bytes), table: name });
+          const refs = new Set<string>();
+          strings(row.data, (value) => {
+            if (universe.has(value)) refs.add(value);
+          });
+          const pairs: Row["pairs"] = {};
+          for (let f = 0; f < fks.length; f++) {
+            const fk = fks[f];
+            if (!ownedTables.has(fk.target_table)) continue;
+            const source = fk.source_schema === options.schema
+              ? fk.source_table
+              : `${fk.source_schema}.${fk.source_table}`;
+            for (
+              const [side, columns] of [[
+                "source",
+                source === name ? fk.source_columns : [],
+              ], [
+                "target",
+                fk.target_table === name ? fk.target_columns : [],
+              ]] as const
+            ) {
+              if (!columns.length) continue;
+              const values = columns.map((c) => row.data[c]);
+              pairs[`${f}:${side}`] = values.some((v) => v == null)
+                ? undefined
+                : JSON.stringify(values);
+            }
+          }
+          const data: Data = ownable ? {} : emptyData;
+          for (const field of ownable ? fields : []) {
+            if (field in row.data) data[field] = row.data[field];
+          }
+          if (name === "events") {
+            const meta = object(row.data.metadata);
+            data.metadata = {
+              actionId: meta.actionId,
+              actionStatus: meta.actionStatus,
+            };
+            data.payload = { dataRef: object(row.data.payload).dataRef };
+          }
+          if (name === "event_bodies") {
+            const body = object(row.data.body), input = object(body.input);
+            data.body = {
+              actionId: body.actionId,
+              actionRunId: body.actionRunId,
+              status: body.status,
+              parentActionRunId: body.parentActionRunId,
+              requestId: body.requestId,
+              input: { requestId: input.requestId, actionId: input.actionId },
+            };
+          }
+          rows.push({
+            tid: row.tid,
+            hash: ownable ? row.hash : "",
+            bytes: ownable ? Number(row.bytes) : 0,
+            table: name,
+            data,
+            refs: refs.size ? [...refs] : emptyRefs,
+            pairs: Object.keys(pairs).length ? pairs : emptyPairs,
+          });
         }
-        if (page.length < 5000) break;
+        if (page.length < 1000) break;
       }
       await tx.query("CLOSE prune_inventory");
     }
@@ -265,13 +472,20 @@ export async function pruneRetainedHistory(
       i,
     ) => [key(rows[i].data.namespace, rows[i].data.operation_id), i]),
   );
-  const bodyFor = (i: number) =>
-    bodies.get(
-      key(
-        rows[i].data.namespace,
-        object(object(rows[i].data.payload).dataRef).eventBodyId,
-      ),
-    );
+  const bodyFor = (i: number) => {
+    const id = object(object(rows[i].data.payload).dataRef).eventBodyId;
+    return typeof id === "string" && id.trim()
+      ? bodies.get(key(rows[i].data.namespace, id.trim()))
+      : undefined;
+  };
+  const eventsByBody = new Map<number, number[]>();
+  for (const i of indices("events")) {
+    const b = bodyFor(i);
+    if (b === undefined) continue;
+    const list = eventsByBody.get(b) ?? [];
+    list.push(i);
+    eventsByBody.set(b, list);
+  }
   const action = (i: number) => {
     const row = rows[i].data;
     const body = object(rows[bodyFor(i) ?? -1]?.data.body);
@@ -329,7 +543,50 @@ export async function pruneRetainedHistory(
     }
     selected.add(i);
   }
-  const candidate = new Set(selected);
+  const abandonedBodies = new Set<number>();
+  const abandonedRuns = new Map<number, string>();
+  const requested = options.abandoned?.bodyIds;
+  if (
+    requested &&
+    (!Array.isArray(requested) ||
+      requested.some((id) =>
+        !options.abandoned!.invocations.some((entry) => entry.bodyId === id)
+      ))
+  ) {
+    throw new Error("Reviewed body IDs must belong to the bound listing.");
+  }
+  if (options.abandoned && options.abandoned.version !== version) {
+    throw new Error("Listing version changed.");
+  }
+  const reviewed = options.abandoned?.invocations.filter((entry) =>
+    !requested || requested.includes(entry.bodyId)
+  );
+  const liveIncomplete = new Set(
+    incomplete.map((entry) => key(entry.namespace, entry.event_body_id)),
+  );
+  for (const entry of reviewed ?? []) {
+    const b = bodies.get(key(entry.namespace, entry.bodyId));
+    if (
+      b !== undefined && !liveIncomplete.has(key(entry.namespace, entry.bodyId))
+    ) {
+      throw new Error(
+        `Reviewed invocation is no longer unterminated: ${entry.bodyId}`,
+      );
+    }
+  }
+  for (const entry of incomplete) {
+    if (
+      reviewed &&
+      !reviewed.some((r) =>
+        r.namespace === entry.namespace && r.bodyId === entry.event_body_id
+      )
+    ) continue;
+    const b = bodies.get(key(entry.namespace, entry.event_body_id))!;
+    abandonedBodies.add(b);
+    abandonedRuns.set(b, entry.run_id);
+    for (const i of eventsByBody.get(b) ?? []) selected.add(i);
+  }
+  const candidate = new Set([...selected, ...abandonedBodies]);
   const parents = rows.map((_, i) => i);
   const root = (i: number): number => {
     while (parents[i] !== i) {
@@ -367,7 +624,7 @@ export async function pruneRetainedHistory(
       members.push(i);
       runs.set(k, members);
     } else if (
-      selected.has(i) &&
+      !abandonedBodies.has(bodyFor(i) ?? -1) && selected.has(i) &&
       /\.(invoked|completed|failed|cancelled)$/.test(String(rows[i].data.type))
     ) {
       refuse(i, "invocation identity unavailable; cannot prove terminal pair");
@@ -380,11 +637,26 @@ export async function pruneRetainedHistory(
     for (const i of chosen) {
       union(i, chosen[0]);
       if (
-        chosen.length !== members.length || !statuses.includes("invoked") ||
-        !statuses.some((s) => terminal.has(s))
+        !abandonedBodies.has(bodyFor(i) ?? -1) && (
+          chosen.length !== members.length || !statuses.includes("invoked") ||
+          !statuses.some((s) => terminal.has(s))
+        )
       ) {
         refuse(i, "invocation and terminal must both be selected and present");
       }
+    }
+  }
+  for (const b of abandonedBodies) {
+    if (!abandonedRuns.get(b) || !rows[b].data.event_body_id) {
+      refuse(b, "retirement requires nonempty body and run identities");
+    }
+    if (
+      runBodyCounts.get(key(rows[b].data.namespace, abandonedRuns.get(b))) !== 1
+    ) {
+      refuse(
+        b,
+        "retirement requires exactly one body for the run, with no terminal or other body",
+      );
     }
   }
   for (const i of indices("copilotz_operations")) {
@@ -429,7 +701,12 @@ export async function pruneRetainedHistory(
       addIdentity(r.data.id, i);
       addIdentity(action(i).run, i);
     }
-    if (r.table === "event_bodies") addIdentity(r.data.event_body_id, i);
+    if (r.table === "event_bodies") {
+      addIdentity(r.data.event_body_id, i);
+      if (abandonedBodies.has(i)) {
+        addIdentity(abandonedRuns.get(i), i);
+      }
+    }
     if (r.table === "copilotz_operations") addIdentity(r.data.operation_id, i);
     if (r.table === "event_deliveries") addIdentity(r.data.id, i);
     if (r.table === "copilotz_operation_streams") {
@@ -439,13 +716,13 @@ export async function pruneRetainedHistory(
   const targets = (i: number): Set<number> => {
     const found = new Set<number>();
     const r = rows[i];
-    strings(r.data, (v) => {
+    for (const v of r.refs) {
       for (const t of identities.get(v) ?? []) {
         if (
           t !== i
         ) found.add(t);
       }
-    });
+    }
     return found;
   };
   const retainedIdentities = new Map<string, Set<unknown>>();
@@ -479,7 +756,7 @@ export async function pruneRetainedHistory(
       const refs = targets(i);
       const owners = [...refs].filter((t) =>
         rows[t].table === "copilotz_operations" ||
-        (rows[t].table === "events" && action(t).run)
+        (rows[t].table === "events" && action(t).run) || abandonedBodies.has(t)
       );
       if (!owners.length) continue;
       // An explicit operation/run identity outside the candidate set is shared.
@@ -494,10 +771,10 @@ export async function pruneRetainedHistory(
         ].some((v) => typeof v === "string" && !identities.has(v))
       ) continue;
       let shared = false;
-      strings(r, (v) => {
+      for (const v of rows[i].refs) {
         const namespaces = retainedIdentities.get(v);
         if (namespaces) shared = true;
-      });
+      }
       if (shared) continue;
       for (const owner of owners) own(i, owner);
     }
@@ -561,7 +838,7 @@ export async function pruneRetainedHistory(
     }
   }
   // Discover even nonstandard/composite FKs, including incoming cross-schema FKs.
-  for (const fk of fks) {
+  for (const [f, fk] of fks.entries()) {
     const source = fk.source_schema === options.schema
       ? fk.source_table
       : `${fk.source_schema}.${fk.source_table}`;
@@ -570,15 +847,15 @@ export async function pruneRetainedHistory(
     for (const i of indices(fk.target_table)) {
       if (candidate.has(i)) {
         referenced.set(
-          JSON.stringify(fk.target_columns.map((c) => rows[i].data[c])),
+          rows[i].pairs[`${f}:target`]!,
           i,
         );
       }
     }
     for (const i of indices(source)) {
-      const values = fk.source_columns.map((c) => rows[i].data[c]);
-      if (values.some((v) => v == null)) continue;
-      const target = referenced.get(JSON.stringify(values));
+      const pair = rows[i].pairs[`${f}:source`];
+      if (pair === undefined) continue;
+      const target = referenced.get(pair);
       if (target === undefined) continue;
       if (candidate.has(i)) union(i, target);
       else refuse(target, `foreign key from retained ${source} ${rows[i].tid}`);
@@ -589,6 +866,70 @@ export async function pruneRetainedHistory(
     const k = root(i), set = blocked.get(k) ?? new Set<string>();
     for (const message of messages) set.add(message);
     blocked.set(k, set);
+  }
+  let unterminated: UnterminatedListing | undefined;
+  if (options.listUnterminated || options.abandoned) {
+    const closures = new Map<
+      number,
+      UnterminatedListing["invocations"][number]["closure"]
+    >();
+    for (const i of candidate) {
+      const k = root(i), group = closures.get(k) ?? [];
+      group.push({
+        table: rows[i].table,
+        tid: rows[i].tid,
+        hash: rows[i].hash,
+        identity: Object.fromEntries(
+          Object.entries(rows[i].data).filter(([name]) =>
+            !["body", "payload", "metadata"].includes(name)
+          ),
+        ),
+      });
+      closures.set(k, group);
+    }
+    for (const group of closures.values()) {
+      group.sort((a, b) =>
+        a.table.localeCompare(b.table) || a.tid.localeCompare(b.tid)
+      );
+    }
+    const invocations = incomplete.filter((entry) =>
+      abandonedBodies.has(
+        bodies.get(key(entry.namespace, entry.event_body_id))!,
+      )
+    ).map((entry) => {
+      const b = bodies.get(key(entry.namespace, entry.event_body_id))!;
+      const refusals = [...(blocked.get(root(b)) ?? [])].sort();
+      return {
+        namespace: entry.namespace,
+        bodyId: entry.event_body_id,
+        actionId: entry.action_id,
+        runId: entry.run_id,
+        time: rows[b].data.created_at ?? null,
+        events: (eventsByBody.get(b) ?? []).map((i) => ({
+          eventId: String(rows[i].data.id),
+          time: rows[i].data.created_at,
+        })).sort((a, b) => a.eventId.localeCompare(b.eventId)),
+        closure: closures.get(root(b))!,
+        retainedReference: refusals.some((r) =>
+          r.startsWith("retained reference") || r.startsWith("foreign key")
+        ),
+        refusals,
+      };
+    }).sort((a, b) =>
+      a.namespace.localeCompare(b.namespace) || a.bodyId.localeCompare(b.bodyId)
+    );
+    const listing = { schema: options.schema, version, invocations };
+    unterminated = { ...listing, digest: await listingDigest(listing) };
+    for (const current of invocations) {
+      const previous = reviewed?.find((entry) =>
+        entry.namespace === current.namespace && entry.bodyId === current.bodyId
+      );
+      if (reviewed && JSON.stringify(previous) !== JSON.stringify(current)) {
+        throw new Error(
+          `Reviewed invocation closure changed: ${current.bodyId}. List and review again.`,
+        );
+      }
+    }
   }
   const removed = new Set([...candidate].filter((i) => !blocked.has(root(i))));
   const groups = new Map<number, number[]>();
@@ -722,8 +1063,13 @@ export async function pruneRetainedHistory(
       type,
       count,
     })).sort((a, b) => b.count - a.count || a.type.localeCompare(b.type)),
-    refusals: [...selected].filter((i) => blocked.has(root(i))).map((i) => ({
-      eventId: String(rows[i].data.id),
+    refusals: [
+      ...new Set([
+        ...selected,
+        ...[...abandonedBodies].filter((b) => !eventsByBody.has(b)),
+      ]),
+    ].filter((i) => blocked.has(root(i))).map((i) => ({
+      eventId: String(rows[i].data.id ?? rows[i].data.event_body_id),
       reasons: [...blocked.get(root(i))!].sort(),
     })),
     references: [...references].sort(),
@@ -737,6 +1083,7 @@ export async function pruneRetainedHistory(
     vacuumCommands: touched.map((name) => `VACUUM (ANALYZE) ${table(name)};`),
     committedBatches,
     elapsedMs: Math.round(performance.now() - start),
+    ...(unterminated ? { unterminated } : {}),
   };
 }
 
@@ -747,15 +1094,17 @@ if (import.meta.main) {
     );
   const schema = values("schema");
   if (
-    schema.length !== 1 || Deno.args.some((a) =>
-      !["--apply", "--dry-run", "--writers-stopped"].includes(a) &&
-      !["schema", "event-type", "action-id"].some((n) =>
+    schema.length !== 1 || values("abandoned").length > 1 ||
+    Deno.args.some((a) =>
+      !["--apply", "--dry-run", "--writers-stopped", "--list-unterminated"]
+        .includes(a) &&
+      !["schema", "event-type", "action-id", "abandoned"].some((n) =>
         a.startsWith(`--${n}=`)
       )
     ) || (Deno.args.includes("--apply") && Deno.args.includes("--dry-run"))
   ) {
     throw new Error(
-      "Usage: --schema=S --event-type=TYPE|PREFIX* [--action-id=ID] [--dry-run | --apply --writers-stopped]",
+      "Usage: --schema=S (--event-type=TYPE|PREFIX* [--action-id=ID] | --list-unterminated | --abandoned=FILE.json) [--dry-run | --apply --writers-stopped]",
     );
   }
   const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
@@ -768,14 +1117,19 @@ if (import.meta.main) {
     requestTimeoutMs: 86_400_000,
   });
   try {
+    const report = await pruneRetainedHistory(db.session, {
+      schema: schema[0],
+      eventTypes: values("event-type"),
+      actionIds: values("action-id"),
+      listUnterminated: Deno.args.includes("--list-unterminated"),
+      abandoned: values("abandoned")[0]
+        ? JSON.parse(await Deno.readTextFile(values("abandoned")[0]))
+        : undefined,
+      apply: Deno.args.includes("--apply"),
+      writersStopped: Deno.args.includes("--writers-stopped"),
+    });
     console.log(JSON.stringify(
-      await pruneRetainedHistory(db.session, {
-        schema: schema[0],
-        eventTypes: values("event-type"),
-        actionIds: values("action-id"),
-        apply: Deno.args.includes("--apply"),
-        writersStopped: Deno.args.includes("--writers-stopped"),
-      }),
+      Deno.args.includes("--list-unterminated") ? report.unterminated : report,
       null,
       2,
     ));

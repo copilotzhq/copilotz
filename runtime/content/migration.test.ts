@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreTableNames,
@@ -220,4 +220,78 @@ Deno.test("offline object import mapping keeps original identity while selecting
   } finally {
     await db.close();
   }
+});
+
+Deno.test("parallel inspection deduplicates claims and keeps disagreement checks", async () => {
+  const bytes = new TextEncoder().encode("parallel"),
+    digest = await digestContent(bytes);
+  const store = createMemoryBodyStore({ backendId: "synthetic:parallel" });
+  for (let i = 0; i < 20; i++) {
+    await store.put({
+      bodyId: `copy-${i}`,
+      bytes,
+      digest,
+      mediaType: "text/plain",
+    });
+  }
+  const nodes = Array.from(
+    { length: 40 },
+    (_, i) => ({
+      namespace: "synthetic",
+      id: `node-${i}`,
+      data: {
+        location: {
+          kind: "memory",
+          backendId: store.backendId,
+          key: `copy-${i % 20}`,
+        },
+        byteLength: bytes.length,
+        digest,
+      },
+    }),
+  );
+  const session: import("../events/session.ts").SqlSession = {
+    query: (sql) =>
+      Promise.resolve(
+        {
+          rows: sql.includes('FROM "parallel"."nodes"')
+            ? nodes
+            : sql.includes("to_regclass")
+            ? [{ present: false }]
+            : [],
+        } as never,
+      ),
+    transaction: (run) => run(session),
+  };
+  let heads = 0, active = 0, peak = 0;
+  const reader = {
+    ...store,
+    async head(input: Parameters<typeof store.head>[0]) {
+      heads++;
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Number(input.bodyId.split("-")[1]) % 3)
+      );
+      active--;
+      return await store.head(input);
+    },
+  };
+  const inspect = (concurrency: number) =>
+    inspectEmbeddedContent({
+      session,
+      schema: "parallel",
+      storeFor: () => reader,
+      concurrency,
+    });
+  const sequential = await inspect(1);
+  heads = 0;
+  assertEquals(await inspect(7), sequential);
+  assertEquals(heads, 20);
+  assert(peak > 1 && peak <= 7);
+  nodes[20].data.byteLength++;
+  await assertRejects(() => inspect(7), Error, "references disagree");
+  assertEquals(active, 0, "all workers settle before inspection rejects");
+  await assertRejects(() => inspect(0), TypeError, "concurrency");
+  await assertRejects(() => inspect(257), TypeError, "concurrency");
 });

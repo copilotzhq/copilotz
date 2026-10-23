@@ -158,10 +158,11 @@ refuse their components. Invocation and terminal events and bodies stay
 together. Orphaned or unidentifiable invocation histories are not silently
 repaired by deletion.
 
-All rows are retained in the planner's memory; cursor pages bound database
-transfer, not total process memory. Memory grows with the entire inventory,
-including nonmatching history and incoming-FK tables. Use sufficient RAM on the
-offline client. The database executes serial queries through one CLI connection.
+The planner first gathers identity strings, then streams full rows through a
+1,000-row cursor. It retains compact identities, states, FK pair keys, row
+hashes and only strings that match the identity universe. Payloads are discarded
+after each page. Memory grows with identities and references rather than body
+bytes. The database executes serial queries through one CLI connection.
 
 ## Report and follow-up
 
@@ -270,3 +271,43 @@ Files:
 
 Repository validation: `deno task check`, `deno fmt --check` on all three files,
 and `deno lint` on both TypeScript files pass.
+
+## Reviewed retirement of unterminated invocations
+
+An empty `open_actions` table and a successful drain do not certify that every
+old request recorded a terminal result. Ordinary event-type pruning still
+refuses these histories. Use a separate, explicitly reviewed retirement:
+
+```sh
+deno run -A scripts/prune-retained-history.ts --schema=SCHEMA \
+  --list-unterminated > abandoned.json
+# Review abandoned.json, then dry-run the exact bound listing:
+deno run -A scripts/prune-retained-history.ts --schema=SCHEMA \
+  --abandoned=abandoned.json > retirement-preview.json
+deno run -A scripts/prune-retained-history.ts --schema=SCHEMA \
+  --abandoned=abandoned.json --apply --writers-stopped > retirement-result.json
+```
+
+The inventory shares the upgrade's SQL predicate: namespace, run ID and action
+ID with an invoked body and no confirmed terminal (including its null-action
+rule). It lists every refused invoked body, even one without an event, with
+event IDs and times, the exact closure's table/tuple/hash identities,
+retained-reference status, and refusal reasons. `digest` binds the schema,
+version and full invocation list. Keep those fields unchanged. To approve a
+subset, add a top-level `bodyIds` array of exact listed body IDs; inspect
+namespaces too because IDs may repeat between namespaces. An omitted subset
+selects all entries.
+
+Retirement requires exactly one body for the run in its namespace, regardless of
+action ID or status. Any second body, including a terminal or progress capture,
+blocks retirement. All existing reference, FK, open-action, delivery, operation,
+stream and effect checks still apply. Connected components are indivisible.
+Refused components remain and are reported; safe components can retire. Review
+`refusals` and `deleteCounts` before continuing. Changed closures require a new
+listing and review. Resume with the same file after interruption: already absent
+bodies are skipped, and committed closures are never deleted twice. Keep writers
+stopped throughout listing, review and apply; a digest is an integrity binding,
+not a signature or permission to ignore concurrent writers.
+
+After retirement, run `drain`, then `prepare --storage=./migration-storage.ts`
+as shown in [the offline upgrade guide](upgrade-retained-data.md).

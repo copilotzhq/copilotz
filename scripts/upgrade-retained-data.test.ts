@@ -11,6 +11,7 @@ Deno.test("offline CLI applies and replays the full reviewed v10 to v14 chain", 
   const planPath = `${directory}/plan.json`;
   const authorityPath = `${directory}/authority.json`;
   const keysPath = `${directory}/keys.ts`;
+  const storagePath = `${directory}/storage.ts`;
   const db = await createTestDatabase({ url });
   try {
     await provisionCopilotzSchema(db, schema);
@@ -39,6 +40,10 @@ Deno.test("offline CLI applies and replays the full reviewed v10 to v14 chain", 
   };
   try {
     await Deno.writeTextFile(
+      storagePath,
+      "export default { storeFor: () => undefined, concurrency: 2 };\n",
+    );
+    await Deno.writeTextFile(
       keysPath,
       `import { testSecretAdapter } from ${
         JSON.stringify(
@@ -54,7 +59,12 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
       JSON.stringify({ policies: [], invocations: [], events: [] }),
     );
     assertEquals((await command("drain")).drained, true);
-    const prepared = await command("prepare", `--plan=${planPath}`);
+    const prepared = await command(
+      "prepare",
+      `--plan=${planPath}`,
+      `--storage=${storagePath}`,
+      "--concurrency=3",
+    );
     const plan = JSON.parse(await Deno.readTextFile(planPath));
     assertEquals([plan.sourceVersion, plan.targetVersion], [10, 11]);
     const apply = () =>
@@ -63,6 +73,7 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
         `--plan=${planPath}`,
         `--reviewed=${prepared.fingerprint}`,
         `--owner-keys=${keysPath}`,
+        `--storage=${storagePath}`,
         `--authority=${authorityPath}`,
       );
     assertEquals((await apply()).version, 14);
@@ -79,5 +90,37 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
       await cleanup.close();
       await Deno.remove(directory, { recursive: true });
     }
+  }
+});
+
+Deno.test("storage module validation rejects malformed exports", async () => {
+  const { loadUpgradeStorage } = await import("./upgrade-storage.ts");
+  const { assertRejects } = await import("@std/assert");
+  const directory = await Deno.makeTempDir({ prefix: "cutover-storage-" });
+  try {
+    const invalid = [
+      null,
+      [],
+      { storeFor: 1 },
+      { streamBackend: {} },
+      { copyMappings: [{}] },
+      { concurrency: 0 },
+      { concurrency: 257 },
+      { typo: true },
+    ];
+    for (const [i, value] of invalid.entries()) {
+      const path = `${directory}/${i}.ts`;
+      await Deno.writeTextFile(
+        path,
+        `export default ${JSON.stringify(value)};`,
+      );
+      await assertRejects(
+        () => loadUpgradeStorage(path),
+        TypeError,
+        "RetainedDataUpgradeStorage",
+      );
+    }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
   }
 });

@@ -1,3 +1,13 @@
+## Unreleased
+
+- Complete the linear offline retained-data upgrade through v14, with reviewed
+  content plans and resumable owner-key and authority checkpoints.
+- Add the retained-history pruner with closure/reference safety checks and
+  bounded payload memory. Add digest-bound inventory and reviewed retirement for
+  abandoned invocations that never recorded a terminal result.
+- Add `--storage=MODULE.ts` to the upgrade CLI, database fallback for unmapped
+  locations, and configurable concurrent external content verification.
+
 ## 0.90.1 — 2026-10-23
 
 - A new chat's first turn is live again: dots, who is replying, streaming text,

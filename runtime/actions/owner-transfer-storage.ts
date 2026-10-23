@@ -34,7 +34,13 @@ export type TransferBody = {
   outcome: "completed" | "failed" | "cancelled";
 };
 export type BodyReader = (
-  copy: { key: string; backendId: string; namespace: string; length: number },
+  copy: {
+    key: string;
+    backendId: string;
+    namespace: string;
+    length: number;
+    kind?: string;
+  },
 ) => Promise<{ bytes: Uint8Array; mediaType: string }>;
 export function bodyStoreReader(
   storeFor: (backendId: string, namespace: string) => BodyStore,
@@ -261,6 +267,7 @@ export async function* iterateTransferBodies(
         }
         ({ bytes, mediaType } = await external({
           key: row.current_copy,
+          kind: row.backend_kind,
           backendId: row.backend_id,
           namespace: row.namespace,
           length: row.terminal.length,

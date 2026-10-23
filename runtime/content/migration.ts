@@ -84,6 +84,8 @@ export async function inspectEmbeddedContent(
     storeFor: (location: EmbeddedBodyLocation) => BodyStore;
     /** Private native database selected by the offline upgrade, never inferred from an adapter label. */
     nativeDatabase?: SqlSession;
+    /** Maximum simultaneous content checks; defaults to 16. */
+    concurrency?: number;
     streamBackend?: Readonly<{ kind: string; backendId: string }>;
     copyMappings?: readonly Readonly<
       {
@@ -95,6 +97,14 @@ export async function inspectEmbeddedContent(
     >[];
   },
 ): Promise<ContentMigrationPlan> {
+  const concurrency = input.concurrency ?? 16;
+  if (
+    !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 256
+  ) {
+    throw new TypeError(
+      "Content concurrency must be an integer from 1 to 256.",
+    );
+  }
   const schema = validateEventSchemaName(input.schema),
     tables = createCoreTableNames(schema),
     rows: Row[] = [];
@@ -232,19 +242,42 @@ export async function inspectEmbeddedContent(
     copies.set(key, copy);
     return copy;
   }
-  async function visit(value: unknown, namespace: string): Promise<void> {
+  // Discover in canonical order before doing I/O. Each physical identity has one
+  // worker, so repeated claims cannot race or silently bypass disagreement checks.
+  const work = new Map<
+    string,
+    {
+      loc: EmbeddedBodyLocation;
+      claims: Record<string, unknown>;
+      outcome?: Copy["outcome"];
+    }[]
+  >();
+  function enqueue(
+    loc: EmbeddedBodyLocation,
+    claims: Record<string, unknown>,
+    outcome?: Copy["outcome"],
+  ) {
+    const key = identity(loc), group = work.get(key) ?? [];
+    group.push({ loc, claims, outcome });
+    work.set(key, group);
+  }
+  function visit(value: unknown, namespace: string): void {
     if (Array.isArray(value)) {
-      for (const child of value) await visit(child, namespace);
+      for (const child of value) visit(child, namespace);
       return;
     }
     const item = object(value);
     if (!item) return;
     const loc = location(item, namespace);
-    if (loc) await include(loc, item);
-    for (const child of Object.values(item)) await visit(child, namespace);
+    if (loc) enqueue(loc, item);
+    for (const child of Object.values(item)) visit(child, namespace);
   }
-  for (const row of rows) await visit(row.value, row.namespace);
+  for (const row of rows) visit(row.value, row.namespace);
   const streamRows: ContentMigrationPlan["streamRows"][number][] = [];
+  const pendingStreams: {
+    identity: string;
+    row: ContentMigrationPlan["streamRows"][number];
+  }[] = [];
   const streams = `"${schema}"."copilotz_operation_streams"`;
   if (
     (await input.session.query<{ present: boolean }>(
@@ -278,12 +311,13 @@ export async function inspectEmbeddedContent(
           "Stream backend must be selected explicitly for migration.",
         );
       }
-      const copy = await include(
-        {
-          namespace: stream.namespace,
-          ...input.streamBackend,
-          key: stream.body_id,
-        },
+      const loc = {
+        namespace: stream.namespace,
+        ...input.streamBackend,
+        key: stream.body_id,
+      };
+      enqueue(
+        loc,
         { byteLength: Number(stream.committed_offset), digest: stream.digest },
         stream.outcome === "superseded"
           ? "cancelled"
@@ -291,17 +325,41 @@ export async function inspectEmbeddedContent(
           ? "failed"
           : stream.outcome,
       );
-      streamRows.push({
-        namespace: stream.namespace,
-        streamId: stream.stream_id,
-        physicalKey: stream.body_id,
-        bodyId: copy.bodyId,
-        ...((stream.reason || stream.outcome === "superseded" ||
-            stream.outcome === "abandoned")
-          ? { reason: stream.reason ?? stream.outcome }
-          : {}),
+      pendingStreams.push({
+        identity: identity(loc),
+        row: {
+          namespace: stream.namespace,
+          streamId: stream.stream_id,
+          physicalKey: stream.body_id,
+          bodyId: "",
+          ...((stream.reason || stream.outcome === "superseded" ||
+              stream.outcome === "abandoned")
+            ? { reason: stream.reason ?? stream.outcome }
+            : {}),
+        },
       });
     }
+  }
+  const groups = [...work.values()];
+  let next = 0;
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, groups.length) }, async () => {
+      while (next < groups.length) {
+        const group = groups[next++];
+        for (const item of group) {
+          await include(item.loc, item.claims, item.outcome);
+        }
+      }
+    }),
+  );
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
+  }
+  for (const pending of pendingStreams) {
+    streamRows.push({
+      ...pending.row,
+      bodyId: copies.get(pending.identity)!.bodyId,
+    });
   }
   streamRows.sort((a, b) =>
     a.namespace.localeCompare(b.namespace) ||

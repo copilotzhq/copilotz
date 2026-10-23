@@ -1,3 +1,4 @@
+import { bodyStoreReader } from "./owner-transfer-storage.ts";
 import { upgradeCredentialEffects } from "../authorization/credentials-upgrade.ts";
 import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
 import { authorityRequired, ownerKeysRequired } from "./upgrade-errors.ts";
@@ -50,7 +51,12 @@ import { validateRetainedHistory } from "./upgrade-history.ts";
 
 export type RetainedDataUpgradeStorage = Readonly<{
   /** Resolve only the explicit backend identity in the reviewed inventory. */
-  storeFor?: (location: EmbeddedBodyLocation, session: SqlSession) => BodyStore;
+  storeFor?: (
+    location: EmbeddedBodyLocation,
+    session: SqlSession,
+  ) => BodyStore | undefined;
+  /** Bounded content head/digest parallelism; defaults to 16. */
+  concurrency?: number;
   streamBackend?: Readonly<{ kind: string; backendId: string }>;
   copyMappings?: Parameters<typeof inspectEmbeddedContent>[0]["copyMappings"];
 }>;
@@ -143,9 +149,11 @@ function inspector(
     streamBackend: storage.streamBackend ??
       { kind: "database", backendId: "database:default" },
     copyMappings: storage.copyMappings,
+    concurrency: storage.concurrency,
     ...(storage.storeFor ? {} : { nativeDatabase: session }),
     storeFor: (location: EmbeddedBodyLocation) => {
-      if (storage.storeFor) return storage.storeFor(location, session);
+      const selected = storage.storeFor?.(location, session);
+      if (selected !== undefined) return selected;
       if (
         location.kind !== "database" ||
         location.backendId !== database.backendId
@@ -483,7 +491,28 @@ export async function upgradeActionLifecycle(
     ) {
       throw ownerKeysRequired();
     }
-    await migrateOwnerKeys({ ...options.ownerKeys, session, schema });
+    const readExternalBody = options.ownerKeys.readExternalBody ??
+      (options.storeFor
+        ? (
+          copy: Parameters<
+            NonNullable<OwnerKeyUpgradeOptions["readExternalBody"]>
+          >[0],
+        ) =>
+          bodyStoreReader(() =>
+            inspector(session, schema, options).storeFor({
+              namespace: copy.namespace,
+              kind: copy.kind ?? "object",
+              backendId: copy.backendId,
+              key: copy.key,
+            })
+          )(copy)
+        : undefined);
+    await migrateOwnerKeys({
+      ...options.ownerKeys,
+      readExternalBody,
+      session,
+      schema,
+    });
   }
   if (version === 11 || version === 12 || options.authority) {
     await upgradeAuthoritySchema(session, schema, options.authority);

@@ -604,10 +604,10 @@ finalization still verify retained bytes and event-body digests.
 The native database path batches up to 2,000 records, with a 16 MiB byte budget
 for physical reads. Individual large bodies retain the chunked prefix reader;
 physical layout conversion can require memory for the largest individual body.
-Custom/external storage adapters keep their existing verification path. Rehearse
-using the same storage adapter and client/database hardware as the cutover. See
-[the synthetic benchmark](../scripts/benchmark-offline-upgrade.md) for
-reproduction commands, measured results and their limits.
+External heads and full prefix digests use bounded concurrency (default 16).
+Rehearse using the same storage adapter and client/database hardware as the
+cutover. See [the synthetic benchmark](../scripts/benchmark-offline-upgrade.md)
+for reproduction commands, measured results and their limits.
 
 ## The pain
 
@@ -781,3 +781,91 @@ layers; check each optional feature you enable for its own provisioning needs.
   index.
 - [Persist and recover](./getting-started/part-2-verify-and-recover/07-persist-and-recover.md):
   choosing the database URL your hosts share.
+
+## External storage during offline cutover
+
+First use the pruner's `--list-unterminated`, review the digest-bound JSON,
+dry-run `--abandoned=FILE.json`, then retire with `--apply --writers-stopped`.
+Refused closures must be resolved before preparing. Retirement performs SQL
+deletes only; it does not read, write or delete physical content.
+
+Both `prepare` and `apply` accept `--storage=MODULE.ts`. The module
+default-exports `RetainedDataUpgradeStorage`: optional `storeFor`,
+`streamBackend`, `copyMappings` and `concurrency`. The CLI validates its shape
+before opening the database. `storeFor(location, session)` may return
+`undefined` for the platform database store. Unknown external backends still
+fail closed. `--concurrency=16` overrides the module; the supported range is
+1–256. Concurrency changes no plan fields or fingerprints. Duplicate physical
+identities share one check, and conflicting length/digest/outcome claims still
+fail.
+
+For an S3-compatible backend, create `migration-storage.ts` in the repository
+root (use the exact backend ID, bucket, prefix and protocol of the retained
+data):
+
+```ts
+import { createBodyStorageRuntime } from "./runtime/content/storage.ts";
+import type { RetainedDataUpgradeStorage } from "./runtime/actions/upgrade.ts";
+
+const config = {
+  backendId: Deno.env.get("MIGRATION_BACKEND_ID")!,
+  endpoint: Deno.env.get("MIGRATION_S3_ENDPOINT")!,
+  region: Deno.env.get("MIGRATION_S3_REGION")!,
+  bucket: Deno.env.get("MIGRATION_S3_BUCKET")!,
+  accessKeyId: Deno.env.get("MIGRATION_S3_ACCESS_KEY_ID")!,
+  secretAccessKey: Deno.env.get("MIGRATION_S3_SECRET_ACCESS_KEY")!,
+  prefix: Deno.env.get("MIGRATION_S3_PREFIX") ?? "",
+  pathStyle: true,
+};
+const runtime = createBodyStorageRuntime({ storage: { type: "s3", config } });
+const store = runtime.writer!;
+export default {
+  storeFor: (location) =>
+    location.kind === "object" && location.backendId === store.backendId
+      ? store
+      : undefined,
+  // Set this only if the retained operation streams use this external backend.
+  // Otherwise omit it to retain the default database stream backend.
+  // streamBackend: { kind: "object", backendId: store.backendId },
+  concurrency: 16,
+} satisfies RetainedDataUpgradeStorage;
+```
+
+For native GCS objects use the existing `createGcsBodyStore` adapter and map its
+exact `object` backend ID in the same way. S3 compatibility does not convert
+native GCS object layouts into S3 manifests. `copyMappings` points at already
+imported physical keys; it does not perform copies. Keep credentials in the
+environment, and use credentials that permit only reads for the external source.
+
+```sh
+deno run -A scripts/upgrade-retained-data.ts prepare --schema=SCHEMA \
+  --storage=./migration-storage.ts --concurrency=16 --plan=review.json
+# Review the plan and supply the required keys, ownership and authority inputs.
+deno run -A scripts/upgrade-retained-data.ts apply --schema=SCHEMA \
+  --storage=./migration-storage.ts --plan=review.json --reviewed=FINGERPRINT \
+  --owner-keys=./migration-keys.ts
+```
+
+### Store operation audit
+
+| Step                                     | External BodyStore operations                                                               | Writes                                                                                                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pruner/list/retire and drain             | None                                                                                        | Retirement deletes approved SQL closures                                                                                                                         |
+| Prepare                                  | `head`, `readRange` in 1 MiB digest chunks                                                  | Database physical-format/stream migration and reserved marker; no external mutations                                                                             |
+| Retained finalization to v11             | Repeats `head`, `readRange` and digest verification                                         | SQL logical-body/copy catalog, ownership, document conversions and schema changes; no external mutations                                                         |
+| Owner-key conversion to v12              | `head`, `readRange` via the storage module, unless `ownerKeys.readExternalBody` is supplied | Imports external bytes into database-owned copies and rewrites protected values; marks source catalog copies orphan/noncollectable; leaves source objects intact |
+| Authority/v13 and credential effects/v14 | None                                                                                        | SQL schema and authority changes                                                                                                                                 |
+
+The built-in S3 adapter implements those reads using manifest and immutable-part
+GETs; native GCS uses metadata GETs and generation-bound media range GETs. One
+BodyStore call can make multiple HTTP requests. The upgrade invokes no external
+`put`, `reserve`, `append`, `fence`, `seal`, `terminate`, `abort`, maintenance
+list or delete. There is no external mutation opt-in because none is needed.
+Custom modules are executable operator code and must uphold the read-only
+contract.
+
+Provision database capacity for the v12 imports, including transaction/WAL
+space. That step currently retains imported external bytes in memory and reads
+them sequentially; the configurable concurrency applies to prepare/v11
+inspection. Physical import or later external garbage collection is a separate
+operator procedure. Keep all writers stopped until the entire chain reaches v14.

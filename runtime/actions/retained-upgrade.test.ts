@@ -792,3 +792,97 @@ Deno.test("changed prepared physical version cannot become ready under an earlie
     await f.close();
   }
 });
+
+Deno.test("external content prepares and finalizes with a read-only store and deterministic bounded concurrency", async () => {
+  const f = await fixture();
+  try {
+    const { createMemoryBodyStore } = await import("../content/body-store.ts");
+    const memory = createMemoryBodyStore({ backendId: "synthetic:external" });
+    const bytes = new TextEncoder().encode("synthetic external content");
+    const digest = await digestContent(bytes);
+    for (let i = 0; i < 32; i++) {
+      await memory.put({
+        bodyId: `external-${i}`,
+        bytes,
+        digest,
+        mediaType: "text/plain",
+      });
+      await f.db.query(
+        `INSERT INTO ${f.tables.nodes}(id,namespace,type,name,data) VALUES($1,'archive','asset',$1,$2::jsonb)`,
+        [
+          `external-${i}`,
+          JSON.stringify({
+            location: {
+              kind: "object",
+              backendId: memory.backendId,
+              key: `external-${i}`,
+            },
+            byteLength: bytes.length,
+            digest,
+          }),
+        ],
+      );
+    }
+    let active = 0, peak = 0, heads = 0, ranges = 0;
+    const pause = async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active--;
+    };
+    const forbidden = () => {
+      throw new Error("external mutation forbidden");
+    };
+    const store = {
+      ...memory,
+      kind: "object" as const,
+      async head(input: Parameters<typeof memory.head>[0]) {
+        heads++;
+        await pause();
+        return await memory.head(input);
+      },
+      async readRange(input: Parameters<typeof memory.readRange>[0]) {
+        ranges++;
+        await pause();
+        return await memory.readRange(input);
+      },
+      put: forbidden,
+      reserve: forbidden,
+      fence: forbidden,
+      append: forbidden,
+      seal: forbidden,
+      terminate: forbidden,
+      abort: forbidden,
+      maintenance: { list: forbidden, delete: forbidden },
+    };
+    const storage = {
+      storeFor: (location: { kind: string; backendId: string }) =>
+        location.kind === "object" && location.backendId === store.backendId
+          ? store
+          : undefined,
+    };
+    const sequential = await prepareRetainedDataUpgrade(f.db, f.schema, {
+      ...storage,
+      concurrency: 1,
+    });
+    assert(sequential);
+    assertEquals(peak, 1);
+    peak = 0;
+    const parallel = await prepareRetainedDataUpgrade(f.db, f.schema, {
+      ...storage,
+      concurrency: 16,
+    });
+    assertEquals(parallel, sequential);
+    assert(peak > 1 && peak <= 16);
+    await upgradeActionLifecycle(f.db, f.schema, {
+      ...storage,
+      plan: parallel,
+      reviewedFingerprint: parallel!.fingerprint,
+    });
+    assertEquals(await marker(f.db, f.schema), 14);
+    assertEquals(heads, 128);
+    assertEquals(ranges, 128);
+  } finally {
+    await f.close();
+  }
+});

@@ -1,3 +1,4 @@
+import { loadUpgradeStorage } from "./upgrade-storage.ts";
 import { resolve, toFileUrl } from "@std/path";
 import { EVENT_SCHEMA_VERSION } from "../runtime/events/schema.ts";
 import {
@@ -23,16 +24,39 @@ if (
   !schema ||
   !["drain", "prepare", "apply", "authority-inventory"].includes(command) ||
   args.some((arg) =>
-    !["schema", "plan", "reviewed", "decisions", "authority", "owner-keys"]
+    ![
+      "schema",
+      "plan",
+      "reviewed",
+      "decisions",
+      "authority",
+      "owner-keys",
+      "storage",
+      "concurrency",
+    ]
       .some((name) => arg.startsWith(`--${name}=`))
   )
 ) {
   throw new Error(
-    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --owner-keys=MODULE.ts --authority=FILE.json]",
+    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --owner-keys=MODULE.ts --storage=MODULE.ts --concurrency=16 --authority=FILE.json]",
   );
 }
 const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
 if (!url) throw new Error("COPILOTZ_MIGRATION_DATABASE_URL is required.");
+const storagePath = get("storage");
+const storage = storagePath ? await loadUpgradeStorage(storagePath) : {};
+const concurrency = get("concurrency");
+const contentStorage = {
+  ...storage,
+  ...(concurrency !== undefined ? { concurrency: Number(concurrency) } : {}),
+};
+if (
+  contentStorage.concurrency !== undefined &&
+  (!Number.isSafeInteger(contentStorage.concurrency) ||
+    contentStorage.concurrency < 1 || contentStorage.concurrency > 256)
+) {
+  throw new TypeError("--concurrency must be an integer from 1 to 256.");
+}
 const database = await openManagedOminipgDatabase({
   url,
   statementTimeoutMs: null,
@@ -58,7 +82,11 @@ try {
         "Preparation requires --plan=FILE.json to retain the review inventory.",
       );
     }
-    const plan = await prepareRetainedDataUpgrade(database.session, schema);
+    const plan = await prepareRetainedDataUpgrade(
+      database.session,
+      schema,
+      contentStorage,
+    );
     if (plan) {
       await Deno.writeTextFile(path, JSON.stringify(plan, null, 2) + "\n", {
         createNew: true,
@@ -101,6 +129,7 @@ try {
       ) as ContentMigrationDecision[]
       : undefined;
     await upgradeActionLifecycle(database.session, schema, {
+      ...contentStorage,
       plan,
       reviewedFingerprint,
       contentDecisions,

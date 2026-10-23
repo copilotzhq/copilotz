@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { restoreRetainedFixture } from "./fixtures/retained-upgrade/load.ts";
-import { pruneRetainedHistory } from "./prune-retained-history.ts";
+import { pruneRetainedHistory as compactPruner } from "./prune-retained-history.ts";
 import { inspectRetainedDataDrain } from "../runtime/actions/drain.ts";
 import {
   prepareRetainedDataUpgrade,
@@ -15,9 +15,29 @@ import type { SqlSession } from "../runtime/events/session.ts";
 const url = Deno.env.get("PRUNE_TEST_DATABASE_URL") || ":memory:";
 if (
   url !== ":memory:" &&
-  !/^postgres(?:ql)?:\/\/[^/]+:55439\/prune_[a-z0-9_]+$/.test(url)
+  !/^postgres(?:ql)?:\/\/[^/]+:55439\/cutover_[a-z0-9_]+$/.test(url)
 ) {
-  throw new Error("Tests require a prune_* database on PostgreSQL port 55439.");
+  throw new Error(
+    "Tests require a cutover_* database on PostgreSQL port 55439.",
+  );
+}
+// Optional old implementation for exact, same-snapshot report comparison.
+const baselinePath = Deno.env.get("PRUNE_TEST_BASELINE");
+const baselinePruner = baselinePath
+  ? (await import(baselinePath)).pruneRetainedHistory
+  : undefined;
+async function pruneRetainedHistory(...args: Parameters<typeof compactPruner>) {
+  const report = await compactPruner(...args);
+  if (baselinePruner && !args[1].apply && args[1].eventTypes.length) {
+    const before = await baselinePruner(...args);
+    const stable = (value: typeof report) => ({ ...value, elapsedMs: 0 });
+    assertEquals(
+      stable(report),
+      stable(before),
+      "compact planner must preserve the original report",
+    );
+  }
+  return report;
 }
 const quiet = () => {};
 const families = [
@@ -34,6 +54,18 @@ async function fixture(version = 7) {
   });
   const schema = `prune_${crypto.randomUUID().replaceAll("-", "")}`;
   await restoreRetainedFixture(db, schema);
+  if (baselinePruner && url !== ":memory:") {
+    for (
+      const row of (await db.query<{ tablename: string }>(
+        "SELECT tablename FROM pg_tables WHERE schemaname=$1",
+        [schema],
+      )).rows
+    ) {
+      await db.query(
+        `ALTER TABLE "${schema}"."${row.tablename}" SET (autovacuum_enabled=false)`,
+      );
+    }
+  }
   if (version === 11) {
     const plan = await prepareRetainedDataUpgrade(db, schema);
     assert(plan);
@@ -652,6 +684,238 @@ Deno.test("catalog references, shared receipts, streams, authorization and trans
     );
   } finally {
     await f.db.query(`DROP SCHEMA IF EXISTS "${external}" CASCADE`);
+    await f.close();
+  }
+});
+
+Deno.test("reviewed unterminated retirement is exact, resumable and unlocks the v7 upgrade", async () => {
+  const f = await fixture();
+  try {
+    await seedNoise(f.db, f.schema, 24);
+    // Keep a lone invoked body and its terminal delivery/operation per run.
+    await f.db.query(
+      `DELETE FROM "${f.schema}".copilotz_operation_events WHERE namespace='noise' AND event_id NOT IN ('noise-0','noise-6','noise-12','noise-18')`,
+    );
+    await f.db.query(
+      `DELETE FROM "${f.schema}".events WHERE namespace='noise' AND id NOT IN ('noise-0','noise-6','noise-12','noise-18')`,
+    );
+    await f.db.query(
+      `DELETE FROM "${f.schema}".event_bodies WHERE namespace='noise' AND event_body_id NOT IN ('body-noise-0','body-noise-6','body-noise-12','body-noise-18')`,
+    );
+    await assertRejects(
+      () => prepareRetainedDataUpgrade(f.db, f.schema),
+      Error,
+      "has no confirmed terminal",
+    );
+    const options = { schema: f.schema, eventTypes: [], progress: quiet };
+    const listed = await pruneRetainedHistory(f.db, {
+      ...options,
+      listUnterminated: true,
+    });
+    const abandoned = listed.unterminated!;
+    assertEquals(abandoned.invocations.length, 4);
+    assertEquals(abandoned.invocations[0].closure.map((r) => r.table).sort(), [
+      "copilotz_operation_events",
+      "copilotz_operations",
+      "event_bodies",
+      "event_deliveries",
+      "events",
+    ]);
+    const before = await digests(f.db, f.schema);
+    const dry = await pruneRetainedHistory(f.db, { ...options, abandoned });
+    assertEquals(dry.deleteCounts.events, 4);
+    assertEquals(
+      (await pruneRetainedHistory(f.db, {
+        ...options,
+        abandoned: { ...abandoned, bodyIds: ["body-noise-0"] },
+      })).deleteCounts.events,
+      1,
+    );
+    await assertRejects(
+      () =>
+        pruneRetainedHistory(f.db, {
+          ...options,
+          abandoned: { ...abandoned, bodyIds: ["unreviewed"] },
+        }),
+      Error,
+      "bound listing",
+    );
+    assertEquals(await digests(f.db, f.schema), before);
+    await assertRejects(
+      () =>
+        pruneRetainedHistory(f.db, {
+          ...options,
+          abandoned: { ...abandoned, digest: "wrong" },
+        }),
+      Error,
+      "digest",
+    );
+    await assertRejects(
+      () => pruneRetainedHistory(f.db, { ...options, abandoned, apply: true }),
+      Error,
+      "writers-stopped",
+    );
+    await assertRejects(
+      () =>
+        pruneRetainedHistory(f.db, {
+          ...options,
+          abandoned,
+          apply: true,
+          writersStopped: true,
+          batchSize: 1,
+          afterBatch: () => {
+            throw new Error("stop after commit");
+          },
+        }),
+      Error,
+      "stop after commit",
+    );
+    const rest = await pruneRetainedHistory(f.db, {
+      ...options,
+      abandoned,
+      apply: true,
+      writersStopped: true,
+    });
+    assertEquals(rest.deleteCounts.events, 3);
+    assertEquals(
+      (await pruneRetainedHistory(f.db, {
+        ...options,
+        abandoned,
+        apply: true,
+        writersStopped: true,
+      })).deleteCounts.events,
+      0,
+    );
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema);
+    assert(plan);
+    const { testSecretAdapter } = await import(
+      "../runtime/testing/secret-adapter.ts"
+    );
+    const { testAuthorityManifest } = await import(
+      "../runtime/testing/upgrade.ts"
+    );
+    const adapter = await testSecretAdapter();
+    const upgrade = {
+      plan,
+      reviewedFingerprint: plan.fingerprint,
+      ownerKeys: { sourceAdapter: adapter, masterAdapter: adapter },
+    };
+    await assertRejects(
+      () => upgradeActionLifecycle(f.db, f.schema, upgrade),
+      Error,
+      "authority",
+    );
+    await upgradeActionLifecycle(f.db, f.schema, {
+      ...upgrade,
+      authority: await testAuthorityManifest(f.db, f.schema),
+    });
+    assertEquals(
+      Number(
+        (await f.db.query(
+          `SELECT version FROM "${f.schema}".copilotz_schema_metadata`,
+        )).rows[0].version,
+      ),
+      14,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("unterminated inventory includes body-only histories and refuses references, other bodies and active work", async () => {
+  const f = await fixture();
+  try {
+    for (
+      const id of [
+        "referenced",
+        "extra",
+        "open",
+        "effect",
+        "terminal-null",
+        "body-only",
+        "numeric",
+      ]
+    ) {
+      const encoded = await encodeEventBody({
+        actionId: id === "terminal-null" ? null : "synthetic",
+        actionRunId: id === "numeric" ? 42 : id,
+        status: "invoked",
+      });
+      await f.db.query(
+        `INSERT INTO "${f.schema}".event_bodies(namespace,event_body_id,schema_version,body,digest) VALUES('noise',$1,1,$2::jsonb,$3)`,
+        [id, encoded.body, encoded.digest],
+      );
+    }
+    for (
+      const [id, status] of [["numeric", "progress"], ["extra", "progress"], [
+        "terminal-null",
+        "completed",
+      ]]
+    ) {
+      const encoded = await encodeEventBody({
+        actionId: null,
+        actionRunId: id === "numeric" ? "42" : id,
+        status,
+      });
+      await f.db.query(
+        `INSERT INTO "${f.schema}".event_bodies(namespace,event_body_id,schema_version,body,digest) VALUES('noise',$1,1,$2::jsonb,$3)`,
+        [id + "-other", encoded.body, encoded.digest],
+      );
+    }
+    await f.db.query(
+      `INSERT INTO "${f.schema}".nodes(id,namespace,type,name,data) VALUES('reference','noise','message','reference','{"nested":{"referenced":true}}')`,
+    );
+    await f.db.query(
+      `INSERT INTO "${f.schema}".open_actions(namespace,action_run_id,action_id,scope_id,invoked_event_id,state) SELECT 'noise','open','synthetic','scope',id,'invoked' FROM "${f.schema}".events LIMIT 1`,
+    );
+    for (const ddl of createOwnerSchemaStatements(f.schema, { version: 11 })) {
+      await f.db.query(ddl);
+    }
+    await f.db.query(
+      `INSERT INTO "${f.schema}".action_effects(namespace,action_run_id,step,status) VALUES('noise','effect','step','begun')`,
+    );
+    const options = { schema: f.schema, eventTypes: [], progress: quiet };
+    const abandoned =
+      (await pruneRetainedHistory(f.db, { ...options, listUnterminated: true }))
+        .unterminated!;
+    assertEquals(abandoned.invocations.length, 7);
+    assert(
+      abandoned.invocations.find((r) => r.bodyId === "referenced")!
+        .retainedReference,
+    );
+    const applied = await pruneRetainedHistory(f.db, {
+      ...options,
+      abandoned,
+      apply: true,
+      writersStopped: true,
+    });
+    assertEquals(applied.deleteCounts.event_bodies, 1);
+    assertEquals(applied.refusals.length, 6);
+    assertEquals(
+      (await f.db.query(
+        `SELECT 1 FROM "${f.schema}".event_bodies WHERE event_body_id='referenced'`,
+      )).rows.length,
+      1,
+    );
+    // Review becomes stale if a new referring row appears.
+    const fresh =
+      (await pruneRetainedHistory(f.db, { ...options, listUnterminated: true }))
+        .unterminated!;
+    await f.db.query(
+      `INSERT INTO "${f.schema}".nodes(id,namespace,type,name,data) VALUES('new-reference','noise','message','reference','{"run":"extra"}')`,
+    );
+    await assertRejects(
+      () =>
+        pruneRetainedHistory(f.db, {
+          ...options,
+          abandoned: fresh,
+          apply: true,
+          writersStopped: true,
+        }),
+      Error,
+      "closure changed",
+    );
+  } finally {
     await f.close();
   }
 });

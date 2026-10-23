@@ -98,18 +98,7 @@ export async function validateRetainedHistory(
   // A retained unconverted invocation must never become newly retry-eligible
   // merely because the converted effect inventory starts empty.
   const incomplete = await transaction.query<{ event_body_id: string }>(
-    `WITH keys AS MATERIALIZED (
-       SELECT namespace,event_body_id,body->>'status' AS status,
-              body->>'actionRunId' AS run_id,body->>'actionId' AS action_id
-       FROM ${tables.event_bodies}
-     )
-     SELECT min(event_body_id) FILTER (WHERE status='invoked') AS event_body_id
-     FROM keys
-     WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled')
-     GROUP BY namespace,run_id,action_id
-     HAVING bool_or(status='invoked') AND
-       (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled')))
-     LIMIT 1`,
+    `${unterminatedInvocationsSql(schema)} LIMIT 1`,
   );
   if (incomplete.rows.length) {
     throw new Error(
@@ -118,4 +107,24 @@ export async function validateRetainedHistory(
       } has no confirmed terminal. Original replay eligibility is never inferred from an empty effects table.`,
     );
   }
+}
+
+/** Shared upgrade predicate; includes every invoked body in each refused group. */
+export function unterminatedInvocationsSql(schema: string): string {
+  return `WITH keys AS MATERIALIZED (
+       SELECT namespace,event_body_id,body->>'status' AS status,
+              body->>'actionRunId' AS run_id,body->>'actionId' AS action_id
+       FROM ${createCoreTableNames(schema).event_bodies}
+     )
+     , incomplete AS (SELECT namespace,run_id,action_id
+     FROM keys
+     WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled')
+     GROUP BY namespace,run_id,action_id
+     HAVING bool_or(status='invoked') AND
+       (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled')))
+     )
+     SELECT k.namespace,k.event_body_id,k.run_id,k.action_id
+     FROM keys k JOIN incomplete i ON k.namespace=i.namespace
+       AND k.run_id=i.run_id AND k.action_id IS NOT DISTINCT FROM i.action_id
+     WHERE k.status='invoked'`;
 }

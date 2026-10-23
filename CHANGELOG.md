@@ -442,9 +442,14 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   already in the message and answered twice, before and after the tool.
 - Transcription uploads use the recording's own extension (`voice.m4a` for
   Safari's `audio/mp4`) instead of `voice.audio`.
-- Core message `history` accepts a live window's content options
-  (`bodyByteLimit`, `overflow`, `exclude`). Before, every live chat window was
-  refused with `invalid_input` and showed "Couldn't load messages".
+- Live chat windows apply tool-output visibility to the rows their read already
+  authorized, in place, then resolve content once. Before, each row was re-read
+  through Core's `history` query, which an application policy that authorizes
+  thread reads refused ("No access to these messages"), at one query per row. A
+  100-message window now costs one read. HTTP read adapters
+  (`HttpAdapter.reads`) receive a third argument, `resolve`, that loads content
+  for rows they narrowed. `history` also accepts a window's full content options
+  (`bodyByteLimit`, `overflow`, `exclude`).
 - A browser that already held a session can finish signing in through Google or
   a session transfer. Before, its identity start result returned 404.
 - A PostgreSQL database opened with `pgPoolMax: 1` uses the fenced owner

@@ -327,6 +327,8 @@ export type BodyStorageOptions = Readonly<{
 }>;
 
 export type S3BodyStorageConfig = Readonly<{
+  /** Per-attempt transport timeout, 1..600000 ms; default 30000. */
+  requestTimeoutMs?: number;
   backendId: string;
   endpoint: string;
   region: string;

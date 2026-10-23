@@ -1,10 +1,12 @@
+import { listMissingContent } from "../runtime/content/migration.ts";
+import type { UnrecoverableDecisions } from "../runtime/content/unrecoverable.ts";
 import type { AbandonmentDecisions } from "../runtime/actions/upgrade-terminals.ts";
 import { loadUpgradeStorage } from "./upgrade-storage.ts";
 import { resolve, toFileUrl } from "@std/path";
 import { EVENT_SCHEMA_VERSION } from "../runtime/events/schema.ts";
 import {
   type AuthorityUpgradeManifest,
-  inspectAuthorityUpgrade,
+  iterateAuthorityUpgrade,
 } from "../runtime/authorization/upgrade.ts";
 /** Explicit offline retained-data upgrade; never called by ordinary activation. */
 import { openManagedOminipgDatabase } from "../runtime/persistence/ominipg.ts";
@@ -12,6 +14,7 @@ import { inspectRetainedDataDrain } from "../runtime/actions/drain.ts";
 import {
   type OwnerKeyUpgradeOptions,
   prepareRetainedDataUpgrade,
+  retainedContentInspector,
   type RetainedDataUpgradePlan,
   upgradeActionLifecycle,
 } from "../runtime/actions/upgrade.ts";
@@ -23,7 +26,8 @@ const get = (name: string) =>
 const schema = get("schema");
 if (
   !schema ||
-  !["drain", "prepare", "apply", "authority-inventory"].includes(command) ||
+  !["drain", "prepare", "apply", "authority-inventory", "list-missing-content"]
+    .includes(command) ||
   args.some((arg) =>
     ![
       "schema",
@@ -31,6 +35,7 @@ if (
       "reviewed",
       "decisions",
       "abandoned",
+      "unrecoverable",
       "authority",
       "owner-keys",
       "storage",
@@ -40,7 +45,7 @@ if (
   )
 ) {
   throw new Error(
-    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --abandoned=FILE.json --owner-keys=MODULE.ts --storage=MODULE.ts --concurrency=16 --authority=FILE.json]",
+    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory|list-missing-content --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --abandoned=FILE.json --unrecoverable=FILE.json --owner-keys=MODULE.ts --storage=MODULE.ts --concurrency=16 --authority=FILE.json]",
   );
 }
 const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
@@ -54,6 +59,11 @@ const abandoned = abandonedPath
   : undefined;
 const contentStorage = {
   abandoned,
+  unrecoverable: get("unrecoverable")
+    ? JSON.parse(
+      await Deno.readTextFile(get("unrecoverable")!),
+    ) as UnrecoverableDecisions
+    : undefined,
   ...storage,
   ...(concurrency !== undefined ? { concurrency: Number(concurrency) } : {}),
 };
@@ -70,14 +80,37 @@ const database = await openManagedOminipgDatabase({
   requestTimeoutMs: 24 * 60 * 60 * 1000,
 });
 try {
-  if (command === "authority-inventory") {
+  if (command === "list-missing-content") {
     console.log(
       JSON.stringify(
-        await inspectAuthorityUpgrade(database.session, schema),
+        await listMissingContent(
+          retainedContentInspector(database.session, schema, contentStorage),
+        ),
         null,
         2,
       ),
     );
+  } else if (command === "authority-inventory") {
+    const encoder = new TextEncoder();
+    const write = async (text: string) => {
+      const bytes = encoder.encode(text);
+      let offset = 0;
+      while (offset < bytes.length) {
+        offset += await Deno.stdout.write(bytes.subarray(offset));
+      }
+    };
+    const events = [];
+    let count = 0;
+    await write('{"invocations":[');
+    for await (
+      const batch of iterateAuthorityUpgrade(database.session, schema)
+    ) {
+      for (const invocation of batch.invocations) {
+        await write((count++ ? "," : "") + JSON.stringify(invocation));
+      }
+      events.push(...batch.events);
+    }
+    await write('],"events":' + JSON.stringify(events) + "}\n");
   } else if (command === "drain") {
     const report = await inspectRetainedDataDrain(database.session, schema);
     console.log(JSON.stringify(report, null, 2));

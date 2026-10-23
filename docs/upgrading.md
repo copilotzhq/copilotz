@@ -921,3 +921,36 @@ listing as evidence with **keys, sizes and generations** (and ETags for S3).
 Delete only the reviewed source objects, only after verification; the upgrade
 never deletes them. Retain the listing with the review plan and verification
 results.
+
+### Reviewed missing content and memory-bounded offline inspection
+
+With producers stopped, use
+`list-missing-content --schema=SCHEMA
+--storage=./migration-storage.ts` in
+`scripts/upgrade-retained-data.ts`. Review the returned references and outcomes,
+then write a digest-bound `unrecoverable.json` using `unrecoverableDecisions`
+from `runtime/content/unrecoverable.ts`. Its entries are exact
+`{ namespace, backendId, key }` locations. Supply
+`--unrecoverable=unrecoverable.json` to both prepare and apply/finalize.
+
+Only missing objects referenced exclusively by terminal failed, cancelled,
+abandoned or superseded content qualify. Existing objects, completed/live
+references, and unreferenced decisions are refused. Converted records retain
+terminal history and use explicit unavailable, zero-retained-byte content
+without fabricated bytes or digests. See the
+[operator flow and decision format](../scripts/upgrade-retained-data.md#missing-terminal-object-content).
+
+Inspection, v11 conversion, owner-key migration and authority application
+process payload batches. New review plans contain a compact row manifest; their
+content fingerprint preserves the former sorted JSON serialization, while the
+outer plan fingerprint binds the new format. Regenerate old plans with the new
+tools. Run one heavy process/schema at a time and allow headroom for the largest
+individual row/body. The
+[synthetic memory rehearsal](../scripts/benchmark-cutover-memory.ts) covers 140k
+event bodies, 60k nodes and 20k object locations using disk-efficient padding.
+
+External inspection defaults to 16 workers. HEAD/ranged GET requests retry
+transient transport, 429 and 5xx failures with bounded backoff while preserving
+version guards. Configure `requestTimeoutMs` on the S3/GCS storage configuration
+(default 30 seconds per attempt). A changed version is never retried into
+success.

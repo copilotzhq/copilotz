@@ -1272,3 +1272,135 @@ Deno.test("attestation-only v7 history reaches v14 without decisions", async () 
     await f.close();
   }
 });
+
+Deno.test("reviewed missing non-completed streams become unavailable through v14", async () => {
+  const { unrecoverableDecisions } = await import(
+    "../content/unrecoverable.ts"
+  );
+  const { listMissingContent } = await import("../content/migration.ts");
+  const { retainedContentInspector } = await import("./upgrade.ts");
+  const { createMemoryBodyStore } = await import("../content/body-store.ts");
+  const f = await fixture();
+  try {
+    const memory = createMemoryBodyStore({ backendId: "synthetic:missing" });
+    const streams = `"${f.schema}".copilotz_operation_streams`;
+    const old = (await f.db.query<
+      { stream_id: string; outcome: string; namespace: string }
+    >(
+      `SELECT namespace,stream_id,outcome FROM ${streams} WHERE state='terminal' AND outcome='failed' LIMIT 1`,
+    )).rows[0];
+    assertExists(old);
+    // Seed a genuinely external synthetic store; its reader never queries the
+    // outer database while v12 holds the transaction connection.
+    const physical = (await f.db.query<
+      { body_id: string; media_type: string; bytes: Uint8Array }
+    >(
+      `SELECT b.body_id,b.media_type,p.bytes FROM "${f.schema}".content_bodies b JOIN "${f.schema}".content_body_parts p USING(body_id) ORDER BY b.body_id,p.start_offset`,
+    )).rows;
+    const grouped = new Map<
+      string,
+      { mediaType: string; parts: Uint8Array[] }
+    >();
+    for (const row of physical) {
+      const group = grouped.get(row.body_id) ??
+        { mediaType: row.media_type, parts: [] };
+      group.parts.push(row.bytes);
+      grouped.set(row.body_id, group);
+    }
+    for (const [bodyId, group] of grouped) {
+      const bytes = new Uint8Array(
+        group.parts.reduce((n, p) => n + p.length, 0),
+      );
+      let offset = 0;
+      for (const part of group.parts) {
+        bytes.set(part, offset);
+        offset += part.length;
+      }
+      await memory.put({
+        bodyId,
+        bytes,
+        mediaType: group.mediaType,
+        digest: await digestContent(bytes),
+      });
+    }
+    const storage = {
+      streamBackend: { kind: "object", backendId: memory.backendId },
+      storeFor: (loc: { kind: string }) =>
+        loc.kind === "object" ? memory : undefined,
+    };
+    await f.db.query(
+      `UPDATE ${streams} SET body_id='synthetic-missing',availability='retained',committed_offset=10 WHERE stream_id=$1`,
+      [old.stream_id],
+    );
+    const entries = [{
+      namespace: old.namespace,
+      backendId: memory.backendId,
+      key: "synthetic-missing",
+    }];
+    const unrecoverable = await unrecoverableDecisions(entries);
+    await assertRejects(
+      () => prepareRetainedDataUpgrade(f.db, f.schema, storage),
+      Error,
+      "retained terminal copy",
+    );
+    const listing = await listMissingContent(
+      retainedContentInspector(f.db, f.schema, storage),
+    );
+    assertEquals(
+      listing.find((v) => v.key === "synthetic-missing")?.eligible,
+      true,
+    );
+    await assertRejects(
+      () =>
+        prepareRetainedDataUpgrade(f.db, f.schema, {
+          ...storage,
+          unrecoverable: { ...unrecoverable, digest: "changed" },
+        }),
+      Error,
+      "digest",
+    );
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema, {
+      ...storage,
+      unrecoverable,
+    });
+    assertExists(plan);
+    await upgradeActionLifecycle(f.db, f.schema, {
+      ...storage,
+      unrecoverable,
+      plan,
+      reviewedFingerprint: plan.fingerprint,
+    });
+    assertEquals(await marker(f.db, f.schema), 14);
+    const record = (await f.db.query<
+      {
+        outcome: string;
+        availability: string;
+        availability_reason: string;
+      }
+    >(
+      `SELECT outcome,availability,availability_reason FROM ${streams} WHERE stream_id=$1`,
+      [old.stream_id],
+    )).rows[0];
+    assertEquals(record.outcome, old.outcome);
+    assertEquals(record.availability, "purged");
+    assertEquals(record.availability_reason, "missing");
+    const copy = plan.content.inventory.find((v) => v.unavailable)!;
+    const tombstone =
+      (await f.db.query<{ revocation: string; terminal: unknown }>(
+        `SELECT revocation,terminal FROM ${f.tables.content_logical_bodies} WHERE body_id=$1`,
+        [copy.bodyId],
+      )).rows[0];
+    assertEquals(tombstone.revocation, "revoked");
+    assertEquals((tombstone.terminal as { length: number }).length, 0);
+    assertEquals((tombstone.terminal as { outcome: string }).outcome, "failed");
+    assertEquals(
+      (await f.db.query(
+        `SELECT 1 FROM ${f.tables.content_copies} WHERE body_id=$1`,
+        [copy.bodyId],
+      )).rows.length,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});

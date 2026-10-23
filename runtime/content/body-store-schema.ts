@@ -255,133 +255,141 @@ export async function migrateBodyStoreSchema(
     await transaction.query(
       `ALTER TABLE ${bodies} ADD COLUMN reservation_id TEXT COLLATE "C",ADD COLUMN fenced_from BIGINT,ADD COLUMN version_token TEXT COLLATE "C"`,
     );
-    const rows = await transaction.query<
-      {
-        body_id: string;
-        state: string;
-        byte_length: string | number;
-        digest: string | null;
-      }
-    >(
-      `SELECT body_id,state,byte_length,digest FROM ${bodies}`,
+    await transaction.query(
+      `ALTER TABLE ${parts} ADD COLUMN part_digest TEXT,DROP COLUMN created_at`,
     );
-    for (let start = 0; start < rows.rows.length; start += 2000) {
-      const updates = rows.rows.slice(start, start + 2000).map((row) => ({
-        id: row.body_id,
-        reservation: `migrated:${crypto.randomUUID()}`,
-        version: crypto.randomUUID(),
-      }));
-      await transaction.query(
-        `UPDATE ${bodies} b SET reservation_id=v.reservation,writer_generation=COALESCE(b.writer_generation,1),version_token=v.version,maintenance_version=GREATEST(b.maintenance_version,1),digest=CASE WHEN b.state='aborted' THEN NULL ELSE b.digest END
-         FROM jsonb_to_recordset($1::jsonb) AS v(id text,reservation text,version text) WHERE b.body_id=v.id`,
-        [JSON.stringify(updates)],
+    let after = "", total = 0;
+    while (true) {
+      const rows = await transaction.query<
+        {
+          body_id: string;
+          state: string;
+          byte_length: string | number;
+          digest: string | null;
+        }
+      >(
+        `SELECT body_id,state,byte_length,digest FROM ${bodies} WHERE body_id COLLATE "C">$1 COLLATE "C" ORDER BY body_id COLLATE "C" LIMIT 2000`,
+        [after],
       );
+      if (!rows.rows.length) break;
+      after = rows.rows.at(-1)!.body_id;
+      for (let start = 0; start < rows.rows.length; start += 2000) {
+        const updates = rows.rows.slice(start, start + 2000).map((row) => ({
+          id: row.body_id,
+          reservation: `migrated:${crypto.randomUUID()}`,
+          version: crypto.randomUUID(),
+        }));
+        await transaction.query(
+          `UPDATE ${bodies} b SET reservation_id=v.reservation,writer_generation=COALESCE(b.writer_generation,1),version_token=v.version,maintenance_version=GREATEST(b.maintenance_version,1),digest=CASE WHEN b.state='aborted' THEN NULL ELSE b.digest END
+         FROM jsonb_to_recordset($1::jsonb) AS v(id text,reservation text,version text) WHERE b.body_id=v.id`,
+          [JSON.stringify(updates)],
+        );
+      }
+      const sizes = new Map(
+        (await transaction.query<{ body_id: string; size: string }>(
+          `SELECT body_id,sum(octet_length(bytes)) AS size FROM ${parts} WHERE body_id=ANY($1::text[]) GROUP BY body_id`,
+          [rows.rows.map((row) => row.body_id)],
+        )).rows.map((row) => [row.body_id, Number(row.size)]),
+      );
+      let done = 0;
+      while (done < rows.rows.length) {
+        let end = done, bytesInBatch = 0;
+        while (end < rows.rows.length && end - done < 2000) {
+          const size = sizes.get(rows.rows[end].body_id) ?? 0;
+          if (end > done && bytesInBatch + size > 16 * 1024 * 1024) break;
+          bytesInBatch += size;
+          end++;
+        }
+        const batch = rows.rows.slice(done, end);
+        const retained = (await transaction.query<
+          { body_id: string; bytes: Uint8Array; start_offset: string | number }
+        >(
+          `SELECT body_id,bytes,start_offset FROM ${parts} WHERE body_id=ANY($1::text[]) ORDER BY body_id,start_offset`,
+          [batch.map((body) => body.body_id)],
+        )).rows;
+        const byBody = new Map<string, typeof retained>();
+        for (const part of retained) {
+          const list = byBody.get(part.body_id) ?? [];
+          list.push(part);
+          byBody.set(part.body_id, list);
+        }
+        for (const body of batch) {
+          if (body.state === "aborted") continue;
+          const length = Number(body.byte_length), hash = sha256.create();
+          let covered = 0;
+          for (const part of byBody.get(body.body_id) ?? []) {
+            if (Number(part.start_offset) !== covered) incompatible();
+            hash.update(part.bytes.subarray(0, Math.max(0, length - covered)));
+            covered += part.bytes.length;
+          }
+          const digest = `sha256:${
+            Array.from(
+              hash.digest(),
+              (byte) => byte.toString(16).padStart(2, "0"),
+            ).join("")
+          }`;
+          if (
+            !Number.isSafeInteger(length) || length < 0 || covered < length ||
+            (body.state === "ready" && covered !== length) ||
+            digest !== body.digest
+          ) {
+            throw new Error(
+              "Retained physical body bytes do not match their terminal metadata.",
+            );
+          }
+        }
+        await transaction.query(
+          `DELETE FROM ${parts} WHERE body_id=ANY($1::text[])`,
+          [batch.map((body) => body.body_id)],
+        );
+        const chunks: Record<string, unknown>[] = [];
+        let chunkBytes = 0;
+        const flush = async () => {
+          if (!chunks.length) return;
+          await transaction.query(
+            `INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
+           SELECT body_id,start_offset,append_id,decode(bytes,'base64'),part_digest
+           FROM jsonb_to_recordset($1::jsonb) AS v(body_id text,start_offset bigint,append_id text,bytes text,part_digest text)`,
+            [JSON.stringify(chunks)],
+          );
+          chunks.length = 0;
+          chunkBytes = 0;
+        };
+        for (const row of retained) {
+          for (
+            let start = 0;
+            start < row.bytes.length;
+            start += BODY_APPEND_MAX_BYTES
+          ) {
+            const bytes = row.bytes.subarray(
+                start,
+                start + BODY_APPEND_MAX_BYTES,
+              ),
+              offset = Number(row.start_offset) + start;
+            chunks.push({
+              body_id: row.body_id,
+              start_offset: offset,
+              append_id: `migrated:${offset}`,
+              bytes: bytesToBase64(bytes),
+              part_digest: await digestContent(bytes),
+            });
+            chunkBytes += bytes.length;
+            if (chunks.length === 2000 || chunkBytes >= 16 * 1024 * 1024) {
+              await flush();
+            }
+          }
+        }
+        await flush();
+        done = end;
+        console.error(
+          `[upgrade:${schema}] physical bodies ${total + done}`,
+        );
+      }
+      total += rows.rows.length;
     }
     await transaction.query(
       `ALTER TABLE ${bodies} ALTER COLUMN reservation_id SET NOT NULL,ALTER COLUMN version_token SET NOT NULL,ALTER COLUMN writer_generation SET NOT NULL,DROP COLUMN writer_token_hash,DROP COLUMN lease_expires_at,DROP COLUMN protected_until,DROP COLUMN created_at,DROP COLUMN ready_at`,
     );
-    await transaction.query(
-      `ALTER TABLE ${parts} ADD COLUMN part_digest TEXT,DROP COLUMN created_at`,
-    );
-    const sizes = new Map(
-      (await transaction.query<{ body_id: string; size: string }>(
-        `SELECT body_id,sum(octet_length(bytes)) AS size FROM ${parts} GROUP BY body_id`,
-      )).rows.map((row) => [row.body_id, Number(row.size)]),
-    );
-    let done = 0;
-    while (done < rows.rows.length) {
-      let end = done, bytesInBatch = 0;
-      while (end < rows.rows.length && end - done < 2000) {
-        const size = sizes.get(rows.rows[end].body_id) ?? 0;
-        if (end > done && bytesInBatch + size > 16 * 1024 * 1024) break;
-        bytesInBatch += size;
-        end++;
-      }
-      const batch = rows.rows.slice(done, end);
-      const retained = (await transaction.query<
-        { body_id: string; bytes: Uint8Array; start_offset: string | number }
-      >(
-        `SELECT body_id,bytes,start_offset FROM ${parts} WHERE body_id=ANY($1::text[]) ORDER BY body_id,start_offset`,
-        [batch.map((body) => body.body_id)],
-      )).rows;
-      const byBody = new Map<string, typeof retained>();
-      for (const part of retained) {
-        const list = byBody.get(part.body_id) ?? [];
-        list.push(part);
-        byBody.set(part.body_id, list);
-      }
-      for (const body of batch) {
-        if (body.state === "aborted") continue;
-        const length = Number(body.byte_length), hash = sha256.create();
-        let covered = 0;
-        for (const part of byBody.get(body.body_id) ?? []) {
-          if (Number(part.start_offset) !== covered) incompatible();
-          hash.update(part.bytes.subarray(0, Math.max(0, length - covered)));
-          covered += part.bytes.length;
-        }
-        const digest = `sha256:${
-          Array.from(
-            hash.digest(),
-            (byte) => byte.toString(16).padStart(2, "0"),
-          ).join("")
-        }`;
-        if (
-          !Number.isSafeInteger(length) || length < 0 || covered < length ||
-          (body.state === "ready" && covered !== length) ||
-          digest !== body.digest
-        ) {
-          throw new Error(
-            "Retained physical body bytes do not match their terminal metadata.",
-          );
-        }
-      }
-      await transaction.query(
-        `DELETE FROM ${parts} WHERE body_id=ANY($1::text[])`,
-        [batch.map((body) => body.body_id)],
-      );
-      const chunks: Record<string, unknown>[] = [];
-      let chunkBytes = 0;
-      const flush = async () => {
-        if (!chunks.length) return;
-        await transaction.query(
-          `INSERT INTO ${parts}(body_id,start_offset,append_id,bytes,part_digest)
-           SELECT body_id,start_offset,append_id,decode(bytes,'base64'),part_digest
-           FROM jsonb_to_recordset($1::jsonb) AS v(body_id text,start_offset bigint,append_id text,bytes text,part_digest text)`,
-          [JSON.stringify(chunks)],
-        );
-        chunks.length = 0;
-        chunkBytes = 0;
-      };
-      for (const row of retained) {
-        for (
-          let start = 0;
-          start < row.bytes.length;
-          start += BODY_APPEND_MAX_BYTES
-        ) {
-          const bytes = row.bytes.subarray(
-              start,
-              start + BODY_APPEND_MAX_BYTES,
-            ),
-            offset = Number(row.start_offset) + start;
-          chunks.push({
-            body_id: row.body_id,
-            start_offset: offset,
-            append_id: `migrated:${offset}`,
-            bytes: bytesToBase64(bytes),
-            part_digest: await digestContent(bytes),
-          });
-          chunkBytes += bytes.length;
-          if (chunks.length === 2000 || chunkBytes >= 16 * 1024 * 1024) {
-            await flush();
-          }
-        }
-      }
-      await flush();
-      done = end;
-      console.error(
-        `[upgrade:${schema}] physical bodies ${done}/${rows.rows.length}`,
-      );
-    }
     await transaction.query(
       `ALTER TABLE ${parts} ALTER COLUMN part_digest SET NOT NULL`,
     );

@@ -391,3 +391,117 @@ capture. An attested completion has no reconstructed output; failed/cancelled
 lookups explain the terminal evidence. Abandoned runs cannot resume or retry.
 Historical event cursors continue to show the original captures, while the
 upgrade receipt supplies terminal status.
+
+## Missing terminal object content
+
+Before preparation, inventory missing external objects with the same explicit
+storage resolver that will be used for the upgrade:
+
+```sh
+deno run -A scripts/upgrade-retained-data.ts list-missing-content \
+  --schema=SCHEMA --storage=./migration-storage.ts --concurrency=16 \
+  > missing-content.json
+```
+
+The listing heads every external location and records its referencing nodes,
+event bodies and streams, their outcomes, and decision eligibility. Transport
+errors stop the listing; they are never treated as evidence that an object is
+missing. Review every reference. Completed or non-terminal references, including
+shared references, disqualify a location.
+
+Write a separate `unrecoverable.json` after review. Its shape is:
+
+```json
+{
+  "entries": [
+    {
+      "namespace": "archive",
+      "backendId": "object:archive",
+      "key": "legacy/failed-body"
+    }
+  ],
+  "digest": "sha256:<digest of canonical entries>"
+}
+```
+
+Use `unrecoverableDecisions(entries)` from `runtime/content/unrecoverable.ts` to
+canonicalize and hash the reviewed entries; do not copy the example digest. It
+accepts only exact `namespace`, `backendId` and `key` fields, rejects
+duplicates, and sorts by their JSON tuple identity. The digest covers compact
+UTF-8 JSON of the canonical entries array.
+
+Pass `--unrecoverable=unrecoverable.json` with the same `--storage` to both
+`prepare --plan=review.json` and
+`apply --plan=review.json --reviewed=FINGERPRINT`. Preparation and finalization
+recheck absence and all references. Existing objects, unreferenced decisions,
+completed content, and live content are refused. An omitted decision still
+refuses missing retained bytes. Decisions also bind the finalization receipt, so
+replay requires the accepted decision file.
+
+Streams retain their historical terminal outcome (the normal superseded →
+cancelled and abandoned → failed taxonomy conversion still records the original
+reason). Their availability becomes `purged` with reason `missing`. The logical
+body uses the existing revoked, failed, zero-length tombstone with no physical
+copy. Embedded references explicitly indicate unavailable content. No content
+bytes, digest, or physical version are fabricated. The tombstone survives v12,
+v13 and v14 without attempting to read a nonexistent object.
+
+## Memory and concurrent reads
+
+Retained payloads are scanned in keyset batches. Only identities, content claims
+and compact review evidence survive a batch. Ownership scans extract reference
+identities before releasing JSON. Owner-key migration rescans cells and
+processes physical bodies in bounded batches. Authority application also
+processes batches; v14 uses SQL set operations.
+
+New plans store a `rows: { count, digest }` manifest instead of all retained
+JSON. The content fingerprint hashes exactly the former sorted row
+serialization, including rows without content references. The outer plan
+fingerprint binds the new manifest format; regenerate plans created by earlier
+tool versions. Keep writers stopped until the entire chain finishes.
+Finalization rereads the source under its schema lock and refuses changed rows.
+
+Use one schema and one heavy upgrade process at a time. Batching bounds retained
+payload memory; one unusually large individual row or physical body still needs
+enough memory to decode and verify it. The synthetic scale rehearsal is
+`scripts/benchmark-cutover-memory.ts`; it uses compressed padding to represent
+140k event bodies, 60k nodes, and 20k external locations without consuming
+multiple gigabytes of disk. It accepts only local `cutover_*` PostgreSQL
+databases on port 55439 and removes its own synthetic schema afterward.
+
+`--concurrency=16` bounds physical inspection workers. S3/GCS HEAD and GET retry
+transport failures, HTTP 429 and 5xx at most three times, with 100, 200 and 400
+ms backoff. Writes are not retried. Each retry retains the original conditional
+headers; 412 and version mismatches stop immediately. Response bounds remain
+hard errors. Configure the per-attempt timeout in the storage module:
+
+```ts
+const store = createLegacyObjectBodyStore({
+  ...config,
+  requestTimeoutMs: 120_000, // default 30_000; range 1..600_000
+});
+```
+
+The timeout starts after signing and covers dispatch and response consumption.
+Retries occupy the existing worker slot and cannot create an inner fan-out.
+
+For example, save only the reviewed location objects in
+`reviewed-missing-locations.json`, then generate the bound decision file:
+
+```sh
+deno eval 'import { unrecoverableDecisions } from "./runtime/content/unrecoverable.ts";
+const entries = JSON.parse(await Deno.readTextFile("reviewed-missing-locations.json"));
+console.log(JSON.stringify(await unrecoverableDecisions(entries), null, 2));' \
+  > unrecoverable.json
+
+deno run -A scripts/upgrade-retained-data.ts prepare --schema=SCHEMA \
+  --storage=./migration-storage.ts --unrecoverable=unrecoverable.json \
+  --plan=review.json
+
+deno run -A scripts/upgrade-retained-data.ts apply --schema=SCHEMA \
+  --storage=./migration-storage.ts --unrecoverable=unrecoverable.json \
+  --plan=review.json --reviewed=FINGERPRINT --owner-keys=./migration-keys.ts
+```
+
+Continue from the resulting v11/v12 checkpoint with the reviewed key and
+authority inputs described above.

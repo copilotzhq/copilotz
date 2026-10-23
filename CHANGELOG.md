@@ -1,5 +1,14 @@
 ## Unreleased
 
+- Bound offline cutover payload memory across retained inspection, v11
+  conversion, v12 owner keys and v13 authority application. Add compact review
+  manifests with content fingerprint parity and a synthetic scale rehearsal.
+- Add missing-content inventory and digest-bound unrecoverable decisions for
+  missing non-completed terminal bodies, retaining explicit unavailable history
+  through v14. Reject existing, completed, live and unreferenced locations.
+- Retry transient S3/GCS reads within bounded worker slots and expose
+  per-attempt transport timeouts, preserving conditional version guards.
+
 - Accept uniquely wrapper-attested terminals during offline retained-data
   upgrades. Add digest-bound reviewed abandonment for crash victims, preserving
   referenced history as cancelled with explicit provenance. Plans fingerprint

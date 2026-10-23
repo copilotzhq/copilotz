@@ -59,21 +59,41 @@ function references(value: unknown, ids: Set<string>): void {
 
 async function inspect(tx: SqlExecutor, schema: string) {
   const tables = createCoreTableNames(schema);
-  // This is deliberately an offline scan: provenance must be reviewed before deletion.
-  const nodes = (await tx.query<Node>(
-    `SELECT id, namespace, type, name, data FROM ${tables.nodes} ORDER BY namespace, id`,
-  )).rows;
-  const edges = (await tx.query<Edge>(
-    `SELECT id, namespace, source_node_id, target_node_id, type FROM ${tables.edges} ORDER BY id`,
-  )).rows;
+  const nodes: Node[] = [];
+  const referenceIds = new Map<string, Set<string>>();
+  let after: [string, string] | undefined;
+  while (true) {
+    const batch: Node[] = (await tx.query<Node>(
+      `SELECT id,namespace,type,name,data FROM ${tables.nodes}
+       ${
+        after ? "WHERE (namespace,id)>($1,$2)" : ""
+      } ORDER BY namespace,id LIMIT 1000`,
+      after ?? [],
+    )).rows;
+    for (const node of batch) {
+      const ids = new Set<string>();
+      references(node.data, ids);
+      if (ids.size) referenceIds.set(nodeKey(node.namespace, node.id), ids);
+      nodes.push({
+        ...node,
+        data: {
+          ...(node.type === EXECUTION_OWNER
+            ? { assetIds: node.data.assetIds }
+            : {}),
+          ...(node.type === "asset"
+            ? { state: node.data.state, origin: node.data.origin }
+            : {}),
+        },
+      });
+    }
+    if (batch.length < 1000) break;
+    after = [batch.at(-1)!.namespace, batch.at(-1)!.id];
+  }
   const execution = nodes.filter((node) => node.type === EXECUTION_OWNER);
   const executionIds = new Set(
     execution.map((node) => nodeKey(node.namespace, node.id)),
   );
-  const executionEdges = edges.filter((edge) =>
-    executionIds.has(nodeKey(edge.namespace, edge.source_node_id)) ||
-    executionIds.has(nodeKey(edge.namespace, edge.target_node_id))
-  );
+  let executionEdges = 0;
   const domains = nodes.filter((node) =>
     node.type !== EXECUTION_OWNER && node.type !== "asset" &&
     node.type !== "protected_value"
@@ -86,26 +106,40 @@ async function inspect(tx: SqlExecutor, schema: string) {
   );
   const outgoing = new Map<string, string[]>();
   const owners = new Map<string, Set<string>>();
-  for (const edge of edges) {
-    if (edge.type !== "has_asset") continue;
-    const source = nodeKey(edge.namespace, edge.source_node_id);
-    const target = nodeKey(edge.namespace, edge.target_node_id);
-    const targets = outgoing.get(source) ?? [];
-    targets.push(edge.target_node_id);
-    outgoing.set(source, targets);
-    if (domainByKey.has(source)) {
-      const ids = owners.get(target) ?? new Set<string>();
-      ids.add(source);
-      owners.set(target, ids);
+  let edgeAfter: string | undefined;
+  while (true) {
+    const edges = (await tx.query<Edge>(
+      `SELECT id,namespace,source_node_id,target_node_id,type FROM ${tables.edges}
+       ${edgeAfter === undefined ? "" : "WHERE id>$1"} ORDER BY id LIMIT 2000`,
+      edgeAfter === undefined ? [] : [edgeAfter],
+    )).rows;
+    for (const edge of edges) {
+      if (
+        executionIds.has(nodeKey(edge.namespace, edge.source_node_id)) ||
+        executionIds.has(nodeKey(edge.namespace, edge.target_node_id))
+      ) executionEdges++;
+      if (edge.type !== "has_asset") continue;
+      const source = nodeKey(edge.namespace, edge.source_node_id);
+      const target = nodeKey(edge.namespace, edge.target_node_id);
+      const targets = outgoing.get(source) ?? [];
+      targets.push(edge.target_node_id);
+      outgoing.set(source, targets);
+      if (domainByKey.has(source)) {
+        const ids = owners.get(target) ?? new Set<string>();
+        ids.add(source);
+        owners.set(target, ids);
+      }
     }
+    if (edges.length < 2000) break;
+    edgeAfter = edges.at(-1)!.id;
   }
   const referrers = new Map<string, Set<string>>();
   const order = new Map(
     domains.map((node, index) => [nodeKey(node.namespace, node.id), index]),
   );
   for (const node of domains) {
-    const ids = new Set<string>();
-    references(node.data, ids);
+    const ids = referenceIds.get(nodeKey(node.namespace, node.id)) ??
+      new Set<string>();
     for (const id of ids) {
       const key = nodeKey(node.namespace, id);
       const refs = referrers.get(key) ?? new Set<string>();
@@ -119,7 +153,7 @@ async function inspect(tx: SqlExecutor, schema: string) {
       .map((id) => domainByKey.get(id)!);
   const report: ContentMigrationReport = {
     executionOwners: execution.length,
-    executionEdges: executionEdges.length,
+    executionEdges,
     assets: [],
     byProducer: {},
     removedNodes: 0,
@@ -182,7 +216,7 @@ async function inspect(tx: SqlExecutor, schema: string) {
     const group = candidates.length === 1 ? candidates[0].type : classification;
     report.byProducer[group] = (report.byProducer[group] ?? 0) + 1;
   }
-  return { tables, nodes, edges, domains, executionIds, report };
+  return { tables, domains, report };
 }
 
 /** Dry runs never mutate. Apply is atomic and refuses unresolved ownership. */
@@ -207,7 +241,7 @@ export function migrateActionContent(
         throw new Error("Drain all execution before content migration.");
       }
     }
-    const { nodes, edges, domains, executionIds, report } = await inspect(
+    const { domains, report } = await inspect(
       tx,
       schema,
     );
@@ -290,13 +324,8 @@ export function migrateActionContent(
     await tx.query(`DELETE FROM ${tables.nodes} WHERE type=$1`, [
       EXECUTION_OWNER,
     ]);
-    report.removedNodes = nodes.filter((node) =>
-      executionIds.has(nodeKey(node.namespace, node.id))
-    ).length;
-    report.removedEdges = edges.filter((edge) =>
-      executionIds.has(nodeKey(edge.namespace, edge.source_node_id)) ||
-      executionIds.has(nodeKey(edge.namespace, edge.target_node_id))
-    ).length;
+    report.removedNodes = report.executionOwners;
+    report.removedEdges = report.executionEdges;
     return report;
   });
 }

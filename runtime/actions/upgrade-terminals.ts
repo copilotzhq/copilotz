@@ -110,92 +110,110 @@ async function verify(body: Body) {
 
 /** Read only; invalid evidence remains visible to listing and fails validation. */
 export async function inspectUnterminatedRuns(tx: SqlExecutor, schema: string) {
+  const result = [];
+  for await (const entry of iterateUnterminatedRuns(tx, schema)) {
+    // Listing needs identities and evidence summaries, never retained payloads.
+    const { body: _body, ...summary } = entry;
+    result.push(summary);
+  }
+  return result;
+}
+async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
   const table = createCoreTableNames(schema).event_bodies;
-  const rows = (await tx.query<{
-    namespace: string;
-    event_body_id: string;
-    run_id: string;
-    action_id: string | null;
-    bodies: Body[];
-    wrappers: Body[];
-  }>(
-    `WITH incomplete_runs AS MATERIALIZED (${
-      unterminatedInvocationsSql(schema)
-    }),
-      runs AS MATERIALIZED (SELECT DISTINCT namespace,run_id FROM incomplete_runs),
-      bodies AS (SELECT r.namespace,r.run_id,jsonb_agg(to_jsonb(b) ORDER BY b.event_body_id) AS bodies
-        FROM runs r JOIN ${table} b ON b.namespace=r.namespace AND b.body->>'actionRunId'=r.run_id
-        GROUP BY r.namespace,r.run_id),
-      wrappers AS (SELECT r.namespace,r.run_id,jsonb_agg(to_jsonb(w) ORDER BY w.event_body_id) AS wrappers
-        FROM runs r JOIN ${table} w ON w.namespace=r.namespace AND w.body->'output'->>'targetActionRunId'=r.run_id
-        GROUP BY r.namespace,r.run_id)
-    SELECT i.*,b.bodies,COALESCE(w.wrappers,'[]'::jsonb) AS wrappers
-    FROM incomplete_runs i JOIN bodies b USING(namespace,run_id)
-    LEFT JOIN wrappers w USING(namespace,run_id)
-    ORDER BY i.namespace,i.run_id,i.event_body_id`,
-  ))
-    .rows;
-  return await Promise.all(rows.map(async (row) => {
-    const identity = {
-      namespace: row.namespace,
-      runId: row.run_id,
-      actionId: row.action_id,
-      bodyId: row.event_body_id,
-    };
-    const body = row.bodies.find((b) => b.event_body_id === row.event_body_id)!;
-    let refusal: string | undefined;
-    let attestation: RetainedTerminal | undefined;
-    if (row.wrappers.length) {
-      const wrapper = row.wrappers[0];
-      const output = wrapper.body.output as Record<string, unknown>;
-      if (row.wrappers.length !== 1) refusal = "ambiguous attestation";
-      else if (
-        wrapper.body.actionId !== "copilotz.server.internal.invoke" ||
-        !row.action_id ||
-        (output.actionId !== undefined && output.actionId !== row.action_id) ||
-        (output.targetActionId !== undefined &&
-          output.targetActionId !== row.action_id)
-      ) refusal = "mismatched action in attestation";
-      else if (
-        typeof wrapper.body.status !== "string" ||
-        !terminals.has(wrapper.body.status) ||
-        typeof output.status !== "string" || !terminals.has(output.status)
-      ) refusal = "non-terminal attestation status";
-      else if (
-        row.bodies.filter((b) => b.body.status === "invoked").length !== 1 ||
-        row.bodies.some((b) =>
-          b.body.actionId !== row.action_id ||
-          terminals.has(String(b.body.status))
-        )
-      ) refusal = "conflicting invocation or terminal in attestation";
-      else if (
-        typeof wrapper.body.actionRunId !== "string" ||
-        !wrapper.body.actionRunId.trim() ||
-        wrapper.body.actionRunId === row.run_id
-      ) refusal = "invalid wrapper run";
-      else {
-        await verify(body);
-        await verify(wrapper);
-        attestation = {
-          ...identity,
-          actionId: row.action_id!,
-          bodyDigest: body.digest,
-          status: output.status as RetainedTerminal["status"],
-          terminalSource: "wrapper-attested",
-          wrapperRunId: wrapper.body.actionRunId as string,
-          wrapperBodyId: wrapper.event_body_id,
-          wrapperBodyDigest: wrapper.digest,
-        };
+  let after: [string, string, string] | undefined;
+  while (true) {
+    const rows = (await tx.query<{
+      namespace: string;
+      event_body_id: string;
+      run_id: string;
+      action_id: string | null;
+      body_count: number;
+      invoked_count: number;
+      conflicting: boolean;
+    }>(
+      `WITH incomplete_runs AS MATERIALIZED (${
+        unterminatedInvocationsSql(schema)
+      })
+       SELECT i.*,s.body_count,s.invoked_count,s.conflicting FROM incomplete_runs i
+       CROSS JOIN LATERAL (
+         SELECT count(*)::integer AS body_count,
+           count(*) FILTER (WHERE b.body->>'status'='invoked')::integer AS invoked_count,
+           bool_or(b.body->>'actionId' IS DISTINCT FROM i.action_id OR b.body->>'status' IN ('completed','failed','cancelled')) AS conflicting
+         FROM ${table} b WHERE b.namespace=i.namespace AND b.body->>'actionRunId'=i.run_id
+       ) s
+       ${after ? "WHERE (i.namespace,i.run_id,i.event_body_id)>($1,$2,$3)" : ""}
+       ORDER BY i.namespace,i.run_id,i.event_body_id LIMIT 1000`,
+      after ?? [],
+    )).rows;
+    for (const row of rows) {
+      const body = (await tx.query<Body>(
+        `SELECT * FROM ${table} WHERE namespace=$1 AND event_body_id=$2`,
+        [row.namespace, row.event_body_id],
+      )).rows[0];
+      const wrappers = (await tx.query<Body>(
+        `SELECT * FROM ${table} WHERE namespace=$1 AND body->'output'->>'targetActionRunId'=$2 ORDER BY event_body_id LIMIT 2`,
+        [row.namespace, row.run_id],
+      )).rows;
+      const identity = {
+        namespace: row.namespace,
+        runId: row.run_id,
+        actionId: row.action_id,
+        bodyId: row.event_body_id,
+      };
+      let refusal: string | undefined;
+      let attestation: RetainedTerminal | undefined;
+      if (wrappers.length) {
+        const wrapper = wrappers[0];
+        const output = wrapper.body.output as Record<string, unknown>;
+        if (wrappers.length !== 1) refusal = "ambiguous attestation";
+        else if (
+          wrapper.body.actionId !== "copilotz.server.internal.invoke" ||
+          !row.action_id ||
+          (output.actionId !== undefined &&
+            output.actionId !== row.action_id) ||
+          (output.targetActionId !== undefined &&
+            output.targetActionId !== row.action_id)
+        ) refusal = "mismatched action in attestation";
+        else if (
+          typeof wrapper.body.status !== "string" ||
+          !terminals.has(wrapper.body.status) ||
+          typeof output.status !== "string" || !terminals.has(output.status)
+        ) refusal = "non-terminal attestation status";
+        else if (
+          row.invoked_count !== 1 || row.conflicting
+        ) refusal = "conflicting invocation or terminal in attestation";
+        else if (
+          typeof wrapper.body.actionRunId !== "string" ||
+          !wrapper.body.actionRunId.trim() ||
+          wrapper.body.actionRunId === row.run_id
+        ) refusal = "invalid wrapper run";
+        else {
+          await verify(body);
+          await verify(wrapper);
+          attestation = {
+            ...identity,
+            actionId: row.action_id!,
+            bodyDigest: body.digest,
+            status: output.status as RetainedTerminal["status"],
+            terminalSource: "wrapper-attested",
+            wrapperRunId: wrapper.body.actionRunId as string,
+            wrapperBodyId: wrapper.event_body_id,
+            wrapperBodyDigest: wrapper.digest,
+          };
+        }
       }
+      yield {
+        ...identity,
+        attestation,
+        refusal,
+        body,
+        bodyCount: row.body_count,
+      };
     }
-    return {
-      ...identity,
-      attestation,
-      refusal,
-      body,
-      bodyCount: row.bodies.length,
-    };
-  }));
+    if (rows.length < 1000) break;
+    const last = rows.at(-1)!;
+    after = [last.namespace, last.run_id, last.event_body_id];
+  }
 }
 
 export async function resolveRetainedTerminals(
@@ -213,7 +231,7 @@ export async function resolveRetainedTerminals(
     ),
   );
   const runs: RetainedTerminal[] = [];
-  for (const entry of await inspectUnterminatedRuns(tx, schema)) {
+  for await (const entry of iterateUnterminatedRuns(tx, schema)) {
     if (entry.refusal) {
       throw new Error(
         `Invalid retained history: ${entry.refusal}: ${entry.bodyId}.`,

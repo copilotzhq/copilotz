@@ -293,3 +293,62 @@ Deno.test("S3 refuses unconditional, ambiguous or weak PUT guards before dispatc
   }
   assertEquals(calls, 0);
 });
+
+Deno.test("S3 reads retry transport, 429 and 5xx with unchanged version guards", async () => {
+  for (const method of ["HEAD", "GET"] as const) {
+    let calls = 0;
+    const run = createS3Requester(config, {
+      retryDelayMs: 0,
+      fetch: (input) => {
+        assert(input instanceof Request);
+        assertEquals(input.headers.get("if-match"), '"pinned"');
+        calls++;
+        if (calls === 1) {
+          throw new TypeError("synthetic transport interruption");
+        }
+        return Promise.resolve(
+          new Response(null, {
+            status: calls === 2 ? 429 : calls === 3 ? 503 : 200,
+          }),
+        );
+      },
+    });
+    assertEquals(
+      (await run({ ...request, method, headers: { "if-match": '"pinned"' } }))
+        .status,
+      200,
+    );
+    assertEquals(calls, 4);
+  }
+  let calls = 0;
+  const run = createS3Requester(config, {
+    retryDelayMs: 0,
+    fetch: () =>
+      Promise.resolve(
+        new Response(null, { status: ++calls === 1 ? 503 : 412 }),
+      ),
+  });
+  assertEquals((await run(request)).status, 412);
+  assertEquals(calls, 2, "version failure must stop retries");
+});
+
+Deno.test("S3 bounded read retries exhaust and timeout remains configurable", async () => {
+  let calls = 0;
+  const run = createS3Requester({ ...config, requestTimeoutMs: 5 }, {
+    readRetries: 2,
+    retryDelayMs: 0,
+    fetch: (input) => {
+      assert(input instanceof Request);
+      calls++;
+      return new Promise((_resolve, reject) =>
+        input.signal.addEventListener(
+          "abort",
+          () => reject(input.signal.reason),
+          { once: true },
+        )
+      );
+    },
+  });
+  await assertRejects(() => run(request), Error, "Physical S3");
+  assertEquals(calls, 3);
+});

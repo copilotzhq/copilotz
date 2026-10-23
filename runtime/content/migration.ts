@@ -1,3 +1,15 @@
+import {
+  type ContentReference,
+  type MissingContent,
+  type UnrecoverableDecisions,
+  unrecoverableIdentity,
+  verifyUnrecoverableDecisions,
+} from "./unrecoverable.ts";
+import {
+  contentFingerprint,
+  retainedRows,
+  type RowManifest,
+} from "./offline-rows.ts";
 /** Offline-only conversion. Callers must drain the old runtime and review the inventory. */
 import {
   createCoreTableNames,
@@ -21,8 +33,9 @@ type Copy = EmbeddedBodyLocation & {
   collectable: boolean;
   bodyId: string;
   length: number;
-  digest: string;
-  versionToken: string;
+  digest?: string;
+  versionToken?: string;
+  unavailable?: true;
   outcome: "completed" | "failed" | "cancelled";
 };
 type Row = {
@@ -35,7 +48,7 @@ export type ContentMigrationPlan = Readonly<
   {
     schema: string;
     inventory: readonly Copy[];
-    rows: readonly Row[];
+    rows: readonly Row[] | RowManifest;
     streamRows: readonly {
       namespace: string;
       streamId: string;
@@ -86,6 +99,9 @@ export async function inspectEmbeddedContent(
     nativeDatabase?: SqlSession;
     /** Maximum simultaneous content checks; defaults to 16. */
     concurrency?: number;
+    unrecoverable?: UnrecoverableDecisions;
+    /** Internal read-only inventory sink; skips digest and migration validation. */
+    missingContent?: MissingContent[];
     streamBackend?: Readonly<{ kind: string; backendId: string }>;
     copyMappings?: readonly Readonly<
       {
@@ -97,6 +113,10 @@ export async function inspectEmbeddedContent(
     >[];
   },
 ): Promise<ContentMigrationPlan> {
+  const reviewed = await verifyUnrecoverableDecisions(input.unrecoverable);
+  const decisions = new Map(
+    (reviewed?.entries ?? []).map((e) => [unrecoverableIdentity(e), e]),
+  );
   const concurrency = input.concurrency ?? 16;
   if (
     !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 256
@@ -105,37 +125,7 @@ export async function inspectEmbeddedContent(
       "Content concurrency must be an integer from 1 to 256.",
     );
   }
-  const schema = validateEventSchemaName(input.schema),
-    tables = createCoreTableNames(schema),
-    rows: Row[] = [];
-  for (
-    const row of (await input.session.query<
-      { namespace: string; id: string; data: unknown }
-    >(`SELECT namespace,id,data FROM ${tables.nodes}`)).rows
-  ) {
-    rows.push({
-      namespace: row.namespace,
-      id: row.id,
-      value: row.data,
-      kind: "node",
-    });
-  }
-  for (
-    const row of (await input.session.query<
-      { namespace: string; event_body_id: string; body: unknown }
-    >(`SELECT namespace,event_body_id,body FROM ${tables.event_bodies}`)).rows
-  ) {
-    rows.push({
-      namespace: row.namespace,
-      id: row.event_body_id,
-      value: row.body,
-      kind: "event",
-    });
-  }
-  rows.sort((a, b) =>
-    a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) ||
-    a.id.localeCompare(b.id)
-  );
+  const schema = validateEventSchemaName(input.schema);
   const mappings = new Map<
     string,
     NonNullable<typeof input.copyMappings>[number]
@@ -151,36 +141,6 @@ export async function inspectEmbeddedContent(
   const mappingFor = (loc: EmbeddedBodyLocation) =>
     mappings.get(JSON.stringify([loc.namespace, loc.backendId, loc.key]));
   let prefixes: ReadonlyMap<string, OfflinePrefix> = new Map();
-  if (input.nativeDatabase) {
-    const requests = new Map<string, { key: string; length?: number }>();
-    const collect = (value: unknown, namespace: string): void => {
-      if (Array.isArray(value)) {
-        for (const child of value) collect(child, namespace);
-        return;
-      }
-      const item = object(value);
-      if (!item) return;
-      const loc = location(item, namespace);
-      if (
-        loc?.kind === "database" && loc.backendId === "database:default" &&
-        !requests.has(identity(loc))
-      ) {
-        requests.set(identity(loc), {
-          key: mappingFor(loc)?.targetBodyId ?? loc.key,
-          ...(typeof item.byteLength === "number"
-            ? { length: item.byteLength }
-            : {}),
-        });
-      }
-      for (const child of Object.values(item)) collect(child, namespace);
-    };
-    for (const row of rows) collect(row.value, row.namespace);
-    prefixes = await inspectOfflinePrefixes(
-      input.nativeDatabase,
-      schema,
-      requests,
-    );
-  }
   const copies = new Map<string, Copy>();
   async function include(
     loc: EmbeddedBodyLocation,
@@ -208,6 +168,28 @@ export async function inspectEmbeddedContent(
     const store = input.storeFor({ ...loc, key: physicalKey }),
       head = prefixes.get(key)?.head ??
         await store.head({ bodyId: physicalKey });
+    if (decisions.has(unrecoverableIdentity(loc))) {
+      if (mapping) {
+        throw new Error(
+          "Unrecoverable decision conflicts with a copy mapping.",
+        );
+      }
+      if (head !== null) {
+        throw new Error(`Unrecoverable decision object exists: ${loc.key}`);
+      }
+      const copy: Copy = {
+        ...loc,
+        collectable: false,
+        bodyId: `body:migrated:${
+          (await digestContent(new TextEncoder().encode(key))).slice(7)
+        }`,
+        length: 0,
+        outcome: "failed",
+        unavailable: true,
+      };
+      copies.set(key, copy);
+      return copy;
+    }
     if (!head || !(head.state === "ready" || head.state === "incomplete")) {
       throw new Error(
         `Migration requires a retained terminal copy: ${loc.key}`,
@@ -250,29 +232,91 @@ export async function inspectEmbeddedContent(
       loc: EmbeddedBodyLocation;
       claims: Record<string, unknown>;
       outcome?: Copy["outcome"];
+      reference: ContentReference;
     }[]
   >();
   function enqueue(
     loc: EmbeddedBodyLocation,
     claims: Record<string, unknown>,
-    outcome?: Copy["outcome"],
+    outcome: Copy["outcome"] | undefined,
+    reference: ContentReference,
   ) {
     const key = identity(loc), group = work.get(key) ?? [];
-    group.push({ loc, claims, outcome });
+    // Never retain the enclosing JSON object (which can contain megabytes).
+    group.push({
+      loc,
+      claims: { byteLength: claims.byteLength, digest: claims.digest },
+      outcome,
+      reference,
+    });
     work.set(key, group);
   }
-  function visit(value: unknown, namespace: string): void {
+  const logicalReferences = new Map<string, ContentReference[]>();
+  function visit(
+    value: unknown,
+    namespace: string,
+    reference: ContentReference,
+  ): void {
     if (Array.isArray(value)) {
-      for (const child of value) visit(child, namespace);
+      for (const child of value) visit(child, namespace, reference);
       return;
     }
     const item = object(value);
     if (!item) return;
+    const status = item.outcome ?? item.status ??
+      (["open", "terminating"].includes(String(item.state))
+        ? item.state
+        : undefined);
+    if (typeof status === "string" && reference.outcome === "unknown") {
+      reference = {
+        ...reference,
+        outcome: status,
+        terminal:
+          ["completed", "failed", "cancelled", "abandoned", "superseded"]
+            .includes(status) &&
+          (item.state === undefined ||
+            ["terminal", "failed", "ready", "cancelled"].includes(
+              String(item.state),
+            )),
+      };
+    }
     const loc = location(item, namespace);
-    if (loc) enqueue(loc, item);
-    for (const child of Object.values(item)) visit(child, namespace);
+    if (loc) enqueue(loc, item, undefined, reference);
+    else if (typeof item.bodyId === "string") {
+      const key = JSON.stringify([namespace, item.bodyId]);
+      const refs = logicalReferences.get(key) ?? [];
+      refs.push(reference);
+      logicalReferences.set(key, refs);
+    }
+    for (const child of Object.values(item)) visit(child, namespace, reference);
   }
-  for (const row of rows) visit(row.value, row.namespace);
+  for await (const row of retainedRows(input.session, schema)) {
+    visit(row.value, row.namespace, {
+      kind: row.kind,
+      id: row.id,
+      outcome: "unknown",
+      terminal: false,
+    });
+  }
+  if (input.nativeDatabase) {
+    const requests = new Map<string, { key: string; length?: number }>();
+    for (const [key, group] of work) {
+      const { loc, claims } = group[0];
+      if (loc.kind === "database" && loc.backendId === "database:default") {
+        requests.set(key, {
+          key: mappingFor(loc)?.targetBodyId ?? loc.key,
+          ...(typeof claims.byteLength === "number"
+            ? { length: claims.byteLength }
+            : {}),
+        });
+      }
+    }
+    prefixes = await inspectOfflinePrefixes(
+      input.nativeDatabase,
+      schema,
+      requests,
+    );
+  }
   const streamRows: ContentMigrationPlan["streamRows"][number][] = [];
   const pendingStreams: {
     identity: string;
@@ -285,75 +329,187 @@ export async function inspectEmbeddedContent(
       [streams],
     )).rows[0]?.present
   ) {
-    const entries = (await input.session.query<
-      {
-        namespace: string;
-        stream_id: string;
-        body_id: string;
-        state: string;
-        outcome: Copy["outcome"] | "superseded" | "abandoned";
-        reason: string | null;
-        committed_offset: string | number;
-        digest: string;
-        availability: string;
-      }
-    >(`SELECT s.*,to_jsonb(s)->>'reason' AS reason FROM ${streams} s`))
-      .rows;
-    for (const stream of entries) {
-      if (stream.state !== "terminal") {
-        throw new Error("Drain in-flight streams before content migration.");
-      }
-      if (!["retained", "purge_pending"].includes(stream.availability)) {
-        continue;
-      }
-      if (!input.streamBackend) {
-        throw new TypeError(
-          "Stream backend must be selected explicitly for migration.",
-        );
-      }
-      const loc = {
-        namespace: stream.namespace,
-        ...input.streamBackend,
-        key: stream.body_id,
-      };
-      enqueue(
-        loc,
-        { byteLength: Number(stream.committed_offset), digest: stream.digest },
-        stream.outcome === "superseded"
-          ? "cancelled"
-          : stream.outcome === "abandoned"
-          ? "failed"
-          : stream.outcome,
-      );
-      pendingStreams.push({
-        identity: identity(loc),
-        row: {
+    let streamAfter: [string, string] | undefined;
+    while (true) {
+      const entries = (await input.session.query<
+        {
+          namespace: string;
+          stream_id: string;
+          body_id: string;
+          state: string;
+          outcome: Copy["outcome"] | "superseded" | "abandoned";
+          reason: string | null;
+          committed_offset: string | number;
+          digest: string;
+          availability: string;
+        }
+      >(
+        `SELECT namespace,stream_id,body_id,state,outcome,to_jsonb(s)->>'committed_offset' AS committed_offset,to_jsonb(s)->>'digest' AS digest,availability,to_jsonb(s)->>'reason' AS reason FROM ${streams} s
+      ${
+          streamAfter
+            ? 'WHERE (namespace COLLATE "C",stream_id COLLATE "C")>($1 COLLATE "C",$2 COLLATE "C")'
+            : ""
+        }
+      ORDER BY namespace COLLATE "C",stream_id COLLATE "C" LIMIT 2000`,
+        streamAfter ?? [],
+      ))
+        .rows;
+      for (const stream of entries) {
+        if (!input.missingContent && stream.state !== "terminal") {
+          throw new Error("Drain in-flight streams before content migration.");
+        }
+        const decidedStream = input.streamBackend &&
+          decisions.has(unrecoverableIdentity({
+            namespace: stream.namespace,
+            backendId: input.streamBackend.backendId,
+            key: stream.body_id,
+          }));
+        if (
+          !input.missingContent && !decidedStream &&
+          !["retained", "purge_pending"].includes(stream.availability)
+        ) {
+          const key = JSON.stringify([stream.namespace, stream.body_id]);
+          const refs = logicalReferences.get(key) ?? [];
+          refs.push({
+            kind: "stream",
+            id: stream.stream_id,
+            outcome: stream.outcome,
+            terminal: stream.state === "terminal",
+          });
+          logicalReferences.set(key, refs);
+          continue;
+        }
+        if (!input.streamBackend) {
+          throw new TypeError(
+            "Stream backend must be selected explicitly for migration.",
+          );
+        }
+        const loc = {
           namespace: stream.namespace,
-          streamId: stream.stream_id,
-          physicalKey: stream.body_id,
-          bodyId: "",
-          ...((stream.reason || stream.outcome === "superseded" ||
-              stream.outcome === "abandoned")
-            ? { reason: stream.reason ?? stream.outcome }
-            : {}),
-        },
-      });
+          ...input.streamBackend,
+          key: stream.body_id,
+        };
+        enqueue(
+          loc,
+          {
+            byteLength: Number(stream.committed_offset),
+            digest: stream.digest,
+          },
+          stream.outcome === "superseded"
+            ? "cancelled"
+            : stream.outcome === "abandoned"
+            ? "failed"
+            : stream.outcome,
+          {
+            kind: "stream",
+            id: stream.stream_id,
+            outcome: stream.outcome,
+            terminal: stream.state === "terminal",
+          },
+        );
+        pendingStreams.push({
+          identity: identity(loc),
+          row: {
+            namespace: stream.namespace,
+            streamId: stream.stream_id,
+            physicalKey: stream.body_id,
+            bodyId: "",
+            ...((stream.reason || stream.outcome === "superseded" ||
+                stream.outcome === "abandoned")
+              ? { reason: stream.reason ?? stream.outcome }
+              : {}),
+          },
+        });
+      }
+      if (entries.length < 2000) break;
+      streamAfter = [entries.at(-1)!.namespace, entries.at(-1)!.stream_id];
+    }
+  }
+  const referencesFor = (
+    group: { loc: EmbeddedBodyLocation; reference: ContentReference }[],
+  ) => [
+    ...group.map((item) => item.reference),
+    ...(logicalReferences.get(
+      JSON.stringify([group[0].loc.namespace, group[0].loc.key]),
+    ) ?? []),
+  ];
+  const eligible = (
+    group: typeof work extends Map<string, infer G> ? G : never,
+  ) =>
+    referencesFor(group).every((reference) =>
+      reference.terminal &&
+      ["failed", "cancelled", "abandoned", "superseded"].includes(
+        reference.outcome,
+      )
+    );
+  for (const [key] of decisions) {
+    const groups = [...work.values()].filter((g) =>
+      unrecoverableIdentity(g[0].loc) === key
+    );
+    if (!groups.length) {
+      throw new Error("Unrecoverable decision location is not referenced.");
+    }
+    if (groups.some((g) => !eligible(g))) {
+      throw new Error(
+        "Unrecoverable decision references completed or non-terminal content.",
+      );
     }
   }
   const groups = [...work.values()];
   let next = 0;
+  let firstError: { index: number; error: unknown } | undefined;
+  const recordError = (index: number, error: unknown) => {
+    if (!firstError || index < firstError.index) firstError = { index, error };
+  };
   const results = await Promise.allSettled(
     Array.from({ length: Math.min(concurrency, groups.length) }, async () => {
-      while (next < groups.length) {
-        const group = groups[next++];
-        for (const item of group) {
-          await include(item.loc, item.claims, item.outcome);
+      while (next < groups.length && !firstError) {
+        const index = next++, group = groups[index];
+        try {
+          if (input.missingContent) {
+            const loc = group[0].loc;
+            if (
+              loc.kind !== "database" &&
+              await input.storeFor(loc).head({ bodyId: loc.key }) === null
+            ) {
+              input.missingContent.push({
+                namespace: loc.namespace,
+                backendId: loc.backendId,
+                key: loc.key,
+                references: referencesFor(group),
+                eligible: eligible(group),
+              });
+            }
+            continue;
+          }
+          if (decisions.has(unrecoverableIdentity(group[0].loc))) {
+            await include(group[0].loc, group[0].claims, group[0].outcome);
+            continue;
+          }
+          for (const item of group) {
+            await include(item.loc, item.claims, item.outcome);
+          }
+        } catch (error) {
+          recordError(index, error);
         }
       }
     }),
   );
+  if (firstError) throw firstError.error;
   for (const result of results) {
     if (result.status === "rejected") throw result.reason;
+  }
+  if (input.missingContent) {
+    input.missingContent.sort((a, b) =>
+      unrecoverableIdentity(a).localeCompare(unrecoverableIdentity(b))
+    );
+    return {
+      schema,
+      inventory: [],
+      rows: { count: 0, digest: "" },
+      streamRows: [],
+      fingerprint: "",
+    };
   }
   for (const pending of pendingStreams) {
     streamRows.push({
@@ -368,11 +524,12 @@ export async function inspectEmbeddedContent(
   const inventory = [...copies.values()].sort((a, b) =>
     a.bodyId.localeCompare(b.bodyId)
   );
-  const fingerprint = await digestContent(
-    new TextEncoder().encode(
-      JSON.stringify({ schema, inventory, rows, streamRows }),
-    ),
-  );
+  const { fingerprint, rows } = await contentFingerprint(input.session, {
+    schema,
+    inventory,
+    rows: { count: 0, digest: "" },
+    streamRows,
+  });
   return { schema, inventory, rows, streamRows, fingerprint };
 }
 function convert(
@@ -400,6 +557,11 @@ function convert(
     delete output.backendId;
     delete output.protectedUntil;
     output.bodyId = copy.bodyId;
+    if (copy.unavailable) {
+      output.byteLength = 0;
+      output.availability = "unavailable";
+      delete output.digest;
+    }
   } else if (typeof item.bodyId === "string") {
     const matches = byBody.get(JSON.stringify([namespace, item.bodyId])) ?? [];
     if (matches.length === 1) output.bodyId = matches[0].bodyId;
@@ -426,19 +588,6 @@ export async function migrateEmbeddedContent(
       "A drained runtime and reviewed content inventory are required.",
     );
   }
-  const fingerprint = await digestContent(
-    new TextEncoder().encode(
-      JSON.stringify({
-        schema: plan.schema,
-        inventory: plan.inventory,
-        rows: plan.rows,
-        streamRows: plan.streamRows,
-      }),
-    ),
-  );
-  if (fingerprint !== plan.fingerprint) {
-    throw new Error("Reviewed migration inventory changed.");
-  }
   const tables = createCoreTableNames(plan.schema),
     copies = new Map(plan.inventory.map((copy) => [identity(copy), copy]));
   const byBody = new Map<string, Copy[]>();
@@ -450,6 +599,14 @@ export async function migrateEmbeddedContent(
   }
   let documents = 0;
   await runSqlTransaction(input.session, async (transaction) => {
+    const actual = await contentFingerprint(transaction, plan);
+    if (
+      actual.fingerprint !== plan.fingerprint ||
+      (!Array.isArray(plan.rows) &&
+        JSON.stringify(actual.rows) !== JSON.stringify(plan.rows))
+    ) {
+      throw new Error("Reviewed migration inventory changed.");
+    }
     for (const statement of contentCatalogStatements(plan.schema)) {
       await transaction.query(statement);
     }
@@ -471,6 +628,7 @@ export async function migrateEmbeddedContent(
         backend: copy.backendId,
         version: copy.versionToken,
         collectable: copy.collectable,
+        unavailable: copy.unavailable ?? false,
       }));
       const json = JSON.stringify(batch);
       await transaction.query(
@@ -483,14 +641,14 @@ export async function migrateEmbeddedContent(
       await transaction.query(
         `INSERT INTO ${tables.content_copies}(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable)
          SELECT key,kind,backend,body_id,version,'current',collectable
-         FROM jsonb_to_recordset($1::jsonb) AS v(key text,kind text,backend text,body_id text,version text,collectable boolean)
+         FROM jsonb_to_recordset($1::jsonb) AS v(key text,kind text,backend text,body_id text,version text,collectable boolean,unavailable boolean) WHERE NOT unavailable
          ON CONFLICT(copy_key) DO NOTHING`,
         [json],
       );
       const conflict = await transaction.query(
-        `SELECT 1 FROM jsonb_to_recordset($1::jsonb) AS v(key text,body_id text,version text)
+        `SELECT 1 FROM jsonb_to_recordset($1::jsonb) AS v(key text,body_id text,version text,unavailable boolean)
          LEFT JOIN ${tables.content_copies} c ON c.copy_key=v.key
-         WHERE c.body_id IS DISTINCT FROM v.body_id OR c.version_token IS DISTINCT FROM v.version LIMIT 1`,
+         WHERE NOT v.unavailable AND (c.body_id IS DISTINCT FROM v.body_id OR c.version_token IS DISTINCT FROM v.version) LIMIT 1`,
         [json],
       );
       if (conflict.rows.length) {
@@ -532,7 +690,11 @@ export async function migrateEmbeddedContent(
         events.length = 0;
       }
     }
-    for (const row of plan.rows) {
+    for await (
+      const row of Array.isArray(plan.rows)
+        ? plan.rows
+        : retainedRows(transaction, plan.schema)
+    ) {
       const converted = convert(row.value, row.namespace, copies, byBody);
       if (JSON.stringify(converted) === JSON.stringify(row.value)) continue;
       documents++;
@@ -555,9 +717,33 @@ export async function migrateEmbeddedContent(
     }
     await flush();
     console.error(
-      `[upgrade:${plan.schema}] converted documents ${documents}/${plan.rows.length}`,
+      `[upgrade:${plan.schema}] converted documents ${documents}/${
+        Array.isArray(plan.rows)
+          ? plan.rows.length
+          : (plan.rows as RowManifest).count
+      }`,
     );
+    if (
+      plan.streamRows.some((stream) =>
+        plan.inventory.some((copy) =>
+          copy.bodyId === stream.bodyId && copy.unavailable
+        )
+      )
+    ) {
+      await transaction.query(
+        `ALTER TABLE "${plan.schema}"."copilotz_operation_streams" ADD COLUMN IF NOT EXISTS availability_reason TEXT`,
+      );
+    }
     for (const stream of plan.streamRows) {
+      if (
+        plan.inventory.find((copy) => copy.bodyId === stream.bodyId)
+          ?.unavailable
+      ) {
+        await transaction.query(
+          `UPDATE "${plan.schema}"."copilotz_operation_streams" SET committed_offset=0,digest=NULL,availability='purged',availability_reason='missing' WHERE namespace=$1 AND stream_id=$2`,
+          [stream.namespace, stream.streamId],
+        );
+      }
       if (stream.reason) {
         await transaction.query(
           `UPDATE ${tables.content_logical_bodies} SET terminal=terminal || jsonb_build_object('reason',$2::text) WHERE body_id=$1`,
@@ -575,4 +761,16 @@ export async function migrateEmbeddedContent(
     documents,
     streams: plan.streamRows.length,
   };
+}
+
+/** Heads all external references without requiring them to be recoverable. */
+export async function listMissingContent(
+  input: Omit<
+    Parameters<typeof inspectEmbeddedContent>[0],
+    "unrecoverable" | "missingContent"
+  >,
+): Promise<MissingContent[]> {
+  const missingContent: MissingContent[] = [];
+  await inspectEmbeddedContent({ ...input, missingContent });
+  return missingContent;
 }

@@ -65,32 +65,36 @@ export async function inspectAuthorityUpgrade(
     events: readonly RetainedAuthorityEvent[];
   }>
 > {
-  return await inspectAuthorityState(transaction, schema);
+  const invocations: RetainedInvocation[] = [],
+    events: RetainedAuthorityEvent[] = [];
+  for await (const batch of iterateAuthorityUpgrade(transaction, schema)) {
+    invocations.push(...batch.invocations);
+    events.push(...batch.events);
+  }
+  return { invocations, events };
 }
-async function inspectAuthorityState(
+/** Bounded inventory for CLI consumers and the v13 migration. */
+export async function* iterateAuthorityUpgrade(
   transaction: SqlExecutor,
   schema: string,
-  ingress = new Map<string, Record<string, unknown>>(),
-): Promise<
-  Readonly<{
-    invocations: readonly RetainedInvocation[];
-    events: readonly RetainedAuthorityEvent[];
-  }>
-> {
+) {
   const tables = createCoreTableNames(schema);
-  const rows = (await transaction.query<{
-    namespace: string;
-    id: string;
-    metadata: Record<string, unknown>;
-    payload: unknown;
-    owner_ingress: unknown;
-    body: unknown;
-    digest: string;
-    schema_version: number;
-    intent: unknown;
-    result: unknown;
-  }>(
-    `WITH invoked AS MATERIALIZED (
+  let after: [string, string] | undefined, done = 0;
+  while (true) {
+    const ingress = new Map<string, Record<string, unknown>>();
+    const rows = (await transaction.query<{
+      namespace: string;
+      id: string;
+      metadata: Record<string, unknown>;
+      payload: unknown;
+      owner_ingress: unknown;
+      body: unknown;
+      digest: string;
+      schema_version: number;
+      intent: unknown;
+      result: unknown;
+    }>(
+      `WITH invoked AS MATERIALIZED (
       SELECT namespace,event_body_id FROM ${tables.event_bodies}
       WHERE COALESCE(body->'data',body)->>'status'='invoked'
     ), candidates AS MATERIALIZED (
@@ -107,92 +111,168 @@ async function inspectAuthorityState(
     SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
     FROM candidates c JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
     LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
-    ORDER BY e.namespace,e.id`,
-  )).rows;
-  const receipts =
-    (await transaction.query<{ key: string; intent: unknown; result: unknown }>(
-      `SELECT key,intent,result FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND kind='action.protected-input'`,
+    ${after ? "WHERE (e.namespace,e.id)>($1,$2)" : ""}
+    ORDER BY e.namespace,e.id LIMIT 1000`,
+      after ?? [],
     )).rows;
-  const receiptByKey = new Map(
-    receipts.map((receipt) => [receipt.key, receipt]),
-  );
-  const invocations: RetainedInvocation[] = [];
-  const events: RetainedAuthorityEvent[] = [];
-  let done = 0;
-  for (const row of rows) {
-    ingress.set(
-      JSON.stringify([row.namespace, row.id]),
-      row.owner_ingress as Record<string, unknown>,
+    const receipts = (await transaction.query<
+      { key: string; intent: unknown; result: unknown }
+    >(
+      `SELECT key,intent,result FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND kind='action.protected-input' AND key=ANY($1::text[])`,
+      [rows.flatMap((row) => {
+        const body = row.body ?? row.payload;
+        const data = (protectedActionLifecycleBody(body)?.data ?? body) as
+          | Record<string, unknown>
+          | null;
+        return data?.status === "invoked"
+          ? [
+            JSON.stringify([
+              "action.protected-input",
+              row.namespace,
+              data.actionRunId,
+            ]),
+          ]
+          : [];
+      })],
+    )).rows;
+    const receiptByKey = new Map(
+      receipts.map((receipt) => [receipt.key, receipt]),
     );
-    const body = row.payload && typeof row.payload === "object" &&
-        Object.hasOwn(row.payload, "dataRef")
-      ? await verifiedEventBody(row, eventDataRef(row.payload))
-      : captureHostCommandJson(row.payload);
-    const data = (protectedActionLifecycleBody(body)?.data ?? body) as Record<
-      string,
-      unknown
-    >;
-    if (data.status === "invoked" && typeof data.actionRunId === "string") {
-      const receipt = receiptByKey.get(JSON.stringify([
-        "action.protected-input",
-        row.namespace,
-        data.actionRunId,
-      ]));
-      const capture = receipt
-        ? { intent: receipt.intent, result: receipt.result } as NonNullable<
-          RetainedInvocation["capture"]
-        >
-        : null;
-      const sourceEventId = capture?.result.source.eventId ??
-        row.metadata.sourceEventId;
-      if (typeof sourceEventId !== "string" || !sourceEventId) {
-        throw new Error(
-          "Retained invocation source is missing; authority cannot be inferred.",
+    const invocations: RetainedInvocation[] = [];
+    const events: RetainedAuthorityEvent[] = [];
+    for (const row of rows) {
+      ingress.set(
+        JSON.stringify([row.namespace, row.id]),
+        row.owner_ingress as Record<string, unknown>,
+      );
+      const body = row.payload && typeof row.payload === "object" &&
+          Object.hasOwn(row.payload, "dataRef")
+        ? await verifiedEventBody(row, eventDataRef(row.payload))
+        : captureHostCommandJson(row.payload);
+      const data = (protectedActionLifecycleBody(body)?.data ?? body) as Record<
+        string,
+        unknown
+      >;
+      if (data.status === "invoked" && typeof data.actionRunId === "string") {
+        const receipt = receiptByKey.get(JSON.stringify([
+          "action.protected-input",
+          row.namespace,
+          data.actionRunId,
+        ]));
+        const capture = receipt
+          ? { intent: receipt.intent, result: receipt.result } as NonNullable<
+            RetainedInvocation["capture"]
+          >
+          : null;
+        const sourceEventId = capture?.result.source.eventId ??
+          row.metadata.sourceEventId;
+        if (typeof sourceEventId !== "string" || !sourceEventId) {
+          throw new Error(
+            "Retained invocation source is missing; authority cannot be inferred.",
+          );
+        }
+        invocations.push({
+          databaseSchema: schema,
+          namespace: row.namespace,
+          runId: data.actionRunId,
+          actionId: String(data.actionId),
+          sourceEventId,
+          operationId: capture?.result.source.operationId ?? null,
+          parentRunId: typeof data.parentActionRunId === "string"
+            ? data.parentActionRunId
+            : null,
+          body,
+          capture,
+        });
+      } else {
+        events.push({
+          namespace: row.namespace,
+          eventId: row.id,
+          ...(row.owner_ingress === null ? { unclassified: true } : {}),
+          digest: await digest({
+            namespace: row.namespace,
+            id: row.id,
+            metadata: row.metadata,
+            payload: row.payload,
+            ownerIngress: row.owner_ingress,
+            body,
+          }),
+        });
+      }
+      if (++done % 2000 === 0 || done === rows.length) {
+        console.error(
+          `[upgrade:${schema}] authority inventory ${done}/${rows.length}`,
         );
       }
-      invocations.push({
-        databaseSchema: schema,
-        namespace: row.namespace,
-        runId: data.actionRunId,
-        actionId: String(data.actionId),
-        sourceEventId,
-        operationId: capture?.result.source.operationId ?? null,
-        parentRunId: typeof data.parentActionRunId === "string"
-          ? data.parentActionRunId
-          : null,
-        body,
-        capture,
-      });
-    } else {
-      events.push({
-        namespace: row.namespace,
-        eventId: row.id,
-        ...(row.owner_ingress === null ? { unclassified: true } : {}),
-        digest: await digest({
-          namespace: row.namespace,
-          id: row.id,
-          metadata: row.metadata,
-          payload: row.payload,
-          ownerIngress: row.owner_ingress,
-          body,
-        }),
-      });
     }
-    if (++done % 2000 === 0 || done === rows.length) {
-      console.error(
-        `[upgrade:${schema}] authority inventory ${done}/${rows.length}`,
-      );
-    }
+    yield { invocations, events, ingress };
+    if (rows.length < 1000) break;
+    after = [rows.at(-1)!.namespace, rows.at(-1)!.id];
   }
-  return { invocations, events };
 }
 async function applyAuthorityUpgrade(
   transaction: SqlExecutor,
   schema: string,
   manifest: AuthorityUpgradeManifest,
 ): Promise<void> {
-  const ingress = new Map<string, Record<string, unknown>>();
-  const inventory = await inspectAuthorityState(transaction, schema, ingress);
+  const invocations = new Map(
+    manifest.invocations.map((
+      entry,
+    ) => [JSON.stringify([entry.namespace, entry.runId]), entry]),
+  );
+  const events = new Map(
+    manifest.events.map((
+      entry,
+    ) => [JSON.stringify([entry.namespace, entry.eventId]), entry]),
+  );
+  if (
+    invocations.size !== manifest.invocations.length ||
+    events.size !== manifest.events.length
+  ) throw new Error("Duplicate authority migration entry.");
+  for await (const inventory of iterateAuthorityUpgrade(transaction, schema)) {
+    const selectedInvocations = inventory.invocations.map((entry) => {
+      const key = JSON.stringify([entry.namespace, entry.runId]),
+        selected = invocations.get(key);
+      if (!selected) {
+        throw new Error(
+          "Retained work has no explicit authority migration or duplicate retained invocation.",
+        );
+      }
+      invocations.delete(key);
+      return selected;
+    });
+    const selectedEvents = inventory.events.map((entry) => {
+      const key = JSON.stringify([entry.namespace, entry.eventId]),
+        selected = events.get(key);
+      if (!selected) {
+        throw new Error(
+          "Every retained ingress requires one explicit authority binding.",
+        );
+      }
+      events.delete(key);
+      return selected;
+    });
+    await applyAuthorityBatch(transaction, schema, {
+      ...manifest,
+      invocations: selectedInvocations,
+      events: selectedEvents,
+    }, inventory);
+  }
+  if (invocations.size || events.size) {
+    throw new Error("Authority manifest names unknown retained work.");
+  }
+}
+async function applyAuthorityBatch(
+  transaction: SqlExecutor,
+  schema: string,
+  manifest: AuthorityUpgradeManifest,
+  inventory: {
+    invocations: RetainedInvocation[];
+    events: RetainedAuthorityEvent[];
+    ingress: Map<string, Record<string, unknown>>;
+  },
+) {
+  const { ingress } = inventory;
   const plan = await planAuthorityMigration(
     inventory.invocations,
     manifest.invocations,

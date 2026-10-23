@@ -1,4 +1,8 @@
 import {
+  type UnrecoverableDecisions,
+  verifyUnrecoverableDecisions,
+} from "../content/unrecoverable.ts";
+import {
   type AbandonmentDecisions,
   recordRetainedTerminals,
   type RetainedTerminals,
@@ -57,6 +61,7 @@ import { validateRetainedHistory } from "./upgrade-history.ts";
 
 export type RetainedDataUpgradeStorage = Readonly<{
   abandoned?: AbandonmentDecisions;
+  unrecoverable?: UnrecoverableDecisions;
   /** Resolve only the explicit backend identity in the reviewed inventory. */
   storeFor?: (
     location: EmbeddedBodyLocation,
@@ -141,7 +146,7 @@ function assertInterrupted(value: Marker) {
     );
   }
 }
-function inspector(
+export function retainedContentInspector(
   session: SqlSession,
   schema: string,
   storage: RetainedDataUpgradeStorage,
@@ -158,6 +163,7 @@ function inspector(
       { kind: "database", backendId: "database:default" },
     copyMappings: storage.copyMappings,
     concurrency: storage.concurrency,
+    unrecoverable: storage.unrecoverable,
     ...(storage.storeFor ? {} : { nativeDatabase: session }),
     storeFor: (location: EmbeddedBodyLocation) => {
       const selected = storage.storeFor?.(location, session);
@@ -227,6 +233,9 @@ export async function prepareRetainedDataUpgrade(
 ): Promise<RetainedDataUpgradePlan | undefined> {
   storage = {
     ...storage,
+    unrecoverable: await verifyUnrecoverableDecisions(
+      structuredClone(storage.unrecoverable),
+    ),
     abandoned: await verifyAbandonmentDecisions(
       structuredClone(storage.abandoned),
     ),
@@ -293,7 +302,7 @@ export async function prepareRetainedDataUpgrade(
   });
   if (!prepared) return undefined;
   const content = await inspectEmbeddedContent(
-    inspector(session, schema, storage),
+    retainedContentInspector(session, schema, storage),
   );
   const ownership = await migrateActionContent(session, schema);
   const plan = {
@@ -340,7 +349,8 @@ async function finalizeRetainedDataUpgrade(
   ) {
     if (
       options.reviewedFingerprint !== undefined ||
-      options.contentDecisions !== undefined || options.abandoned !== undefined
+      options.contentDecisions !== undefined ||
+      options.abandoned !== undefined || options.unrecoverable !== undefined
     ) {
       throw new Error(
         "Reviewed upgrade options require the original retained-data plan.",
@@ -351,15 +361,21 @@ async function finalizeRetainedDataUpgrade(
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
   const decisions = canonicalDecisions(options.contentDecisions);
   const abandoned = await verifyAbandonmentDecisions(options.abandoned);
+  const unrecoverable = await verifyUnrecoverableDecisions(
+    options.unrecoverable,
+  );
   // The public entry point already detached the plan before its first await.
   let plan = options.plan;
   const reviewedFingerprint = options.reviewedFingerprint;
   const hasReviewedIntent = reviewedFingerprint !== undefined ||
-    options.contentDecisions !== undefined || options.abandoned !== undefined;
+    options.contentDecisions !== undefined || options.abandoned !== undefined ||
+    options.unrecoverable !== undefined;
   const decisionsFingerprint = await digestContent(
     new TextEncoder().encode(
       JSON.stringify(
-        abandoned?.entries.length
+        unrecoverable?.entries.length
+          ? { content: decisions, abandoned, unrecoverable }
+          : abandoned?.entries.length
           ? { content: decisions, abandoned }
           : decisions,
       ),
@@ -443,7 +459,7 @@ async function finalizeRetainedDataUpgrade(
     await assertReceiptUpgradeAuthority(transaction, schema);
     const session = joined(transaction);
     const actual = await inspectEmbeddedContent(
-      inspector(session, schema, options),
+      retainedContentInspector(session, schema, options),
     );
     const ownership = await migrateActionContent(session, schema);
     if (
@@ -476,15 +492,15 @@ async function finalizeRetainedDataUpgrade(
       `ALTER TABLE ${core.events} ADD COLUMN IF NOT EXISTS owner_ingress JSONB`,
     );
     await upgradeReceiptReaders(transaction, schema);
-    await migrateActionContent(session, schema, {
-      apply: true,
-      decisions,
-    });
     await migrateEmbeddedContent({
       session,
       plan: actual,
       drained: true,
       reviewedFingerprint: actual.fingerprint,
+    });
+    await migrateActionContent(session, schema, {
+      apply: true,
+      decisions,
     });
     await upgradeOperationCatalog(session, schema);
     await validateRetainedHistory(transaction, schema, abandoned);
@@ -524,6 +540,9 @@ export async function upgradeActionLifecycle(
   // Preserve the reviewed intent across every asynchronous checkpoint.
   options = {
     ...options,
+    ...(options.unrecoverable
+      ? { unrecoverable: structuredClone(options.unrecoverable) }
+      : {}),
     ...(options.abandoned
       ? { abandoned: structuredClone(options.abandoned) }
       : {}),
@@ -553,7 +572,7 @@ export async function upgradeActionLifecycle(
           >[0],
         ) =>
           bodyStoreReader(() =>
-            inspector(session, schema, options).storeFor({
+            retainedContentInspector(session, schema, options).storeFor({
               namespace: copy.namespace,
               kind: copy.kind ?? "object",
               backendId: copy.backendId,

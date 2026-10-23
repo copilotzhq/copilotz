@@ -27,7 +27,14 @@ function invalid(message: string): never {
 /** No prefix is applied. Keep writers stopped for the entire offline cutover. */
 export function createLegacyObjectBodyStore(
   config: S3BodyStorageConfig,
-  options: Readonly<{ fetch?: typeof fetch; timeoutMs?: number }> = {},
+  options: Readonly<
+    {
+      fetch?: typeof fetch;
+      timeoutMs?: number;
+      readRetries?: number;
+      retryDelayMs?: number;
+    }
+  > = {},
 ): BodyStore {
   const source = createLegacyS3Source(
     config,

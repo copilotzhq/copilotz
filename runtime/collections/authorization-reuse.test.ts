@@ -1,6 +1,7 @@
+import { createDecisionReuse } from "../authorization/decision-cache.ts";
 import { createAuthorizationOwner } from "../authorization/owner.ts";
 import type { OperationCatalog } from "../streams/catalog.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createOwnerTestDatabase } from "../testing/owner-database.ts";
 import { bindSqlDatabaseIdentity } from "../events/database-identity.ts";
 import type { SqlExecutor, SqlSession } from "../events/session.ts";
@@ -347,7 +348,8 @@ Deno.test("Collection decisions reuse each phase; record versions, dependencies 
     assertEquals(f.phases.length, count);
     await f.write("record", "third", { visible: true }, true);
     await f.list();
-    assertEquals(f.phases.length, count + 4);
+    // Equal observed current.visible values share a result decision.
+    assertEquals(f.phases.length, count + 3);
     await f.write("record", "record", { visible: false });
     await assertRejects(f.get);
     await f.write("record", "record", { visible: true });
@@ -951,4 +953,118 @@ Deno.test("Untrackable policy views cannot retain a decision; detached audit rea
       }
     });
   }
+});
+
+Deno.test("list disclosures reuse equivalent policy observations but check every row", async () => {
+  const f = await fixture();
+  try {
+    for (let i = 0; i < 8; i++) {
+      await f.write("record", `row-${i}`, { visible: true, value: i }, true);
+    }
+    await f.list();
+    assertEquals(f.phases.filter((p) => p === "result").length, 1);
+    // Inserting a row with a different policy-observed value must refuse the
+    // whole disclosure, even after many successful rows primed the cache.
+    await f.write("record", "row-9", { visible: false }, true);
+    await assertRejects(f.list);
+    await f.write("record", "row-9", { visible: true });
+    await f.list();
+    // A result filter is enforced for every row even when policy never reads it.
+    f.registration.policies.fixture = {
+      ...f.registration.policies.fixture,
+      evaluate() {
+        return { collections: { records: { where: { visible: true } } } };
+      },
+    };
+    const evaluate = createOwnerEvaluator({
+      registration: f.registration,
+      collections: { records: f.records },
+      databaseSchema: "public",
+    });
+    const decide = (result: Record<string, unknown>) =>
+      f.run("disclose", {}, (_, c) =>
+        evaluate(f.authority, {
+          kind: "collection",
+          resource: "records",
+          operation: "list",
+          input: {
+            collection: { alias: "records", name: "record" },
+            method: "list",
+            args: {},
+            phase: "result",
+            result,
+          },
+        }, c));
+    const first = await decide({ id: "one", visible: true });
+    const second = await decide({ id: "two", visible: false });
+    assertEquals(first.constraints, second.constraints);
+    const { constrainCollection } = await import(
+      "../authorization/collection-constraints.ts"
+    );
+    assertThrows(() =>
+      constrainCollection({
+        collection: { alias: "records", name: "record" },
+        method: "list",
+        args: {},
+        phase: "result",
+        result: { id: "two", visible: false },
+      }, second.constraints)
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("policy list reads share a command snapshot with detached results and write invalidation", async () => {
+  const f = await fixture();
+  try {
+    f.registration.policies.fixture = {
+      ...f.registration.policies.fixture,
+      async evaluate({ read }) {
+        const first = await read.list("facts", { limit: 20 });
+        Reflect.set(first[0], "allowed", false);
+        const second = await read.list("facts", { limit: 20 });
+        if (second.some((row) => row.allowed !== true)) authorizationRefused();
+        return { collections: { records: {} } };
+      },
+    };
+    const start = f.sql.length;
+    await f.get();
+    const lists = f.sql.slice(start).filter((sql) => sql.includes("LIMIT 20"));
+    assertEquals(lists.length, 1);
+    await f.write("fact", "fact-3", { allowed: false });
+    await assertRejects(f.get);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("list decision keys retain explicit requested identities but share equivalent result targets", () => {
+  const reuse = createDecisionReuse("public");
+  const authority = testAuthority("public", "space");
+  const intent = {
+    kind: "collection" as const,
+    resource: "record",
+    operation: "list",
+    input: {
+      phase: "result",
+      collection: { name: "record" },
+      args: {},
+      current: { id: "first" },
+    },
+  };
+  const key = reuse.key(authority, intent);
+  assertEquals(
+    reuse.key(authority, {
+      ...intent,
+      input: { ...intent.input, current: { id: "second" } },
+    }),
+    key,
+  );
+  assert(
+    reuse.key(authority, {
+      ...intent,
+      input: { ...intent.input, args: { id: "requested" } },
+    }) !== key,
+  );
 });

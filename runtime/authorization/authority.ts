@@ -119,8 +119,13 @@ function freeze<T>(value: T): T {
   return value;
 }
 
+const validatedAuthorities = new WeakSet<object>();
+
 /** Validates persisted/wire data without granting permission to use it. */
 export function retainedAuthority(value: unknown): AuthenticatedAuthority {
+  if (value && typeof value === "object" && validatedAuthorities.has(value)) {
+    return value as AuthenticatedAuthority;
+  }
   const captured = captureHostCommandJson(value);
   if (new TextEncoder().encode(JSON.stringify(captured)).length > 65536) {
     invalid("binding exceeds 64 KiB");
@@ -307,7 +312,9 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     (principal.kind !== "grant" ||
       (root.flow as Record<string, unknown>).id !== principal.id)
   ) invalid("flow principal");
-  return freeze(captured as AuthenticatedAuthority);
+  const authority = freeze(captured as AuthenticatedAuthority);
+  validatedAuthorities.add(authority);
+  return authority;
 }
 
 /** A long-lived device remains enrolled; only this admission is short-lived. */

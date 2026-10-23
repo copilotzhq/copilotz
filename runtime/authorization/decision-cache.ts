@@ -30,7 +30,7 @@ const readMethods = new Set([
 ]);
 
 type Signatures = {
-  paths: readonly PolicyReadSet[];
+  paths: readonly { reads: PolicyReadSet; signature: string }[];
   sessionExpiresAt?: string;
 };
 type Entry = {
@@ -40,6 +40,12 @@ type Entry = {
   until: number;
   lifetime: { valid: boolean };
 };
+// Components are already serialized JSON. Length framing avoids serializing and
+// escaping the same key/read paths again for every row of a disclosure.
+function decisionKey(key: string, signature: string, values: string): string {
+  return `${key.length}:${key}${signature.length}:${signature}${values}`;
+}
+
 export function createDecisionReuse(schema: string) {
   const scope = { cache: "evaluation" };
   const signatures = { cache: "evaluation-signatures" };
@@ -71,13 +77,9 @@ export function createDecisionReuse(schema: string) {
         intent.operation,
         phase ?? null,
         this.targetDependencies(authority, intent),
-        // A disclosure is always bound to the actual result/current version.
-        phase === "result"
-          ? [
-            (intent.input as { current?: unknown }).current ?? null,
-            (intent.input as { result?: unknown }).result ?? null,
-          ]
-          : null,
+        // Result/current fields are fingerprinted by the tracked policy reads.
+        // Uninspected row fields do not change a decision; the collection kernel
+        // still checks the returned constraints against every disclosed row.
         // Flow completion has additional implicit invocation rules.
         authority.flow ? [authority, intent] : null,
       ]);
@@ -95,18 +97,22 @@ export function createDecisionReuse(schema: string) {
       };
       const name = input.collection?.name;
       if (!name) return [];
-      const id = input.current?.id ?? input.args?.id;
+      // An explicitly requested identity is an execution fence. A returned list
+      // row is only a policy input; collection invalidation and observed fields
+      // already cover it without partitioning equivalent row decisions.
+      const id = intent.operation === "get"
+        ? input.current?.id ?? input.args?.id
+        : input.args?.id;
       const dependency = {
         owner: authority.scope.owner,
         namespace: authority.scope.namespace,
         collection: name,
       };
-      return intent.operation === "get" && typeof id === "string"
-        ? [{ ...dependency, id }]
-        : [
-          dependency,
-          ...(typeof id === "string" ? [{ ...dependency, id }] : []),
-        ];
+      return typeof id === "string"
+        ? intent.operation === "get"
+          ? [{ ...dependency, id }]
+          : [dependency, { ...dependency, id }]
+        : [dependency];
     },
     async get(
       tx: SqlExecutor,
@@ -127,7 +133,7 @@ export function createDecisionReuse(schema: string) {
       }
       // Policies see the session-clamped credential, exactly as on a cold call.
       // The index is stamped by the session row along with the decisions.
-      let current = structuredClone(authority);
+      let current = authority;
       if (
         current.validity.kind === "credential" && index.sessionExpiresAt &&
         Date.parse(index.sessionExpiresAt) <
@@ -141,12 +147,12 @@ export function createDecisionReuse(schema: string) {
           },
         };
       }
-      for (const reads of index.paths) {
+      for (const { reads, signature } of index.paths) {
         const values = policyReadValues({ authority: current, intent }, reads);
         const saved = cachedAuthorization<Entry>(
           tx,
           scope,
-          stableStringify([key, reads, values]),
+          decisionKey(key, signature, values),
         );
         if (
           !saved || !saved.lifetime.valid || saved.policy !== policy ||
@@ -168,7 +174,7 @@ export function createDecisionReuse(schema: string) {
         return {
           ...saved,
           until,
-          decision: { ...structuredClone(saved.decision), authority: current },
+          decision: { ...saved.decision, authority: current },
         };
       }
     },
@@ -189,11 +195,10 @@ export function createDecisionReuse(schema: string) {
       const existing =
         cachedAuthorization<Signatures>(tx, signatures, key)?.paths ??
           [];
-      const signature = stableStringify(observations.reads);
-      const paths =
-        existing.some((reads) => stableStringify(reads) === signature)
-          ? existing
-          : [...existing.slice(-7), observations.reads];
+      const signature = JSON.stringify(observations.reads);
+      const paths = existing.some((path) => path.signature === signature)
+        ? existing
+        : [...existing.slice(-7), { reads: observations.reads, signature }];
       rememberAuthorization(
         tx,
         signatures,
@@ -206,9 +211,18 @@ export function createDecisionReuse(schema: string) {
       rememberAuthorization(
         tx,
         scope,
-        stableStringify([key, observations.reads, observations.values]),
+        decisionKey(key, signature, observations.values),
         {
-          decision: structuredClone(decision),
+          decision: {
+            ...decision,
+            // Evaluator constraints and authority are already detached and
+            // deeply frozen. Only the dependency array is assembled locally.
+            dependencies: Object.freeze(
+              decision.dependencies.map((dependency) =>
+                Object.freeze({ ...dependency })
+              ),
+            ),
+          },
           policy,
           revision: policy.revision,
           until,

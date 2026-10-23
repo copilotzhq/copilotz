@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   authorizationDependencyKeys,
   authorizationRowKeys,
@@ -7,6 +7,7 @@ import {
   hintAuthorizationRows,
   observeAuthorizationWrites,
   OwnerAuthorizationCache,
+  readAuthorizationRecord,
 } from "./cache.ts";
 import { runSqlTransaction, type SqlExecutor } from "../events/session.ts";
 
@@ -158,6 +159,50 @@ Deno.test("complete manifest write sets invalidate records and sets without fenc
       await tx.query("UPDATE public.nodes SET data='{}' WHERE id='B'");
       assertEquals(owner.valid(other), false);
       assertEquals(owner.valid(otherAsset), false);
+    },
+  );
+});
+
+Deno.test("internal immutable record snapshots reuse captures without sharing mutable caller data", async () => {
+  const owner = new OwnerAuthorizationCache();
+  const raw: SqlExecutor = {
+    query: () => Promise.resolve({ rows: [], rowCount: 0 }),
+  };
+  let loads = 0;
+  const dependency = {
+    owner: "schema",
+    namespace: "space",
+    collection: "message",
+    id: "one",
+  };
+  await runSqlTransaction(
+    { transaction: (run) => run(raw) },
+    async (managed) => {
+      const tx = observeAuthorizationWrites(managed, owner, "public", 1);
+      const load = () => {
+        loads++;
+        return Promise.resolve({ nested: { value: loads } });
+      };
+      const snapshot = () =>
+        readAuthorizationRecord(tx, "public", dependency, load, {
+          immutableJson: true,
+        });
+      const first = await snapshot();
+      assert(first === await snapshot());
+      assertThrows(() => {
+        first.nested.value = 99;
+      });
+      const mutable = await readAuthorizationRecord(
+        tx,
+        "public",
+        dependency,
+        load,
+      );
+      mutable.nested.value = 99;
+      assertEquals((await snapshot()).nested.value, 1);
+      hintAuthorizationChanges(tx, [dependency]);
+      await tx.query("UPDATE public.nodes SET data='{}' WHERE id='one'");
+      assertEquals((await snapshot()).nested.value, 2);
     },
   );
 });

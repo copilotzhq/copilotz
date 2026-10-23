@@ -1592,3 +1592,49 @@ Deno.test("delivery retry captures a fresh stream incarnation and commits the co
     await closeFixture(fixture);
   }
 });
+
+Deno.test("batched native asset reads preserve order, isolation, deletion and digest checks", async () => {
+  const f = await createFixture();
+  try {
+    const bytes = new TextEncoder().encode("first body");
+    const one = await f.assets.publish({
+      namespace: "tenant-a",
+      id: "batch-one",
+      mediaType: "text/plain",
+      body: bytes,
+    });
+    const two = await f.assets.publish({
+      namespace: "tenant-a",
+      id: "batch-two",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("second body"),
+    });
+    const result = await f.assets.readMany("tenant-a", [
+      two.id,
+      one.id,
+      one.id,
+    ]);
+    assertEquals(result.map((r) => r.asset.id), [two.id, one.id, one.id]);
+    result[1].bytes.fill(0);
+    assertEquals(result[2].bytes, bytes);
+    await assertRejects(() =>
+      f.assets.readMany("tenant-other", [one.id, two.id])
+    );
+    const logical = await f.assets.catalog.read(one.bodyId);
+    await f.session.query(
+      `UPDATE "${TEST_SCHEMA}".content_body_parts SET bytes=$1 WHERE body_id=$2`,
+      [new Uint8Array(bytes.length), logical!.copy.key],
+    );
+    const error = await assertRejects(() =>
+      f.assets.readMany("tenant-a", [one.id, two.id])
+    );
+    assertEquals((error as ContentError).code, "asset_corrupted");
+    await f.assets.markDeleted("tenant-a", two.id);
+    const deleted = await assertRejects(() =>
+      f.assets.readMany("tenant-a", [two.id, one.id])
+    );
+    assertEquals((deleted as ContentError).code, "asset_deleted");
+  } finally {
+    await closeFixture(f);
+  }
+});

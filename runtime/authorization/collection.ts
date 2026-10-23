@@ -31,7 +31,9 @@ export type CollectionPolicyOperation = Readonly<{
   method: CollectionPolicyIntent["method"];
   args: unknown;
   expectedArgs?: unknown;
-  current?(transaction: SqlExecutor): Promise<CollectionRecord | null>;
+  current?(
+    transaction: SqlExecutor,
+  ): Promise<CollectionRecord | null | undefined>;
   next?: CollectionRecord | null;
   result?: unknown;
 }>;

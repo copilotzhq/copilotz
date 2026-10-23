@@ -1,3 +1,4 @@
+import { captureHostCommandJson } from "../application/host-command-json.ts";
 /** Private owner memory. SQL authority and the owner's epoch fence remain in commands. */
 import {
   afterSqlCommit,
@@ -321,9 +322,12 @@ export function observeAuthorizationCache(
 export function reportAuthorizationCache(
   transaction: SqlExecutor,
   cache: string,
-  result: string,
+  result: string | (() => string),
 ): void {
-  contexts.get(transaction)?.owner.observe?.(cache, result);
+  contexts.get(transaction)?.owner.observe?.(
+    cache,
+    typeof result === "function" ? result() : result,
+  );
 }
 
 /** Immutable owner-observed facts, invalidated by the same writes as decisions. */
@@ -333,6 +337,7 @@ export async function readAuthorizationRecord<T>(
   schema: string,
   dependency: AuthorityDependency,
   read: () => Promise<T>,
+  options: { immutableJson?: boolean } = {},
 ): Promise<T> {
   const key = JSON.stringify([schema, dependency]);
   const saved = cachedAuthorization<{ value: T }>(
@@ -340,14 +345,25 @@ export async function readAuthorizationRecord<T>(
     recordReads,
     key,
   );
-  if (saved) return structuredClone(saved.value);
+  if (saved) {
+    if (options.immutableJson) {
+      // Only internal policy snapshots request this path. Captured JSON is
+      // deeply immutable; ordinary record consumers still receive detached data.
+      saved.value = captureHostCommandJson(saved.value) as T;
+      return saved.value;
+    }
+    return structuredClone(saved.value);
+  }
   const context = contexts.get(transaction);
   const keys = authorizationDependencyKeys(schema, [dependency]);
   const stamp = context?.owner.stamp(keys);
-  const value = await memoAuthorizationRead(transaction, key, keys, read);
+  const loaded = await memoAuthorizationRead(transaction, key, keys, read);
+  const value = options.immutableJson
+    ? captureHostCommandJson(loaded) as T
+    : loaded;
   if (stamp && context?.owner.valid(stamp)) {
     rememberAuthorization(transaction, recordReads, key, {
-      value: structuredClone(value),
+      value: options.immutableJson ? value : structuredClone(value),
     }, keys);
   }
   return value;

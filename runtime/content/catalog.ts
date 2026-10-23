@@ -140,6 +140,7 @@ function sameWriter(body: LogicalBody, writer: ContentWriter): boolean {
 
 export interface ContentCatalog {
   read(bodyId: string, executor?: SqlExecutor): Promise<LogicalBody | null>;
+  readMany?(bodyIds: readonly string[]): Promise<readonly LogicalBody[]>;
   nextDeadline(executor?: SqlExecutor): Promise<string | null>;
   retirementCandidates(input?: {
     limit?: number;
@@ -445,6 +446,16 @@ export function createContentCatalog(
   }
   return {
     read,
+    async readMany(bodyIds) {
+      if (!bodyIds.length) return [];
+      const rows = await session.query<BodyRow>(
+        `SELECT b.*, c.backend_kind, c.backend_id, c.version_token, c.collectable
+         FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy
+         WHERE b.body_id=ANY($1::text[])`,
+        [[...new Set(bodyIds)]],
+      );
+      return rows.rows.map(map);
+    },
     async nextDeadline(
       executor: SqlExecutor = session,
     ): Promise<string | null> {

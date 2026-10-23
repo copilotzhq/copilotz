@@ -32,12 +32,6 @@ export function policyReadValues(root: unknown, reads: PolicyReadSet): string {
 export function trackPolicyReads(values: Record<string, unknown>) {
   // JSON snapshots have no aliases, accessors, prototypes or caller-owned state.
   const snapshot = captureHostCommandJson(values) as Record<string, unknown>;
-  const freeze = (value: unknown) => {
-    if (!object(value)) return;
-    for (const child of Object.values(value)) freeze(child);
-    Object.freeze(value);
-  };
-  freeze(snapshot);
   let active = true;
   const lifetime = { valid: true };
   const paths = new Map<string, PolicyReadPath>();
@@ -58,10 +52,24 @@ export function trackPolicyReads(values: Record<string, unknown>) {
     const identity = JSON.stringify(path);
     const saved = proxies.get(identity);
     if (saved) return saved;
-    // Build frozen targets containing child proxies, so reflective descriptors
-    // and Object.isFrozen retain their JSON snapshot semantics. A proxy directly
-    // over the raw frozen snapshot could not substitute tracked child objects.
+    // Ordinary property access wraps only the inspected path. Reflection
+    // materializes one frozen level with child proxies, preserving descriptor
+    // invariants without traversing unobserved payloads or history rows.
     const target = Array.isArray(value) ? [] : {};
+    let prepared = false;
+    const prepare = () => {
+      if (prepared) return;
+      prepared = true;
+      for (const key of Object.keys(value)) {
+        Object.defineProperty(target, key, {
+          value: wrap(Reflect.get(value, key), [...path, key]),
+          enumerable: true,
+          configurable: false,
+          writable: false,
+        });
+      }
+      Object.freeze(target);
+    };
     const proxy = new Proxy(target, {
       get(_target, key, receiver) {
         if (typeof key === "symbol") {
@@ -76,7 +84,7 @@ export function trackPolicyReads(values: Record<string, unknown>) {
         if (Object.hasOwn(value, key)) {
           const result = Reflect.get(value, key);
           remember(child, object(result) ? "shape" : "value");
-          return Reflect.get(target, key, receiver);
+          return wrap(result, child);
         }
         remember(child, "value");
         if (
@@ -97,12 +105,17 @@ export function trackPolicyReads(values: Record<string, unknown>) {
         remember(path, "value");
         return Reflect.ownKeys(value);
       },
+      isExtensible() {
+        prepare();
+        return false;
+      },
       getOwnPropertyDescriptor(_target, key) {
         if (typeof key !== "string") {
           unsupported();
           return undefined;
         }
         remember([...path, key], "value");
+        prepare();
         return Object.getOwnPropertyDescriptor(target, key);
       },
       getPrototypeOf() {
@@ -116,32 +129,27 @@ export function trackPolicyReads(values: Record<string, unknown>) {
       },
       defineProperty(_target, key, descriptor) {
         unsupported();
+        prepare();
         return Reflect.defineProperty(target, key, descriptor);
       },
       deleteProperty(_target, key) {
         unsupported();
+        prepare();
         return Reflect.deleteProperty(target, key);
       },
       setPrototypeOf(_target, prototype) {
         unsupported();
+        prepare();
         return Reflect.setPrototypeOf(target, prototype);
       },
       preventExtensions() {
         unsupported();
-        return Reflect.preventExtensions(target);
+        prepare();
+        return true;
       },
     });
     proxies.set(identity, proxy);
     proxyIdentities.add(proxy);
-    for (const key of Object.keys(value)) {
-      Object.defineProperty(target, key, {
-        value: wrap(Reflect.get(value, key), [...path, key]),
-        enumerable: true,
-        configurable: false,
-        writable: false,
-      });
-    }
-    Object.freeze(target);
     return proxy;
   };
   const all = () => {

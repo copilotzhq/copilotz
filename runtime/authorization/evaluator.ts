@@ -360,6 +360,20 @@ export function createOwnerEvaluator(
   ): Promise<AuthorizationDecision> {
     let authority = retainedAuthority(value);
     intent = captureHostCommandJson(intent) as AuthorizationIntent;
+    const diagnosticIntent = () => {
+      const phase = (intent.input as { phase?: unknown } | null)?.phase;
+      return [
+        intent.kind,
+        intent.resource,
+        intent.operation,
+        typeof phase === "string" ? phase : "",
+      ].join("|");
+    };
+    reportAuthorizationCache(
+      command.transaction,
+      "evaluation-call",
+      diagnosticIntent,
+    );
     const directory = options.directory;
     if (directory && intent.kind !== "collection") authorizationRefused();
     const reference = directory
@@ -405,6 +419,11 @@ export function createOwnerEvaluator(
         return saved.decision;
       }
     }
+    reportAuthorizationCache(
+      command.transaction,
+      "policy-call",
+      diagnosticIntent,
+    );
     // These dependencies drive live authorization notices as well as grants.
     // Query/result cache stamps must not subscribe readers to ordinary data writes.
     const dependencies: AuthorityDependency[] = [...authority.dependencies];
@@ -674,13 +693,32 @@ export function createOwnerEvaluator(
                     )
                   ) as Promise<readonly CollectionRecord[]>;
                 }
+                const capturedQuery = captureHostCommandJson(query, {
+                  omitUndefinedProperties: true,
+                }) as CollectionQuery;
                 return track(() =>
-                  queryCollectionRecords(
+                  memoAuthorizationRead(
                     command.transaction,
-                    tables,
-                    definition,
-                    namespace,
-                    query,
+                    JSON.stringify([
+                      databaseSchema,
+                      "query",
+                      namespace,
+                      definition.name,
+                      capturedQuery,
+                    ]),
+                    authorizationDependencyKeys(databaseSchema, [{
+                      owner: authority.scope.owner,
+                      namespace,
+                      collection: definition.name,
+                    }]),
+                    () =>
+                      queryCollectionRecords(
+                        command.transaction,
+                        tables,
+                        definition,
+                        namespace,
+                        capturedQuery,
+                      ),
                   )
                 );
               },

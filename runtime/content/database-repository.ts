@@ -59,6 +59,7 @@ import {
   databaseBodyStoreWriter,
   isDatabaseBodyStore,
   provisionDatabaseBodyStore,
+  readReadyDatabaseBodies,
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 import type {
@@ -1809,10 +1810,58 @@ export function createDatabaseAssetRepository(
       assertReadable(asset);
       return asset;
     });
+    const batched = new Map<string, { bytes: Uint8Array; digest: string }>();
+    if (assets.length > 1 && catalog.readMany) {
+      const logical = new Map(
+        (await catalog.readMany(assets.map((asset) => asset.bodyId)))
+          .map((body) => [body.bodyId, body]),
+      );
+      const groups = new Map<BodyStore, Map<string, AssetRecord>>();
+      let batchBytes = 0;
+      for (const asset of assets) {
+        if (asset.byteLength > PREPARED_BODY_CACHE_MAX_BYTES - batchBytes) {
+          continue;
+        }
+        batchBytes += asset.byteLength;
+        const body = logical.get(asset.bodyId);
+        if (!body) continue;
+        const store = storeForCopy(body.copy);
+        let group = groups.get(store);
+        if (!group) groups.set(store, group = new Map());
+        group.set(body.copy.key, asset);
+      }
+      for (const [store, group] of groups) {
+        const result = await readReadyDatabaseBodies(
+          store,
+          [...group].map(([bodyId, asset]) => ({
+            bodyId,
+            byteLength: asset.byteLength,
+            digest: asset.digest,
+          })),
+        );
+        if (!result) continue;
+        for (const [key, bytes] of result) {
+          const asset = group.get(key)!;
+          if (await digest(bytes) !== asset.digest) {
+            throw createContentError(
+              "asset_corrupted",
+              `Asset body integrity check failed: ${asset.id}`,
+              { namespace: asset.namespace, assetId: asset.id },
+            );
+          }
+          batched.set(asset.bodyId, { bytes, digest: asset.digest });
+        }
+      }
+    }
     const bytes = await readBodiesBounded(
       rows.map((row, index) => ({ row, asset: assets[index] })),
       storage.readConcurrency,
       async ({ asset }) => {
+        const batch = batched.get(asset.bodyId);
+        if (
+          batch && batch.digest === asset.digest &&
+          batch.bytes.byteLength === asset.byteLength
+        ) return batch.bytes.slice();
         const head =
           (await readLogicalHead(catalog, asset.bodyId, storeForCopy))?.head;
         if (!head || head.state !== "ready") {

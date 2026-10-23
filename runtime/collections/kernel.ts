@@ -1106,12 +1106,18 @@ export function createCollectionKernel(
         ...(id
           ? {
             current: (tx: SqlExecutor) =>
-              readAuthorizationRecord(tx, options.eventStore.databaseSchema, {
-                owner: "schema",
-                namespace,
-                collection: name,
-                id,
-              }, () => loadCollectionRecord(tx, tables, namespace, name, id)),
+              readAuthorizationRecord(
+                tx,
+                options.eventStore.databaseSchema,
+                {
+                  owner: "schema",
+                  namespace,
+                  collection: name,
+                  id,
+                },
+                () => loadCollectionRecord(tx, tables, namespace, name, id),
+                { immutableJson: true },
+              ),
           }
           : {}),
       }, authority)
@@ -1129,6 +1135,33 @@ export function createCollectionKernel(
         result = canonicalizeContentRefs(result);
       }
       const rows = Array.isArray(result) && result.length ? result : [result];
+      // Capture shared query arguments once. Each row still loads its current
+      // record, evaluates its disclosure, and enforces the resulting filter.
+      let recordId: string | undefined;
+      const check = captureCollectionPolicy({
+        databaseSchema: options.eventStore.databaseSchema,
+        registration,
+        namespace,
+        method,
+        args,
+        current: (tx: SqlExecutor) => {
+          const target = recordId;
+          return target
+            ? readAuthorizationRecord(
+              tx,
+              options.eventStore.databaseSchema,
+              {
+                owner: "schema",
+                namespace,
+                collection: name,
+                id: target,
+              },
+              () => loadCollectionRecord(tx, tables, namespace, name, target),
+              { immutableJson: true },
+            )
+            : Promise.resolve(undefined);
+        },
+      }, authority);
       for (const row of rows) {
         const value = row && typeof row === "object"
           ? row as Record<string, unknown>
@@ -1136,34 +1169,9 @@ export function createCollectionKernel(
         const record = method === "vectors.search"
           ? value?.record as Record<string, unknown> | undefined
           : value;
-        const recordId =
-          method !== "relations.list" && typeof record?.id === "string"
-            ? record.id
-            : id;
-        const check = captureCollectionPolicy({
-          databaseSchema: options.eventStore.databaseSchema,
-          registration,
-          namespace,
-          method,
-          args,
-          ...(recordId
-            ? {
-              current: (tx: SqlExecutor) =>
-                readAuthorizationRecord(
-                  tx,
-                  options.eventStore.databaseSchema,
-                  {
-                    owner: "schema",
-                    namespace,
-                    collection: name,
-                    id: recordId,
-                  },
-                  () =>
-                    loadCollectionRecord(tx, tables, namespace, name, recordId),
-                ),
-            }
-            : {}),
-        }, authority);
+        recordId = method !== "relations.list" && typeof record?.id === "string"
+          ? record.id
+          : id;
         await check.authorize(read, "result", row);
       }
     };

@@ -4,6 +4,8 @@ export const dataProperties = Symbol("data properties");
 type DataOnlyPolicy = {
   value(value: unknown, depth: number, nodes: number): unknown;
   cycle(): never;
+  /** Receives only completed immutable copies, never caller objects. */
+  captured?(value: object): void;
   properties(
     value: object,
     array: boolean,
@@ -50,12 +52,16 @@ export function walkDataOnly(
           });
         }
       });
+      if (result && capture === true) {
+        Object.freeze(result);
+        policy.captured?.(result);
+      }
       return capture === "json"
         ? `${array ? "[" : "{"}${(result as string[]).join(",")}${
           array ? "]" : "}"
         }`
         : result
-        ? Object.freeze(result)
+        ? result
         : undefined;
     } finally {
       ancestors.delete(object);

@@ -108,3 +108,27 @@ Deno.test("policy JSON views preserve frozen descriptors and never expose raw ch
   assertEquals(child.value.id, "member");
   assert(!tracker.finish().lifetime.valid);
 });
+
+Deno.test("lazy policy views preserve array length, reflection, identities and late reads", () => {
+  const tracker = trackPolicyReads(input());
+  const intent = tracker.value<ReturnType<typeof input>["intent"]>("intent");
+  const ids = intent.input.ids;
+  assertEquals(ids.length, 2);
+  assertEquals(Reflect.ownKeys(ids), ["0", "1", "length"]);
+  assertEquals(Object.getOwnPropertyDescriptor(ids, "length"), {
+    value: 2,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+  assert(Object.isFrozen(ids));
+  assert(intent.input.ids === ids);
+  assertEquals(
+    Object.getOwnPropertyDescriptor(intent, "input")!.value,
+    intent.input,
+  );
+  assertEquals(JSON.stringify(ids), '["a","b"]');
+  assertThrows(() => ids.push("c"));
+  assert(!tracker.finish().lifetime.valid);
+  assertEquals(ids[0], "a");
+});

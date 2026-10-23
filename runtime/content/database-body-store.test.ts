@@ -1,6 +1,9 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
-import { createDatabaseBodyStore } from "./database-body-store.ts";
+import {
+  createDatabaseBodyStore,
+  readReadyDatabaseBodies,
+} from "./database-body-store.ts";
 import { digestContent } from "./digest.ts";
 import { bodyStoreConformance } from "../testing/body-store-conformance.ts";
 import { readBodyBytes } from "./body-store.ts";
@@ -335,6 +338,81 @@ Deno.test("database body retries reconcile lost commit acknowledgement and rejec
     lose = true;
     await assertRejects(() => store.fence({ writer }));
     assertEquals((await store.fence({ writer })).generation, 2);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("native ready body batches use one snapshot and exclude missing, unready or mismatched bodies", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `ready_batch_${crypto.randomUUID().replaceAll("-", "")}`;
+  let queries = 0;
+  const store = createDatabaseBodyStore({
+    schema,
+    session: {
+      query(sql, params) {
+        queries++;
+        return db.query(sql, params);
+      },
+      transaction: db.transaction,
+    } as SqlExecutor,
+  });
+  try {
+    const bytes = new TextEncoder().encode("batch bytes");
+    const digest = await digestContent(bytes),
+      emptyDigest = await digestContent(new Uint8Array());
+    await store.put({ bodyId: "text", bytes, digest, mediaType: "text/plain" });
+    await store.put({
+      bodyId: "empty",
+      bytes: new Uint8Array(),
+      digest: emptyDigest,
+      mediaType: "text/plain",
+    });
+    await store.reserve({
+      bodyId: "open",
+      reservationId: "writer",
+      generation: 1,
+      mediaType: "text/plain",
+    });
+    queries = 0;
+    const result = await readReadyDatabaseBodies(store, [
+      { bodyId: "text", byteLength: bytes.length, digest },
+      { bodyId: "empty", byteLength: 0, digest: emptyDigest },
+      { bodyId: "open", byteLength: 0, digest: emptyDigest },
+      { bodyId: "missing", byteLength: 0, digest: emptyDigest },
+    ]);
+    assertEquals(queries, 1);
+    assertEquals([...result!.keys()], ["empty", "text"]);
+    assertEquals(result!.get("text"), bytes);
+    assertEquals(
+      (await readReadyDatabaseBodies(store, [{
+        bodyId: "text",
+        byteLength: bytes.length + 1,
+        digest,
+      }]))!.size,
+      0,
+    );
+    assertEquals(
+      (await readReadyDatabaseBodies(store, [{
+        bodyId: "text",
+        byteLength: bytes.length,
+        digest: emptyDigest,
+      }]))!.size,
+      0,
+    );
+    await db.query(
+      `UPDATE "${schema}".content_body_parts SET start_offset=1 WHERE body_id='text'`,
+    );
+    assertEquals(
+      (await readReadyDatabaseBodies(store, [{
+        bodyId: "text",
+        byteLength: bytes.length,
+        digest,
+      }]))!.size,
+      0,
+    );
   } finally {
     await db.close();
   }

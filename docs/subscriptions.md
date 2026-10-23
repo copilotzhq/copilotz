@@ -169,8 +169,10 @@ the public record timestamp is less precise. String ordering and ranges use SQL
 `COLLATE "C"` and Unicode code-point ordering in memory. `eqIgnoreCase`,
 `inIgnoreCase`, `jsonEquals`, JSON containment (`contains`/`containsAny`),
 timestamp predicates, cursors, includes, text search, and non-scalar/undeclared
-ordering fields are refused. These restrictions apply to policy filters as well
-as client queries. Use typed scalar predicates for complex data.
+ordering fields are refused. These restrictions also apply to policy filters,
+except that trusted policies may use `jsonEquals` on non-timestamp fields (for
+example, an empty roles array). Client queries cannot enable this exception. Use
+typed scalar predicates for other complex data.
 
 Configure owner limits through `engine.subscriptionLimits`:
 
@@ -179,14 +181,24 @@ Configure owner limits through `engine.subscriptionLimits`:
 | `maxStates` (attached states across the schema)                           |             256 |
 | `maxStatesPerPrincipal` (tenant and principal, across sockets/namespaces) |              32 |
 | `maxDetachedPerPrincipal`                                                 |              16 |
-| `maxPredicateNodes` (per query/policy filter group)                       |              64 |
+| `maxPredicateNodes` (per client query filter group)                       |              64 |
 | `maxPredicateValues` (`in`/`overlaps` list length)                        |              32 |
-| `maxQueryBytes` (serialized filter group)                                 |          16 KiB |
+| `maxQueryBytes` (serialized client filter group)                          |          16 KiB |
 | `maxPendingAdmissions`                                                    |             256 |
 | `maxCollections`                                                          |              32 |
 | `maxRows` / `maxCacheBytes` (per row cache)                               | 10,000 / 16 MiB |
 | `maxFrames` / `maxBytes` (reader and replay history)                      |      64 / 1 MiB |
 | `retentionMs`                                                             |         300,000 |
+
+Policy output has an independent, fixed budget: 256 predicate nodes, 1000 values
+per `in`/`overlaps` list, and 256 KiB of serialized filters. The SQL compiler
+also limits each predicate to 1000 total values and depth 16. Policy membership
+lists compile to sets once at admission; they are not scanned or serialized on
+every row change. Changing client limits does not change this policy budget.
+Refused policy filters log their reason at validation or live compilation,
+including reauthorization failures. Applications should prefer exact scopes for
+individual record windows and explicitly bound any remaining policy-generated
+lists.
 
 All limits must be positive safe integers; SQL predicate structural bounds still
 apply when raising live limits. Detached states do not consume active admission.

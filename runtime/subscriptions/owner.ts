@@ -24,7 +24,11 @@ import { afterSqlCommit, type SqlSession } from "../events/session.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { mapNode, type NodeRow } from "../collections/reducer.ts";
 import { compareCodePoints } from "../collections/predicate.ts";
-import { compileLiveFilters, queryRefused } from "./predicate.ts";
+import {
+  compileLiveFilters,
+  POLICY_PREDICATE_LIMITS,
+  queryRefused,
+} from "./predicate.ts";
 import { stableStringify } from "../collections/equal.ts";
 import type { CollectionDefinition } from "../collections/definition.ts";
 import type {
@@ -515,10 +519,18 @@ export function createCollectionObserver(
           try {
             policyMatches = compileLiveFilters(
               [next],
-              limits,
+              POLICY_PREDICATE_LIMITS,
               definition.schema,
+              { trusted: true },
             );
           } catch (error) {
+            console.error("Subscription policy filter refused", {
+              collection: alias,
+              policy: authority.policy,
+              reason: (error as { reason?: string }).reason ??
+                "query_unsupported",
+              message: error instanceof Error ? error.message : String(error),
+            });
             admissionError = error;
             reader.stop("reset", "subscription_query_refused");
             if (state) forget(state);

@@ -37,6 +37,7 @@ export async function fixture(
       import("../collections/definition.ts").CollectionDefinition
     >;
     now?: () => Date;
+    policyFilter?: import("../collections/types.ts").CollectionFilter;
   } = {},
 ) {
   const db = await createTestDatabase({
@@ -173,7 +174,8 @@ export async function fixture(
                   key,
                 ) => [key, {}]),
               ),
-              entry: grant.restricted ? { where: { visible: true } } : {},
+              entry: configuration.policyFilter ??
+                (grant.restricted ? { where: { visible: true } } : {}),
             },
           };
         },

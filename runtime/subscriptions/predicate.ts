@@ -20,6 +20,15 @@ export type LivePredicateLimits = {
   maxPredicateValues: number;
   maxQueryBytes: number;
 };
+/** Trusted application output has a separate budget from client predicates.
+ * Matches compile to sets once; these bounds also fit the SQL predicate compiler
+ * (256 nodes / 1000 total values). Client defaults remain 64 / 32 / 16 KiB.
+ */
+export const POLICY_PREDICATE_LIMITS: LivePredicateLimits = {
+  maxPredicateNodes: 256,
+  maxPredicateValues: 1000,
+  maxQueryBytes: 256 * 1024,
+};
 type Match = (row: CollectionRecord) => boolean;
 
 /** Compiles both policy and query once. No constant serialization runs on commit. */
@@ -27,6 +36,7 @@ export function compileLiveFilters(
   filters: readonly CollectionFilter[],
   limits: LivePredicateLimits,
   schema: unknown,
+  options: { trusted?: boolean } = {},
 ): Match {
   const scalarField = (field: string) => {
     if (field === "id") return true;
@@ -95,7 +105,10 @@ export function compileLiveFilters(
       const child = predicate(p.not);
       return (row) => !child(row);
     }
-    if ("jsonEquals" in p || "eqIgnoreCase" in p || "inIgnoreCase" in p) {
+    if (
+      "jsonEquals" in p && !options.trusted || "eqIgnoreCase" in p ||
+      "inIgnoreCase" in p
+    ) {
       throw queryRefused(
         "Live predicates refuse jsonEquals and locale-dependent case folding",
       );
@@ -108,6 +121,10 @@ export function compileLiveFilters(
       throw queryRefused("Live timestamp predicates are unsupported");
     }
     const get = at(p.field);
+    if ("jsonEquals" in p) {
+      const constant = stableStringify(p.jsonEquals);
+      return (row) => stableStringify(get(row)) === constant;
+    }
     if ("exists" in p) return (row) => p.exists === (get(row) !== undefined);
     if ("isNull" in p) return (row) => p.isNull === (get(row) === null);
     if ("isBlank" in p) {

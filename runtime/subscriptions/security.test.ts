@@ -275,3 +275,64 @@ Deno.test("SEC3 malformed content options cannot strand the owner admission queu
     await f.close();
   }
 });
+
+Deno.test("trusted policy values admit live windows without widening client limits", async () => {
+  const ids = Array.from(
+    { length: 512 },
+    (_, i) => `allowed-${i}`.padEnd(96, "x"),
+  );
+  const f = await fixture({}, {
+    policyFilter: { filter: { field: "id", in: ids } },
+  });
+  try {
+    await f.collections.entry.create({ id: ids[511] });
+    await f.collections.entry.create({ id: "foreign" });
+    const sub = await f.observe(f.authority, "entry", { limit: 100 });
+    try {
+      const r = reader(sub), first = await r.next();
+      assert(first.t === "snapshot");
+      assertEquals(first.rows.map((row) => row.id), [ids[511]]);
+      await f.collections.entry.create({ id: ids[0] });
+      const next = await r.next();
+      assert(next.t === "batch");
+      assertEquals(next.changes.map((row) => row.id), [ids[0]]);
+      const error = await assertRejects(() =>
+        f.observe(f.authority, "entry", {
+          filter: { field: "id", in: ids.slice(0, 33) },
+        })
+      );
+      assertEquals((error as { reason?: string }).reason, "limit_exceeded");
+    } finally {
+      sub.detach();
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("refused trusted live policies log their diagnostic reason", async () => {
+  const f = await fixture({}, { policyFilter: { contains: { tags: ["x"] } } });
+  const original = console.error;
+  const logs: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  try {
+    const error = await assertRejects(() => f.observe(f.authority, "entry"));
+    assertEquals(
+      (error as { code?: string }).code,
+      "subscription_query_refused",
+    );
+    assert(
+      logs.some((entry) =>
+        JSON.stringify(entry).includes("Live JSON containment")
+      ),
+    );
+    assert(
+      logs.some((entry) => JSON.stringify(entry).includes("query_unsupported")),
+    );
+  } finally {
+    console.error = original;
+    await f.close();
+  }
+});

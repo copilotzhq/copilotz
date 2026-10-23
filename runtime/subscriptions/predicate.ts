@@ -47,6 +47,22 @@ export function compileLiveFilters(
     for (const part of field.split(".")) {
       node = node?.properties?.[part] as typeof node;
     }
+    // An untyped enum or const of scalar values (`status: { enum: [...] }`)
+    // is as scalar as its declared type would be.
+    const literals = node as { enum?: unknown; const?: unknown } | undefined;
+    if (
+      node?.type === undefined &&
+      (Array.isArray(literals?.enum) || literals && "const" in literals)
+    ) {
+      const values = Array.isArray(literals.enum)
+        ? literals.enum
+        : [literals.const];
+      return values.length > 0 &&
+        values.every((value) =>
+          value === null ||
+          ["string", "number", "boolean"].includes(typeof value)
+        );
+    }
     const types = Array.isArray(node?.type) ? node.type : [node?.type];
     return types.length > 0 &&
       types.every((type) =>

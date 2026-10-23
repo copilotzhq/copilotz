@@ -99,3 +99,23 @@ test("the feed reads the newest messages and shows them oldest first", async () 
     runtime.dispose();
   }
 });
+
+test("the chat window's content selection is valid input to the visibility projection's history read", async () => {
+  // Live message windows project each row through Core `history` with the
+  // window's own content selection; a narrower schema refused every window.
+  const { messageCollection } = await import(
+    "../collections/message/index.ts"
+  );
+  const { validateAgainstJsonSchema } = await import(
+    "../../../runtime/collections/validate.ts"
+  );
+  const history = messageCollection.queries?.history;
+  assert.ok(history?.inputSchema);
+  validateAgainstJsonSchema(history.inputSchema, {
+    threadId: "t",
+    messageId: "m",
+    view: "all",
+    viewerParticipantIds: ["human"],
+    content: messageReadSelection.content,
+  }, "history input");
+});

@@ -387,11 +387,28 @@ export const messageCollection: CollectionDefinition = defineCollection({
             anyOf: [
               { type: "boolean" },
               {
+                // The whole CollectionContentOptions shape: live subscription
+                // windows project through this query with their deferral
+                // options (`bodyByteLimit`, `overflow`, `exclude`).
                 type: "object",
                 additionalProperties: false,
                 properties: {
                   fields: { type: "array", items: { type: "string" } },
                   byteLimit: { type: "integer", minimum: 0 },
+                  bodyByteLimit: { type: "integer", minimum: 0 },
+                  overflow: { type: "string", enum: ["reject", "defer"] },
+                  exclude: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: Object.fromEntries(
+                        ["kind", "role", "mediaType", "disposition"].map((
+                          key,
+                        ) => [key, { type: ["string", "null"] }]),
+                      ),
+                    },
+                  },
                 },
               },
             ],

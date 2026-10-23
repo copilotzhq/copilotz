@@ -483,6 +483,8 @@ async function follow(
     const snapshot = projector.snapshot();
     ctx.command("threadFeed", threadId, "set", {
       attempts: snapshot.attempts,
+      turns: snapshot.turns,
+      routed: snapshot.routed,
     });
     const outputs = JSON.stringify(snapshot.outputs);
     if (outputs !== lastOutputs) {
@@ -491,12 +493,15 @@ async function follow(
         outputs: snapshot.outputs,
       });
     }
-    const summary = JSON.stringify([status, snapshot.active]);
+    // The conversation re-renders only when this summary changes, never as
+    // text streams.
+    const summary = JSON.stringify([status, snapshot.active, snapshot.replied]);
     if (summary !== last) {
       last = summary;
       ctx.command("threadRun", threadId, "set", {
         status,
         active: snapshot.active,
+        replied: snapshot.replied,
         ...(snapshot.active.length ? {} : { stopping: false }),
       });
     }
@@ -509,7 +514,7 @@ async function follow(
     timer ??= setTimeout(flush, 50);
   };
   try {
-    run({ status, active: [] });
+    run({ status, active: [], replied: [] });
     while (!signal.aborted) {
       try {
         status = "live";

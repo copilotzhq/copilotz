@@ -165,6 +165,12 @@ export type ChatMessage = Readonly<{
   attemptId?: string;
   edited?: boolean;
   error?: string;
+  /**
+   * On the person's latest message only: `true` while it was delivered and
+   * no reply to it has begun (it says "Sent"), `false` once one has (the
+   * mark fades). See {@link markDelivered}.
+   */
+  delivered?: boolean;
 }>;
 
 /** Consecutive messages by one speaker, rendered under one name and avatar. */
@@ -536,6 +542,18 @@ function workflow(row: Row): Record<string, unknown> {
   return record(record(row.metadata).copilotzWorkflow);
 }
 
+/**
+ * Whether a row is the question of an agent's `ask` whose call these rows
+ * draw: Core records the question as the asking agent's message, and the
+ * call already shows it. Without the call (outside the window, or not
+ * visible to this viewer) the question shows as the message it is.
+ */
+function askQuestionOf(row: Row, shownCalls: ReadonlySet<string>): boolean {
+  const ask = record(record(row.metadata).copilotzAsk);
+  const call = text(ask.toolCallId);
+  return ask.phase === "question" && call !== undefined && shownCalls.has(call);
+}
+
 /** Whether a row is a tool result already shown inside its call's activity. */
 function isToolResult(row: Row, sender: ChatSender): boolean {
   return sender.type === "tool" &&
@@ -600,11 +618,30 @@ export function projectMessages(
        * only its status shows its output to its requester or authorized initiator.
        */
       viewerIds?: readonly string[];
+      /**
+       * The `ask` call draws inline as the question (its renderer is
+       * `inline`): the question message Core records for a call these rows
+       * show is left out, so the question shows once.
+       */
+      inlineAsk?: boolean;
     }>
     & TranscriptOptions = {},
 ): ChatMessage[] {
   const results = new Map<string, ToolResult>();
+  // The ask calls these rows draw as the message, so each question shows
+  // once: as its call, which names who was asked and how it went.
+  const shownCalls = new Set<string>();
   for (const row of rows) {
+    if (options.inlineAsk && record(row.visibility).kind !== "internal") {
+      const calls = record(row.metadata).llmToolCalls;
+      for (const call of Array.isArray(calls) ? calls : []) {
+        const value = record(call);
+        const id = text(value.id);
+        if (id && (text(value.action) ?? text(value.name)) === "ask") {
+          shownCalls.add(id);
+        }
+      }
+    }
     const sender = inferSender(senderOf(String(row.senderId ?? "")), row);
     if (sender.type !== "tool") continue;
     const result = toolResult(row, options.viewerIds);
@@ -613,6 +650,7 @@ export function projectMessages(
   const messages: ChatMessage[] = [];
   for (const row of rows) {
     if (record(row.visibility).kind === "internal") continue;
+    if (askQuestionOf(row, shownCalls)) continue;
     const sender = inferSender(senderOf(String(row.senderId ?? "")), row);
     if (isToolResult(row, sender)) continue;
     const metadata = record(row.metadata);
@@ -811,6 +849,31 @@ export function finishedReplies(
   });
   return (message, index) =>
     idle || (last.get(message.sender.id) ?? index) > index;
+}
+
+/**
+ * Marks the person's latest message, once sent, as delivered until a reply
+ * to it begins: an agent message follows it, or `replied` (the feed's
+ * messages a reply has begun for, `threadRun.replied`) names it. Sending and
+ * failed messages, and every earlier one, carry no mark.
+ */
+export function markDelivered(
+  messages: readonly ChatMessage[],
+  isOwn: (sender: ChatSender) => boolean,
+  replied: ReadonlySet<string>,
+): ChatMessage[] {
+  let index = messages.length - 1;
+  while (
+    index >= 0 &&
+    !(messages[index].role === "user" && isOwn(messages[index].sender))
+  ) index--;
+  const latest = messages[index];
+  if (!latest || latest.status !== "sent") return [...messages];
+  const answered = replied.has(latest.id) ||
+    messages.slice(index + 1).some((message) => message.role === "assistant");
+  return messages.map((message, at) =>
+    at === index ? { ...message, delivered: !answered } : message
+  );
 }
 
 /** Consecutive messages from the same speaker share one header. */

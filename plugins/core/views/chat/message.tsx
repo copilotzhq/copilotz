@@ -512,6 +512,48 @@ function Body(
   );
 }
 
+/**
+ * Where the person's own message stands, in one quiet slot under its bubble:
+ * "Sending…" while it goes, then "Sent" on their latest message until a reply
+ * to it begins, when it fades. One live region, so each change is announced
+ * once.
+ */
+function Delivery(
+  { message }: { message: ChatMessage },
+): React.ReactElement | null {
+  const sending = message.status === "sending";
+  if (!sending && message.delivered === undefined) return null;
+  const shown = sending || message.delivered === true;
+  return (
+    <span
+      role="status"
+      data-slot="message-delivery"
+      data-state={sending ? "sending" : message.delivered ? "sent" : "settled"}
+      className={cn(
+        "flex items-center gap-1 px-1 text-xs whitespace-nowrap transition-opacity duration-700",
+        shown ? "opacity-100" : "opacity-0",
+      )}
+    >
+      {sending
+        ? (
+          <>
+            <Spinner className="size-3" />
+            {message.transcription === "pending" ? "Transcribing…" : "Sending…"}
+          </>
+        )
+        : (
+          <span
+            aria-hidden={message.delivered ? undefined : true}
+            className="animate-in fade-in-0 flex items-center gap-1 duration-500"
+          >
+            <Check aria-hidden="true" className="size-3.5" />
+            Sent
+          </span>
+        )}
+    </span>
+  );
+}
+
 /** What a message's recordings said, from their transcripts. */
 function spoken(message: ChatMessage): string {
   return message.attachments.flatMap((attachment) =>
@@ -656,6 +698,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                         own
                           ? "bubble bg-bubble text-bubble-foreground rounded-tr-md"
                           : "bg-muted rounded-tl-md",
+                        "transition-opacity duration-300",
                         message.status === "sending" && "opacity-70",
                         message.status === "failed" &&
                           "ring-destructive/50 ring-1",
@@ -683,17 +726,6 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                       {attachments}
                     </>
                   )}
-                {message.status === "sending" && (
-                  <p
-                    role="status"
-                    className="text-muted-foreground flex items-center gap-1.5 text-xs"
-                  >
-                    <Spinner className="size-3" />{" "}
-                    {message.transcription === "pending"
-                      ? "Transcribing…"
-                      : "Sending…"}
-                  </p>
-                )}
                 {message.status === "failed" && (
                   <div
                     role="alert"
@@ -735,30 +767,42 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                     )}
                   </div>
                 )}
-                {message.status === "sent" && (message.text || own) && (
+                {(message.status === "sent" || message.status === "sending") &&
+                  (message.text || own) && (
                   <div
+                    data-slot="message-footer"
                     className={cn(
-                      "text-muted-foreground flex h-7 items-center gap-0.5 opacity-0 transition-opacity group-focus-within/body:opacity-100 group-hover/body:opacity-100",
+                      "text-muted-foreground flex h-7 items-center gap-1",
                       own && "flex-row-reverse",
                     )}
                   >
-                    {/* A voice message copies what was said. */}
-                    <CopyButton text={message.text || spoken(message)} />
-                    {own && onEdit && message.text && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label="Edit message"
-                            onClick={() => setEditing(message.id)}
-                          >
-                            <Pencil />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit</TooltipContent>
-                      </Tooltip>
+                    {own && <Delivery message={message} />}
+                    {message.status === "sent" && (
+                      <div
+                        className={cn(
+                          "flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/body:opacity-100 group-hover/body:opacity-100",
+                          own && "flex-row-reverse",
+                        )}
+                      >
+                        {/* A voice message copies what was said. */}
+                        <CopyButton text={message.text || spoken(message)} />
+                        {own && onEdit && message.text && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label="Edit message"
+                                onClick={() => setEditing(message.id)}
+                              >
+                                <Pencil />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Edit</TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

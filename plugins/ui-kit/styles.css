@@ -381,6 +381,24 @@
   }
 }
 
+/* The dots after "North is replying": a soft wave, never a bounce. */
+.typing-dot {
+  opacity: 0.35;
+  animation: copilotz-typing 1.4s ease-in-out infinite;
+}
+@keyframes copilotz-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 0.9;
+    transform: translateY(-1.5px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -388,5 +406,10 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  /* Still dots, plainly visible. */
+  .typing-dot {
+    animation-name: none;
+    opacity: 0.6;
   }
 }

@@ -1,7 +1,8 @@
 /**
  * Framework-free projection of a thread's observation feed (`POST
  * /threads/:id/observe`) into display state: live agent replies with their
- * text, reasoning and tool-call drafts, and the operations still running.
+ * text, reasoning and tool-call drafts, the operations still running, and
+ * who they wait on (the participants their messages addressed).
  *
  * Lane identity comes from each stream descriptor's metadata (`llmAttemptId`,
  * `lane`, `providerAttemptIndex`), never from timing. Bytes are applied by
@@ -57,6 +58,19 @@ export type FeedAttempt = Readonly<{
   updatedAt: number;
 }>;
 
+/**
+ * A participant a running operation waits on: a message in it addressed them
+ * (`recipientIds`) and they have not replied yet.
+ */
+export type FeedTurn = Readonly<{
+  participantId: string;
+  operationId: string;
+  /** The agent whose question this answers (Core's `ask`), by participant id. */
+  askedBy?: string;
+  /** When the message addressed them, on the projector's clock. */
+  since: number;
+}>;
+
 export type FeedState = Readonly<{
   attempts: readonly FeedAttempt[];
   /** Operations that produced output in this thread and have not settled. */
@@ -66,6 +80,23 @@ export type FeedState = Readonly<{
    * id when the call is unknown), then by channel such as `stdout`.
    */
   outputs: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /**
+   * Who the running operations wait on, oldest first: each participant a
+   * message in them addressed, until their reply without tool calls (with
+   * tool calls they go on once the tools settle) or the operation settles.
+   * Known before any reply streams, so a View can say who is replying.
+   */
+  turns: readonly FeedTurn[];
+  /**
+   * Running operations whose messages said who replies: for these, `turns`
+   * is complete, and no turn means no one is replying.
+   */
+  routed: readonly string[];
+  /**
+   * Messages a reply has begun for: those created in a running operation in
+   * which an agent's reply has started to stream.
+   */
+  replied: readonly string[];
 }>;
 
 type Lane = {
@@ -90,6 +121,8 @@ const TEXT_LIMIT = 512 * 1024;
 /** Tool output keeps its newest text, like a terminal's scrollback. */
 const OUTPUT_LIMIT = 64 * 1024;
 const ATTEMPT_LIMIT = 16;
+/** The first messages of an operation are the ones a reply answers. */
+const OPERATION_MESSAGE_LIMIT = 16;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -129,6 +162,62 @@ export function createFeedProjector(
   /** Tool Action run id → the tool call it executes. */
   const toolRuns = new Map<string, string>();
   const outputs = new Map<string, Record<string, string>>();
+  /** Turns by operation and participant. */
+  const turns = new Map<string, FeedTurn>();
+  const routed = new Set<string>();
+  /** The messages each running operation created, oldest first. */
+  const messages = new Map<string, string[]>();
+  /** Running operations in which a reply has started to stream. */
+  const replying = new Set<string>();
+
+  /**
+   * A message in a running operation: an agent's reply without tool calls
+   * ends that agent's turn, and its recipients' turns begin. Ask progress and
+   * answers, and messages that continue nothing, address no one new.
+   */
+  const noteMessage = (operationId: string, row: Record<string, unknown>) => {
+    let changed = false;
+    const id = text(row.id);
+    const list = messages.get(operationId) ?? [];
+    if (id && list.length < OPERATION_MESSAGE_LIMIT && !list.includes(id)) {
+      messages.set(operationId, [...list, id]);
+      changed = replying.has(operationId);
+    }
+    const sender = text(row.senderId);
+    const metadata = record(row.metadata);
+    const flow = record(metadata.copilotzWorkflow);
+    const ask = record(metadata.copilotzAsk);
+    const calls = Array.isArray(metadata.llmToolCalls) &&
+      metadata.llmToolCalls.length > 0;
+    if (
+      sender && !calls &&
+      (flow.kind === "agent_output" || flow.kind === "agent_failure")
+    ) {
+      changed = turns.delete(`${operationId}\n${sender}`) || changed;
+    }
+    if (
+      ask.phase === "progress" || ask.phase === "answer" ||
+      flow.continuation === "none" || flow.continuation === "realtime"
+    ) return changed;
+    if (!routed.has(operationId)) {
+      routed.add(operationId);
+      changed = true;
+    }
+    const recipients = Array.isArray(row.recipientIds) ? row.recipientIds : [];
+    for (const participantId of recipients.map(text)) {
+      if (!participantId || participantId === sender) continue;
+      const key = `${operationId}\n${participantId}`;
+      if (turns.has(key)) continue;
+      turns.set(key, {
+        participantId,
+        operationId,
+        ...(ask.phase === "question" && sender ? { askedBy: sender } : {}),
+        since: now(),
+      });
+      changed = true;
+    }
+    return changed;
+  };
 
   const attemptFor = (
     id: string,
@@ -211,6 +300,12 @@ export function createFeedProjector(
           if (!operationId) return false;
           active.delete(operationId);
           settled.add(operationId);
+          for (const [key, turn] of turns) {
+            if (turn.operationId === operationId) turns.delete(key);
+          }
+          routed.delete(operationId);
+          messages.delete(operationId);
+          replying.delete(operationId);
           for (const attempt of attempts.values()) {
             if (
               attempt.operationId === operationId &&
@@ -250,6 +345,12 @@ export function createFeedProjector(
             return true;
           }
           return changed;
+        }
+        if (
+          type === "message.created" && operationId &&
+          !settled.has(operationId)
+        ) {
+          return noteMessage(operationId, record(data.record)) || changed;
         }
         if (type !== "stream.output") return changed;
         const streamId = text(output.streamId);
@@ -318,6 +419,9 @@ export function createFeedProjector(
           candidate,
           coreStreamAgent({ metadata }),
         );
+        if (operationId && !settled.has(operationId)) {
+          replying.add(operationId);
+        }
         return true;
       }
       const lane = lanes.get(frame.streamId);
@@ -395,6 +499,11 @@ export function createFeedProjector(
         outputs: Object.fromEntries(
           [...outputs].map(([id, channels]) => [id, { ...channels }]),
         ),
+        turns: [...turns.values()].sort((left, right) =>
+          left.since - right.since
+        ).map((turn) => ({ ...turn })),
+        routed: [...routed],
+        replied: [...replying].flatMap((id) => messages.get(id) ?? []),
       };
     },
     forget(attemptIds) {

@@ -1,11 +1,15 @@
 /** Scoped, bounded read capabilities; policy predicates reach SQL before pagination. */
+import { createResolvedCollectionReader } from "../runtime/collections/resolved-read.ts";
 import { createHttpActionOrigins } from "./action-origins.ts";
 import {
   withoutCollectionPolicyInvocation,
   withTrustedCollectionPolicyRead,
 } from "../runtime/authorization/invocation.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
-import type { CollectionQuery } from "../runtime/collections/types.ts";
+import type {
+  CollectionQuery,
+  CollectionRecord,
+} from "../runtime/collections/types.ts";
 import type { FacadeContext } from "./context.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
@@ -155,7 +159,24 @@ export async function createHttpReads(
   >(
     (current, adapter) =>
       (adapter as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter)
-        .reads?.(current, scope as ServerAuthorizedScope) ?? current,
+        .reads?.(
+          current,
+          scope as ServerAuthorizedScope,
+          (name, rows, options) =>
+            // No collection lookup or policy bypass: these are the exact references
+            // retained by the adapter from an already authorized read. Resolution
+            // uses the same namespace, authority and resolver as collection reads.
+            bound(() =>
+              createResolvedCollectionReader(
+                () => Promise.resolve(rows),
+                definition(name).schema,
+                scope.namespace ?? application.config.namespace!,
+                runtime.content.resolver,
+              )(undefined, options) as Promise<
+                readonly CollectionRecord[]
+              >
+            ),
+        ) ?? current,
     read,
   );
 }

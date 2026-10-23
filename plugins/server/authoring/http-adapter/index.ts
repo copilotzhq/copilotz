@@ -116,6 +116,14 @@ export type HttpAdapter = Readonly<{
   reads?(
     read: HttpReadServices,
     scope: ServerAuthorizedScope,
+    /** Resolve only references retained from rows this read already authorized.
+     * Adapters may remove rows/fields, never introduce rows or Asset references.
+     * One call shares one content budget, preserving the supplied row order. */
+    resolve: (
+      collection: string,
+      rows: readonly CollectionRecord[],
+      options?: ScopedCollectionReadOptions,
+    ) => Promise<readonly CollectionRecord[]>,
   ): HttpReadServices;
   /** Domain content authorization in addition to the owner's asset grant. */
   authorizeAsset?(

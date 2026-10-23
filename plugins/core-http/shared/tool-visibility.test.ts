@@ -278,8 +278,11 @@ Deno.test("Tool terminal feed projection removes every duplicate body envelope",
       metadata: { diagnostic: "SECRET" },
     } as unknown as Output;
     const projected = await projectCoreOutput(output, scope, {
-      query(_name: string, _query: string, input: Record<string, unknown>) {
-        assertEquals(input.viewerParticipantIds, ["human"]);
+      list(_name: string, query: unknown) {
+        assertEquals(query, {
+          where: { threadId: "thread", id: "result" },
+          limit: 1,
+        });
         return Promise.resolve([safe]);
       },
     } as unknown as Read, () => Promise.resolve([]));

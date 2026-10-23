@@ -399,6 +399,23 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
 
 ### Fixed
 
+- Agent turns cost far less owner work. With a real application policy and an
+  instant model, a PostgreSQL follow-up turn takes 369 ms in a fresh thread
+  (was 480) and 416 ms in a 100-message thread (was 995), with about 1,300 SQL
+  statements instead of 4,100. Result decisions are reused by the values a
+  policy read rather than whole row snapshots, while every disclosed row is
+  still checked; host-command capture recognizes its own immutable outputs;
+  ready content bodies load in batches; and transcript verification no longer
+  sends snapshots as SQL predicates.
+- Live subscriptions compile the application's policy filter with their own
+  bounds (256 nodes, 1,000 values, 256 KiB) instead of the client's (64, 32, 16
+  KiB). Before, a policy that listed a person's threads refused every live
+  window once they had more than 32. A refused policy filter is logged with its
+  reason.
+- Live `where` treats an untyped scalar `enum` or `const` field (such as a
+  space's `status`) as scalar.
+- `scripts/provision-content-indexes.ts SCHEMA [--apply]` previews or adds the
+  content deadline indexes to a schema provisioned before they existed.
 - Provider completions are checkpointed before finalization, so a retry reuses
   the paid response instead of calling the provider again. An empty final answer
   fails visibly.

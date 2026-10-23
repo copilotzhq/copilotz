@@ -35,9 +35,15 @@ import {
   TooltipTrigger,
   transfer,
 } from "@copilotz/copilotz/web/kit";
-import { canRecordVoice, VoiceComposer } from "./voice.tsx";
+import {
+  canRecordVoice,
+  recordVoice,
+  VoiceComposer,
+  type VoiceRecorder,
+  type VoiceTake,
+} from "./voice.tsx";
 import { SenderAvatar } from "./identity.tsx";
-import type { ChatSender } from "../../shared/chat-messages.ts";
+import type { ChatSender, VoiceRecording } from "../../shared/chat-messages.ts";
 
 /** An agent the message may address with @mention. */
 export type MentionTarget = Readonly<{
@@ -51,6 +57,8 @@ export type MentionTarget = Readonly<{
 export interface ComposerSubmit {
   text: string;
   files: readonly File[];
+  /** Which `files` are voice recordings made here (not uploaded audio). */
+  recordings: readonly VoiceRecording[];
   /** Targets named by @mention; empty means no mention (the View then applies
    * the app's recipient policy). */
   recipientIds: readonly string[];
@@ -146,7 +154,9 @@ export function Composer(
   const depth = useRef(0);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [recording, setRecording] = useState(false);
+  const [recorder, setRecorder] = useState<VoiceRecorder | null>(null);
+  // Recording began from the keyboard, so focus moves into it.
+  const [keyboard, setKeyboard] = useState(false);
   const [notice, setNotice] = useState("");
   const [mention, setMention] = useState<
     { start: number; query: string } | null
@@ -210,20 +220,44 @@ export function Composer(
   };
 
   const canSend = !disabled && (value.trim().length > 0 || files.length > 0);
-  const submit = (extra: readonly File[] = []) => {
+  /** Sends the text and attachments, and a voice recording when given. */
+  const submit = (take?: VoiceTake) => {
     if (disabled) return;
     const text = value.trim();
-    const all = [...files.map((item) => item.file), ...extra];
+    const all = [
+      ...files.map((item) => item.file),
+      ...(take ? [take.file] : []),
+    ];
     if (!text && !all.length) return;
+    const recordings: VoiceRecording[] = take
+      ? [{
+        index: files.length,
+        durationMs: take.durationMs,
+        peaks: take.peaks,
+      }]
+      : [];
     const recipientIds = mentionedTargets(text, targets);
     setFiles([]);
     setMention(null);
     setNotice("");
     for (const item of files) if (item.url) URL.revokeObjectURL(item.url);
-    void Promise.resolve(onSubmit({ text, files: all, recipientIds })).catch(
+    void Promise.resolve(
+      onSubmit({ text, files: all, recordings, recipientIds }),
+    ).catch(
       (cause) =>
         setNotice(cause instanceof Error ? cause.message : String(cause)),
     );
+  };
+  // Recording starts inside the click, as some browsers require.
+  const record = (event: React.MouseEvent) => {
+    setNotice("");
+    setKeyboard(event.detail === 0);
+    setRecorder(recordVoice());
+  };
+  // Back to the text field; on a phone without opening the keyboard.
+  const closeVoice = () => {
+    setRecorder(null);
+    if (!coarse()) nextFrame(() => field.current && dom(field.current).focus());
   };
 
   const choose = (target: MentionTarget) => {
@@ -343,18 +377,19 @@ export function Composer(
             ))}
           </ul>
         )}
-        {recording
+        {recorder
           ? (
-            <div className="p-2">
-              <VoiceComposer
-                disabled={disabled}
-                onClose={() => setRecording(false)}
-                onSend={(file) => {
-                  setRecording(false);
-                  submit([file]);
-                }}
-              />
-            </div>
+            <VoiceComposer
+              recorder={recorder}
+              focus={keyboard}
+              disabled={disabled}
+              onClose={closeVoice}
+              onRestart={record}
+              onSend={(take) => {
+                submit(take);
+                closeVoice();
+              }}
+            />
           )
           : (
             <>
@@ -534,7 +569,8 @@ export function Composer(
                   </Tooltip>
                 )}
                 <div className="flex-1" />
-                {voice && !value.trim() && !generating && (
+                {/* Like typing, recording works while an agent replies. */}
+                {voice && !value.trim() && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -543,7 +579,7 @@ export function Composer(
                         size="icon-sm"
                         aria-label="Record a voice message"
                         disabled={disabled}
-                        onClick={() => setRecording(true)}
+                        onClick={record}
                       >
                         <Mic />
                       </Button>

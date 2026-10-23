@@ -90,13 +90,14 @@ const view: ViewDefinition<
           help: config.labels.composerHelp,
           footer: config.labels.footer,
         }}
-        onSubmit={async ({ text, files, recipientIds }) => {
+        onSubmit={async ({ text, files, recordings, recipientIds }) => {
           ctx.actions.setDraft({ threadId: key, text: "" });
           if (!threadId) {
             try {
               await startConversation(ctx, {
                 text,
                 files,
+                ...(recordings.length ? { recordings } : {}),
                 ...recipients(recipientIds),
                 ...(spaceId ? { spaceId } : {}),
               });
@@ -107,7 +108,13 @@ const view: ViewDefinition<
             return;
           }
           // A failed send stays in the conversation with Retry.
-          await send({ threadId, text, files, ...recipients(recipientIds) })
+          await send({
+            threadId,
+            text,
+            files,
+            ...(recordings.length ? { recordings } : {}),
+            ...recipients(recipientIds),
+          })
             .result()
             .catch(() => {});
         }}

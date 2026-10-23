@@ -159,6 +159,8 @@ const tables = () => ({
 /** A feed the test drives frame by frame. */
 class TestFeed implements ThreadFeedAdapter {
   observers = new Set<(frame: FeedFrame) => void | Promise<void>>();
+  /** Set when a test grants uploads (`mount({ upload: true })`). */
+  upload?: ThreadFeedAdapter["upload"];
   cancelled: string[] = [];
   position = 0;
   observe(
@@ -375,6 +377,10 @@ type Mounted = {
   calls: { alias: string; input: Record<string, unknown> }[];
   /** Fail the next createThread after creating it (an observe error). */
   failCreateOnce?: () => boolean;
+  /** The app's voice Action fails while this says so. */
+  failVoice?: () => boolean;
+  /** The app's voice Action finishes once this settles. */
+  voiceHold?: Promise<void>;
   url: () => URL;
   local: ReturnType<typeof memory>;
   container: {
@@ -391,11 +397,35 @@ async function mount(
     live?: InstanceType<typeof FixtureLive>;
     /** Composed after the test app; its resources override by alias. */
     extra?: BrowserPlugin;
+    /** The host publishes attachments as Assets (Core HTTP uploads). */
+    upload?: boolean;
   } = {},
 ): Promise<Mounted> {
   let current = new URL(href);
   const live = options.live ?? new FixtureLive(tables());
   const feed = new TestFeed();
+  if (options.upload) {
+    feed.upload = (_file, upload) =>
+      Promise.resolve({
+        assetId: `asset:${upload.idempotencyKey}`,
+        kind: "file",
+        role: "attachment",
+        mediaType: upload.mediaType,
+        ...(upload.name ? { name: upload.name } : {}),
+        disposition: "attachment",
+      });
+  }
+  // Core content for a sent part: an uploaded reference as is, or inline.
+  const stored = (part: Record<string, unknown>) =>
+    typeof part.assetId === "string" ? { ...part } : {
+      assetId: String(part.type),
+      kind: String(part.type),
+      role: part.type === "text" ? "body" : "attachment",
+      mediaType: String(part.mediaType ?? "text/plain"),
+      ...(part.type === "text" ? { value: part.text } : {}),
+      ...(part.name ? { name: part.name } : {}),
+      ...(part.metadata ? { metadata: part.metadata } : {}),
+    };
   const local = options.local ?? memory();
   const calls: Mounted["calls"] = [];
   const hooks: Partial<Mounted> = {};
@@ -430,20 +460,58 @@ async function mount(
           return Promise.reject(new Error("Internal application error"));
         }
       }
+      if (alias === "voiceSend") {
+        // As the app's Action does: each recording is followed by its
+        // labelled transcript, in one message under the Action's own id.
+        if (hooks.failVoice?.()) {
+          return Promise.reject(
+            Object.assign(new Error("Action execution failed."), {
+              code: "action_failed",
+              status: 422,
+            }),
+          );
+        }
+        const finish = () => {
+          const id = `voice-${calls.length}`;
+          const voiceIndexes = data.voiceIndexes as number[];
+          live.put("message", {
+            id,
+            threadId: String(data.threadId),
+            senderId: "p-ana",
+            createdAt: "2026-10-21T11:00:00.000Z",
+            content: (data.content as Record<string, unknown>[]).flatMap((
+              part,
+              index,
+            ) => [
+              stored(part),
+              ...(voiceIndexes.includes(index)
+                ? [{
+                  assetId: `transcript-${index}`,
+                  kind: "text",
+                  role: "body",
+                  mediaType: "text/plain",
+                  value: `[Voice transcript]\nShip the beta on Friday.`,
+                }]
+                : []),
+            ]),
+            metadata: {},
+          });
+          return {
+            value: { threadId: data.threadId, message: { id } },
+            seq: 1,
+          };
+        };
+        return hooks.voiceHold
+          ? hooks.voiceHold.then(finish)
+          : Promise.resolve(finish());
+      }
       if (alias === "createThreadMessage") {
         live.put("message", {
           id: String(data.id),
           threadId: String(data.threadId),
           senderId: "p-ana",
           createdAt: "2026-10-21T11:00:00.000Z",
-          content: (data.content as Record<string, unknown>[]).map((part) => ({
-            assetId: String(part.type),
-            kind: String(part.type),
-            role: part.type === "text" ? "body" : "attachment",
-            mediaType: String(part.mediaType ?? "text/plain"),
-            ...(part.type === "text" ? { value: part.text } : {}),
-            ...(part.name ? { name: part.name } : {}),
-          })),
+          content: (data.content as Record<string, unknown>[]).map(stored),
           metadata: {},
         });
         // As Core does: a visible message records activity on its thread.
@@ -2001,5 +2069,285 @@ test("profile lists only personal memory and imports and forgets through the own
     assert.doesNotMatch(document.body.textContent!, /Prefers short replies/);
   } finally {
     await shell.dispose();
+  }
+});
+
+/** An app that transcribes recordings with its own Action. */
+const voiceApp: BrowserPlugin = {
+  id: "voice-app",
+  actions: { voiceSend: { id: "test.voice.send", placement: "server" } },
+  resources: {
+    chat: {
+      ...(app.resources!.chat as Record<string, unknown>),
+      voice: { action: "voiceSend", transcriptLabel: "[Voice transcript]" },
+    },
+  },
+};
+const recording = () =>
+  new File(["voice"], "voice-message.webm", { type: "audio/webm" });
+const voiceNotes = () => all('[data-slot="voice-note"]');
+
+test("a recording goes through the app's voice Action; it shows Transcribing…, then the record with its transcript", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    upload: true,
+    extra: voiceApp,
+  });
+  try {
+    let release = () => {};
+    shell.voiceHold = new Promise((resolve) => release = resolve);
+    let sending: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      sending = shell.runtime.actions.chatSend({
+        threadId: "t1",
+        text: "",
+        files: [recording()],
+        recordings: [{ index: 0, durationMs: 4_200, peaks: [0.2, 0.9] }],
+        recipientIds: ["p-north"],
+      }).result();
+      await settle();
+    });
+    assert.match(main(), /Transcribing…/);
+    assert.equal(voiceNotes().length, 1, "the take plays while it sends");
+    const call = shell.calls.find((entry) => entry.alias === "voiceSend")!;
+    assert.ok(call, JSON.stringify(shell.calls));
+    const [part] = call.input.content as Record<string, unknown>[];
+    assert.match(String(part.assetId), /^asset:/, "uploaded first");
+    assert.deepEqual(
+      { ...part, assetId: "uploaded" },
+      {
+        assetId: "uploaded",
+        kind: "audio",
+        role: "attachment",
+        mediaType: "audio/webm",
+        name: "voice-message.webm",
+        disposition: "attachment",
+        metadata: { voice: true, durationMs: 4_200, peaks: [0.2, 0.9] },
+      },
+    );
+    assert.deepEqual(call.input.voiceIndexes, [0]);
+    assert.equal(call.input.threadId, "t1");
+    assert.deepEqual(call.input.recipientIds, ["p-north"]);
+    assert.equal(
+      shell.calls.some((entry) => entry.alias === "createThreadMessage"),
+      false,
+      "never sent without its transcript",
+    );
+    await act(async () => {
+      release();
+      await sending;
+      await settle();
+    });
+    assert.doesNotMatch(main(), /Transcribing…/);
+    assert.equal(voiceNotes().length, 1, "the record replaced the take");
+    assert.doesNotMatch(main(), /\[Voice transcript\]/, "no raw label");
+    const [toggle] = all('[data-slot="voice-transcript"] button');
+    assert.match(toggle.textContent ?? "", /Transcript.*Ship the beta/);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    await click(toggle as unknown as { click(): void });
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    const id = toggle.getAttribute("aria-controls")!;
+    assert.equal(
+      document.getElementById(id)?.textContent,
+      "Ship the beta on Friday.",
+    );
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("a failed transcription sends nothing: Send audio only sends the audio, Retry transcribes again", async () => {
+  const shell = await mount("https://app.example/?chat=t1", {
+    upload: true,
+    extra: voiceApp,
+  });
+  let fail = true;
+  shell.failVoice = () => fail;
+  const send = async () => {
+    await act(async () => {
+      await shell.runtime.actions.chatSend({
+        threadId: "t1",
+        text: "",
+        files: [recording()],
+        recordings: [{ index: 0, durationMs: 2_000 }],
+      }).result().catch(() => {});
+      await settle();
+    });
+  };
+  try {
+    await send();
+    assert.match(main(), /Couldn't transcribe\./);
+    assert.equal(
+      shell.calls.some((entry) => entry.alias === "createThreadMessage"),
+      false,
+    );
+    await click(byText("button", "Send audio only"));
+    const sent = shell.calls.filter((entry) =>
+      entry.alias === "createThreadMessage"
+    );
+    assert.equal(sent.length, 1);
+    const content = sent[0].input.content as Record<string, unknown>[];
+    assert.deepEqual(content.map((part) => part.kind), ["audio"]);
+    assert.deepEqual(content[0].metadata, { voice: true, durationMs: 2_000 });
+    assert.doesNotMatch(main(), /Couldn't transcribe/);
+    assert.equal(voiceNotes().length, 1, "a voice message, without transcript");
+    assert.equal(all('[data-slot="voice-transcript"]').length, 0);
+
+    await send();
+    assert.match(main(), /Couldn't transcribe\./);
+    fail = false;
+    await click(byText("button", "Retry"));
+    assert.equal(
+      shell.calls.filter((entry) => entry.alias === "voiceSend").length,
+      3,
+    );
+    assert.doesNotMatch(main(), /Couldn't transcribe/);
+    assert.equal(all('[data-slot="voice-transcript"]').length, 1);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+test("without a voice hook a recording is sent as audio, still a voice message", async () => {
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await act(async () => {
+      await shell.runtime.actions.chatSend({
+        threadId: "t1",
+        text: "",
+        files: [
+          recording(),
+          new File(["mp3"], "interview.mp3", { type: "audio/mpeg" }),
+        ],
+        recordings: [{ index: 0, durationMs: 1_500 }],
+      }).result();
+      await settle();
+    });
+    const sent = shell.calls.find((entry) =>
+      entry.alias === "createThreadMessage"
+    )!;
+    const content = sent.input.content as Record<string, unknown>[];
+    assert.deepEqual(content.map((part) => part.type), ["audio", "audio"]);
+    assert.deepEqual(content[0].metadata, { voice: true, durationMs: 1_500 });
+    assert.equal(
+      content[1].metadata,
+      undefined,
+      "an upload is not a recording",
+    );
+    assert.equal(voiceNotes().length, 1);
+  } finally {
+    await shell.dispose();
+  }
+});
+
+/** A browser microphone: MediaRecorder and getUserMedia, scripted. */
+function fakeMicrophone(refuse = false) {
+  class Recorder {
+    static isTypeSupported = (type: string) =>
+      type === "audio/webm;codecs=opus";
+    state = "inactive";
+    mimeType: string;
+    ondataavailable: ((event: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    constructor(_stream: unknown, options?: { mimeType?: string }) {
+      this.mimeType = options?.mimeType ?? "audio/webm";
+    }
+    start() {
+      this.state = "recording";
+    }
+    stop() {
+      this.state = "inactive";
+      queueMicrotask(() => {
+        this.ondataavailable?.({
+          data: new Blob(["opus"], { type: this.mimeType }),
+        });
+        this.onstop?.();
+      });
+    }
+  }
+  let released = 0;
+  const navigator = globalThis.navigator as unknown as Record<string, unknown>;
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: {
+      getUserMedia: () =>
+        refuse
+          ? Promise.reject(new DOMException("Denied", "NotAllowedError"))
+          : Promise.resolve({ getTracks: () => [{ stop: () => released++ }] }),
+    },
+  });
+  Object.defineProperty(globalThis, "MediaRecorder", {
+    configurable: true,
+    value: Recorder,
+  });
+  return {
+    released: () => released,
+    restore() {
+      delete navigator.mediaDevices;
+      delete (globalThis as Record<string, unknown>).MediaRecorder;
+    },
+  };
+}
+
+test("the composer records a voice message: timer, Cancel, Send; it goes as a recording", async () => {
+  const microphone = fakeMicrophone();
+  const shell = await mount("https://app.example/?chat=t1", {
+    upload: true,
+    extra: voiceApp,
+  });
+  try {
+    await click(byLabel("Record a voice message"));
+    assert.ok(document.querySelector('[role="timer"]'), "recording");
+    assert.equal(
+      document.querySelector('textarea[aria-label="Message"]'),
+      null,
+      "the bar replaces the field",
+    );
+    // Escape cancels and releases the microphone.
+    await act(async () => {
+      document.body.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await settle();
+    });
+    assert.ok(document.querySelector('textarea[aria-label="Message"]'));
+    assert.equal(microphone.released(), 1);
+
+    await click(byLabel("Record a voice message"));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)));
+    await click(byLabel("Send voice message"));
+    await act(() => settle());
+    const call = shell.calls.find((entry) => entry.alias === "voiceSend")!;
+    assert.ok(call, JSON.stringify(shell.calls.map((entry) => entry.alias)));
+    const [part] = call.input.content as Record<string, unknown>[];
+    assert.equal(part.kind, "audio");
+    assert.equal(part.mediaType, "audio/webm", "no codec parameters");
+    assert.equal((part.metadata as { voice?: boolean }).voice, true);
+    assert.ok(
+      ((part.metadata as { durationMs?: number }).durationMs ?? 0) >= 400,
+    );
+    assert.deepEqual(call.input.voiceIndexes, [0]);
+    assert.ok(document.querySelector('textarea[aria-label="Message"]'));
+  } finally {
+    await shell.dispose();
+    microphone.restore();
+  }
+});
+
+test("a refused microphone says how to allow it, with Try again", async () => {
+  const microphone = fakeMicrophone(true);
+  const shell = await mount("https://app.example/?chat=t1");
+  try {
+    await click(byLabel("Record a voice message"));
+    const alert = document.querySelector(
+      '[data-slot="voice-composer"] [role="alert"]',
+    );
+    assert.match(alert?.textContent ?? "", /Microphone access is blocked/);
+    assert.ok(byText("button", "Try again"));
+    await click(byLabel("Close"));
+    assert.ok(document.querySelector('textarea[aria-label="Message"]'));
+  } finally {
+    await shell.dispose();
+    microphone.restore();
   }
 });

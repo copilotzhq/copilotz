@@ -10,6 +10,11 @@ import type {
 } from "@copilotz/copilotz/web";
 import { monotonicUlid } from "../../../../dependencies/ulid.ts";
 import { createFeedProjector } from "../../shared/chat-feed.ts";
+import {
+  VOICE_PEAKS,
+  type VoiceMetadata,
+  type VoiceRecording,
+} from "../../shared/chat-messages.ts";
 import type { ThreadFeedAdapter } from "./host.ts";
 
 /** Logical server Actions the default intents call, and their default aliases. */
@@ -37,12 +42,24 @@ export interface ChatIntentInputs {
     /** A new conversation's Space. */
     spaceId?: string;
     /**
+     * Which `files` are voice recordings made in the composer, as opposed to
+     * uploaded audio. With the app's voice hook (`resources.chat.voice`) they
+     * are transcribed and sent with their transcripts; without it they go as
+     * audio.
+     */
+    recordings?: readonly VoiceRecording[];
+    /**
      * Create the conversation `threadId` names first (it does not exist yet):
      * the first message shows at once and a retry continues the same thread.
      */
     create?: { name?: string; spaceId?: string };
     /** Retry this outbox message with its original id. */
     retry?: string;
+    /**
+     * With `retry`: send its recordings as audio only, without transcripts
+     * (after transcription failed).
+     */
+    withoutTranscript?: boolean;
   };
   chatDiscard: { messageId: string };
   chatRevise: { threadId: string; messageId: string; text: string };
@@ -109,6 +126,13 @@ function alreadyDone(error: unknown): undefined {
   throw error;
 }
 
+/** The send was refused (signed out, or not allowed here), not failed. */
+function refusedSend(error: unknown): boolean {
+  const failure = error as { status?: unknown; code?: unknown } | undefined;
+  return failure?.status === 401 || failure?.status === 403 ||
+    failure?.code === "unauthorized" || failure?.code === "forbidden";
+}
+
 /** A failed send's message: plain words, never a raw server error. */
 function sendFailure(error: unknown): string {
   const failure = error as { status?: unknown; code?: unknown } | undefined;
@@ -161,6 +185,83 @@ export function titleFrom(text: string): string {
   const cut = line.slice(0, 48);
   const space = cut.lastIndexOf(" ");
   return `${(space > 24 ? cut.slice(0, space) : cut).trim()}…`;
+}
+
+/**
+ * The app's voice-message hook, `resources.chat.voice`. Without it,
+ * recordings are sent as audio attachments.
+ */
+export type ChatVoiceHook = Readonly<{
+  /**
+   * The composition alias of the app's server Action that transcribes
+   * recordings and sends the message: one send with the audio and, after each
+   * recording, its transcript. Input `{ threadId, content, voiceIndexes,
+   * recipientIds? }`: Core content as `createThreadMessage` takes it, and the
+   * recordings' positions in it. It resolves with `{ message: { id } }` and
+   * fails without sending when a recording can't be transcribed.
+   */
+  action: string;
+  /**
+   * The first line of the text part the Action adds after each recording.
+   * The conversation shows that part as the recording's transcript.
+   */
+  transcriptLabel?: string;
+}>;
+
+/** The app's voice hook, when it configures one. */
+export function voiceHook(
+  resources: Readonly<Record<string, unknown>>,
+): ChatVoiceHook | undefined {
+  const chat = resources.chat as Record<string, unknown> | undefined;
+  const voice = chat?.voice as Record<string, unknown> | undefined;
+  if (!voice || typeof voice.action !== "string" || !voice.action) {
+    return undefined;
+  }
+  return {
+    action: voice.action,
+    ...(typeof voice.transcriptLabel === "string" && voice.transcriptLabel
+      ? { transcriptLabel: voice.transcriptLabel }
+      : {}),
+  };
+}
+
+/** A recording's content metadata: it is voice, with its length and waveform. */
+function voiceMetadata(recording: VoiceRecording): VoiceMetadata {
+  const peaks = (recording.peaks ?? []).slice(0, VOICE_PEAKS).map((peak) =>
+    Math.round(Math.min(1, Math.max(0, peak)) * 100) / 100
+  );
+  return {
+    voice: true,
+    ...(recording.durationMs && recording.durationMs > 0
+      ? { durationMs: Math.round(recording.durationMs) }
+      : {}),
+    ...(peaks.length ? { peaks } : {}),
+  };
+}
+
+/** A new conversation started with a recording is titled this. */
+export const VOICE_TITLE = "Voice message";
+
+/** Local previews of recordings still in the outbox, by message id. */
+const previews = new Map<string, string[]>();
+/** A playable preview of a recording while it sends; the send never needs it. */
+function preview(id: string, file: File): { url?: string } {
+  try {
+    const url = URL.createObjectURL(file);
+    previews.set(id, [...previews.get(id) ?? [], url]);
+    return { url };
+  } catch {
+    return {};
+  }
+}
+function revokePreviews(id: string, delay = 0): void {
+  const urls = previews.get(id);
+  if (!urls) return;
+  previews.delete(id);
+  const revoke = () => urls.forEach((url) => URL.revokeObjectURL(url));
+  // A sent message keeps its preview until the conversation shows the record.
+  if (delay) setTimeout(revoke, delay);
+  else revoke();
 }
 
 function kindOf(type: string): "image" | "audio" | "video" | "file" {
@@ -283,26 +384,40 @@ function feed(ctx: BrowserActionContext): ThreadFeedAdapter | undefined {
     : undefined;
 }
 
+/**
+ * A message's Core content: its text, then each file uploaded (or inline),
+ * with audio as `audio` and recordings marked as voice. `voiceIndexes` are
+ * the recordings' positions in it.
+ */
 async function content(
   ctx: BrowserActionContext,
   id: string,
   text: string,
   files: readonly File[],
-): Promise<unknown[]> {
+  recordings: readonly VoiceRecording[],
+): Promise<{ parts: unknown[]; voiceIndexes: number[] }> {
   const parts: unknown[] = text ? [{ type: "text", text }] : [];
+  const voiceIndexes: number[] = [];
   const adapter = feed(ctx);
   let inline = 0;
   for (const [index, file] of files.entries()) {
     const mediaType = file.type || "application/octet-stream";
+    const recording = recordings.find((entry) => entry.index === index);
+    const metadata = recording ? voiceMetadata(recording) : undefined;
+    if (recording) voiceIndexes.push(parts.length);
     if (adapter?.upload) {
-      parts.push(
-        await adapter.upload(file, {
-          name: file.name,
-          mediaType,
-          idempotencyKey: `${id}:${index}`,
-          signal: ctx.signal,
-        }),
-      );
+      const uploaded = await adapter.upload(file, {
+        name: file.name,
+        mediaType,
+        idempotencyKey: `${id}:${index}`,
+        signal: ctx.signal,
+      });
+      // Uploads come back as files; audio is content an agent can hear.
+      parts.push({
+        ...uploaded,
+        ...(kindOf(mediaType) === "audio" ? { kind: "audio" } : {}),
+        ...(metadata ? { metadata } : {}),
+      });
       continue;
     }
     inline += file.size;
@@ -316,9 +431,10 @@ async function content(
       mediaType,
       name: file.name,
       dataBase64: base64(new Uint8Array(await file.arrayBuffer())),
+      ...(metadata ? { metadata } : {}),
     });
   }
-  return parts;
+  return { parts, voiceIndexes };
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -444,19 +560,29 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
       // A new conversation has its id before anything is sent, so the first
       // message shows at once and a retry continues the same thread.
       const threadId = input.threadId ?? monotonicUlid();
+      const id = input.retry ?? monotonicUlid();
+      const previous = input.retry
+        ? ctx.collections.outbox.get(id).value
+        : undefined;
+      const recordings =
+        ((input.retry
+          ? previous?.recordings as VoiceRecording[] | undefined
+          : input.recordings) ?? []).filter((recording) =>
+            files[recording.index] !== undefined
+          );
       if (input.create || !input.threadId) {
         ctx.command("pendingThread", threadId, "set", {
-          name: input.create?.name ?? titleFrom(text || files[0]?.name || ""),
+          name: input.create?.name ??
+            titleFrom(
+              text || (recordings.length ? VOICE_TITLE : files[0]?.name) ||
+                "",
+            ),
           ...(input.create?.spaceId ?? input.spaceId
             ? { spaceId: input.create?.spaceId ?? input.spaceId }
             : {}),
           created: false,
         });
       }
-      const id = input.retry ?? monotonicUlid();
-      const previous = input.retry
-        ? ctx.collections.outbox.get(id).value
-        : undefined;
       const body = input.retry ? String(previous?.text ?? "") : text;
       const recipientIds = input.retry
         ? (previous?.recipientIds as string[] | undefined) ?? []
@@ -470,6 +596,11 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
       const addressed = input.retry
         ? previous?.addressed === true
         : input.recipientIds !== undefined || agents.length > 0;
+      const voice = voiceHook(ctx.resources);
+      // Recordings go with their transcripts when the app transcribes them;
+      // audio only is the person's choice, never a silent fallback.
+      const transcribe = Boolean(voice && recordings.length) &&
+        input.withoutTranscript !== true;
       retainedFiles(ctx).set(id, files);
       ctx.command("outbox", id, "set", {
         threadId,
@@ -477,21 +608,31 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
         recipientIds: [...recipientIds],
         recipientAgents: agents.map((agent) => ({ ...agent })),
         addressed,
-        attachments: input.retry ? previous?.attachments ?? [] : files.map((
-          file,
-        ) => ({
-          kind: kindOf(file.type),
-          mediaType: file.type || "application/octet-stream",
-          name: file.name,
-          size: file.size,
-        })),
+        recordings: recordings.map((recording) => ({ ...recording })),
+        attachments: input.retry
+          ? previous?.attachments ?? []
+          : files.map((file, index) => {
+            const recording = recordings.find((entry) => entry.index === index);
+            return {
+              kind: kindOf(file.type),
+              mediaType: file.type || "application/octet-stream",
+              name: file.name,
+              size: file.size,
+              ...(recording
+                ? { ...voiceMetadata(recording), ...preview(id, file) }
+                : {}),
+            };
+          }),
+        transcribe,
         status: "sending",
         error: null,
+        failure: null,
         removed: false,
         createdAt: input.retry
           ? previous?.createdAt ?? new Date().toISOString()
           : new Date().toISOString(),
       });
+      let transcribing = false;
       try {
         const pending = ctx.collections.pendingThread?.get(threadId).value;
         if (pending && pending.created !== true) {
@@ -507,11 +648,61 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
           }).catch(alreadyDone);
           ctx.command("pendingThread", threadId, "set", { created: true });
         }
+        const { parts, voiceIndexes } = await content(
+          ctx,
+          id,
+          body,
+          files,
+          recordings,
+        );
+        // The record carries these uploads: the conversation swaps this
+        // message for it the moment it shows.
+        const assetIds = parts.flatMap((part) => {
+          const assetId = (part as { assetId?: unknown }).assetId;
+          return typeof assetId === "string" ? [assetId] : [];
+        });
+        if (assetIds.length) ctx.command("outbox", id, "set", { assetIds });
+        if (transcribe) {
+          transcribing = true;
+          const result = await call(ctx, voice!.action, {
+            threadId,
+            content: parts,
+            voiceIndexes,
+            // Agents named by external id are addressed by their agent id.
+            ...(addressed
+              ? {
+                recipientIds: [
+                  ...recipientIds,
+                  ...agents.flatMap((agent) => {
+                    const agentId = agent.agentId ?? agent.externalId;
+                    return typeof agentId === "string" && agentId
+                      ? [agentId]
+                      : [];
+                  }),
+                ],
+              }
+              : {}),
+          }) as { message?: { id?: unknown } } | undefined;
+          const messageId = typeof result?.message?.id === "string"
+            ? result.message.id
+            : undefined;
+          retainedFiles(ctx).delete(id);
+          // The sent message has the Action's id: it replaces this one once
+          // the conversation shows it.
+          ctx.command(
+            "outbox",
+            id,
+            "set",
+            messageId ? { status: "sent", messageId } : { removed: true },
+          );
+          revokePreviews(id, 60_000);
+          return { threadId, messageId: messageId ?? id };
+        }
         await call(ctx, aliases.createThreadMessage, {
           id,
           threadId,
           sender: self,
-          content: await content(ctx, id, body, files),
+          content: parts,
           // Explicit recipients, even none, keep Core's default (every agent
           // in the thread) for apps that choose it by sending nothing.
           ...(addressed ? { recipientIds: [...recipientIds] } : {}),
@@ -528,10 +719,15 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
         }).catch(alreadyDone);
         retainedFiles(ctx).delete(id);
         ctx.command("outbox", id, "set", { status: "sent" });
+        revokePreviews(id, 60_000);
       } catch (error) {
+        // A failed transcription sent nothing: the person retries, or sends
+        // the audio without its transcript.
+        const voiceFailed = transcribing && !refusedSend(error);
         ctx.command("outbox", id, "set", {
           status: "failed",
-          error: sendFailure(error),
+          error: voiceFailed ? "Couldn't transcribe." : sendFailure(error),
+          failure: voiceFailed ? "transcription" : null,
         });
         throw error;
       }
@@ -539,6 +735,7 @@ export function defaultIntents(aliases: Aliases): ChatIntents {
     },
     chatDiscard({ messageId }, ctx) {
       retainedFiles(ctx).delete(messageId);
+      revokePreviews(messageId);
       ctx.command("outbox", messageId, "set", { removed: true });
     },
     chatRevise({ threadId, messageId, text }, ctx) {

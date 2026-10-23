@@ -4,8 +4,9 @@
 /** One speaker's consecutive messages: header, bodies, attachments and actions. @module */
 // deno-lint-ignore verbatim-module-syntax -- classic JSX requires this runtime import.
 import * as React from "react";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
+  AudioLines,
   Check,
   Copy,
   Download,
@@ -51,6 +52,7 @@ import type {
 import { AssistantActivity, type ToolPresentation } from "./activity.tsx";
 import type { ActivityLabels } from "./activity.tsx";
 import { SenderAvatar, senderColor } from "./identity.tsx";
+import { VoiceNote } from "./voice.tsx";
 
 /** Loads a persisted attachment body (from `adapters.core.feed.asset`). */
 export type AssetLoader = (
@@ -75,6 +77,8 @@ export interface MessageGroupProps {
   onLoadBody?(messageId: string, assetId: string): void;
   onEdit?(messageId: string, text: string): Promise<void>;
   onRetry?(messageId: string): void;
+  /** After transcription failed: send the recordings without transcripts. */
+  onSendAudioOnly?(messageId: string): void;
   onDiscard?(messageId: string): void;
 }
 
@@ -115,19 +119,27 @@ function useAttachmentUrl(
   messageId: string,
   loadAsset: AssetLoader | undefined,
   enabled: boolean,
-): { url?: string; failed: boolean } {
+): { url?: string; failed: boolean; retry(): void } {
   const [state, setState] = useState<{ url?: string; failed: boolean }>({
     url: attachment.url,
     failed: false,
   });
+  const [attempt, setAttempt] = useState(0);
+  // The loader is a new function on every render of the conversation; only
+  // the asset itself (or a retry) loads it again, so playback carries on.
+  const loader = useRef(loadAsset);
+  loader.current = loadAsset;
+  const canLoad = Boolean(loadAsset);
   useEffect(() => {
-    if (attachment.url || !enabled || !attachment.assetId || !loadAsset) {
+    const load = loader.current;
+    if (attachment.url || !enabled || !attachment.assetId || !load) {
       setState({ url: attachment.url, failed: false });
       return;
     }
+    setState((current) => current.failed ? { failed: false } : current);
     const controller = new AbortController();
     let created: string | undefined;
-    loadAsset(messageId, attachment.assetId, controller.signal).then(
+    load(messageId, attachment.assetId, controller.signal).then(
       (blob) => {
         if (controller.signal.aborted) return;
         created = URL.createObjectURL(blob);
@@ -141,8 +153,15 @@ function useAttachmentUrl(
       controller.abort();
       if (created) URL.revokeObjectURL(created);
     };
-  }, [attachment.url, attachment.assetId, messageId, loadAsset, enabled]);
-  return state;
+  }, [
+    attachment.url,
+    attachment.assetId,
+    messageId,
+    canLoad,
+    enabled,
+    attempt,
+  ]);
+  return { ...state, retry: () => setAttempt((value) => value + 1) };
 }
 
 function AttachmentMeta(
@@ -157,15 +176,17 @@ function AttachmentMeta(
 }
 
 function AttachmentView(
-  { attachment, messageId, loadAsset }: {
+  { attachment, messageId, loadAsset, own = false }: {
     attachment: ChatAttachment;
     messageId: string;
     loadAsset?: AssetLoader;
+    /** In the person's own bubble. */
+    own?: boolean;
   },
 ): React.ReactElement {
   const kind = attachmentKind(attachment);
   const visual = kind === "image" || kind === "audio" || kind === "video";
-  const { url, failed } = useAttachmentUrl(
+  const { url, failed, retry } = useAttachmentUrl(
     attachment,
     messageId,
     loadAsset,
@@ -173,6 +194,19 @@ function AttachmentView(
   );
   const [open, setOpen] = useState(false);
   const label = attachment.name ?? attachment.mediaType;
+  if (attachment.voice && kind === "audio") {
+    return (
+      <VoiceNote
+        url={url}
+        failed={failed || (!url && !(attachment.assetId && loadAsset))}
+        onRetry={retry}
+        durationMs={attachment.durationMs}
+        peaks={attachment.peaks}
+        transcript={attachment.transcript}
+        tone={own ? "bubble" : "plain"}
+      />
+    );
+  }
   const card = (
     <span
       data-slot="attachment-card"
@@ -195,7 +229,7 @@ function AttachmentView(
   if (kind === "audio" && url) {
     return (
       <audio
-        className="w-full max-w-sm"
+        className="w-72 max-w-full"
         controls
         preload="metadata"
         src={url}
@@ -478,6 +512,13 @@ function Body(
   );
 }
 
+/** What a message's recordings said, from their transcripts. */
+function spoken(message: ChatMessage): string {
+  return message.attachments.flatMap((attachment) =>
+    attachment.transcript?.trim() ? [attachment.transcript.trim()] : []
+  ).join("\n\n");
+}
+
 /** One speaker's run of messages under one name and avatar. */
 export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
   function MessageGroup(
@@ -493,6 +534,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
       onLoadBody,
       onEdit,
       onRetry,
+      onSendAudioOnly,
       onDiscard,
     }: MessageGroupProps,
   ): React.ReactElement {
@@ -566,6 +608,7 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                     attachment={attachment}
                     messageId={message.id}
                     loadAsset={loadAsset}
+                    own={own}
                   />
                 ))}
               </div>
@@ -645,15 +688,31 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                     role="status"
                     className="text-muted-foreground flex items-center gap-1.5 text-xs"
                   >
-                    <Spinner className="size-3" /> Sending…
+                    <Spinner className="size-3" />{" "}
+                    {message.transcription === "pending"
+                      ? "Transcribing…"
+                      : "Sending…"}
                   </p>
                 )}
                 {message.status === "failed" && (
                   <div
                     role="alert"
-                    className="text-destructive flex flex-wrap items-center gap-2 text-xs"
+                    className={cn(
+                      "text-destructive flex flex-wrap items-center gap-2 text-xs",
+                      own && "justify-end",
+                    )}
                   >
                     <span>{message.error ?? "Not sent."}</span>
+                    {message.transcription === "failed" && onSendAudioOnly && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => onSendAudioOnly(message.id)}
+                      >
+                        <AudioLines /> Send audio only
+                      </Button>
+                    )}
                     {onRetry && (
                       <Button
                         type="button"
@@ -683,7 +742,8 @@ export const MessageGroup: React.NamedExoticComponent<MessageGroupProps> = memo(
                       own && "flex-row-reverse",
                     )}
                   >
-                    <CopyButton text={message.text} />
+                    {/* A voice message copies what was said. */}
+                    <CopyButton text={message.text || spoken(message)} />
                     {own && onEdit && message.text && (
                       <Tooltip>
                         <TooltipTrigger asChild>

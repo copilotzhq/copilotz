@@ -203,6 +203,7 @@ const view: ViewDefinition<
             viewerIds: [config.self?.id, config.self?.externalId].filter((
               value,
             ): value is string => typeof value === "string" && value !== ""),
+            transcriptLabel: config.voice?.transcriptLabel,
           },
         ),
       ),
@@ -218,10 +219,30 @@ const view: ViewDefinition<
       finishedReplies(projected, idle),
     );
     const known = new Set(rows.map((row) => row.id));
+    // Uploads the conversation's messages carry, for outbox messages sent by
+    // an app Action under an id of its own.
+    const carried = new Set(
+      rows.flatMap((row) =>
+        Array.isArray(row.content)
+          ? row.content.flatMap((part) => {
+            const assetId = (part as { assetId?: unknown } | null)?.assetId;
+            return typeof assetId === "string" ? [assetId] : [];
+          })
+          : []
+      ),
+    );
     const self = config.self;
     const me = ownSender(senders.values(), self);
+    // An outbox message gives way to its record: the same id, or, sent by an
+    // app Action under its own id (a voice message), the record carrying its
+    // uploads or the id the Action returned.
     const outbox = (ctx.collections.outbox?.list({ where: { threadId: id } })
-      .value ?? []).filter((row: Row) => !row.removed && !known.has(row.id));
+      .value ?? []).filter((row: Row) =>
+        !row.removed && !known.has(row.id) &&
+        !(typeof row.messageId === "string" && known.has(row.messageId)) &&
+        !(row.transcribe === true && Array.isArray(row.assetIds) &&
+          row.assetIds.some((asset) => carried.has(String(asset))))
+      );
     const pending: ChatMessage[] = outbox.map((row: Row) => ({
       id: row.id,
       role: "user",
@@ -237,6 +258,11 @@ const view: ViewDefinition<
         : row.status === "sending"
         ? "sending"
         : "sent",
+      ...(row.failure === "transcription"
+        ? { transcription: "failed" as const }
+        : row.transcribe === true && row.status === "sending"
+        ? { transcription: "pending" as const }
+        : {}),
       ...(typeof row.error === "string" ? { error: row.error } : {}),
     }));
     const all = [...persisted, ...pending];
@@ -298,6 +324,14 @@ const view: ViewDefinition<
               threadId: id,
               text: "",
               retry: messageId,
+            })
+              .result().catch(() => {})}
+          onSendAudioOnly={(messageId) =>
+            void ctx.actions.chatSend?.({
+              threadId: id,
+              text: "",
+              retry: messageId,
+              withoutTranscript: true,
             })
               .result().catch(() => {})}
           onDiscard={(messageId) =>

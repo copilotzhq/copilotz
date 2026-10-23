@@ -122,6 +122,70 @@ test("text skips reasoning and assets; attachments keep references", () => {
   assert.equal(messageText("plain"), "plain");
 });
 
+test("a recording's labelled transcript becomes its transcript, not message text", () => {
+  const label = "[Voice transcript]";
+  const audio = (assetId: string, kind = "audio", metadata?: unknown) => ({
+    assetId,
+    kind,
+    role: "attachment",
+    mediaType: "audio/webm",
+    name: "voice-message.webm",
+    ...(metadata ? { metadata } : {}),
+  });
+  const content = [
+    text("Before"),
+    audio("v1", "audio", {
+      voice: true,
+      durationMs: 4210.4,
+      peaks: [0.2, 1.4, -1, "x", 0.5],
+    }),
+    text(`${label}\n  Não envie 42.\nKeep English.  `),
+    // Uploaded audio (no voice mark, no transcript) stays an attachment.
+    audio("song", "file"),
+    text("After"),
+  ];
+  const options = { transcriptLabel: label };
+  assert.equal(messageText(content, options), "Before\n\nAfter");
+  assert.deepEqual(messageAttachments(content, options), [
+    {
+      kind: "audio",
+      mediaType: "audio/webm",
+      name: "voice-message.webm",
+      assetId: "v1",
+      voice: true,
+      durationMs: 4210,
+      peaks: [0.2, 1, 0, 0.5],
+      transcript: "  Não envie 42.\nKeep English.  ",
+    },
+    {
+      kind: "file",
+      mediaType: "audio/webm",
+      name: "voice-message.webm",
+      assetId: "song",
+    },
+  ]);
+  // A transcript after audio sent as a file is still that recording's.
+  const filed = [audio("old", "file"), text(`${label}\nHi`)];
+  assert.equal(messageAttachments(filed, options)[0].transcript, "Hi");
+  assert.equal(messageAttachments(filed, options)[0].voice, true);
+  // Without the app's label, or not right after audio, it is text.
+  assert.equal(messageText(filed), `${label}\nHi`);
+  assert.equal(
+    messageText([text(`${label}\nHi`)], options),
+    `${label}\nHi`,
+  );
+  const [projected] = projectMessages(
+    [{ id: "m", senderId: "ana", content }],
+    () => ana,
+    options,
+  );
+  assert.equal(projected.text, "Before\n\nAfter");
+  assert.equal(
+    projected.attachments[0].transcript,
+    "  Não envie 42.\nKeep English.  ",
+  );
+});
+
 test("participant rows become senders with stable fallbacks", () => {
   assert.deepEqual(
     chatSender({

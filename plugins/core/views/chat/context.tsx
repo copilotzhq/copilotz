@@ -22,6 +22,7 @@ import {
 } from "../../shared/chat-messages.ts";
 import type { ActivityLabels, ToolPresentation } from "./activity.tsx";
 import type { ThreadFeedAdapter } from "./host.ts";
+import { type ChatVoiceHook, voiceHook } from "./intents.ts";
 import { readParticipants } from "../reads.ts";
 
 /** What a tool renderer View receives as its value. */
@@ -127,6 +128,8 @@ export type ChatConfig = Readonly<{
   labels: ChatLabels;
   suggestions: readonly string[];
   features: Readonly<{ attachments: boolean; voice: boolean }>;
+  /** The app's voice hook (`resources.chat.voice`): recordings are transcribed. */
+  voice?: ChatVoiceHook;
   self?: ChatSelf;
   feed?: ThreadFeedAdapter;
   branding: Readonly<{ title?: string; subtitle?: string; logoUrl?: string }>;
@@ -149,6 +152,7 @@ export function chatConfig(ctx: BrowserViewContext): ChatConfig {
   const sender = record(record(ctx.resources.chat).sender);
   const feed = ctx.adapters.core?.feed;
   const self = Object.keys(sender).length ? sender as ChatSelf : undefined;
+  const voice = voiceHook(ctx.resources);
   return {
     technical: technicalDetails(ctx, self),
     imageOrigins: strings(record(ctx.resources.markdown).imageOrigins),
@@ -161,6 +165,7 @@ export function chatConfig(ctx: BrowserViewContext): ChatConfig {
       attachments: features.attachments !== false,
       voice: features.voice !== false,
     },
+    ...(voice ? { voice } : {}),
     ...(self ? { self } : {}),
     ...(feed && typeof feed === "object"
       ? { feed: feed as ThreadFeedAdapter }

@@ -209,12 +209,15 @@ export {
   type ChatIntentInputs,
   type ChatIntentName,
   type ChatIntents,
+  type ChatVoiceHook,
   coreActionAliases,
   type CoreActionName,
   intentServerActions,
   MESSAGE_BODY_BYTES,
   titleFrom,
   TOOL_RESULT_BYTES,
+  VOICE_TITLE,
+  voiceHook,
 } from "./views/chat/intents.ts";
 export type {
   ChatConfig,
@@ -263,6 +266,11 @@ export {
   toolReaderIds,
   type ToolResultRef,
   type ToolResultStatus,
+  type TranscriptOptions,
+  VOICE_PEAKS,
+  type VoiceMetadata,
+  voiceMetadata,
+  type VoiceRecording,
 } from "./shared/chat-messages.ts";
 export {
   createFeedProjector,
@@ -290,5 +298,16 @@ export {
   MessageLog,
   prependScrollTop,
 } from "./views/chat/list.tsx";
-export { canRecordVoice, VoiceComposer } from "./views/chat/voice.tsx";
+export {
+  canRecordVoice,
+  MAX_RECORDING_MS,
+  recordingFormat,
+  recordVoice,
+  VoiceComposer,
+  VoiceNote,
+  type VoiceNoteProps,
+  type VoiceRecorder,
+  type VoiceSnapshot,
+  type VoiceTake,
+} from "./views/chat/voice.tsx";
 export { startConversation } from "./views/chat/start.ts";

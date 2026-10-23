@@ -409,6 +409,99 @@ test("pending and failed sends say so, with Retry and Discard", () => {
   assert.ok(html.includes("Discard"));
 });
 
+test("a voice message is a compact player with its transcript one click away", () => {
+  const voice = {
+    kind: "audio" as const,
+    mediaType: "audio/webm",
+    name: "voice-message.webm",
+    assetId: "v1",
+    voice: true as const,
+    durationMs: 7_450,
+    peaks: [0.1, 0.8, 0.4, 1],
+    transcript: "  Plan the launch\nby Friday.  ",
+  };
+  const upload = {
+    kind: "audio" as const,
+    mediaType: "audio/mpeg",
+    name: "interview.mp3",
+    url: "blob:interview",
+  };
+  const html = renderToStaticMarkup(
+    <MessageGroup
+      group={{
+        id: "x",
+        sender: ana,
+        role: "user",
+        own: true,
+        messages: [
+          message("m", ana, { text: "", attachments: [voice, upload] }),
+        ],
+      }}
+      loadAsset={() => new Promise(() => {})}
+    />,
+  );
+  // The recording: a player (play, waveform seek, length), not raw text.
+  assert.match(html, /data-slot="voice-note"/);
+  assert.match(html, /aria-label="Voice message, 0:07"/);
+  assert.match(html, /aria-label="Loading the voice message"/);
+  assert.match(html, /type="range"[^>]*aria-label="Playback position"/);
+  assert.ok(html.includes(">0:07<"), "its length before the body loads");
+  assert.match(html, /bg-bubble-foreground/, "drawn for the own bubble");
+  // The transcript: a closed disclosure with a one-line preview.
+  assert.match(html, /aria-expanded="false"[^>]*>.*Transcript/s);
+  assert.ok(html.includes("Plan the launch by Friday."), "preview");
+  assert.doesNotMatch(html, /Plan the launch\nby Friday/, "not the body");
+  // An uploaded audio file stays an ordinary player.
+  assert.equal(html.match(/data-slot="voice-note"/g)?.length, 1);
+  assert.match(html, /<audio[^>]*controls[^>]*aria-label="interview.mp3"/);
+});
+
+test("a voice send says Transcribing…, and a failed one offers audio only or Retry", () => {
+  const take = {
+    kind: "audio" as const,
+    mediaType: "audio/webm",
+    voice: true as const,
+    durationMs: 3_000,
+    url: "blob:take",
+  };
+  const html = renderToStaticMarkup(
+    <MessageGroup
+      group={{
+        id: "x",
+        sender: ana,
+        role: "user",
+        own: true,
+        messages: [
+          message("one", ana, {
+            text: "",
+            attachments: [take],
+            status: "sending",
+            transcription: "pending",
+          }),
+          message("two", ana, {
+            text: "",
+            attachments: [take],
+            status: "failed",
+            transcription: "failed",
+            error: "Couldn't transcribe.",
+          }),
+        ],
+      }}
+      onRetry={() => {}}
+      onSendAudioOnly={() => {}}
+      onDiscard={() => {}}
+    />,
+  );
+  assert.ok(html.includes("Transcribing…"));
+  assert.ok(!html.includes("Sending…"));
+  assert.ok(html.includes("Couldn&#x27;t transcribe."));
+  for (const action of ["Send audio only", "Retry", "Discard"]) {
+    assert.ok(html.includes(action), action);
+  }
+  // A local take plays at once: no loading state.
+  assert.equal(html.match(/aria-label="Play"/g)?.length, 2);
+});
+
 test("@mentions resolve to participant ids; the active mention follows the caret", () => {
   const targets = [
     { id: "p-north", name: "North", sender: north },

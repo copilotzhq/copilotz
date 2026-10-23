@@ -36,6 +36,42 @@ export type ChatAttachment = Readonly<{
   assetId?: string;
   /** A local preview (object URL) for a message not yet sent. */
   url?: string;
+  /**
+   * A voice message: recorded in the composer (`metadata.voice` on its
+   * content) or carrying a transcript. It shows as a compact player.
+   */
+  voice?: true;
+  /** The recording's length, known before its body loads. */
+  durationMs?: number;
+  /** Peak levels (0–1) across the recording, drawn as its waveform. */
+  peaks?: readonly number[];
+  /** What was said: the transcript the message carries for this recording. */
+  transcript?: string;
+}>;
+
+/** Recorded voice in content metadata (`metadata.voice`), as the composer marks it. */
+export type VoiceMetadata = Readonly<{
+  voice: true;
+  durationMs?: number;
+  peaks?: readonly number[];
+}>;
+
+/** A voice recording among a message's files (`chatSend`'s `recordings`). */
+export type VoiceRecording = Readonly<{
+  /** Its position in the message's `files`. */
+  index: number;
+  durationMs?: number;
+  /** Peak levels (0–1) across the recording, for its waveform. */
+  peaks?: readonly number[];
+}>;
+
+/** How a message carries transcripts: see {@link messageAttachments}. */
+export type TranscriptOptions = Readonly<{
+  /**
+   * The first line of the text part that follows a recording with its
+   * transcript (`resources.chat.voice.transcriptLabel`).
+   */
+  transcriptLabel?: string;
 }>;
 
 export type ChatActivityStatus = "active" | "complete" | "failed";
@@ -120,6 +156,11 @@ export type ChatMessage = Readonly<{
   activity: readonly ChatActivity[];
   /** `sending`/`failed` come from the outbox, `streaming` from the feed. */
   status: "sent" | "sending" | "failed" | "streaming";
+  /**
+   * A send that transcribes its recordings first: `pending` while it runs,
+   * `failed` when transcription failed (nothing was sent).
+   */
+  transcription?: "pending" | "failed";
   /** The LLM call that produced an agent message. */
   attemptId?: string;
   edited?: boolean;
@@ -188,17 +229,56 @@ function entries(content: unknown): readonly ContentEntry[] {
     : [];
 }
 
+const entryKind = (entry: ContentEntry): unknown =>
+  entry.kind ?? (entry as { type?: unknown }).type;
+
+/** Audio content: its kind, or a file whose media type is audio. */
+function isAudio(entry: ContentEntry | undefined): boolean {
+  const kind = entry ? entryKind(entry) : undefined;
+  return (kind === "audio" || kind === "file") &&
+    typeof entry?.mediaType === "string" &&
+    /^audio\//i.test(entry.mediaType);
+}
+
+/**
+ * The transcript a text entry carries for the recording right before it:
+ * its text after the label line, verbatim.
+ */
+function transcriptAt(
+  list: readonly ContentEntry[],
+  index: number,
+  label: string | undefined,
+): string | undefined {
+  const entry = list[index];
+  if (!label || !entry || !isAudio(list[index - 1])) return undefined;
+  if (entryKind(entry) !== "text") return undefined;
+  const value = typeof entry.value === "string"
+    ? entry.value
+    : (entry as { text?: unknown }).text;
+  if (typeof value !== "string") return undefined;
+  if (value === label) return "";
+  return value.startsWith(`${label}\n`)
+    ? value.slice(label.length + 1)
+    : undefined;
+}
+
 /**
  * A message body's text parts in order: read text, or a text body the read
- * left as a reference (deferred over its budget). Reasoning and assets stay
- * out.
+ * left as a reference (deferred over its budget). Reasoning, assets and
+ * recordings' transcripts (see {@link messageAttachments}) stay out.
  */
-export function messageTextParts(content: unknown): ChatTextPart[] {
-  return entries(content).flatMap((entry): ChatTextPart[] => {
+export function messageTextParts(
+  content: unknown,
+  options: TranscriptOptions = {},
+): ChatTextPart[] {
+  const list = entries(content);
+  return list.flatMap((entry, index): ChatTextPart[] => {
     const role = typeof entry.role === "string" ? entry.role : "";
     if (role.startsWith("reasoning")) return [];
-    const kind = entry.kind ?? (entry as { type?: unknown }).type;
-    if (kind !== "text") return [];
+    if (entryKind(entry) !== "text") return [];
+    if (transcriptAt(list, index, options.transcriptLabel) !== undefined) {
+      return [];
+    }
     const value = typeof entry.value === "string"
       ? entry.value
       : (entry as { text?: unknown }).text;
@@ -223,21 +303,59 @@ export function joinText(parts: readonly ChatTextPart[]): string {
 }
 
 /** The readable text of a message body; reasoning and assets stay out. */
-export function messageText(content: unknown): string {
-  return joinText(messageTextParts(content));
+export function messageText(
+  content: unknown,
+  options: TranscriptOptions = {},
+): string {
+  return joinText(messageTextParts(content, options));
 }
 
-/** Image, audio, video and file entries, as references for previews. */
+/** The most waveform peaks a recording keeps. */
+export const VOICE_PEAKS = 64;
+
+/** A content entry's recorded-voice metadata (`metadata.voice`), validated. */
+export function voiceMetadata(value: unknown): VoiceMetadata | undefined {
+  const metadata = record(value);
+  if (metadata.voice !== true) return undefined;
+  const duration = metadata.durationMs;
+  const peaks = Array.isArray(metadata.peaks)
+    ? metadata.peaks.filter((peak): peak is number =>
+      typeof peak === "number" && Number.isFinite(peak)
+    ).slice(0, VOICE_PEAKS).map((peak) => Math.min(1, Math.max(0, peak)))
+    : [];
+  return {
+    voice: true,
+    ...(typeof duration === "number" && Number.isFinite(duration) &&
+        duration > 0
+      ? { durationMs: Math.round(duration) }
+      : {}),
+    ...(peaks.length ? { peaks } : {}),
+  };
+}
+
+/**
+ * Image, audio, video and file entries, as references for previews. A
+ * recording is a voice message: marked by `metadata.voice`, or followed by a
+ * text part whose first line is `transcriptLabel`, which becomes its
+ * `transcript` (and leaves the message text).
+ */
 export function messageAttachments(
   content: unknown,
+  options: TranscriptOptions = {},
 ): readonly ChatAttachment[] {
-  return entries(content).flatMap((entry) => {
+  const list = entries(content);
+  return list.flatMap((entry, index) => {
     const kind = entry.kind;
     if (
       kind !== "image" && kind !== "audio" && kind !== "video" &&
       kind !== "file"
     ) return [];
     const metadata = record(entry.metadata);
+    const audio = isAudio(entry);
+    const voice = audio ? voiceMetadata(metadata) : undefined;
+    const transcript = audio
+      ? transcriptAt(list, index + 1, options.transcriptLabel)
+      : undefined;
     return [{
       kind,
       mediaType: text(entry.mediaType) ?? "application/octet-stream",
@@ -246,6 +364,10 @@ export function messageAttachments(
         ? { size: metadata.byteLength }
         : {}),
       ...(text(entry.assetId) ? { assetId: text(entry.assetId) } : {}),
+      ...(voice || transcript !== undefined ? { voice: true as const } : {}),
+      ...(voice?.durationMs ? { durationMs: voice.durationMs } : {}),
+      ...(voice?.peaks ? { peaks: voice.peaks } : {}),
+      ...(transcript !== undefined ? { transcript } : {}),
     }];
   });
 }
@@ -471,13 +593,15 @@ function inferSender(sender: ChatSender, row: Row): ChatSender {
 export function projectMessages(
   rows: readonly Row[],
   senderOf: (id: string) => ChatSender,
-  options: Readonly<{
-    /**
-     * The viewer's participant ids: a tool result whose visibility shares
-     * only its status shows its output to its requester or authorized initiator.
-     */
-    viewerIds?: readonly string[];
-  }> = {},
+  options:
+    & Readonly<{
+      /**
+       * The viewer's participant ids: a tool result whose visibility shares
+       * only its status shows its output to its requester or authorized initiator.
+       */
+      viewerIds?: readonly string[];
+    }>
+    & TranscriptOptions = {},
 ): ChatMessage[] {
   const results = new Map<string, ToolResult>();
   for (const row of rows) {
@@ -564,10 +688,11 @@ export function projectMessages(
           : {}),
       });
     }
-    const parts = messageTextParts(row.content);
+    const voice = { transcriptLabel: options.transcriptLabel };
+    const parts = messageTextParts(row.content, voice);
     const body = joinText(parts);
     const pending = parts.some((part) => "assetId" in part) ? parts : undefined;
-    const attachments = messageAttachments(row.content);
+    const attachments = messageAttachments(row.content, voice);
     const human = sender.type === "human";
     if (
       !human && !body && !pending && !attachments.length && !activity.length

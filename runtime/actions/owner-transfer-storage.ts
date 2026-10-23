@@ -1,4 +1,8 @@
 /** Offline storage utilities. Owners and all physical producers must be stopped. */
+import {
+  isLegacyObjectBodyStore,
+  legacyObjectBodyReader,
+} from "../content/legacy-object-body-store.ts";
 import type { SqlExecutor } from "../events/session.ts";
 import {
   createCoreTableNames,
@@ -11,7 +15,11 @@ import {
 import { base64ToBytes, bytesToBase64 } from "../content/encoding.ts";
 import { digestContent } from "../content/digest.ts";
 import { BODY_APPEND_MAX_BYTES } from "../content/body-store-operations.ts";
-import type { BodyStore, S3BodyStorageConfig } from "../content/body-store.ts";
+import type {
+  BodyReader,
+  BodyStore,
+  S3BodyStorageConfig,
+} from "../content/body-store.ts";
 import { createS3Requester } from "../content/s3-request.ts";
 import {
   BODY_MANIFEST_DECODE_BYTES,
@@ -33,21 +41,16 @@ export type TransferBody = {
   digest: `sha256:${string}`;
   outcome: "completed" | "failed" | "cancelled";
 };
-export type BodyReader = (
-  copy: {
-    key: string;
-    backendId: string;
-    namespace: string;
-    length: number;
-    kind?: string;
-  },
-) => Promise<{ bytes: Uint8Array; mediaType: string }>;
+export type { BodyReader } from "../content/body-store.ts";
 export function bodyStoreReader(
   storeFor: (backendId: string, namespace: string) => BodyStore,
 ): BodyReader {
   return async (copy) => {
-    const store = storeFor(copy.backendId, copy.namespace),
-      head = await store.head({ bodyId: copy.key });
+    const store = storeFor(copy.backendId, copy.namespace);
+    if (isLegacyObjectBodyStore(store)) {
+      return await legacyObjectBodyReader(store)(copy);
+    }
+    const head = await store.head({ bodyId: copy.key });
     if (!head || head.byteLength < copy.length) {
       throw new Error("Missing retained body.");
     }

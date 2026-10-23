@@ -799,43 +799,72 @@ fail closed. `--concurrency=16` overrides the module; the supported range is
 identities share one check, and conflicting length/digest/outcome claims still
 fail.
 
-For an S3-compatible backend, create `migration-storage.ts` in the repository
-root (use the exact backend ID, bucket, prefix and protocol of the retained
-data):
+For legacy objects whose retained `location.key` is the full physical object
+name, create `migration-storage.ts` in the repository root. This complete
+example uses GCS HMAC interoperability through the S3-compatible XML endpoint:
 
 ```ts
-import { createBodyStorageRuntime } from "./runtime/content/storage.ts";
-import type { RetainedDataUpgradeStorage } from "./runtime/actions/upgrade.ts";
+import { createLegacyObjectBodyStore } from "@copilotz/copilotz/content";
+import type { RetainedDataUpgradeStorage } from "@copilotz/copilotz/actions";
 
-const config = {
-  backendId: Deno.env.get("MIGRATION_BACKEND_ID")!,
-  endpoint: Deno.env.get("MIGRATION_S3_ENDPOINT")!,
-  region: Deno.env.get("MIGRATION_S3_REGION")!,
-  bucket: Deno.env.get("MIGRATION_S3_BUCKET")!,
-  accessKeyId: Deno.env.get("MIGRATION_S3_ACCESS_KEY_ID")!,
-  secretAccessKey: Deno.env.get("MIGRATION_S3_SECRET_ACCESS_KEY")!,
-  prefix: Deno.env.get("MIGRATION_S3_PREFIX") ?? "",
+function required(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+}
+const bucket = required("MIGRATION_S3_BUCKET");
+const store = createLegacyObjectBodyStore({
+  backendId: `gcs:${bucket}`, // Must exactly match the retained backend ID.
+  provider: "gcs",
+  endpoint: "https://storage.googleapis.com",
+  region: "auto",
+  bucket,
+  accessKeyId: required("MIGRATION_S3_ACCESS_KEY_ID"),
+  secretAccessKey: required("MIGRATION_S3_SECRET_ACCESS_KEY"),
   pathStyle: true,
-};
-const runtime = createBodyStorageRuntime({ storage: { type: "s3", config } });
-const store = runtime.writer!;
+});
 export default {
   storeFor: (location) =>
     location.kind === "object" && location.backendId === store.backendId
       ? store
-      : undefined,
-  // Set this only if the retained operation streams use this external backend.
-  // Otherwise omit it to retain the default database stream backend.
-  // streamBackend: { kind: "object", backendId: store.backendId },
+      : undefined, // Database locations use the default database reader.
+  // Include this when retained operation streams also use this legacy bucket.
+  // Omit it when their bodies are in the database.
+  streamBackend: { kind: "object", backendId: store.backendId },
   concurrency: 16,
 } satisfies RetainedDataUpgradeStorage;
 ```
 
-For native GCS objects use the existing `createGcsBodyStore` adapter and map its
-exact `object` backend ID in the same way. S3 compatibility does not convert
-native GCS object layouts into S3 manifests. `copyMappings` points at already
-imported physical keys; it does not perform copies. Keep credentials in the
-environment, and use credentials that permit only reads for the external source.
+For another S3-compatible bucket, use `provider: "s3"`, its endpoint and region,
+and the exact retained backend ID. S3 requires a strong ETag; GCS requires both
+generation and metageneration. Keep HMAC credentials in the environment and
+grant only source reads. The legacy adapter applies **no prefix**, even if a
+config contains one: every body ID is already the absolute object name,
+including any prefix, schema, namespace and percent-encoded segments.
+
+**No object copy or import is needed.** Prepare and finalization read legacy
+objects in place. The v12 owner-key step re-homes retained external bytes into
+database-owned copies. The CLI storage resolver automatically uses
+`legacyObjectBodyReader(store)` for this step; applications invoking
+`migrateOwnerKeys` directly can supply it as `readExternalBody` (dispatch by
+backend ID when there are multiple stores).
+
+Ready legacy objects require exact Content-Length, `copilotz-sha256` metadata
+(hex SHA-256, optionally prefixed with `sha256:`), and a media type from
+`copilotz-media-type` or Content-Type. Both `x-goog-meta-*` and `x-amz-meta-*`
+headers are accepted. Reads use bounded ranged GETs guarded by the observed
+version; changed versions, missing objects, absent/invalid digest metadata,
+short/transformed ranges, length mismatches and digest mismatches refuse the
+upgrade. The reader never invents missing digest metadata. Progressive legacy
+objects at `KEY.progressive/meta.json`, including terminal `incomplete`
+prefixes, are explicitly unsupported by this adapter and must be resolved before
+cutover. The separate offline importer still supports reviewed incomplete
+prefixes; it is not required for ready raw objects. The adapter rejects every
+mutation and every maintenance operation.
+
+For current manifest-based layouts, use the matching `createS3BodyStore` or
+`createGcsBodyStore` adapter instead. `copyMappings` only identifies previously
+imported keys; omit it for legacy in-place reads.
 
 ```sh
 deno run -A scripts/upgrade-retained-data.ts prepare --schema=SCHEMA \
@@ -856,16 +885,22 @@ deno run -A scripts/upgrade-retained-data.ts apply --schema=SCHEMA \
 | Owner-key conversion to v12              | `head`, `readRange` via the storage module, unless `ownerKeys.readExternalBody` is supplied | Imports external bytes into database-owned copies and rewrites protected values; marks source catalog copies orphan/noncollectable; leaves source objects intact |
 | Authority/v13 and credential effects/v14 | None                                                                                        | SQL schema and authority changes                                                                                                                                 |
 
-The built-in S3 adapter implements those reads using manifest and immutable-part
-GETs; native GCS uses metadata GETs and generation-bound media range GETs. One
-BodyStore call can make multiple HTTP requests. The upgrade invokes no external
-`put`, `reserve`, `append`, `fence`, `seal`, `terminate`, `abort`, maintenance
-list or delete. There is no external mutation opt-in because none is needed.
-Custom modules are executable operator code and must uphold the read-only
-contract.
+The legacy adapter uses HEAD and version-guarded ranged GETs. Current S3 layouts
+use manifest and immutable-part GETs; native GCS uses metadata GETs and
+generation-bound media range GETs. One BodyStore call can make multiple HTTP
+requests. The upgrade invokes no external `put`, `reserve`, `append`, `fence`,
+`seal`, `terminate`, `abort`, maintenance list or delete. There is no external
+mutation opt-in because none is needed. Custom modules are executable operator
+code and must uphold the read-only contract.
 
 Provision database capacity for the v12 imports, including transaction/WAL
 space. That step currently retains imported external bytes in memory and reads
 them sequentially; the configurable concurrency applies to prepare/v11
-inspection. Physical import or later external garbage collection is a separate
-operator procedure. Keep all writers stopped until the entire chain reaches v14.
+inspection. Keep all writers stopped until the entire chain reaches v14.
+
+After the final verification of the upgraded history and database-owned bytes,
+the operator can delete the legacy objects. Before deletion, retain an object
+listing as evidence with **keys, sizes and generations** (and ETags for S3).
+Delete only the reviewed source objects, only after verification; the upgrade
+never deletes them. Retain the listing with the review plan and verification
+results.

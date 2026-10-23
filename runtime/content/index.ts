@@ -17,6 +17,7 @@ export type {
   AppendResult,
   BodyMaintenanceDeleteInput,
   BodyMaintenanceListInput,
+  BodyReader,
   BodyState,
   BodyStorageConfig,
   BodyStorageOptions,
@@ -39,6 +40,10 @@ export type {
   TrustedBodyScope,
   WriterCapability,
 } from "./body-store.ts";
+export {
+  createLegacyObjectBodyStore,
+  legacyObjectBodyReader,
+} from "./legacy-object-body-store.ts";
 export { createS3BodyStore } from "./s3-body-store.ts";
 export {
   createGcsBodyStore,

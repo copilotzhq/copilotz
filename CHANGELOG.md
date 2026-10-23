@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Add a read-only legacy object store and verified owner-key reader for offline
+  cutover, reading raw S3/GCS objects in place before v12 installs database
+  copies.
+
 - Complete the linear offline retained-data upgrade through v14, with reviewed
   content plans and resumable owner-key and authority checkpoints.
 - Add the retained-history pruner with closure/reference safety checks and

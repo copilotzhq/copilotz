@@ -1,3 +1,7 @@
+import {
+  type AbandonmentDecisions,
+  resolveRetainedTerminals,
+} from "./upgrade-terminals.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { verifiedEventBody } from "../events/body-store.ts";
 import type { SqlExecutor } from "../events/session.ts";
@@ -6,7 +10,8 @@ import type { SqlExecutor } from "../events/session.ts";
 export async function validateRetainedHistory(
   transaction: SqlExecutor,
   schema: string,
-): Promise<void> {
+  abandoned?: AbandonmentDecisions,
+) {
   const tables = createCoreTableNames(schema);
   const broken = await transaction.query<{ kind: string; id: string }>(
     `SELECT 'causation' AS kind, event.id FROM ${tables.events} event
@@ -95,36 +100,7 @@ export async function validateRetainedHistory(
     if (events.rows.length < batchSize) break;
     after = String(events.rows.at(-1)!.position);
   }
-  // A retained unconverted invocation must never become newly retry-eligible
-  // merely because the converted effect inventory starts empty.
-  const incomplete = await transaction.query<{ event_body_id: string }>(
-    `${unterminatedInvocationsSql(schema)} LIMIT 1`,
-  );
-  if (incomplete.rows.length) {
-    throw new Error(
-      `Drain existing Action history before upgrading: invocation ${
-        incomplete.rows[0].event_body_id
-      } has no confirmed terminal. Original replay eligibility is never inferred from an empty effects table.`,
-    );
-  }
+  return await resolveRetainedTerminals(transaction, schema, abandoned);
 }
 
-/** Shared upgrade predicate; includes every invoked body in each refused group. */
-export function unterminatedInvocationsSql(schema: string): string {
-  return `WITH keys AS MATERIALIZED (
-       SELECT namespace,event_body_id,body->>'status' AS status,
-              body->>'actionRunId' AS run_id,body->>'actionId' AS action_id
-       FROM ${createCoreTableNames(schema).event_bodies}
-     )
-     , incomplete AS (SELECT namespace,run_id,action_id
-     FROM keys
-     WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled')
-     GROUP BY namespace,run_id,action_id
-     HAVING bool_or(status='invoked') AND
-       (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled')))
-     )
-     SELECT k.namespace,k.event_body_id,k.run_id,k.action_id
-     FROM keys k JOIN incomplete i ON k.namespace=i.namespace
-       AND k.run_id=i.run_id AND k.action_id IS NOT DISTINCT FROM i.action_id
-     WHERE k.status='invoked'`;
-}
+export { unterminatedInvocationsSql } from "./upgrade-terminals.ts";

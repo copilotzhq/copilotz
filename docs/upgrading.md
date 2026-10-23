@@ -60,6 +60,19 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
 
 #### Database
 
+For retained v5–v10 history, stop writers and **drain → list unterminated runs →
+optionally retire unreferenced noise → review abandonment decisions → prepare
+and finalize**. A unique terminal internal-invoke wrapper can attest its
+target's outcome even when the target has no terminal body. Plans list and
+fingerprint that evidence. Unattested crash victims require exact, digest-bound
+abandonment identities supplied with `--abandoned=FILE.json` on prepare and
+apply. Referenced runs may be preserved; decisions cannot override live work or
+an existing terminal. Conversion records provenance-bearing terminal receipts:
+wrapper status for attestations, cancelled with `abandoned-before-upgrade` for
+reviewed abandonment. It invents no output or Event body digest and never
+reopens abandoned work. Follow the
+[operator flow and file format](../scripts/upgrade-retained-data.md#old-invocations-without-their-own-terminal-body).
+
 1. **Upgrade every owner schema from v13 to v14, offline.** Stop admission,
    schedules, workers, owners and every physical writer. Confirm the drain with
    `inspectRetainedDataDrain(session, schema)`, then call

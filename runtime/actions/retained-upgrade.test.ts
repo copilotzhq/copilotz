@@ -886,3 +886,389 @@ Deno.test("external content prepares and finalizes with a read-only store and de
     await f.close();
   }
 });
+
+Deno.test("wrapper attestations and reviewed referenced abandonment survive v7 through v14", async () => {
+  const { abandonmentDecisions } = await import("./upgrade-terminals.ts");
+  const { createActionLifecycleLoader } = await import("./persistence.ts");
+  const { pruneRetainedHistory } = await import(
+    "../../scripts/prune-retained-history.ts"
+  );
+  const f = await fixture();
+  try {
+    const add = async (id: string, body: Record<string, unknown>) => {
+      const encoded = await encodeEventBody(body);
+      await f.db.query(
+        `INSERT INTO ${f.tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('archive',$1,1,$2::jsonb,$3)`,
+        [id, encoded.body, encoded.digest],
+      );
+    };
+    for (const status of ["completed", "failed"] as const) {
+      await add(`target-${status}`, {
+        actionId: "synthetic.target",
+        actionRunId: status,
+        status: "invoked",
+        input: {},
+        metadata: {},
+      });
+      await add(`wrapper-${status}`, {
+        actionId: "copilotz.server.internal.invoke",
+        actionRunId: `wrapper-${status}`,
+        status: "completed",
+        output: { status, targetActionRunId: status },
+      });
+    }
+    await add("orphan-body", {
+      actionId: "synthetic.target",
+      actionRunId: "orphan",
+      status: "invoked",
+      input: {},
+      metadata: {},
+    });
+    const event = {
+      ...f.original.rows.events[0],
+      id: "orphan-event",
+      position: 10000,
+      type: "synthetic.target.invoked",
+      subject_type: "synthetic.target",
+      subject_id: "orphan",
+      deduplication_id: "orphan:action:invoked",
+      payload: {
+        dataRef: {
+          eventBodyId: "orphan-body",
+          schemaVersion: 1,
+          mediaType: "application/json",
+        },
+      },
+      metadata: {
+        actionId: "synthetic.target",
+        actionStatus: "invoked",
+        sourceEventId: f.original.rows.events[0].id,
+      },
+    };
+    await f.db.query(
+      `INSERT INTO ${f.tables.events} SELECT * FROM jsonb_populate_record(NULL::${f.tables.events},$1::jsonb)`,
+      [JSON.stringify(event)],
+    );
+    const indexed = {
+      ...f.original.rows.copilotz_operation_events[0],
+      event_id: event.id,
+      event_position: 10000,
+      event_ordinal: 10000,
+    };
+    await f.db.query(
+      `INSERT INTO "${f.schema}".copilotz_operation_events SELECT * FROM jsonb_populate_record(NULL::"${f.schema}".copilotz_operation_events,$1::jsonb)`,
+      [JSON.stringify(indexed)],
+    );
+    await assertRejects(
+      () => prepareRetainedDataUpgrade(f.db, f.schema),
+      Error,
+      "no confirmed terminal",
+    );
+    const abandoned = await abandonmentDecisions([{
+      namespace: "archive",
+      runId: "orphan",
+      actionId: "synthetic.target",
+      bodyId: "orphan-body",
+    }]);
+    const listing = (await pruneRetainedHistory(f.db, {
+      schema: f.schema,
+      eventTypes: [],
+      listUnterminated: true,
+      progress: () => {},
+    })).unterminated!;
+    assertEquals(
+      listing.invocations.find((i) => i.runId === "completed")?.terminal,
+      "attested",
+    );
+    assertEquals(
+      listing.invocations.find((i) => i.runId === "orphan")?.terminal,
+      "unattested",
+    );
+    assertEquals(
+      listing.invocations.find((i) => i.runId === "orphan")?.retainedReference,
+      true,
+    );
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema, {
+      abandoned,
+    });
+    assertExists(plan);
+    assertEquals(plan.terminals?.abandoned, 1);
+    assertEquals(plan.terminals?.attested, 2);
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          plan,
+          reviewedFingerprint: plan.fingerprint,
+        }),
+      Error,
+      "no confirmed terminal",
+    );
+    await upgradeActionLifecycle(f.db, f.schema, {
+      plan,
+      reviewedFingerprint: plan.fingerprint,
+      abandoned,
+    });
+    assertEquals(await marker(f.db, f.schema), 14);
+    await upgradeActionLifecycle(f.db, f.schema, {
+      plan,
+      reviewedFingerprint: plan.fingerprint,
+      abandoned,
+    });
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          plan,
+          reviewedFingerprint: plan.fingerprint,
+        }),
+      Error,
+      "Completed upgrade replay differs",
+    );
+    const receipts = (await f.db.query<{ result: Record<string, unknown> }>(
+      `SELECT result FROM ${f.tables.owner_receipts} WHERE kind='action.upgrade-terminal' ORDER BY key`,
+    )).rows;
+    assertEquals(receipts.length, 3);
+    for (const { result } of receipts) {
+      assertEquals("output" in result, false);
+      assertEquals("digest" in result, false);
+    }
+    const { actionOwnershipStatement } = await import("./ownership.ts");
+    for (const runId of ["completed", "failed", "orphan", "fresh"]) {
+      const params: unknown[] = [];
+      const statement = actionOwnershipStatement(
+        {
+          draft: { namespace: "archive", type: "synthetic.target.invoked" },
+          data: {
+            actionRunId: runId,
+            actionId: "synthetic.target",
+            status: "invoked",
+            input: {},
+            metadata: {},
+          },
+        },
+        undefined,
+        f.tables,
+        (value) => {
+          params.push(value);
+          return `$${params.length}`;
+        },
+        new Date().toISOString(),
+      );
+      const allowed = (await f.db.query<{ allowed: boolean }>(
+        `SELECT (${statement.gate}) AS allowed`,
+        params,
+      )).rows[0].allowed;
+      assertEquals(
+        allowed,
+        runId === "fresh",
+        "terminal upgrade receipts bar even body-only invocation claims",
+      );
+    }
+    const load = createActionLifecycleLoader({
+      store: createEventStore({ session: f.db, schema: f.schema }),
+    });
+    assertEquals(
+      (await load("archive", "completed:action:terminal"))?.status,
+      "completed",
+    );
+    assertEquals(
+      (await load("archive", "failed:action:terminal"))?.status,
+      "failed",
+    );
+    const cancelled = await load("archive", "orphan:action:terminal");
+    assertEquals(cancelled?.status, "cancelled");
+    assert(cancelled?.status === "cancelled");
+    assertEquals(cancelled.error.message, "abandoned-before-upgrade");
+    assertEquals(
+      (await f.db.query(`SELECT * FROM ${f.tables.open_actions}`)).rows,
+      [],
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("reviewed terminal exceptions refuse ambiguity, conflicts, changed decisions and live work", async () => {
+  const { abandonmentDecisions } = await import("./upgrade-terminals.ts");
+  const f = await fixture();
+  try {
+    for (
+      const scenario of [
+        "ambiguous",
+        "nonterminal",
+        "mismatch",
+        "terminal",
+        "multiple",
+        "open",
+        "delivery",
+        "digest",
+        "body-change",
+      ] as const
+    ) {
+      await assertRejects(
+        () =>
+          f.db.transaction(async (tx) => {
+            const add = async (id: string, body: Record<string, unknown>) => {
+              const encoded = await encodeEventBody(body);
+              await tx.query(
+                `INSERT INTO ${f.tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('archive',$1,1,$2::jsonb,$3)`,
+                [id, encoded.body, encoded.digest],
+              );
+            };
+            const invocation = {
+              actionId: "synthetic.target",
+              actionRunId: "target",
+              status: "invoked",
+            };
+            await add("target-body", invocation);
+            const abandoned = await abandonmentDecisions([{
+              namespace: "archive",
+              runId: "target",
+              actionId: "synthetic.target",
+              bodyId: "target-body",
+            }]);
+            if (["ambiguous", "nonterminal", "mismatch"].includes(scenario)) {
+              await add("wrapper", {
+                actionId: "copilotz.server.internal.invoke",
+                actionRunId: "wrapper",
+                status: "completed",
+                output: {
+                  targetActionRunId: "target",
+                  status: scenario === "nonterminal" ? "running" : "completed",
+                  ...(scenario === "mismatch"
+                    ? { targetActionId: "wrong" }
+                    : {}),
+                },
+              });
+              if (scenario === "ambiguous") {
+                await add("wrapper2", {
+                  actionId: "copilotz.server.internal.invoke",
+                  actionRunId: "wrapper2",
+                  status: "completed",
+                  output: { targetActionRunId: "target", status: "completed" },
+                });
+              }
+            }
+            if (scenario === "terminal") {
+              await add("terminal", { ...invocation, status: "completed" });
+            }
+            if (scenario === "multiple") {
+              await add("extra", { ...invocation, status: "progress" });
+            }
+            if (scenario === "open") {
+              await tx.query(
+                `INSERT INTO ${f.tables.open_actions}(namespace,action_run_id,action_id,scope_id,invoked_event_id,state) VALUES('archive','target','synthetic.target','scope',$1,'deferred')`,
+                [f.original.rows.events[0].id],
+              );
+            }
+            if (scenario === "delivery") {
+              await tx.query(
+                `UPDATE ${f.tables.event_deliveries} SET status='pending'`,
+              );
+            }
+            if (scenario === "body-change") {
+              const plan = await prepareRetainedDataUpgrade(
+                join(tx),
+                f.schema,
+                { abandoned },
+              );
+              assertExists(plan);
+              const encoded = await encodeEventBody({
+                ...invocation,
+                input: { changed: true },
+              });
+              await tx.query(
+                `UPDATE ${f.tables.event_bodies} SET body=$1::jsonb,digest=$2 WHERE event_body_id='target-body'`,
+                [encoded.body, encoded.digest],
+              );
+              await assertRejects(
+                () =>
+                  upgradeChain(join(tx), f.schema, {
+                    plan,
+                    reviewedFingerprint: plan.fingerprint,
+                    abandoned,
+                  }),
+                Error,
+                "changed after review",
+              );
+            } else {
+              await assertRejects(() =>
+                prepareRetainedDataUpgrade(join(tx), f.schema, {
+                  abandoned: scenario === "digest"
+                    ? { ...abandoned, digest: "bad" }
+                    : abandoned,
+                }), Error);
+            }
+            throw new Error("rollback refusal");
+          }),
+        Error,
+        "rollback refusal",
+      );
+    }
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("attestation-only v7 history reaches v14 without decisions", async () => {
+  const f = await fixture();
+  try {
+    for (const status of ["completed", "failed"] as const) {
+      for (
+        const [id, body] of [
+          [`target-${status}`, {
+            actionId: "synthetic.target",
+            actionRunId: status,
+            status: "invoked",
+            input: {},
+            metadata: {},
+          }],
+          [`wrapper-${status}`, {
+            actionId: "copilotz.server.internal.invoke",
+            actionRunId: `wrapper-${status}`,
+            status: "completed",
+            output: { status, targetActionRunId: status },
+          }],
+        ] as const
+      ) {
+        const encoded = await encodeEventBody(body);
+        await f.db.query(
+          `INSERT INTO ${f.tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('archive',$1,1,$2::jsonb,$3)`,
+          [id, encoded.body, encoded.digest],
+        );
+      }
+    }
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema);
+    assertExists(plan);
+    assertEquals(plan.terminals?.attested, 2);
+    assertEquals(plan.terminals?.runs.map((r) => r.wrapperBodyId), [
+      "wrapper-completed",
+      "wrapper-failed",
+    ]);
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          plan,
+          reviewedFingerprint: plan.fingerprint,
+        }),
+      Error,
+      "owner",
+    );
+    assertEquals(await marker(f.db, f.schema), 11);
+    const adapter = await testSecretAdapter();
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          ownerKeys: { sourceAdapter: adapter, masterAdapter: adapter },
+        }),
+      Error,
+      "authority",
+    );
+    assertEquals(await marker(f.db, f.schema), 12);
+    await upgradeChain(f.db, f.schema, {
+      authority: await testAuthorityManifest(f.db, f.schema),
+    });
+    assertEquals(await marker(f.db, f.schema), 14);
+  } finally {
+    await f.close();
+  }
+});

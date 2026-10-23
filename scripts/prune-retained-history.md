@@ -311,3 +311,22 @@ not a signature or permission to ignore concurrent writers.
 
 After retirement, run `drain`, then `prepare --storage=./migration-storage.ts`
 as shown in [the offline upgrade guide](upgrade-retained-data.md).
+
+### Attestation and abandonment without deletion
+
+Listing now adds `terminal: "attested" | "unattested"`. Attested rows include
+`attestation` with wrapper run/body IDs, status and original digests. Invalid
+wrapper evidence includes `attestationRefusal`; investigate it before
+conversion. The wrapper reference still protects its target from retirement.
+
+Use **drain → list → optional retirement of unreferenced noise → reviewed
+abandonment decision → prepare/finalize**. Unattested runs referenced by
+terminal operations or application rows can be preserved and cancelled during
+upgrade. Select their exact `{ namespace, runId, actionId, bodyId }` identities
+and use `abandonmentDecisions(entries)` to create the upgrade's digest-bound
+file. See
+[the decision format and commands](upgrade-retained-data.md#old-invocations-without-their-own-terminal-body).
+Pass that file to the upgrade CLI's `--abandoned` on prepare and apply. The
+pruner's `--abandoned` continues to mean reviewed **deletion** of its closure
+listing; do not interchange the two files. Neither decision can override live
+work, an open action, multiple bodies, or an existing terminal.

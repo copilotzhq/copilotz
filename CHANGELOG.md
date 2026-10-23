@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Accept uniquely wrapper-attested terminals during offline retained-data
+  upgrades. Add digest-bound reviewed abandonment for crash victims, preserving
+  referenced history as cancelled with explicit provenance. Plans fingerprint
+  terminal evidence, and pruner listings distinguish attested/unattested runs.
+
 - Add a read-only legacy object store and verified owner-key reader for offline
   cutover, reading raw S3/GCS objects in place before v12 installs database
   copies.

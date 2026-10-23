@@ -1,3 +1,7 @@
+import {
+  inspectUnterminatedRuns,
+  type RetainedTerminal,
+} from "../runtime/actions/upgrade-terminals.ts";
 /** Offline retained-history pruning. No runtime activation or schema migration. */
 import { digestContent } from "../runtime/content/digest.ts";
 import { unterminatedInvocationsSql } from "../runtime/actions/upgrade-history.ts";
@@ -35,6 +39,9 @@ export type UnterminatedListing = {
     events: { eventId: string; time: unknown }[];
     closure: { table: string; tid: string; hash: string; identity: Data }[];
     retainedReference: boolean;
+    terminal: "attested" | "unattested";
+    attestation?: RetainedTerminal;
+    attestationRefusal?: string;
     refusals: string[];
   }[];
   digest: string;
@@ -186,6 +193,13 @@ export async function pruneRetainedHistory(
     run_id: string;
     action_id: string | null;
   }[] = [];
+  const attestations = new Map<
+    string,
+    Pick<
+      Awaited<ReturnType<typeof inspectUnterminatedRuns>>[number],
+      "attestation" | "refusal"
+    >
+  >();
   const byTable = new Map<string, number[]>();
   let version = 0;
   let fks: ForeignKey[] = [];
@@ -260,6 +274,12 @@ export async function pruneRetainedHistory(
     )).rows;
     relationBytesBefore = await size(tx);
     if (options.listUnterminated || options.abandoned) {
+      for (const entry of await inspectUnterminatedRuns(tx, options.schema)) {
+        attestations.set(
+          JSON.stringify([entry.namespace, entry.bodyId]),
+          { attestation: entry.attestation, refusal: entry.refusal },
+        );
+      }
       incomplete = (await tx.query<typeof incomplete[number]>(
         unterminatedInvocationsSql(options.schema),
       )).rows;
@@ -899,7 +919,15 @@ export async function pruneRetainedHistory(
     ).map((entry) => {
       const b = bodies.get(key(entry.namespace, entry.event_body_id))!;
       const refusals = [...(blocked.get(root(b)) ?? [])].sort();
+      const evidence = attestations.get(
+        JSON.stringify([entry.namespace, entry.event_body_id]),
+      );
       return {
+        terminal: evidence?.attestation
+          ? "attested" as const
+          : "unattested" as const,
+        ...(evidence?.attestation ? { attestation: evidence.attestation } : {}),
+        ...(evidence?.refusal ? { attestationRefusal: evidence.refusal } : {}),
         namespace: entry.namespace,
         bodyId: entry.event_body_id,
         actionId: entry.action_id,

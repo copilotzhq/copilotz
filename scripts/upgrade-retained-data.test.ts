@@ -1,3 +1,5 @@
+import { abandonmentDecisions } from "../runtime/actions/upgrade-terminals.ts";
+import { encodeEventBody } from "../runtime/events/body-store.ts";
 import { assertEquals } from "@std/assert";
 import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { provisionCopilotzSchema } from "../runtime/events/schema.ts";
@@ -9,6 +11,7 @@ Deno.test("offline CLI applies and replays the full reviewed v10 to v14 chain", 
     `file://${directory}/db`;
   const schema = `chain_cli_${crypto.randomUUID().replaceAll("-", "")}`;
   const planPath = `${directory}/plan.json`;
+  const abandonedPath = `${directory}/abandoned.json`;
   const authorityPath = `${directory}/authority.json`;
   const keysPath = `${directory}/keys.ts`;
   const storagePath = `${directory}/storage.ts`;
@@ -18,6 +21,28 @@ Deno.test("offline CLI applies and replays the full reviewed v10 to v14 chain", 
     await provisionOperationCatalog(db, schema);
     await db.query(
       `UPDATE "${schema}".copilotz_schema_metadata SET version=10`,
+    );
+    const encoded = await encodeEventBody({
+      actionId: "synthetic.action",
+      actionRunId: "crash",
+      status: "invoked",
+      input: {},
+      metadata: {},
+    });
+    await db.query(
+      `INSERT INTO "${schema}".event_bodies(namespace,event_body_id,schema_version,body,digest) VALUES('archive','crash-body',1,$1::jsonb,$2)`,
+      [encoded.body, encoded.digest],
+    );
+    await Deno.writeTextFile(
+      abandonedPath,
+      JSON.stringify(
+        await abandonmentDecisions([{
+          namespace: "archive",
+          runId: "crash",
+          actionId: "synthetic.action",
+          bodyId: "crash-body",
+        }]),
+      ),
     );
   } finally {
     await db.close();
@@ -64,9 +89,11 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
       `--plan=${planPath}`,
       `--storage=${storagePath}`,
       "--concurrency=3",
+      `--abandoned=${abandonedPath}`,
     );
     const plan = JSON.parse(await Deno.readTextFile(planPath));
     assertEquals([plan.sourceVersion, plan.targetVersion], [10, 11]);
+    assertEquals(plan.terminals.abandoned, 1);
     const apply = () =>
       command(
         "apply",
@@ -75,6 +102,7 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
         `--owner-keys=${keysPath}`,
         `--storage=${storagePath}`,
         `--authority=${authorityPath}`,
+        `--abandoned=${abandonedPath}`,
       );
     assertEquals((await apply()).version, 14);
     assertEquals((await apply()).version, 14);

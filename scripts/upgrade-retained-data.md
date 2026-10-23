@@ -310,3 +310,80 @@ listing as evidence with **keys, sizes and generations** (and ETags for S3).
 Delete only the reviewed source objects, only after verification; the upgrade
 never deletes them. Retain the listing with the review plan and verification
 results.
+
+## Old invocations without their own terminal body
+
+Keep writers stopped. The operator sequence is **drain → list → optionally
+retire unreferenced noise → decide abandonment → prepare → review → apply**.
+List before preparation commits marker `0`:
+
+```sh
+deno run -A scripts/prune-retained-history.ts --schema=SCHEMA \
+  --list-unterminated > unterminated.json
+```
+
+The listing marks each invocation `terminal: "attested"` or `"unattested"`.
+Attested entries include wrapper run/body IDs and verified source digests. The
+upgrade accepts exactly one same-namespace terminal
+`copilotz.server.internal.invoke` body whose `output.targetActionRunId` matches
+and whose `output.status` is completed, failed or cancelled. The target must
+have one invocation and no conflicting terminal or action identity. Ambiguous,
+non-terminal or mismatched attestations refuse conversion. `attestationRefusal`
+in a listing requires investigation; it cannot be overridden by abandonment.
+
+For unattested crash victims, review exact identities and create an abandonment
+file with this shape:
+
+```json
+{
+  "entries": [
+    {
+      "namespace": "archive",
+      "runId": "synthetic-run",
+      "actionId": "synthetic.action",
+      "bodyId": "synthetic-invocation-body"
+    }
+  ],
+  "digest": "sha256:..."
+}
+```
+
+Use `abandonmentDecisions(entries)` from `runtime/actions/upgrade-terminals.ts`
+to canonicalize entries and compute the digest. For example, save a reviewed
+subset of the listing's `invocations` as `selected.json`, then run from the
+repository root:
+
+```sh
+deno eval 'import { abandonmentDecisions } from "./runtime/actions/upgrade-terminals.ts";
+const selected = JSON.parse(await Deno.readTextFile("selected.json"));
+if (selected.some(e => e.terminal !== "unattested" || e.attestationRefusal)) throw Error("Review unattested entries only");
+const entries = selected.map(({namespace,runId,actionId,bodyId}) => ({namespace,runId,actionId,bodyId}));
+console.log(JSON.stringify(await abandonmentDecisions(entries), null, 2));' > abandonment.json
+```
+
+The digest is SHA-256 over UTF-8 JSON of canonical entries (keys ordered
+namespace, runId, actionId, bodyId; entries sorted by their JSON strings). Pass
+the same file via `--abandoned=abandonment.json` on **both prepare and apply**,
+including reviewed-plan replays. It is separate from `--decisions`, which still
+controls content ownership. The plan includes counts, exact identities, source
+body digests and wrapper evidence under `terminals`; the plan fingerprint binds
+all of them. The decisions fingerprint also binds abandonment alongside content
+decisions. Empty exception inventories preserve the existing plan and decisions
+fingerprints exactly.
+
+Abandonment requires one body, an invocation, no terminal, and fully drained
+operations, streams, deliveries and effects with no open actions. Retained
+operation or application references are allowed and remain intact. Unreferenced
+noise can instead be retired with the pruner's separately reviewed deletion
+file; the two tools' `--abandoned` formats have different purposes.
+
+Finalization records `action.upgrade-terminal` logical owner receipts with the
+attested status and `terminalSource: "wrapper-attested"`, or `cancelled`,
+`terminalSource: "reviewed-abandonment"` and reason `abandoned-before-upgrade`.
+These survive v12–v14. Original Events and bodies remain unchanged by this step:
+no synthetic Event, body digest, output or execution obligation is created.
+Lifecycle terminal lookup reads the receipt and verifies the retained invocation
+capture. An attested completion has no reconstructed output; failed/cancelled
+lookups explain the terminal evidence. Abandoned runs cannot resume or retry.
+Historical event cursors continue to show the original captures, while the
+upgrade receipt supplies terminal status.

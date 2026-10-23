@@ -18,7 +18,7 @@ import { testSecretAdapter } from "../runtime/testing/secret-adapter.ts";
 
 const [
   beforePath,
-  urlString = "postgres://postgres@localhost:55439/migperf_equivalence",
+  urlString = "postgres://postgres@localhost:55439/cutover_equivalence",
   eventCount = "1000",
 ] = Deno.args;
 if (!beforePath) {
@@ -29,8 +29,8 @@ if (!beforePath) {
 const url = new URL(urlString);
 if (
   !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
-  url.port !== "55439" || !/^\/migperf_[a-z0-9_]+$/.test(url.pathname)
-) throw new Error("A local migperf_* database on port 55439 is required.");
+  url.port !== "55439" || !/^\/cutover_[a-z0-9_]+$/.test(url.pathname)
+) throw new Error("A local cutover_* database on port 55439 is required.");
 const root = toFileUrl(resolve(beforePath) + "/");
 const oldUpgrade = await import(
   new URL("runtime/actions/upgrade.ts", root).href

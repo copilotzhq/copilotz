@@ -1,3 +1,4 @@
+import type { AbandonmentDecisions } from "../runtime/actions/upgrade-terminals.ts";
 import { loadUpgradeStorage } from "./upgrade-storage.ts";
 import { resolve, toFileUrl } from "@std/path";
 import { EVENT_SCHEMA_VERSION } from "../runtime/events/schema.ts";
@@ -29,6 +30,7 @@ if (
       "plan",
       "reviewed",
       "decisions",
+      "abandoned",
       "authority",
       "owner-keys",
       "storage",
@@ -38,7 +40,7 @@ if (
   )
 ) {
   throw new Error(
-    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --owner-keys=MODULE.ts --storage=MODULE.ts --concurrency=16 --authority=FILE.json]",
+    "Usage: COPILOTZ_MIGRATION_DATABASE_URL=... deno run -A scripts/upgrade-retained-data.ts drain|prepare|apply|authority-inventory --schema=SCHEMA [--plan=FILE.json --reviewed=FINGERPRINT --decisions=FILE.json --abandoned=FILE.json --owner-keys=MODULE.ts --storage=MODULE.ts --concurrency=16 --authority=FILE.json]",
   );
 }
 const url = Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL");
@@ -46,7 +48,12 @@ if (!url) throw new Error("COPILOTZ_MIGRATION_DATABASE_URL is required.");
 const storagePath = get("storage");
 const storage = storagePath ? await loadUpgradeStorage(storagePath) : {};
 const concurrency = get("concurrency");
+const abandonedPath = get("abandoned");
+const abandoned = abandonedPath
+  ? JSON.parse(await Deno.readTextFile(abandonedPath)) as AbandonmentDecisions
+  : undefined;
 const contentStorage = {
+  abandoned,
   ...storage,
   ...(concurrency !== undefined ? { concurrency: Number(concurrency) } : {}),
 };

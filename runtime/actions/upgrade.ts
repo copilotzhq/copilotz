@@ -1,3 +1,9 @@
+import {
+  type AbandonmentDecisions,
+  recordRetainedTerminals,
+  type RetainedTerminals,
+  verifyAbandonmentDecisions,
+} from "./upgrade-terminals.ts";
 import { bodyStoreReader } from "./owner-transfer-storage.ts";
 import { upgradeCredentialEffects } from "../authorization/credentials-upgrade.ts";
 import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
@@ -50,6 +56,7 @@ import {
 import { validateRetainedHistory } from "./upgrade-history.ts";
 
 export type RetainedDataUpgradeStorage = Readonly<{
+  abandoned?: AbandonmentDecisions;
   /** Resolve only the explicit backend identity in the reviewed inventory. */
   storeFor?: (
     location: EmbeddedBodyLocation,
@@ -67,6 +74,7 @@ export type RetainedDataUpgradePlan = Readonly<{
   targetVersion: number;
   content: ContentMigrationPlan;
   ownership: ContentMigrationReport;
+  terminals?: RetainedTerminals;
   fingerprint: string;
 }>;
 const RETAINED_TARGET_VERSION = 11;
@@ -174,6 +182,7 @@ async function fingerprint(plan: Omit<RetainedDataUpgradePlan, "fingerprint">) {
     targetVersion: plan.targetVersion,
     content: plan.content,
     ownership: plan.ownership,
+    ...(plan.terminals ? { terminals: plan.terminals } : {}),
   })));
 }
 
@@ -216,6 +225,13 @@ export async function prepareRetainedDataUpgrade(
   schemaName = "public",
   storage: RetainedDataUpgradeStorage = {},
 ): Promise<RetainedDataUpgradePlan | undefined> {
+  storage = {
+    ...storage,
+    abandoned: await verifyAbandonmentDecisions(
+      structuredClone(storage.abandoned),
+    ),
+  };
+  let terminals: RetainedTerminals | undefined;
   const schema = validateEventSchemaName(schemaName);
   const metadata = createCoreTableNames(schema).copilotz_schema_metadata;
   const prepared = await session.transaction(async (transaction) => {
@@ -236,6 +252,11 @@ export async function prepareRetainedDataUpgrade(
         await inspectRetainedDataDrain(transaction, schema),
       );
       await validateBodyStoreSchema(transaction, schema);
+      terminals = await validateRetainedHistory(
+        transaction,
+        schema,
+        storage.abandoned,
+      );
       return current;
     }
     if (
@@ -250,7 +271,11 @@ export async function prepareRetainedDataUpgrade(
     assertRetainedDataDrained(
       await inspectRetainedDataDrain(transaction, schema),
     );
-    await validateRetainedHistory(transaction, schema);
+    terminals = await validateRetainedHistory(
+      transaction,
+      schema,
+      storage.abandoned,
+    );
     await assertReceiptUpgradeAuthority(transaction, schema);
     await migrateBodyStoreSchema(joined(transaction), schema);
     await transaction.query(
@@ -278,6 +303,7 @@ export async function prepareRetainedDataUpgrade(
     targetVersion: Number(prepared.upgrade_to),
     content,
     ownership,
+    ...(terminals ? { terminals } : {}),
   };
   return { ...plan, fingerprint: await fingerprint(plan) };
 }
@@ -314,7 +340,7 @@ async function finalizeRetainedDataUpgrade(
   ) {
     if (
       options.reviewedFingerprint !== undefined ||
-      options.contentDecisions !== undefined
+      options.contentDecisions !== undefined || options.abandoned !== undefined
     ) {
       throw new Error(
         "Reviewed upgrade options require the original retained-data plan.",
@@ -324,13 +350,20 @@ async function finalizeRetainedDataUpgrade(
   }
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
   const decisions = canonicalDecisions(options.contentDecisions);
+  const abandoned = await verifyAbandonmentDecisions(options.abandoned);
   // The public entry point already detached the plan before its first await.
   let plan = options.plan;
   const reviewedFingerprint = options.reviewedFingerprint;
   const hasReviewedIntent = reviewedFingerprint !== undefined ||
-    options.contentDecisions !== undefined;
+    options.contentDecisions !== undefined || options.abandoned !== undefined;
   const decisionsFingerprint = await digestContent(
-    new TextEncoder().encode(JSON.stringify(decisions)),
+    new TextEncoder().encode(
+      JSON.stringify(
+        abandoned?.entries.length
+          ? { content: decisions, abandoned }
+          : decisions,
+      ),
+    ),
   );
   if (!plan) {
     if (hasReviewedIntent) {
@@ -340,7 +373,10 @@ async function finalizeRetainedDataUpgrade(
     }
     plan = await prepareRetainedDataUpgrade(session, schema, options);
     if (!plan) return;
-    if (plan.content.inventory.length || plan.ownership.executionOwners) {
+    if (
+      plan.content.inventory.length || plan.ownership.executionOwners ||
+      plan.terminals
+    ) {
       throw Object.assign(
         new Error(
           "Review the prepared retained-content inventory before finalizing the offline upgrade.",
@@ -394,7 +430,16 @@ async function finalizeRetainedDataUpgrade(
     assertRetainedDataDrained(
       await inspectRetainedDataDrain(transaction, schema),
     );
-    await validateRetainedHistory(transaction, schema);
+    const terminals = await validateRetainedHistory(
+      transaction,
+      schema,
+      abandoned,
+    );
+    if (JSON.stringify(terminals) !== JSON.stringify(reviewed.terminals)) {
+      throw new Error(
+        "Retained terminal evidence or abandonment decisions changed after review.",
+      );
+    }
     await assertReceiptUpgradeAuthority(transaction, schema);
     const session = joined(transaction);
     const actual = await inspectEmbeddedContent(
@@ -442,7 +487,13 @@ async function finalizeRetainedDataUpgrade(
       reviewedFingerprint: actual.fingerprint,
     });
     await upgradeOperationCatalog(session, schema);
-    await validateRetainedHistory(transaction, schema);
+    await validateRetainedHistory(transaction, schema, abandoned);
+    await recordRetainedTerminals(
+      transaction,
+      schema,
+      terminals,
+      reviewed.fingerprint,
+    );
     await assertReceiptUpgradeAuthority(transaction, schema);
     const updated = await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1,upgrade_reviewed_fingerprint=$4,upgrade_decisions_fingerprint=$5 WHERE singleton AND version=0 AND upgrade_id=$2 AND upgrade_from=$3 AND upgrade_to=$1 AND upgrade_reviewed_fingerprint IS NULL AND upgrade_decisions_fingerprint IS NULL RETURNING version`,
@@ -473,6 +524,9 @@ export async function upgradeActionLifecycle(
   // Preserve the reviewed intent across every asynchronous checkpoint.
   options = {
     ...options,
+    ...(options.abandoned
+      ? { abandoned: structuredClone(options.abandoned) }
+      : {}),
     ...(options.plan ? { plan: structuredClone(options.plan) } : {}),
     ...(options.contentDecisions
       ? { contentDecisions: structuredClone(options.contentDecisions) }

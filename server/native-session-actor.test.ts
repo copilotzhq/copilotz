@@ -147,7 +147,7 @@ Deno.test("native session actor authorizes Core assets and missing actors return
     const published = await application.content.assets.publish({
       namespace: "main",
       mediaType: "text/plain",
-      body: new TextEncoder().encode("tool result"),
+      body: new TextEncoder().encode("message attachment"),
       idempotencyKey: "fixture-asset",
     });
     const message = await records.message.create({
@@ -179,7 +179,84 @@ Deno.test("native session actor authorizes Core assets and missing actors return
       );
     const asset = await get(assetPath, member);
     assertEquals(asset.status, 200, await asset.clone().text());
-    assertEquals(await asset.text(), "tool result");
+    assertEquals(await asset.text(), "message attachment");
+    // Canonical visibility checks may narrow, but never replace, owner grants.
+    allowedAsset = "";
+    assertEquals((await get(assetPath, member)).status, 403);
+    allowedAsset = assetId;
+    await records.participant.create({
+      id: "tool",
+      externalId: "tool",
+      participantType: "tool",
+    });
+    for (
+      const scenario of [
+        { policy: "public", initiatorId: "other", readable: true },
+        {
+          policy: "public_status",
+          initiatorId: "participant:member",
+          readable: true,
+        },
+        { policy: "public_status", initiatorId: "other", readable: false },
+        { policy: "public_status", readable: false },
+        {
+          policy: "requester_only",
+          initiatorId: "participant:member",
+          readable: false,
+        },
+        {
+          policy: "requester_only",
+          requesterId: "participant:member",
+          readable: true,
+        },
+      ]
+    ) {
+      const id = crypto.randomUUID();
+      const body = `tool output ${id}`;
+      const output = await application.content.assets.publish({
+        namespace: "main",
+        mediaType: "text/plain",
+        body: new TextEncoder().encode(body),
+        idempotencyKey: id,
+      });
+      await records.message.create({
+        id,
+        threadId: "thread",
+        senderId: "tool",
+        content: [{
+          assetId: output.id,
+          kind: "text",
+          role: "body",
+          mediaType: output.mediaType,
+        }],
+        visibility: {
+          kind: "tool",
+          policy: scenario.policy,
+          requesterId: scenario.requesterId ?? "agent",
+          ...(scenario.initiatorId
+            ? { initiatorId: scenario.initiatorId }
+            : {}),
+        },
+        metadata: { toolStatus: "completed" },
+      });
+      allowedAsset = output.id;
+      for (
+        const path of [
+          `/threads/thread/messages/${id}/assets/${output.id}`,
+          `/assets/${output.id}`,
+        ]
+      ) {
+        const response = await get(path, member);
+        assertEquals(
+          response.status,
+          scenario.readable ? 200 : 404,
+          JSON.stringify(scenario),
+        );
+        if (scenario.readable) assertEquals(await response.text(), body);
+        else await response.body?.cancel();
+      }
+    }
+    allowedAsset = assetId;
     assertEquals((await get(assetPath, outsider)).status, 404);
     assertEquals(
       (await get(assetPath.replace("/message/", "/missing/"), member)).status,

@@ -1,6 +1,9 @@
 /** Scoped, bounded read capabilities; policy predicates reach SQL before pagination. */
 import { createHttpActionOrigins } from "./action-origins.ts";
-import { withoutCollectionPolicyInvocation } from "../runtime/authorization/invocation.ts";
+import {
+  withoutCollectionPolicyInvocation,
+  withTrustedCollectionPolicyRead,
+} from "../runtime/authorization/invocation.ts";
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import type { CollectionQuery } from "../runtime/collections/types.ts";
 import type { FacadeContext } from "./context.ts";
@@ -176,36 +179,40 @@ export async function authorizeHttpAsset(
   const adapters = Object.values(
     application.plugins?.adapters?.http ?? {},
   ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
-  await withoutCollectionPolicyInvocation(async () => {
-    for (const adapter of adapters) {
-      await adapter.authorizeAsset?.(id, scope, read);
-    }
-  });
-  // A closed live stream also has a canonical Asset. Reuse its descriptor's
-  // source ancestry so knowing that Asset id cannot bypass stream visibility.
-  const asset = await runtime.content.assets.get(namespace, id);
-  const streamId = asset?.metadata?.streamId;
-  if (typeof streamId === "string") {
-    const stream = await runtime.operations.findStream(namespace, streamId);
-    if (stream) {
-      const origins = createHttpActionOrigins(runtime, namespace);
+  // Policy evidence needs trusted reads even when the collections themselves
+  // have owner policies. This scope returns only a decision, never the records.
+  await withoutCollectionPolicyInvocation(() =>
+    withTrustedCollectionPolicyRead(async () => {
       for (const adapter of adapters) {
-        if (
-          adapter.projectOutput &&
-          !await adapter.projectOutput(
-            stream
-              .descriptor as import("../runtime/streams/types.ts").ApplicationOutput,
-            scope,
-            read,
-            (run) => origins(stream.operationId, run),
-          )
-        ) {
-          throw Object.assign(new Error("Message content was not found."), {
-            status: 404,
-            code: "message_content_not_found",
-          });
+        await adapter.authorizeAsset?.(id, scope, read);
+      }
+      // A closed live stream also has a canonical Asset. Reuse its descriptor's
+      // source ancestry so knowing that Asset id cannot bypass stream visibility.
+      const asset = await runtime.content.assets.get(namespace, id);
+      const streamId = asset?.metadata?.streamId;
+      if (typeof streamId === "string") {
+        const stream = await runtime.operations.findStream(namespace, streamId);
+        if (stream) {
+          const origins = createHttpActionOrigins(runtime, namespace);
+          for (const adapter of adapters) {
+            if (
+              adapter.projectOutput &&
+              !await adapter.projectOutput(
+                stream
+                  .descriptor as import("../runtime/streams/types.ts").ApplicationOutput,
+                scope,
+                read,
+                (run) => origins(stream.operationId, run),
+              )
+            ) {
+              throw Object.assign(new Error("Message content was not found."), {
+                status: 404,
+                code: "message_content_not_found",
+              });
+            }
+          }
         }
       }
-    }
-  }
+    })
+  );
 }

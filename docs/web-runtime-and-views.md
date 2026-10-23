@@ -368,6 +368,34 @@ thread arrives) and opens it, then creates the thread and sends. Creating with
 the same id is idempotent, so Retry continues the same thread instead of
 starting another one; a failed send stays in the thread with Retry and Discard.
 
+### Voice messages
+
+The composer's microphone (on unless `resources.shell.features.voice` is
+`false`) records a voice note: a live waveform, then review (listen back, record
+again or delete) and send. A recording is sent as `kind: "audio"` content with
+`metadata: { voice: true, durationMs, peaks }` and shows as a compact player.
+
+An app transcribes recordings through `resources.chat.voice`:
+
+```ts
+resources: {
+  chat: {
+    voice: { action: "voiceSend", transcriptLabel: "[Voice transcript]" },
+  },
+}
+```
+
+`action` is the composition alias of a server Action. It receives
+`{ threadId, content, voiceIndexes, recipientIds? }`: the message's Core content
+as `createThreadMessage` takes it, and the recordings' positions in it. It sends
+one message with a text part after each recording that starts with
+`transcriptLabel`, resolves with `{ message: { id } }`, and fails without
+sending when a recording can't be transcribed. The conversation shows that text
+part as the recording's transcript. On failure the person chooses "Send audio
+only" or Retry. Without the hook, recordings are sent as audio. Give each
+recording's content part an `alt` such as "its transcript follows" so an agent
+answers from the transcript instead of opening the audio.
+
 ### Streaming
 
 Replies stream through Core HTTP's record-scoped feed,
@@ -390,7 +418,7 @@ components.
 | Slot             | Declare                                                                                                                      | The View receives                                             |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Branding, copy   | `resources.shell.branding {title, subtitle?, logoUrl?}`, `.labels`, `.suggestions`, `.features {spaces, attachments, voice}` | —                                                             |
-| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats), `.defaultRecipients`              | —                                                             |
+| Identity         | `resources.chat.sender` (the reader), `resources.chat.agents` (participants of new chats), `.defaultRecipients`, `.voice`    | —                                                             |
 | Space sections   | `resources.spaceSections.<id> {label, icon?, order?, view, tools?, params?}`; `null` hides a built-in                        | `{spaceId, threadId}`, mode `full` or `panel`                 |
 | Right panel      | `resources.shell.panel {view}` replaces the Space sections in the panel                                                      | `{threadId, spaceId}`, mode `panel`                           |
 | Header menu      | `resources.headerMenu.<id> {label, icon?, order?, action?, dialog?, page?, destructive?, requires?}`                         | `{threadId, spaceId}` (dialog mode for `dialog`)              |

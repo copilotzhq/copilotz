@@ -314,9 +314,24 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   addresses the default or first agent, and `"all"` leaves Core's default.
 - **New chats are optimistic and idempotent.** The browser chooses the thread
   ID, shows the first message at once, and a retry continues the same thread.
+- **Voice messages.** The composer records voice notes (a live waveform, review,
+  then send) and shows them as compact players with a collapsible transcript.
+  Recordings are sent as `kind: "audio"` content with
+  `metadata: { voice: true, durationMs, peaks }`. An app transcribes them
+  through `resources.chat.voice = { action, transcriptLabel? }`: the Action
+  receives `{ threadId, content, voiceIndexes, recipientIds? }`, sends one
+  message with a labelled transcript after each recording, and fails without
+  sending when a recording can't be transcribed. The person then chooses "Send
+  audio only" or Retry. Without the hook, recordings are sent as audio.
 - `ReadState` has a `failed` status for a query read that failed and waits for
   `refresh()`. `stale` now means a read that recovers by itself. `ReadStatus`
   renders `failed` with Try again.
+- **Operation constraint alternatives.** Policy `operations` constraints accept
+  `anyOf` on reads: one complete `{ metadata, absentMetadata? }` alternative
+  must match in addition to the common constraints (at most 16, not nested).
+  Admission stamps only the top-level `metadata`. A flow token is also projected
+  to the browser proof that started the flow, after the owner authorizes the
+  read. See [authorization](docs/authorization.md).
 - **Owner-verified identity evidence.** `defineIdentityVerifier` (from
   `/engine`) registers an owner-only verifier. Actions call
   `context.authentication.verify(alias, input)`, and policy reads the result
@@ -421,6 +436,17 @@ upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
   preferences instead of failing.
 - Message bubbles size to their content up to their maximum width and wrap only
   at word boundaries; short messages no longer wrap mid-word.
+- The model's notice for an attachment it can't see carries the attachment's
+  `alt` text and leaves opening it to the agent. Before, it told the model to
+  open every attachment, so an agent opened a recording whose transcript was
+  already in the message and answered twice, before and after the tool.
+- Transcription uploads use the recording's own extension (`voice.m4a` for
+  Safari's `audio/mp4`) instead of `voice.audio`.
+- Core message `history` accepts a live window's content options
+  (`bodyByteLimit`, `overflow`, `exclude`). Before, every live chat window was
+  refused with `invalid_input` and showed "Couldn't load messages".
+- A browser that already held a session can finish signing in through Google or
+  a session transfer. Before, its identity start result returned 404.
 - A PostgreSQL database opened with `pgPoolMax: 1` uses the fenced owner
   snapshot for Collection snapshots instead of failing native snapshot
   admission, which needs two connections.

@@ -76,7 +76,7 @@ delivered cannot be retracted.
 This uses the Notes application from
 [Chapter 5](getting-started/part-1-design-and-build/05-package-a-plugin.md): its
 `composition.ts` and `notes-plugin.ts` must exist, with
-`@copilotz/copilotz@^0.89.0` installed. No provider or credential is involved;
+`@copilotz/copilotz@^0.90.0` installed. No provider or credential is involved;
 the script plays the provider. Create `channel-session.ts`:
 
 ```ts
@@ -190,7 +190,9 @@ A `ChannelAdapter` has three methods:
   `externalThreadId`, `sender`, `content`, optional `recipients`, `thread`,
   non-secret `route` and `visibility`. The shared ingress Action creates the
   thread, participants and the durable **binding** from the provider thread to
-  the Core thread.
+  the Core thread. Without `recipients`, the message goes to the thread's
+  agents, the same default Core applies to any message that names no recipients;
+  a new thread falls back to `defaultAgentAliases`.
 - optional `deliver(attempt, context)` sends resolved reply content to the
   provider and may return `{ deliveryKey, delivered, providerIds? }`.
 

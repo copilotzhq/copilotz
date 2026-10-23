@@ -80,6 +80,8 @@ export type EngineContextSeed = Readonly<{
   signal: AbortSignal;
   /** Unique dispatcher execution attempt; never exposed on ProcessorContext. */
   executionIncarnationId?: string;
+  /** Retained delivery retry budget, absent for live/direct execution. */
+  deliveryAttempt?: Readonly<{ attempts: number; maxAttempts: number }>;
   settlementScopeId?: string;
   /** Action lineage carried by durable execution. */
   actionScopeId?: string;
@@ -111,6 +113,7 @@ export type EffectNoStartVerifier = (
   options: Readonly<{ signal: AbortSignal }>,
 ) => boolean | Promise<boolean>;
 export type CreateCopilotzEngineOptions = Readonly<{
+  subscriptionLimits?: import("../subscriptions/owner.ts").SubscriptionLimits;
   authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
   verifyEffectNotStarted?: EffectNoStartVerifier;
   session: SqlSession;
@@ -172,6 +175,7 @@ export type CopilotzEngineMaintenanceResult = Readonly<{
 
 export type CopilotzEngineDatabaseScope = Readonly<{
   authorization: import("../authorization/owner.ts").AuthorizationOwner;
+  observeCollection: import("../subscriptions/types.ts").CollectionObserver;
   databaseSchema: string;
   content: Readonly<{
     assets: DatabaseAssetRepository;
@@ -210,6 +214,7 @@ export type CopilotzEngineDatabaseScope = Readonly<{
 
 export type CopilotzEngine = Readonly<{
   authorization: import("../authorization/owner.ts").AuthorizationOwner;
+  observeCollection: import("../subscriptions/types.ts").CollectionObserver;
   databaseSchema: string;
   operations: OperationCatalog;
   databaseScope(databaseSchema: string): Promise<CopilotzEngineDatabaseScope>;
@@ -354,6 +359,9 @@ export type CopilotzEngine = Readonly<{
 }>;
 
 export type CreateProcessorContextOptions = Readonly<{
+  authentication?:
+    import("../authorization/identity-evidence.ts").IdentityVerifierClient;
+  directory?: import("../authorization/directory-read.ts").DirectoryReader;
   collectionInvocation?: Readonly<{
     owner: Parameters<
       typeof import("../authorization/invocation.ts").bindProcessorCollectionInvocation

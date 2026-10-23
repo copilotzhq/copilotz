@@ -354,3 +354,60 @@ Deno.test("restarted parents may complete independently while descendant effect 
     await db.close();
   }
 });
+
+Deno.test("retryable errors cannot reopen an indeterminate external effect", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `effect_retry_guard_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
+  let calls = 0;
+  try {
+    await provisionCopilotzSchema(db, schema);
+    const history = lifecycle();
+    const action = defineAction({
+      id: "fixture.uncertain",
+      async execute(_input: unknown, ctx: ActionContext) {
+        await ctx.effect.begin("dispatch");
+        calls++;
+        throw Object.assign(new Error("provider outcome unknown"), {
+          retryable: true,
+        });
+      },
+    });
+    const callers = createActionCallers({ action }, {
+      actionLifecycle: history.emitter,
+      deliveryAttempt: { attempts: 1, maxAttempts: 3 },
+      signal: new AbortController().signal,
+      createInvocationKey: () => "uncertain",
+      createContext: ({ frame, actions }) =>
+        ({ signal: frame.signal, actions }) as ActionContext,
+      createEffectClient: (frame) =>
+        createOwnerEffectClient({
+          session: db,
+          schema,
+          namespace: "test",
+          actionRunId: frame.actionRunId,
+        }),
+    });
+    for (let index = 0; index < 2; index++) {
+      const error = await assertRejects(() => callers.action(null)) as Error & {
+        code: string;
+        retryable: boolean;
+      };
+      assertEquals(error.code, "effect_indeterminate");
+      assertEquals(error.retryable, false);
+    }
+    assertEquals(calls, 1);
+    assertEquals(
+      [...history.receipts.values()].filter((event) =>
+        event.status === "failed"
+      ).length,
+      1,
+    );
+  } finally {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await db.close();
+  }
+});

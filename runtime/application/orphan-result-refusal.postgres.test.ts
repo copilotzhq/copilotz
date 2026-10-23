@@ -73,7 +73,7 @@ async function fixture(
   const url = new URL(selected);
   assert(["postgres:", "postgresql:"].includes(url.protocol));
   const admin = await createTestDatabase({ url: url.href, pgPoolMax: 1 });
-  const databaseName = `orphan_refusal_${
+  const databaseName = `${url.pathname.slice(1)}_orphan_${
     crypto.randomUUID().replaceAll("-", "")
   }`;
   await admin.query(`CREATE DATABASE "${databaseName}"`);
@@ -313,7 +313,7 @@ async function fixture(
           server: {
             default: defineServerFacade({
               expose: {
-                actions: { include: [write.id] },
+                actions: { include: ["write"] },
                 collections: false,
                 channels: false,
               },
@@ -370,7 +370,7 @@ async function fixture(
             alarms.add(callback);
             return callback;
           },
-          cancel(handle: unknown) {
+          cancel(handle: unknown): void {
             alarms.delete(handle as () => void);
           },
         },
@@ -385,7 +385,7 @@ async function fixture(
       authorize() {},
       execute: () => "ready",
     });
-    releaseDatabaseOwner(probeOwner);
+    await releaseDatabaseOwner(probeOwner);
     const probe = () =>
       invokeProbe(
         { principal: "integrity-observer", epoch: probeOwner.epoch! },
@@ -399,10 +399,7 @@ async function fixture(
       ? await openDatabaseOwner(database, schema)
       : undefined;
     if (retainedOwner) {
-      resources.push(() => {
-        releaseDatabaseOwner(retainedOwner);
-        return Promise.resolve();
-      });
+      resources.push(() => releaseDatabaseOwner(retainedOwner));
     }
     const listener = listen(gateway, { hostname: "127.0.0.1", port: 0 });
     resources.push(() => listener.shutdown());
@@ -467,7 +464,7 @@ async function fixture(
   type Opened = Awaited<ReturnType<typeof start>>;
   const submit = (app: Opened, id: string) =>
     app.gateway.fetch(
-      new Request("http://integrity.test/api/actions/integrity/write", {
+      new Request("http://integrity.test/api/actions/write", {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": id },
         body: JSON.stringify({ id, value: `value-${id}` }),
@@ -907,7 +904,7 @@ Deno.test({
       await attachment.detach();
       assertEquals(
         observed.some((type) =>
-          ["operation.completed", "operation.failed", "operation.cancelled"]
+          ["operation.settled"]
             .includes(type)
         ),
         false,
@@ -936,7 +933,7 @@ Deno.test({
       // A read refusal does not rewrite the receipt or authorize new admission.
       assertEquals(await reopened.gateway.operationStatus(scope), status);
       assertEquals(
-        await client.operations.result(originalRoot),
+        (await client.operations.result(originalRoot)).value,
         "accepted:original",
       );
       const originalReceipt = await f.submit(reopened, "original");

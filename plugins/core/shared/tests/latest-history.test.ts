@@ -131,6 +131,8 @@ Deno.test("real Core route selects latest public history across more than one pa
         id,
         threadId: "thread",
         sender: { id: "user", externalId: "user", participantType: "human" },
+        // History only: it addresses no agent.
+        recipientIds: [],
         content,
       });
     }
@@ -160,6 +162,8 @@ Deno.test("real Core route selects latest public history across more than one pa
       id: "old-1004",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "old-1004",
     });
     await test.domain.actions.createThreadMessage({
@@ -199,6 +203,8 @@ Deno.test("Agent history policy includes its inclusive cutoff and trigger", asyn
       id: "outside-age-window",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "OUTSIDE_AGE_WINDOW",
     });
     clock.value = triggerTime - 60_000;
@@ -206,6 +212,8 @@ Deno.test("Agent history policy includes its inclusive cutoff and trigger", asyn
       id: "on-age-boundary",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "ON_AGE_BOUNDARY",
     });
     clock.value = triggerTime;
@@ -238,6 +246,8 @@ Deno.test("dynamic history policy replaces the Agent's static age limit", async 
       id: "static-only-history",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "STATIC_ONLY_HISTORY",
     });
     clock.value = triggerTime - 1_000;
@@ -245,6 +255,8 @@ Deno.test("dynamic history policy replaces the Agent's static age limit", async 
       id: "dynamic-boundary-history",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "DYNAMIC_BOUNDARY_HISTORY",
     });
     clock.value = triggerTime;
@@ -276,6 +288,8 @@ Deno.test("dynamic instructions retain the Agent's static history policy", async
       id: "older-than-static-policy",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "OLDER_THAN_STATIC_POLICY",
     });
     clock.value = triggerTime;
@@ -315,6 +329,8 @@ Deno.test("history cutoff stays tied to the trigger timestamp on router retry", 
       id: "retry-boundary-history",
       threadId: "thread",
       sender: { id: "user", externalId: "user", participantType: "human" },
+      // History only: it addresses no agent.
+      recipientIds: [],
       content: "RETRY_BOUNDARY_HISTORY",
     });
     clock.value = triggerTime;
@@ -338,16 +354,26 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let armed = false;
+  // Hold exactly the seeded context body's read. Every body read checks the
+  // store's head first, including one whose bytes come from the repository's
+  // prepared-body cache, so gating the first byte read of any body would
+  // instead pause whichever read happened to miss that cache.
+  let publishing = false;
+  const contextBodies = new Set<string>();
   const backingStore = createMemoryBodyStore();
   const gatedStore: BodyStore = {
     ...backingStore,
-    async readRange(input) {
-      if (armed) {
+    async put(input) {
+      if (publishing) contextBodies.add(input.bodyId);
+      return await backingStore.put(input);
+    },
+    async head(input) {
+      if (armed && contextBodies.has(input.bodyId)) {
         armed = false;
         entered.resolve();
         await release.promise;
       }
-      return await backingStore.readRange(input);
+      return await backingStore.head(input);
     },
   };
   let promptRef: ContentRef | undefined;
@@ -371,10 +397,13 @@ Deno.test("removing an Agent during preparation prevents the uncaptured model in
   });
   let finishSend: (() => Promise<void>) | undefined;
   try {
+    publishing = true;
     const asset = await test.domain.content.publish({
       mediaType: "text/plain",
       body: new TextEncoder().encode("context body held during preparation"),
     }, { operationKey: "seed-context" });
+    publishing = false;
+    assertEquals(contextBodies.size, 1, "the context body was stored");
     promptRef = {
       assetId: asset.id,
       kind: "text",

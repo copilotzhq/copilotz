@@ -1,5 +1,5 @@
 import { type CollectionField, collectionField } from "./field.ts";
-import { compileCollectionPredicate } from "./predicate.ts";
+import { compileCollectionPredicate, idWherePredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
@@ -47,8 +47,13 @@ function collectionOrder(
   if (direction !== "asc" && direction !== "desc") {
     throw new TypeError(`Invalid collection order direction '${direction}'.`);
   }
+  const field = collectionField(definition, query.order?.field ?? "id");
   return {
-    ...collectionField(definition, query.order?.field ?? "id"),
+    ...field,
+    expression: field.cast === "text" && field.expression !== "id" &&
+        field.expression !== "namespace"
+      ? `(${field.expression}) COLLATE "C"`
+      : field.expression,
     direction: direction === "desc" ? "DESC" : "ASC",
   };
 }
@@ -118,7 +123,9 @@ function cursorFilter(
   const greaterThan = (order.direction === "ASC") === followsRequestedOrder;
   const operator = greaterThan ? ">" : "<";
   if (order.expression === "id") {
-    return `id ${operator} $${params.push(anchor.id)}`;
+    return `id COLLATE "C" ${operator} $${
+      params.push(anchor.id)
+    }::text COLLATE "C"`;
   }
   const idIndex = params.push(anchor.id);
   // Match PostgreSQL's default null placement: ASC NULLS LAST / DESC NULLS FIRST.
@@ -295,7 +302,7 @@ export async function queryCollectionRecords(
   }
   const limit = boundedLimit(query.limit);
   const orderBy = order.expression === "id"
-    ? `id ${order.direction}`
+    ? `id COLLATE "C" ${order.direction}`
     : `(${order.expression}) ${order.direction}, id ${order.direction}`;
   const rows = await queryCollectionRows<NodeRow>(
     executor,
@@ -396,6 +403,11 @@ export function compileCollectionFilters(
       );
     }
     for (const [field, value] of Object.entries(predicate.where ?? {})) {
+      const id = idWherePredicate(field, value);
+      if (id) {
+        filters.push(compileCollectionPredicate(id, params));
+        continue;
+      }
       // Equality uses JSON text, so drivers must receive text for scalar
       // booleans/numbers too. PGlite does not coerce them for a text parameter.
       const index = params.push(
@@ -403,8 +415,9 @@ export function compileCollectionFilters(
           ? String(value)
           : value,
       );
-      if (field === "id") filters.push(`id = $${index}`);
-      else filters.push(`${jsonTextPath(field)} = $${index}::text`);
+      if (field === "id") {
+        filters.push(`id = $${index}`);
+      } else filters.push(`${jsonTextPath(field)} = $${index}::text`);
     }
     for (const [field, value] of Object.entries(predicate.contains ?? {})) {
       const path = field.split(".").map(sqlLiteral).join(",");

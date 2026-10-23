@@ -27,6 +27,12 @@ export type MemoryActionCallers = Readonly<{
     input: unknown,
     options?: ActionCallOptions,
   ): Promise<unknown>;
+  personal_memory(
+    input: unknown,
+    options?: ActionCallOptions,
+  ): Promise<unknown>;
+  remember(input: unknown, options?: ActionCallOptions): Promise<unknown>;
+  retire_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
   search_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
   inspect_memory(input: unknown, options?: ActionCallOptions): Promise<unknown>;
 }>;

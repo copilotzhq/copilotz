@@ -59,10 +59,12 @@ Command and query names cannot reuse method names such as `create`, `list` or
 A Collection is protected when `authorization.collections` binds its alias to a
 policy ID and revision in `authorization.policies`. Declaring
 `ownerPolicy: "required"` makes that binding mandatory: startup fails without
-it. A Collection with no binding is unguarded: every read reaches it unfiltered
-and every write is allowed, which suits policy data such as memberships but not
-data a caller must not see. The same owner evaluator protects Collection reads,
-named queries, mutations, Actions and operation observations.
+it. A Collection with no binding is host-only: trusted host code can read and
+write it, and every other caller is refused, including HTTP routes and the
+Actions and Processors that run for a user. That suits policy data such as
+memberships, which only policies and host code touch. The same owner evaluator
+protects Collection reads, named queries, mutations, Actions and operation
+observations.
 
 Policies declare Collection aliases in `sources`. Their `evaluate` callback
 receives immutable retained authority, the actual command intent, command time,
@@ -70,8 +72,9 @@ cancellation signal and bounded `read.get` / `read.list` capabilities. Reads
 must use declared sources. Missing records and empty queries are dependencies;
 committed changes re-authorize dependent observations. Reads cannot escape the
 callback, submit commands or access raw SQL. A Collection intent also names the
-Action, Processor or alarm executing the call as `intent.invocation`, absent for
-direct calls, so a policy can grant a write to one Action on a user's behalf.
+Action, Processor or alarm executing the call as `intent.invocation` (by stable
+ID), absent for direct calls, so a policy can grant a write to one Action on a
+user's behalf. Policy maps and grants use composition aliases.
 
 Return `ServerConstraints`: `collections` filters (`where`, `contains`,
 `containsAny` or `filter`) are intersected before pagination and aggregation.
@@ -82,7 +85,8 @@ refused. Decisions and effects share an owner transaction; joined work keeps its
 attempt fences through the outer commit.
 
 See [Owner authorization](authorization.md) for configuration, sessions,
-lifetimes and the offline v13 upgrade.
+lifetimes and live-read admission, and [Upgrading](upgrading.md) for the offline
+v14 upgrade.
 
 ### Read and write from a host
 
@@ -216,13 +220,14 @@ trusted namespace. A `list` query combines these parts with AND:
 
 `order: { field, direction }`, `limit`, and `after`/`before` cursors page the
 result. Ordering supports built-in IDs and timestamps, plus declared scalar
-fields and nested paths. Numbers sort numerically; strings sort as text;
-booleans sort false before true. A field must declare one scalar type,
-optionally nullable (homogeneous `enum` and `const` are supported too).
-Undeclared, ambiguous, object, and array order fields are rejected. Equal values
-use `id` as a deterministic tie-breaker. Missing/null values sort last ascending
-and first descending; cursors follow exactly that order. `limit` defaults to 100
-and larger values are clamped to 1,000; a non-positive or fractional limit is an
+fields and nested paths. Numbers sort numerically; strings and IDs sort bytewise
+(`COLLATE "C"`, Unicode code-point order, so `"B"` sorts before `"a"`); booleans
+sort false before true. A field must declare one scalar type, optionally
+nullable (homogeneous `enum` and `const` are supported too). Undeclared,
+ambiguous, object, and array order fields are rejected. Equal values use `id` as
+a deterministic tie-breaker. Missing/null values sort last ascending and first
+descending; cursors follow exactly that order. `limit` defaults to 100 and
+larger values are clamped to 1,000; a non-positive or fractional limit is an
 error. `include` loads declared relations. Word search uses `search(query)` with
 `text`, and needs fields declared in `search: { enabled: true, fields }`.
 
@@ -253,11 +258,30 @@ agree, wrap them in `context.readSnapshot(async ({ collections }) => ...)`: one
 repeatable, read-only point in time. Keep it short; do model or network work
 after it returns.
 
+Managed PGlite runs Collection snapshots in the serialized owner transaction,
+including databases with vector extensions. Custom providers, custom constructor
+configuration, and background sync retain their native snapshot admission
+checks. PostgreSQL retains a pooled repeatable-read snapshot and a separate lane
+for current authorization checks. Both close their read scope before returning;
+a snapshot does not authorize writes or expose a raw SQL executor to application
+code.
+
 When several writes must commit together, use
 `context.transaction(async ({ collections }) => ...)`. Its writes stage and
 return `{ id }` references; all records and their Events commit at once or not
 at all. Do not call the standalone `context.collections` writes inside an open
 transaction.
+
+### Live reads
+
+`observe(query, options)` on `app.collections.<alias>`, on server read services
+and on the SDK's `client.collections.observe` returns an authorized snapshot,
+then ordered deltas pushed by the owner after each commit. Live queries accept a
+bounded subset of `list`: scalar `where` and `filter` predicates, `id` equality
+and `in`, `limit` up to 1,000 and ordering by `id`, `createdAt`, `updatedAt` or
+a declared scalar field. `jsonEquals`, `eqIgnoreCase`, `inIgnoreCase`, JSON
+containment, cursors, includes and text search are refused. See
+[Subscriptions](subscriptions.md).
 
 ### Content-aware reads
 
@@ -270,7 +294,7 @@ resolving content you would not show. See
 ## Reference
 
 This standalone `app.ts` extends the Chapter 4 Notes example with a `pin`
-command and a filtered list. It needs `@copilotz/copilotz@^0.89.0` on Deno 2.9+
+command and a filtered list. It needs `@copilotz/copilotz@^0.90.0` on Deno 2.9+
 or Node 24+, and no credential.
 
 ```ts
@@ -438,3 +462,4 @@ Run `deno run -A app.ts` or `node app.ts`. Among the printed Event types expect
 - [Events, Deliveries, and Recovery](events-deliveries-recovery.md) explains
   delivery-scoped operation keys and retries.
 - [Content and Assets](content-assets.md) covers content fields and resolution.
+- [Subscriptions](subscriptions.md) covers live Collection reads.

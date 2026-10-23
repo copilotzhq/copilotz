@@ -67,6 +67,22 @@ function mapRow(row: BodyRow): StoredVersion {
   };
   return { body, versionToken: row.version_token };
 }
+type ReadyRead = Readonly<
+  { bodyId: string; byteLength: number; digest: string }
+>;
+const readyReaders = new WeakMap<
+  BodyStore,
+  (input: readonly ReadyRead[]) => Promise<ReadonlyMap<string, Uint8Array>>
+>();
+
+/** Native finite reads share one SQL snapshot; no adapter identity is inferred from strings. */
+export function readReadyDatabaseBodies(
+  store: BodyStore,
+  input: readonly ReadyRead[],
+) {
+  return readyReaders.get(store)?.(input);
+}
+
 const provisioners = new WeakMap<BodyStore, () => Promise<void>>();
 const writers = new WeakMap<
   BodyStore["put"],
@@ -329,6 +345,61 @@ export function createDatabaseBodyStore(
   writers.set(store.put, (transaction) => {
     assertSchemaCommandTransaction(transaction, schemaName);
     return createDatabaseBodyStore({ ...options, session: transaction });
+  });
+  readyReaders.set(store, async (input) => {
+    if (!input.length) return new Map();
+    await ensure();
+    const rows = await session.query<{
+      body_id: string;
+      byte_length: string | number;
+      start_offset: string | number | null;
+      bytes: Uint8Array | ArrayBuffer | string | null;
+    }>(
+      `SELECT body.body_id,body.byte_length,part.start_offset,
+        substring(part.bytes FROM 1 FOR (body.byte_length-part.start_offset)::integer) AS bytes
+       FROM unnest($1::text[],$2::bigint[],$3::text[]) wanted(id,length,digest)
+       JOIN ${bodies} body ON body.body_id=wanted.id AND body.state='ready'
+         AND body.byte_length=wanted.length AND body.digest=wanted.digest
+       LEFT JOIN ${parts} part ON part.body_id=body.body_id AND part.start_offset<body.byte_length
+       ORDER BY body.body_id,part.start_offset`,
+      [
+        input.map((v) => v.bodyId),
+        input.map((v) => v.byteLength),
+        input.map((v) => v.digest),
+      ],
+    );
+    const collected = new Map<
+      string,
+      { bytes: Uint8Array; offset: number; valid: boolean }
+    >();
+    for (const row of rows.rows) {
+      let entry = collected.get(row.body_id);
+      if (!entry) {
+        entry = {
+          bytes: new Uint8Array(integer(row.byte_length)),
+          offset: 0,
+          valid: true,
+        };
+        collected.set(row.body_id, entry);
+      }
+      if (row.start_offset === null || row.bytes === null) continue;
+      const bytes = bytesFromSql(row.bytes);
+      if (
+        integer(row.start_offset) !== entry.offset ||
+        entry.offset + bytes.length > entry.bytes.length
+      ) {
+        entry.valid = false;
+        continue;
+      }
+      entry.bytes.set(bytes, entry.offset);
+      entry.offset += bytes.length;
+    }
+    // Missing, changed or incomplete physical copies take the ordinary logical
+    // retry path; the repository verifies the assembled digest before disclosure.
+    return new Map(
+      [...collected].filter(([, v]) => v.valid && v.offset === v.bytes.length)
+        .map(([id, v]) => [id, v.bytes]),
+    );
   });
   provisioners.set(store, ensure);
   return store;

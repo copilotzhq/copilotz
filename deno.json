@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.89.0",
+  "version": "0.90.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -51,7 +51,16 @@
     "./core/server": "./plugins/core-http/index.ts",
     "./usage/client": "./plugins/usage/authoring/client/index.ts",
     "./build": "./build/index.ts",
-    "./transcription": "./plugins/transcription/index.ts"
+    "./transcription": "./plugins/transcription/index.ts",
+    "./web": "./client/web/index.ts",
+    "./web/react": "./plugins/web-react/index.ts",
+    "./web/kit": "./plugins/ui-kit/index.ts",
+    "./core/web": "./plugins/core/web.ts",
+    "./admin/web": "./plugins/admin/web.ts",
+    "./usage/web": "./plugins/usage/web.ts",
+    "./ui/web": "./plugins/ui/web.ts",
+    "./shard": "./runtime/application/shard-public.ts",
+    "./migration": "./runtime/migration/index.ts"
   },
   "publish": {
     "include": [
@@ -72,15 +81,22 @@
       "server/**/*.ts",
       "client/**/*.ts",
       "build/**/*.ts",
-      "plugins/**/copilotz.json"
+      "plugins/**/copilotz.json",
+      "plugins/**/*.tsx",
+      "plugins/**/*.css",
+      "plugins/ui-kit/katex/LICENSE",
+      "plugins/ui-kit/katex/fonts/*.woff2",
+      "runtime/migration/**/*.ts"
     ],
     "exclude": [
       "**/*.test.ts",
       "runtime/testing",
-      "plugins/core/shared/testing"
+      "plugins/core/shared/testing",
+      "**/*.test.tsx"
     ]
   },
   "unstable": [
+    "no-legacy-abort",
     "bare-node-builtins",
     "detect-cjs",
     "node-globals",
@@ -141,11 +157,12 @@
     "@bradenmacdonald/s3-lite-client": "jsr:@bradenmacdonald/s3-lite-client@^0.9.6",
     "@modelcontextprotocol/sdk": "npm:@modelcontextprotocol/sdk@1.29.0",
     "@oxian/ominipg": "jsr:@oxian/ominipg@0.10.1",
-    "@oxian/oxian-js": "jsr:@oxian/oxian-js@0.22.0",
+    "@oxian/oxian-js": "jsr:@oxian/oxian-js@0.23.1",
     "@std/assert": "jsr:@std/assert@1",
     "@std/path": "jsr:@std/path@1",
     "@std/ulid": "jsr:@std/ulid@1.0.0",
     "@std/yaml": "jsr:@std/yaml@1",
+    "ws": "npm:ws@8.18.3",
     "ajv": "npm:ajv@^8.17.1",
     "ajv-formats": "npm:ajv-formats@^3.0.1",
     "croner": "npm:croner@9.0.0",
@@ -161,13 +178,54 @@
     "typescript": "npm:typescript@5.8.2",
     "@copilotz/copilotz/transcription": "./plugins/transcription/index.ts",
     "@noble/hashes/sha256": "npm:@noble/hashes@1.8.0/sha256",
-    "aws4fetch": "npm:aws4fetch@1.0.20"
+    "aws4fetch": "npm:aws4fetch@1.0.20",
+    "@copilotz/copilotz/web": "./client/web/index.ts",
+    "@copilotz/copilotz/web/react": "./plugins/web-react/index.ts",
+    "@copilotz/copilotz/web/kit": "./plugins/ui-kit/index.ts",
+    "@copilotz/copilotz/core/web": "./plugins/core/web.ts",
+    "@copilotz/copilotz/admin/web": "./plugins/admin/web.ts",
+    "@copilotz/copilotz/usage/web": "./plugins/usage/web.ts",
+    "@copilotz/copilotz/ui/web": "./plugins/ui/web.ts",
+    "react": "npm:react@19.1.1",
+    "react-dom": "npm:react-dom@19.1.1",
+    "@types/react": "npm:@types/react@19.1.10",
+    "@types/react-dom": "npm:@types/react-dom@19.1.7",
+    "@radix-ui/react-slot": "npm:@radix-ui/react-slot@1.2.3",
+    "@radix-ui/react-dialog": "npm:@radix-ui/react-dialog@1.1.15",
+    "@radix-ui/react-avatar": "npm:@radix-ui/react-avatar@1.1.10",
+    "@radix-ui/react-scroll-area": "npm:@radix-ui/react-scroll-area@1.2.10",
+    "@radix-ui/react-tooltip": "npm:@radix-ui/react-tooltip@1.2.8",
+    "class-variance-authority": "npm:class-variance-authority@0.7.1",
+    "clsx": "npm:clsx@2.1.1",
+    "tailwind-merge": "npm:tailwind-merge@3.3.1",
+    "react-markdown": "npm:react-markdown@9.1.0",
+    "happy-dom": "npm:happy-dom@21.0.3",
+    "remark-gfm": "npm:remark-gfm@4.0.1",
+    "lucide-react": "npm:lucide-react@0.540.0",
+    "react-dom/client": "npm:react-dom@19.1.1/client",
+    "react-dom/server": "npm:react-dom@19.1.1/server",
+    "react/jsx-runtime": "npm:react@19.1.1/jsx-runtime",
+    "tailwindcss": "npm:tailwindcss@4.1.12",
+    "@tailwindcss/typography": "npm:@tailwindcss/typography@0.5.16",
+    "@tailwindcss/cli": "npm:@tailwindcss/cli@4.1.12",
+    "@copilotz/copilotz/shard": "./runtime/application/shard-public.ts",
+    "@radix-ui/react-tabs": "npm:@radix-ui/react-tabs@1.1.13",
+    "@radix-ui/react-dropdown-menu": "npm:@radix-ui/react-dropdown-menu@2.1.16",
+    "@tanstack/react-virtual": "npm:@tanstack/react-virtual@3.13.12",
+    "rehype-highlight": "npm:rehype-highlight@7.0.2",
+    "remark-math": "npm:remark-math@6.0.0",
+    "katex": "npm:katex@0.16.47",
+    "rehype-katex": "npm:rehype-katex@7.0.1",
+    "tw-animate-css": "npm:tw-animate-css@1.3.7",
+    "@copilotz/copilotz/migration": "./runtime/migration/index.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": [
       "jsr:@oxian/ominipg",
-      "jsr:@oxian/oxian-js"
+      "jsr:@oxian/oxian-js",
+      "npm:@jsr/oxian__ominipg",
+      "npm:@jsr/oxian__oxian-js"
     ]
   },
   "tasks": {
@@ -185,17 +243,24 @@
     "check:surface": "deno run --allow-read --allow-run=deno scripts/check-package-surface.ts",
     "check": "deno task check:forbidden && deno task check:boundaries && deno task check:plugin-layout && deno task check:surface && deno task check:generated && deno task check:core-ownership",
     "publish:dry-run": "deno publish --dry-run --allow-dirty",
-    "test": "deno test --allow-all contracts/package runtime plugins server client scripts build",
+    "test": "deno test --node-modules-dir=auto --allow-all contracts/package runtime plugins server client scripts build",
     "test:contracts": "deno test --allow-all contracts/package",
     "build:plugins": "deno run -A scripts/build-plugins.ts",
     "check:generated": "deno run -A scripts/build-plugins.ts --check",
     "smoke:authoring": "deno run -A build/index.ts build contracts/authoring && deno run -A contracts/authoring/run.ts",
-    "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts"
+    "check:core-ownership": "deno run --allow-read --allow-env scripts/check-core-ownership.ts",
+    "build:web-css": "deno run -A --node-modules-dir=auto npm:@tailwindcss/cli@4.1.12 -i plugins/ui-kit/styles.css -o dist/web.css --minify && mkdir -p dist/fonts && cp plugins/ui-kit/katex/fonts/*.woff2 dist/fonts/"
   },
   "lock": false,
   "fmt": {
     "exclude": [
-      "**/plugin.generated.ts"
+      "**/plugin.generated.ts",
+      "plugins/ui-kit/katex/"
     ]
-  }
+  },
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  },
+  "nodeModulesDir": "none"
 }

@@ -4,7 +4,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { createTestDatabase } from "../../../../../runtime/testing/ominipg.ts";
+import { createOwnerTestDatabase } from "../../../../../runtime/testing/owner-database.ts";
 import { createSqlSession } from "../../../../../runtime/events/index.ts";
 import { queryCollectionRecords } from "../../../../../runtime/collections/query.ts";
 import { createResolvedCollectionReader } from "../../../../../runtime/collections/resolved-read.ts";
@@ -45,7 +45,7 @@ import { CORE_TOOL_ACTION_METADATA_SCHEMA } from "../../../shared/workflow-metad
 
 const date = "2026-09-06T00:00:00.000Z";
 Deno.test("oversized stored Tool results become budgeted markers for prompt and memory", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createOwnerTestDatabase();
   const session = createSqlSession(db);
   const assets = createMemoryAssetRepository();
   const readIds: string[] = [];
@@ -393,7 +393,7 @@ Deno.test("oversized stored Tool results become budgeted markers for prompt and 
 });
 
 Deno.test("Core resolves own native reasoning, leaves peer state unread, and counts it in the byte limit", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createOwnerTestDatabase();
   const session = createSqlSession(db);
   const assets = createMemoryAssetRepository();
   const readIds: string[] = [];
@@ -586,8 +586,8 @@ Deno.test("Core resolves own native reasoning, leaves peer state unread, and cou
   }
 });
 
-Deno.test("Core rejects changed content, metadata, visibility or revision before opening asset bodies", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+Deno.test("Core rejects changed message snapshots before opening asset bodies", async () => {
+  const db = await createOwnerTestDatabase();
   const session = createSqlSession(db);
   const assets = createMemoryAssetRepository();
   const readIds: string[] = [];
@@ -641,7 +641,7 @@ Deno.test("Core rejects changed content, metadata, visibility or revision before
         // Keep timestamps unchanged: full snapshot checks must catch changes
         // even when version timestamps alone cannot distinguish the records.
         await session.query(
-          "UPDATE changed_nodes SET data = $1::jsonb",
+          "UPDATE changed_nodes SET data = $1::jsonb, created_at = ($1::jsonb->>'createdAt')::timestamptz, updated_at = ($1::jsonb->>'updatedAt')::timestamptz",
           [JSON.stringify({ ...record, [mutation.field]: mutation.value })],
         );
         return await queryCollectionRecords(
@@ -674,7 +674,12 @@ Deno.test("Core rejects changed content, metadata, visibility or revision before
     } as unknown as CoreProcessorContext;
     for (
       mutation of [
+        { field: "senderId", value: "other" },
+        { field: "createdAt", value: "2026-09-07T00:00:00.000Z" },
+        { field: "updatedAt", value: "2026-09-07T00:00:00.000Z" },
         { field: "content", value: [changed] },
+        { field: "visibility", value: null },
+        { field: "visibility", value: undefined },
         { field: "metadata", value: { changed: true } },
         { field: "visibility", value: { kind: "internal" } },
         { field: "revision", value: { index: 1 } },
@@ -696,18 +701,10 @@ Deno.test("Core rejects changed content, metadata, visibility or revision before
     assertEquals(readIds, []);
     assertEquals(queries.length, 1);
     const predicate = queries[0].filter as CollectionPredicate;
-    assert("and" in predicate);
-    assertEquals(predicate.and[0], { field: "id", in: ["message"] });
-    assert("or" in predicate.and[1]);
+    assertEquals(predicate, { field: "id", in: ["message"] });
     const predicateParams: unknown[] = [];
-    const predicateSql = compileCollectionPredicate(
-      predicate,
-      predicateParams,
-    );
+    const predicateSql = compileCollectionPredicate(predicate, predicateParams);
     assertStringIncludes(predicateSql, "id = ANY($1::text[])");
-    assertStringIncludes(predicateSql, " AND ");
-    assertStringIncludes(predicateSql, "created_at =");
-    assertStringIncludes(predicateSql, "(data #> '{content}')");
     assertEquals(predicateParams[0], ["message"]);
   } finally {
     await db.close();
@@ -715,7 +712,7 @@ Deno.test("Core rejects changed content, metadata, visibility or revision before
 });
 
 Deno.test("Agent window predicates select private scope, branch and anchor before PGlite pagination", async () => {
-  const db = await createTestDatabase({ url: ":memory:" });
+  const db = await createOwnerTestDatabase();
   const session = createSqlSession(db);
   try {
     const records = Array.from({ length: 2005 }, (_, index) => ({
@@ -841,8 +838,8 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
   };
   const body = await publish("body", "hello");
   const thought = await publish("thought", "own previous thought");
-  const records = Array.from({ length: 25 }, (_, index) => {
-    const own = index === 24;
+  const records = Array.from({ length: 101 }, (_, index) => {
+    const own = index === 100;
     return {
       id: `m${String(index).padStart(2, "0")}`,
       namespace: "tenant",
@@ -861,9 +858,9 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
         list: (query: CollectionQuery) => {
           calls.list++;
           const filter = query.filter as unknown as {
-            and: { in?: string[] }[];
+            in: string[];
           };
-          const wanted = new Set(filter.and[0].in);
+          const wanted = new Set(filter.in);
           return Promise.resolve(
             structuredClone(records.filter((record) => wanted.has(record.id))),
           );
@@ -899,16 +896,16 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
   } as const;
 
   const prompt = await preparedMessages(context, input);
-  assertEquals(prompt.length, 25);
-  assertEquals(calls.list, 2, "25 messages are two batches of at most 20");
+  assertEquals(prompt.length, 101);
+  assertEquals(calls.list, 2, "101 messages are two batches of at most 100");
   assertEquals(calls.sizes, 1, "every Asset row is read once");
   assertEquals(calls.opened.length, 1, "every body is opened in one pass");
   assertEquals(
     calls.opened[0].length,
-    25,
-    "25 bodies; textual reasoning is never opened",
+    101,
+    "101 bodies; textual reasoning is never opened",
   );
-  const own = prompt[24];
+  const own = prompt[100];
   assertEquals(own.role, "assistant");
   if (own.role === "assistant") {
     assertEquals("reasoning" in own, false);
@@ -937,7 +934,7 @@ Deno.test("transcript preparation reads storage once per batch, sizes once, and 
     1,
     "history and context share body resolution",
   );
-  assertEquals(calls.opened[0].length, 26);
+  assertEquals(calls.opened[0].length, 102);
 
   // A history over budget is refused from the sizes alone: no body is opened.
   calls.opened.length = 0;

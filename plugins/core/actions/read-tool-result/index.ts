@@ -1,5 +1,6 @@
 /** Reads a bounded part of one authorized historical Tool result. @module */
 
+import { canReadToolOutput } from "../../shared/tool-visibility.ts";
 import type { ActionDefinition } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { ContentRef } from "@copilotz/copilotz/content";
@@ -199,6 +200,7 @@ function sameAgentResult(
   const metadata = record(message.metadata);
   const invocation = record(metadata.toolInvocation);
   const requesterId = optionalText(metadata.requesterId);
+  if (!requesterId) return false;
   const workflow = workflowMetadata(metadata);
   const action = coreToolActionMessageMetadata(metadata);
   if (
@@ -222,6 +224,8 @@ function sameAgentResult(
   } else if (
     !(visibility.kind === "public" &&
       metadata.historyVisibility === "public") &&
+    !(visibility.kind === "tool" &&
+      canReadToolOutput(visibility, [participantId])) &&
     !(visibility.kind === "participants" &&
       stringArray(visibility.participantIds).includes(participantId))
   ) return false;
@@ -236,7 +240,7 @@ function sameAgentResult(
     return stringArray(visibility.participantIds).includes(participantId);
   }
   if (visibility.kind === "tool") {
-    return visibility.requesterId === participantId;
+    return canReadToolOutput(visibility, [participantId]);
   }
   return visibility.kind === undefined || visibility.kind === "public";
 }

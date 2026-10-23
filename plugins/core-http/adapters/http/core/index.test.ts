@@ -132,7 +132,10 @@ Deno.test("Core message history reads each unique sender once", async () => {
 });
 
 Deno.test("Core round trip keeps stored history, actor identity, and multipart bytes", async () => {
-  const database = await createTestDatabase({ url: ":memory:" });
+  const database = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `actor_core_${crypto.randomUUID().replaceAll("-", "")}`;
   const adapter: LlmAdapter = {
     call() {
       const bytes = new TextEncoder().encode("Hello 🌎");
@@ -163,7 +166,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
   const application = await createCopilotzApplication({
     database,
     namespace: "tenant",
-    databaseSchema: "core_http_contract",
+    databaseSchema: schema,
     engine: { retryBaseMs: 0, random: () => 0 },
     plugins: [
       corePlugin,
@@ -243,7 +246,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
                     thread: {
                       create: {},
                       update: {},
-                      commands: { ensureMembership: {} },
+                      commands: { ensureMembership: {}, recordMessage: {} },
                     },
                     message: { create: {}, update: {} },
                   },
@@ -282,9 +285,10 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       new TextDecoder().decode(new Uint8Array(collected)),
       "Hello 🌎",
     );
-    const result = await client.operations.result(receipt.operationId) as {
-      threadId: string;
-    };
+    const result = (await client.operations.result(receipt.operationId))
+      .value as {
+        threadId: string;
+      };
     const page = await core.threads.messages(result.threadId);
     assertEquals(page.data.length, 2);
     assertEquals(page.data[0].sender.id, "person");
@@ -340,7 +344,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         ) replayed.push(...frame.bytes);
         if (
           frame.kind === "output" &&
-          frame.output.type === "operation.completed" &&
+          frame.output.type === "operation.settled" &&
           frame.output.operationId === followup.operationId
         ) {
           completed = true;
@@ -432,6 +436,117 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
         ),
       CopilotzHttpError,
     );
+    await records.thread.commands.ensureMembership({
+      id: result.threadId,
+      participantIds: ["foreign-human"],
+    });
+    await records.message.update({
+      id: "status-result",
+      set: {
+        visibility: {
+          kind: "tool",
+          policy: "public_status",
+          requesterId: "support",
+          initiatorId: "person",
+        },
+      },
+    });
+    const initiated = (await core.threads.messages(result.threadId)).data.find(
+      (message) => message.id === "status-result",
+    )!;
+    assertEquals(initiated.visibility, {
+      kind: "tool",
+      policy: "public_status",
+      requesterId: "support",
+      initiatorId: "person",
+    });
+    assertEquals(
+      await (await core.messages.asset(
+        result.threadId,
+        initiated.id,
+        page.data[1].content[0].assetId,
+      )).text(),
+      "Hello 🌎",
+    );
+    const toolAssetUrl =
+      `https://test/api/threads/${result.threadId}/messages/status-result/assets/${
+        page.data[1].content[0].assetId
+      }`;
+    assertEquals(
+      (await handler(
+        new Request(toolAssetUrl, { headers: { "x-user": "foreign-human" } }),
+      )).status,
+      404,
+    );
+    await records.message.create({
+      id: "tool-plan-visible",
+      threadId: result.threadId,
+      senderId: support[0].id,
+      recipientIds: [],
+      content: [],
+      metadata: { llmToolCalls: [{ id: "call" }] },
+    });
+    await records.message.update({
+      id: "status-result",
+      set: {
+        visibility: {
+          kind: "tool",
+          policy: "requester_only",
+          requesterId: support[0].id,
+          initiatorId: "person",
+        },
+        metadata: {
+          toolStatus: "cancelled",
+          toolId: "test-tool",
+          toolInvocation: { id: "call", args: "SECRET" },
+          copilotzWorkflow: { sourceMessageId: "tool-plan-visible" },
+        },
+      },
+    });
+    assertEquals((await handler(new Request(toolAssetUrl))).status, 404);
+    for (const viewer of ["person", "foreign-human"]) {
+      const response = await handler(
+        new Request(`https://test/api/threads/${result.threadId}/messages`, {
+          headers: { "x-user": viewer },
+        }),
+      );
+      const body = await response.json();
+      const terminal = body.data.find((message: { id: string }) =>
+        message.id === "status-result"
+      );
+      assertEquals(terminal.metadata.toolStatus, "cancelled");
+      assertEquals(terminal.content, []);
+      assertEquals(terminal.visibility.policy, "requester_only");
+      assertEquals(JSON.stringify(terminal).includes("SECRET"), false);
+      const direct = await handler(
+        new Request("https://test/api/collections/message/status-result", {
+          headers: { "x-user": viewer },
+        }),
+      );
+      assertEquals(direct.status, 200);
+      assertEquals((await direct.json()).data.content, []);
+      const forgedHistory = await handler(
+        new Request("https://test/api/collections/message/queries/history", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-user": viewer },
+          body: JSON.stringify({
+            threadId: result.threadId,
+            messageId: "status-result",
+            viewerParticipantIds: [support[0].id],
+            content: true,
+          }),
+        }),
+      );
+      assertEquals(forgedHistory.status, 200);
+      assertEquals((await forgedHistory.json()).data[0].content, []);
+    }
+    // Restore the foreign participant's original isolation for the admission tests.
+    const members = (await records.thread.get({ id: result.threadId }))!
+      .participantIds as string[];
+    await records.thread.update({
+      id: result.threadId,
+      set: { participantIds: members.filter((id) => id !== "foreign-human") },
+    });
     // Membership cannot invite a human from another thread, or partially enroll
     // valid selections before rejecting a forged selection.
     const answer = page.data[1];
@@ -555,7 +670,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       () => client.operations.result(rejected.operationId),
       CopilotzHttpError,
     );
-    assertEquals((await core.threads.messages(result.threadId)).data.length, 5);
+    assertEquals((await core.threads.messages(result.threadId)).data.length, 6);
     assertEquals(
       ((await records.thread.get({ id: result.threadId }))
         ?.participantIds as string[]).includes("foreign-human"),
@@ -563,6 +678,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
     );
   } finally {
     await application.close();
+    await database.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await database.close();
   }
 });

@@ -68,7 +68,7 @@ async function fixture() {
     runtime,
     caller: { principal: "fixture", epoch: owner.epoch! },
     async close() {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },
@@ -242,7 +242,6 @@ Deno.test({
             );
             assertEquals(seen.filter((item) => item.startsWith("b:")), [
               "b:read",
-              "b:result",
               "b:result",
             ]);
             published.resolve();

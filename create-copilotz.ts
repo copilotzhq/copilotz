@@ -1,3 +1,9 @@
+import type { DeviceUpgrade } from "./server/device.ts";
+import {
+  type CopilotzShard,
+  createCopilotzShard,
+  type CreateCopilotzShardOptions,
+} from "./runtime/application/shard.ts";
 import { withOwnedHosting } from "./runtime/application/hosting.ts";
 import { createServerFacadeFetchHandler } from "./server/facade.ts";
 import { createCopilotz as createEmbeddedCopilotz } from "./runtime/application/copilotz.ts";
@@ -14,21 +20,33 @@ import type { CopilotzApplication } from "./runtime/application/types.ts";
 import type { RegistryComposition } from "./runtime/plugins/index.ts";
 import type { InternalCopilotzGateway } from "./runtime/application/gateway.ts";
 
-type EmbeddedOptions = RuntimeEmbeddedOptions & Readonly<{ role?: "embedded" }>;
+type DeviceHostingOptions = Readonly<{
+  /** Custom host upgrade; listen() supplies a runtime default when omitted. */
+  upgradeDevice?: DeviceUpgrade;
+}>;
+
+type EmbeddedOptions =
+  & RuntimeEmbeddedOptions
+  & DeviceHostingOptions
+  & Readonly<{ role?: "embedded" }>;
 
 type GatewayOptions =
   & RuntimeGatewayOptions
+  & DeviceHostingOptions
   & Readonly<{
     role: "gateway";
   }>;
 
+type ShardOptions = CreateCopilotzShardOptions & Readonly<{ role: "shard" }>;
+
 type WorkerOptions = RuntimeWorkerOptions & Readonly<{ role: "worker" }>;
 
-/** One discriminated factory contract for embedded, Gateway, and Worker roles. */
+/** One discriminated factory contract for embedded, gateway, shard, and worker roles. */
 export type CreateCopilotzOptions =
   | EmbeddedOptions
   | GatewayOptions
-  | WorkerOptions;
+  | WorkerOptions
+  | ShardOptions;
 
 /** Reuse the registry's dependency and contribution composition at the public boundary. */
 type CompositionOptions = Pick<
@@ -75,15 +93,18 @@ type WorkerFactoryResult = Readonly<{
 /** The `/api` facade when `serverPlugin` is composed; otherwise 404. */
 function serverFetch(
   gateway: Pick<InternalCopilotzGateway, "application" | "admit">,
+  upgradeDevice?: DeviceUpgrade,
 ): (request: Request) => Promise<Response> {
   return gateway.application.plugins.resources.server?.default
     ? createServerFacadeFetchHandler(gateway.application, {
       admit: gateway.admit,
+      upgradeDevice,
     })
     : (_request: Request) =>
       Promise.resolve(new Response(null, { status: 404 }));
 }
 
+export function createCopilotz(options: ShardOptions): Promise<CopilotzShard>;
 export function createCopilotz<const T extends GatewayOptions>(
   options: T & GatewayOptions,
 ): Promise<GatewayApplication<T>>;
@@ -96,7 +117,10 @@ export function createCopilotz<const T extends EmbeddedOptions = EmptyMap>(
 /** Composes exactly the plugins, resources, and adapters supplied by the caller. */
 export async function createCopilotz(
   options: CreateCopilotzOptions = {},
-): Promise<CopilotzApplication | GatewayApplication | WorkerFactoryResult> {
+): Promise<
+  CopilotzApplication | GatewayApplication | WorkerFactoryResult | CopilotzShard
+> {
+  if (options.role === "shard") return createCopilotzShard(options);
   if (options.role === "worker") {
     const { role: _role, ...workerOptions } = options;
     const worker = await createWorker(workerOptions);
@@ -114,7 +138,7 @@ export async function createCopilotz(
     } = options;
     const gateway = await createGateway(gatewayOptions);
     try {
-      const fetch = serverFetch(gateway);
+      const fetch = serverFetch(gateway, options.upgradeDevice);
       gateway.installFetchFallback(fetch);
       return withOwnedHosting(
         {
@@ -145,6 +169,6 @@ export async function createCopilotz(
   return await createEmbeddedCopilotz(
     embeddedOptions,
     embeddedOptions.databaseLifecycle,
-    (gateway) => serverFetch(gateway),
+    (gateway) => serverFetch(gateway, embeddedOptions.upgradeDevice),
   );
 }

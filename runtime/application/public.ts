@@ -31,3 +31,10 @@ export type {
   ProtectedActionSource,
   ProtectedActionSourceEntry,
 } from "../actions/protected-action-types.ts";
+
+export type {
+  CollectionSubscription,
+  SubscriptionDelta,
+  SubscriptionFrame,
+  SubscriptionOptions,
+} from "../subscriptions/types.ts";

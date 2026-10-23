@@ -13,7 +13,7 @@ import type {
 } from "./fixture-command-types.ts";
 
 export async function createFixtureCopilotz<T extends HostCommandDefinitions>(
-  options: Exclude<CreateCopilotzOptions, { role: "worker" }> & {
+  options: Exclude<CreateCopilotzOptions, { role: "worker" | "shard" }> & {
     hostCommands?: T;
   },
 ) {

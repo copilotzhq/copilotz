@@ -1,6 +1,10 @@
 /** Public Collection authoring declarations without the runtime kernel. @module */
 
 export { defineCollection, relation } from "./definition.ts";
+export {
+  type CollectionConflictError,
+  isCollectionConflictError,
+} from "./errors.ts";
 export type {
   CollectionAlarmDefinition,
   CollectionCommandDefinition,

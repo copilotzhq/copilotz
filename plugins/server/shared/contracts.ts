@@ -64,6 +64,8 @@ export type ServerEndpointDescriptor = Readonly<{
 }>;
 
 export type ServerAuthorizedScope = Readonly<{
+  /** Configured session cookie: true clears it; false means host-verified. Omit for owner verification. */
+  invalidSessionCookie?: boolean;
   authority: import("@copilotz/copilotz/engine").AuthenticatedAuthority;
   actor?: Readonly<
     { id: string; externalId?: string; name?: string; email?: string }
@@ -97,8 +99,40 @@ export type ServerAuthenticate = (
   | ServerAuthorizedScope
   | Response
   | Promise<ServerAuthorizedScope | Response>;
+/** Owner-trusted identity projection after native credentials have been verified.
+ * Runs for every authentication path. Reads use the selected tenant scope;
+ * returning undefined deliberately leaves the request without an actor.
+ * The result populates the HTTP scope and ingress proof. Credential-dependent
+ * Action/operation metadata belongs in owner policy so retries remain stable.
+ */
+export type ServerResolveActor = (
+  context: Readonly<{
+    scope: ServerAuthorizedScope;
+    read: import("../authoring/http-adapter/index.ts").HttpReadServices;
+    endpoint: ServerEndpointDescriptor;
+    params: Readonly<Record<string, string>>;
+  }>,
+) => ServerAuthorizedScope["actor"] | Promise<ServerAuthorizedScope["actor"]>;
+
+export type SessionCookieOptions = Readonly<{
+  name?: string;
+  path?: string;
+  domain?: string;
+  secure?: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+}>;
 export type ServerFacadeResource = Readonly<{
   basePath: string;
+  sessionCookie?: SessionCookieOptions;
+  /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Readonly<
+    {
+      maxSubscriptions?: number;
+      maxPendingControls?: number;
+      maxPendingBytes?: number;
+    }
+  >;
   /** Maximum raw bytes accepted by the generic asset upload endpoint. */
   maxAssetUploadBytes: number;
   expose: Readonly<{
@@ -107,14 +141,26 @@ export type ServerFacadeResource = Readonly<{
     channels: boolean | ServerPatternPolicy;
   }>;
   authenticate: ServerAuthenticate;
+  resolveActor?: ServerResolveActor;
 }>;
 
 export type DefineServerFacadeInput = Readonly<{
   basePath?: string;
+  sessionCookie?: SessionCookieOptions;
+  /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Readonly<
+    {
+      maxSubscriptions?: number;
+      maxPendingControls?: number;
+      maxPendingBytes?: number;
+    }
+  >;
   /** Defaults to 20 MiB. */
   maxAssetUploadBytes?: number;
   expose?: ServerExposureOptions;
   authenticate: ServerAuthenticate;
+  resolveActor?: ServerResolveActor;
 }>;
 
 export {

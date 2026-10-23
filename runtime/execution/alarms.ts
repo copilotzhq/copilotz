@@ -1,6 +1,6 @@
 import type { DatabaseOwner } from "../engine/commands.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
-import { completeOwnerDeadline } from "../engine/alarms.ts";
+import { completeOwnerDeadlines } from "../engine/alarms.ts";
 import type { EventStore } from "../events/store.ts";
 import type { DeliveryExecutor } from "./types.ts";
 
@@ -14,15 +14,16 @@ export function registerDeliveryAlarms(
   return owner.registerAlarmSource({
     name: "deliveries",
     async wake(deadlines) {
-      await run("alarm.deliveries.consume", {}, async (_input, context) => {
-        for (const deadline of deadlines) {
-          await completeOwnerDeadline(
+      await run(
+        "alarm.deliveries.consume",
+        {},
+        (_input, context) =>
+          completeOwnerDeadlines(
             context.transaction,
             store.databaseSchema,
-            deadline,
-          );
-        }
-      });
+            deadlines,
+          ),
+      );
       for (
         const namespace of new Set(
           deadlines.map((deadline) => deadline.namespace),

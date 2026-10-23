@@ -99,32 +99,49 @@ export function createHostServices(
     handle: ApplicationSendHandle,
     boundary: ApplicationScope,
   ) => {
-    // Result-only callers own no progressive readers. Drain observations while
-    // settlement runs, releasing each subscriber-owned byte stream immediately.
+    const app = application();
+    let changed = Promise.withResolvers<void>();
+    let ended = false;
+    let interrupted: unknown;
+    const notify = () => changed.resolve();
+    // Admission already subscribed before dispatch. Use that subscription for
+    // both completion hints and owner-loss errors, without another owner command.
     const drained = (async () => {
       for await (const output of handle.outputs) {
         if (isStreamOutput(output)) await output.payload.cancel();
+        notify();
       }
-    })();
+    })().catch((error) => {
+      interrupted = error;
+    }).finally(() => {
+      ended = true;
+      notify();
+    });
     try {
-      const settled = await Promise.allSettled([handle.done, drained]);
-      const recorded = await recordedOperationResult(
-        application(),
-        boundary,
-        handle.operationId,
-        "host",
-      );
-      for (const value of settled) {
-        if (value.status === "rejected") throw value.reason;
+      for (;;) {
+        const next = changed;
+        if (interrupted !== undefined) throw interrupted;
+        const recorded = await recordedOperationResult(
+          app,
+          boundary,
+          handle.operationId,
+          "host",
+        );
+        if (!recorded.pending) return recorded.value;
+        if (interrupted !== undefined) throw interrupted;
+        if (ended) {
+          await handle.done;
+          throw new Error("Operation result is not yet recorded.");
+        }
+        await next.promise;
+        changed = Promise.withResolvers<void>();
       }
-      if (recorded.pending) {
-        throw new Error("Operation result is not yet recorded.");
-      }
-      return recorded.value;
     } finally {
       await handle.detach("host_result_returned");
+      await drained;
     }
   };
+
   const mutate = async (
     alias: string,
     operation: ServerCollectionMutationRequest["operation"],
@@ -224,6 +241,30 @@ export function createHostServices(
         schema: definition.schema,
         relations: definition.relations,
       },
+      async observe(query = {}, options = {}) {
+        const authority = options.authority ??
+          captureCollectionInvocation()?.authority;
+        if (!authority) {
+          throw Object.assign(
+            new Error("Subscription requires retained authority."),
+            { code: "forbidden" },
+          );
+        }
+        const boundary = scope(options);
+        if (
+          authority.scope.namespace !== boundary.namespace ||
+          authority.scope.databaseSchema !== boundary.databaseSchema
+        ) throw new TypeError("Subscription authority scope mismatch.");
+        const runtime = await application().databaseScope(
+          boundary.databaseSchema,
+        );
+        return await runtime.observeCollection(
+          authority,
+          alias,
+          query,
+          options,
+        );
+      },
       async get(input: { id: string }, options: ApplicationReadOptions = {}) {
         return await (await collection(alias, options)).get(input, options);
       },
@@ -305,12 +346,20 @@ export function createHostServices(
   );
   // Public host services are trusted capabilities. An existing invocation keeps
   // its narrower authority, including when an HTTP handler calls a host method.
-  const bindHost = <T extends object>(value: T): T => {
+  const bindHost = <T extends object>(value: T, path: readonly string[]): T => {
     const bound = Object.create(Object.getPrototypeOf(value));
     for (const [key, member] of Object.entries(value)) {
       bound[key] = typeof member === "function"
         ? async (...args: unknown[]) => {
-          if (captureCollectionInvocation()) {
+          const invocation = captureCollectionInvocation();
+          if (invocation?.callHostCapability) {
+            return invocation.callHostCapability(
+              [...path, key],
+              args,
+              scope((args[1] ?? {}) as ApplicationScope),
+            );
+          }
+          if (invocation) {
             return Reflect.apply(member, value, args);
           }
           const options = (args[1] ?? {}) as ApplicationReadOptions;
@@ -331,10 +380,13 @@ export function createHostServices(
           }, () => Reflect.apply(member, value, args));
         }
         : member && typeof member === "object" && key !== "definition"
-        ? bindHost(member)
+        ? bindHost(member, [...path, key])
         : member;
     }
     return bound;
   };
-  return { actions: bindHost(actions), collections: bindHost(collections) };
+  return {
+    actions: bindHost(actions, ["actions"]),
+    collections: bindHost(collections, ["collections"]),
+  };
 }

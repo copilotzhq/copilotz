@@ -15,22 +15,24 @@ import {
   protectedEventResolverFrom,
   withProtectedEventResolver,
 } from "./protected-context.ts";
-type ActionInvocationHost = Pick<
-  RuntimeContext,
-  | "namespace"
-  | "databaseSchema"
-  | "resources"
-  | "adapters"
-  | "collections"
-  | "vectors"
-  | "content"
-  | "streams"
-  | "operations"
-  | "signal"
-  | "now"
-  | "transaction"
-  | "readSnapshot"
->;
+type ActionInvocationHost =
+  & Pick<
+    RuntimeContext,
+    | "namespace"
+    | "databaseSchema"
+    | "resources"
+    | "adapters"
+    | "collections"
+    | "vectors"
+    | "content"
+    | "streams"
+    | "operations"
+    | "signal"
+    | "now"
+    | "transaction"
+    | "readSnapshot"
+  >
+  & Partial<Pick<RuntimeContext, "directory" | "authentication">>;
 
 /** Reserved stream metadata injected by the generic Action invocation host. */
 const SOURCE_ACTION_RUN_ID_METADATA_KEY = "sourceActionRunId";
@@ -109,6 +111,8 @@ export function createActionInvocationContext(
   return bindActionCollectionInvocation(
     withProtectedEventResolver({
       ...host,
+      directory: host.directory ?? { get: unavailable, command: unavailable },
+      authentication: host.authentication ?? { verify: unavailable },
       action: {
         id: frame.actionId,
         runId: frame.actionRunId,

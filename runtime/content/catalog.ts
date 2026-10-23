@@ -140,7 +140,13 @@ function sameWriter(body: LogicalBody, writer: ContentWriter): boolean {
 
 export interface ContentCatalog {
   read(bodyId: string, executor?: SqlExecutor): Promise<LogicalBody | null>;
+  readMany?(bodyIds: readonly string[]): Promise<readonly LogicalBody[]>;
   nextDeadline(executor?: SqlExecutor): Promise<string | null>;
+  retirementCandidates(input?: {
+    limit?: number;
+    after?: string;
+    now?: Date;
+  }): Promise<(ContentCopy & { bodyId: string; state: string })[]>;
   expireReservations(): Promise<void>;
   deferRecovery(bodyId: string): Promise<void>;
   deferRetirement(copyKey: string): Promise<void>;
@@ -411,33 +417,49 @@ export function createContentCatalog(
     }
     return row;
   }
+  // Scheduling and collection must agree on durable protection. These guards
+  // are hints for candidate selection; the fenced retirement claim rechecks them.
+  async function retentionGuards(executor: SqlExecutor, time = "NOW()") {
+    const operations = `"${schema}"."copilotz_operations"`;
+    const streams = `"${schema}"."copilotz_operation_streams"`;
+    deadlineTables ??= executor.query<
+      { present: boolean; streams_present: boolean }
+    >(
+      "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS streams_present",
+      [operations, streams],
+    ).then((result) => result.rows[0]);
+    const { present, streams_present: streamsPresent } = await deadlineTables;
+    const pendingGuard = present
+      ? `AND NOT EXISTS(SELECT 1 FROM ${operations} o WHERE o.namespace=p.namespace AND o.operation_id=p.producer AND o.state IN ('accepted','running'))`
+      : "";
+    const streamGuard = streamsPresent
+      ? `AND NOT EXISTS(SELECT 1 FROM ${streams} s WHERE s.body_id=b.body_id AND s.availability='retained' AND s.cleanup_state IS NULL)`
+      : "";
+    const producerGuard = present
+      ? `AND NOT EXISTS(SELECT 1 FROM ${tables.pending_content} p JOIN ${operations} o ON o.operation_id=p.producer AND o.namespace=p.namespace WHERE p.body_id=b.body_id AND o.state IN ('accepted','running'))`
+      : "";
+    const currentGuard = `b.terminal IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM ${tables.nodes} n WHERE n.type IN ('asset','protected_value') AND n.data->>'state'='ready' AND (n.data->>'bodyId') COLLATE "C"=b.body_id)
+      AND NOT EXISTS(SELECT 1 FROM ${tables.pending_content} p WHERE p.body_id=b.body_id AND p.expires_at>${time})
+      ${streamGuard} ${producerGuard}`;
+    return { pendingGuard, currentGuard };
+  }
   return {
     read,
+    async readMany(bodyIds) {
+      if (!bodyIds.length) return [];
+      const rows = await session.query<BodyRow>(
+        `SELECT b.*, c.backend_kind, c.backend_id, c.version_token, c.collectable
+         FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy
+         WHERE b.body_id=ANY($1::text[])`,
+        [[...new Set(bodyIds)]],
+      );
+      return rows.rows.map(map);
+    },
     async nextDeadline(
       executor: SqlExecutor = session,
     ): Promise<string | null> {
-      const operations = `"${schema}"."copilotz_operations"`;
-      const streams = `"${schema}"."copilotz_operation_streams"`;
-      deadlineTables ??= executor.query<
-        { present: boolean; streams_present: boolean }
-      >(
-        "SELECT to_regclass($1) IS NOT NULL AS present, to_regclass($2) IS NOT NULL AS streams_present",
-        [operations, streams],
-      ).then((result) => result.rows[0]);
-      const { present, streams_present: streamsPresent } = await deadlineTables;
-      const pendingGuard = present
-        ? `AND NOT EXISTS(SELECT 1 FROM ${operations} o WHERE o.namespace=p.namespace AND o.operation_id=p.producer AND o.state IN ('accepted','running'))`
-        : "";
-      const streamGuard = streamsPresent
-        ? `AND NOT EXISTS(SELECT 1 FROM ${streams} s WHERE s.body_id=b.body_id AND s.availability='retained' AND s.cleanup_state IS NULL)`
-        : "";
-      const producerGuard = present
-        ? `AND NOT EXISTS(SELECT 1 FROM ${tables.pending_content} p JOIN ${operations} o ON o.operation_id=p.producer AND o.namespace=p.namespace WHERE p.body_id=b.body_id AND o.state IN ('accepted','running'))`
-        : "";
-      const currentGuard = `b.terminal IS NOT NULL
-        AND NOT EXISTS(SELECT 1 FROM ${tables.nodes} n WHERE n.type IN ('asset','protected_value') AND n.data->>'state'='ready' AND n.data->>'bodyId'=b.body_id)
-        AND NOT EXISTS(SELECT 1 FROM ${tables.pending_content} p WHERE p.body_id=b.body_id AND p.expires_at>NOW())
-        ${streamGuard} ${producerGuard}`;
+      const { pendingGuard, currentGuard } = await retentionGuards(executor);
       const eligibleCopy =
         `c.collectable AND c.state IN ('current','orphan','retiring')`;
       // Each branch walks its due index until the first eligible row. The join
@@ -454,6 +476,41 @@ export function createContentCatalog(
       ) due`,
       )).rows[0];
       return row?.deadline ? new Date(row.deadline).toISOString() : null;
+    },
+    async retirementCandidates(input = {}) {
+      const limit = input.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) {
+        throw new TypeError("Invalid retirement page size.");
+      }
+      const { currentGuard } = await retentionGuards(
+        session,
+        "$3::timestamptz",
+      );
+      const rows = await session.query<{
+        copy_key: string;
+        backend_kind: string;
+        backend_id: string;
+        body_id: string;
+        state: string;
+      }>(
+        `SELECT c.copy_key,c.backend_kind,c.backend_id,c.body_id,c.state
+         FROM ${tables.content_copies} c
+         JOIN ${tables.content_logical_bodies} b ON b.body_id=c.body_id
+         WHERE c.collectable AND c.state IN ('current','orphan','retiring')
+           AND c.retire_after<=$3::timestamptz
+           AND ($1::text IS NULL OR c.copy_key>$1)
+           AND (c.copy_key<>b.current_copy OR
+             (b.protected_until<=$3::timestamptz AND ${currentGuard}))
+         ORDER BY c.copy_key LIMIT $2`,
+        [input.after ?? null, limit, (input.now ?? new Date()).toISOString()],
+      );
+      return rows.rows.map((row) => ({
+        key: row.copy_key,
+        backendKind: row.backend_kind,
+        backendId: row.backend_id,
+        bodyId: row.body_id,
+        state: row.state,
+      }));
     },
     async expireReservations() {
       return await command(

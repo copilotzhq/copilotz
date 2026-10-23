@@ -26,7 +26,10 @@ import {
   type LlmToolPipelineStage,
   type LlmUsage,
 } from "../../shared/contracts.ts";
-import { LLMProviderError } from "../../shared/errors.ts";
+import {
+  LLMProviderError,
+  LLMStreamTimeoutError,
+} from "../../shared/errors.ts";
 import { toLLMConfig } from "./config.ts";
 import { chat } from "./orchestrator.ts";
 import {
@@ -789,7 +792,11 @@ async function normalizedProviderFailure(error: unknown): Promise<unknown> {
   const code = semanticCode ?? boundedCode(error.providerError?.code) ??
     boundedCode(error.reason);
   return new LlmAdapterCallError(
-    code ? `LLM provider call failed (${code}).` : "LLM provider call failed.",
+    !semanticCode && error.cause instanceof LLMStreamTimeoutError
+      ? error.cause.message
+      : code
+      ? `LLM provider call failed (${code}).`
+      : "LLM provider call failed.",
     {
       attempts: await normalizeFailureAttempts(error),
       ...(semanticCode

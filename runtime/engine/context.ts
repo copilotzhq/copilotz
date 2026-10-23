@@ -455,7 +455,9 @@ export function createProcessorContext(
           ...transactionOptions.identity?.metadata,
         },
       },
-      execute: async ({ collections: byName, relations, vectors }) => {
+      execute: async (
+        { collections: byName, relations, vectors, sessions, flows },
+      ) => {
         const transactionCollections = (Object.fromEntries(
           Object.entries(options.registry.collections).map(
             ([alias, definition]) => {
@@ -474,6 +476,20 @@ export function createProcessorContext(
             collections: transactionCollections,
             relations,
             vectors,
+            sessions,
+            flows,
+            directory: {
+              command: async (
+                alias: string,
+                input: unknown,
+                call: { operationKey: string },
+              ) => {
+                if (!options.directory) {
+                  throw new Error("Directory commands unavailable.");
+                }
+                await options.directory.command(alias, input, call);
+              },
+            },
           } as const,
         );
       },
@@ -525,6 +541,7 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
+    deliveryAttempt: options.base.deliveryAttempt,
     authorize: options.authorizeAction,
     prepareInput: options.prepareActionInput,
     refuseAuthorization: options.refuseActionAuthorization,
@@ -574,6 +591,16 @@ export function createProcessorContext(
     content,
     streams,
     collections,
+    authentication: options.authentication ??
+      {
+        verify: () =>
+          Promise.reject(new Error("Identity verification unavailable.")),
+      },
+    directory: options.directory ?? {
+      get: () => Promise.reject(new Error("Directory reads are unavailable.")),
+      command: () =>
+        Promise.reject(new Error("Directory commands unavailable.")),
+    },
     vectors: options.collections.vectors(namespace),
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),

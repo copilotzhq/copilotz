@@ -1,3 +1,8 @@
+import { writeOwnerDeliveries } from "../authorization/leases.ts";
+import { registerDirectoryCollections } from "../authorization/directory-collections.ts";
+import { bindFlowOperation } from "../authorization/flow.ts";
+import { isOwnerAuthorizationRefusal } from "./authorization-refusal.ts";
+import { createCollectionObserver } from "../subscriptions/owner.ts";
 import { authorizeOperation } from "../authorization/operation.ts";
 import { withOwnerCommandAuthorization } from "./command-authorization.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
@@ -19,7 +24,9 @@ import { createAuthorizedActions } from "../actions/authorized-capture.ts";
 import {
   assertOwnerIngressReplay,
   hostIngressProof,
+  isCredentialOperationReplay,
   ownerIngressEvidence,
+  withIngressRequestMetadata,
 } from "../application/ingress/authority.ts";
 import { readLogicalHead } from "../content/catalog.ts";
 import { registerDeliveryAlarms } from "../execution/alarms.ts";
@@ -87,7 +94,6 @@ import {
   createEphemeralEvent,
   createEventCoordinator,
   createEventStore,
-  type EventCoordinator,
   type EventStore,
   matchesCopilotzEvent,
   waitForCopilotzEvent,
@@ -135,7 +141,7 @@ export type DatabaseScopeRuntime = Readonly<{
   deferPublication(publish: () => Promise<void>): () => Promise<void>;
   public: CopilotzEngineDatabaseScope;
   store: EventStore;
-  coordinator: EventCoordinator;
+  coordinator: ReturnType<typeof createEventCoordinator>;
   capabilities: DatabaseScopeCapabilities;
   streamBodyStore: BodyStore;
   transients: TransientProcessorSet;
@@ -323,7 +329,18 @@ export function createDatabaseScope(
     prefix: engine.assetStorage?.prefix,
     databaseSchema,
   });
+  const authorization = createAuthorizationOwner({
+    session: engine.session,
+    master: engine.secretAdapter,
+    actions: options.registry.actions,
+    databaseSchema,
+    owner: options.owner,
+    registration: engine.authorization,
+    collections: options.registry.collections,
+    operations: options.operationCatalog,
+  });
   const collections = createCollectionRuntime({
+    credentials: authorization.credentials,
     policies: collectionAuthorizations(
       engine.authorization,
       options.registry.collections,
@@ -340,6 +357,14 @@ export function createDatabaseScope(
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);
   }
+  const closeDirectoryCollections = registerDirectoryCollections(
+    options.owner,
+    {
+      runtime: collections,
+      definitions: options.registry.collections,
+      authorization: engine.authorization,
+    },
+  );
   const capabilities: DatabaseScopeCapabilities = {
     assets,
     collections,
@@ -415,117 +440,127 @@ export function createDatabaseScope(
           async (_, command) => {
             const authority = ownerIngressEvidence(ingress)?.authority;
             let accepted = draft;
-            if (authority) {
-              if (!engine.authorization) authorizationRefused();
-              const constraints = (await createOwnerEvaluator({
-                registration: engine.authorization,
-                collections: options.registry.collections,
-                databaseSchema,
-              })(authority, {
-                kind: draft.type.includes("collection")
-                  ? "collection"
-                  : "action",
-                resource: String(
-                  (payload as Record<string, unknown>).actionAlias ??
-                    (payload as Record<string, unknown>).collectionAlias ??
-                    draft.type,
-                ),
-                operation: "admit",
-                input: captureHostCommandJson(payload),
-              }, command)).constraints;
-              const request = payload as Record<string, unknown>;
-              let validatedInput = request.input;
-              if (typeof request.actionAlias === "string") {
-                const policy = constraints.actions?.[request.actionAlias];
-                if (!policy) authorizationRefused();
-                if (policy.input) {
-                  const supplied = request.input as Record<string, unknown>;
-                  for (const [key, value] of Object.entries(policy.input)) {
-                    if (
-                      Object.hasOwn(supplied, key) &&
-                      !sameActionValue(supplied[key], value)
-                    ) authorizationRefused();
+            let admissionRefusal: unknown;
+            let derivedMetadata: Record<string, unknown> = {};
+            try {
+              if (authority) {
+                if (!engine.authorization) authorizationRefused();
+                const constraints = (await createOwnerEvaluator({
+                  registration: engine.authorization,
+                  collections: options.registry.collections,
+                  databaseSchema,
+                })(authority, {
+                  kind: draft.type.includes("collection")
+                    ? "collection"
+                    : "action",
+                  resource: String(
+                    (payload as Record<string, unknown>).actionAlias ??
+                      (payload as Record<string, unknown>).collectionAlias ??
+                      draft.type,
+                  ),
+                  operation: "admit",
+                  input: captureHostCommandJson(payload),
+                }, command)).constraints;
+                derivedMetadata = { ...constraints.operations?.metadata };
+                const request = payload as Record<string, unknown>;
+                let validatedInput = request.input;
+                if (typeof request.actionAlias === "string") {
+                  const policy = constraints.actions?.[request.actionAlias];
+                  if (!policy) authorizationRefused();
+                  if (policy.input) {
+                    const supplied = request.input as Record<string, unknown>;
+                    for (const [key, value] of Object.entries(policy.input)) {
+                      if (
+                        Object.hasOwn(supplied, key) &&
+                        !sameActionValue(supplied[key], value)
+                      ) authorizationRefused();
+                    }
+                    validatedInput = { ...supplied, ...policy.input };
                   }
-                  validatedInput = { ...supplied, ...policy.input };
-                }
-              } else if (typeof request.collectionAlias === "string") {
-                const mutation =
-                  constraints.collectionMutations?.[request.collectionAlias] ??
+                } else if (typeof request.collectionAlias === "string") {
+                  const mutation = constraints.collectionMutations
+                    ?.[request.collectionAlias] ??
                     constraints.collectionMutations
                       ?.[
                         options.registry.collections[request.collectionAlias]
                           .name
                       ];
-                const allowed = request.operation === "command"
-                  ? mutation?.commands?.[String(request.command)]
-                  : mutation
-                    ?.[request.operation as "create" | "update" | "delete"];
-                if (!allowed) authorizationRefused();
-                const constrained = constrainCollection({
-                  collection: {
-                    alias: request.collectionAlias,
-                    name: options.registry.collections[request.collectionAlias]
-                      .name,
-                  },
-                  phase: "mutation",
-                  method: request.operation as
-                    | "create"
-                    | "update"
-                    | "delete"
-                    | "command",
-                  args: captureHostCommandJson(
-                    request.operation === "create"
-                      ? { input: request.input }
-                      : request.operation === "command"
-                      ? {
-                        id: request.id,
-                        name: request.command,
-                        input: request.input,
-                      }
-                      : { ...request.input as object, id: request.id },
-                  ),
-                }, constraints) as Record<string, unknown>;
-                validatedInput = request.operation === "create" ||
-                    request.operation === "command"
-                  ? constrained.input
-                  : request.input;
-              }
-              if (schema) {
-                try {
-                  validateCollectionInput(schema, {
-                    ...request,
-                    input: validatedInput,
-                  }, "Protected request input");
-                } catch (error) {
-                  if (
-                    (error as { code?: string }).code ===
-                      "collection_validation_failed"
-                  ) Object.assign(error as object, { status: 422 });
-                  throw error;
+                  const allowed = request.operation === "command"
+                    ? mutation?.commands?.[String(request.command)]
+                    : mutation
+                      ?.[request.operation as "create" | "update" | "delete"];
+                  if (!allowed) authorizationRefused();
+                  const constrained = constrainCollection({
+                    collection: {
+                      alias: request.collectionAlias,
+                      name:
+                        options.registry.collections[request.collectionAlias]
+                          .name,
+                    },
+                    phase: "mutation",
+                    method: request.operation as
+                      | "create"
+                      | "update"
+                      | "delete"
+                      | "command",
+                    args: captureHostCommandJson(
+                      request.operation === "create"
+                        ? { input: request.input }
+                        : request.operation === "command"
+                        ? {
+                          id: request.id,
+                          name: request.command,
+                          input: request.input,
+                        }
+                        : { ...request.input as object, id: request.id },
+                    ),
+                  }, constraints) as Record<string, unknown>;
+                  validatedInput = request.operation === "create" ||
+                      request.operation === "command"
+                    ? constrained.input
+                    : request.input;
                 }
+                if (schema) {
+                  try {
+                    validateCollectionInput(schema, {
+                      ...request,
+                      input: validatedInput,
+                    }, "Protected request input");
+                  } catch (error) {
+                    if (
+                      (error as { code?: string }).code ===
+                        "collection_validation_failed"
+                    ) Object.assign(error as object, { status: 422 });
+                    throw error;
+                  }
+                }
+                const metadata = { ...draft.metadata };
+                const operationMetadata = {
+                  ...(metadata.operationMetadata as Record<string, unknown> ??
+                    {}),
+                  ...constraints.operations?.metadata,
+                };
+                if (constraints.admission) {
+                  operationMetadata.httpAdmissionKey =
+                    constraints.admission.key;
+                  operationMetadata.httpIdempotencyKey = deduplicationId;
+                }
+                if (constraints.observationKeys) {
+                  metadata.observationKeys = [...constraints.observationKeys];
+                }
+                // Empty policy output must preserve an older admission's exact
+                // metadata so its immutable deduplication identity still replays.
+                if (
+                  Object.keys(operationMetadata).length ||
+                  Object.hasOwn(metadata, "operationMetadata")
+                ) {
+                  metadata.operationMetadata = operationMetadata;
+                }
+                accepted = { ...draft, metadata };
               }
-              const metadata = { ...draft.metadata };
-              const operationMetadata = {
-                ...(metadata.operationMetadata as Record<string, unknown> ??
-                  {}),
-                ...constraints.operations?.metadata,
-              };
-              if (constraints.admission) {
-                operationMetadata.httpAdmissionKey = constraints.admission.key;
-                operationMetadata.httpIdempotencyKey = deduplicationId;
-              }
-              if (constraints.observationKeys) {
-                metadata.observationKeys = [...constraints.observationKeys];
-              }
-              // Empty policy output must preserve an older admission's exact
-              // metadata so its immutable deduplication identity still replays.
-              if (
-                Object.keys(operationMetadata).length ||
-                Object.hasOwn(metadata, "operationMetadata")
-              ) {
-                metadata.operationMetadata = operationMetadata;
-              }
-              accepted = { ...draft, metadata };
+            } catch (error) {
+              if (!isOwnerAuthorizationRefusal(error)) throw error;
+              admissionRefusal = error;
             }
             return await coordinator.commitMutation({
               transaction: command.transaction,
@@ -551,13 +586,85 @@ export function createDatabaseScope(
                 : {}),
               eventId,
               draft: { ...accepted, payload: persistedPayload },
-              ingress,
+              ingress: withIngressRequestMetadata(
+                ingress,
+                draft.metadata ?? {},
+              ),
               matchData: prepared.publicData,
               body: { id: bodyId, json: prepared.body },
               mutate: async (context) => {
+                if (admissionRefusal) throw admissionRefusal;
+                if (authority) {
+                  await bindFlowOperation(
+                    authority,
+                    eventId,
+                    context.transaction,
+                  );
+                }
                 for (const value of prepared.prepared) {
                   await protectedValues!.adopt(context, draft.namespace, value);
                 }
+              },
+              replayMetadata: async (event, context) => {
+                const replay = await isCredentialOperationReplay(
+                  context,
+                  databaseSchema,
+                  event,
+                  ingress,
+                );
+                if (!replay) {
+                  if (admissionRefusal) throw admissionRefusal;
+                  return accepted.metadata ?? {};
+                }
+                // Result authority is rechecked, even when execution admission changed.
+                await authorizeOperation(
+                  engine.authorization
+                    ? createOwnerEvaluator({
+                      registration: engine.authorization,
+                      collections: options.registry.collections,
+                      databaseSchema,
+                    })
+                    : undefined,
+                  options.operationCatalog,
+                  authority!,
+                  event.id,
+                  "read",
+                  command,
+                );
+                const raw = event.ownerIngress?.requestMetadata;
+                if (raw) {
+                  if (!sameActionValue(raw, draft.metadata ?? {})) {
+                    throw Object.assign(
+                      new Error(
+                        "Idempotency metadata differs from its first capture.",
+                      ),
+                      { code: "event_deduplication_conflict" },
+                    );
+                  }
+                  return event.metadata;
+                }
+                // Retained admissions without raw metadata can normalize only
+                // keys proven to be derived by the current owner policy.
+                const original = event.metadata?.operationMetadata as Record<
+                  string,
+                  unknown
+                > ?? {};
+                const metadata = { ...accepted.metadata };
+                const operationMetadata = {
+                  ...metadata.operationMetadata as Record<string, unknown>,
+                };
+                for (const key of Object.keys(derivedMetadata)) {
+                  if (Object.hasOwn(original, key)) {
+                    operationMetadata[key] = original[key];
+                  } else {
+                    delete operationMetadata[key];
+                  }
+                }
+                if (
+                  Object.hasOwn(metadata, "operationMetadata") ||
+                  Object.keys(operationMetadata).length
+                ) metadata.operationMetadata = operationMetadata;
+                return metadata;
               },
               recoverDuplicate: async (event, context) => {
                 const existing = await readEventBody(
@@ -1152,14 +1259,17 @@ export function createDatabaseScope(
     } as const;
     return result;
   };
+
   const publicScope: CopilotzEngineDatabaseScope = {
-    authorization: createAuthorizationOwner({
+    authorization,
+    observeCollection: createCollectionObserver({
+      ...engine.subscriptionLimits,
+      contentResolver: resolver,
       session: engine.session,
-      databaseSchema,
+      schema: databaseSchema,
       owner: options.owner,
-      registration: engine.authorization,
+      authorization,
       collections: options.registry.collections,
-      operations: options.operationCatalog,
     }),
     databaseSchema,
     content: { assets, preparer: options.preparer, resolver } as const,
@@ -1295,11 +1405,15 @@ export function createDatabaseScope(
           pushedHead === undefined || BigInt(frame.headSeq) > BigInt(pushedHead)
         ) pushedHead = frame.headSeq;
         if (frame.kind === "change" && frame.change.event) {
-          publicScope.authorization.notice({
-            namespace: frame.change.namespace,
-            collection: frame.change.event.subject?.type,
-            id: frame.change.event.subject?.id,
-          });
+          // Only declared Collection changes invalidate policy sources. Catalog
+          // progress without a subject is not a tenant-wide permission change.
+          if (frame.change.collectionChange) {
+            publicScope.authorization.notice({
+              namespace: frame.change.namespace,
+              collection: frame.change.collectionChange.collection,
+              id: frame.change.collectionChange.id,
+            });
+          }
           void options.eventHub.publish(frame.change.event);
         }
       },
@@ -1312,10 +1426,13 @@ export function createDatabaseScope(
           {},
           async (_input, { transaction, caller }) => {
             invalidateOwnerAlarm(transaction, databaseSchema, "content");
-            await transaction.query(
+            await writeOwnerDeliveries(
+              transaction,
+              databaseSchema,
+              undefined,
               `UPDATE ${store.tables.event_deliveries}
           SET lease_expires_at=NOW(), updated_at=NOW()
-          WHERE status='leased' AND owner_epoch < $1`,
+          WHERE status='leased' AND owner_epoch < $1 RETURNING *`,
               [caller.epoch],
             );
             await transaction.query(
@@ -1375,6 +1492,7 @@ export function createDatabaseScope(
     },
     publishActivation,
     closeAlarms() {
+      closeDirectoryCollections();
       closeContentAlarms();
       collectionAlarms.close();
       closeDeliveryAlarms();

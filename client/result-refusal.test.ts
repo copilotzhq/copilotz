@@ -31,7 +31,7 @@ Deno.test("result unavailability preserves the receipt and never resubmits or fa
       }
       if (path.endsWith("/result")) {
         return resultAvailable
-          ? Response.json({ data: "authoritative-later-result" })
+          ? Response.json({ data: "authoritative-later-result", seq: "7" })
           : Response.json({
             error: {
               code: "operation_result_unavailable",
@@ -82,7 +82,7 @@ Deno.test("result unavailability preserves the receipt and never resubmits or fa
   resultAvailable = true;
   assertEquals(
     await client.operations.result(accepted.operationId),
-    "authoritative-later-result",
+    { value: "authoritative-later-result", seq: "7" },
   );
   assertEquals(requests.filter(({ method }) => method !== "GET").length, 1);
 });

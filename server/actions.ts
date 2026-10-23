@@ -1,5 +1,7 @@
+import { createHttpReads } from "./reads.ts";
+import { credentialHeaders } from "./session-cookie.ts";
 import { facadeIngress } from "./context.ts";
-import { coreThreadObservationMetadata } from "@copilotz/copilotz/core";
+import { httpIngressMetadata } from "./adapter-metadata.ts";
 /** Durable Action ingress and authorized result recovery. @module */
 import type { InternalCopilotzApplication } from "../runtime/application/types.ts";
 import {
@@ -44,7 +46,6 @@ export async function actionResponse(
   const correlationId = context.serverIdentity.correlationId ??
     header(request.headers, "x-copilotz-correlation-id") ??
     `server:${requestId}`;
-  const observationThreadId = context.operationMetadata.threadId;
   const handle = await admitActionRequest(
     application,
     {
@@ -62,20 +63,10 @@ export async function actionResponse(
       causationId: context.serverIdentity.causationId,
       deduplicationId: context.serverIdentity.deduplicationId ??
         header(request.headers, "idempotency-key") ?? requestId,
-      operationMetadata: {
-        ...context.operationMetadata,
-        ...(context.serverScope.actor
-          ? { actorId: context.serverScope.actor.id }
-          : {}),
-      },
+      operationMetadata: context.operationMetadata,
       metadata: {
-        ...(typeof observationThreadId === "string"
-          ? coreThreadObservationMetadata(observationThreadId)
-          : {}),
+        ...httpIngressMetadata(application, context.operationMetadata),
         ...({ sourceAdapter: "server" } as const),
-        core: {
-          visibility: { kind: "internal" },
-        },
       },
     },
     endpoint.inputSchema,
@@ -96,12 +87,25 @@ export async function actionResponse(
     databaseSchema: context.databaseSchema,
   });
   await handle.detach("http_receipt_returned");
+  // Receipt acceptance is independent of current result access. A replay can
+  // install committed credentials when authorized; failed projection stays on
+  // the ordinary explicit result-recovery path.
+  const completed = status?.state === "completed"
+    ? await operationResult(application, context, handle.operationId).catch(
+      () => undefined,
+    )
+    : undefined;
   return {
+    ...(completed?.headers ? { headers: completed.headers } : {}),
     status: 202,
     data: {
       operationId: handle.operationId,
       correlationId: handle.correlationId,
-      status: status?.state ?? "accepted",
+      status: !status || status.state === "accepted"
+        ? "accepted"
+        : status.state === "running"
+        ? "running"
+        : "settled",
       checkpoint: handle.replayCursor,
       acceptedAt: status?.acceptedAt,
     },
@@ -112,24 +116,108 @@ export async function operationResult(
   context: FacadeContext,
   operationId: string,
 ): Promise<HttpResponse> {
-  const result = await recordedOperationResult(
-    application,
-    context,
-    operationId,
-  );
   const runtime = context.databaseSchema &&
       context.databaseSchema !== application.config.databaseSchema
     ? await application.databaseScope(context.databaseSchema)
     : application;
-  await runtime.authorization.operation(
-    context.serverScope.authority!,
+  let authority = context.serverScope.authority!;
+  const receiptAuthority = context.receiptAuthority ?? authority;
+  const receipt = await runtime.authorization.logoutReceipt(
+    receiptAuthority,
     operationId,
   );
-  return {
-    status: result.pending ? 202 : 200,
-    ...(result.kind === "collection"
-      ? {}
-      : { headers: { "cache-control": "no-store" } }),
-    data: result.value,
+  if (receipt) authority = receiptAuthority;
+  if (receipt && ["accepted", "running"].includes(receipt.state)) {
+    return { status: 202, data: { status: receipt.state } };
+  }
+  const read = async (): Promise<HttpResponse> => {
+    const authorize = () =>
+      runtime.authorization.operation(
+        authority,
+        operationId,
+      );
+    const domainAdapters = Object.values(
+      application.plugins?.adapters?.http ?? {},
+    ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[];
+    let request: Record<string, unknown> | undefined;
+    if (
+      domainAdapters.some((adapter) =>
+        adapter.authorizeActionResult || adapter.reads
+      )
+    ) {
+      await authorize();
+      request = (await runtime.events.resolve(
+        context.namespace ?? application.config.namespace!,
+        operationId,
+      ))?.data as Record<string, unknown> | undefined;
+      for (const adapter of domainAdapters) {
+        adapter.authorizeActionResult?.(
+          (request?.actionMetadata ?? {}) as Record<string, unknown>,
+          context.serverScope,
+        );
+      }
+    }
+    const result = await recordedOperationResult(
+      application,
+      context,
+      operationId,
+    ).catch(async (error) => {
+      // Availability and terminal failures must not disclose hidden operations.
+      await authorize();
+      throw error;
+    });
+    const effects = result.kind === "action" && !result.pending
+      ? await runtime.authorization.credentials.project(
+        authority,
+        operationId,
+      )
+      : [];
+    if (result.kind !== "action" || result.pending) await authorize();
+    return {
+      status: result.pending ? 202 : 200,
+      ...(result.kind === "collection" ? {} : {
+        headers: {
+          "cache-control": "no-store",
+          ...credentialHeaders(effects, context.sessionCookie),
+        },
+      }),
+      data: result.kind === "collection" && !result.pending &&
+          request?.operation !== "delete" &&
+          typeof request?.collectionAlias === "string" &&
+          domainAdapters.some((adapter) => adapter.reads)
+        ? await (await createHttpReads(application, context.serverScope, {
+          context,
+        })).get(
+          request.collectionAlias,
+          String((result.value as { id: string }).id),
+        )
+        : result.value,
+      ...(!result.pending
+        ? {
+          seq: await runtime.operations.resultSequence(
+            context.namespace ?? application.config.namespace!,
+            operationId,
+          ),
+        }
+        : {}),
+    };
   };
+  try {
+    return await read();
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (receipt || !["forbidden", "revoked"].includes(code ?? "")) throw error;
+    // Revocation may commit after the first lookup but before ordinary result
+    // authorization. Recover that receipt once, through the same result policy.
+    const current = await runtime.authorization.logoutReceipt(
+      receiptAuthority,
+      operationId,
+    );
+    if (current) authority = receiptAuthority;
+    if (current && ["accepted", "running"].includes(current.state)) {
+      return { status: 202, data: { status: current.state } };
+    }
+    if (current?.state === "completed") return await read();
+    throw error;
+  }
 }

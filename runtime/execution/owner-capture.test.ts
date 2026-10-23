@@ -37,12 +37,23 @@ function fixture() {
           ids.push(input.appendId);
           return Promise.resolve({});
         },
-        close(input) {
-          bounded(input);
-          closeInputs.push(input);
+        async close(closeInput) {
+          bounded(closeInput);
+          closeInputs.push(closeInput);
+          const bytes = new Uint8Array(
+            chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          );
+          let offset = 0;
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.length;
+          }
           return Promise.resolve({
             type: "content.pending",
             pendingRef: String(opens.length),
+            mediaType: input.mediaType,
+            byteLength: bytes.length,
+            digest: await digestContent(bytes),
           });
         },
         abort() {
@@ -93,10 +104,17 @@ Deno.test("worker capture streams multi-frame authored bytes and preserves order
     origin: { type: "message", id: "message-1" },
   };
   const result = await captureWorkerContent(input, options, f.port);
-  assertEquals(result, [ref, { type: "content.pending", pendingRef: "1" }, {
-    type: "content.pending",
-    pendingRef: "2",
-  }]);
+  assertEquals(
+    result.map((item) => {
+      const { mediaType: _m, byteLength: _b, digest: _d, ...value } =
+        item as Record<string, unknown>;
+      return "pendingRef" in value ? value : item;
+    }),
+    [ref, { type: "content.pending", pendingRef: "1" }, {
+      type: "content.pending",
+      pendingRef: "2",
+    }],
+  );
   assertEquals(f.uploads[0].length, 33);
   assert(
     f.uploads[0].every((chunk) => chunk.byteLength <= CAPTURE_CHUNK_BYTES),
@@ -334,4 +352,32 @@ Deno.test("worker capture preserves text, JSON and empty body normalization", as
       "application/json",
     ], ["text", "body", "text/plain; charset=utf-8"]],
   );
+});
+
+Deno.test("worker capture refuses a zero-byte seal after acknowledged nonempty appends", async () => {
+  const f = fixture();
+  const open = f.port.open;
+  const port: CapturePort = {
+    ...f.port,
+    async open(input) {
+      const writer = await open(input);
+      return {
+        ...writer,
+        async close(input) {
+          const result = await writer.close(input) as Record<string, unknown>;
+          return {
+            ...result,
+            byteLength: 0,
+            digest: await digestContent(new Uint8Array()),
+          };
+        },
+      };
+    },
+  };
+  await assertRejects(
+    () => captureWorkerContent("full reply", { operationKey: "reply" }, port),
+    Error,
+    "complete prepared body",
+  );
+  assertEquals(f.aborts(), 1);
 });

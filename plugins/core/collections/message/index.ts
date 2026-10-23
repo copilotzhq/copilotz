@@ -1,5 +1,10 @@
 /** Defines the canonical Core Message Collection. @module */
 
+import {
+  canReadToolOutput,
+  projectToolOutput,
+  toolOutputReadFilter,
+} from "../../shared/tool-visibility.ts";
 import { contentSequenceSchema } from "@copilotz/copilotz/content";
 import {
   type CollectionContentOptions,
@@ -126,54 +131,6 @@ function orderBoundary(
   };
 }
 
-/** Public tool status never grants access to a result body or execution metadata. */
-function projectHistoryRecord(
-  record: HistoryMessageRecord,
-  viewers?: readonly string[],
-): HistoryMessageRecord {
-  const visibility = record.visibility as Record<string, unknown> | undefined;
-  if (
-    !viewers || visibility?.kind !== "tool" ||
-    visibility.policy !== "public_status" ||
-    viewers.includes(String(visibility.requesterId))
-  ) return record;
-  const metadata = record.metadata as Record<string, unknown>;
-  const invocation = metadata.toolInvocation as
-    | Record<string, unknown>
-    | undefined;
-  const workflow = metadata.copilotzWorkflow as
-    | Record<string, unknown>
-    | undefined;
-  const action = metadata.copilotzToolAction as
-    | Record<string, unknown>
-    | undefined;
-  return {
-    ...record,
-    content: [],
-    metadata: {
-      ...(metadata.toolStatus !== undefined
-        ? { toolStatus: metadata.toolStatus }
-        : {}),
-      ...(metadata.toolId !== undefined ? { toolId: metadata.toolId } : {}),
-      toolInvocation: {
-        ...(invocation?.id !== undefined ? { id: invocation.id } : {}),
-        tool: metadata.toolId !== undefined ? { id: metadata.toolId } : {},
-      },
-      copilotzWorkflow: workflow?.sourceMessageId !== undefined
-        ? { sourceMessageId: workflow.sourceMessageId }
-        : {},
-      copilotzToolAction: {
-        ...(action?.actionRunId !== undefined
-          ? { actionRunId: action.actionRunId }
-          : {}),
-        ...(action?.planMessageId !== undefined
-          ? { planMessageId: action.planMessageId }
-          : {}),
-      },
-    },
-  };
-}
-
 function privateToolStatusCandidate(
   record: HistoryMessageRecord,
   viewers: readonly string[] | undefined,
@@ -182,7 +139,7 @@ function privateToolStatusCandidate(
   const visibility = record.visibility as Record<string, unknown> | undefined;
   if (
     visibility?.kind !== "tool" || visibility.policy !== "requester_only" ||
-    viewers.includes(String(visibility.requesterId))
+    canReadToolOutput(visibility, viewers)
   ) return false;
   return true;
 }
@@ -240,14 +197,7 @@ function projectPrivateToolStatus(
   const metadata = record.metadata as Record<string, unknown>;
   const invocation = (metadata.toolInvocation ?? {}) as Record<string, unknown>;
   const sourceMessageId = statusSourceId(record);
-  const projected = {
-    ...record,
-    visibility: {
-      kind: "tool",
-      policy: "public_status",
-      requesterId: visibility.requesterId,
-    },
-  };
+  const projected = record;
   // Keep the source lookup explicit so a future caller cannot accidentally
   // treat an unrelated private result as a public status row.
   if (
@@ -256,7 +206,7 @@ function projectPrivateToolStatus(
     typeof invocation.id !== "string" ||
     !invocationIds(parent).has(invocation.id)
   ) return undefined;
-  return projectHistoryRecord(projected, []);
+  return projectToolOutput(projected, []);
 }
 
 type ActiveBranchWindow = Readonly<{
@@ -391,11 +341,27 @@ export const messageCollection: CollectionDefinition = defineCollection({
             anyOf: [
               { type: "boolean" },
               {
+                // Accept the full CollectionContentOptions shape, including
+                // bounded body resolution and deferral for history callers.
                 type: "object",
                 additionalProperties: false,
                 properties: {
                   fields: { type: "array", items: { type: "string" } },
                   byteLimit: { type: "integer", minimum: 0 },
+                  bodyByteLimit: { type: "integer", minimum: 0 },
+                  overflow: { type: "string", enum: ["reject", "defer"] },
+                  exclude: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: Object.fromEntries(
+                        ["kind", "role", "mediaType", "disposition"].map((
+                          key,
+                        ) => [key, { type: ["string", "null"] }]),
+                      ),
+                    },
+                  },
                 },
               },
             ],
@@ -498,7 +464,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
           contentLimit = records.length,
         ) => {
           const projected = records.map((record) =>
-            projectHistoryRecord(record, viewers)
+            projectToolOutput(record, viewers)
           );
           if (!input.content) return projected;
           const visible = records.filter((record, index) =>
@@ -513,22 +479,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
                 and: [
                   filter,
                   publicHistoryFilter(viewers),
-                  ...(viewers
-                    ? [{
-                      not: {
-                        and: [
-                          { field: "visibility.kind", eq: "tool" },
-                          { field: "visibility.policy", eq: "public_status" },
-                          {
-                            not: {
-                              field: "visibility.requesterId",
-                              in: viewers,
-                            },
-                          },
-                        ],
-                      },
-                    }]
-                    : []),
+                  ...(viewers ? [toolOutputReadFilter(viewers)] : []),
                   { field: "id", in: batch.map((record) => record.id) },
                 ],
               },

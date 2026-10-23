@@ -134,6 +134,11 @@ The registration has three maps:
 - `systemScopes` (optional) places owner-generated alarm occurrences in an
   explicit tenant for each namespace. Namespace names are never inferred to be
   tenant identities.
+- `directoryReads`, `directoryCommands` and `identityVerifiers` (optional)
+  register the owner capabilities described in
+  [Declared directory reads](#declared-directory-reads-from-actions),
+  [Atomic directory service commands](#atomic-directory-service-commands) and
+  [Owner-verified identity evidence](#owner-verified-identity-evidence).
 
 Startup rejects unknown aliases or revisions, any Action or Collection the
 server facade exposes without a binding, and any Collection that declares
@@ -150,13 +155,13 @@ and `CollectionPolicies` types are removed. `defineServerFacade` rejects an
 
 ### What `evaluate` receives
 
-`evaluate({ authority, intent, commandTime, signal, read })` runs in the owner's
-command:
+`evaluate({ authority, intent, commandTime, signal, read, evidence, directory })`
+runs in the owner's command:
 
 - `authority` is the retained binding, validated and frozen.
 - `intent` describes the exact command. `kind` is `action`, `collection`,
-  `operation`, `observation`, `session`, `asset` or `event`, with a `resource`,
-  an `operation` and the captured `input`:
+  `operation`, `observation`, `session`, `flow`, `asset`, `event`, `directory`
+  or `identity`, with a `resource`, an `operation` and the captured `input`:
   - Action intents name the Action by alias. `operation` is `admit` at HTTP
     admission, `capture` when the owner captures the input, and `authorize` when
     execution or a replay checks it again.
@@ -165,24 +170,58 @@ command:
     `input` holds the method, the arguments, the phase and, for writes, the
     `current` and proposed `next` record.
   - Operation intents are `read` or `cancel`; observations `attach`; sessions
-    `create` or `revoke`; Asset intents `read`.
-- `commandTime` and `signal` are the command's time and cancellation.
+    `create` or `revoke`; flows `start`; Asset intents `read`. Directory intents
+    name the declared read or command alias, and identity intents the verifier
+    alias.
+- `commandTime` and `signal` are the command's time and cancellation. Reading
+  `commandTime` marks a decision as time-dependent and prevents reuse, including
+  Action capture reuse. Read it only inside branches that need time;
+  destructuring it at function entry also counts as a read. A policy adapter
+  that enriches authority should preserve context property descriptors instead
+  of spreading the context: `{ ...context }` evaluates its getters. For example:
+
+  ```ts
+  const adapted = Object.defineProperties({}, {
+    ...Object.getOwnPropertyDescriptors(context),
+    authority: { value: enrichedAuthority, enumerable: true },
+  });
+  ```
+
+  Descriptor copying avoids reading the clock, but enumerates all JSON inputs
+  for Collection decision matching. To preserve narrower field tracking, forward
+  the context directly and read only the fields needed by the policy. A spread
+  of `authority` or `requestFacts` also observes that entire subtree.
+
+  Cache diagnostics distinguish `decision.command-time` and
+  `remember.no-reusable-decision` from key misses. Include these diagnostic
+  events when investigating repeated `action.absent` or `evaluation.absent`
+  entries.
+
 - `read.get(alias, id)` and `read.list(alias, query)` read only the declared
   `sources`, in the binding's namespace, inside the command's transaction. Each
   read is a dependency, including a missing record or an empty result; a
   committed change to one re-authorizes the open observations that depended on
   it. Relation includes, raw SQL and owner commands are unavailable, and a
   failed read refuses the command even if the policy catches the error.
+- `evidence.get(alias)` reads owner-verified identity evidence for the policy's
+  declared `evidence` aliases; see
+  [Owner-verified identity evidence](#owner-verified-identity-evidence).
+- `directory` is present only when a directory command writes this owner's
+  Collections; see
+  [Native Collections inside directory commands](#native-collections-inside-directory-commands).
 
 Collection intents also carry `intent.invocation?: { kind, id }`, where `kind`
-is `action`, `processor` or `alarm`. Only the owner supplies this executing
-identity; direct calls, such as HTTP route reads, have none. Nested Actions name
-the immediate executing Action, and run IDs or caller metadata cannot select the
-grant. The user's retained authority is still present, and the invocation grants
-nothing unless the policy says so. This excerpt from
+is `action`, `processor` or `alarm` and `id` is the executing definition's
+stable ID (such as `notes.save`), not its alias. Only the owner supplies this
+executing identity; direct calls, such as HTTP route reads, have none. Nested
+Actions name the immediate executing Action, and run IDs or caller metadata
+cannot select the grant. The user's retained authority is still present, and the
+invocation grants nothing unless the policy says so. This excerpt from
 [Chapter 17](getting-started/part-4-release-to-users/17-connect-chat-and-channels.md)
 lets Core's own Actions and Processors write threads for a member while direct
-reads get only a membership filter:
+reads get only a membership filter. Core enrolls new members with
+`ensureMembership` and records each visible message as the thread's activity
+with `recordMessage`, so a policy that binds `thread` grants both commands:
 
 ```ts
 const memberThreads = {
@@ -193,12 +232,132 @@ if (intent.kind === "collection") {
     ? {
       collections: memberThreads,
       collectionMutations: {
-        thread: { create: {}, update: {}, commands: { ensureMembership: {} } },
+        thread: {
+          create: {},
+          update: {},
+          commands: { ensureMembership: {}, recordMessage: {} },
+        },
       },
     }
     : { collections: memberThreads };
 }
 ```
+
+### Authorization reuse during an Action run
+
+The schema owner keeps a successful capture (or the first successful
+`authorize`) in memory for that run and its captured authority and policy
+revision. Capability calls reuse it without reading the protected-input receipt,
+input event/body, or invocation row and without invoking the Action policy
+again. Collection and other capability-specific policies still apply.
+Completed-result replay retains its fresh authorization boundary.
+
+The cache belongs to one owner incarnation. The owner observes SQL mutations
+before executing them, including mutations inside a command or writable CTE.
+Collection projections, including the Assets their manifests add, and Asset and
+protected-value writes invalidate the exact record and collection-set keys;
+missing-record and empty-list dependencies are covered. Unclassified raw writes
+conservatively invalidate their table. Session writes and flow-effect writes
+invalidate their grants. Flow descendant receipts are also tracked. The hit
+checks credential, session and flow deadlines, policy identity/revision, owner
+lifetime and invocation cancellation. Delivery liveness is cached separately by
+delivery ID. Lease, heartbeat, settlement, recovery and cancellation commands
+retain the returned row's worker, epoch, status and expiry in owner memory. Both
+attempt authority and writer liveness check those facts against the command
+clock on every hit; renewal extends the lease without rerunning policy.
+Operation admission is cached against the specific operation row. Writes to
+unrelated deliveries or operations do not invalidate these entries. Unclassified
+writes retain the table-wide fallback; returned write sets temporarily fence
+reads until the affected IDs are known.
+
+Only confirmed commits publish new grants to the owner cache. Uncommitted grants
+stay inside their command, and rollback discards them. A write may
+conservatively evict an older grant even when it rolls back. Restart and
+takeover start cold; an old captured policy binding cannot acquire a new
+revision's authority. Attempt-bound authority is reusable only while its
+original worker and owner epoch still hold the live lease. Actual
+staff-directory reads and verifier evidence reads retain fresh evaluation
+because they lack the required local dependency fence; declaring an unused
+evidence reader does not disable reuse. Directory commands also retain fresh
+evaluation. The internal cache observer distinguishes absent and stale entries,
+and reports decisions that cannot be retained (staff, evidence, directory,
+command-time reads, no tracked local facts, or expired deadlines).
+
+Within one owner command, session lookups and policy `read.get` calls share
+pending reads keyed by schema, namespace, collection and record ID (session keys
+also include tenant and principal). Each policy receives a detached copy. Writes
+invalidate these reads before the next evaluation. Product policies therefore
+need no local memoization for repeated point reads within a command. Policy
+changes must use a new registration/revision, and mutable authorization facts
+must be read through the tracked sources; changing an untracked closure variable
+is not an invalidation signal.
+
+### Reusing Collection read and observation decisions
+
+Collection read admission and its result phase share owner-local decisions
+across commands. The evaluator supplies read-only JSON views and records the
+paths inspected in `authority` and `intent`, including nested request facts,
+arguments and invocation fields. Entries are grouped by the security scope,
+principal, session/credential basis, retained dependencies, policy, resource,
+operation and phase, then by their read-path signature (at most eight signatures
+per group). A lookup compares only the values at those paths. Different request
+IDs or Action run IDs can therefore share a decision when policy does not read
+them; inspecting those fields makes their values part of the match.
+
+Object enumeration, spreads, property descriptors and `JSON.stringify` observe
+the whole enumerated subtree, including values and property order. Reflecting on
+the context observes all its JSON inputs. Descriptor copying preserves lazy
+clock access but does not hide input reads. Access to unsupported values,
+mutation attempts, returned proxy references and later use of escaped views
+prevent reuse. Non-JSON inputs and policy exceptions fail closed. Policy views
+must stay within evaluation; copying data out must use JSON values rather than
+retaining views. Signal inspection also prevents decision reuse.
+
+Result matching always includes the actual current/disclosed record, with its
+version fields, independently of which fields policy reads. Point decisions also
+depend on their record key, including negative reads. List, aggregate, search
+and selector decisions depend on the collection set, so insertion or removal
+invalidates results even when surviving records have not changed. Session
+identity remains a mandatory fence. Session-stamped expiry metadata normalizes
+the incoming credential just as a cold evaluation would, and every hit checks
+its deadline. Across attempts, the current worker/epoch/lease is validated even
+if policy ignores its ID. A reused decision carries the current request's
+authority, never the previous request's authority. Action capture grants remain
+isolated by run: sharing read decisions does not transfer capture receipts or
+broaden an Action's retained authority.
+
+Query/result record and collection-set stamps belong to the decision cache, not
+to the authorization dependencies retained by live readers. Ordinary data
+commits update subscription windows without reauthorizing each reader. A policy
+that actually reads that record or collection still tracks it as an
+authorization fact, and changes trigger notice reauthorization.
+
+The decision retains all policy-read dependencies and the session/flow fences.
+Attempt validity uses the owner's current lease facts and command time. Policy
+replacement or revision changes and owner restart invalidate reuse. Decisions
+and cached authorization-only record reads are copied before use and only
+published after commit; speculative rollback state cannot become a shared grant.
+Opaque SQL still invalidates conservatively. Known event appends invalidate only
+their own source row; opaque event deletes also fence lease state because event
+deletion can cascade to deliveries.
+
+`observation | operations | attach` reuses its policy decision under the same
+rules. Channel registration, expiry alarms and checks of selected operations or
+records still execute. Collection mutations and their post-commit disclosures
+retain fresh policy evaluation. Policies with no tracked local reads, actual
+remote staff/evidence reads, policies that inspect command time and directory
+delegation remain uncached. Mutable policy logic must use a new
+registration/revision; all changing authorization facts must be read through
+tracked sources.
+
+A warm worker Collection `get` needs no policy evaluation, session lookup,
+authorization-only record read or invocation-liveness query. It still reads the
+actual record and enters the serialized owner command. That fence protects
+cross-process owner takeover and the disclosure boundary. The existing
+repeatable read snapshot API is not a substitute for current authority:
+PostgreSQL snapshots can expose historical records, and protected PGlite
+snapshots themselves use an owner command. This optimization therefore retains
+that boundary.
 
 ### What `evaluate` returns
 
@@ -211,16 +370,51 @@ if (intent.kind === "collection") {
 | `actionMetadata`      | Trusted metadata added to the Action invocation.                                                                                                                                                                |
 | `collections`         | A read filter per Collection (`where`, `contains`, `containsAny` or `filter`), keyed by alias or name. Required for every read and applied before pagination and aggregation. `{}` allows every record.         |
 | `collectionMutations` | `create`, `update`, `delete` and named `commands`, each with optional `fields` allowlist, trusted `input` and a `filter` that the current and resulting record must match. Read filters never authorize writes. |
-| `operations`          | `{ metadata, absentMetadata? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                               |
+| `operations`          | `{ metadata, absentMetadata?, anyOf? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                       |
 | `observationKeys`     | Opaque catalog keys stamped on admitted work, such as a conversation's selection key from that domain's helper.                                                                                                 |
 | `assets`              | `{ read: [assetId, …] }`: exact Assets the caller may read.                                                                                                                                                     |
-| `sessions`            | `{ create?: true, revoke?: "self" \| "tenant" }`.                                                                                                                                                               |
+| `sessions`            | `{ create?: { principal, maxAge }, revoke?: "self" \| "tenant" }`.                                                                                                                                              |
+| `flows`               | `{ start: { [kind]: { continuation, maxAge } } }`: exact continuation alias and maximum lifetime.                                                                                                               |
 | `events`              | Authenticated root Event types, including adapter-validated channel input.                                                                                                                                      |
+| `directoryReads`      | Declared directory read aliases this request may use. Inspect the exact requested ID before granting.                                                                                                           |
+| `directoryCommands`   | Declared directory service command aliases this request may run.                                                                                                                                                |
+| `identityVerifiers`   | Declared identity verifier aliases this request may call.                                                                                                                                                       |
+| `flowProcessors`      | Processor stable IDs that may project a consumed flow's events.                                                                                                                                                 |
 | `admission`           | `{ key }`: the host-selected conversation group for bounded HTTP admission. Product labels, such as a thread link, travel in `operations.metadata`.                                                             |
 
 Writes validate both the current and the resulting scope. Action input is
 captured once, atomically with its retained authority; retries re-authorize that
 capture instead of preparing the input again.
+
+Operation constraints always require every top-level `metadata` value and every
+top-level `absentMetadata` exclusion. Optional `anyOf` additionally requires one
+complete alternative to match. Each alternative has its own `metadata` and
+optional `absentMetadata`; requirements from different alternatives never mix.
+Alternatives are a nonempty array of at most 16 entries and cannot nest.
+Explicit null is a value, not absence. Undefined values are rejected at the JSON
+boundary.
+
+Use alternatives on read decisions when an operation has independent ownership
+paths, such as an authenticated actor or the original browser's identity
+receipt:
+
+```ts
+operations: {
+  metadata: { tenantId },
+  absentMetadata: ["credentialId", "computerOperationKind"],
+  anyOf: [
+    { metadata: { actorId } },
+    { metadata: { identityReceipt: true, clientProof } },
+  ],
+}
+```
+
+Derive these values from verified authority and stamp the receipt marker and
+proof only on the intended identity Actions. Admission still stamps only the
+top-level `metadata`; alternatives are never merged into admitted metadata. Keep
+ordinary Action ownership independent of a client's in-memory proof so a new
+client instance can recover its user's ordinary results. Grant a proof
+alternative for reads only if it must not also authorize cancellation.
 
 ### Trusted host calls
 
@@ -235,6 +429,17 @@ The context APIs (`context.actions`, `context.collections`, `context.invoke` and
 binding is forbidden to authenticated callers, for both reads and writes.
 Explicit `withRetainedAuthority(authority, signal, fn)` scopes from
 `@copilotz/copilotz` retain the same guarantee.
+
+Separate workers install a revocable ambient binding around every user callback:
+Action execute/resume/reconcile, Processor handle/onError and prepare factories.
+The binding survives awaits. Captured same-scope application Action and
+Collection calls use the worker's existing reverse capability and the context
+retained by the owner, including parent provenance and current policy. No host
+authority is sent over the wire. Foreign schemas/namespaces and unsupported host
+ingress are refused; use context capabilities for execution and declared
+directory reads for delegation. Captured application calls accept
+`idempotencyKey`, `metadata` and `signal`; scope options may only name the
+current owner scope. Independent host bootstrap remains trusted.
 
 Policy Collection filters accept only `where`, `contains`, `containsAny` and
 `filter`. The owner validates their shapes and nested predicates before using a
@@ -262,12 +467,13 @@ export const sessionRoutes = createHttpAdapter({
       method: "POST",
       path: "/login",
       async handler(context) {
+        // `authenticate` verified this login and bound the account it proved.
+        const accountId = context.scope.authority.scope.bindings.account;
         const id = crypto.randomUUID();
-        // The policy must grant `sessions.create` to this request.
+        // The policy must grant `sessions.create` for exactly this principal.
         await context.sessions.create({
           id,
-          // The session ID is also the principal ID of every later request.
-          principal: id,
+          principal: accountId,
           expiresAt: new Date(Date.now() + sessionLifetimeMs).toISOString(),
         });
         return Response.json({ ok: true }, {
@@ -295,12 +501,17 @@ export const sessionRoutes = createHttpAdapter({
 Register it as `adapters: { http: { auth: sessionRoutes } }`. The rules:
 
 - `authenticate` verifies the login request itself (a password, a one-time code,
-  an identity-provider callback) and returns a credential binding whose policy
-  grants `sessions: { create: true }` for session intents.
+  an identity-provider callback) and returns a credential binding that records
+  the verified account, here in `scope.bindings.account`. Its policy grants
+  `sessions: { create: { principal: authority.scope.bindings.account, maxAge: 28800 } }`
+  for session intents. The owner refuses a different principal, or an
+  `expiresAt` further away than `maxAge` seconds. Never derive the grant from
+  `intent.input`.
 - Later requests carry the session ID. `authenticate` returns a binding with
-  `principal: { kind: "session", id }` and
-  `authorityBasis: { kind: "session", id }`. The `principal` passed to
-  `sessions.create` must equal its `id`, or no binding can use the session.
+  `principal: { kind: "session", id: accountId }` and
+  `authorityBasis: { kind: "session", id: sessionId }`. `sessions.create` binds
+  the session ID to its principal; they may differ. Every command checks both
+  against the stored session row.
 - Every protected command checks the session row in its own transaction. An
   unknown, expired or revoked session is refused, and an admission never
   outlives its session's `expiresAt`.
@@ -415,13 +626,579 @@ principal, target scope, provenance, policy, operation and directory source; a
 refused transaction rolls the receipt back with its effects. Staff channels use
 the same 15-minute admission and renewal path.
 
+### Declared directory reads from Actions
+
+`context.directory.get(alias, id)` is a read-only capability for a directory
+Collection in another owner schema **in the same database**. Declare it in
+`authorization.directoryReads`; placement, Collection, fields, byte limit and
+eligible Action aliases are fixed by trusted composition. Caller input selects
+only the declared alias and record ID. There are no list, write or destination
+selection methods, and Processors or independent host calls cannot use it.
+
+```ts
+import { defineDatabaseDirectoryRead } from "@copilotz/copilotz/engine";
+
+const routing = defineDatabaseDirectoryRead({
+  revision: "1",
+  databaseSchema: "directory",
+  namespace: "directory",
+  collection: routes,
+  actions: ["enroll"], // registered, policy-bound Action aliases
+  fields: ["tenant"], // exact top-level projection, no implicit fields
+  maxBytes: 4096, // default 16384, maximum 65536
+  authorize({ authority, id, record }) {
+    // Destination owner policy; inspect fresh state and the retained caller.
+    return record?.active === true &&
+      record.requester === authority.principal.id && record.id === id;
+  },
+});
+// Add to the application's authorization registration:
+// directoryReads: { routing }
+```
+
+The caller's policy must separately return `directoryReads: ["routing"]` for
+`intent.kind === "directory"`, `intent.operation === "get"`. Inspect the exact
+`intent.input.id`, caller scope and `intent.invocation` before granting it. The
+source policy is checked before reading and again before disclosure; the
+declared destination policy must return exactly `true`. Missing declarations,
+undeclared Actions, denial, expired authority, cancellation, unavailable storage
+and oversized results all fail closed. The destination policy receives a
+detached record and retained authority, not a database handle. It must not
+perform writes.
+
+```ts
+const route = await context.directory.get("routing", routingRecordId);
+```
+
+Each call reads current committed directory state through the existing owner
+command transaction; no identity result is cached or replayed by this API.
+Successful reads commit an `authorization.directory` receipt before disclosure.
+Its intent records caller principal, source tenant/namespace, operation and
+Action provenance, declaration revision, destination scope/Collection, projected
+fields, record ID and result digests, and command time. The receipt contains no
+credential or returned record payload. Audit-write failure prevents disclosure.
+Refused reads disclose nothing and roll back with the command; they do not
+create successful-read receipts.
+
+This capability also works through the worker transport, where the owner
+resolves the declaration from its own registration. It does not grant
+cross-owner mutations, transactions, arbitrary queries, or reads from another
+database. Mutations use the separately declared directory service commands
+below. Staff authorization sources remain restricted to policy evaluation and
+are not a business directory API.
+
+## Sessions and anonymous flows in Actions
+
+Schema version 14 adds owner-private credential effects. Existing version 13
+schemas use the offline `upgradeActionLifecycle` entry point with producers
+stopped; see [Upgrading to 0.90.0](upgrading.md#upgrading-to-0900). The upgrade
+preserves existing sessions and authority bindings. Configure the application's
+Secret Adapter: signing uses its wrapped owner data key, so credential replay
+survives owner restart and key rewrapping.
+
+Actions stage sessions inside their existing transaction. `maxAge` is seconds,
+bounded to one year. No token is returned:
+
+```ts
+await context.transaction(async ({ collections, sessions }) => {
+  await collections.accounts.update({ id: accountId, lastLogin: timestamp });
+  await sessions.create({ principal: accountId, maxAge: 3600 });
+});
+```
+
+Policy must explicitly return
+`sessions: { create: { principal: accountId, maxAge: 3600 } }` for the `session`
+`create` intent. Its input contains the owner-generated session ID, principal
+and expiry, and `intent.invocation` identifies the executing Action. Check that
+Action's identity and independently verified account before granting creation. A
+broad Action grant alone cannot mint a session. Policy refusal rolls back the
+entire transaction, including collection writes, effects and receipts.
+
+This is also the recommended remote login configuration. The owner compares the
+proposed principal and expiry with the grant before inserting a session or
+effect row. The maximum lifetime must be a positive integer; booleans no longer
+grant creation. A compromised worker cannot substitute another principal or
+extend the grant's lifetime. Derive the grant from trusted owner state or
+independently validated authentication evidence, never by echoing
+`intent.input`. Keep signing keys on the owner; a worker proposes effects and
+receives no credential token.
+
+`await sessions.revoke()` revokes the caller's session; `revoke(id)` targets a
+specific session without clearing the caller's cookie when it targets someone
+else. The `session` `revoke` intent requires `sessions: { revoke: "self" }` or
+`{ revoke: "tenant" }`. For session transfer, create the replacement **before**
+revoking the old session in the same transaction. The transport delivers the
+replacement cookie. Logout commits revocation and sends a terminal session
+notice to every device authenticated with that session, then closes each with
+code 4401, even when no collection channels remain; the exact logout Action can
+finish and recover its result without reviving authority for other operations.
+Session principal IDs identify accounts; `authority.authorityBasis.id`
+identifies the particular session. Existing fifteen-minute channel admission
+still applies.
+
+For an anonymous flow, the start Action runs under an explicitly authorized
+grant and stages a bounded credential:
+
+```ts
+await context.transaction(async ({ flows }) => {
+  await flows.start({
+    kind: "oauth",
+    continuation: "oauthCallback",
+    maxAge: 300,
+  });
+});
+```
+
+The `flow` `start` intent needs an exact owner grant:
+`flows: { start: { oauth: { continuation: "oauthCallback", maxAge: 300 } } }`.
+The owner compares the requested continuation and lifetime with that grant
+before creating an effect. Kind arrays no longer authorize minting.
+`continuation` is a registered Action **alias**. Lifetime defaults to 300
+seconds and cannot exceed 900 seconds. The signed credential binds schema,
+namespace, tenant, flow kind, nonce and expiry. Its principal is the nonce, with
+a validated `authority.flow` descriptor. The owner consumes it on the
+continuation's first input capture. The same retained Action run may replay; a
+second run is refused.
+
+Flow restrictions apply in addition to policy. The credential can directly
+invoke only its continuation and read or observe its start and continuation
+operations. Inside the consumed continuation, `context.actions` may invoke
+transitive child Actions within that exact accepted operation. Each child still
+needs an exact product Action grant; its internal Collection, session, asset and
+directory capabilities still require their own grants. Policy receives
+`intent.invocation`, including the owner-resolved parent run at child capture.
+
+The owner records each descendant's flow, consumed root, accepted operation,
+parent and Action identity in the same transaction as policy and input capture.
+A refused child leaves no delegation receipt. Other operations, tenants and
+direct child calls remain refused; replay returns retained results without
+re-running children. Flow expiry and current authorization checks apply to every
+command. `operations.start` and `awaitOperation({ start })` refuse a flow before
+admitting another operation. Detached Processors retain the flow and cannot
+become admitted Action descendants. Collection alarms and scheduled occurrences
+run with independently configured `systemScopes` and current owner policy, not
+the originating flow. Granting a flow permission to write a schedule does not
+authorize the occurrence's Actions or effects; its independent policy must grant
+them explicitly.
+
+Credential effects retain only public claims. Session tokens never enter Action
+outputs, event bodies, operation metadata, transaction receipts or live reads.
+The owner reconstructs them only for HTTP projection. Projection also requires a
+client-held proof: a hash is bound to admission, so another caller sharing an
+anonymous grant cannot obtain a session merely by reading its operation. The
+projection command reauthorizes operation access before reconstructing a
+credential, including current session revocation and policy constraints.
+
+A flow token may also be projected to its original nonempty credential proof
+after the browser's session changes. This applies only to `flow.start` effects:
+the owner must first authorize access to that operation, and the flow must
+remain unexpired. Another proof cannot receive the token. This permits the first
+start result to deliver the flow token before the client can send a flow header.
+Session-token projection and the dedicated self-logout receipt rules are
+unchanged.
+
+## Device and live-read admission
+
+`/device` checks Origin before either Deno or Node upgrades the connection.
+Same-origin is allowed; additional canonical HTTP(S) origins require
+`allowedOrigins` on the server facade. Missing Origin is only for header-token
+clients: cookies are removed from captured headers and cannot be supplied in
+hello. Host authentication must use the supplied request without ambient cookie
+fallback. Same-origin browsers can explicitly select their captured HttpOnly
+cookie with `{ cookie: true }`; empty hello credentials are refused.
+
+Action sessions default to `__Host-copilotz_session`, with Secure, HttpOnly,
+Path=/ and no Domain. The Host-prefix attributes are validated, and duplicate
+cookies with the configured name are refused with `duplicate_session_cookie`.
+Credential tokens use an HKDF-derived HMAC key with a credential-specific label.
+The protected-value commitment key is unchanged, preserving shipped data.
+
+Live queries and policy constraints share bounded admission. Defaults allow 32
+attached states per tenant/principal and 16 per device socket, 64 predicate
+nodes, and 32 `in`/`overlaps` values. Expensive or non-equivalent filters are
+refused, including `jsonEquals` and locale-dependent case folding. String ranges
+use Unicode code-point/C ordering. See
+[the complete limits and accepted filters](./subscriptions.md).
+`subscription_query_refused` and `subscription_capacity_exceeded` distinguish
+query refusal from capacity. Detached readers do not consume active admission;
+retained history is bounded and evicted before denying active capacity.
+
+Invisible Collection mutations emit no live frame: policy matching checks both
+the old and new image, including exits and progress-only reads. Progress and
+Action settlement use namespace-local event counts, so another namespace's
+commits cannot advance a subscriber's sequence. Existing permission notices,
+revocation, scope resets and checkpoint identity checks still gate publication.
+
+HTTP ingress stores the authenticated `scope.actor` separately from retained
+`authority.principal` and `authority.authorityBasis`. Session authentication
+does not replace actor attribution with a session or account ID. The offline
+authority manifest (v12 → v13) uses `actorBinding` to review that same actor
+independently of authority.
+
+Action grants, Action policy registrations, HTTP exposure, HTTP route `action`,
+handler `context.invoke`, client Action calls, flow continuations and Tool
+bindings all use the composition alias (for example `saveNote`). Stable Action
+IDs identify durable lifecycle events and are not alternate configuration keys.
+
+### Completed self-logout receipts
+
+The initiating credential proof can recover its completed self-logout operation
+inside the original schema, namespace and tenant, until the recorded proof
+receipt expires. Recovery matches the durable `session.revoke` effect, its
+original session basis and proof digest. It grants no new Action execution,
+collection access, cancellation or access to another operation. An observation
+of that single operation returns only its completion notice, with no historical
+Events or stream payloads. If revocation has committed but completion is still
+pending, receipt observation waits on owner operation pushes for up to ten
+seconds; a longer wait returns `operation_result_pending` (409) for retry. The
+single writer is never held while waiting. Result polling returns 202 until
+completion. If revocation commits during result or observation admission, the
+server rechecks the same proof-bound receipt once. Ordinary Action-result
+disclosure checks still apply. Operations that also issue replacement
+credentials require the original session as well as its proof; a signed-out
+proof cannot recover replacement credentials.
+
+The device SDK exposes `onAuthState(listener)`, returning an unsubscribe
+function. A session-level notice (or terminal 4401 close) emits
+`{state:"revoked",code:"session_revoked"}` exactly once and prevents automatic
+reconnection. Establish a new session and explicitly reauthenticate to
+reconnect. A permission change for one collection remains a channel-level
+revocation.
+
+Anonymous HTTP Action access without credentials, or with only a discarded
+session cookie, is 401, including Core HTTP Actions. A failed session-cookie
+verification is anonymous and clears the cookie, allowing anonymous sign-in
+Actions to run. Other presented but refused credentials remain 403. An actor
+explicitly authenticated by the host retains 403 on denial even without standard
+credential headers. A direct host authentication refusal also becomes 401 when
+no credential is present. A credential-projection proof is a receipt capability,
+not an authentication credential. Cookie defaults remain
+`__Host-copilotz_session`, Secure, HttpOnly, Path=/ and no Domain.
+
+Host-authenticated session cookies follow the same recovery contract: verify
+before retaining a principal, return anonymous scope plus
+`invalidSessionCookie: true` on invalid/revoked/expired credentials, and
+configure the facade's `sessionCookie` attributes to match. Duplicate configured
+cookies are refused before calling the host authenticator. Credential proof
+remains required for the narrowly scoped completed self-revocation receipt;
+discarded cookies never confer ordinary operation-read or Action authority.
+
+For a valid host-authenticated cookie with the configured name, return
+`invalidSessionCookie: false` alongside the verified authority/actor. This
+prevents the facade from attempting to decode the host's cookie as an Action
+credential. Omit the property when the facade should verify its own
+Action-session token.
+
+## Owner-verified identity evidence
+
+Register a named `identityVerifiers` capability on the owner. An Action calls
+`context.authentication.verify(alias, input)` before its transaction. Workers
+can request a verifier; they cannot register one or supply its verified result.
+An `externalEffect` checkpoint, even a persisted one, is never authentication
+evidence.
+
+The verifier is trusted owner code. Keep provider secrets, trusted issuer
+configuration and signing-key caches there. For an OIDC code flow, it must
+exchange the code and validate the ID token's signature, issuer, audience,
+expiry and nonce against the owner-retained challenge, including PKCE. Do not
+accept the expected issuer, audience, nonce or principal from the worker.
+
+This generic example uses application-owned `loginChallenges` and `trustedOidc`
+services; those names are not platform APIs:
+
+```ts
+import { defineIdentityVerifier } from "@copilotz/copilotz/engine";
+
+const oidc = defineIdentityVerifier({
+  revision: "1",
+  actions: ["loginCallback"],
+  async verify(input, { binding, exchangeKey, signal }) {
+    const { code } = parseCodeInput(input); // Bounded untrusted input.
+    const challenge = await loginChallenges.get(binding);
+    // Service verifies against configured provider keys and owner-held nonce/PKCE.
+    const identity = await trustedOidc.exchangeAndVerify({
+      code,
+      issuer: configuredIssuer,
+      audience: configuredClientId,
+      clientSecret: ownerClientSecret,
+      nonce: challenge.nonce,
+      pkceVerifier: challenge.pkceVerifier,
+      exchangeKey,
+      signal,
+    });
+    return {
+      issuer: identity.issuer,
+      subject: identity.subject,
+      principal: accountIdFor(identity.issuer, identity.subject),
+    };
+  },
+});
+// authorization.identityVerifiers = { oidc }
+```
+
+The result is a bounded `IdentityEvidence` value with `issuer`, `subject`,
+`principal` and optional JSON `claims`. Return only verified facts needed by
+policy, never tokens, authorization codes or secrets. Inputs and evidence are
+limited to 16 KiB. Policy declares `evidence: ["oidc"]`; its typed
+`evidence.get("oidc")` reader accepts no caller-selected receipt or binding. It
+reads only evidence for the current schema, namespace, tenant, flow, accepted
+root operation and client proof. An undeclared read refuses, including when
+policy catches the read error. Missing evidence is `null`.
+
+```ts
+// Excerpt from the login policy; ordinary admission grants are omitted.
+const identityPolicy = {
+  revision: "1",
+  sources: [],
+  evidence: ["oidc"],
+  async evaluate({ intent, evidence }) {
+    if (intent.kind === "identity" && intent.resource === "oidc") {
+      return { identityVerifiers: ["oidc"] };
+    }
+    if (intent.kind === "session" && intent.operation === "create") {
+      const identity = await evidence.get("oidc");
+      return identity
+        ? {
+          sessions: { create: { principal: identity.principal, maxAge: 3600 } },
+        }
+        : {};
+    }
+    return {};
+  },
+};
+```
+
+Only a consumed flow Action or an admitted descendant in its accepted operation
+can request verification. The owner durably reserves the exchange before
+provider I/O, then records verified evidence before returning it. Repeated calls
+with the same input and verifier revision return the same evidence. Changed
+input or revision refuses. A pending reservation returns
+`identity_evidence_pending`; it never re-exchanges a one-use code. If a crash
+occurs after the provider consumes a code but before the receipt commits, start
+a new flow. This is an explicit unresolved outcome, not a successful login.
+
+Verification runs outside the SQL transaction. A later login rollback retains
+the evidence, so replay does not repeat the provider exchange. Evidence expires
+with the flow. Trusted host maintenance can call
+`pruneIdentityEvidence(session, databaseSchema)` to remove expired evidence and
+pending reservations. Payload-free `identity.audit` receipts remain under the
+owner's audit retention policy. Protect private receipt storage and apply the
+application's retention schedule to owner-held login challenges too.
+
+## Atomic directory service commands
+
+For provisioning, use a declared trusted identity-service command. This extends
+`context.directory` with `command(alias, input, { operationKey })`, and Action
+transactions with `tx.directory.command`. Composition fixes the destination
+schema, namespace, command name, revision and permitted Action aliases. Source
+policy must grant `directoryCommands: [alias]`; the destination's independent
+`authorize` callback must also return `true`.
+
+```ts
+import { defineDatabaseDirectoryCommand } from "@copilotz/copilotz/engine";
+
+const prepare = defineDatabaseDirectoryCommand({
+  databaseSchema: "directory",
+  namespace: "directory",
+  command: "prepareLogin",
+  revision: "1",
+  actions: ["loginCallback"],
+  evidence: ["oidc"],
+  async authorize({ authority, input, evidence }) {
+    const identity = await evidence.get("oidc");
+    return admittedSourceTenant(authority.scope.tenant) &&
+      identity?.principal === parseDirectoryInput(input).accountId;
+  },
+  async execute({ transaction, namespace, input }) {
+    // Trusted service repository; only this supplied SQL transaction may write.
+    return await directoryRepository.prepare(transaction, {
+      namespace,
+      ...parseDirectoryInput(input),
+    });
+  },
+});
+// authorization.directoryCommands = { prepare, publishMembership }
+```
+
+The directory service owns its repository and migrations. Its callbacks run on
+the owner, never on a worker. Use the supplied SQL executor for service-owned
+tables and joined source reads. For native Collections, use the destination
+Collection repository described below: raw writes to native tables omit their
+events, indexes and integrity checks. The SQL executor is revoked when the
+implementation returns. No captured application handles, network side effects or
+independent commits are permitted in a service command. Physical tenant
+provisioning belongs to trusted host orchestration before route activation.
+
+Both schema owners must already be attached in the same process and database.
+The source SQL transaction locks and verifies the destination's live owner
+identity. Directory writes, source Collection writes, session effects and both
+owners' audit receipts commit atomically. Commands participate in the existing
+transaction plan in call order; membership publication can see the preceding
+account write. A failure in any command rolls back the whole transaction even if
+Action planning code attempted to catch it.
+
+```ts
+const identity = await context.authentication.verify("oidc", { code });
+await context.transaction(async (tx) => {
+  await tx.directory.command("prepare", { accountId: identity.principal }, {
+    operationKey: "prepare",
+  });
+  await tx.collections.accounts.create({ id: identity.principal });
+  await tx.directory.command("publishMembership", {
+    accountId: identity.principal,
+  }, { operationKey: "publish" });
+  await tx.sessions.create({ principal: identity.principal, maxAge: 3600 });
+}, { operationKey: "complete-login" });
+```
+
+Transactional commands return no result because workers stage their plans.
+Derive the account ID from verified evidence before planning. A standalone
+`context.directory.command` can return a bounded result, but commits its own
+transaction; it cannot promise atomicity with later calls. Reuse of a command
+key in the same accepted Action invocation returns its retained result; changed
+input/revision refuses. Private receipts retain results for replay, while
+`directory.audit` contains coordinates and input/output digests only. Opposing
+cross-schema lock orders may cause a database deadlock and rollback; commands
+must have no effects outside their SQL transaction.
+
+## Native Collections inside directory commands
+
+Declare destination **composition aliases** and exact native methods in
+`collections`. The owner supplies the registered destination Collection runtime;
+application code does not construct a runtime or a `CommandContext`. Exactly one
+attached destination composition must provide all declared aliases; it must also
+bind their owner policies. Multiple matching compositions refuse. Closing a
+composition removes its registration.
+
+```ts
+const publishMembership = defineDatabaseDirectoryCommand({
+  databaseSchema: "directory",
+  namespace: "directory",
+  command: "publishMembership",
+  revision: "1",
+  actions: ["loginCallback"],
+  evidence: ["oidc"],
+  collections: {
+    loginIndex: ["get", "create", "addMembership"],
+    tenantRoute: ["create"],
+  },
+  async authorize({ authority, input, evidence }) {
+    const identity = await evidence.get("oidc");
+    return admittedSourceTenant(authority.scope.tenant) &&
+      identity?.principal === parseDirectoryInput(input).accountId;
+  },
+  async execute({ collections, authority, evidence, transaction }) {
+    const identity = requireVerifiedIdentity(await evidence.get("oidc"));
+    const subjectId = identityKey(identity.issuer, identity.subject);
+    // These application helpers read trusted state in the joined transaction.
+    await requireActiveSourceAccount(transaction, identity.principal);
+    const route = await requireProvisionedRoute(transaction, authority.scope);
+    const existing = await collections.loginIndex.get({ id: subjectId });
+    if (!existing) {
+      await collections.loginIndex.create({
+        id: subjectId,
+        subject: identity.subject,
+        members: [],
+      });
+    }
+    await collections.loginIndex.commands.addMembership({
+      id: subjectId,
+      member: identity.principal,
+    });
+    // Route activation is allowed only after host-owned physical provisioning.
+    await collections.tenantRoute.create({
+      id: route.id,
+      active: true,
+      databaseSchema: route.databaseSchema,
+    });
+    return { accountId: identity.principal };
+  },
+});
+```
+
+`get({ id })`, `create(input)` and `commands.name({ id, ...input })` keep the
+native Collection shapes. Mutations return planned mutation references. They run
+the destination's schema validation, custom command reduction, event creation
+and indexes. No write options or placement overrides are accepted. Undeclared
+aliases/methods, missing destination policy registrations and expired repository
+handles refuse. A caught repository refusal or unawaited failed call still
+aborts the transaction. Captured app handles remain unavailable.
+
+The destination must independently bind these Collections to its own registered
+owner policies. For delegated calls, policy receives `directory` with the fixed
+`command`, `databaseSchema` and `namespace`, alongside the **unchanged source**
+`authority` and `intent.invocation`. Declared policy reads select fresh records
+in the destination namespace. The source flow/session is validated by its own
+owner; it is never treated as a credential for the destination. For example:
+
+```ts
+// Destination Collection policy excerpt, separate from subscription/read grants.
+evaluate({ authority, intent, directory }) {
+  if (
+    directory?.command !== "publishMembership" ||
+    !admittedSourceTenant(authority.scope.tenant) ||
+    intent.invocation?.id !== loginCallback.id
+  ) return {};
+  return {
+    collections: { loginIndex: {}, tenantRoute: {} },
+    collectionMutations: {
+      loginIndex: {
+        create: { fields: ["subject", "members"] },
+        commands: { addMembership: { fields: ["member"] } },
+      },
+      tenantRoute: { create: { fields: ["active", "databaseSchema"] } },
+    },
+  };
+}
+```
+
+All three gates apply: the source directory grant, the declaration's destination
+`authorize`, and the destination Collection policy. They remain effective at the
+outer transaction's result gate. No directory grant becomes host trust or an
+authority for subsequent detached work.
+
+The destination joins the source transaction using its own live epoch and
+command context. Rollback removes both schemas' records, native events, indexes,
+session effects and receipts. After confirmed commit, destination subscription
+updates and Processor deliveries use the destination owner/coordinator and
+publication queue, including its fencing and shutdown drain. Processors receive
+the original caller provenance; publication grants no additional mutation or
+credential authority.
+
+Replay returns the retained result without rerunning reducers or publishing
+again. It rechecks source and destination authorization, including the retained
+native intents against current destination policy and records. Private native
+intent receipts are bounded to 1 MiB; command inputs/results remain bounded to
+16 KiB. Audit receipts contain coordinates, method declarations and digests,
+never Collection payloads. Protect and retain private receipt storage under the
+same policy as private directory results. Changes to method declarations require
+a new command revision and conflict with an existing operation's replay intent.
+
+## Flow-bounded Processor projections
+
+A Processor may read or mutate Collections for a flow only when its live,
+owner-retained delivery points to an event committed in that flow's consumed
+operation. Product policy must additionally grant
+`flowProcessors: ["records.project"]` using the Processor's stable ID, along
+with exact Collection grants. Policy receives `intent.invocation` and should
+validate proposed projections against fresh declared sources.
+
+This also permits detached processing of an event committed in the consumed
+operation. It does not authorize a further event emitted in the detached
+Processor's separate operation. Such an event cannot extend the flow, even when
+its metadata claims the original ancestry. Processors cannot use flow authority
+to start unrelated operations, invoke child Actions, mint sessions or flows,
+verify identities or call directory commands. Expiry, client proof, current
+delivery lease and owner epoch remain enforced. A remote Processor has the same
+retained invocation around its owner RPCs as an in-process handler.
+
 ## Reference
 
 ### Upgrading retained authority (v12 → v13)
 
-Schema v13 is installed only by the explicit offline chain in
-[Upgrading](upgrading.md#current-owner-schema-v13). Its last step converts
-retained authority:
+Retained authority is converted by the v12 → v13 step of the explicit offline
+chain in [Upgrading](upgrading.md#current-owner-schema-v14), which then
+continues to v14:
 
 - Stop producers and close transports. Run `scripts/upgrade-retained-data.ts`
   with `authority-inventory`, and review every invocation and ingress binding
@@ -466,4 +1243,7 @@ retained authority:
   extends it to Core's conversation routes.
 - Reference: [HTTP server and browser client](server.md) covers `authenticate`,
   routes and observation.
-- Reference: [Upgrading](upgrading.md) covers the offline v13 chain.
+- Reference: [Upgrading](upgrading.md) covers the offline v14 chain and the
+  [0.90.0 policy changes](upgrading.md#upgrading-to-0900).
+- Reference: [Subscriptions](subscriptions.md) covers live-read admission and
+  limits.

@@ -2,7 +2,7 @@ import type { EventVisibility } from "@copilotz/copilotz/core";
 import type {} from "@copilotz/copilotz/events";
 import type { ConversationMessage } from "./contracts.ts";
 import type { FrozenContextContribution } from "./types.ts";
-import { isContentRef } from "@copilotz/copilotz/content";
+import { isContentRef } from "@copilotz/copilotz/content/codec";
 
 const WORKFLOW_METADATA_KEY = "copilotzWorkflow";
 const AGENT_ASK_METADATA_KEY = "copilotzAsk";
@@ -147,6 +147,8 @@ export type CoreToolActionOrigin = Readonly<{
   /** Stable initiating Message, retained across Tools and nested Asks. */
   originMessageId?: string;
   availableToolIds: readonly string[];
+  /** Immutable output audience for this Tool stage, absent on legacy cursors. */
+  outputVisibility?: EventVisibility;
   /** Original response audience retained across every Tool continuation. */
   responseVisibility: EventVisibility;
   parentLlmActionRunId: string;
@@ -661,16 +663,15 @@ const CORE_LLM_CALL_KEYS = new Set([
 export function coreLlmCallMetadata(
   value: unknown,
 ): CoreLlmCallMetadata | null {
-  const candidate = record(value);
+  const candidate = Object.fromEntries(
+    Object.entries(record(value)).filter(([key]) =>
+      CORE_LLM_CALL_KEYS.has(key)
+    ),
+  );
   if (candidate.schema !== CORE_LLM_CALL_METADATA_SCHEMA) return null;
   if (
     candidate.originMessageId !== undefined &&
     !optionalMetadataText(candidate.originMessageId)
-  ) return null;
-  if (
-    Reflect.ownKeys(candidate).some((key) =>
-      typeof key !== "string" || !CORE_LLM_CALL_KEYS.has(key)
-    )
   ) return null;
   if (candidate.llmSession !== undefined) {
     const session = record(candidate.llmSession);
@@ -726,6 +727,13 @@ export function defineCoreLlmCallMetadata(
   value: CoreLlmCallMetadata,
 ): CoreLlmCallMetadata {
   const copy = structuredClone(value);
+  if (
+    Reflect.ownKeys(copy).some((key) =>
+      typeof key !== "string" || !CORE_LLM_CALL_KEYS.has(key)
+    )
+  ) {
+    throw new TypeError("Invalid Core LLM call metadata.");
+  }
   const validated = coreLlmCallMetadata(copy);
   if (!validated) throw new TypeError("Invalid Core LLM call metadata.");
   return ({
@@ -755,9 +763,12 @@ function coreEventVisibility(value: unknown): value is EventVisibility {
       keys[1] === "participantIds" &&
       validStringArray(candidate.participantIds);
   }
-  return candidate.kind === "tool" && keys.length === 3 &&
-    keys[0] === "kind" && keys[1] === "policy" &&
-    keys[2] === "requesterId" &&
+  return candidate.kind === "tool" &&
+    keys.every((key) =>
+      ["kind", "policy", "requesterId", "initiatorId"].includes(key)
+    ) &&
+    (candidate.initiatorId === undefined ||
+      Boolean(optionalMetadataText(candidate.initiatorId))) &&
     (candidate.policy === "requester_only" ||
       candidate.policy === "public_status" || candidate.policy === "public") &&
     Boolean(optionalMetadataText(candidate.requesterId));
@@ -787,6 +798,7 @@ function validPlanPosition(candidate: Record<string, unknown>): boolean {
 }
 
 const TOOL_ACTION_ORIGIN_KEYS = new Set([
+  "outputVisibility",
   "schema",
   "planId",
   "planMessageId",
@@ -847,6 +859,10 @@ function validToolActionOrigin(
     agentTurn?.completeOn &&
     !candidate.availableToolIds.includes(agentTurn.completeOn.action)
   ) return null;
+  if (
+    candidate.outputVisibility !== undefined &&
+    !coreEventVisibility(candidate.outputVisibility)
+  ) return null;
   return candidate as CoreToolActionOrigin;
 }
 
@@ -861,16 +877,16 @@ export function coreToolActionOrigin(
   return validToolActionOrigin(candidate);
 }
 
-/** Reads validated Core Tool Action provenance from lifecycle data. */
+/** Extracts and validates the Core-owned cursor, excluding app metadata.
+ * Shape validation is not authority: app Actions use trustedCoreToolOrigin. */
 export function coreToolActionMetadata(
   value: unknown,
 ): CoreToolActionMetadata | null {
-  const candidate = record(value);
-  if (
-    Object.keys(candidate).some((key) =>
-      key !== "ask" && !TOOL_ACTION_ORIGIN_KEYS.has(key)
-    )
-  ) return null;
+  const candidate = Object.fromEntries(
+    Object.entries(record(value)).filter(([key]) =>
+      key === "ask" || TOOL_ACTION_ORIGIN_KEYS.has(key)
+    ),
+  );
   const origin = validToolActionOrigin(candidate);
   if (!origin) return null;
   if (
@@ -885,6 +901,13 @@ export function defineCoreToolActionMetadata(
   value: CoreToolActionMetadata,
 ): CoreToolActionMetadata {
   const copy = structuredClone(value);
+  if (
+    Object.keys(copy).some((key) =>
+      key !== "ask" && !TOOL_ACTION_ORIGIN_KEYS.has(key)
+    )
+  ) {
+    throw new TypeError("Invalid Core Tool Action metadata.");
+  }
   const validated = coreToolActionMetadata(copy);
   if (!validated) throw new TypeError("Invalid Core Tool Action metadata.");
   return ({

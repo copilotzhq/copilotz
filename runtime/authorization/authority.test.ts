@@ -207,3 +207,19 @@ Deno.test("point and set dependencies include missing-row and empty-query insert
   assert(!authorityDependsOn(set, { ...set, namespace: "other" }));
   assert(!authorityDependsOn(set, { ...set, owner: "other" }));
 });
+
+Deno.test("retained authority reuses only its validated immutable output", () => {
+  const input = authorityFixture();
+  const captured = retainedAuthority(input);
+  assert(retainedAuthority(captured) === captured);
+  assert(retainedAuthority(input) !== captured);
+  assertThrows(() =>
+    retainedAuthority(Object.freeze({ ...captured, version: 2 }))
+  );
+  assertThrows(() =>
+    retainedAuthority({
+      ...captured,
+      principal: { ...captured.principal, id: "" },
+    })
+  );
+});

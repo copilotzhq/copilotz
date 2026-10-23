@@ -1,16 +1,19 @@
+import { createCollectionConflictError } from "../../../../runtime/collections/errors.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { toolPlanCollection } from "../../collections/tool-plan/index.ts";
-import { retryToolPlanMutation } from "../tool-plan.ts";
+import { retryCoreMutation } from "../retry-mutation.ts";
 
 Deno.test("Tool-plan state writes retry structured transient database errors", async () => {
   for (const code of ["40P01", "40001"]) {
     let attempts = 0;
-    const value = await retryToolPlanMutation(async () => {
+    const value = await retryCoreMutation(() => {
       attempts++;
       if (attempts === 1) {
-        throw Object.assign(new Error("transaction aborted"), { code });
+        return Promise.reject(
+          Object.assign(new Error("transaction aborted"), { code }),
+        );
       }
-      return "committed";
+      return Promise.resolve("committed");
     });
     assertEquals(value, "committed");
     assertEquals(attempts, 2);
@@ -22,9 +25,11 @@ Deno.test("Tool-plan state writes retry structured transient database errors", a
     ]
   ) {
     let attempts = 0;
-    await retryToolPlanMutation(async () => {
+    await retryCoreMutation(() => {
       attempts++;
-      if (attempts === 1) throw new Error(message);
+      return attempts === 1
+        ? Promise.reject(new Error(message))
+        : Promise.resolve();
     });
     assertEquals(attempts, 2);
   }
@@ -32,13 +37,11 @@ Deno.test("Tool-plan state writes retry structured transient database errors", a
 
 Deno.test("Tool-plan state writes retry exact collection conflicts only", async () => {
   let attempts = 0;
-  await retryToolPlanMutation(async () => {
+  await retryCoreMutation(() => {
     attempts++;
-    if (attempts === 1) {
-      throw new Error(
-        "Collection 'toolPlanBranch' 'branch-a' was created while its mutation was prepared.",
-      );
-    }
+    return attempts === 1
+      ? Promise.reject(createCollectionConflictError())
+      : Promise.resolve();
   });
   assertEquals(attempts, 2);
 
@@ -46,14 +49,44 @@ Deno.test("Tool-plan state writes retry exact collection conflicts only", async 
   const semantic = new TypeError("Tool-plan stage cursor is invalid.");
   await assertRejects(
     () =>
-      retryToolPlanMutation(async () => {
+      retryCoreMutation(() => {
         attempts++;
-        throw semantic;
+        return Promise.reject(semantic);
       }),
     TypeError,
     "Tool-plan stage cursor is invalid.",
   );
   assertEquals(attempts, 1, "semantic errors are never retried");
+});
+
+Deno.test("Core mutation retries never reinterpret an uncertain commit as a conflict", async () => {
+  for (
+    const details of [
+      { code: "owner_commit_unknown" },
+      { code: "persistence_indeterminate" },
+      { indeterminate: true },
+      { outcome: "unknown" },
+      { execution: "indeterminate" },
+    ]
+  ) {
+    let attempts = 0;
+    const failure = Object.assign(
+      new Error("uncertain commit", {
+        cause: createCollectionConflictError(),
+      }),
+      details,
+    );
+    await assertRejects(
+      () =>
+        retryCoreMutation(() => {
+          attempts++;
+          return Promise.reject(failure);
+        }),
+      Error,
+      "uncertain commit",
+    );
+    assertEquals(attempts, 1);
+  }
 });
 
 Deno.test("legacy-ready Tool-plan migration opens the projection barrier once", () => {

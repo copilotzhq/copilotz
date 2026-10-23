@@ -1,4 +1,11 @@
 import { captureWorkerContent, type CaptureWriter } from "./owner-capture.ts";
+import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
+import {
+  bindWorkerCollectionInvocation,
+  closeCollectionPolicyInvocation,
+  withContextCollectionInvocation,
+} from "../authorization/invocation.ts";
+import { standardActionError } from "../actions/errors.ts";
 /** The single worker execution path for in-process and WebSocket placement. */
 import type { WorkerWorkHandler } from "../../dependencies/oxian-worker.ts";
 import { isHostCallError } from "../../dependencies/oxian-work.ts";
@@ -24,6 +31,9 @@ type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Request = (call: CapabilityCall, signal?: AbortSignal) => Promise<unknown>;
 const MAX_ACTIVE_INVOCATIONS = 256;
+function authorizationRefused(): never {
+  throw standardActionError({ code: "forbidden", status: 403 })!;
+}
 
 function signalFrom(args: readonly unknown[]): AbortSignal | undefined {
   for (const argument of args) {
@@ -300,7 +310,9 @@ function workerContext(options: {
         ) as unknown[];
         const entry = { path: [...path], args: copied };
         plan.push(entry);
-        if (path[0] === "vectors") return undefined;
+        if (["vectors", "sessions", "flows", "directory"].includes(path[0])) {
+          return undefined;
+        }
         const input = copied[0] as RecordValue;
         if (!input || typeof input !== "object" || Array.isArray(input)) {
           throw capabilityError("owner_plan_invalid");
@@ -331,6 +343,14 @@ function workerContext(options: {
       return task;
     };
     const scoped = {
+      directory: {
+        command: (...args: unknown[]) => stage(["directory", "command"], args),
+      },
+      sessions: {
+        create: (...args: unknown[]) => stage(["sessions", "create"], args),
+        revoke: (...args: unknown[]) => stage(["sessions", "revoke"], args),
+      },
+      flows: { start: (...args: unknown[]) => stage(["flows", "start"], args) },
       collections: Object.fromEntries(
         Object.entries(registry.collections).map((
           [alias, definition],
@@ -443,12 +463,19 @@ function workerContext(options: {
       return [alias, caller];
     }),
   );
-  const context = withProtectedEventResolver({
+  const rawContext = withProtectedEventResolver({
     ...invocation.scope,
     resources: registry.resources,
     adapters: registry.adapters,
     actions,
     collections: collections(),
+    authentication: {
+      verify: (...args: unknown[]) => rpc(["authentication", "verify"], args),
+    },
+    directory: {
+      get: (...args: unknown[]) => rpc(["directory", "get"], args),
+      command: (...args: unknown[]) => rpc(["directory", "command"], args),
+    },
     content: {
       ...methods([
         "authorize",
@@ -504,6 +531,42 @@ function workerContext(options: {
     transaction,
     readSnapshot,
   }, () => rpc(["protectedEvent"], []));
+  const scope = {
+    databaseSchema: String(invocation.scope.databaseSchema),
+    namespace: String(invocation.scope.namespace),
+  };
+  const action = invocation.scope.action as
+    | { id: string; runId: string; parentRunId?: string }
+    | undefined;
+  const context = bindWorkerCollectionInvocation(
+    rawContext,
+    {
+      scope,
+      signal,
+      resolveSource: () =>
+        Promise.reject(capabilityError("owner_source_required")),
+      callHostCapability(path, args, destination) {
+        check();
+        if (
+          destination.databaseSchema !== scope.databaseSchema ||
+          destination.namespace !== scope.namespace
+        ) authorizationRefused();
+        const input = (args[1] ?? {}) as RecordValue;
+        const translated: RecordValue = {};
+        for (const [key, value] of Object.entries(input)) {
+          if (key === "databaseSchema" || key === "namespace") continue;
+          if (!["idempotencyKey", "metadata", "signal"].includes(key)) {
+            authorizationRefused();
+          }
+          translated[key === "idempotencyKey" ? "operationKey" : key] = value;
+        }
+        return rpc(path, [args[0], translated]);
+      },
+    },
+    action
+      ? { kind: "action", ...action }
+      : { kind: "processor", id: invocation.alias, runId: invocation.context },
+  );
   return {
     context,
     async drain() {
@@ -512,6 +575,7 @@ function workerContext(options: {
     },
     stop() {
       stopped = true;
+      closeCollectionPolicyInvocation(context);
     },
   };
 }
@@ -520,8 +584,13 @@ export function createOwnerWorkerWorkloads(
   options: Readonly<{
     registry: PluginRegistry;
     workloads?: readonly string[];
+    deliveryTimeoutMs?: number;
   }>,
 ): Readonly<Record<string, WorkerWorkHandler>> {
+  const deliveryTimeoutMs = resolveDeliveryTimeoutMs(
+    options.deliveryTimeoutMs,
+    options.registry.actions,
+  );
   const execute: WorkerWorkHandler = async (work) => {
     const abort = new AbortController();
     const signal = AbortSignal.any([work.signal, abort.signal]);
@@ -532,6 +601,9 @@ export function createOwnerWorkerWorkloads(
           workload: OWNER_CAPABILITY_WORKLOAD,
           body: encodeCapability(call),
           signal: callSignal,
+          // Action calls remain open through nested provider work and its
+          // durable finalization; Oxian's short RPC default is insufficient.
+          deadlineAtMs: Date.now() + deliveryTimeoutMs,
         });
         const response = await readCapability(handle.output) as {
           value?: unknown;
@@ -549,7 +621,10 @@ export function createOwnerWorkerWorkloads(
             error.message,
           );
           Object.assign(failure, { execution: error.execution, cause: error });
-          if (error.execution === "indeterminate") abort.abort(failure);
+          if (
+            error.execution === "indeterminate" ||
+            error.code === "deadline_exceeded"
+          ) abort.abort(failure);
           throw failure;
         }
         throw error;
@@ -606,9 +681,13 @@ export function createOwnerWorkerWorkloads(
         if (typeof handler !== "function") {
           throw capabilityError("owner_definition_unavailable");
         }
-        const value = invocation.kind === "prepare"
-          ? await (handler as () => unknown)()
-          : await (handler as Method)(...invocation.args, local.context);
+        const value = await withContextCollectionInvocation(
+          local.context,
+          () =>
+            invocation.kind === "prepare"
+              ? (handler as () => unknown)()
+              : (handler as Method)(...invocation.args, local.context),
+        );
         await local.drain();
         await request({ kind: "complete", id: invocation.id, value });
       } catch (error) {

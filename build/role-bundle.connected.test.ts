@@ -2,12 +2,12 @@ import { assert, assertEquals } from "@std/assert";
 import { buildWorkerRole } from "./role-bundle.ts";
 import { plugin } from "../contracts/package/fixtures/owner-whole-plugin.ts";
 import { createCopilotzGateway } from "../runtime/application/gateway.ts";
-import { createTestDatabase } from "../runtime/testing/ominipg.ts";
+import { createOwnerTestDatabase } from "../runtime/testing/owner-database.ts";
 import { listen } from "../runtime/adapters/deno/listen.ts";
 
 Deno.test("emitted whole-plugin worker executes Actions, Processors and bounded reads over a real WebSocket without owner modules", async () => {
   const root = await Deno.makeTempDir({ prefix: "copilotz-emitted-worker-" });
-  const database = await createTestDatabase();
+  const database = await createOwnerTestDatabase();
   let gateway: Awaited<ReturnType<typeof createCopilotzGateway>> | undefined;
   let worker: { ready: Promise<void>; close(): Promise<void> } | undefined;
   let listener: ReturnType<typeof listen> | undefined;
@@ -80,6 +80,27 @@ Deno.test("emitted whole-plugin worker executes Actions, Processors and bounded 
       await gateway.actions.write("artifact", { idempotencyKey: "artifact" }),
       "whole:artifact",
     );
+    // The Action's result covers the note write. The reply belongs to its
+    // inherited Processor and requires scope settlement before inspecting SQL.
+    const operation = (await gateway.application.listOperations()).find((
+      item,
+    ) => item.correlationId === "host:artifact");
+    assert(operation);
+    const attachment = await gateway.application.attach({
+      operationId: operation.operationId,
+    });
+    try {
+      let outcome: unknown;
+      for await (const output of attachment.outputs) {
+        if (output.type === "operation.settled") {
+          outcome = (output as { outcome?: string }).outcome;
+        }
+      }
+      await attachment.done;
+      assertEquals(outcome, "completed");
+    } finally {
+      await attachment.detach();
+    }
     const replies = await database.query(
       "SELECT id FROM public.nodes WHERE type='public_reply'",
     );

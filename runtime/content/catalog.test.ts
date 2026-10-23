@@ -418,38 +418,63 @@ Deno.test("one outstanding append owns caller bytes and rejects over-bound chunk
 });
 Deno.test("quiet owner-local writers renew catalog protection independently of append I/O", async () => {
   const f = await fixture();
-  try {
-    let renewals = 0;
-    const catalog = {
-      ...f.catalog,
-      async renew(input: Parameters<typeof f.catalog.renew>[0]) {
+  const originalNow = Date.now;
+  let now = originalNow();
+  // Advance application time on completed renewals, not on database latency.
+  // Three renewals must extend protection beyond the initial reservation.
+  const renewed = Promise.withResolvers<void>();
+  const timeout = setTimeout(
+    () => renewed.reject(new Error("Writer did not renew protection.")),
+    10_000,
+  );
+  let renewals = 0;
+  const catalog = {
+    ...f.catalog,
+    async renew(input: Parameters<typeof f.catalog.renew>[0]) {
+      try {
+        const result = await f.catalog.renew(input);
         renewals++;
-        return await f.catalog.renew(input);
-      },
-    };
-    const runtime = createContentStreamRuntime({
-        namespace,
-        store: f.store,
-        catalog,
-        protectionMs: 40,
-        onOpen(_s, p) {
-          p.established();
-        },
-      }),
-      writer = await runtime.open({
-        id: "quiet",
-        mediaType: "text/plain",
-        role: "content",
-      });
-    await new Promise((resolve) => setTimeout(resolve, 110));
+        if (renewals <= 3) now += 20;
+        if (renewals === 3) renewed.resolve();
+        return result;
+      } catch (error) {
+        renewed.reject(error);
+        throw error;
+      }
+    },
+  };
+  const runtime = createContentStreamRuntime({
+    namespace,
+    store: f.store,
+    catalog,
+    protectionMs: 40,
+    onOpen(_s, p) {
+      now = originalNow();
+      p.established();
+    },
+  });
+  let writer: Awaited<ReturnType<typeof runtime.open>> | undefined;
+  Date.now = () => now;
+  try {
+    writer = await runtime.open({
+      id: "quiet",
+      mediaType: "text/plain",
+      role: "content",
+    });
+    await renewed.promise;
     assertEquals(renewals >= 2, true);
     const logical =
       (await f.catalog.read(`content-streams/${namespace}/quiet`))!;
     assertEquals(Date.parse(logical.protectedUntil) > Date.now(), true);
     assertEquals(logical.terminal, undefined);
-    await writer.abort();
   } finally {
-    await f.db.close();
+    clearTimeout(timeout);
+    try {
+      await writer?.abort();
+    } finally {
+      Date.now = originalNow;
+      await f.db.close();
+    }
   }
 });
 Deno.test("catalog alarm deadlines are durable and unsupported stores never schedule collection", async () => {
@@ -587,6 +612,8 @@ Deno.test("catalog alarm query has indexed due branches and bounded candidate me
       // Prove all lookups have an indexed path, independently of the cost
       // preference for sequential scans in this intentionally tiny fixture.
       await tx.query("SET LOCAL enable_seqscan=off");
+      await tx.query("SET LOCAL enable_hashjoin=off");
+      await tx.query("SET LOCAL enable_mergejoin=off");
       const statements: string[] = [];
       const query: typeof tx.query = (sql, parameters) => {
         statements.push(sql);
@@ -596,6 +623,26 @@ Deno.test("catalog alarm query has indexed due branches and bounded candidate me
       const sql = statements.find((sql) => sql.includes("MIN(deadline)"))!;
       const explained = await tx.query(`EXPLAIN (FORMAT JSON) ${sql}`);
       const plan = JSON.stringify(explained.rows);
+      const referenceLookups: Record<string, unknown>[] = [];
+      const visit = (value: unknown) => {
+        if (!value || typeof value !== "object") return;
+        const node = value as Record<string, unknown>;
+        if (node["Index Name"] === "nodes_ready_content_body_idx") {
+          referenceLookups.push(node);
+        }
+        for (const child of Object.values(node)) visit(child);
+      };
+      visit(explained.rows);
+      assertEquals(referenceLookups.length > 0, true);
+      for (const lookup of referenceLookups) {
+        // An index scan with only a Filter still walks every ready asset for
+        // each candidate. The identity collation must permit a keyed lookup.
+        assertEquals(
+          String(lookup["Index Cond"]).includes("body_id"),
+          true,
+          JSON.stringify(lookup),
+        );
+      }
       // PostgreSQL may introduce another Limit for the MIN expression's
       // init-plan. The six explicit branches, each LIMIT 1, are the bound.
       assertEquals((sql.match(/LIMIT 1/g) ?? []).length, 6);

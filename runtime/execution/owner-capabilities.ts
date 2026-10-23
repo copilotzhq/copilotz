@@ -1,3 +1,4 @@
+import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
 import {
@@ -9,7 +10,10 @@ import type {
   OwnerSessionSource,
 } from "./types.ts";
 import { ownerExecutionInterrupted } from "./owner-interruption.ts";
-import { collectionReceiptInvocation } from "../authorization/invocation.ts";
+import {
+  collectionReceiptInvocation,
+  withContextCollectionInvocation,
+} from "../authorization/invocation.ts";
 import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,
@@ -159,6 +163,12 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
       ].includes(leaf);
   }
   if (snapshot) return false;
+  if (root === "authentication") {
+    return path.length === 2 && method === "verify";
+  }
+  if (root === "directory") {
+    return path.length === 2 && ["get", "command"].includes(method);
+  }
   if (root === "actions") {
     return path.length === 2 ||
       path.length === 3 && leaf === "prepare";
@@ -245,6 +255,7 @@ export function createOwnerCapabilityHost(
       identity: WorkerCallContext["fence"]["identity"],
       input: unknown,
     ): Promise<unknown>;
+    deliveryTimeoutMs?: number;
     resourceIdleMs?: number;
     resourceLifetimeMs?: number;
     onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
@@ -1213,6 +1224,12 @@ export function createOwnerCapabilityHost(
                 if (
                   !collection &&
                   !(operation.path.length === 2 &&
+                    (root === "sessions" &&
+                        ["create", "revoke"].includes(operation.path[1]) ||
+                      root === "flows" && operation.path[1] === "start" ||
+                      root === "directory" &&
+                        operation.path[1] === "command")) &&
+                  !(operation.path.length === 2 &&
                     ["relations", "vectors"].includes(root) &&
                     operation.path[1] === "upsert")
                 ) throw capabilityError("owner_plan_invalid");
@@ -1334,7 +1351,10 @@ export function createOwnerCapabilityHost(
           ]
           : args;
         const executeCall = async () =>
-          await callPath(invocation.context, path, callArgs);
+          await withContextCollectionInvocation(
+            invocation.context,
+            () => callPath(invocation.context, path, callArgs),
+          );
         try {
           const value = path[0] === "protectedEvent"
             ? await protectedEventResolverFrom(invocation.context)?.()
@@ -1413,7 +1433,10 @@ export function createOwnerCapabilityHost(
       maxPerConnection: 128,
       maxRequestBytes: OWNER_CAPABILITY_BYTES,
       maxResponseBytes: OWNER_CAPABILITY_BYTES,
-      timeoutMs: 120_000,
+      timeoutMs: resolveDeliveryTimeoutMs(
+        options.deliveryTimeoutMs,
+        options.registry.actions,
+      ),
     },
     lifecycle: {
       onDisconnect(event) {
@@ -1447,7 +1470,15 @@ export function createOwnerCapabilityHost(
               event.fence.connectionId &&
             assignment.binding.fence.sessionGeneration ===
               event.fence.sessionGeneration
-          ) assignment.semanticRetirement = true;
+          ) {
+            if (
+              !assignment.semanticRetirement &&
+              event.error?.code === "deadline_exceeded"
+            ) {
+              // Transport expiry is an attempt boundary, not an Action result.
+              assignment.interruption ??= ownerExecutionInterrupted();
+            } else assignment.semanticRetirement = true;
+          }
         }
         return retire(
           (assignment) =>

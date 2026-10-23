@@ -173,7 +173,9 @@ export function createActionContext(
       operationKey,
       namespace,
       ...(options.identity ? { identity: options.identity } : {}),
-      execute: async ({ collections: byName, relations, vectors }) => {
+      execute: async (
+        { collections: byName, relations, vectors, sessions, flows },
+      ) => {
         throwIfAborted(options.signal);
         return await execute(
           {
@@ -183,6 +185,16 @@ export function createActionContext(
             ),
             relations,
             vectors,
+            sessions,
+            flows,
+            directory: {
+              command: () =>
+                Promise.reject(
+                  new Error(
+                    "Directory commands require an authorized owner invocation.",
+                  ),
+                ),
+            },
           } as const,
         );
       },

@@ -23,6 +23,7 @@ import {
 import {
   createContentResolver,
   createMemoryAssetRepository,
+  isPendingContentRef,
 } from "@copilotz/copilotz/content";
 import type {
   ContentStreamAbortInput,
@@ -94,6 +95,41 @@ async function within<T>(promise: Promise<T>, milliseconds = 250): Promise<T> {
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function memoryEffects(): import("../../../../runtime/actions/effect-client.ts").ActionEffectClient {
+  const states = new Map<
+    string,
+    import("@copilotz/copilotz/actions").ActionEffectState
+  >();
+  return {
+    inspect: (step) =>
+      Promise.resolve(structuredClone(states.get(step) ?? { status: "none" })),
+    begin(step) {
+      const prior = states.get(step);
+      if (prior) {
+        return Promise.resolve(
+          structuredClone(prior) as Exclude<typeof prior, { status: "none" }>,
+        );
+      }
+      states.set(step, { status: "indeterminate" });
+      return Promise.resolve({ status: "proceed" });
+    },
+    confirm(step, outcome) {
+      states.set(step, { status: "replay", outcome: structuredClone(outcome) });
+      return Promise.resolve();
+    },
+    notStarted() {
+      throw new Error("not configured");
+    },
+    inventory: () =>
+      Promise.resolve(
+        [...states].map(([step, value]) => ({
+          step,
+          status: value.status === "replay" ? "confirmed" : "begun",
+        })),
+      ),
+  };
 }
 
 type OpenedStream = {
@@ -222,7 +258,9 @@ function fixture(options: FixtureOptions) {
     }));
   };
 
+  const effects = memoryEffects();
   const context = {
+    effect: effects,
     namespace: "tenant-a",
     operationKey: "operation-a",
     identity: Object.freeze({ correlationId: "correlation-a" }),
@@ -784,6 +822,7 @@ Deno.test("resolved credentials never enter durable Action lifecycle data", asyn
     },
   });
   const actions = createActionCallers({ callLlm: callLlmAction }, {
+    createEffectClient: () => memoryEffects(),
     actionLifecycle: lifecycle,
     content: test.context.content,
     signal: test.context.signal,
@@ -1081,7 +1120,7 @@ Deno.test("settled attempts remain accounted when later credentials are unavaila
         }],
       }, test.context),
     Error,
-    "No LLM credential is available",
+    "primary failed",
   );
   assertEquals(test.progressValues(), [{
     schema: "copilotz.llm.attempt-accounting.v1",
@@ -1829,7 +1868,7 @@ Deno.test("llm.call keeps attachments reference-only while preserving mixed cont
     {
       type: "text",
       text:
-        'Copilotz attachment {"name":"render.png","mediaType":"image/png","assetRef":"asset://tenant-a/tool-export-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+        'Copilotz attachment {"name":"render.png","mediaType":"image/png","assetRef":"asset://tenant-a/tool-export-a"}. Its body is not included in this LLM request; use an asset tool only if you need more than the conversation already says about it.',
       role: "tool.output",
       mediaType: "text/plain; charset=utf-8",
       name: "render.png",
@@ -1837,7 +1876,7 @@ Deno.test("llm.call keeps attachments reference-only while preserving mixed cont
     {
       type: "text",
       text:
-        'Copilotz attachment {"name":"brief.pdf","mediaType":"application/pdf","assetRef":"asset://tenant-a/file-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+        'Copilotz attachment {"name":"brief.pdf","mediaType":"application/pdf","assetRef":"asset://tenant-a/file-a"}. Its body is not included in this LLM request; use an asset tool only if you need more than the conversation already says about it.',
       role: "body",
       mediaType: "text/plain; charset=utf-8",
       name: "brief.pdf",
@@ -2958,6 +2997,16 @@ Deno.test("llm.call drains invalid local frames before fallback accounting", asy
       totalTokens: undefined,
     }],
   );
+  const replay = await callLlmAction.execute({
+    ...emptyInput,
+    models: [{ connection: "primary", model: "primary-model" }, {
+      connection: "backup",
+      model: "backup-model",
+    }],
+  }, test.context);
+  assertEquals(replay.model, "backup-model");
+  assertEquals(replay.attempts, output.attempts);
+  assertEquals(backupCalls, 1);
 });
 
 Deno.test("llm.call reports finalized attempts before a terminal framework failure", async () => {
@@ -3475,6 +3524,7 @@ Deno.test("callLlm accepts plain strings as text message content", async () => {
   } as unknown as LlmActionContext["content"];
   const durable: ActionEventData[] = [];
   const actions = createActionCallers({ callLlm: callLlmAction }, {
+    createEffectClient: () => memoryEffects(),
     actionLifecycle: {
       emit(data) {
         durable.push(structuredClone(data));
@@ -3548,6 +3598,7 @@ Deno.test("misplaced credentials are rejected before any durable Action input is
   const test = fixture({ llmConnections: { primary: { adapter: "unused" } } });
   const durable: ActionEventData[] = [];
   const actions = createActionCallers({ callLlm: callLlmAction }, {
+    createEffectClient: () => memoryEffects(),
     actionLifecycle: createActionLifecycleEmitter({
       namespace: "tenant-a",
       append(input) {
@@ -3874,4 +3925,460 @@ Deno.test("llm.call holds sealed handles until delayed final capture physically 
     release.resolve();
     await result;
   }
+});
+
+for (const loss of ["seal", "confirmation receipt"] as const) {
+  Deno.test(`a completed provider response survives a ${loss} deadline and replays full text without billing twice`, async () => {
+    const { createTestDatabase } = await import(
+      "../../../../runtime/testing/ominipg.ts"
+    );
+    const { provisionCopilotzSchema } = await import(
+      "../../../../runtime/events/schema.ts"
+    );
+    const { createOwnerEffectClient } = await import(
+      "../../../../runtime/actions/effect-commands.ts"
+    );
+    const db = await createTestDatabase({
+      url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    });
+    const schema = "llm_completion_replay";
+    await provisionCopilotzSchema(db, schema);
+    let calls = 0;
+    const answer = "Complete streamed answer, including the final paragraph.\n"
+      .repeat(50);
+    const adapter: LlmAdapter = {
+      call() {
+        calls++;
+        return invocation(
+          {
+            content: answer,
+            attempts: [{ status: "completed", usage: { outputTokens: 51 } }],
+            finishReason: "stop",
+          },
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue({
+                lane: "content",
+                mediaType: "text/plain",
+                bytes: new TextEncoder().encode(answer),
+              });
+              controller.close();
+            },
+          }),
+        );
+      },
+    };
+    const { ownerExecutionInterrupted } = await import(
+      "../../../../runtime/execution/owner-interruption.ts"
+    );
+    const receipts = new Map<string, ActionEventData>();
+    const lifecycle = createActionLifecycleEmitter({
+      namespace: "tenant-a",
+      append({ draft, data }) {
+        receipts.set(draft.deduplicationId!, structuredClone(data));
+        return Promise.resolve({ deduplicated: false } as never);
+      },
+      load: (_namespace, key) => Promise.resolve(receipts.get(key) ?? null),
+    });
+    let runId = "";
+    let interruptConfirmation = loss === "confirmation receipt";
+    const caller = (context: LlmActionContext) =>
+      createActionCallers({ callLlm: callLlmAction }, {
+        actionLifecycle: lifecycle,
+        signal: context.signal,
+        content: context.content,
+        createInvocationKey: () => "replayed-call",
+        createEffectClient(frame) {
+          runId = frame.actionRunId;
+          const client = createOwnerEffectClient({
+            session: db,
+            schema,
+            namespace: "tenant-a",
+            actionRunId: runId,
+          });
+          return {
+            ...client,
+            async confirm(step, outcome, options) {
+              await client.confirm(step, outcome, options);
+              if (interruptConfirmation) {
+                interruptConfirmation = false;
+                throw Object.assign(ownerExecutionInterrupted(), {
+                  code: "deadline_exceeded",
+                });
+              }
+            },
+          };
+        },
+        createContext({ frame, progress }) {
+          return {
+            ...context,
+            progress,
+            action: {
+              id: frame.actionId,
+              runId: frame.actionRunId,
+              metadata: frame.metadata,
+            },
+          };
+        },
+      }).callLlm;
+    try {
+      const first = fixture({
+        llmConnections: { primary: { adapter: "provider" } },
+        adapters: { provider: adapter },
+        onClose() {
+          if (loss !== "seal") return;
+          throw Object.assign(ownerExecutionInterrupted(), {
+            code: "deadline_exceeded",
+          });
+        },
+      });
+      await assertRejects(async () =>
+        await caller(first.context)({ ...baseInput, stream: { id: "reply" } })
+      );
+      assertEquals(calls, 1);
+      assertEquals(
+        [...receipts.values()].filter((event) =>
+          event.status === "failed" || event.status === "cancelled"
+        ),
+        [],
+      );
+      assertEquals(
+        (await createOwnerEffectClient({
+          session: db,
+          schema,
+          namespace: "tenant-a",
+          actionRunId: runId,
+        }).inspect("provider:0")).status,
+        "replay",
+      );
+      // A fresh context/client models a different worker after delivery retry.
+      const retry = fixture({
+        llmConnections: { primary: { adapter: "provider" } },
+        adapters: { provider: adapter },
+      });
+      const output = await caller(retry.context)({
+        ...baseInput,
+        stream: { id: "reply" },
+      });
+      assertEquals(
+        [...receipts.values()].filter((event) => event.status === "completed")
+          .length,
+        1,
+      );
+      assertEquals(calls, 1);
+      assertEquals(retry.opened.length, 0);
+      assertEquals(
+        new TextDecoder().decode(retry.captured[0].assets[0].body),
+        answer,
+      );
+      assert(isPendingContentRef(output.content[0]));
+      assertEquals(
+        output.content[0].byteLength,
+        new TextEncoder().encode(answer).length,
+      );
+      assertEquals(output.usage?.outputTokens, 51);
+      // A duplicated delivery after recovery must also reuse the one receipt.
+      await caller(retry.context)({ ...baseInput, stream: { id: "reply" } });
+      assertEquals(calls, 1);
+      assertEquals(
+        [...receipts.values()].filter((event) => event.status === "completed")
+          .length,
+        1,
+      );
+    } finally {
+      await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await db.close();
+    }
+  });
+}
+
+Deno.test("an empty provider completion fails visibly and stays checkpointed", async () => {
+  let calls = 0;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call() {
+          calls++;
+          return invocation({
+            content: "",
+            attempts: [{ status: "completed" }],
+            finishReason: "stop",
+          });
+        },
+      },
+    },
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assertRejects(
+      async () => await callLlmAction.execute(baseInput, test.context),
+      Error,
+      "without reply content",
+    );
+  }
+  assertEquals(calls, 1);
+  assertEquals(test.captured.length, 0);
+});
+
+Deno.test("retry preserves credential skips before a completed paid fallback", async () => {
+  let resolutions = 0, calls = 0, lost = false;
+  const test = fixture({
+    llmConnections: {
+      primary: {
+        provider: "openai",
+        auth: {
+          resolve() {
+            resolutions++;
+            if (resolutions > 1) {
+              throw new Error("retry must not re-resolve credentials");
+            }
+            return { available: false };
+          },
+        },
+      },
+      backup: { adapter: "backup" },
+    },
+    adapters: {
+      backup: {
+        call() {
+          calls++;
+          return invocation({
+            content: "paid fallback answer",
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+    onCapture() {
+      if (!lost) {
+        lost = true;
+        throw new Error("delivery lost");
+      }
+    },
+  });
+  const input = {
+    ...baseInput,
+    models: [{ connection: "primary", model: "gpt-4o" }, {
+      connection: "backup",
+      model: "backup",
+    }] as const,
+  };
+  await assertRejects(async () =>
+    await callLlmAction.execute(input, test.context)
+  );
+  const output = await callLlmAction.execute(input, test.context);
+  assertEquals(output.connection, "backup");
+  assertEquals(resolutions, 1);
+  assertEquals(calls, 1);
+});
+
+for (const status of [429, 503, 408, 401, 400]) {
+  Deno.test(`provider HTTP ${status} uses a fresh dispatch only for retryable failures`, async () => {
+    let calls = 0;
+    const test = fixture({
+      llmConnections: { primary: { adapter: "provider" } },
+      adapters: {
+        provider: {
+          call() {
+            calls++;
+            return invocation(
+              calls === 1
+                ? Promise.reject(
+                  Object.assign(new Error("provider rejected request"), {
+                    status,
+                    retryAfterMs: 1234,
+                  }),
+                )
+                : {
+                  content: "full answer",
+                  attempts: [{ status: "completed" }],
+                },
+            );
+          },
+        },
+      },
+    });
+    const failure = await assertRejects(() =>
+      Promise.resolve(callLlmAction.execute(baseInput, test.context))
+    ) as Error & { retryable: boolean; retryAfterMs: number };
+    const retryable = [429, 503, 408].includes(status);
+    assertEquals(failure.retryable, retryable);
+    assertEquals(failure.retryAfterMs, 1234);
+    if (retryable) {
+      await callLlmAction.execute(baseInput, test.context);
+      await callLlmAction.execute(baseInput, test.context);
+      assertEquals(calls, 2);
+    } else {
+      await assertRejects(() =>
+        Promise.resolve(callLlmAction.execute(baseInput, test.context))
+      );
+      assertEquals(calls, 1);
+    }
+  });
+}
+
+Deno.test("a paid fallback is reused before retrying an earlier transient provider failure", async () => {
+  let primaryCalls = 0, backupCalls = 0, failedCapture = false;
+  const test = fixture({
+    llmConnections: {
+      primary: { adapter: "primary" },
+      backup: { adapter: "backup" },
+    },
+    adapters: {
+      primary: {
+        call() {
+          primaryCalls++;
+          return invocation(Promise.reject(new TypeError("fetch failed")));
+        },
+      },
+      backup: {
+        call() {
+          backupCalls++;
+          return invocation({
+            content: "paid fallback",
+            attempts: [{ status: "completed" }],
+          });
+        },
+      },
+    },
+    onCapture() {
+      if (!failedCapture) {
+        failedCapture = true;
+        throw new Error("capture lost");
+      }
+    },
+  });
+  const input = {
+    ...baseInput,
+    models: [{ connection: "primary", model: "first" }, {
+      connection: "backup",
+      model: "second",
+    }] as const,
+  };
+  await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(input, test.context))
+  );
+  const output = await callLlmAction.execute(input, test.context);
+  assertEquals(output.connection, "backup");
+  assertEquals(output.attempts?.map((a) => a.status), ["failed", "completed"]);
+  assertEquals(primaryCalls, 1);
+  assertEquals(backupCalls, 1);
+});
+
+Deno.test("a provider timeout before completion retries without becoming cancellation", async () => {
+  const { LLMStreamTimeoutError } = await import("../../shared/errors.ts");
+  let calls = 0;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call() {
+          calls++;
+          return invocation(
+            calls === 1
+              ? Promise.reject(new LLMStreamTimeoutError("first_token", 100))
+              : {
+                content: "answer after timeout",
+                attempts: [{ status: "completed" }],
+              },
+          );
+        },
+      },
+    },
+  });
+  const error = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(baseInput, test.context))
+  ) as Error & { retryable: boolean; code: string };
+  assertEquals(error.code, "llm_provider_timeout");
+  assertEquals(error.message, "The model stopped responding.");
+  assertEquals(error.retryable, true);
+  await callLlmAction.execute(baseInput, test.context);
+  assertEquals(calls, 2);
+});
+
+Deno.test("an interrupted visible stream retries with the full replacement answer", async () => {
+  const failedResult = Promise.withResolvers<LlmAdapterResult>();
+  let calls = 0;
+  const test = fixture({
+    llmConnections: { primary: { adapter: "provider" } },
+    adapters: {
+      provider: {
+        call() {
+          calls++;
+          return calls === 1
+            ? invocation(
+              failedResult.promise,
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue({
+                    lane: "content",
+                    mediaType: "text/plain",
+                    bytes: encoder.encode("discarded partial"),
+                  });
+                  controller.close();
+                },
+              }),
+            )
+            : invocation({
+              content: "The complete replacement answer.",
+              attempts: [{ status: "completed" }],
+            });
+        },
+      },
+    },
+    onAppend() {
+      failedResult.reject(new TypeError("fetch failed"));
+    },
+  });
+  const input = { ...baseInput, stream: { id: "reply" } };
+  const error = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute(input, test.context))
+  ) as Error & { retryable: boolean };
+  assertEquals(error.retryable, true);
+  assertEquals(test.opened.length, 1);
+  assertEquals(test.opened[0].aborted, true);
+  await callLlmAction.execute(input, test.context);
+  assertEquals(calls, 2);
+  assertEquals(
+    decoder.decode(test.captured.at(-1)!.assets[0].body),
+    "The complete replacement answer.",
+  );
+});
+
+Deno.test("credential resolution failure cannot mask a later provider rejection", async () => {
+  const test = fixture({
+    llmConnections: {
+      missing: {
+        provider: "openai",
+        auth: {
+          resolve() {
+            throw new Error("account unavailable");
+          },
+        },
+      },
+      primary: { adapter: "provider" },
+    },
+    adapters: {
+      provider: {
+        call() {
+          return invocation(
+            Promise.reject(
+              Object.assign(new Error("bad key"), { status: 401 }),
+            ),
+          );
+        },
+      },
+    },
+  });
+  const failure = await assertRejects(() =>
+    Promise.resolve(callLlmAction.execute({
+      ...baseInput,
+      models: [{ connection: "missing", model: "first" }, {
+        connection: "primary",
+        model: "second",
+      }],
+    }, test.context))
+  ) as Error & { code: string; retryable: boolean };
+  assertEquals(failure.code, "llm_provider_auth_error");
+  assertEquals(failure.retryable, false);
 });

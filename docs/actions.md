@@ -37,7 +37,7 @@ the call and runs `execute`.
 ### A complete Action
 
 `save-note.ts` is a pure definition module: no environment reads and no
-top-level I/O. It needs only `@copilotz/copilotz@^0.89.0`. It declares the
+top-level I/O. It needs only `@copilotz/copilotz@^0.90.0`. It declares the
 `note` Collection it writes, so the file stands alone.
 
 ```ts
@@ -108,8 +108,9 @@ the `id` (`notes.save`).
 ### Call from a host
 
 `app.actions.saveNote({ text }, options)` starts a new recorded operation and
-returns the Action output after inherited work settles. The alias is `saveNote`;
-the durable Events still use `notes.save.invoked` and `notes.save.completed` (or
+returns the Action output as soon as its durable lifecycle result exists.
+Inherited downstream work may still be pending. The alias is `saveNote`; the
+durable Events still use `notes.save.invoked` and `notes.save.completed` (or
 `failed`/`cancelled`). Invalid input is rejected before those Events exist. An
 identical `idempotencyKey` restores the recorded output or failure without
 executing the Action again. Host calls run as the trusted host: the owner
@@ -574,6 +575,19 @@ Recovery checks each Action's retained effect steps, including steps removed by
 a newer deployment. Old attempts without the original replay contract cannot
 acquire it retroactively. Swallowing an effect error does not permit a
 successful Action terminal.
+
+An Action error explicitly marked `retryable: true` leaves its lifecycle open
+when an owner-retained delivery has attempts remaining. It emits no failed or
+cancelled Action event until terminal exhaustion. Ordinary unclassified errors
+and direct calls without a delivery budget keep immediate settlement. All begun
+effects must still have confirmed outcomes; retryability never overrides an
+indeterminate external effect. A bounded `retryAfterMs` error hint can delay the
+next delivery without occupying execution capacity.
+
+The LLM Action distinguishes an observed incomplete transient response from an
+interrupted dispatch of unknown outcome. It retains a retry receipt for the
+former, uses a fresh candidate attempt on the next delivery, and reuses any
+completed candidate before considering further provider requests.
 
 Built-in channel delivery, command execution, file mutation, mutating HTTP and
 unknown MCP calls use this protocol. Read-only filesystem tools, HTTP

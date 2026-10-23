@@ -120,15 +120,30 @@ Collection reads leave references untouched unless asked. The second argument of
 `get`, `list` and `search` takes `content`:
 
 - `true` resolves every declared field;
-- `{ fields, exclude, byteLimit }` selects declared paths, leaves entries that
-  match an `exclude` clause (`kind`, `role`, `mediaType`, `disposition`) as
-  `resolve: false` descriptors, and sets the budget.
+- `{ fields, exclude, byteLimit, bodyByteLimit, overflow }` selects declared
+  paths, leaves entries that match an `exclude` clause (`kind`, `role`,
+  `mediaType`, `disposition`) as `resolve: false` descriptors, and sets the
+  budget and what happens over it.
 
 Resolved entries keep their reference metadata and add `value`, typed as
 `ResolvedCollectionContentEntry`. Resolution runs after filtering and
 pagination, reads each unique Asset body once per call, and checks the byte
 budget (default 32 MiB of unique bodies) against metadata before any body is
 fetched. Missing, unauthorized or corrupt content rejects the whole read.
+
+Over the budget, `overflow: "reject"` (the default) rejects the read with a
+`ContentByteLimitError`; use it when a caller needs every body. With
+`overflow: "defer"` the read never fails for size: unique bodies resolve in read
+order (records as read, then fields and entries), so a window ordered newest
+first resolves its newest bodies. A body larger than `bodyByteLimit` (default
+`byteLimit`) is deferred on its own as `size` and spends nothing; once a body
+does not fit, it and every later body are deferred as `budget`. A deferred entry
+stays a reference with `resolve: false`, `deferred` and its `byteLength`, so a
+reader can load it on demand. The plan depends only on the order and the sizes,
+so the same read resolves the same bodies. Live subscription windows defer by
+default (unless the subscriber passes `overflow: "reject"`), so a window never
+fails because its bodies are large. `planContentBudget` exposes the rule, and
+repositories implement it in `readWithin` from the metadata of one read.
 Undeclared paths are rejected. Excluded entries are still authorized as
 references; exclusion only skips loading. The budget bounds stored body bytes,
 not every decoded copy in memory.
@@ -160,7 +175,7 @@ This builds on the files from
 [Chapter 18](getting-started/part-4-release-to-users/18-handle-files-and-large-content.md):
 `notes-plugin.ts` with its declared `body` field, and `notes-files.ts` with
 `notesFilesPlugin` and the `NoteFileReader` contract. It needs Deno 2.9+ or Node
-24+ and `@copilotz/copilotz@^0.89.0`; no credential or file access.
+24+ and `@copilotz/copilotz@^0.90.0`; no credential or file access.
 
 Create `body-report.ts`, a pure definition module. Whenever a note with a body
 is created, an Action reads that body back with a bounded Collection read and

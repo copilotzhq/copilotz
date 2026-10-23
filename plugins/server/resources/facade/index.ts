@@ -1,5 +1,7 @@
 /** Defines the immutable semantic Server facade Resource. @module */
 
+import { validateAllowedOrigins } from "../../shared/device-origin.ts";
+
 import type {
   DefineServerFacadeInput,
   ServerCollectionExposure,
@@ -122,8 +124,10 @@ export function defineServerFacade(
   if (
     !input || typeof input !== "object" || Array.isArray(input) ||
     Reflect.ownKeys(input).some((key) =>
-      key !== "basePath" && key !== "expose" &&
-      key !== "authenticate" &&
+      key !== "basePath" && key !== "expose" && key !== "sessionCookie" &&
+      key !== "authenticate" && key !== "resolveActor" &&
+      key !== "allowedOrigins" &&
+      key !== "deviceLimits" &&
       key !== "maxAssetUploadBytes"
     )
   ) throw new TypeError("Server facade definition is invalid.");
@@ -131,6 +135,11 @@ export function defineServerFacade(
     if (typeof input[key] !== "function") {
       throw new TypeError(`Server ${key} must be a function.`);
     }
+  }
+  if (
+    input.resolveActor !== undefined && typeof input.resolveActor !== "function"
+  ) {
+    throw new TypeError("Server resolveActor must be a function.");
   }
   const expose = input.expose === undefined
     ? {}
@@ -140,7 +149,52 @@ export function defineServerFacade(
       key !== "actions" && key !== "collections" && key !== "channels"
     )
   ) throw new TypeError("Server facade categories are invalid.");
+  if (input.sessionCookie !== undefined) {
+    const cookie = plainRecord(input.sessionCookie, "Session cookie");
+    if (
+      Object.keys(cookie).some((k) =>
+        !["name", "path", "domain", "secure", "sameSite"].includes(k)
+      ) ||
+      cookie.name !== undefined &&
+        (typeof cookie.name !== "string" ||
+          !/^[A-Za-z0-9_-]+$/.test(cookie.name)) ||
+      cookie.path !== undefined &&
+        (typeof cookie.path !== "string" ||
+          !/^\/[\x21-\x3A\x3C-\x7E]*$/.test(cookie.path)) ||
+      cookie.domain !== undefined &&
+        (typeof cookie.domain !== "string" ||
+          !/^[A-Za-z0-9.-]+$/.test(cookie.domain)) ||
+      cookie.secure !== undefined && typeof cookie.secure !== "boolean" ||
+      cookie.sameSite !== undefined &&
+        !["Strict", "Lax", "None"].includes(String(cookie.sameSite)) ||
+      cookie.sameSite === "None" && cookie.secure === false ||
+      String(cookie.name ?? "__Host-copilotz_session").startsWith("__Host-") &&
+        (cookie.domain !== undefined || cookie.secure === false ||
+          cookie.path !== undefined && cookie.path !== "/") ||
+      typeof cookie.name === "string" && cookie.name.startsWith("__Secure-") &&
+        cookie.secure === false
+    ) throw new TypeError("Invalid session cookie configuration.");
+  }
+  const allowedOrigins = validateAllowedOrigins(input.allowedOrigins);
+  if (input.deviceLimits !== undefined) {
+    const limits = plainRecord(input.deviceLimits, "Device limits");
+    if (
+      Object.entries(limits).some(([key, value]) =>
+        !["maxSubscriptions", "maxPendingControls", "maxPendingBytes"].includes(
+          key,
+        ) ||
+        !Number.isSafeInteger(value) || (value as number) <= 0
+      )
+    ) throw new TypeError("Invalid device limits");
+  }
   return ({
+    allowedOrigins,
+    ...(input.deviceLimits
+      ? { deviceLimits: Object.freeze({ ...input.deviceLimits }) }
+      : {}),
+    ...(input.sessionCookie
+      ? { sessionCookie: Object.freeze({ ...input.sessionCookie }) }
+      : {}),
     basePath: routePath(input.basePath ?? "/api", "Server facade basePath"),
     maxAssetUploadBytes: maxAssetUploadBytes(input.maxAssetUploadBytes),
     expose: {
@@ -157,6 +211,7 @@ export function defineServerFacade(
         | ServerPatternPolicy,
     } as const,
     authenticate: input.authenticate,
+    ...(input.resolveActor ? { resolveActor: input.resolveActor } : {}),
   } as const);
 }
 
@@ -173,4 +228,6 @@ export type {
   ServerExposureOptions,
   ServerFacadeResource,
   ServerPatternPolicy,
+  ServerResolveActor,
+  SessionCookieOptions,
 } from "../../shared/contracts.ts";

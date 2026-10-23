@@ -14,8 +14,8 @@ Notes works in one application. Then a second team wants an import feature that
 reuses `notes.save`, a test suite wants to compose Notes without the importer,
 and the importer occasionally receives malformed rows. Without clear rules, the
 importer copies the `note` Collection, two plugins both register an alias called
-`saveNote`, and one bad row retries until it dead-letters silently with no
-record a user can see.
+`saveNote`, and one bad row retries until it dead-letters with nothing but a log
+line, and no record a user can see.
 
 ## The problem
 
@@ -113,9 +113,9 @@ unchanged; place it in the same directory. Install the runtime package first:
 
 ```sh
 # Deno
-deno add jsr:@copilotz/copilotz@^0.89.0
+deno add jsr:@copilotz/copilotz@^0.90.0
 # Node 24+
-npx jsr add @copilotz/copilotz@^0.89.0
+npx jsr add @copilotz/copilotz@^0.90.0
 ```
 
 Create `notes-import-plugin.ts`. It is a pure definition module: no environment,

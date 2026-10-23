@@ -264,7 +264,7 @@ async function productionSources(
     const url = new URL(entry.name + (entry.isDirectory ? "/" : ""), directory);
     if (entry.isDirectory) result.push(...await productionSources(url, path));
     else if (
-      entry.isFile && path.endsWith(".ts") && !path.endsWith(".test.ts")
+      entry.isFile && /\.tsx?$/.test(path) && !path.endsWith(".test.ts")
     ) {
       result.push({ path, text: await Deno.readTextFile(url) });
     }

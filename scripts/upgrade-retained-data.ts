@@ -1,4 +1,5 @@
 import { resolve, toFileUrl } from "@std/path";
+import { EVENT_SCHEMA_VERSION } from "../runtime/events/schema.ts";
 import {
   type AuthorityUpgradeManifest,
   inspectAuthorityUpgrade,
@@ -103,7 +104,11 @@ try {
       authority,
     });
     console.log(
-      JSON.stringify({ state: "complete", version: 13, upgradeId: plan?.id }),
+      JSON.stringify({
+        state: "complete",
+        version: EVENT_SCHEMA_VERSION,
+        upgradeId: plan?.id,
+      }),
     );
   }
 } finally {

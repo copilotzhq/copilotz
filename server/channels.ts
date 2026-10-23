@@ -157,7 +157,11 @@ export async function handleChannel(
       status: 202,
       data: {
         operationId: handle.operationId,
-        status: status?.state === "accepted" ? "accepted" : "running",
+        status: !status || status.state === "accepted"
+          ? "accepted"
+          : status.state === "running"
+          ? "running"
+          : "settled",
         correlationId: handle.correlationId,
         checkpoint: handle.replayCursor,
         acceptedAt: status?.acceptedAt ?? new Date().toISOString(),

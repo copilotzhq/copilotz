@@ -71,6 +71,8 @@ export type ContextContributionInput = Readonly<{
   agent: AgentResource;
   participant: Participant;
   thread: ConversationThread;
+  /** Original turn initiator, retained through agent and tool continuations. */
+  initiatorParticipantId?: string;
   /** The participant-relative internal history scope, when applicable. */
   historyScopeId?: string;
   sourceRange?: Readonly<{
@@ -87,6 +89,8 @@ export type ContextContribution = Readonly<{
   id: string;
   title: string;
   role: "context" | "evidence";
+  /** Defaults to system context; volatile personal data belongs before the latest message. */
+  placement?: "system" | "before_latest_message";
   content: ContentInput;
   source?: ContextSourceRef;
   capturedAt?: string;
@@ -96,6 +100,15 @@ export type ContextResource = Readonly<{
   id: string;
   type: "context";
   purposes: readonly ContextPurpose[];
+  /** Idempotent preparation before Core opens its read-only prompt snapshot. */
+  prepare?(
+    input: Readonly<{
+      context: ProcessorContext;
+      threadId: string;
+      initiatorParticipantId?: string;
+      historyScopeId?: string;
+    }>,
+  ): void | Promise<void>;
   contribute(
     input: ContextContributionInput,
   ):
@@ -142,6 +155,8 @@ export type FrozenContextContribution = Readonly<{
   resourceId: string;
   title: string;
   role: "context" | "evidence";
+  /** Defaults to system context; volatile personal data belongs before the latest message. */
+  placement?: "system" | "before_latest_message";
   content: readonly ContentRef[];
   source?: ContextSourceRef;
   capturedAt: string;

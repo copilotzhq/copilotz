@@ -164,6 +164,16 @@
           "description": "Operations, Events, deliveries, resend, observation, cancellation and recovery."
         },
         {
+          "title": "Owner Recovery",
+          "slug": "owner-recovery",
+          "description": "Automatic replacement of a fenced owner, retryable 503 admission and lease timing."
+        },
+        {
+          "title": "Execution Liveness",
+          "slug": "execution-liveness",
+          "description": "Inactivity-based stall detection for model calls, the delivery safety ceiling and deliveryTimeoutMs."
+        },
+        {
           "title": "Content and Assets",
           "slug": "content-assets",
           "description": "Namespace-scoped Assets, content references and budgeted reads."
@@ -177,6 +187,11 @@
           "title": "Views",
           "slug": "views",
           "description": "Scoped one-shot text presentations with an authorized projector."
+        },
+        {
+          "title": "Web runtime and Views",
+          "slug": "web-runtime-and-views",
+          "description": "Framework-neutral browser runtime, live client Collections, plugin renderers and the shared shadcn UI kit."
         }
       ]
     },
@@ -297,6 +312,11 @@
           "title": "Upgrading and Data Safety",
           "slug": "upgrading",
           "description": "Version pins, stable identities, schema evolution and offline upgrades."
+        },
+        {
+          "title": "Moving Retained Tenant Data",
+          "slug": "retained-data-migration",
+          "description": "Relocate owner schemas, migrate owner keys and read transfer bodies offline with the public migration API."
         }
       ]
     },
@@ -312,6 +332,11 @@
           "title": "API",
           "slug": "api",
           "description": "createCopilotz, its roles, operation methods and package entrypoints."
+        },
+        {
+          "title": "Subscriptions",
+          "slug": "subscriptions",
+          "description": "Authorized owner-pushed Collection reads, applied checkpoints and optimistic settlement."
         }
       ]
     },

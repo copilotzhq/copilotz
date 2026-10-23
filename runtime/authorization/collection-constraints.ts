@@ -26,33 +26,36 @@ export function validateCollectionConstraints(
   constraints: ServerConstraints,
 ): void {
   const filter = (value: unknown) => {
-    const input = record(value);
-    for (const [key, item] of Object.entries(input)) {
-      if (key === "filter") {
-        try {
+    try {
+      const input = record(value);
+      for (const [key, item] of Object.entries(input)) {
+        if (key === "filter") {
           compileCollectionPredicate(
             item as NonNullable<CollectionFilter["filter"]>,
             [],
           );
-        } catch {
-          authorizationRefused();
+        } else if (["where", "contains", "containsAny"].includes(key)) {
+          const fields = record(item);
+          if (
+            Object.keys(fields).some((field) =>
+              !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(field)
+            )
+          ) throw new TypeError("Invalid policy filter field path.");
+          if (
+            key === "containsAny" &&
+            Object.values(fields).some((values) => !Array.isArray(values))
+          ) {
+            throw new TypeError("Policy containsAny requires arrays.");
+          }
+        } else {
+          throw new TypeError(`Unsupported policy filter clause: ${key}`);
         }
-      } else if (["where", "contains", "containsAny"].includes(key)) {
-        const fields = record(item);
-        if (
-          Object.keys(fields).some((field) =>
-            !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(field)
-          )
-        ) authorizationRefused();
-        if (
-          key === "containsAny" &&
-          Object.values(fields).some((values) => !Array.isArray(values))
-        ) {
-          authorizationRefused();
-        }
-      } else {
-        authorizationRefused();
       }
+    } catch (error) {
+      console.error("Policy collection filter refused", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      authorizationRefused();
     }
   };
   if (constraints.collections !== undefined) {

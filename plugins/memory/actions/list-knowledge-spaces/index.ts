@@ -31,6 +31,7 @@ export const listKnowledgeSpacesAction: ActionDefinition<
     const values = (await threadMemorySpaces(
       context,
       memoryActionProvenance(context).threadId,
+      memoryActionProvenance(context).initiatorParticipantId,
     )).slice(0, Math.min(limit, 1_000));
     return { knowledgeSpaces: values, totalKnowledgeSpaces: values.length };
   },

@@ -73,3 +73,70 @@ Deno.test("operation constraints reject lossy undefined and contradictory absenc
     captureOperationConstraints({ metadata: {}, absentMetadata: [""] })
   );
 });
+
+Deno.test("operation alternatives preserve complete branches and common exclusions", () => {
+  const policy = captureOperationConstraints({
+    metadata: { tenant: "one" },
+    absentMetadata: ["computerOperationKind"],
+    anyOf: [
+      { metadata: { actorId: "user" }, absentMetadata: ["credentialId"] },
+      {
+        metadata: { identityFlow: true, proof: "browser" },
+        absentMetadata: ["credentialId"],
+      },
+    ],
+  });
+  const wire = JSON.parse(JSON.stringify(policy));
+  assert(matchesOperationConstraints({ tenant: "one", actorId: "user" }, wire));
+  assert(
+    matchesOperationConstraints({
+      tenant: "one",
+      identityFlow: true,
+      proof: "browser",
+    }, wire),
+  );
+  for (
+    const candidate of [
+      { tenant: "two", actorId: "user" },
+      { tenant: "one", actorId: "other", proof: "browser" },
+      { tenant: "one", identityFlow: true, proof: "other" },
+      { tenant: "one", actorId: "user", credentialId: null },
+      {
+        tenant: "one",
+        identityFlow: true,
+        proof: "browser",
+        credentialId: null,
+      },
+      {
+        tenant: "one",
+        identityFlow: true,
+        proof: "browser",
+        computerOperationKind: null,
+      },
+    ]
+  ) assert(!matchesOperationConstraints(candidate, wire));
+});
+
+Deno.test("operation alternatives reject malformed or unbounded disjunctions", () => {
+  for (
+    const anyOf of [
+      [],
+      null,
+      {},
+      [null],
+      [{}],
+      [{ metadata: { proof: undefined } }],
+      [{ metadata: { proof: "x" }, absentMetadata: ["proof"] }],
+      [{ metadata: {}, anyOf: [{ metadata: {} }] }],
+      Array.from({ length: 17 }, () => ({ metadata: {} })),
+    ]
+  ) {
+    assertThrows(() =>
+      captureOperationConstraints(
+        { metadata: {}, anyOf } as Parameters<
+          typeof captureOperationConstraints
+        >[0],
+      )
+    );
+  }
+});

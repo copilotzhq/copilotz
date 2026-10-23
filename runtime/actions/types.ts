@@ -220,6 +220,10 @@ export type ActionTransactionContext<
   TCollections extends RuntimeCollections = RuntimeCollections,
 > = Readonly<{
   collections: RuntimeTransactionCollections<TCollections>;
+  directory:
+    import("../authorization/directory-command.ts").TransactionDirectoryCommands;
+  sessions: import("./session-effects.ts").ActionSessions;
+  flows: import("./session-effects.ts").ActionFlows;
   relations: CollectionTransactionRelations;
   vectors: VectorTransaction;
 }>;
@@ -245,6 +249,10 @@ export interface RuntimeContext<
   readonly adapters: TAdapters;
   readonly actions: TActions;
   readonly collections: TCollections;
+  readonly authentication:
+    import("../authorization/identity-evidence.ts").IdentityVerifierClient;
+  readonly directory:
+    import("../authorization/directory-read.ts").DirectoryReader;
   readonly vectors: VectorReader;
   readonly content: RuntimeContent;
   readonly streams: RuntimeStreams;
@@ -320,6 +328,8 @@ export type ActionDefinition<
   TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
 > = Readonly<{
   id: string;
+  /** Minimum delivery safety backstop required by this Action, in milliseconds. */
+  deliveryTimeoutMs?: number;
   content?: ActionContentDeclaration;
   inputSchema?: TInputSchema;
   outputSchema?: TOutputSchema;
@@ -348,6 +358,8 @@ export type ActionDefinition<
 
 export type AnyActionDefinition = Readonly<{
   id: string;
+  /** Minimum delivery safety backstop required by this Action, in milliseconds. */
+  deliveryTimeoutMs?: number;
   content?: ActionContentDeclaration;
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;

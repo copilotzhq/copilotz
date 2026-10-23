@@ -1,7 +1,4 @@
-import {
-  createBundledSkill as defineSkill,
-  createInlineSkill,
-} from "../skills/resources/skill/index.ts";
+import { createInlineSkill } from "../skills/resources/skill/index.ts";
 import { skillsPlugin } from "../skills/plugin.ts";
 import { storageFixture } from "../core/shared/testing/storage-plugin.ts";
 import { coreEvent } from "../core/shared/events/index.ts";
@@ -389,10 +386,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
         value: "event-native",
         operation: "set",
       }, sourceEvent);
-      const first = await invoke(processor, "update_user_memory", {
-        content: "Prefers factory APIs",
-        category: "preference",
-      }, sourceEvent);
       const separate = await invoke(
         processor,
         "create_thread",
@@ -408,7 +401,7 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       await invoke(processor, "end_thread", {
         summary: "Core tool migration complete",
       }, sourceEvent);
-      return { first, separate, separateReplay };
+      return { separate, separateReplay };
     });
     assertEquals(result.separate, result.separateReplay);
     const recovered = await fixture.run(async (processor, sourceEvent) =>
@@ -441,11 +434,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       "tenant-a",
       "agent-participant",
     );
-    const userParticipant = await projectParticipantById(
-      fixture.engine,
-      "tenant-a",
-      "user-participant",
-    );
     const thread = await projectThreadById(
       fixture.engine,
       "tenant-a",
@@ -455,13 +443,6 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
       retained: true,
       architecture: "event-native",
     });
-    const items = (userParticipant?.metadata.memories as {
-      items: unknown[];
-    }).items;
-    assertEquals(items.length, 1);
-    assert((items[0] as {
-      id: string;
-    }).id.startsWith("memory:"));
     assertEquals(thread?.status, "archived");
     assertEquals(thread?.metadata.summary, "Core tool migration complete");
     const child = await projectThreadById(
@@ -502,7 +483,7 @@ Deno.test("memory and thread tools mutate domain state idempotently", async () =
     const events = await fixture.engine.events.list({ namespace: "tenant-a" });
     assertEquals(
       events.filter((event) => event.type === "participant.updated").length,
-      2,
+      1,
     );
     assertEquals(
       events.filter((event) => event.type === "thread.updated").length,

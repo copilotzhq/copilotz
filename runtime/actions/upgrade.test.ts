@@ -1,3 +1,4 @@
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { testUpgradeOptions } from "../testing/upgrade.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -440,6 +441,7 @@ Deno.test("linear chain stops at each missing input and resumes the exact review
     for (
       const table of [
         "owner_data_keys",
+        "authorization_effects",
         "authorization_sessions",
         "authorization_channels",
         "authorization_invocations",
@@ -521,7 +523,7 @@ Deno.test("linear chain stops at each missing input and resumes the exact review
       ...keys,
       authority: f.options.authority,
     });
-    assertEquals(await version(), 13);
+    assertEquals(await version(), EVENT_SCHEMA_VERSION);
     assertEquals(
       (await f.db.query(`SELECT * FROM ${f.store.tables.owner_data_keys}`))
         .rows,
@@ -608,10 +610,275 @@ for (const step of [11, 12]) {
       assertEquals(await version(), step + 1);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
       await upgradeActionLifecycle(f.db, f.schema, f.options);
-      assertEquals(await version(), 13);
+      assertEquals(await version(), EVENT_SCHEMA_VERSION);
     } finally {
       await f.db.query(`DROP SCHEMA "${f.schema}" CASCADE`);
       await f.db.close();
     }
   });
 }
+
+async function credentialSchemaInventory(db: SqlSession, schema: string) {
+  const columns = (await db.query(
+    `SELECT table_name,column_name,ordinal_position,data_type,is_nullable,column_default,collation_name
+     FROM information_schema.columns WHERE table_schema=$1 ORDER BY table_name,ordinal_position`,
+    [schema],
+  )).rows;
+  const indexes = (await db.query(
+    `SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname=$1 ORDER BY tablename,indexname`,
+    [schema],
+  )).rows;
+  const constraints = (await db.query(
+    `SELECT c.relname AS table_name,k.conname,pg_get_constraintdef(k.oid) AS definition
+     FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 ORDER BY c.relname,k.conname`,
+    [schema],
+  )).rows;
+  const sequences = (await db.query(
+    `SELECT sequence_name,data_type,start_value,minimum_value,maximum_value,increment,cycle_option
+     FROM information_schema.sequences WHERE sequence_schema=$1 ORDER BY sequence_name`,
+    [schema],
+  )).rows;
+  return { columns, indexes, constraints, sequences };
+}
+
+async function credentialUpgradeFixture(seedOfflineOwner = true) {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  });
+  const schema = `credential_upgrade_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
+  const tables = createCoreTableNames(schema);
+  await provisionCopilotzSchema(db, schema);
+  await provisionOperationCatalog(db, schema);
+  const fresh = await credentialSchemaInventory(db, schema);
+  // Recreate the released v13 key/collation shape before exercising the upgrade.
+  const keys =
+    (await db.query<{ table_name: string; name: string; definition: string }>(
+      `SELECT c.relname AS table_name,k.conname AS name,pg_get_constraintdef(k.oid) AS definition
+     FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname=$1 AND k.contype='f'`,
+      [schema],
+    )).rows;
+  for (const key of keys) {
+    await db.query(
+      `ALTER TABLE "${schema}"."${key.table_name}" DROP CONSTRAINT "${key.name}"`,
+    );
+  }
+  await db.query(`ALTER TABLE ${tables.nodes} DROP CONSTRAINT nodes_pkey`);
+  const ids = (await db.query<{ table_name: string; column_name: string }>(
+    `SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=$1 AND collation_name='C'`,
+    [schema],
+  )).rows;
+  for (const column of ids) {
+    await db.query(
+      `ALTER TABLE "${schema}"."${column.table_name}" ALTER COLUMN "${column.column_name}" TYPE TEXT COLLATE "default"`,
+    );
+  }
+  await db.query(`DROP INDEX "${schema}".nodes_ready_content_body_idx`);
+  await db.query(`CREATE INDEX nodes_ready_content_body_idx
+    ON ${tables.nodes} ((data->>'bodyId'))
+    WHERE type IN ('asset','protected_value') AND data->>'state'='ready'`);
+  await db.query(`ALTER TABLE ${tables.nodes} ADD PRIMARY KEY(id)`);
+  for (const key of keys) {
+    const definition = key.table_name === "edges"
+      ? `FOREIGN KEY (${
+        key.name.includes("source") ? "source" : "target"
+      }_node_id) REFERENCES ${tables.nodes}(id) ON DELETE CASCADE`
+      : key.definition;
+    await db.query(
+      `ALTER TABLE "${schema}"."${key.table_name}" ADD CONSTRAINT "${key.name}" ${definition}`,
+    );
+  }
+  const generated = monotonicUlid();
+  await db.query(
+    `INSERT INTO ${tables.nodes}(namespace,id,type,name) VALUES('main','explicit-id','fixture','explicit'),('main',$1,'fixture','generated')`,
+    [generated],
+  );
+  await db.query(
+    `INSERT INTO ${tables.edges}(id,namespace,source_node_id,target_node_id,type) VALUES('edge','main','explicit-id',$1,'related')`,
+    [generated],
+  );
+  await db.query(`DROP TABLE ${tables.authorization_effects}`);
+  await db.query(`UPDATE ${tables.copilotz_schema_metadata} SET version=13`);
+  if (seedOfflineOwner) {
+    await db.query(
+      `UPDATE ${tables.owner_epochs} SET epoch=7,holder='old-owner',last_seq=42`,
+    );
+  }
+  await db.query(
+    `INSERT INTO ${tables.authorization_sessions}(namespace,tenant,id,principal,expires_at,revoked_at)
+     VALUES('main','tenant','active','account','2099-01-01',NULL),
+           ('main','tenant','revoked','account','2099-01-01','2026-01-01')`,
+  );
+  await db.query(
+    `INSERT INTO ${tables.authorization_invocations}(namespace,run_id,source_event_id,authority)
+     VALUES('main','retained-run','retained-operation','{"principal":"account"}')`,
+  );
+  const retained = async () => ({
+    nodes:
+      (await db.query(`SELECT * FROM ${tables.nodes} ORDER BY namespace,id`))
+        .rows,
+    edges: (await db.query(`SELECT * FROM ${tables.edges} ORDER BY id`)).rows,
+    sessions: (await db.query(
+      `SELECT * FROM ${tables.authorization_sessions} ORDER BY id`,
+    )).rows,
+    invocations: (await db.query(
+      `SELECT * FROM ${tables.authorization_invocations} ORDER BY run_id`,
+    )).rows,
+  });
+  const state = async () => ({
+    version: (await db.query(
+      `SELECT version FROM ${tables.copilotz_schema_metadata}`,
+    )).rows[0].version,
+    epochs: (await db.query(`SELECT * FROM ${tables.owner_epochs}`)).rows,
+    inventory: await credentialSchemaInventory(db, schema),
+    retained: await retained(),
+  });
+  const before = await state();
+  return {
+    db,
+    schema,
+    tables,
+    fresh,
+    retained,
+    state,
+    before,
+    async close() {
+      await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await db.close();
+    },
+  };
+}
+
+Deno.test("v13 to v14 creates exactly the fresh schema, preserves sessions and replays flow bindings", async () => {
+  const f = await credentialUpgradeFixture();
+  try {
+    await assertRejects(() => validateCopilotzSchema(f.db, f.schema));
+    await upgradeActionLifecycle(f.db, f.schema);
+    assertEquals((await validateCopilotzSchema(f.db, f.schema)).version, 14);
+    await validateOperationCatalog(f.db, f.schema);
+    assertEquals(await credentialSchemaInventory(f.db, f.schema), f.fresh);
+    assertEquals(await f.retained(), f.before.retained);
+    assertEquals(
+      (await f.state()).epochs.map((row) => ({
+        owner: row.owner,
+        epoch: Number(row.epoch),
+        holder: row.holder,
+        last_seq: Number(row.last_seq),
+      })),
+      [{ owner: "schema", epoch: 8, holder: "", last_seq: 42 }],
+    );
+    assertEquals(
+      f.fresh.indexes.filter((row) => row.tablename === "authorization_effects")
+        .map((row) => row.indexname),
+      [
+        "authorization_effects_operation",
+        "authorization_effects_pkey",
+        "authorization_effects_run",
+      ],
+    );
+    await f.db.query(
+      `INSERT INTO ${f.tables.authorization_effects}(namespace,tenant,effect_key,run_id,operation_id,initiator,method,intent,claims,accepted_operation,consumed_run)
+       VALUES('main','tenant','flow','start-run','start-operation','{}','flow.start','{}','{}','callback-operation','callback-run')`,
+    );
+    const effects =
+      (await f.db.query(`SELECT * FROM ${f.tables.authorization_effects}`))
+        .rows;
+    const upgraded = await f.state();
+    await upgradeActionLifecycle(f.db, f.schema);
+    await upgradeActionLifecycle(f.db, f.schema);
+    assertEquals(await f.state(), upgraded);
+    assertEquals(
+      (await f.db.query(`SELECT * FROM ${f.tables.authorization_effects}`))
+        .rows,
+      effects,
+    );
+    // Current validation must require the admission binding, with no startup repair.
+    await f.db.query(
+      `ALTER TABLE ${f.tables.authorization_effects} DROP COLUMN accepted_operation`,
+    );
+    await assertRejects(
+      () => validateCopilotzSchema(f.db, f.schema),
+      Error,
+      "authorization_effects.accepted_operation",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("v13 to v14 refuses undrained work without changing schema, sessions or owner epoch", async () => {
+  const f = await credentialUpgradeFixture(false);
+  try {
+    const catalog = createOperationCatalog(f.db, f.schema);
+    const store = createEventStore({
+      session: f.db,
+      schema: f.schema,
+      admitOperationEventSql: (input, param) =>
+        catalog.admitEventSql(input, param),
+      indexOperationEventSql: (input, param) =>
+        catalog.indexEventSql(input, param),
+    });
+    const event = await store.append({
+      namespace: "main",
+      type: "pending",
+      payload: {},
+    }, ["worker"]);
+    const before = await f.state();
+    await assertRejects(
+      () => upgradeActionLifecycle(f.db, f.schema),
+      Error,
+      "Drain existing",
+    );
+    assertEquals(await f.state(), before);
+    // Remove only this synthetic pending delivery and settle its operation.
+    await f.db.query(
+      `DELETE FROM ${f.tables.event_deliveries} WHERE event_id=$1`,
+      [event.event.id],
+    );
+    await catalog.reconcile();
+    await upgradeActionLifecycle(f.db, f.schema);
+    assertEquals((await validateCopilotzSchema(f.db, f.schema)).version, 14);
+    assertEquals(await f.retained(), f.before.retained);
+  } finally {
+    await f.close();
+  }
+});
+
+Deno.test("v13 to v14 rolls back effect DDL, owner epoch and marker together on failure", async () => {
+  const f = await credentialUpgradeFixture();
+  const failing: SqlSession = {
+    query: f.db.query,
+    transaction: (run) =>
+      f.db.transaction((tx) =>
+        run({
+          async query<TRow extends Record<string, unknown>>(
+            sql: string,
+            params?: unknown[],
+          ) {
+            const result = await tx.query<TRow>(sql, params);
+            if (sql.includes("SET version=14")) {
+              throw new Error("injected combined upgrade failure");
+            }
+            return result;
+          },
+        })
+      ),
+  };
+  try {
+    await assertRejects(
+      () => upgradeActionLifecycle(failing, f.schema),
+      Error,
+      "injected combined upgrade failure",
+    );
+    assertEquals(await f.state(), f.before);
+    await upgradeActionLifecycle(f.db, f.schema);
+    assertEquals((await validateCopilotzSchema(f.db, f.schema)).version, 14);
+    assertEquals(await credentialSchemaInventory(f.db, f.schema), f.fresh);
+    assertEquals(await f.retained(), f.before.retained);
+  } finally {
+    await f.close();
+  }
+});

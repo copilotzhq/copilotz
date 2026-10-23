@@ -67,7 +67,16 @@ Deno.test("F4 Collection grants use the immediate executing Action, never ingres
     },
   });
   const authority = testAuthority("public");
-  const forged = { kind: "action", id: "threads.create" };
+  const forged = { kind: "action", id: "threads.create", runId: "forged-run" };
+  const assertInvocation = (id: string) => {
+    const invocation = seen.at(-1)?.invocation;
+    assertEquals(invocation?.kind, "action");
+    assertEquals(invocation?.id, id);
+    assert(
+      typeof invocation?.runId === "string" && invocation.runId.length > 0,
+    );
+    assert(invocation.runId !== forged.runId);
+  };
   const actions = bindTestActions(app.actions, authority);
   try {
     await assertRejects(() =>
@@ -90,20 +99,17 @@ Deno.test("F4 Collection grants use the immediate executing Action, never ingres
     assertEquals(seen.at(-1)?.invocation, undefined);
     assertThrows(() => retainedAuthority({ ...authority, invocation: forged }));
     await actions.allowed({ id: "allowed" });
-    assertEquals(seen.at(-1)?.invocation, forged);
+    assertInvocation("threads.create");
     await assertRejects(() =>
       actions.denied({ id: "denied" }, { metadata: { invocation: forged } })
     );
-    assertEquals(seen.at(-1)?.invocation, {
-      kind: "action",
-      id: "threads.other",
-    });
+    assertInvocation("threads.other");
     await actions.nested({ id: "nested" });
-    assertEquals(seen.at(-1)?.invocation, forged);
+    assertInvocation("threads.create");
     assert(
       seen.every((intent) =>
         !intent.invocation ||
-        Object.keys(intent.invocation).sort().join() === "id,kind"
+        Object.keys(intent.invocation).sort().join() === "id,kind,runId"
       ),
     );
     assertEquals(
@@ -161,7 +167,11 @@ Deno.test("F4 executing invocation grants remain fenced after attempt takeover a
     { participants: record },
     schema,
     ({ intent }) => {
-      assertEquals(intent.invocation, { kind: "action", id: "threads.create" });
+      assertEquals(intent.invocation, {
+        kind: "action",
+        id: "threads.create",
+        runId: "run",
+      });
       evaluations++;
       return { collectionMutations: { participants: { create: {} } } };
     },
@@ -225,7 +235,7 @@ Deno.test("F4 executing invocation grants remain fenced after attempt takeover a
     await assertRejects(authorize);
     assertEquals(evaluations, 1);
   } finally {
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }

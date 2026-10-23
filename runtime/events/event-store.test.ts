@@ -11,6 +11,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
+import { ActionError } from "../actions/errors.ts";
 import {
   createCoreSchemaStatements,
   createCoreTableNames,
@@ -149,6 +150,7 @@ Deno.test("A20 clean current baseline contains the marker and no body-reference 
       [
         "action_effects",
         "authorization_channels",
+        "authorization_effects",
         "authorization_invocations",
         "authorization_sessions",
         "content_adoptions",
@@ -773,6 +775,84 @@ Deno.test("non-retryable delivery failures dead-letter on the first attempt", as
       { unsettled: 0, deadLetters: 1, cancelled: 0, succeeded: 0 },
     );
   } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("a dead-lettered delivery logs one structured line without its input", async () => {
+  const fixture = await createFixture();
+  const { store } = fixture;
+  const lines: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => void lines.push(args);
+  try {
+    const append = (type: string, maxAttempts?: number) =>
+      store.append(
+        {
+          type,
+          namespace: "tenant-a",
+          payload: { apiKey: "sk-input-secret-0000000000000000" },
+        },
+        ["processor:app.reply"],
+        maxAttempts ? { maxAttempts } : undefined,
+      );
+
+    // A failure that will be retried is not a dead letter.
+    const retried = (await append("work.retried")).deliveries[0];
+    await store.claimDelivery({ id: retried.id, owner: "a", leaseMs: 60_000 });
+    await store.failDelivery({
+      id: retried.id,
+      owner: "a",
+      error: new Error("temporarily unavailable"),
+    });
+    assertEquals(lines, []);
+
+    const refused = (await append("work.refused")).deliveries[0];
+    await store.claimDelivery({ id: refused.id, owner: "b", leaseMs: 60_000 });
+    await store.failDelivery({
+      id: refused.id,
+      owner: "b",
+      error: new ActionError("Forbidden", { code: "forbidden", status: 403 }),
+      retryable: false,
+    });
+    const failing = (await append("work.failing")).deliveries[0];
+    await store.claimDelivery({ id: failing.id, owner: "c", leaseMs: 60_000 });
+    await store.failDelivery({
+      id: failing.id,
+      owner: "c",
+      error: new TypeError("upstream said token=abcdefghijklmnop"),
+      retryable: false,
+    });
+    const expired = (await append("work.expired", 1)).deliveries[0];
+    await store.claimDelivery({ id: expired.id, owner: "d", leaseMs: 0 });
+    await store.recoverExpiredDeliveries();
+
+    assertEquals(lines.length, 3);
+    const [forbidden, masked, lease] = lines.map(([line]) => {
+      assertEquals(typeof line, "string");
+      assertEquals(String(line).includes("sk-input-secret"), false);
+      return JSON.parse(String(line));
+    });
+    assertEquals(forbidden, {
+      severity: "ERROR",
+      message: "[copilotz] Delivery dead-lettered",
+      consumerId: "processor:app.reply",
+      operationId: refused.settlementScopeId,
+      deliveryId: refused.id,
+      eventId: refused.eventId,
+      databaseSchema: TEST_SCHEMA,
+      attempts: 1,
+      maxAttempts: refused.maxAttempts,
+      error: { code: "forbidden", name: "ActionError", message: "Forbidden" },
+    });
+    assertEquals(masked.error, {
+      name: "TypeError",
+      message: "upstream said token=[redacted]",
+    });
+    assertEquals(lease.deliveryId, expired.id);
+    assertEquals(lease.error.name, "DeliveryLeaseExpired");
+  } finally {
+    console.error = original;
     await closeFixture(fixture);
   }
 });
@@ -1552,5 +1632,46 @@ Deno.test("A55 event core is runtime-neutral and factory-first", async () => {
       !/runtime\/cli|server\//.test(source),
       `${module} imports a runtime adapter`,
     );
+  }
+});
+
+Deno.test("delivery backoff honors a bounded provider Retry-After hint", async () => {
+  const schema = `retry_hint_${crypto.randomUUID().replaceAll("-", "")}`;
+  const f = await createFixture(
+    Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    schema,
+  );
+  try {
+    for (
+      const [hint, expected] of [[2000, 2000], [999999, 30000], [-1, 0], [
+        NaN,
+        0,
+      ]]
+    ) {
+      const appended = await f.store.append({
+        type: "retry.hint",
+        namespace: "test",
+        payload: {},
+      }, ["worker"]);
+      const id = appended.deliveries[0].id;
+      await f.store.claimDelivery({ id, owner: "worker", leaseMs: 60_000 });
+      const delivery = await f.store.failDelivery({
+        id,
+        owner: "worker",
+        error: Object.assign(new Error("provider unavailable"), {
+          retryable: true,
+          retryAfterMs: hint,
+        }),
+      });
+      assertEquals(delivery?.status, "retry_wait");
+      const row = (await f.session.query<{ delay: number }>(
+        `SELECT EXTRACT(EPOCH FROM (available_at-updated_at))*1000 AS delay FROM "${schema}".event_deliveries WHERE id=$1`,
+        [id],
+      )).rows[0];
+      assertEquals(Number(row.delay), expected);
+    }
+  } finally {
+    await f.db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await closeFixture(f);
   }
 });

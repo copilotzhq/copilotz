@@ -1,4 +1,4 @@
-# Conversation memory
+# Memory scopes
 
 ## What it is
 
@@ -18,7 +18,13 @@ import { memoryPlugin } from "@copilotz/copilotz/memory";
 ```
 
 Configure `resources.memory.config`; optionally supply embeddings through
-`adapters.memoryEmbedding.default`. The agent writes
+`adapters.memoryEmbedding.default`. Grant `remember`, `search_memory`,
+`inspect_memory` and `retire_memory`. `remember({ text, scope })` writes
+immediately to personal, current Core space, or thread scope (default). Personal
+scope follows the human initiator. The profile uses the same notes. See
+[upgrading and owner policies](../../docs/upgrading.md#memory-scopes).
+
+For conversation compaction the agent writes
 `{ continuity, remember?, retire? }` through `consolidate_memory`, and reads
 notes through `search_memory` and `inspect_memory`. Existing checkpoints stay
 stored without conversion.

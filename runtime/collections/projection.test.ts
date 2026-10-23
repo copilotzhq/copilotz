@@ -324,7 +324,7 @@ Deno.test("a refused collection write leaves neither its event nor its projectio
     await assertRejects(
       () => docs.create({ id: "d1", title: "Again" }, { namespace }),
       Error,
-      "Collection 'projection_doc' 'd1' was created while its mutation was prepared.",
+      "Record already exists.",
     );
     await assertRejects(
       () =>
@@ -489,7 +489,7 @@ Deno.test({
       assert(raced.error instanceof Error);
       assertEquals(
         raced.error.message,
-        "Collection 'projection_doc' 'd-race' was created while its mutation was prepared.",
+        "Record already exists.",
       );
       assertEquals(raced.transactions, 2);
       assertEquals((await docs.get("d-race", namespace))?.title, "held");
@@ -500,4 +500,58 @@ Deno.test({
       await fixture.db.close();
     }
   },
+});
+
+Deno.test("node identity is namespace-local, conflicts are generic, and edges cascade within that namespace", async () => {
+  const f = await createFixture(
+    POSTGRES_URL ?? ":memory:",
+    `identity_${crypto.randomUUID().replaceAll("-", "")}`,
+  );
+  try {
+    for (const namespace of ["one", "two"]) {
+      await f.folders.create({ id: "same", title: namespace }, { namespace });
+      await f.docs.create({ id: "doc", title: namespace, folderId: "same" }, {
+        namespace,
+      });
+    }
+    assertEquals(
+      (await f.folders.get("same", "one"))?.title,
+      "one",
+    );
+    assertEquals(
+      (await f.folders.get("same", "two"))?.title,
+      "two",
+    );
+    const before = await graph(f, "two");
+    for (const collection of [f.folders, f.tags]) {
+      const error = await assertRejects(() =>
+        collection.create({ id: "same", title: "duplicate" }, {
+          namespace: "one",
+        })
+      );
+      assertEquals((error as { code: string }).code, "collection_conflict");
+      assertEquals((error as Error).message, "Record already exists.");
+    }
+    await f.folders.delete("same", { namespace: "one" });
+    assertEquals(await graph(f, "two"), before);
+    assertEquals((await graph(f, "one"))[1], []);
+    await assertRejects(() =>
+      f.db.query(
+        `INSERT INTO ${f.store.tables.edges}(id,namespace,source_node_id,target_node_id,type) VALUES('foreign','one','doc','same','invalid')`,
+      )
+    );
+    const ids = ["é", "e", "Z", "z"];
+    for (const id of ids) {
+      await f.tags.create({ id, title: id }, { namespace: "one" });
+    }
+    const rows = (await f.db.query<{ id: string }>(
+      `SELECT id FROM ${f.store.tables.nodes} WHERE namespace='one' AND type=$1 ORDER BY id`,
+      [tagDefinition.name],
+    )).rows;
+    assertEquals(rows.map((row) => row.id), [...ids].sort());
+  } finally {
+    await f.executor.shutdown();
+    await f.db.query(`DROP SCHEMA "${f.store.databaseSchema}" CASCADE`);
+    await f.db.close();
+  }
 });

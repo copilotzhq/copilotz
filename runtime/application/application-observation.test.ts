@@ -8,7 +8,7 @@ import {
   encodeOperationReplayCursor,
   type StreamOutput,
 } from "../streams/index.ts";
-import type { SqlExecutor } from "../events/index.ts";
+import { createSqlSession, type SqlExecutor } from "../events/index.ts";
 
 Deno.test("attachment pages consumed lanes once and repairs progress without notifications", async () => {
   const db = await createTestDatabase({
@@ -31,11 +31,7 @@ Deno.test("attachment pages consumed lanes once and repairs progress without not
     return result as never;
   };
   const application = await createCopilotzApplication({
-    database: {
-      query,
-      transaction: db.transaction,
-      close: db.close,
-    },
+    database: Object.assign(createSqlSession(db), { query, close: db.close }),
     databaseSchema: schema,
     namespace,
     plugins: [],
@@ -150,7 +146,7 @@ Deno.test("attachment byte readers wake while the outer loop is coalescing", asy
     return db.query(sql, params);
   };
   const application = await createCopilotzApplication({
-    database: { query, transaction: db.transaction, close: db.close },
+    database: Object.assign(createSqlSession(db), { query, close: db.close }),
     databaseSchema: "observation_bytes",
     namespace: "tenant",
     plugins: [definePlugin({
@@ -272,7 +268,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
     return result as never;
   };
   const application = await createCopilotzApplication({
-    database: { query, transaction: db.transaction, close: db.close },
+    database: Object.assign(createSqlSession(db), { query, close: db.close }),
     databaseSchema: schema,
     namespace: "tenant",
     plugins: [],
@@ -316,7 +312,7 @@ Deno.test("attachment final pass includes a stream committed during the terminal
       }
     }
     await attachment.done;
-    assertEquals(types, ["test.root", "stream.output", "operation.completed"]);
+    assertEquals(types, ["test.root", "stream.output", "operation.settled"]);
     assertEquals(streamListings, 3);
   } finally {
     await application.shutdown();

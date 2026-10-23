@@ -1,4 +1,4 @@
-import type { ActionContext } from "@copilotz/copilotz/actions";
+import { type ActionContext, ActionError } from "@copilotz/copilotz/actions";
 export function actor(context: ActionContext) {
   const value = context.action.metadata.httpActor as {
     id?: string;
@@ -6,7 +6,13 @@ export function actor(context: ActionContext) {
     name?: string;
   } | undefined;
   if (!value?.id) {
-    throw new Error("Conversation mutations require an authenticated actor.");
+    throw new ActionError(
+      "Conversation mutations require an authenticated actor.",
+      {
+        status: 403,
+        code: "actor_required",
+      },
+    );
   }
   return {
     ...value,

@@ -22,6 +22,14 @@ ordered list of `{ externalId }` references to those inputs or
 who belongs to the Thread; recipients determine who responds. Ordinary calls
 using canonical `recipientIds` remain supported.
 
+A message that names no recipients (neither `recipientIds` nor
+`membership.recipients`) addresses the Thread's agent participants other than
+the sender, so a chat composer reaches the conversation's agents without
+choosing one. Explicit recipients always win, and an explicit empty list
+addresses no one, which is how agent replies and system notices avoid waking
+other agents. A Thread without agents leaves the message unaddressed.
+`threadAgentRecipients` is that default, shared with channel ingress.
+
 ## How it works
 
 It prepares content, resolves the sender, and applies all Collection mutations

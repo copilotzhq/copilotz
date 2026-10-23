@@ -1,3 +1,12 @@
+import { sessionCookieHeader } from "./session-cookie.ts";
+import { retainedAuthority } from "../runtime/authorization/authority.ts";
+import { attachDeviceSocket, type DeviceSessionOptions } from "./device.ts";
+import {
+  deviceOrigin,
+  validateAllowedOrigins,
+} from "../plugins/server/shared/device-origin.ts";
+import type { DeviceUpgrade } from "./device.ts";
+import { upgradeWebSocket } from "../dependencies/oxian-http.ts";
 import { defaultServerFacade } from "../plugins/server/resources/server/default/index.ts";
 import { withRetainedAuthority } from "../runtime/authorization/binding.ts";
 import { handleChannel } from "./channels.ts";
@@ -7,7 +16,7 @@ import type { FacadeContext } from "./context.ts";
 import { authenticateHttpRequest } from "./authentication.ts";
 import { createHttpOperations } from "./operations.ts";
 import { applicationOutputsMultipartResponse } from "./multipart.ts";
-import { createHttpReads } from "./reads.ts";
+import { authorizeHttpAsset, createHttpReads } from "./reads.ts";
 import { validateAgainstJsonSchema } from "../runtime/collections/validate.ts";
 import type {
   HttpAdapter,
@@ -32,8 +41,16 @@ import { collectionMutationResponse } from "./mutations.ts";
 
 export type CreateServerFacadeFetchHandlerOptions = Readonly<{
   facade?: ServerFacadeResource;
+  /** Host WebSocket upgrade; mounts the authenticated device binding at /device. */
+  upgradeDevice?: DeviceUpgrade;
+  allowedOrigins?: readonly string[];
+  deviceLimits?: Pick<
+    DeviceSessionOptions,
+    "maxSubscriptions" | "maxPendingControls" | "maxPendingBytes"
+  >;
   admit?: () => void | Promise<void>;
   responseHeaders?: Readonly<Record<string, string>>;
+  /** Overrides the default structured 5xx logger. */
   onError?: (error: unknown, request: Request) => void | Promise<void>;
 }>;
 
@@ -145,6 +162,8 @@ export function createServerFacadeFetchHandler(
         application,
         context.serverScope,
         read,
+        undefined,
+        context.receiptAuthority,
       );
       if (endpoint.kind === "http") {
         const route = httpRoutes.get(endpoint.id);
@@ -171,7 +190,7 @@ export function createServerFacadeFetchHandler(
           }
         }
         const submit = async (
-          actionId: string,
+          actionAlias: string,
           input: unknown,
           options: {
             idempotencyKey?: string;
@@ -179,14 +198,14 @@ export function createServerFacadeFetchHandler(
           } = {},
         ) => {
           const entry = Object.entries(application.plugins.actions).find((
-            [, action],
-          ) => action.id === actionId);
+            [alias],
+          ) => alias === actionAlias);
           if (!entry) {
             throw appError(404, "action_not_found", "Action was not found.");
           }
           const target = {
             ...endpoint,
-            id: actionId,
+            id: entry[1].id,
             actionAlias: entry[0],
             inputSchema: entry[1].inputSchema,
           };
@@ -204,8 +223,8 @@ export function createServerFacadeFetchHandler(
             serverActionMetadata: {
               ...context.serverActionMetadata,
               ...options.actionMetadata,
-              ...(context.serverScope.actor
-                ? { httpActor: context.serverScope.actor }
+              ...(context.serverActionMetadata.httpActor
+                ? { httpActor: context.serverActionMetadata.httpActor }
                 : {}),
             },
           })).data;
@@ -248,15 +267,32 @@ export function createServerFacadeFetchHandler(
             }) as {
               operationId: string;
             };
-            for (;;) {
-              context.serverSignal.throwIfAborted();
-              const result = await operationResult(
-                application,
-                context,
-                receipt.operationId,
-              );
-              if (result.status !== 202) return result.data;
-              await new Promise((resolve) => setTimeout(resolve, 25));
+            const runtime = context.databaseSchema
+              ? await application.databaseScope(context.databaseSchema)
+              : application;
+            // Subscribe before the first read so completion cannot be lost
+            // between observing the current state and waiting for a change.
+            const changes = await runtime.operations.watch(
+              receipt.operationId,
+              {
+                namespace: context.namespace,
+              },
+            );
+            try {
+              for (;;) {
+                context.serverSignal.throwIfAborted();
+                const result = await operationResult(
+                  application,
+                  context,
+                  receipt.operationId,
+                );
+                if (result.status !== 202) return result.data;
+                while (!await changes.wait({ signal: context.serverSignal })) {
+                  context.serverSignal.throwIfAborted();
+                }
+              }
+            } finally {
+              changes.close();
             }
           },
           operations: {
@@ -281,6 +317,7 @@ export function createServerFacadeFetchHandler(
                 context.serverScope.authority!,
                 id,
               );
+              await authorizeHttpAsset(application, context.serverScope, id);
               const content = await runtime.content.assets.read(
                 context.namespace!,
                 id,
@@ -289,6 +326,7 @@ export function createServerFacadeFetchHandler(
                 context.serverScope.authority!,
                 id,
               );
+              await authorizeHttpAsset(application, context.serverScope, id);
               return new Response(content.bytes.slice(), {
                 headers: {
                   "content-type": content.asset.mediaType,
@@ -416,7 +454,9 @@ export function createServerFacadeFetchHandler(
         );
       }
       if (endpoint.kind === "operation") {
-        if (endpoint.operation !== "observe") {
+        if (
+          endpoint.operation !== "observe" && endpoint.operation !== "result"
+        ) {
           await operations.get(context.serverParams.id);
         }
         if (endpoint.operation === "result") {
@@ -508,12 +548,22 @@ export function createServerFacadeFetchHandler(
           context.serverScope.authority!,
           context.serverParams.id,
         );
+        await authorizeHttpAsset(
+          application,
+          context.serverScope,
+          context.serverParams.id,
+        );
         const content = await physical.content.assets.read(
           context.namespace!,
           context.serverParams.id,
         );
         await physical.authorization.asset(
           context.serverScope.authority!,
+          context.serverParams.id,
+        );
+        await authorizeHttpAsset(
+          application,
+          context.serverScope,
           context.serverParams.id,
         );
         return {
@@ -550,7 +600,36 @@ export function createServerFacadeFetchHandler(
       throw appError(404, "route_not_found", "Route was not found.");
     },
   } as const;
-  const fetch = createHttpFetchHandler(app, {
+  const fetch = createHttpFetchHandler({
+    async handle(request) {
+      try {
+        return await app.handle(request);
+      } catch (error) {
+        const typed = error as { status?: number; code?: string };
+        const context = request.context as FacadeContext | undefined;
+        const endpoint = context?.serverEndpointKey
+          ? endpointByKey(routes, context.serverEndpointKey)
+          : undefined;
+        const actionRoute = endpoint?.kind === "action" ||
+          endpoint?.kind === "http" &&
+            "action" in (httpRoutes.get(endpoint.id) ?? {});
+        if (
+          actionRoute && typed?.status === 403 && typed.code === "forbidden" &&
+          !context?.serverScope.actor &&
+          !["authorization", "cookie", "x-api-key", "x-copilotz-flow"].some(
+            (name) =>
+              (name !== "cookie" || !context?.invalidSessionCookie) &&
+              request.headers?.[name]?.trim(),
+          )
+        ) {
+          // Proof alone is a receipt capability. A host-selected actor or a
+          // supplied credential retains 403; anonymous access refusal is 401.
+          throw appError(401, "forbidden", "Authentication is required.");
+        }
+        throw error;
+      }
+    },
+  }, {
     basePath: facade.basePath,
     requestBodyPolicy(request) {
       const endpoint = routes.match(
@@ -570,7 +649,36 @@ export function createServerFacadeFetchHandler(
         : { maxBytes: 1024 * 1024 };
     },
     responseHeaders: options.responseHeaders,
+    finalizeResponse(response, context) {
+      if (!(context as FacadeContext | undefined)?.invalidSessionCookie) {
+        return response;
+      }
+      const name = facade.sessionCookie?.name ?? "__Host-copilotz_session";
+      const headers = new Headers(response.headers);
+      // A committed replacement wins; never append a clear after fresh login.
+      if (
+        !headers.getSetCookie().some((cookie) =>
+          cookie.split("=", 1)[0].trim() === name
+        )
+      ) {
+        headers.append(
+          "set-cookie",
+          sessionCookieHeader("", 0, facade.sessionCookie),
+        );
+      }
+      headers.set("cache-control", "no-store");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    },
     onError: options.onError,
+    errorRoute: (request) =>
+      routes.match(
+        request.method,
+        new URL(request.url).pathname,
+      )?.endpoint.path,
     rawBody(_request, context) {
       const key = (context as FacadeContext | undefined)?.serverEndpointKey;
       const endpoint = routes.routes.find((route) => route.endpoint.key === key)
@@ -597,8 +705,165 @@ export function createServerFacadeFetchHandler(
           "Application route was not found.",
         );
       }
-      return await authenticateHttpRequest(request, application, facade, match);
+      const authenticated = await authenticateHttpRequest(
+        request,
+        application,
+        facade,
+        match,
+      );
+      if (
+        authenticated instanceof Response && authenticated.status === 403 &&
+        !["authorization", "cookie", "x-api-key", "x-copilotz-flow"].some(
+          (name) => request.headers.get(name)?.trim(),
+        )
+      ) {
+        return new Response(authenticated.body, {
+          status: 401,
+          headers: authenticated.headers,
+        });
+      }
+      return authenticated;
     },
   });
-  return Object.assign(fetch, { routes }) as ServerFacadeFetchHandler;
+  const allowedOrigins = validateAllowedOrigins(
+    options.allowedOrigins ?? facade.allowedOrigins,
+  );
+  const handler: HttpFetchHandler = async (request) => {
+    if (
+      new URL(request.url).pathname !== `${facade.basePath}/device`
+    ) return fetch(request);
+    const origin = deviceOrigin(request, allowedOrigins);
+    if (origin === false) {
+      return new Response("Device origin refused", { status: 403 });
+    }
+    const upgradeDevice: DeviceUpgrade = options.upgradeDevice ??
+      upgradeWebSocket;
+    if (
+      request.method !== "GET" ||
+      request.headers.get("upgrade")?.toLowerCase() !== "websocket"
+    ) {
+      return new Response("WebSocket upgrade required", { status: 426 });
+    }
+    await options.admit?.();
+    request.signal.throwIfAborted();
+    const requestHeaders = new Headers(request.headers),
+      requestUrl = request.url;
+    if (origin !== "cookie") requestHeaders.delete("cookie");
+    const { socket, response, requestDeadline } = upgradeDevice(
+      request,
+    );
+    attachDeviceSocket(socket, {
+      ...facade.deviceLimits,
+      ...options.deviceLimits,
+      requestDeadline,
+      async authenticate(credentials, lifetime) {
+        if (
+          !credentials || typeof credentials !== "object" ||
+          Array.isArray(credentials) || !Object.keys(credentials).length
+        ) throw appError(403, "forbidden", "Session proof required");
+        const headers = new Headers(requestHeaders);
+        // Explicit proof changes authority; cookies on an already-open socket do not.
+        for (const [key, value] of Object.entries(credentials)) {
+          if (
+            key.toLowerCase() === "cookie" && value === true &&
+            origin === "cookie" && headers.get("cookie")
+          ) continue;
+          if (
+            !["authorization", "cookie", "x-api-key"].includes(
+              key.toLowerCase(),
+            ) || typeof value !== "string" || !value.trim() ||
+            key.toLowerCase() === "cookie" && origin !== "cookie"
+          ) throw appError(403, "forbidden", "Invalid session proof");
+          headers.set(key, value);
+        }
+        const session = await authenticateHttpRequest(
+          new Request(requestUrl, { headers }),
+          application,
+          facade,
+          {
+            endpoint: {
+              key: "device",
+              kind: "http",
+              id: "device",
+              method: "GET",
+              path: `${facade.basePath}/device`,
+              operation: "connect",
+            },
+            params: {},
+          },
+        );
+        if (session instanceof Response) {
+          throw appError(
+            session.status,
+            "forbidden",
+            "Device authentication refused",
+          );
+        }
+        const authority = session.serverScope.authority!;
+        if (authority.authorityBasis.kind === "session") {
+          const runtime = (!session.databaseSchema ||
+              session.databaseSchema === application.config.databaseSchema)
+            ? application
+            : await application.databaseScope(session.databaseSchema);
+          const watcher = await runtime.authorization.observeCredential(
+            authority,
+            (error) => {
+              if ((error as { code?: string }).code === "revoked") {
+                lifetime.revoked();
+              }
+            },
+          );
+          if (lifetime.signal.aborted) watcher.close();
+          else {lifetime.signal.addEventListener(
+              "abort",
+              () => watcher.close(),
+              { once: true },
+            );}
+        }
+        return {
+          principalKind: authority.principal.kind,
+          async observe(collection, query, observation) {
+            const endpoint = routes.routes.find((route) =>
+              route.endpoint.kind === "collection" &&
+              route.endpoint.collectionAlias === collection &&
+              route.endpoint.operation === "list"
+            )?.endpoint;
+            if (!endpoint) {
+              throw appError(403, "forbidden", "Collection is not exposed");
+            }
+            const authenticated = await authenticateHttpRequest(
+              new Request(new URL(endpoint.path, requestUrl), { headers }),
+              application,
+              facade,
+              { endpoint, params: {} },
+            );
+            if (authenticated instanceof Response) {
+              throw appError(
+                authenticated.status,
+                "forbidden",
+                "Device authentication refused",
+              );
+            }
+            const read = await createHttpReads(
+              application,
+              {
+                ...authenticated.serverScope,
+                authority: retainedAuthority({
+                  ...authenticated.serverScope.authority!,
+                  requestFacts: {
+                    ...authenticated.serverScope.authority!.requestFacts,
+                    transport: "websocket",
+                  },
+                }),
+              },
+              { context: authenticated },
+            );
+            return read.observe(collection, query, observation);
+          },
+        };
+      },
+    });
+    return response;
+  };
+  return Object.assign(handler, { routes }) as ServerFacadeFetchHandler;
 }

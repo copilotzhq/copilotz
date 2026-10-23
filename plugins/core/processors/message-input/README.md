@@ -22,8 +22,9 @@ when it creates the Thread.
 
 The Processor resolves Thread and Participant references in the current
 namespace. Recipient IDs can select existing Participants or configured Agent
-aliases and IDs. It creates canonical Agent Participants for registered Agents
-and enrolls selected Participants with the sender in the same message write.
-Unknown recipients on object Thread references are checked before a new Thread
-is created. The message write remains idempotent through the Core
-`createThreadMessage` Action.
+aliases and IDs. An input without `recipientIds` leaves the choice to the
+`createThreadMessage` Action, which addresses the Thread's agents. It creates
+canonical Agent Participants for registered Agents and enrolls selected
+Participants with the sender in the same message write. Unknown recipients on
+object Thread references are checked before a new Thread is created. The message
+write remains idempotent through the Core `createThreadMessage` Action.

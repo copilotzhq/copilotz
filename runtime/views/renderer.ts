@@ -318,7 +318,9 @@ export function createTextRenderer(
             }
             evaluated = true;
             return await read(() =>
-              view ? view.render(projected as never, context) : projected
+              view
+                ? view.render(projected as never, context as never)
+                : projected
             );
           })),
           signal,
@@ -335,4 +337,21 @@ export function createTextRenderer(
     },
   };
   return renderer;
+}
+
+/** Interactive host port. Framework implementations belong to plugins. */
+export interface ViewRendererAdapter {
+  readonly id: string;
+  /** Embed an independently observed View. Stable key identifies its retained slot. */
+  view?(
+    output: {
+      getSnapshot(): unknown;
+      subscribe(listener: () => void): () => void;
+    },
+    key: string,
+  ): unknown;
+  mount(target: unknown, output: {
+    getSnapshot(): unknown;
+    subscribe(listener: () => void): () => void;
+  }): { dispose(): void };
 }

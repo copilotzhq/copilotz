@@ -1,3 +1,488 @@
+## 0.90.0 — 2026-10-23
+
+Browsers now read live data. The owner pushes Collection changes over an
+authenticated device socket to a framework-neutral web runtime, and the chat UX
+ships as Copilotz's React front-end plugins. Agent memory becomes one store with
+personal, space and thread scopes. Model calls fail on inactivity instead of a
+fixed deadline, and the owner reuses authorization decisions, which removes most
+policy evaluations and authorization SQL from an agent turn. This release also
+includes the security review's hardening, exact credential grants,
+owner-verified identity evidence and owner schema **v14**.
+
+Read [Upgrading to 0.90.0](docs/upgrading.md#upgrading-to-0900) before you
+upgrade: several changes refuse configuration or requests that 0.89.0 accepted.
+
+### Upgrade required
+
+- Owner schema **v14** is one offline step from v13. Stop every writer, drain,
+  then run `upgradeActionLifecycle(session, schema)`; v13 needs no new key or
+  manifest input. One transaction does the following:
+  - adds the private credential-effect storage with its accepted continuation
+    operation and indexed run and operation lookups;
+  - keys nodes by `(namespace, id)` with cascading composite edge references;
+  - puts `COLLATE "C"` on every text identity column and rebuilds the
+    ready-content reference index with it.
+
+  It advances the owner epoch once, preserves sessions and retained authority,
+  and is idempotent. Fresh provisioning installs the same v14. No step runs at
+  startup. See [the upgrade guide](docs/upgrading.md#current-owner-schema-v14).
+- Policies that grant Core's `thread` `ensureMembership` command must also grant
+  `recordMessage`. Every visible message now records itself on its thread in the
+  same transaction, so without this grant the whole send is refused.
+- **Credential grants are exact.** `sessions.create` is `{ principal, maxAge }`
+  and `flows.start` maps each kind to `{ continuation, maxAge }`. The owner
+  compares the proposed credential with the grant before it stores anything.
+  `sessions: { create: true }` and flow-kind arrays no longer authorize minting.
+- Action configuration uses composition aliases everywhere: policies, exposure,
+  HTTP routes, handler `invoke`, Tool bindings, flow continuations and clients.
+  Stable Action IDs are no longer accepted as configuration keys.
+- Anonymous Action refusals return 401, and a session cookie that fails
+  verification counts as absent and is cleared.
+- A message that names no recipients now addresses the thread's agents; pass
+  `recipientIds: []` to address nobody.
+- **`update_user_memory` is removed.** Agents save personal facts with Memory's
+  `remember({ text, scope: "personal" })` and remove them with `retire_memory`.
+  Applications that install Memory compose `memoryScopeConstraints` into the
+  owner policies bound to `memoryNote`, `memorySpace`, `memorySpaceAccess` and
+  `longTermMemory`. See [Memory scopes](docs/upgrading.md#memory-scopes).
+- **Core no longer emits `## USER METADATA`.** The system prompt no longer
+  carries the first human's participant metadata, and there is no switch to
+  restore it. Apps that relied on a field register an explicit context
+  contributor; see [Prompt context](docs/upgrading.md#prompt-context).
+- Apps that adopt the new device socket, web runtime, Action sessions or shard
+  role, or that built on a pre-release, follow the second part of the guide:
+  browsers send `credentials: { cookie: true }` in the device hello,
+  cross-origin clients need `allowedOrigins`, Views a link may open declare
+  `url`, Action-session apps supply `resolveActor`, tool renderers that should
+  show while a call runs declare `live: true`, and shard controllers
+  authenticate from headers.
+
+### Changed
+
+- **Action results arrive at Action completion.** Browser
+  `ActionHandle.result()`, `client.actions.invoke`, `GET /operations/:id/result`
+  and host `app.actions.*` calls resolve once the invoked Action's durable
+  result exists, without waiting for downstream deliveries and streams. A
+  create-then-send flow drops from about 1.6 s to 0.29 s. A failed Action still
+  rejects; a later downstream failure cannot change an accepted result. Use
+  `handle.settled()` or `client.operations.settled(id)` when the whole scope
+  must finish, and inspect its `outcome`; `awaitOperation`, `app.send().done`
+  and `app.attach().done` still wait for the scope. The final observation frame
+  is now `operation.settled` with `outcome: completed | failed | cancelled`;
+  durable Action lifecycle outputs still arrive as they are recorded. HTTP
+  operation status uses `state: settled`, `outcome` and `settledAt`. Custom
+  `ActionTransport`s implement `settled(operationId, signal)`. Checkpoints and
+  idempotent result replay are unchanged.
+- **Security review hardening.** The device socket, live subscriptions, Action
+  sessions and the shard role ship with these protections, and HTTP
+  authentication gains the stale-cookie rule.
+  - `/device` refuses a foreign or opaque `Origin` before upgrading. Same-origin
+    is allowed, and other canonical HTTP(S) origins need `allowedOrigins`. With
+    no `Origin`, captured cookies are stripped and cookie credentials are
+    refused. Empty hello credentials are refused, and only one bounded hello is
+    accepted before authentication.
+  - Live subscriptions have per-principal, per-socket (default 16) and overall
+    quotas, plus predicate node, list value and query byte limits. Refusals use
+    the stable codes `subscription_query_refused` and
+    `subscription_capacity_exceeded`. Their reasons are `query_unsupported`,
+    `limit_exceeded`, `quota_exceeded`, `forbidden`, `unbound_collection` and
+    `unavailable`. `jsonEquals` and locale-dependent case folding are not
+    admitted live. Diagnostics name only the Collection, principal kind and
+    reason.
+  - Recompute is incremental. A commit evaluates only the changed record's old
+    and new image against each compiled filter, never the whole cache. Detached
+    readers no longer consume active admission and are evicted oldest first.
+  - Progress is namespace-local. Invisible mutations and other namespaces emit
+    no frame, and Action result sequences use the same namespace-local count.
+  - The Action-session cookie defaults to `__Host-copilotz_session`. The facade
+    validates its `__Host-` attributes and refuses a request carrying the
+    configured cookie twice (`duplicate_session_cookie`).
+  - `createShardControllerHandler` requires a headers-only
+    `authenticate(request)` that runs before the body is read; a refusal cancels
+    the unread body and returns 403. `authorize(request, input)` still checks
+    the parsed work's scope, and bodies are bounded at 16 MiB.
+  - Non-worker shard sessions occupy reserved IDs, `shard:<kind>:<id>`
+    (`shardSessionId(kind, id)`), so a browser, computer or connector cannot
+    replace a worker connection. Admission refuses a wire ID whose namespace
+    does not match the authenticated principal kind (`principal_kind_mismatch`),
+    and the owner sees only `worker` sessions.
+  - Credential tokens use an HMAC key derived with HKDF and a credential label.
+    Protected-value commitments are unchanged.
+  - A session credential that fails verification (revoked, expired, unknown,
+    malformed or badly signed) counts as absent. Anonymous-capable Actions run
+    anonymously, principal-required Actions return 401, and the response clears
+    the configured cookie.
+- **Authorization.**
+  - Separate workers run every user callback inside a revocable ambient binding
+    that carries the caller's authority. A worker never acquires host trust.
+  - A consumed flow continuation may run child Actions only within its accepted
+    operation. The owner records each descendant in a receipt, and each child
+    still needs its own grant. `operations.start` and
+    `awaitOperation({ start })` refuse flow authority before admitting another
+    operation.
+  - Session principal and session ID are separate. Every command checks both
+    against the stored session row.
+  - Anonymous HTTP Action refusals are 401, including Core HTTP Actions. Refused
+    credentials that were presented keep 403.
+  - HTTP ingress records the authenticated actor separately from the principal.
+- **Live data.**
+  - Live queries accept bounded windows ordered by a scalar schema field or by
+    `createdAt`/`updatedAt`, ascending or descending, with an `id` tiebreak,
+    PostgreSQL null placement and code-point string order. Ordered batches carry
+    the window's exact `order` array.
+  - Live filters accept `id` equality and `id` `in` lists, with SQL parity.
+  - Logout revokes every device socket on that session with a terminal notice
+    and close code 4401. The SDK reports it through `onAuthState`.
+  - The initiator can recover its completed self-logout result with its original
+    credential proof.
+  - Message window reads defer bodies over budget instead of failing the read.
+    Content reads take `bodyByteLimit` and `overflow: "defer"`. Deferred entries
+    stay unresolved references with `deferred` and `byteLength`. Live
+    subscription windows defer by default.
+- **Core.**
+  - A message that names no recipients addresses the thread's agent participants
+    other than the sender. Explicit recipients, including an empty list, are
+    kept.
+  - The router starts agent turns only for agent recipients. Human recipients
+    are delivered and recorded without model calls, and mixed lists route each
+    kind.
+  - Visible messages run `thread.commands.recordMessage`, which sets
+    `lastMessageId` and moves `updatedAt`, so lists ordered by activity reorder.
+    Its own event, `thread.message-recorded`, keeps `thread.updated` Processors
+    out of every message.
+  - The thread feed reads the newest messages by `createdAt` and returns them
+    oldest first. The composer and Revise write time-ordered IDs.
+  - Generated IDs are monotonic ULIDs. Duplicate IDs within a namespace raise a
+    typed, namespace-local conflict.
+  - Delivery dispatch and worker host calls share the delivery safety ceiling
+    (see **Liveness**). 0.89.0 cut worker host calls off after 30 seconds on the
+    worker and 120 seconds on the owner, which interrupted long agent steps. A
+    transport deadline is an interruption, not an Action failure.
+  - The router runs independent agent recipients concurrently. Inputs are
+    prepared in order, provider calls overlap, and the delivery waits for every
+    recipient before it fails. A retry replays the recipients that completed.
+  - The feed treats stream errors as provisional until the operation settles.
+- **Liveness.** Stalled work is detected by inactivity, and wall-clock limits
+  are safety ceilings. See [execution liveness](docs/execution-liveness.md).
+  - A provider call fails after 90 s without provider activity before visible
+    content, or 120 s after it, with "The model stopped responding." Metadata,
+    reasoning, content, stream data and SSE heartbeat comments renew the window.
+    It also covers request preparation, waiting for headers and the final usage
+    drain. `streamIdleTimeoutMs` now starts at the first visible content.
+  - The absolute provider backstops are four hours per attempt
+    (`attemptTimeoutMs`, was 30 minutes) and five hours per logical call
+    (`totalTimeoutMs`, was one hour).
+  - Deliveries and worker host calls stop at a six-hour safety ceiling. Set
+    `deliveryTimeoutMs` in `createCopilotz`, identically on every role, to
+    change it; `defineAction({ deliveryTimeoutMs })` declares a larger minimum
+    for one Action. Worker leases and checkpointed provider completions remain
+    the recovery mechanisms.
+- **Provider failures.** Only a completed provider response is checkpointed and
+  reused. Network and TLS errors, resets, HTTP 429 and 5xx responses and
+  timeouts before completion are retried by the next delivery attempt with a
+  fresh request, after bounded backoff that honors `Retry-After` up to 30 s and
+  holds no worker. Authentication, invalid-request and refusal errors settle
+  immediately. An Action error marked `retryable: true` keeps the Action open
+  while delivery attempts remain. The terminal failure names the provider
+  problem and, after exhaustion, the attempt count.
+- **Performance.**
+  - **Authorization decisions are reused while they stay valid.** The owner
+    keeps committed grants in owner-local memory and invalidates them from its
+    own writes: exact records and collection sets for Collection, Asset and
+    protected-value writes, the whole table for unclassified writes, plus
+    session and flow changes, credential deadlines, lease loss, policy revisions
+    and owner replacement. An Action run is authorized once at capture, and its
+    capability calls reuse that decision, including agent work bound to a
+    delivery attempt while its lease holds. In a Processor-turn benchmark with
+    26 capability calls, policy evaluations fall from 82 to 1 and SQL statements
+    from 690 to 68. Collection read and result decisions and operation
+    observation attaches are reused across commands, matched on the authority,
+    request-fact and intent fields the policy read and on the record version. A
+    warm worker `get` falls from 18 SQL statements and two evaluations to three
+    and none. Collection mutations, staff-directory and verifier-evidence reads,
+    directory delegation and policies that read `commandTime` keep fresh
+    evaluation. See
+    [Authorization reuse](docs/authorization.md#authorization-reuse-during-an-action-run).
+  - **Fewer owner commands per agent turn.** Delivery claims and settlements
+    update their deadlines in the same statement, revision acknowledgments are
+    batched, and an authorized primitive read takes one owner command. With a
+    zero-latency model on PostgreSQL, a plain turn falls from 524 to 470 SQL
+    statements (65 to 62 owner commands) and settles in about 197 ms; a tool
+    turn falls from 1,125 to 986 statements (148 to 135 commands).
+    `scripts/benchmark-turn.ts` measures each stage of a turn. Core also loads
+    thread participants, missing senders and history participants with one
+    batched read instead of one read each, and `createThreadMessage` reuses the
+    record its create returned.
+  - **No owner work at idle.** Content retirement applies the same protection
+    rules as its alarm. A copy still protected by a ready Asset or
+    protected-value reference, or by unexpired pending content, is retried when
+    the protection expires or is released, instead of every second; each such
+    body used to cost one owner command per second indefinitely.
+- **Tool output visibility.** Tool calls and results record
+  `visibility.initiatorId`, the human participant whose message started the
+  turn, and keep it across agent-to-agent work. Output is readable under
+  `public`, by the requesting agent, and by the initiator under `public_status`,
+  the default; `requester_only` stays agent-only. One rule now covers message
+  content and assets, history and feed projections, Collection reads and
+  subscriptions, live tool streams, retained stream assets and operation
+  results. A viewer who may not read a result still receives the result message,
+  with `content: []` and `metadata.toolStatus` (`completed`, `failed` or
+  `cancelled`), so a visible call always settles. Messages stored without
+  `initiatorId` grant the initiator nothing; nothing is backfilled. HTTP
+  adapters can apply domain rules of this kind through the new
+  `createHttpAdapter` hooks `reads`, `authorizeAsset`, `authorizeActionResult`
+  and `projectOutput`.
+- **Memory.**
+  - Core space membership selects a dedicated space memory. Joining, leaving,
+    moving and archiving change access on the next read or write. Thread notes
+    stay private to their thread, also between threads of one space. Legacy
+    custom spaces and `memorySpaceAccess` grants stay stored but no longer widen
+    what agents see.
+  - Consolidation writes the thread scope; `remember` writes the space or
+    personal scope explicitly.
+  - Scheduled jobs record their creator in `metadata.creatorParticipantId` and
+    dispatch with that human as the initiator.
+- **Prompt context.**
+  - Core no longer copies the first human's participant metadata into the system
+    prompt. Hosts add selected user facts with a `defineContextResource`
+    contributor placed `before_latest_message`.
+  - With Memory installed, the initiator's personal notes render as one bounded
+    block (at most 20 items and 8,000 characters, in stable ID order)
+    immediately before the newest message, only when the initiator is the
+    thread's sole human.
+  - Agent `workingMemory`, `expertise` and `learnedPreferences` render as
+    `## AGENT CONFIGURATION` at the same position, instead of
+    `## YOUR PERSISTENT MEMORY` in the system prompt. Later changes to them
+    leave the system prompt, tools and earlier history byte-identical; the
+    upgrade itself changes the cached prefix once.
+
+### Added
+
+- **Live Collection reads.** `collections.observe` on the application, the
+  server read services and the SDK returns a snapshot, ordered deltas and
+  applied checkpoints pushed by the owner, with no SQL per subscriber on commit.
+  `createDeviceTransport` carries them over the authenticated `/device` socket,
+  which the Deno and Node `listen` adapters serve by default. Custom hosts pass
+  `upgradeDevice`. See [subscriptions](docs/subscriptions.md).
+- **Web runtime.** `@copilotz/copilotz/web` is a framework-free browser runtime:
+  client Collections over live reads, Action handles that settle by owner
+  sequence, client storage and View resolution. `createBrowserPorts(client)`
+  binds it to the SDK. `/web/react` is the React adapter and `/web/kit` the
+  shared kit. See [web runtime and Views](docs/web-runtime-and-views.md).
+- **Chat UI as React front-end plugins.**
+  - `/ui/web` (`uiWebPlugin({ navigation, preferences, core })`) is the shell: a
+    sidebar grouped by Space, a header, a resizable panel, SpaceView, pages, a
+    palette and keyboard navigation. Chats without a Space form a collapsible No
+    Space group; groups start collapsed with a count, the current chat's group
+    opens, and each person's open groups are remembered. Below 768 px the
+    sidebar is an off-canvas drawer and the panel a full-screen sheet.
+  - `/core/web` (`createCoreWebPlugin`, `threadFeedAdapter(client)`) holds the
+    chat Views, live streaming replies, tool activity, attachments and the
+    composer.
+  - Tool activity is one quiet row per reply ("Used 3 tools · 4s") that opens to
+    plain-language steps. **View details** loads a call's Input and Result tree
+    on request, only for viewers who may read the output; others see a
+    status-only step. A call left without a terminal status settles as done once
+    its agent moves on. **Show technical details**, a per-person choice in the
+    user menu, opens technical live output and step details by default.
+  - Tool renderers (`resources.toolRenderers.<toolId>`) take `summary` (a View
+    that states the step in plain words), `batch` (one summary for consecutive
+    calls), `summaryResult` (the summary reads the result), `view`, `inline`
+    (the View replaces the step), `live` (the View draws in the message while
+    the call runs, then settles into a compact card), `audience` (`everyone` or
+    `technical`) and `icon`. `useToolDisplay()` tells a renderer whether it
+    draws `live`, as a `card` or `full`.
+  - `/admin/web` is one administration page with section tabs.
+  - Extension points: `resources.shell.*`, `resources.chat.*`,
+    `resources.spaceSections`, `resources.adminSections`,
+    `resources.headerMenu`, `resources.userMenu`, `resources.toolRenderers`,
+    Markdown plugins and the agent selector.
+  - `bindShellSession(runtime, device)` replaces the shell with the app's
+    sign-in when the session is revoked.
+- **URL state carries identifiers only.** `urlReference` admits a decoded value
+  only when it is a scalar or a flat record of scalars. A View opts into links
+  with `url`. Its query reads, and those of the Views it nests, are `held` until
+  a user gesture; `url: { queries: "run" }` opts out.
+- **Markdown.** `markdownUrlPolicy({ origin, imageOrigins })` from `/web` keeps
+  links to safe schemes and loads images only from the page origin and listed
+  origins (`resources.markdown.imageOrigins`); refused images render as their
+  alt text. Raw HTML stays skipped. KaTeX math (with `\( \)` and `\[ \]`
+  delimiters) and code highlighting load on first use. `preloadMarkdown()` loads
+  both ahead of time, and the kit vendors KaTeX's CSS and fonts.
+- **Mentions and default recipients.** `@` in the composer picks agents. Without
+  a mention, `resources.chat.defaultRecipients` decides: `"first"` (the default)
+  addresses the default or first agent, and `"all"` leaves Core's default.
+- **New chats are optimistic and idempotent.** The browser chooses the thread
+  ID, shows the first message at once, and a retry continues the same thread.
+- **Voice messages.** The composer records voice notes (a live waveform, review,
+  then send) and shows them as compact players with a collapsible transcript.
+  Recordings are sent as `kind: "audio"` content with
+  `metadata: { voice: true, durationMs, peaks }`. An app transcribes them
+  through `resources.chat.voice = { action, transcriptLabel? }`: the Action
+  receives `{ threadId, content, voiceIndexes, recipientIds? }`, sends one
+  message with a labelled transcript after each recording, and fails without
+  sending when a recording can't be transcribed. The person then chooses "Send
+  audio only" or Retry. Without the hook, recordings are sent as audio.
+- `ReadState` has a `failed` status for a query read that failed and waits for
+  `refresh()`. `stale` now means a read that recovers by itself. `ReadStatus`
+  renders `failed` with Try again.
+- **Operation constraint alternatives.** Policy `operations` constraints accept
+  `anyOf` on reads: one complete `{ metadata, absentMetadata? }` alternative
+  must match in addition to the common constraints (at most 16, not nested).
+  Admission stamps only the top-level `metadata`. A flow token is also projected
+  to the browser proof that started the flow, after the owner authorizes the
+  read. See [authorization](docs/authorization.md).
+- **Owner-verified identity evidence.** `defineIdentityVerifier` (from
+  `/engine`) registers an owner-only verifier. Actions call
+  `context.authentication.verify(alias, input)`, and policy reads the result
+  through a declared `evidence` input with `evidence.get(alias)`. The owner
+  reserves each exchange durably and never repeats it. `pruneIdentityEvidence`
+  removes expired evidence.
+- **Directory capabilities.** `defineDatabaseDirectoryRead` and
+  `context.directory.get` give Actions declared, audited, read-only reads of a
+  same-database directory. `defineDatabaseDirectoryCommand` and
+  `context.directory.command` / `tx.directory.command` run trusted directory
+  service commands atomically with the source transaction. A command's
+  `collections` map lets it write the destination's native Collections, under
+  the destination's own policy. Policies grant them with `directoryReads` and
+  `directoryCommands`.
+- **Flow-bounded Processors.** A Processor may project a consumed flow's events
+  when policy grants `flowProcessors: [processorId]` and exact Collection
+  grants.
+- **Sessions and flows as Action effects.** `sessions.create`, `sessions.revoke`
+  and `flows.start` inside `context.transaction` commit atomically with the
+  Action's writes. The HTTP transport projects the session as an HttpOnly cookie
+  (`sessionCookie` on the facade). Flow credentials are signed, short-lived and
+  limited to their continuation.
+- **Actors for owner-verified credentials.**
+  `defineServerFacade({ resolveActor })` maps a verified request, including an
+  Action-session cookie that the owner verifies after `authenticate`, to its
+  actor using tenant-scoped reads. Core routes that need a viewer refuse a
+  request without one with `403 actor_required`.
+- **Memory scopes.** `remember({ text, scope })` appends an immutable note
+  immediately to `personal` (the turn's human initiator, across threads and
+  agent chains), `space` (the thread's current Core space) or `thread` (the
+  default). Parallel appends cannot overwrite each other. `replaces: id`
+  corrects a note atomically, and `retire_memory({ id, reason })` retires one
+  permanently, keeping an audit record. `search_memory` searches every scope
+  visible to the turn, by text when no embeddings exist.
+  `memoryScopeConstraints` from `/memory` gives owner policies the scope
+  predicates. The profile lists personal notes with **Forget** (the
+  `personal_memory` Action). Legacy `participant.metadata.memories.items` import
+  lazily into personal notes; no SQL upgrade is needed.
+- **Trusted tool origins.** `trustedCoreToolOrigin(context)` from `/core`
+  returns a tool call's origin after checking it against owner-retained
+  provenance. App metadata keys no longer invalidate Core's tool and LLM
+  metadata.
+- **Shard role.** `createCopilotz({ role: "shard", ... })` and
+  `@copilotz/copilotz/shard` host pinned worker, computer, browser and connector
+  connections between stateless controllers and the owner. Non-owner workers
+  pass `kind` (`"computer"`, `"browser"` or `"connector"`) to
+  `createShardWorker`. Browsers are assigned to a shard by hashing the
+  authenticated actor. Dispatch still names logical targets plus `kind`.
+- **Migration API.** `@copilotz/copilotz/migration` exports owner bundle export
+  and import, tenant relocation, owner key migration and transfer body reads.
+  The offline scripts are thin callers. See
+  [retained-data migration](docs/retained-data-migration.md).
+- **Automatic owner recovery.** A running application replaces a fenced owner
+  for every opened database scope, resetting its subscriptions and observations.
+  Requests that cannot wait `databaseRecovery.waitMs` (default 2 s) for the
+  replacement, and fence refusals, return a retryable 503 with `Retry-After`.
+  See [owner recovery](docs/owner-recovery.md).
+- Dead-lettered deliveries write one structured `console.error` line naming the
+  consumer, operation, delivery, attempts and the masked error. It never
+  includes the Event or its input.
+- Unexpected HTTP 5xx errors write one structured `console.error` line
+  (`event: "http.server_error"`, route template, error name, message and stack)
+  without request data. The response stays generic. An `onError` callback
+  replaces the line; if it throws, the line is still written.
+
+### Fixed
+
+- Agent turns cost far less owner work. With a real application policy and an
+  instant model, a PostgreSQL follow-up turn takes 369 ms in a fresh thread
+  (was 480) and 416 ms in a 100-message thread (was 995), with about 1,300 SQL
+  statements instead of 4,100. Result decisions are reused by the values a
+  policy read rather than whole row snapshots, while every disclosed row is
+  still checked; host-command capture recognizes its own immutable outputs;
+  ready content bodies load in batches; and transcript verification no longer
+  sends snapshots as SQL predicates.
+- Live subscriptions compile the application's policy filter with their own
+  bounds (256 nodes, 1,000 values, 256 KiB) instead of the client's (64, 32, 16
+  KiB). Before, a policy that listed a person's threads refused every live
+  window once they had more than 32. A refused policy filter is logged with its
+  reason.
+- Live `where` treats an untyped scalar `enum` or `const` field (such as a
+  space's `status`) as scalar.
+- `scripts/provision-content-indexes.ts SCHEMA [--apply]` previews or adds the
+  content deadline indexes to a schema provisioned before they existed.
+- Provider completions are checkpointed before finalization, so a retry reuses
+  the paid response instead of calling the provider again. An empty final answer
+  fails visibly.
+- Worker capture verifies sealed bodies against the prepared ones, and atomic
+  Core message writes reuse the bounded conflict retry.
+- A Tool Action refused by policy before capture returns a failed tool result,
+  and the agent turn continues.
+- Namespace predicates were missing from asset, protected-value, graph-upgrade,
+  history and alarm-pagination queries.
+- Owner shutdown waits for queued SQL commands and asynchronous publications, so
+  a second runtime in the same process no longer meets a closed database.
+- Owners are keyed by the database instance they were opened on, so a new
+  runtime never reuses an owner whose database is already closed.
+- An invalid composition, such as a View alias collision, is refused before any
+  database or Hypervisor opens.
+- A first chat on a policy-protected native PGlite database cleans up its
+  snapshot instead of failing with `owner_cleanup_unknown`.
+- JSON tool results reach tool renderers as `data`, or as a reference that is
+  read on demand.
+- Oxian 0.23.1 provides portable route WebSocket upgrades and CLI shutdown, and
+  closing a route WebSocket no longer interrupts unrelated HTTP streams.
+  Observation no longer fails with 500 or 503 after logout or on page load.
+- A fallback candidate skipped for a missing credential no longer replaces the
+  primary provider's real error, and the user-facing failure appears only once
+  it is terminal.
+- A routine device-channel renewal (lifetime, reauthentication, authority or
+  capacity change) re-attaches live queries from their checkpoint at once.
+  Before, it failed the channel and spent retries, so views stayed stale behind
+  "Reconnecting" until a reload.
+- Core's message and message-asset routes failed with a `TypeError` (HTTP 500)
+  for an Action-session request, which arrived without an actor, and hid tool
+  results. See `resolveActor` above.
+- `localStorageAdapter` treats unavailable, blocked, full or corrupted browser
+  storage as empty and skips failed writes, so the app starts with in-memory
+  preferences instead of failing.
+- Message bubbles size to their content up to their maximum width and wrap only
+  at word boundaries; short messages no longer wrap mid-word.
+- The model's notice for an attachment it can't see carries the attachment's
+  `alt` text and leaves opening it to the agent. Before, it told the model to
+  open every attachment, so an agent opened a recording whose transcript was
+  already in the message and answered twice, before and after the tool.
+- Transcription uploads use the recording's own extension (`voice.m4a` for
+  Safari's `audio/mp4`) instead of `voice.audio`.
+- Live chat windows apply tool-output visibility to the rows their read already
+  authorized, in place, then resolve content once. Before, each row was re-read
+  through Core's `history` query, which an application policy that authorizes
+  thread reads refused ("No access to these messages"), at one query per row. A
+  100-message window now costs one read. HTTP read adapters
+  (`HttpAdapter.reads`) receive a third argument, `resolve`, that loads content
+  for rows they narrowed. `history` also accepts a window's full content options
+  (`bodyByteLimit`, `overflow`, `exclude`).
+- A browser that already held a session can finish signing in through Google or
+  a session transfer. Before, its identity start result returned 404.
+- A PostgreSQL database opened with `pgPoolMax: 1` uses the fenced owner
+  snapshot for Collection snapshots instead of failing native snapshot
+  admission, which needs two connections.
+
+### Removed
+
+- `sessions: { create: true }` as a session grant.
+- Stable Action IDs as configuration keys; use composition aliases.
+- Generic Server's Core imports and the 25 ms handler `invoke` polling loop;
+  handler invocation waits for operation changes.
+- `update_user_memory` from Built-in Tools; use Memory's `remember` with
+  `scope: "personal"`.
+- Core's `## USER METADATA` system-prompt section.
+
 ## 0.89.0 — 2026-10-19
 
 The runtime is converted in place to **one owner per database schema**: a single
@@ -10,7 +495,7 @@ connection. There is no alternate runtime or compatibility mode.
   → v11 → owner keys v12 → authority v13**. Stop every writer, drain, then run
   `upgradeActionLifecycle` with the reviewed plan, owner-key adapters and
   authority manifest. No step runs at startup. See
-  [the upgrade guide](docs/upgrading.md#current-owner-schema-v13) and
+  [the upgrade guide](docs/upgrading.md#current-owner-schema-v14) and
   [the offline guide](scripts/upgrade-retained-data.md).
 - Applications with protected values configure a master Secret Adapter. Each
   owner gets its own data key, wrapped by that adapter.
@@ -98,7 +583,7 @@ connection. There is no alternate runtime or compatibility mode.
   old writers and run `upgradeActionLifecycle` for each physical schema before
   starting the new runtime. The v6 upgrade preserves in-flight Actions and
   immutable history; the older v5 cutover still requires drained workflows. See
-  [the upgrade guide](docs/upgrading.md#0880-durable-compaction-waits).
+  [the upgrade guide](docs/upgrading.md#current-owner-schema-v14).
 
 ### Removed
 

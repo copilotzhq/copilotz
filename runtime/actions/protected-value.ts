@@ -1,3 +1,4 @@
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
 import {
   ensureOwnerDataKey,
   ownerDataCipher,
@@ -217,11 +218,17 @@ async function insertOwner(
     throw new Error("Protected body has entered irreversible retirement.");
   }
   const expected = nodeData(ref);
+  hintAuthorizationChanges(context.transaction, [{
+    owner: "schema",
+    namespace,
+    collection: PROTECTED_VALUE_NODE_TYPE,
+    id: ref.ownerNodeId,
+  }]);
   await context.transaction.query(
     `INSERT INTO ${context.tables.nodes} (
        id, namespace, type, name, data, created_at, updated_at
      ) VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (namespace, id) DO NOTHING`,
     [
       ref.ownerNodeId,
       namespace,
@@ -236,8 +243,8 @@ async function insertOwner(
     data: unknown;
   }>(
     `SELECT namespace, type, data FROM ${context.tables.nodes}
-      WHERE id = $1 LIMIT 1`,
-    [ref.ownerNodeId],
+      WHERE namespace = $2 AND id = $1 LIMIT 1`,
+    [ref.ownerNodeId, namespace],
   );
   const row = existing.rows[0];
   if (

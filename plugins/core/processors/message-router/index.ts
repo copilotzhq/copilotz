@@ -290,18 +290,65 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
       const routedRecipients = new Set(
         stringArray(coreEvent(event).routing?.recipientIds),
       );
-      for (
-        const recipientId of new Set(
-          stringArray(record.recipientIds).filter(
-            (id) => routedRecipients.has(id),
+      const recipientIds = [
+        ...new Set(
+          stringArray(record.recipientIds).filter((id) =>
+            routedRecipients.has(id)
           ),
-        )
-      ) {
+        ),
+      ];
+      // Addressing a Participant does not imply an Agent turn. Keep the Message's
+      // recipients intact for conversation/channel delivery and select inference
+      // recipients from current, authorized records before preparing an Action.
+      const agentRecipients = new Set<string>();
+      for (let offset = 0; offset < recipientIds.length; offset += 1_000) {
+        const batch = recipientIds.slice(offset, offset + 1_000);
+        const participants = await context.collections.participant.list({
+          where: { id: { in: batch } },
+          limit: batch.length,
+        });
+        for (const participant of participants) {
+          if (participant.participantType === "agent") {
+            agentRecipients.add(String(participant.id));
+          }
+        }
+      }
+      // A Processor invocation owns one snapshot at a time. Capture each
+      // recipient's input serially; provider execution may then overlap.
+      let preparing: Promise<unknown> = Promise.resolve();
+      const prepareSerially = <T>(prepare: () => Promise<T>): Promise<T> => {
+        const result = preparing.then(prepare);
+        preparing = result.then(() => undefined, () => undefined);
+        return result;
+      };
+      const route = async (recipientId: string) => {
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`
           : `${record.id}:${recipientId}`;
         try {
-          await context.actions.callLlm.prepare(async () => {
+          const prepare = async () => {
+            const initiatorParticipantId = coreMessageOrigin({
+              id: record.id,
+              senderId: String(record.senderId),
+              metadata: record.metadata,
+            }).initiatorParticipantId;
+            for (
+              const resource of Object.values(
+                context.resources.promptContext ?? {},
+              )
+            ) {
+              if (
+                isContextResource(resource) &&
+                resource.purposes.includes("conversation")
+              ) {
+                await resource.prepare?.({
+                  context,
+                  threadId: String(record.threadId),
+                  initiatorParticipantId,
+                  ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                });
+              }
+            }
             const compactedBoundaries = new Set<string>();
             for (;;) {
               context.signal.throwIfAborted();
@@ -413,6 +460,7 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                         agent: resolved.agent,
                         participant: mapParticipantRecord(participant),
                         thread: metadata.thread,
+                        initiatorParticipantId,
                         ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
                       },
                     )
@@ -867,17 +915,21 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 metadata,
               };
             }
-          }, {
-            operationKey: `route:${continuationKey}`,
-            identity: {
-              correlationId: event.correlationId,
-              causationId: event.id,
-              settlementScopeId: context.identity.settlementScopeId,
+          };
+          await context.actions.callLlm.prepare(
+            () => prepareSerially(prepare),
+            {
+              operationKey: `route:${continuationKey}`,
+              identity: {
+                correlationId: event.correlationId,
+                causationId: event.id,
+                settlementScopeId: context.identity.settlementScopeId,
+              },
+              signal: context.signal,
             },
-            signal: context.signal,
-          });
+          );
         } catch (error) {
-          if (error instanceof ContextCompactionAwaitingError) continue;
+          if (error instanceof ContextCompactionAwaitingError) return;
           if (
             (agentTurn?.sourceHistory || agentTurn?.sourceHistoryRef) &&
             !isSettledActionError(error)
@@ -898,16 +950,27 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 error,
               }) || settled;
             }
-            if (settled) continue;
+            if (settled) return;
           }
           if (error instanceof SupersededMessageError) {
-            continue;
+            return;
           }
           if (!isSettledActionError(error)) {
             throw error;
           }
         }
-      }
+      };
+      // Recipients have independent Action identities. Let each reach its own
+      // outcome, then retry the delivery if any turn remains retryable. Waiting
+      // for every branch keeps the delivery's capability lifetime open until
+      // in-flight completions have been checkpointed.
+      const outcomes = await Promise.allSettled(
+        recipientIds.filter((id) => agentRecipients.has(id)).map(route),
+      );
+      const rejected = outcomes.find((outcome) =>
+        outcome.status === "rejected"
+      );
+      if (rejected?.status === "rejected") throw rejected.reason;
     },
   });
 export default messageRouterProcessor;

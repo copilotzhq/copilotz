@@ -101,6 +101,12 @@ Deno.test("scoped preparation failure is offered to its owning Context resource"
   const context = {
     signal: new AbortController().signal,
     identity: {},
+    collections: {
+      participant: {
+        list: () =>
+          Promise.resolve([{ id: "north", participantType: "agent" }]),
+      },
+    },
     actions: { callLlm: { prepare: () => Promise.reject(error) } },
     resources: {
       promptContext: {

@@ -5,6 +5,8 @@ import {
   type SqlSession,
 } from "../events/index.ts";
 
+const nodeKey = (namespace: string, id: string) =>
+  JSON.stringify([namespace, id]);
 const EXECUTION_OWNER = "@copilotz/action-content";
 type Node = {
   id: string;
@@ -65,10 +67,12 @@ async function inspect(tx: SqlExecutor, schema: string) {
     `SELECT id, namespace, source_node_id, target_node_id, type FROM ${tables.edges} ORDER BY id`,
   )).rows;
   const execution = nodes.filter((node) => node.type === EXECUTION_OWNER);
-  const executionIds = new Set(execution.map((node) => node.id));
+  const executionIds = new Set(
+    execution.map((node) => nodeKey(node.namespace, node.id)),
+  );
   const executionEdges = edges.filter((edge) =>
-    executionIds.has(edge.source_node_id) ||
-    executionIds.has(edge.target_node_id)
+    executionIds.has(nodeKey(edge.namespace, edge.source_node_id)) ||
+    executionIds.has(nodeKey(edge.namespace, edge.target_node_id))
   );
   const domains = nodes.filter((node) =>
     node.type !== EXECUTION_OWNER && node.type !== "asset" &&
@@ -90,6 +94,7 @@ async function inspect(tx: SqlExecutor, schema: string) {
   for (const owner of execution) {
     const ids = new Set([
       ...edges.filter((edge) =>
+        edge.namespace === owner.namespace &&
         edge.source_node_id === owner.id && edge.type === "has_asset"
       ).map((edge) => edge.target_node_id),
       ...(Array.isArray(owner.data.assetIds)
@@ -236,23 +241,16 @@ export function migrateActionContent(
       );
       report.assignedOwners++;
     }
-    const ids = [...executionIds];
-    if (ids.length) {
-      await tx.query(
-        `DELETE FROM ${tables.edges} WHERE source_node_id = ANY($1::text[]) OR target_node_id = ANY($1::text[])`,
-        [ids],
-      );
-      await tx.query(
-        `DELETE FROM ${tables.nodes} WHERE id = ANY($1::text[]) AND type = $2`,
-        [ids, EXECUTION_OWNER],
-      );
-    }
+    // Composite foreign keys remove only edges in each deleted node's namespace.
+    await tx.query(`DELETE FROM ${tables.nodes} WHERE type=$1`, [
+      EXECUTION_OWNER,
+    ]);
     report.removedNodes = nodes.filter((node) =>
-      executionIds.has(node.id)
+      executionIds.has(nodeKey(node.namespace, node.id))
     ).length;
     report.removedEdges = edges.filter((edge) =>
-      executionIds.has(edge.source_node_id) ||
-      executionIds.has(edge.target_node_id)
+      executionIds.has(nodeKey(edge.namespace, edge.source_node_id)) ||
+      executionIds.has(nodeKey(edge.namespace, edge.target_node_id))
     ).length;
     return report;
   });

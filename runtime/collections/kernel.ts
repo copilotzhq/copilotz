@@ -1,3 +1,6 @@
+import { readAuthorizationRecord } from "../authorization/cache.ts";
+import { withTransactionEffects } from "./transaction-effects.ts";
+import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
   hostIngressProof,
   type OwnerIngressProof,
@@ -33,6 +36,7 @@ import {
 } from "../engine/command-authorization.ts";
 import { collectionCommandReceipt } from "./command-receipt.ts";
 import { withSnapshotControl } from "./snapshot-control.ts";
+import { usesExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 import { isPendingContentRef } from "../content/schema.ts";
 import { syncCollectionAlarm } from "./alarms.ts";
 import {
@@ -63,7 +67,7 @@ import type {
   ScopedCollectionReadOptions,
 } from "./read-options.ts";
 export type { ScopedCollectionReadOptions } from "./read-options.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import { createAsyncContextStorage } from "../../dependencies/async-hooks.ts";
 import {
   type CoordinatedMutationResult,
@@ -136,6 +140,8 @@ import {
 } from "./validate.ts";
 
 export type CreateCollectionRuntimeOptions = Readonly<{
+  credentials?:
+    import("../authorization/owner.ts").AuthorizationOwner["credentials"];
   coordinator: EventCoordinator;
   policies?: CollectionPolicyRegistrations;
   session: SqlSession;
@@ -418,6 +424,8 @@ export type CollectionTransactionOptions<T> = Readonly<{
   execute(
     context: Readonly<{
       collections: CollectionTransactionCollections;
+      sessions: import("../actions/session-effects.ts").ActionSessions;
+      flows: import("../actions/session-effects.ts").ActionFlows;
       relations: CollectionTransactionRelations;
       vectors: VectorTransaction;
     }>,
@@ -843,7 +851,7 @@ function mutationResult<TSelect extends object>(
 export function createCollectionKernel(
   options: CreateCollectionRuntimeOptions,
 ): CollectionKernel {
-  const createId = options.createId ?? ulid;
+  const createId = options.createId ?? monotonicUlid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
   const commands = createAsyncContextStorage<
@@ -1098,7 +1106,18 @@ export function createCollectionKernel(
         ...(id
           ? {
             current: (tx: SqlExecutor) =>
-              loadCollectionRecord(tx, tables, namespace, name, id),
+              readAuthorizationRecord(
+                tx,
+                options.eventStore.databaseSchema,
+                {
+                  owner: "schema",
+                  namespace,
+                  collection: name,
+                  id,
+                },
+                () => loadCollectionRecord(tx, tables, namespace, name, id),
+                { immutableJson: true },
+              ),
           }
           : {}),
       }, authority)
@@ -1116,6 +1135,33 @@ export function createCollectionKernel(
         result = canonicalizeContentRefs(result);
       }
       const rows = Array.isArray(result) && result.length ? result : [result];
+      // Capture shared query arguments once. Each row still loads its current
+      // record, evaluates its disclosure, and enforces the resulting filter.
+      let recordId: string | undefined;
+      const check = captureCollectionPolicy({
+        databaseSchema: options.eventStore.databaseSchema,
+        registration,
+        namespace,
+        method,
+        args,
+        current: (tx: SqlExecutor) => {
+          const target = recordId;
+          return target
+            ? readAuthorizationRecord(
+              tx,
+              options.eventStore.databaseSchema,
+              {
+                owner: "schema",
+                namespace,
+                collection: name,
+                id: target,
+              },
+              () => loadCollectionRecord(tx, tables, namespace, name, target),
+              { immutableJson: true },
+            )
+            : Promise.resolve(undefined);
+        },
+      }, authority);
       for (const row of rows) {
         const value = row && typeof row === "object"
           ? row as Record<string, unknown>
@@ -1123,23 +1169,9 @@ export function createCollectionKernel(
         const record = method === "vectors.search"
           ? value?.record as Record<string, unknown> | undefined
           : value;
-        const recordId =
-          method !== "relations.list" && typeof record?.id === "string"
-            ? record.id
-            : id;
-        const check = captureCollectionPolicy({
-          databaseSchema: options.eventStore.databaseSchema,
-          registration,
-          namespace,
-          method,
-          args,
-          ...(recordId
-            ? {
-              current: (tx: SqlExecutor) =>
-                loadCollectionRecord(tx, tables, namespace, name, recordId),
-            }
-            : {}),
-        }, authority);
+        recordId = method !== "relations.list" && typeof record?.id === "string"
+          ? record.id
+          : id;
         await check.authorize(read, "result", row);
       }
     };
@@ -1180,6 +1212,12 @@ export function createCollectionKernel(
                   await policy?.authorize(command, "read");
                   const value = await load(policy?.args());
                   await disclose(command, value);
+                  // Primitive reads and their relation reads are wholly inside
+                  // this owner command. Check all descendants at this same
+                  // result boundary; a second command would only reread them.
+                  // Named selectors below still need a fresh command after any
+                  // external hydration or separately admitted nested reads.
+                  if (disclosureRoot) await discloseAll(command);
                   if (snapshot && snapshot.state !== "open") {
                     throw new Error("Read snapshot access has already closed.");
                   }
@@ -1191,6 +1229,7 @@ export function createCollectionKernel(
           );
         },
       );
+    if (disclosureRoot && method !== "query") return result;
     disclosure.checks.push((read) => disclose(read, result));
     // Hydrated endpoints and named-query reads share the root's final fresh gate.
     // An unprotected root cannot disclose a protected descendant on an old check.
@@ -2052,6 +2091,17 @@ export function createCollectionKernel(
         : undefined;
       const adopts = plan.content.some((item) => item.adoptions.length > 0);
       const inStatement = composed && adopts;
+      const collectionChange = {
+        previous: plan.expected ?? null,
+        collection: name,
+        id: subjectId,
+        record: plan.write.body.operation === "delete"
+          ? null
+          : plan.write.record,
+        ordering: undefined as
+          | { createdAt: string; updatedAt: string }
+          | undefined,
+      };
       const result = await options.coordinator.commitMutation({
         draft,
         ...(alarmEventId ? { eventId: alarmEventId } : {}),
@@ -2064,6 +2114,7 @@ export function createCollectionKernel(
           matchData,
         }),
         body: { id: bodyId, json: plan.write.body },
+        collectionChange,
         ...((adopts && !inStatement) || (!guard && scoped.condition) ||
             definition.alarm
           ? {
@@ -2092,6 +2143,9 @@ export function createCollectionKernel(
                 definition,
                 plan.write.body,
                 guard,
+                (ordering) => {
+                  collectionChange.ordering = ordering;
+                },
               );
               if (alarmAdmission) {
                 await recordScheduledAlarmIngress(context, {
@@ -2131,6 +2185,7 @@ export function createCollectionKernel(
                 : undefined;
               return {
                 invalidatesContent: adopts,
+                nodeChanges: projection.nodeChanges,
                 ctes: [...adoption?.ctes ?? [], ...projection.ctes],
                 gate: adoption
                   ? `(${adoption.gate}) AND (${projection.gate})`
@@ -2143,7 +2198,14 @@ export function createCollectionKernel(
                   ? `jsonb_build_object('adoption', ${adoption.report}, 'projection', ${projection.report})`
                   : projection.report,
                 resolve: (report: unknown, inserted: boolean) => {
-                  if (inserted) return plan.write.record;
+                  if (inserted) {
+                    const decoded = typeof report === "string"
+                      ? JSON.parse(report)
+                      : report;
+                    collectionChange.ordering =
+                      (adoption ? decoded.projection : decoded)?.ordering;
+                    return plan.write.record;
+                  }
                   const parts = adoption
                     ? (typeof report === "string"
                       ? JSON.parse(report)
@@ -2192,7 +2254,7 @@ export function createCollectionKernel(
           }
           return existingBody.record;
         },
-      });
+      }).catch(rethrowNodeIdentityConflict);
       if (execution) {
         execution.pending.push(result as CoordinatedMutationResult<unknown>);
       }
@@ -4179,9 +4241,67 @@ export function createCollectionKernel(
         }, () => protectedGraph);
       },
     };
-    const run = () => execute({ collections, relations, vectors });
+    let credentialIndex = 0;
+    const credential = (
+      method: import("../actions/session-effects.ts").CredentialEffectMethod,
+      input: unknown,
+    ): Promise<void> => {
+      if (scope.state !== "open") {
+        throw new Error("Transaction mutation planning is already closed.");
+      }
+      if (!options.credentials) collectionPolicyRefused();
+      const binding = captureCollectionInvocation();
+      if (!binding || binding.invocation.kind !== "action") {
+        collectionPolicyRefused();
+      }
+      const intent = structuredClone(input);
+      assertLosslessJson(intent, "Credential effect");
+      const key = `${operationKey}/credential:${++credentialIndex}`;
+      scope.plans.push({
+        id: key,
+        order: [++scope.orderSequence],
+        async commit(transaction) {
+          await options.credentials!.commit(
+            binding,
+            method,
+            intent,
+            key,
+            schemaCommandContext(
+              transaction,
+              options.eventStore.databaseSchema,
+            ),
+          );
+          return undefined;
+        },
+      });
+      return Promise.resolve();
+    };
+    const sessions: import("../actions/session-effects.ts").ActionSessions = {
+      create: (input) => credential("session.create", input),
+      revoke: (id) => credential("session.revoke", id ?? null),
+    };
+    const flows: import("../actions/session-effects.ts").ActionFlows = {
+      start: (input) => credential("flow.start", input),
+    };
+    const run = () =>
+      execute({ collections, relations, vectors, sessions, flows });
 
-    const value = await finishPlanning(scope, run);
+    const value = await finishPlanning(scope, () =>
+      withTransactionEffects(
+        (key, commit) => {
+          if (scope.state !== "open") {
+            throw new Error("Transaction planning is closed.");
+          }
+          scope.plans.push({
+            id: key,
+            order: [++scope.orderSequence],
+            async commit() {
+              await commit();
+            },
+          });
+        },
+        run,
+      ));
     const pending: CoordinatedMutationResult<unknown>[] = [];
     const writes: CollectionWrite<CollectionRecord>[] = [];
     const orderedPlans = [...scope.plans].sort(comparePlanOrder);
@@ -4448,18 +4568,22 @@ export function createCollectionKernel(
         }
       });
     };
-    let exclusive = false;
-    const value = await options.session.withReadSnapshot(async (session) => {
-      if (session.kind === "exclusive" && options.policies?.size) {
-        exclusive = true;
-        return undefined;
-      }
-      return await select({ ...session, cleanup: cleanup.promise });
-    }, { onCleanup: cleanup.resolve });
-    if (!exclusive) return value as T;
+    let exclusive = usesExclusiveReadSnapshot(options.session.withReadSnapshot);
+    if (!exclusive) {
+      const value = await options.session.withReadSnapshot(async (session) => {
+        if (session.kind === "exclusive" && options.policies?.size) {
+          exclusive = true;
+          return undefined;
+        }
+        return await select({ ...session, cleanup: cleanup.promise });
+      }, { onCleanup: cleanup.resolve });
+      if (!exclusive) return value as T;
+    }
     // An exclusive backend cannot open a second owner command while its
     // snapshot holds the connection. The acquired owner command itself provides
     // the consistent read scope and evaluates policy in that same transaction.
+    // Known managed PGlite uses this boundary directly: its native raw-snapshot
+    // certification excludes extension configurations such as vector storage.
     const released = Promise.withResolvers<
       import("../events/session.ts").SqlSnapshotCleanup
     >();

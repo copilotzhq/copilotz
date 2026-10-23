@@ -1,3 +1,4 @@
+import { validateDeliveryTimeoutMs } from "../execution/deadlines.ts";
 import {
   type ActionContentDeclaration,
   actionContentDeclaration,
@@ -16,6 +17,7 @@ import { snapshotActionSchema } from "./secret.ts";
 const ACTION_KEYS = new Set([
   "id",
   "content",
+  "deliveryTimeoutMs",
   "inputSchema",
   "outputSchema",
   "execute",
@@ -56,6 +58,11 @@ export function isActionDefinition(
     Object.keys(value).some((key) => !ACTION_KEYS.has(key)) ||
     typeof value.id !== "string" || !value.id.trim() ||
     !/^[a-z][a-z0-9_.-]*$/i.test(value.id.trim()) ||
+    (value.deliveryTimeoutMs !== undefined &&
+      (typeof value.deliveryTimeoutMs !== "number" ||
+        !Number.isSafeInteger(value.deliveryTimeoutMs) ||
+        value.deliveryTimeoutMs <= 0 ||
+        value.deliveryTimeoutMs > 0x7fff_ffff)) ||
     typeof value.execute !== "function" ||
     (value.resume !== undefined && typeof value.resume !== "function") ||
     (value.reconcile !== undefined && typeof value.reconcile !== "function")
@@ -74,6 +81,7 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    deliveryTimeoutMs?: number;
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -108,6 +116,7 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    deliveryTimeoutMs?: number;
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -135,6 +144,7 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    deliveryTimeoutMs?: number;
     content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
@@ -175,6 +185,9 @@ export function defineAction<
     throw new TypeError(`Action '${id}' reconcile must be a function.`);
   }
 
+  const deliveryTimeoutMs = definition.deliveryTimeoutMs === undefined
+    ? undefined
+    : validateDeliveryTimeoutMs(definition.deliveryTimeoutMs);
   const inputSchema = optionalSchema(
     id,
     "inputSchema",
@@ -203,6 +216,7 @@ export function defineAction<
   }
   return ({
     id,
+    ...(deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs }),
     ...(content ? { content } : {}),
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),

@@ -123,7 +123,10 @@ async function fixture(denyCommittedResult = false, vector = false) {
               metadata: { keyId: "key" },
               absentMetadata: ["computerOperationKind"],
             },
-            sessions: { create: true, revoke: "tenant" },
+            sessions: {
+              create: { principal: "account", maxAge: 3600 },
+              revoke: "tenant",
+            },
           };
         },
       },
@@ -160,7 +163,7 @@ async function fixture(denyCommittedResult = false, vector = false) {
   const setMember = (allowed: boolean) =>
     run("fixture.membership", {}, async (_, command) => {
       await command.transaction.query(
-        `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('key','main','member','key',$1::jsonb) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data`,
+        `INSERT INTO "${schema}".nodes(id,namespace,type,name,data) VALUES('key','main','member','key',$1::jsonb) ON CONFLICT(namespace,id) DO UPDATE SET data=EXCLUDED.data`,
         [JSON.stringify({ allowed })],
       );
     });
@@ -201,7 +204,7 @@ async function fixture(denyCommittedResult = false, vector = false) {
     evaluate,
     authorization,
     async close() {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     },
@@ -385,7 +388,7 @@ Deno.test("F4 tenant logout commits revocation, refuses replay and closes only i
   try {
     await f.authorization.createSession(f.authority, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     await f.authorization.createSession({
@@ -393,14 +396,24 @@ Deno.test("F4 tenant logout commits revocation, refuses replay and closes only i
       scope: { ...f.authority.scope, tenant: "two" },
     }, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     const binding: AuthenticatedAuthority = {
       ...f.authority,
-      principal: { kind: "session", id: "session" },
+      principal: { kind: "session", id: "account" },
       authorityBasis: { kind: "session", id: "session" },
     };
+    await assertRejects(() =>
+      f.authorization.observe(
+        {
+          ...binding,
+          principal: { kind: "session", id: "another-account" },
+        },
+        {},
+        () => {},
+      )
+    );
     const revoked = Promise.withResolvers<unknown>();
     const first = await f.authorization.observe(binding, {}, revoked.resolve);
     let otherRevoked = false;
@@ -574,12 +587,12 @@ Deno.test("F4 failed logout commit leaves the session and channel live", async (
   try {
     await f.authorization.createSession(f.authority, {
       id: "session",
-      principal: "session",
+      principal: "account",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     const authority: AuthenticatedAuthority = {
       ...f.authority,
-      principal: { kind: "session", id: "session" },
+      principal: { kind: "session", id: "account" },
       authorityBasis: { kind: "session", id: "session" },
     };
     const channel = await f.authorization.observe(authority, {}, () => {});

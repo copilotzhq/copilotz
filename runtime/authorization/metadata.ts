@@ -14,7 +14,7 @@ export function captureOperationConstraints(
   if (
     !captured || typeof captured !== "object" || Array.isArray(captured) ||
     Object.keys(captured).some((key) =>
-      key !== "metadata" && key !== "absentMetadata"
+      key !== "metadata" && key !== "absentMetadata" && key !== "anyOf"
     ) ||
     !captured.metadata || typeof captured.metadata !== "object" ||
     Array.isArray(captured.metadata)
@@ -26,6 +26,23 @@ export function captureOperationConstraints(
       typeof key !== "string" || !key || Object.hasOwn(captured.metadata, key)
     )
   ) throw new TypeError("Invalid required-absent metadata keys.");
+  if (captured.anyOf !== undefined) {
+    if (
+      !Array.isArray(captured.anyOf) || !captured.anyOf.length ||
+      captured.anyOf.length > 16
+    ) throw new TypeError("Invalid operation metadata alternatives.");
+    for (const alternative of captured.anyOf) {
+      if (
+        alternative && typeof alternative === "object" &&
+        Object.hasOwn(alternative, "anyOf")
+      ) {
+        throw new TypeError(
+          "Nested operation metadata alternatives are invalid.",
+        );
+      }
+      captureOperationConstraints(alternative);
+    }
+  }
   return captured;
 }
 
@@ -39,7 +56,11 @@ export function matchesOperationConstraints(
   const metadata = candidate as Record<string, unknown>;
   return Object.entries(constraints.metadata).every(([key, value]) =>
     Object.hasOwn(metadata, key) && sameValue(metadata[key], value)
-  ) && (constraints.absentMetadata ?? []).every((key) =>
-    !Object.hasOwn(metadata, key)
-  );
+  ) &&
+    (constraints.absentMetadata ?? []).every((key) =>
+      !Object.hasOwn(metadata, key)
+    ) && (constraints.anyOf === undefined ||
+      constraints.anyOf.some((alternative) =>
+        matchesOperationConstraints(metadata, alternative)
+      ));
 }

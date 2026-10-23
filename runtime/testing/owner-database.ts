@@ -1,3 +1,4 @@
+import { bindSqlDatabaseIdentity } from "../events/database-identity.ts";
 import { createTestDatabase } from "./ominipg.ts";
 
 /** Explicit backend admission: this mode never constructs embedded storage. */
@@ -10,7 +11,9 @@ export async function createOwnerTestDatabase() {
       "Connected PostgreSQL tests require an explicit PostgreSQL URL.",
     );
   }
-  const name = `owner_connected_${crypto.randomUUID().replaceAll("-", "")}`;
+  const name = `${url.pathname.slice(1)}_owner_${
+    crypto.randomUUID().replaceAll("-", "")
+  }`;
   const admin = await createTestDatabase({ url: url.href, pgPoolMax: 1 });
   let created = false;
   try {
@@ -22,7 +25,7 @@ export async function createOwnerTestDatabase() {
       `PostgreSQL-only admitted: ${url.protocol}//${url.hostname}:${url.port}${url.pathname}`,
     );
     let closing: Promise<void> | undefined;
-    return {
+    return bindSqlDatabaseIdentity({
       ...database,
       close() {
         return closing ??= (async () => {
@@ -38,7 +41,7 @@ export async function createOwnerTestDatabase() {
           }
         })();
       },
-    };
+    }, database);
   } catch (error) {
     try {
       if (created) await admin.query(`DROP DATABASE "${name}"`);

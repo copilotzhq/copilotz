@@ -4,7 +4,9 @@ import type {
   CollectionAggregateRow,
   CollectionQuery,
   CollectionRecord,
+  CollectionSubscription,
   ScopedCollectionReadOptions,
+  SubscriptionOptions,
 } from "@copilotz/copilotz/collections";
 import type {
   ServerAuthorizedScope,
@@ -13,6 +15,13 @@ import type {
 } from "../../shared/contracts.ts";
 
 export type HttpReadServices = Readonly<{
+  observe(
+    collection: string,
+    query?: CollectionQuery,
+    options?: SubscriptionOptions,
+  ): Promise<
+    CollectionSubscription
+  >;
   get(
     collection: string,
     id: string,
@@ -49,8 +58,9 @@ export type HttpHandlerContext = Readonly<{
     }
   >;
   read: HttpReadServices;
+  /** Returns the Action's durable result; observe its operation for scope settlement. */
   invoke(
-    actionId: string,
+    actionAlias: string,
     input: unknown,
     options?: {
       idempotencyKey?: string;
@@ -60,12 +70,12 @@ export type HttpHandlerContext = Readonly<{
   content: Readonly<{ get(assetId: string): Promise<Response> }>;
   operations: Readonly<{
     checkpoint(
-      threadId: string,
+      record: Readonly<{ collection: string; id: string }>,
       coverage?: { checkpoint: string; actionRunIds: readonly string[] },
     ): Promise<string>;
     observe(
       selection: {
-        threadId?: string;
+        record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
         checkpoint?: string;
       },
@@ -97,7 +107,51 @@ export type HttpRoute = Readonly<
     }
   )
 >;
+export type HttpObservationSelection = Readonly<{
+  key(id: string): string;
+  outputMetadata?(id: string): Readonly<Record<string, unknown>>;
+}>;
 export type HttpAdapter = Readonly<{
+  /** Domain read projection, applied to every HTTP/device collection read. */
+  reads?(
+    read: HttpReadServices,
+    scope: ServerAuthorizedScope,
+    /** Resolve only references retained from rows this read already authorized.
+     * Adapters may remove rows/fields, never introduce rows or Asset references.
+     * One call shares one content budget, preserving the supplied row order. */
+    resolve: (
+      collection: string,
+      rows: readonly CollectionRecord[],
+      options?: ScopedCollectionReadOptions,
+    ) => Promise<readonly CollectionRecord[]>,
+  ): HttpReadServices;
+  /** Domain content authorization in addition to the owner's asset grant. */
+  authorizeAsset?(
+    id: string,
+    scope: ServerAuthorizedScope,
+    read: HttpReadServices,
+  ): Promise<void>;
+  /** Authorize a retained Action result from its admitted invocation metadata. */
+  authorizeActionResult?(
+    metadata: Readonly<Record<string, unknown>>,
+    scope: ServerAuthorizedScope,
+  ): void;
+  /** Domain projection shared by explicit operation and record observations. */
+  projectOutput?(
+    output: import("@copilotz/copilotz/streams").ApplicationOutput,
+    scope: ServerAuthorizedScope,
+    read: HttpReadServices,
+    origins: (
+      actionRunId: string,
+    ) => Promise<readonly Readonly<Record<string, unknown>>[]>,
+  ): Promise<import("@copilotz/copilotz/streams").ApplicationOutput | null>;
+
+  /** Domain-owned selection keys, indexed by the authorized Collection alias. */
+  observations?: Readonly<Record<string, HttpObservationSelection>>;
+  /** Domain metadata for durable HTTP ingress, derived from trusted scope metadata. */
+  ingressMetadata?(
+    metadata: Readonly<Record<string, unknown>>,
+  ): Readonly<Record<string, unknown>>;
   /** Collection aliases read by authenticated routes; checked at Server startup. */
   collections?: readonly string[];
   routes: readonly HttpRoute[];

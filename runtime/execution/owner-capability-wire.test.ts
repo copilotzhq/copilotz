@@ -165,3 +165,37 @@ Deno.test("codec bounds Error cause traversal by the same depth budget", () => {
   assertThrows(() => encodeCapability(hostile), Error, "owner_data_invalid");
   assertEquals(getters, 0);
 });
+
+Deno.test("capability errors retain explicit retryability and bounded retry delay without their cause", () => {
+  const error = Object.assign(
+    new Error("provider unavailable", {
+      cause: new Error("private diagnostic"),
+    }),
+    {
+      retryable: true,
+      retryAfterMs: 5000,
+      code: "llm_provider_network",
+    },
+  );
+  const decoded = decodeCapability(encodeCapability(error)) as Error & {
+    retryable?: boolean;
+    retryAfterMs?: number;
+    code?: string;
+  };
+  assertEquals(decoded.retryable, true);
+  assertEquals(decoded.retryAfterMs, 5000);
+  assertEquals(decoded.code, "llm_provider_network");
+  assertEquals(decoded.cause, undefined);
+  assertEquals(
+    (decodeCapability(
+      encodeCapability(new Error("ordinary")),
+    ) as typeof decoded).retryable,
+    undefined,
+  );
+  assertEquals(
+    (decodeCapability(
+      encodeCapability(Object.assign(error, { retryAfterMs: 999999 })),
+    ) as typeof decoded).retryAfterMs,
+    30_000,
+  );
+});

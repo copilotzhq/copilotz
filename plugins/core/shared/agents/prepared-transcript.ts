@@ -1,7 +1,4 @@
-import type {
-  CollectionPredicate,
-  CollectionRecord,
-} from "@copilotz/copilotz/collections";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type { LlmMessage } from "@copilotz/copilotz/llm";
 import type { ConversationMessage } from "../contracts.ts";
 import type { CoreProcessorContext } from "../runtime-context.ts";
@@ -67,40 +64,6 @@ function toolResultMarker(messageId: string, bytes: number): string {
   } has ${bytes} source bytes, so its body was omitted from this input. The full stored result remains retrievable by Message ID through bounded readToolResult calls (subject to Core's maxSourceBytes policy). Call readToolResult({messageId:${
     JSON.stringify(messageId)
   },offset:0,limit:8192}); offsets use its assembled UTF-8 text representation, reported as totalBytes. Use its search option for plain literal text.]`;
-}
-
-function snapshotFilter(
-  ids: readonly string[],
-  snapshots: ReadonlyMap<string, ConversationMessage>,
-): CollectionPredicate {
-  return {
-    and: [
-      // Keep the batch candidate set on the physical primary-key column so
-      // PostgreSQL can use its id index before evaluating snapshot JSON.
-      { field: "id", in: ids },
-      {
-        or: ids.flatMap((id) => {
-          const snapshot = snapshots.get(id);
-          return snapshot
-            ? [{
-              and: [
-                { field: "id", eq: id },
-                { field: "senderId", eq: snapshot.sender.id },
-                { field: "createdAt", eq: snapshot.createdAt },
-                { field: "updatedAt", eq: snapshot.updatedAt },
-                {
-                  field: "content",
-                  jsonEquals: contentReferences(snapshot.content),
-                },
-                optionalSnapshotFilter(snapshot, "visibility"),
-                optionalSnapshotFilter(snapshot, "revision"),
-              ],
-            }]
-            : [];
-        }),
-      },
-    ],
-  };
 }
 
 function contentReferences(value: unknown): unknown {
@@ -173,16 +136,18 @@ function sameMetadata(left: unknown, right: unknown): boolean {
     );
 }
 
-function optionalSnapshotFilter(
-  snapshot: { visibility?: unknown; revision?: unknown },
+/** Compare optional JSON fields including absent versus explicit null. */
+function sameOptionalSnapshot(
+  record: CollectionRecord,
+  snapshot: ConversationMessage,
   field: "visibility" | "revision",
-) {
-  return Object.hasOwn(snapshot, field)
-    ? { field, jsonEquals: snapshot[field] }
-    : { field, exists: false };
+): boolean {
+  return Object.hasOwn(record, field) === Object.hasOwn(snapshot, field) &&
+    sameMetadata(record[field], snapshot[field]);
 }
 
-const BATCH_SIZE = 20;
+// IDs are the only query payload; keep ordinary history windows in one command.
+const BATCH_SIZE = 100;
 
 type MessageCollection = NonNullable<
   CoreProcessorContext["collections"]["message"]
@@ -247,8 +212,9 @@ async function loadStored(
     const batchIds = ids.slice(offset, offset + BATCH_SIZE);
     const records = await messages.list({
       where: { threadId },
-      // Match the captured record before any Body is opened.
-      filter: snapshotFilter(batchIds, snapshots),
+      // Read authorized candidates by primary key. Check the complete captured
+      // snapshot below before any Asset or Body opens.
+      filter: { field: "id", in: batchIds },
       limit: batchIds.length,
     });
     if (records.length !== batchIds.length) {
@@ -256,11 +222,19 @@ async function loadStored(
     }
     for (const record of records) {
       const snapshot = snapshots.get(record.id);
-      // Metadata is already returned by the same indexed batch read. Private
-      // turns can hold more than 1 MiB of frozen source here, beyond the SQL
-      // jsonEquals budget. Verify it locally before any Asset or Body opens.
+      // The authorized read already returns these fields. Comparing here avoids
+      // sending the entire history back through every command/SQL boundary.
+      // No body is opened until every captured snapshot has been verified.
       if (
-        !snapshot ||
+        !snapshot || record.threadId !== threadId ||
+        record.senderId !== snapshot.sender.id ||
+        Date.parse(String(record.createdAt)) !==
+          Date.parse(snapshot.createdAt) ||
+        Date.parse(String(record.updatedAt)) !==
+          Date.parse(snapshot.updatedAt) ||
+        !sameMetadata(record.content, contentReferences(snapshot.content)) ||
+        !sameOptionalSnapshot(record, snapshot, "visibility") ||
+        !sameOptionalSnapshot(record, snapshot, "revision") ||
         !sameMetadata(record.metadata, snapshotMetadata(snapshot.metadata))
       ) {
         throw new Error("Message history is no longer available.");

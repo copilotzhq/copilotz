@@ -21,12 +21,26 @@ export type ServerCollectionMutationConstraints = Readonly<{
 }>;
 
 export type ServerConstraints = Readonly<{
+  identityVerifiers?: readonly string[];
+  flowProcessors?: readonly string[];
+  directoryCommands?: readonly string[];
+  /** Declared directory read aliases. Policy must inspect the exact requested id. */
+  directoryReads?: readonly string[];
   /** Authenticated root event types, including adapter-validated channel input. */
   events?: readonly string[];
   /** Opaque catalog selection keys chosen by owner policy for admitted work. */
   observationKeys?: readonly string[];
   assets?: Readonly<{ read?: readonly string[] }>;
-  sessions?: Readonly<{ create?: boolean; revoke?: "self" | "tenant" }>;
+  flows?: Readonly<{
+    start?: Readonly<
+      Record<string, Readonly<{ continuation: string; maxAge: number }>>
+    >;
+  }>;
+  sessions?: Readonly<{
+    /** Exact owner-authorized principal and maximum credential lifetime in seconds. */
+    create?: Readonly<{ principal: string; maxAge: number }>;
+    revoke?: "self" | "tenant";
+  }>;
   actions?: Readonly<
     Record<string, Readonly<{ input?: Readonly<Record<string, unknown>> }>>
   >;
@@ -44,5 +58,10 @@ export type ServerConstraints = Readonly<{
     metadata: Readonly<Record<string, unknown>>;
     /** Required missing own keys. Null and omitted requirements are not absence. */
     absentMetadata?: readonly string[];
+    /** Reads must also match one complete alternative. Never stamped at admission. */
+    anyOf?: readonly Readonly<{
+      metadata: Readonly<Record<string, unknown>>;
+      absentMetadata?: readonly string[];
+    }>[];
   }>;
 }>;

@@ -32,7 +32,7 @@ import {
   isJsonSchemaValidationError,
   validateAgainstJsonSchema,
 } from "../collections/validate.ts";
-import { markNonRetryable } from "../failure.ts";
+import { errorRetryability, markNonRetryable } from "../failure.ts";
 import { ActionError } from "./errors.ts";
 import {
   durableActionMetadata,
@@ -125,6 +125,8 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
+  /** Owner-retained delivery budget; absent for a direct Action invocation. */
+  deliveryAttempt?: Readonly<{ attempts: number; maxAttempts: number }>;
   /** Current owner policy for input, mutations and result disclosure. */
   authorize?(
     frame: ActionInvocationFrame,
@@ -909,16 +911,33 @@ function actionCaller(
       // owner-authorized attempt must reconcile the durable effect inventory
       // before user code can run again. Accepted terminals above still win.
       if (isOwnerExecutionInterrupted(caught)) throw caught;
-      const status = frame.signal?.aborted || isCancellationError(error)
-        ? "cancelled" as const
-        : "failed" as const;
+      const retryable = !frame.signal.aborted &&
+        errorRetryability(error) === true;
+      if (
+        retryable && invoker.deliveryAttempt &&
+        invoker.deliveryAttempt.attempts < invoker.deliveryAttempt.maxAttempts
+      ) {
+        throw error;
+      }
+      const serialized = safeError(error, inputSecrets);
+      const terminalError = retryable && invoker.deliveryAttempt
+        ? {
+          ...serialized,
+          message:
+            `${serialized.message} Failed after ${invoker.deliveryAttempt.attempts} attempts.`,
+        }
+        : serialized;
+      const status =
+        frame.signal?.aborted || (!retryable && isCancellationError(error))
+          ? "cancelled" as const
+          : "failed" as const;
       try {
         await lifecycle.emit({
           ...lifecycleCommon(frame, durableInput),
           status,
           error: actionDefinitionHasSecrets(action)
             ? protectedActionError(status === "cancelled")
-            : safeError(error, inputSecrets),
+            : terminalError,
           deduplicationId: `${frame.actionRunId}:action:terminal`,
         });
       } catch (settlementError) {

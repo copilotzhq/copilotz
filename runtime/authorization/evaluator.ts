@@ -1,4 +1,20 @@
+import { trackPolicyReads } from "./policy-reads.ts";
+import { createDecisionReuse } from "./decision-cache.ts";
+import { ownerAttemptLive } from "./leases.ts";
+import {
+  authorizationDependencyKeys,
+  authorizationTableKey,
+  memoAuthorizationRead,
+  reportAuthorizationCache,
+} from "./cache.ts";
+import { defineDatabaseDirectoryCommand } from "./directory-command.ts";
+import {
+  defineIdentityVerifier,
+  readIdentityEvidence,
+} from "./identity-evidence.ts";
 import { validateCollectionConstraints } from "./collection-constraints.ts";
+import { defineDatabaseDirectoryRead } from "./directory-read.ts";
+import { checkFlow } from "./flow.ts";
 /** One owner-local policy evaluator. Policy code receives declared, tracked reads. */
 import type {
   AuthenticatedAuthority,
@@ -41,15 +57,24 @@ export type AuthorizationIntent = Readonly<{
     | "operation"
     | "observation"
     | "session"
+    | "flow"
     | "asset"
-    | "event";
+    | "event"
+    | "directory"
+    | "identity";
   resource: string;
   operation: string;
   input: unknown;
+  /** Owner-resolved root source, used when capturing a flow continuation. */
+  sourceOperationId?: string;
+  sourceEventId?: string;
+  sourceDeliveryId?: string;
   /** Owner-resolved executing identity. Absent for direct ingress calls. */
   invocation?: Readonly<{
     kind: "action" | "processor" | "alarm";
     id: string;
+    runId?: string;
+    parentRunId?: string;
   }>;
 }>;
 export type AuthorizationRead = Readonly<{
@@ -59,21 +84,38 @@ export type AuthorizationRead = Readonly<{
     query?: CollectionQuery,
   ): Promise<readonly CollectionRecord[]>;
 }>;
+export type DirectoryPolicyProvenance = Readonly<{
+  command: string;
+  databaseSchema: string;
+  namespace: string;
+}>;
 export type OwnerPolicy = Readonly<{
   revision: string;
   /** Local Collection aliases, or explicit directory capabilities for staff grants. */
   sources: readonly AuthorizationSource[];
+  evidence?: readonly string[];
   evaluate(
     context: Readonly<{
       authority: AuthenticatedAuthority;
+      directory?: DirectoryPolicyProvenance;
       intent: AuthorizationIntent;
       commandTime: string;
       signal: AbortSignal;
       read: AuthorizationRead;
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
     }>,
   ): ServerConstraints | Promise<ServerConstraints>;
 }>;
 export type OwnerAuthorization = Readonly<{
+  identityVerifiers?: Readonly<
+    Record<string, import("./identity-evidence.ts").IdentityVerifier>
+  >;
+  directoryCommands?: Readonly<
+    Record<string, import("./directory-command.ts").DatabaseDirectoryCommand>
+  >;
+  directoryReads?: Readonly<
+    Record<string, import("./directory-read.ts").DatabaseDirectoryRead>
+  >;
   /** Explicit tenant placement for owner-generated alarm occurrences, by namespace. */
   systemScopes?: Readonly<
     Record<string, import("./authority.ts").AuthorityScope>
@@ -87,6 +129,13 @@ export type AuthorizationDecision = Readonly<{
   constraints: ServerConstraints;
   dependencies: readonly AuthorityDependency[];
 }>;
+const reuseDeadlines = new WeakMap<AuthorizationDecision, number>();
+/** Private owner metadata, never serialized or accepted as retained authority. */
+export function authorizationReuseDeadline(
+  decision: AuthorizationDecision,
+): number | undefined {
+  return reuseDeadlines.get(decision);
+}
 export function authorizationRefused(): never {
   throw markOwnerAuthorizationRefusal(
     standardActionError({ code: "forbidden", status: 403 })!,
@@ -123,9 +172,44 @@ export function validateOwnerAuthorization(
       );
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.identityVerifiers ?? {},
+    )
+  ) {
+    defineIdentityVerifier(declaration);
+    if (
+      !alias ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) throw new TypeError("Identity verifiers require policy-bound Actions.");
+  }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryCommands ?? {},
+    )
+  ) {
+    defineDatabaseDirectoryCommand(declaration);
+    if (
+      !alias || declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      ) ||
+      declaration.evidence?.some((evidence) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, evidence)
+      )
+    ) {
+      throw new TypeError(
+        "Directory commands require policy-bound Actions and declared evidence.",
+      );
+    }
+  }
   for (const [id, policy] of Object.entries(registration.policies)) {
     if (
       !id || !policy.revision || typeof policy.evaluate !== "function" ||
+      policy.evidence?.some((alias) =>
+        !Object.hasOwn(registration.identityVerifiers ?? {}, alias)
+      ) ||
       !Array.isArray(policy.sources) ||
       new Set(policy.sources.map(sourceAlias)).size !== policy.sources.length ||
       policy.sources.some((source) =>
@@ -165,6 +249,23 @@ export function validateOwnerAuthorization(
       throw new TypeError("Required Collection authority binding is missing.");
     }
   }
+  for (
+    const [alias, declaration] of Object.entries(
+      registration.directoryReads ?? {},
+    )
+  ) {
+    if (
+      !alias || declaration.kind !== "database-directory-read" ||
+      declaration.actions.some((action) =>
+        !Object.hasOwn(registration.actions, action)
+      )
+    ) {
+      throw new TypeError(
+        "Directory reads require declared, policy-bound Actions.",
+      );
+    }
+    defineDatabaseDirectoryRead(declaration);
+  }
 }
 export function captureOwnerAuthorization(
   registration: OwnerAuthorization | undefined,
@@ -174,6 +275,25 @@ export function captureOwnerAuthorization(
   validateOwnerAuthorization(registration, collections, actions);
   if (!registration) return;
   return Object.freeze({
+    directoryCommands: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.directoryCommands ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineDatabaseDirectoryCommand(declaration)]),
+      ),
+    ),
+    identityVerifiers: Object.freeze(
+      Object.fromEntries(
+        Object.entries(registration.identityVerifiers ?? {}).map((
+          [alias, declaration],
+        ) => [alias, defineIdentityVerifier(declaration)]),
+      ),
+    ),
+    directoryReads: Object.freeze(Object.fromEntries(
+      Object.entries(registration.directoryReads ?? {}).map((
+        [alias, declaration],
+      ) => [alias, defineDatabaseDirectoryRead(declaration)]),
+    )),
     ...(registration.systemScopes
       ? {
         systemScopes: Object.freeze(
@@ -189,6 +309,7 @@ export function captureOwnerAuthorization(
           id,
           Object.freeze({
             revision: policy.revision,
+            evidence: Object.freeze([...(policy.evidence ?? [])]),
             sources: Object.freeze(
               policy.sources.map(captureAuthorizationSource),
             ),
@@ -221,10 +342,15 @@ export function createOwnerEvaluator(
     registration: OwnerAuthorization;
     collections: Readonly<Record<string, CollectionDefinition>>;
     databaseSchema: string;
+    /** Package-only live delegation; never accepted from a worker or retained authority. */
+    directory?: DirectoryPolicyProvenance & {
+      evidence: import("./identity-evidence.ts").IdentityEvidenceReader;
+    };
   }>,
 ): OwnerEvaluator {
   const { registration, collections, databaseSchema } = options;
   const tables = createCoreTableNames(databaseSchema);
+  const reuse = createDecisionReuse(databaseSchema);
   return async function evaluate(
     value: AuthenticatedAuthority,
     intent: AuthorizationIntent,
@@ -233,10 +359,31 @@ export function createOwnerEvaluator(
     >,
   ): Promise<AuthorizationDecision> {
     let authority = retainedAuthority(value);
-    const policy = registration.policies[authority.policy.id];
+    intent = captureHostCommandJson(intent) as AuthorizationIntent;
+    const diagnosticIntent = () => {
+      const phase = (intent.input as { phase?: unknown } | null)?.phase;
+      return [
+        intent.kind,
+        intent.resource,
+        intent.operation,
+        typeof phase === "string" ? phase : "",
+      ].join("|");
+    };
+    reportAuthorizationCache(
+      command.transaction,
+      "evaluation-call",
+      diagnosticIntent,
+    );
+    const directory = options.directory;
+    if (directory && intent.kind !== "collection") authorizationRefused();
+    const reference = directory
+      ? registration.collections[intent.resource]
+      : authority.policy;
+    const namespace = directory?.namespace ?? authority.scope.namespace;
+    const policy = reference && registration.policies[reference.id];
     if (
-      !policy || policy.revision !== authority.policy.revision ||
-      authority.scope.databaseSchema !== databaseSchema
+      !policy || policy.revision !== reference?.revision ||
+      (!directory && authority.scope.databaseSchema !== databaseSchema)
     ) authorizationRefused();
     const required = intent.kind === "collection"
       ? registration.collections[intent.resource]
@@ -245,8 +392,8 @@ export function createOwnerEvaluator(
       : undefined;
     if (
       (intent.kind === "collection" || intent.kind === "action") &&
-      (!required || required.id !== authority.policy.id ||
-        required.revision !== authority.policy.revision)
+      (!required || required.id !== reference?.id ||
+        required.revision !== reference?.revision)
     ) authorizationRefused();
     command.signal.throwIfAborted();
     if (
@@ -256,8 +403,39 @@ export function createOwnerEvaluator(
         Date.parse(authority.validity.admittedAt) >
           Date.parse(command.commandTime))
     ) authorizationRefused();
-    const dependencies: AuthorityDependency[] = [];
+    const reuseKey = !directory ? reuse.key(authority, intent) : undefined;
+    if (reuseKey) {
+      const saved = await reuse.get(
+        command.transaction,
+        reuseKey,
+        policy,
+        command.commandTime,
+        authority,
+        intent,
+      );
+      if (saved) {
+        command.signal.throwIfAborted();
+        reuseDeadlines.set(saved.decision, saved.until);
+        return saved.decision;
+      }
+    }
+    reportAuthorizationCache(
+      command.transaction,
+      "policy-call",
+      diagnosticIntent,
+    );
+    // These dependencies drive live authorization notices as well as grants.
+    // Query/result cache stamps must not subscribe readers to ordinary data writes.
+    const dependencies: AuthorityDependency[] = [...authority.dependencies];
+    let reusableUntil = authority.validity.kind === "credential"
+      ? Date.parse(authority.validity.expiresAt)
+      : Infinity;
     const staffReads: Array<Record<string, unknown>> = [];
+    let sessionExpiresAt: string | undefined;
+    let evidenceRead = false;
+    let localPolicyReads = 0;
+    let commandTimeRead = false;
+    let observed: ReturnType<typeof trackPolicyReads> | undefined;
     let active = true;
     let failed = false;
     const pending: Promise<unknown>[] = [];
@@ -277,9 +455,10 @@ export function createOwnerEvaluator(
       if (typeof declared !== "string") return declared;
       const definition = collections[alias];
       if (!definition) authorizationRefused();
+      localPolicyReads++;
       dependencies.push({
         owner: authority.scope.owner,
-        namespace: authority.scope.namespace,
+        namespace,
         collection: definition.name,
         ...(id === undefined ? {} : { id }),
       });
@@ -297,35 +476,79 @@ export function createOwnerEvaluator(
       return promise;
     };
     try {
-      if (authority.validity.kind === "attempt") {
-        const live = await command.transaction.query(
-          `SELECT id FROM ${tables.event_deliveries} WHERE id=$1 AND lease_owner=$2 AND owner_epoch=$3::bigint AND status='leased' AND lease_expires_at>$4::timestamptz`,
-          [
-            authority.validity.attempt,
-            authority.validity.worker,
-            authority.validity.epoch,
+      if (!directory && authority.validity.kind === "attempt") {
+        if (
+          !await ownerAttemptLive(
+            command.transaction,
+            databaseSchema,
+            authority.validity,
             command.commandTime,
-          ],
-        );
-        if (!live.rows.length) authorizationRefused();
+          )
+        ) authorizationRefused();
       }
-      if (authority.authorityBasis.kind === "session") {
-        const rows = await command.transaction.query<
-          { expires_at: string; revoked_at: string | null }
-        >(
-          `SELECT expires_at::text,revoked_at::text FROM "${
-            databaseSchema.replaceAll('"', '""')
-          }".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4`,
-          [
+      if (!directory) await checkFlow(authority, intent, command);
+      if (authority.flow) {
+        reusableUntil = Math.min(
+          reusableUntil,
+          Date.parse(authority.flow.expiresAt),
+        );
+        dependencies.push({
+          owner: authority.scope.owner,
+          namespace,
+          collection: "@authorization/flow",
+          id: authority.flow.id,
+        });
+      }
+      if (!directory && authority.authorityBasis.kind === "session") {
+        const rows = await memoAuthorizationRead(
+          command.transaction,
+          JSON.stringify([
+            databaseSchema,
+            "session",
             authority.scope.namespace,
             authority.scope.tenant,
             authority.authorityBasis.id,
             authority.principal.id,
-          ],
+          ]),
+          [authorizationTableKey(databaseSchema, "authorization_sessions")],
+          () =>
+            command.transaction.query<
+              { expires_at: string; revoked_at: string | null }
+            >(
+              `SELECT expires_at::text,revoked_at::text FROM "${
+                databaseSchema.replaceAll('"', '""')
+              }".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4`,
+              [
+                authority.scope.namespace,
+                authority.scope.tenant,
+                authority.authorityBasis.id,
+                authority.principal.id,
+              ],
+            ),
         );
         const session = rows.rows[0];
+        let completingLogout = false;
         if (
-          !session || session.revoked_at ||
+          session?.revoked_at && intent.invocation?.runId &&
+          (intent.kind === "action" && intent.operation === "authorize" ||
+            intent.kind === "collection" &&
+              (intent.input as { phase?: string })?.phase === "result")
+        ) {
+          // A nested logout and its already-captured caller may finish the same
+          // operation. This exception grants no new capture or mutation.
+          const effect = await command.transaction.query(
+            `SELECT 1 FROM "${databaseSchema}".authorization_effects WHERE namespace=$1 AND tenant=$2 AND method='session.revoke' AND claims->>'id'=$4 AND (run_id=$3 OR operation_id=(SELECT source_event_id FROM "${databaseSchema}".authorization_invocations WHERE namespace=$1 AND run_id=$3))`,
+            [
+              authority.scope.namespace,
+              authority.scope.tenant,
+              intent.invocation.runId,
+              authority.authorityBasis.id,
+            ],
+          );
+          completingLogout = effect.rows.length > 0;
+        }
+        if (
+          !session || session.revoked_at && !completingLogout ||
           Date.parse(session.expires_at) <= Date.parse(command.commandTime)
         ) authorizationRefused();
         if (
@@ -341,6 +564,11 @@ export function createOwnerEvaluator(
             },
           });
         }
+        sessionExpiresAt = session.expires_at;
+        reusableUntil = Math.min(reusableUntil, Date.parse(session.expires_at));
+        // Logout completion is intentionally checked again: it is a narrow
+        // per-invocation exception, not a reusable session grant.
+        if (session.revoked_at) reusableUntil = -Infinity;
         dependencies.push({
           owner: authority.scope.owner,
           namespace: authority.scope.namespace,
@@ -348,13 +576,59 @@ export function createOwnerEvaluator(
           id: authority.authorityBasis.id,
         });
       }
+      if (reuseKey) observed = trackPolicyReads({ authority, intent });
+      const wrapContext = <T extends object>(context: T): T =>
+        observed ? observed.context(context) : context;
       const constraints = await withOwnerAuthorizationPhase(() =>
         withOwnerPolicyRefusal(() => {
-          const result = policy.evaluate({
-            authority,
-            intent: captureHostCommandJson(intent) as AuthorizationIntent,
-            commandTime: command.commandTime,
-            signal: command.signal,
+          const result = policy.evaluate(wrapContext({
+            get authority() {
+              return observed
+                ? observed.value<AuthenticatedAuthority>("authority")
+                : authority;
+            },
+            ...(directory
+              ? {
+                directory: {
+                  command: directory.command,
+                  databaseSchema,
+                  namespace,
+                },
+              }
+              : {}),
+            get intent() {
+              return observed
+                ? observed.value<AuthorizationIntent>("intent")
+                : captureHostCommandJson(intent) as AuthorizationIntent;
+            },
+            get commandTime() {
+              commandTimeRead = true;
+              return command.commandTime;
+            },
+            get signal() {
+              if (observed) observed.lifetime.valid = false;
+              return command.signal;
+            },
+            evidence: {
+              get(alias) {
+                assertActive();
+                if (!policy.evidence?.includes(alias)) {
+                  failed = true;
+                  authorizationRefused();
+                }
+                evidenceRead = true;
+                return track(() =>
+                  directory
+                    ? directory.evidence.get(alias)
+                    : readIdentityEvidence(
+                      registration,
+                      authority,
+                      alias,
+                      command,
+                    )
+                );
+              },
+            },
             read: {
               get(alias, id) {
                 const definition = source(alias, id);
@@ -369,13 +643,31 @@ export function createOwnerEvaluator(
                     readStaffSource(definition, { id }, command, databaseSchema)
                   ) as Promise<CollectionRecord | null>;
                 }
+                const dependency = {
+                  owner: authority.scope.owner,
+                  namespace,
+                  collection: definition.name,
+                  id,
+                };
                 return track(() =>
-                  loadCollectionRecord(
+                  memoAuthorizationRead(
                     command.transaction,
-                    tables,
-                    authority.scope.namespace,
-                    definition.name,
-                    id,
+                    JSON.stringify([
+                      databaseSchema,
+                      "record",
+                      namespace,
+                      definition.name,
+                      id,
+                    ]),
+                    authorizationDependencyKeys(databaseSchema, [dependency]),
+                    () =>
+                      loadCollectionRecord(
+                        command.transaction,
+                        tables,
+                        namespace,
+                        definition.name,
+                        id,
+                      ),
                   )
                 );
               },
@@ -401,23 +693,47 @@ export function createOwnerEvaluator(
                     )
                   ) as Promise<readonly CollectionRecord[]>;
                 }
+                const capturedQuery = captureHostCommandJson(query, {
+                  omitUndefinedProperties: true,
+                }) as CollectionQuery;
                 return track(() =>
-                  queryCollectionRecords(
+                  memoAuthorizationRead(
                     command.transaction,
-                    tables,
-                    definition,
-                    authority.scope.namespace,
-                    query,
+                    JSON.stringify([
+                      databaseSchema,
+                      "query",
+                      namespace,
+                      definition.name,
+                      capturedQuery,
+                    ]),
+                    authorizationDependencyKeys(databaseSchema, [{
+                      owner: authority.scope.owner,
+                      namespace,
+                      collection: definition.name,
+                    }]),
+                    () =>
+                      queryCollectionRecords(
+                        command.transaction,
+                        tables,
+                        definition,
+                        namespace,
+                        capturedQuery,
+                      ),
                   )
                 );
               },
             },
-          });
+          }));
           if (!(result instanceof Promise)) active = false;
           return result;
         }, command.signal)
       );
       await Promise.all(pending);
+      if (
+        authority.flow && intent.invocation?.kind === "processor" &&
+        (!Array.isArray(constraints.flowProcessors) ||
+          !constraints.flowProcessors.includes(intent.invocation.id))
+      ) authorizationRefused();
       if (failed) {
         throw new Error("Owner authorization could not be completed.");
       }
@@ -462,6 +778,7 @@ export function createOwnerEvaluator(
           ],
         );
       }
+      observed?.escapes(constraints);
       let captured: ServerConstraints;
       try {
         captured = captureHostCommandJson(constraints) as ServerConstraints;
@@ -469,11 +786,60 @@ export function createOwnerEvaluator(
       } catch {
         authorizationRefused();
       }
-      return {
+      const decision: AuthorizationDecision = {
         authority,
         constraints: captured,
-        dependencies,
+        dependencies: [...new Map(dependencies.map((dependency) => [
+          JSON.stringify([
+            dependency.owner,
+            dependency.namespace,
+            dependency.collection,
+            dependency.id ?? null,
+          ]),
+          dependency,
+        ])).values()],
       };
+      const observations = observed?.finish();
+      // Remote staff reads and verifier evidence have no local write fence.
+      // Time-dependent policies and policies with no tracked facts stay fresh.
+      if (
+        !staffReads.length && !evidenceRead && !directory && localPolicyReads &&
+        !commandTimeRead && (!observations || observations.lifetime.valid)
+      ) {
+        reuseDeadlines.set(decision, reusableUntil);
+        if (
+          reuseKey && observations &&
+          reusableUntil > Date.parse(command.commandTime)
+        ) {
+          reuse.remember(
+            command.transaction,
+            reuseKey,
+            policy,
+            decision,
+            intent,
+            reusableUntil,
+            sessionExpiresAt,
+            observations,
+          );
+        }
+      } else {
+        reportAuthorizationCache(
+          command.transaction,
+          "decision",
+          staffReads.length
+            ? "staff-read"
+            : evidenceRead
+            ? "evidence-read"
+            : directory
+            ? "directory"
+            : commandTimeRead
+            ? "command-time"
+            : observations && !observations.lifetime.valid
+            ? "untrackable-input"
+            : "untracked-policy",
+        );
+      }
+      return decision;
     } catch (error) {
       if (failed) {
         throw new Error("Owner authorization could not be completed.", {
@@ -483,6 +849,7 @@ export function createOwnerEvaluator(
       if (isOwnerAuthorizationRefusal(error)) authorizationRefused();
       throw new Error("Owner authorization could not be completed.");
     } finally {
+      observed?.finish();
       active = false;
       await Promise.allSettled(pending);
     }

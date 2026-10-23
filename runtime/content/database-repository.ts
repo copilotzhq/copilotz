@@ -1,3 +1,6 @@
+import type { AuthorityDependency } from "../authorization/authority.ts";
+import { hintAuthorizationChanges } from "../authorization/cache.ts";
+import { createCollectionConflictError } from "../collections/errors.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { invalidateOwnerAlarm } from "../engine/alarms.ts";
 import {
@@ -26,7 +29,7 @@ import {
 } from "./body-store-schema.ts";
 import { BODY_APPEND_MAX_BYTES } from "./body-store-operations.ts";
 import { afterSqlCommit } from "../events/session.ts";
-import { ulid } from "../../dependencies/ulid.ts";
+import { monotonicUlid } from "../../dependencies/ulid.ts";
 import type {
   CoordinatedMutationResult,
   DurableEvent,
@@ -44,6 +47,7 @@ import {
 import { digestContent } from "./digest.ts";
 import { assetNodeData } from "./asset-node.ts";
 import { createContentByteLimitError, createContentError } from "./errors.ts";
+import { planContentBudget } from "./budget.ts";
 import { captureContentInput, cloneContentRef } from "./input.ts";
 import {
   assetBodyKey,
@@ -55,6 +59,7 @@ import {
   databaseBodyStoreWriter,
   isDatabaseBodyStore,
   provisionDatabaseBodyStore,
+  readReadyDatabaseBodies,
 } from "./database-body-store.ts";
 import { createBodyStorageRuntime } from "./storage.ts";
 import type {
@@ -67,6 +72,7 @@ import type {
   AssetRecord,
   AssetRepository,
   AssetState,
+  ContentDeferral,
   ContentInput,
   ContentRef,
   ContentSequence,
@@ -168,6 +174,7 @@ export type DatabaseAssetRepository =
  * optionally the asset nodes, only while nothing already holds their identity.
  */
 export type AssetAdoptionStatement = Readonly<{
+  nodeChanges: readonly AuthorityDependency[];
   invalidatesContent: boolean;
   ctes: readonly string[];
   /** Holds while no asset, key or body already occupies the adoption. */
@@ -463,7 +470,7 @@ function preparedBodyCacheKey(namespace: string, assetId: string): string {
 export function createDatabaseAssetRepository(
   options: CreateDatabaseAssetRepositoryOptions,
 ): DatabaseAssetRepository {
-  const createId = options.createId ?? ulid;
+  const createId = options.createId ?? monotonicUlid;
   const now = options.now ?? (() => new Date());
   const digest = options.digest ?? digestContent;
   const configuredStorage = options.storage ?? createBodyStorageRuntime();
@@ -1245,12 +1252,18 @@ export function createDatabaseAssetRepository(
         { namespace, assetId: asset.id, cause },
       );
     }
+    hintAuthorizationChanges(context.transaction, [{
+      owner: "schema",
+      namespace,
+      collection: "asset",
+      id: asset.id,
+    }]);
     const result = await context.transaction.query<AssetNodeRow>(
       `INSERT INTO ${context.tables.nodes} (
          id, namespace, type, name, data, source_type, source_id,
          created_at, updated_at
        ) VALUES ($1, $2, 'asset', $3, $4::jsonb, $5, $6, $7, $7)
-       RETURNING *`,
+       ON CONFLICT (namespace,id) DO NOTHING RETURNING *`,
       [
         asset.id,
         namespace,
@@ -1261,6 +1274,7 @@ export function createDatabaseAssetRepository(
         asset.createdAt,
       ],
     );
+    if (!result.rows.length) throw createCollectionConflictError();
     return mapAsset(result.rows[0]);
   };
 
@@ -1460,6 +1474,16 @@ export function createDatabaseAssetRepository(
       ),
     );
     return {
+      nodeChanges: nodes
+        ? plans.flatMap((plan) =>
+          plan.adoptions.map(({ asset }) => ({
+            owner: "schema",
+            namespace: asset.namespace,
+            collection: "asset",
+            id: asset.id,
+          }))
+        )
+        : [],
       invalidatesContent: hasDatabase,
       ctes: [
         `adoption_rows AS (SELECT * FROM jsonb_to_recordset(${rows}::jsonb) AS wanted(id text,namespace text,key text,media_type text,created_at timestamptz,data jsonb,database boolean,physical_key text,backend_id text,collectable boolean,token text,parts jsonb))`,
@@ -1474,7 +1498,7 @@ export function createDatabaseAssetRepository(
             OR EXISTS(SELECT 1 FROM ${physical.bodies} WHERE body_id=wanted.physical_key)))`
             : ""
         }
-          OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND taken.type='asset' AND (taken.id=wanted.id OR (wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
+          OR EXISTS(SELECT 1 FROM ${tables.nodes} taken WHERE taken.namespace=wanted.namespace AND (taken.id=wanted.id OR (taken.type='asset' AND wanted.key IS NOT NULL AND taken.source_type='asset_idempotency' AND taken.source_id=wanted.key)))) AS refused)`,
       ],
       gate: "NOT (SELECT refused FROM adoption_refused)",
       effects: (source) => [
@@ -1775,15 +1799,69 @@ export function createDatabaseAssetRepository(
         .reduce((sum, row) => sum + mapAsset(row).byteLength, 0);
       if (bytes > maxBytes) throw createContentByteLimitError(bytes, maxBytes);
     }
+    return await bodiesOf(rows);
+  };
+
+  const bodiesOf = async (
+    rows: readonly AssetNodeRow[],
+  ): Promise<readonly AssetBody[]> => {
     const assets = rows.map((row) => {
       const asset = mapAsset(row);
       assertReadable(asset);
       return asset;
     });
+    const batched = new Map<string, { bytes: Uint8Array; digest: string }>();
+    if (assets.length > 1 && catalog.readMany) {
+      const logical = new Map(
+        (await catalog.readMany(assets.map((asset) => asset.bodyId)))
+          .map((body) => [body.bodyId, body]),
+      );
+      const groups = new Map<BodyStore, Map<string, AssetRecord>>();
+      let batchBytes = 0;
+      for (const asset of assets) {
+        if (asset.byteLength > PREPARED_BODY_CACHE_MAX_BYTES - batchBytes) {
+          continue;
+        }
+        batchBytes += asset.byteLength;
+        const body = logical.get(asset.bodyId);
+        if (!body) continue;
+        const store = storeForCopy(body.copy);
+        let group = groups.get(store);
+        if (!group) groups.set(store, group = new Map());
+        group.set(body.copy.key, asset);
+      }
+      for (const [store, group] of groups) {
+        const result = await readReadyDatabaseBodies(
+          store,
+          [...group].map(([bodyId, asset]) => ({
+            bodyId,
+            byteLength: asset.byteLength,
+            digest: asset.digest,
+          })),
+        );
+        if (!result) continue;
+        for (const [key, bytes] of result) {
+          const asset = group.get(key)!;
+          if (await digest(bytes) !== asset.digest) {
+            throw createContentError(
+              "asset_corrupted",
+              `Asset body integrity check failed: ${asset.id}`,
+              { namespace: asset.namespace, assetId: asset.id },
+            );
+          }
+          batched.set(asset.bodyId, { bytes, digest: asset.digest });
+        }
+      }
+    }
     const bytes = await readBodiesBounded(
       rows.map((row, index) => ({ row, asset: assets[index] })),
       storage.readConcurrency,
       async ({ asset }) => {
+        const batch = batched.get(asset.bodyId);
+        if (
+          batch && batch.digest === asset.digest &&
+          batch.bytes.byteLength === asset.byteLength
+        ) return batch.bytes.slice();
         const head =
           (await readLogicalHead(catalog, asset.bodyId, storeForCopy))?.head;
         if (!head || head.state !== "ready") {
@@ -1881,7 +1959,7 @@ export function createDatabaseAssetRepository(
             const owned = (await transaction.query<
               { id: string; type: "asset" | "protected_value" }
             >(
-              `SELECT id,type FROM ${tables.nodes} WHERE type IN ('asset','protected_value') AND data->>'state'='ready' AND data->>'bodyId'=$1 LIMIT 1`,
+              `SELECT id,type FROM ${tables.nodes} WHERE type IN ('asset','protected_value') AND data->>'state'='ready' AND (data->>'bodyId') COLLATE "C"=$1 LIMIT 1`,
               [body.bodyId],
             )).rows[0];
             if (owned) {
@@ -2151,6 +2229,22 @@ export function createDatabaseAssetRepository(
       );
     },
 
+    async readWithin(namespaceInput, assetIds, budget) {
+      const namespace = requiredText(namespaceInput, "Asset namespace");
+      // One metadata round trip decides; only the bodies that fit are read.
+      const rows = await getRows(options.session, namespace, assetIds);
+      const plan = planContentBudget(rows.map(mapAsset), budget);
+      const bodies = await bodiesOf(
+        rows.filter((_, index) => plan[index] === "read"),
+      );
+      let next = 0;
+      return rows.map((row, index) =>
+        plan[index] === "read"
+          ? bodies[next++]
+          : { asset: mapAsset(row), deferred: plan[index] as ContentDeferral }
+      );
+    },
+
     async open(namespaceInput, assetIdInput) {
       const namespace = requiredText(namespaceInput, "Asset namespace");
       const assetId = requiredText(assetIdInput, "Asset ID");
@@ -2242,6 +2336,12 @@ export function createDatabaseAssetRepository(
             ? currentRow.source_id
             : undefined;
           const deletedAt = now().toISOString();
+          hintAuthorizationChanges(transaction, [{
+            owner: "schema",
+            namespace,
+            collection: "asset",
+            id: assetId,
+          }]);
           const updated = await transaction.query<AssetNodeRow>(
             `UPDATE ${names.nodes}
              SET data = (COALESCE(data, '{}'::jsonb) - 'body') || $1::jsonb,
@@ -2311,36 +2411,28 @@ export function createDatabaseAssetRepository(
       let orphanedBodiesDeleted = 0;
       await catalog.expireReservations();
       const attemptedCopies = new Set<string>();
-      const tracked = await options.session.query<
-        {
-          copy_key: string;
-          backend_kind: string;
-          backend_id: string;
-          state: string;
-          body_id: string;
-        }
-      >(
-        `SELECT copy_key,backend_kind,backend_id,state,body_id FROM ${tables.content_copies} WHERE ($1::text IS NULL OR copy_key>$1) ORDER BY copy_key LIMIT $2`,
-        [
-          catalogMaintenanceAfter ?? null,
-          Math.min(10000, Math.max(limit * 4, 100)),
-        ],
-      );
-      for (const copy of tracked.rows) {
-        catalogMaintenanceAfter = copy.copy_key;
-        if (
-          copy.state === "current" && maintenance.isBodyRetained &&
-          await maintenance.isBodyRetained(copy.body_id)
-        ) continue;
-        attemptedCopies.add(copy.copy_key);
+      const pageSize = Math.min(10000, Math.max(limit * 4, 100));
+      const tracked = await catalog.retirementCandidates({
+        after: catalogMaintenanceAfter,
+        limit: pageSize,
+        now: maintenanceNow,
+      });
+      for (const copy of tracked) {
+        catalogMaintenanceAfter = copy.key;
+        // Catalog selection is authoritative, including stream cleanup state.
+        // The legacy store-discovery callback must not override a due claim.
+        attemptedCopies.add(copy.key);
         try {
           const store = storeForCopy({
-            key: copy.copy_key,
-            backendKind: copy.backend_kind,
-            backendId: copy.backend_id,
+            key: copy.key,
+            backendKind: copy.backendKind,
+            backendId: copy.backendId,
           });
-          if (!store.conditionalDelete) continue;
-          const head = await store.head({ bodyId: copy.copy_key });
+          if (!store.conditionalDelete) {
+            await catalog.deferRetirement(copy.key);
+            continue;
+          }
+          const head = await store.head({ bodyId: copy.key });
           if (head) {
             const result = await retireBody(
               { store, body: head },
@@ -2348,41 +2440,48 @@ export function createDatabaseAssetRepository(
             );
             if (result.status === "deleted") orphanedBodiesDeleted++;
             else if (result.status === "blocked") {
-              await catalog.deferRetirement(copy.copy_key);
+              await catalog.deferRetirement(copy.key);
             }
           } else if (!head) {
-            await runCommand("content.confirmAbsentRetirement", {
-              copyKey: copy.copy_key,
-            }, async (input, { transaction }) => {
-              invalidateOwnerAlarm(
-                transaction,
-                options.databaseSchema,
-                "content",
-              );
-              const claimed = await transaction.query(
-                `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
-                [
-                  input.copyKey,
-                  store.kind,
-                  store.kind === "database" ? "" : store.backendId,
-                ],
-              );
-              if (claimed.rows.length) {
-                await transaction.query(
-                  `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1`,
-                  [input.copyKey],
+            const confirmed = await runCommand(
+              "content.confirmAbsentRetirement",
+              {
+                copyKey: copy.key,
+              },
+              async (input, { transaction }) => {
+                invalidateOwnerAlarm(
+                  transaction,
+                  options.databaseSchema,
+                  "content",
                 );
-              }
-            });
+                const claimed = await transaction.query(
+                  `UPDATE ${tables.owner_body_retirements} SET completed=TRUE WHERE owner='schema' AND body_id=$1 AND backend_kind=$2 AND backend_id=$3 RETURNING body_id`,
+                  [
+                    input.copyKey,
+                    store.kind,
+                    store.kind === "database" ? "" : store.backendId,
+                  ],
+                );
+                if (claimed.rows.length) {
+                  await transaction.query(
+                    `UPDATE ${tables.content_copies} SET state='retired' WHERE copy_key=$1`,
+                    [input.copyKey],
+                  );
+                }
+                return claimed.rows.length > 0;
+              },
+            );
+            // Absence without a durable claim is not proof of retirement.
+            if (!confirmed) await catalog.deferRetirement(copy.key);
           }
         } catch {
           await catalog.deferRetirement(
-            copy.copy_key,
+            copy.key,
           ); /* The durable retry deadline does not slide on unrelated commands. */
         }
         if (orphanedBodiesDeleted >= limit) break;
       }
-      if (tracked.rows.length < Math.min(10000, Math.max(limit * 4, 100))) {
+      if (tracked.length < pageSize) {
         catalogMaintenanceAfter = undefined;
       }
       if (storage.writer && orphanedBodiesDeleted < limit) {
@@ -2419,12 +2518,19 @@ export function createDatabaseAssetRepository(
             bodyMaintenanceAfter = undefined;
             break;
           }
+          // Store discovery only owns untracked uploads. Tracked copies must
+          // obey catalog retention and retry deadlines, even on another page.
+          const known = await options.session.query<{ copy_key: string }>(
+            `SELECT copy_key FROM ${tables.content_copies} WHERE copy_key=ANY($1::text[])`,
+            [candidates.bodies.map((body) => body.bodyId)],
+          );
+          const knownCopies = new Set(known.rows.map((copy) => copy.copy_key));
           for (const body of candidates.bodies) {
             scanned += 1;
             bodyMaintenanceAfter = body.bodyId;
             if (
               !body.bodyId.startsWith(prefix) ||
-              attemptedCopies.has(body.bodyId)
+              attemptedCopies.has(body.bodyId) || knownCopies.has(body.bodyId)
             ) continue;
             attemptedCopies.add(body.bodyId);
             if (body.state !== "ready" && body.state !== "incomplete") {

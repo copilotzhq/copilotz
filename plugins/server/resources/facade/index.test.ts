@@ -45,3 +45,52 @@ Deno.test("defineServerFacade rejects malformed policy", () => {
     TypeError,
   );
 });
+
+Deno.test("SEC3 facade validates canonical origins and default Host cookie attributes", () => {
+  for (
+    const allowedOrigins of [["*"], ["null"], ["https://app.example/"], [
+      "https://user:pass@app.example",
+    ], ["file://example"]]
+  ) {
+    assertThrows(() =>
+      defineServerFacade({
+        authenticate: () => {
+          throw new Error("unused");
+        },
+        allowedOrigins,
+      })
+    );
+  }
+  for (
+    const sessionCookie of [{ secure: false }, { path: "/api" }, {
+      domain: "example.com",
+    }]
+  ) {
+    assertThrows(() =>
+      defineServerFacade({
+        authenticate: () => {
+          throw new Error("unused");
+        },
+        sessionCookie,
+      })
+    );
+  }
+});
+
+Deno.test("defineServerFacade retains and validates the trusted actor resolver", () => {
+  const authenticate = () => new Response(null, { status: 401 });
+  const resolveActor = () => ({ id: "participant" });
+  assertEquals(
+    defineServerFacade({ authenticate, resolveActor }).resolveActor,
+    resolveActor,
+  );
+  assertThrows(
+    () =>
+      defineServerFacade({
+        authenticate,
+        resolveActor: "invalid" as unknown as typeof resolveActor,
+      }),
+    TypeError,
+    "resolveActor",
+  );
+});

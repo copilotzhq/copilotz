@@ -47,10 +47,9 @@ request is authenticated. The application returned by `createCopilotz` then has
 an `app.fetch(request)` method, a standard Fetch handler that any host can
 serve. Three pieces work together:
 
-- `expose.actions: { include: ["notes.save"] }` exposes only this Action.
-  Without it, the facade's default exposes every registered Action, Collection
-  read and Channel. `collections: false` and `channels: false` turn those
-  families off.
+- `expose.actions: { include: ["saveNote"] }` exposes only this Action. Without
+  it, the facade's default exposes every registered Action, Collection read and
+  Channel. `collections: false` and `channels: false` turn those families off.
 - `authenticate(request, context)` runs for every facade request. It returns the
   trusted scope (`actor`, `namespace`, `databaseSchema`) with an **authority
   binding**, or a `Response`, such as a 401, to reject the request. The binding
@@ -84,9 +83,9 @@ fixed token mapped to one local demo identity.
 roles to the policy, and shows a production host supplying the verification it
 already has.
 
-Action IDs keep their stable identity in the URL: dots become path separators,
-so `notes.save` is `POST /api/actions/notes/save`. The public client builds that
-path for you.
+Action composition aliases identify the HTTP endpoint: dots become path
+separators, so alias `saveNote` is `POST /api/actions/saveNote`. The public
+client builds that path for you.
 
 ### Install the Node listener bridge
 
@@ -159,9 +158,9 @@ export type ServerAppOptions = Readonly<{
   database?: CopilotzDatabaseInput;
 }>;
 
-// The only Action IDs the facade publishes. Adding a plugin later does not add
+// The only Action aliases the facade publishes. Adding a plugin later does not add
 // routes until its Action is listed here.
-export const publicActions = ["notes.save"];
+export const publicActions = ["saveNote"];
 
 // Plugins the server application composes: the Notes package and the facade.
 export const serverPlugins = [notesPlugin, serverPlugin];
@@ -483,13 +482,15 @@ function field(data: unknown, key: string): unknown {
 try {
   // Submits `notes.save`. The receipt names the operation; a retry with the
   // same key and input returns the same operation.
-  const receipt = await client.actions.submit("notes.save", { text }, {
+  const receipt = await client.actions.submit("saveNote", { text }, {
     idempotencyKey,
   });
   console.log(`operation ${receipt.operationId}`);
-  // Waits for the operation's result. It is `unknown` because it crosses a
-  // network boundary.
-  const output = await client.operations.result(receipt.operationId);
+  // Waits for the operation result and its owner sequence. The value is
+  // `unknown` because it crosses a network boundary.
+  const { value: output, seq } = await client.operations.result(
+    receipt.operationId,
+  );
   const id = field(output, "id");
   const saved = field(output, "text");
   // Print only the note's identity and text, or the raw result if it differs.

@@ -36,6 +36,6 @@ export async function wakeOwnerAlarms(
       });
     }
   } finally {
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
   }
 }

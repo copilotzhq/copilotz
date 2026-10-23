@@ -212,6 +212,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   workerId?: string;
   capacity?: number;
   leaseMs?: number;
+  /** Absolute safety backstop; liveness is governed by leases and provider idle timers. */
+  deliveryTimeoutMs?: number;
   createDispatchAttemptId?: () => string;
   /** Disabled by default; receives allowlisted process-local delivery timing. */
   onDiagnostic?: DeliveryDiagnosticSink;

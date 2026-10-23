@@ -40,20 +40,48 @@ test("public embedded, Gateway, and Worker factories forward Views for collision
   const database = await createTestDatabase({ url: ":memory:" });
   const plugin = definePlugin({ id: "views", version: "1", views: { board } });
   const options = { database, plugins: [plugin], views: { board } };
+  // Each factory must settle promptly: a refused composition opens nothing.
+  const bounded = async <T>(label: string, run: () => Promise<T>) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        run(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} did not settle`)),
+            10_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   try {
-    await rejects(() => createCopilotz(options), /View alias 'board'/);
-    await rejects(
-      () => createCopilotz({ ...options, role: "gateway" }),
-      /View alias 'board'/,
+    await bounded(
+      "embedded",
+      () => rejects(() => createCopilotz(options), /View alias 'board'/),
     );
-    await rejects(() =>
-      createCopilotz({
-        plugins: options.plugins,
-        views: options.views,
-        role: "worker",
-        id: "view-test-worker",
-        transport: { type: "in-process", config: { topic: "views-test" } },
-      }), /View alias 'board'/);
+    await bounded("gateway", () =>
+      rejects(
+        () => createCopilotz({ ...options, role: "gateway" }),
+        /View alias 'board'/,
+      ));
+    await bounded("worker", () =>
+      rejects(() =>
+        createCopilotz({
+          plugins: options.plugins,
+          views: options.views,
+          role: "worker",
+          id: "view-test-worker",
+          transport: { type: "in-process", config: { topic: "views-test" } },
+        }), /View alias 'board'/));
+    // Nothing leaked: the same database starts a valid application promptly.
+    const app = await bounded(
+      "valid embedded start",
+      () => createCopilotz({ database, plugins: [plugin] }),
+    );
+    await app.close();
   } finally {
     await database.close();
   }

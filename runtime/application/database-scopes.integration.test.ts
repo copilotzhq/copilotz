@@ -34,8 +34,8 @@ Deno.test("requested idle schema recovers overdue work before factory readiness 
     );
     const owner = await openDatabaseOwner(db, scoped);
     // The store's lazy owner and this explicit attachment are both test-owned.
-    releaseDatabaseOwner(owner);
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
   }
   const placement: string[] = [];
   const app = await createCopilotz({
@@ -77,8 +77,8 @@ Deno.test("partial explicit scope startup releases every opened owner and preser
   await provisionCopilotzSchema(db, valid);
   await provisionOperationCatalog(db, valid);
   const preparedOwner = await openDatabaseOwner(db, valid);
-  releaseDatabaseOwner(preparedOwner);
-  releaseDatabaseOwner(preparedOwner);
+  await releaseDatabaseOwner(preparedOwner);
+  await releaseDatabaseOwner(preparedOwner);
   await db.query(
     `INSERT INTO "${valid}".nodes(id,namespace,type,name) VALUES('retained','space','record','retained')`,
   );

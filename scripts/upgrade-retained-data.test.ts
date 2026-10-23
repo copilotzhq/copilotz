@@ -3,7 +3,7 @@ import { createTestDatabase } from "../runtime/testing/ominipg.ts";
 import { provisionCopilotzSchema } from "../runtime/events/schema.ts";
 import { provisionOperationCatalog } from "../runtime/streams/catalog.ts";
 
-Deno.test("offline CLI applies and replays the full reviewed v10 to v13 chain", async () => {
+Deno.test("offline CLI applies and replays the full reviewed v10 to v14 chain", async () => {
   const directory = await Deno.makeTempDir({ prefix: "chain-cli-" });
   const url = Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ||
     `file://${directory}/db`;
@@ -65,8 +65,8 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
         `--owner-keys=${keysPath}`,
         `--authority=${authorityPath}`,
       );
-    assertEquals((await apply()).version, 13);
-    assertEquals((await apply()).version, 13);
+    assertEquals((await apply()).version, 14);
+    assertEquals((await apply()).version, 14);
     assertEquals(await command("authority-inventory"), {
       invocations: [],
       events: [],

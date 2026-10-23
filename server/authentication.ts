@@ -1,3 +1,4 @@
+import { digestContent } from "../runtime/content/digest.ts";
 import { retainedAuthority } from "../runtime/authorization/authority.ts";
 import { withTrustedCollectionPolicyRead } from "../runtime/authorization/invocation.ts";
 import {
@@ -33,7 +34,8 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
     Reflect.ownKeys(input).some((key) =>
       key !== "namespace" && key !== "databaseSchema" && key !== "identity" &&
       key !== "actionMetadata" && key !== "operationMetadata" &&
-      key !== "context" && key !== "actor" && key !== "authority"
+      key !== "context" && key !== "actor" && key !== "authority" &&
+      key !== "invalidSessionCookie"
     )
   ) {
     throw new TypeError(
@@ -63,6 +65,14 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
   ) {
     throw new TypeError("Server actor contains unsupported identity fields.");
   }
+  if (
+    input.invalidSessionCookie !== undefined &&
+    typeof input.invalidSessionCookie !== "boolean"
+  ) {
+    throw new TypeError(
+      "invalidSessionCookie must be boolean when supplied.",
+    );
+  }
   const plain = (candidate: unknown, label: string) => {
     if (candidate === undefined) return undefined;
     if (
@@ -74,6 +84,9 @@ function authorizedScope(value: unknown): ServerAuthorizedScope {
   };
   return ({
     authority: retainedAuthority(input.authority),
+    ...(typeof input.invalidSessionCookie === "boolean"
+      ? { invalidSessionCookie: input.invalidSessionCookie }
+      : {}),
     ...(input.actor
       ? {
         actor: plain(
@@ -119,9 +132,22 @@ export async function authenticateHttpRequest(
     match.endpoint,
     facade.maxAssetUploadBytes,
   );
+  const cookieName = facade.sessionCookie?.name ?? "__Host-copilotz_session";
+  const sessionCookies = (request.headers.get("cookie") ?? "").split(";").map(
+    (value) => value.trim(),
+  )
+    .filter((value) => value.split("=", 1)[0].trim() === cookieName);
+  if (sessionCookies.length > 1) {
+    throw Object.assign(new Error("Duplicate session cookie"), {
+      status: 403,
+      code: "duplicate_session_cookie",
+    });
+  }
+  const sessionToken = sessionCookies[0]?.slice(cookieName.length + 1);
   const authenticationContext = {
-    lookup: (scope: ServerAuthorizedScope) =>
-      createHttpReads(application, scope),
+    lookup: (
+      scope: Pick<ServerAuthorizedScope, "namespace" | "databaseSchema">,
+    ) => createHttpReads(application, scope),
     endpoint: match.endpoint,
     params: match.params,
     defaultNamespace: application.config.namespace,
@@ -149,10 +175,47 @@ export async function authenticateHttpRequest(
     databaseSchema: selected.databaseSchema ??
       application.config.databaseSchema,
   } as const;
+  let selectedAuthority = scope.authority!;
+  const proof = request.headers.get("x-copilotz-credential-proof");
+  if (proof && !/^[A-Za-z0-9_-]{32,128}$/.test(proof)) {
+    throw new TypeError("Invalid credential projection proof.");
+  }
+  selectedAuthority = retainedAuthority({
+    ...selectedAuthority,
+    scope: {
+      ...selectedAuthority.scope,
+      bindings: {
+        ...selectedAuthority.scope.bindings,
+        "@credential-proof": proof
+          ? await digestContent(new TextEncoder().encode(proof))
+          : "",
+      },
+    },
+  });
+  const flowToken = request.headers.get("x-copilotz-flow");
+  let invalidSessionCookie = selected.invalidSessionCookie;
+  let receiptAuthority:
+    | import("../runtime/authorization/authority.ts").AuthenticatedAuthority
+    | undefined;
+  if (
+    flowToken || sessionCookies.length && invalidSessionCookie === undefined
+  ) {
+    const runtime = scope.databaseSchema === application.config.databaseSchema
+      ? application
+      : await application.databaseScope(scope.databaseSchema);
+    const verified = await runtime.authorization.credentials.authenticate(
+      selectedAuthority,
+      flowToken || sessionToken || "",
+      flowToken ? "flow" : "session",
+    );
+    selectedAuthority = verified.authority;
+    invalidSessionCookie ||= verified.invalidSession;
+    receiptAuthority = verified.receiptAuthority;
+  }
   const authority = retainedAuthority({
-    ...scope.authority,
+    ...selectedAuthority,
     requestFacts: {
-      ...scope.authority!.requestFacts,
+      ...selectedAuthority.requestFacts,
       endpoint: match.endpoint.key,
       operation: match.endpoint.operation ?? match.endpoint.kind,
       params: match.params,
@@ -166,15 +229,57 @@ export async function authenticateHttpRequest(
       "Authentication scope differs from retained authority.",
     );
   }
+  if (
+    authority.flow && !(
+      match.endpoint.kind === "action" &&
+        match.endpoint.actionAlias === authority.flow.continuation ||
+      match.endpoint.kind === "operation" &&
+        ["get", "result", "observe"].includes(match.endpoint.operation ?? "")
+    )
+  ) {
+    throw Object.assign(new Error("Forbidden."), {
+      code: "forbidden",
+      status: 403,
+    });
+  }
+  // Only owner-verified authority reaches the app's identity projection. Validate
+  // its result with the same rules as actors supplied during authentication.
+  const resolveActor = facade.resolveActor;
+  const resolvedScope = resolveActor
+    ? authorizedScope({
+      ...scope,
+      authority,
+      actor: await withTrustedCollectionPolicyRead(async () =>
+        await resolveActor({
+          scope: { ...scope, authority },
+          read: await authenticationContext.lookup({
+            namespace: scope.namespace,
+            databaseSchema: scope.databaseSchema,
+          }),
+          endpoint: match.endpoint,
+          params: match.params,
+        })
+      ),
+    })
+    : { ...scope, authority };
+  const actor = resolvedScope.actor;
   const result = withFacadeIngress(
     {
       ...(scope.context ?? {}),
-      serverScope: { ...scope, authority },
+      sessionCookie: facade.sessionCookie,
+      ...(invalidSessionCookie ? { invalidSessionCookie } : {}),
+      ...(receiptAuthority ? { receiptAuthority } : {}),
+      serverScope: {
+        ...resolvedScope,
+      },
       serverRequest: request,
       namespace: scope.namespace,
       databaseSchema: scope.databaseSchema,
       serverEndpointKey: match.endpoint.key,
       serverParams: match.params,
+      // Raw admission metadata must remain stable across credential transitions
+      // (notably logout replay). Owner policy supplies credential-derived Action
+      // metadata; the resolved actor belongs to the scope and ingress proof.
       serverActionMetadata: {
         ...scope.actionMetadata,
         ...(scope.actor ? { httpActor: scope.actor } : {}),
@@ -186,7 +291,7 @@ export async function authenticateHttpRequest(
       serverIdentity: scope.identity ?? ({} as const),
       serverSignal: request.signal,
     } as const,
-    authorityIngressProof(authority),
+    authorityIngressProof(authority, actor),
   );
   return result;
 }

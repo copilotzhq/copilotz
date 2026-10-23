@@ -1,3 +1,4 @@
+import { captureCollectionCommandInvocation } from "./invocation-command.ts";
 import { sameValue } from "../collections/equal.ts";
 import { constrainCollection } from "./collection-constraints.ts";
 import { authorizationRefused } from "./evaluator.ts";
@@ -12,10 +13,7 @@ import type { CommandContext } from "../engine/commands.ts";
 import type { CollectionRecord } from "../collections/types.ts";
 import type { CollectionPolicyIntent } from "./intent.ts";
 import type { CollectionPolicyRegistration } from "./resources.ts";
-import {
-  captureCollectionCommandInvocation,
-  captureCollectionInvocation,
-} from "./invocation.ts";
+import { captureCollectionInvocation } from "./invocation.ts";
 
 type ReadScope = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
 type CommandPolicy = Readonly<{
@@ -33,7 +31,9 @@ export type CollectionPolicyOperation = Readonly<{
   method: CollectionPolicyIntent["method"];
   args: unknown;
   expectedArgs?: unknown;
-  current?(transaction: SqlExecutor): Promise<CollectionRecord | null>;
+  current?(
+    transaction: SqlExecutor,
+  ): Promise<CollectionRecord | null | undefined>;
   next?: CollectionRecord | null;
   result?: unknown;
 }>;
@@ -114,6 +114,17 @@ export function captureCollectionPolicy(
       collectionPolicyRefused();
     }
     await policyAuthority.authorizeIntent?.(fixed, read);
+    if (policyAuthority.authorizeDirectoryIntent) {
+      authorizedArgs = constrainCollection(
+        fixed,
+        await policyAuthority.authorizeDirectoryIntent(fixed, read),
+      );
+      if (
+        operation.expectedArgs !== undefined &&
+        !sameValue(authorizedArgs, operation.expectedArgs)
+      ) authorizationRefused();
+      return;
+    }
     if (policyAuthority.trustedHost) return;
     let binding = policyAuthority.authority;
     if (!binding) {
@@ -129,11 +140,18 @@ export function captureCollectionPolicy(
       resource: operation.registration.alias,
       operation: operation.method,
       input: fixed,
+      ...(policyAuthority.sourceEventId
+        ? { sourceEventId: policyAuthority.sourceEventId }
+        : {}),
+      ...(policyAuthority.sourceDeliveryId
+        ? { sourceDeliveryId: policyAuthority.sourceDeliveryId }
+        : {}),
       ...(!policyAuthority.direct
         ? {
           invocation: {
             kind: policyAuthority.invocation.kind,
             id: policyAuthority.invocation.id,
+            runId: policyAuthority.invocation.runId,
           },
         }
         : {}),

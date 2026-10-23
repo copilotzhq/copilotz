@@ -12,12 +12,12 @@ renderer, and a host supplies an authorized projector. The View receives only
 that projection. `ViewDefinition<Item, Result, Context>` permits a host-specific
 result/context while preserving the default text context.
 
-`createTextRenderer` remains a pure, one-shot text renderer. The public package
-does not include a React renderer or a browser component scheduler. A React host
-can evaluate these same View definitions over authorized data and mount the
-returned elements. React hooks belong in mounted React components, not
-asynchronous View functions. None of this is a JavaScript sandbox or an
-alternative worker execution runtime.
+`createTextRenderer` remains a pure, one-shot text renderer. `/views` itself
+imports no UI framework. In the browser, the runtime from `/web` evaluates these
+same View definitions with tracked reads, and the React adapter from
+`/web/react` mounts them; see [Web runtime and Views](web-runtime-and-views.md).
+React hooks belong in mounted React components, not in View functions. None of
+this is a JavaScript sandbox or an alternative worker execution runtime.
 
 ```ts
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
@@ -64,6 +64,12 @@ The registry exposes `views` and `resolveView(shows, mode, renderer)`.
 `{ shows, value }`; its value is an opaque selector for the host projector, not
 a raw record to render. Mode names are open-ended; defaults are `context` and
 `text`.
+
+A View may declare `url: true` (or `url: { queries: "run" }`) to let a link open
+it. Without it, URL state cannot name the View. The browser runtime enforces
+this, admits identifier values only and holds query reads until a user gesture;
+see [URL state](web-runtime-and-views.md#url-state-and-deep-links). The text
+renderer accepts only `{ shows, value }`, so it refuses a URL-marked reference.
 
 Overlapping Views fail composition unless the final Resource overlay selects a
 matching candidate:
@@ -160,12 +166,15 @@ See [Plugins and Processors](plugins-and-processors.md) for composition and
 
 ## Collection subscriptions
 
-The generic live Collection observation API and its server projection were
-removed in 0.89.0. They polled and compared replacement snapshots instead of
-following the owner's commit order. The client no longer exposes
-`collections.observe`, and the corresponding HTTP route is gone. Use one-shot
-Collection reads for current data; live Collection subscriptions will return on
-owner push.
+Live Collection reads return in 0.90.0 on owner push. 0.89.0 removed the earlier
+observation, which polled and compared replacement snapshots. The owner now
+sends a snapshot, then ordered deltas in its commit order, over the
+authenticated device socket: `collections.observe` on the application, the
+server read services and the SDK. See [Subscriptions](subscriptions.md).
 
 Operation observations and their multipart streaming remain supported, including
 payload replay, terminal ordering, revocation and bounded renewal.
+
+For interactive browser Views, see
+[Web runtime and Views](web-runtime-and-views.md). React adapters and the shared
+UI kit live in plugin entry points; core stays framework-neutral.

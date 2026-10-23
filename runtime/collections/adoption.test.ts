@@ -54,15 +54,13 @@ function recording(base: SqlSession, recorder: Recorder): SqlSession {
       return result;
     },
   });
-  return {
-    ...recorded(base, true),
-    transaction: (operation) => {
-      recorder.transactions++;
-      return base.transaction((transaction) =>
-        operation(recorded(transaction))
-      );
-    },
+  const session = createSqlSession(base);
+  session.query = recorded(base, true).query;
+  session.transaction = (operation) => {
+    recorder.transactions++;
+    return base.transaction((transaction) => operation(recorded(transaction)));
   };
+  return session;
 }
 
 async function createEngines(url: string, recorder: Recorder) {
@@ -258,6 +256,8 @@ async function adoptionScenarios(url: string) {
       "both notes reference one asset",
     );
   } finally {
+    await competitor.shutdown();
+    await measured.shutdown();
     await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
     await db.close();
   }

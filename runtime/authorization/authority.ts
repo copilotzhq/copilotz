@@ -44,6 +44,9 @@ export type AuthorityValidity =
   }>
   | Readonly<{ kind: "occurrence"; key: string; revision: string }>;
 export type AuthenticatedAuthority = Readonly<{
+  flow?: Readonly<
+    { id: string; kind: string; continuation: string; expiresAt: string }
+  >;
   version: 1;
   principal: AuthorityPrincipal;
   scope: AuthorityScope;
@@ -116,13 +119,19 @@ function freeze<T>(value: T): T {
   return value;
 }
 
+const validatedAuthorities = new WeakSet<object>();
+
 /** Validates persisted/wire data without granting permission to use it. */
 export function retainedAuthority(value: unknown): AuthenticatedAuthority {
+  if (value && typeof value === "object" && validatedAuthorities.has(value)) {
+    return value as AuthenticatedAuthority;
+  }
   const captured = captureHostCommandJson(value);
   if (new TextEncoder().encode(JSON.stringify(captured)).length > 65536) {
     invalid("binding exceeds 64 KiB");
   }
   const root = object(captured, [
+    "flow",
     "version",
     "principal",
     "scope",
@@ -134,6 +143,11 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     "authorityBasis",
   ]);
   if (root.version !== 1) invalid("unsupported version");
+  if (root.flow !== undefined) {
+    const flow = object(root.flow, ["id", "kind", "continuation", "expiresAt"]);
+    for (const key of ["id", "kind", "continuation"]) text(flow[key]);
+    timestamp(flow.expiresAt);
+  }
   const principal = object(root.principal, [
     "kind",
     "id",
@@ -290,10 +304,17 @@ export function retainedAuthority(value: unknown): AuthenticatedAuthority {
     invalid("occurrence basis");
   }
   if (
-    ["session", "credential", "grant"].includes(String(basis.kind)) &&
+    ["credential", "grant"].includes(String(basis.kind)) &&
     basis.id !== principal.id
   ) invalid("credential basis cannot be its creator");
-  return freeze(captured as AuthenticatedAuthority);
+  if (
+    root.flow &&
+    (principal.kind !== "grant" ||
+      (root.flow as Record<string, unknown>).id !== principal.id)
+  ) invalid("flow principal");
+  const authority = freeze(captured as AuthenticatedAuthority);
+  validatedAuthorities.add(authority);
+  return authority;
 }
 
 /** A long-lived device remains enrolled; only this admission is short-lived. */

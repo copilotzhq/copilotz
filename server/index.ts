@@ -25,7 +25,9 @@ export type {
   ServerExposureOptions,
   ServerFacadeResource,
   ServerPatternPolicy,
+  ServerResolveActor,
   ServerRouteMatch,
+  SessionCookieOptions,
 } from "../plugins/server/index.ts";
 
 export { createHttpAdapter } from "../plugins/server/authoring/http-adapter/index.ts";
@@ -35,3 +37,6 @@ export type {
   HttpReadServices,
   HttpRoute,
 } from "../plugins/server/authoring/http-adapter/index.ts";
+
+export { attachDeviceSocket } from "./device.ts";
+export type { DeviceSessionOptions } from "./device.ts";

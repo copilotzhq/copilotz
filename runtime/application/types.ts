@@ -44,6 +44,8 @@ export type CreateCopilotzApplicationOptions =
     /** Default tenant namespace used when run/connect omit one. */
     namespace?: string;
     databaseSchema?: string;
+    /** Delivery safety backstop (default six hours). Configure identically on all roles. */
+    deliveryTimeoutMs?: number;
     /** Trusted owner-only Collection authorization callbacks. */
     authorization?: import("../authorization/evaluator.ts").OwnerAuthorization;
 
@@ -76,6 +78,7 @@ export type CreateCopilotzApplicationOptions =
 /** Plain application semantics that can be shared by Gateway and Worker roles. */
 export type CopilotzComposition = Pick<
   CreateCopilotzApplicationOptions,
+  | "deliveryTimeoutMs"
   | "plugins"
   | "collections"
   | "actions"
@@ -134,10 +137,12 @@ export type ApplicationOperationStatus = Readonly<{
   operationId: string;
   namespace: string;
   correlationId: string;
+  /** Scope settlement state; Action completion is its own durable lifecycle. */
   state: OperationState;
   metadata: Readonly<Record<string, unknown>>;
   acceptedAt: string;
   updatedAt: string;
+  /** Time the scope settled (the retained catalog's completed_at). */
   completedAt?: string;
 }>;
 
@@ -217,7 +222,7 @@ type ApplicationUnresolvedReadOptions =
   & ApplicationScope
   & Pick<ScopedCollectionReadOptions, "signal">;
 
-/** Each Action caller admits one operation and returns its recorded output. */
+/** Admits one operation and returns the Action's durable output before scope settlement. */
 export type ApplicationActions<TActions extends ActionMap = ActionMap> =
   Readonly<
     {
@@ -234,6 +239,16 @@ export type ApplicationCollection<
   TInsert extends object = Record<string, unknown>,
 > = Readonly<{
   definition: ScopedCollection<TSelect, TInsert>["definition"];
+  observe(
+    query?: CollectionQuery,
+    options?:
+      & ApplicationScope
+      & import("../subscriptions/types.ts").SubscriptionOptions
+      & {
+        authority?:
+          import("../authorization/authority.ts").AuthenticatedAuthority;
+      },
+  ): Promise<import("../subscriptions/types.ts").CollectionSubscription>;
   create(input: TInsert, options?: ApplicationCallOptions): Promise<TSelect>;
   update(
     input: ScopedCollectionUpdateInput<TSelect>,

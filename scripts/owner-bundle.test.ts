@@ -18,9 +18,9 @@ import {
   validateCopilotzSchema,
 } from "../runtime/events/schema.ts";
 import { createEventStore } from "../runtime/events/store.ts";
-import { encodeEventBody } from "../runtime/events/body-store.ts";
+import { encodeEventBody } from "@copilotz/copilotz/migration";
 import { provisionOperationCatalog } from "../runtime/streams/catalog.ts";
-import { createContentCatalog } from "../runtime/content/catalog.ts";
+import { createContentCatalog } from "@copilotz/copilotz/migration";
 import { createDatabaseBodyStore } from "../runtime/content/database-body-store.ts";
 import { createBodyStorageRuntime } from "../runtime/content/storage.ts";
 import { createS3BodyStore } from "../runtime/content/s3-body-store.ts";
@@ -33,10 +33,13 @@ import {
   additionalAuthenticatedData,
   createProtectedValueRuntime,
   protectedValueRef,
-} from "../runtime/actions/protected-value.ts";
-import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
-import { bodyStoreReader, oldS3BodyReader } from "./owner-transfer-storage.ts";
-import { exportOwnerBundle, importOwnerBundle } from "./owner-bundle.ts";
+} from "@copilotz/copilotz/migration";
+import { migrateOwnerKeys } from "@copilotz/copilotz/migration";
+import { bodyStoreReader, oldS3BodyReader } from "@copilotz/copilotz/migration";
+import {
+  exportOwnerBundle,
+  importOwnerBundle,
+} from "@copilotz/copilotz/migration";
 import { createCopilotzApplication } from "../runtime/application/application.ts";
 import { definePlugin, defineProcessor } from "../runtime/plugins/index.ts";
 
@@ -352,7 +355,7 @@ Deno.test({
   fn: async () => {
     const db = await createTestDatabase({ url: pgUrl }),
       schema = unique("owner_export"),
-      destination = unique("owner_import");
+      destination = unique(`${new URL(pgUrl!).pathname.slice(1)}_import`);
     const targetUrl = new URL(pgUrl!);
     targetUrl.pathname = `/${destination}`;
     const temp = await Deno.makeTempDir({ prefix: "owner-bundle-" }),
@@ -426,6 +429,15 @@ Deno.test({
         prepared = await runtime.prepare(coordinates, {
           token: "portable-secret",
         });
+      await db.query(
+        `INSERT INTO "${schema}".nodes(namespace,id,type,name) VALUES
+        ('space','shared','identity_fixture','shared'),('space','related','identity_fixture','related'),
+        ('other','shared','identity_fixture','shared'),('other','related','identity_fixture','related')`,
+      );
+      await db.query(
+        `INSERT INTO "${schema}".edges(id,namespace,source_node_id,target_node_id,type) VALUES
+        ('space-edge','space','shared','related','fixture'),('other-edge','other','shared','related','fixture')`,
+      );
       await db.query(`CREATE DATABASE "${destination}"`);
       created = true;
       await exportOwnerBundle({
@@ -459,6 +471,26 @@ Deno.test({
         });
         try {
           const tables = createCoreTableNames(schema);
+          assertEquals(
+            (await target.query(
+              `SELECT namespace,id FROM ${tables.nodes} WHERE type='identity_fixture' ORDER BY namespace,id`,
+            )).rows,
+            [
+              { namespace: "other", id: "related" },
+              { namespace: "other", id: "shared" },
+              { namespace: "space", id: "related" },
+              { namespace: "space", id: "shared" },
+            ],
+          );
+          await target.query(
+            `DELETE FROM ${tables.nodes} WHERE namespace='other' AND id='shared'`,
+          );
+          assertEquals(
+            (await target.query(
+              `SELECT id FROM ${tables.edges} WHERE type='fixture' ORDER BY id`,
+            )).rows,
+            [{ id: "space-edge" }],
+          );
           assertEquals(
             (await target.query<{ count: string }>(
               `SELECT count(*) AS count FROM ${tables.events} WHERE type='test.retained'`,

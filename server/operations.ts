@@ -1,9 +1,5 @@
-import {
-  listThreadOperations,
-  threadEventWatermark,
-} from "@copilotz/copilotz/core/server";
-/** One bounded observation coordinator for operation selections and conversations. */
-import { coreThreadObservationKey } from "@copilotz/copilotz/core";
+import { createHttpActionOrigins } from "./action-origins.ts";
+import { createEphemeralEvent } from "../runtime/events/index.ts";
 import { watchSelection } from "./selection-watch.ts";
 
 import type {
@@ -30,6 +26,11 @@ export async function createHttpOperations(
   application: InternalCopilotzApplication,
   scope: ServerAuthorizedScope,
   read: HttpReadServices,
+  adapters = Object.values(
+    application.plugins?.adapters?.http ?? {},
+  ) as import("../plugins/server/authoring/http-adapter/index.ts").HttpAdapter[],
+  receiptAuthority?:
+    import("../runtime/authorization/authority.ts").AuthenticatedAuthority,
 ) {
   const namespace = scope.namespace ?? application.config.namespace!;
   const databaseSchema = scope.databaseSchema ??
@@ -41,36 +42,80 @@ export async function createHttpOperations(
     if (!scope.authority) {
       throw failure("forbidden", 403, "Retained authority is required.");
     }
+    const recovered = receiptAuthority &&
+      await runtime.authorization.logoutReceipt(receiptAuthority, operationId);
     const record = await runtime.authorization.operation(
-      scope.authority,
+      recovered?.state === "completed" ? receiptAuthority! : scope.authority,
       operationId,
     );
     return {
       operationId: record.operationId,
       namespace: record.namespace,
       correlationId: record.correlationId,
-      state: record.state,
+      state: ["accepted", "running"].includes(record.state)
+        ? record.state
+        : "settled",
+      ...(["accepted", "running"].includes(record.state)
+        ? {}
+        : { outcome: record.state }),
       metadata: record.metadata.operationMetadata as Record<string, unknown> ??
         {},
       acceptedAt: record.acceptedAt,
       updatedAt: record.updatedAt,
-      ...(record.completedAt ? { completedAt: record.completedAt } : {}),
+      ...(record.completedAt ? { settledAt: record.completedAt } : {}),
     };
   };
-  const thread = async (id: string) => {
-    if (!await read.get("thread", id)) {
-      throw failure("thread_not_found", 404, "Thread was not found.");
+  type RecordSelection = Readonly<{ collection: string; id: string }>;
+  const descriptor = (record: RecordSelection) => {
+    const matches = adapters.flatMap((adapter) =>
+      adapter.observations?.[record.collection]
+        ? [adapter.observations[record.collection]]
+        : []
+    );
+    if (matches.length !== 1) {
+      throw failure(
+        "invalid_operation_selection",
+        400,
+        "Collection observation is not configured.",
+      );
+    }
+    return matches[0];
+  };
+  const authorizeRecord = async (record: RecordSelection) => {
+    descriptor(record);
+    if (!await read.get(record.collection, record.id)) {
+      throw failure("record_not_found", 404, "Record was not found.");
     }
   };
+  const list = (record: RecordSelection, input: {
+    operationIds?: readonly string[];
+    states?: readonly import("../runtime/streams/catalog.ts").OperationState[];
+    afterPosition?: string;
+    limit: number;
+  }) =>
+    runtime.operations.listSelectionChanges({
+      namespace,
+      selectionKey: descriptor(record).key(record.id),
+      operationIds: input.operationIds,
+      states: input.states,
+      afterChangeOrdinal: input.afterPosition,
+      limit: input.limit,
+    });
+  const watermark = async (record: RecordSelection) => {
+    const key = descriptor(record).key(record.id);
+    return (await runtime.operations.getSelectionHeads({
+      namespace,
+      selectionKeys: [key],
+    }))
+      .find((head) => head.selectionKey === key)?.changeOrdinal;
+  };
   const discover = async (
-    threadId: string,
+    record: RecordSelection,
     afterPosition?: string,
     operationIds?: readonly string[],
   ) => {
-    await thread(threadId);
-    const operations = await listThreadOperations(runtime.operations, {
-      namespace,
-      threadId,
+    await authorizeRecord(record);
+    const operations = await list(record, {
       operationIds,
       afterPosition,
       ...(afterPosition ? {} : { states: ["accepted", "running"] as const }),
@@ -88,20 +133,140 @@ export async function createHttpOperations(
     }
     return operations.map((operation) => operation.operationId);
   };
+  type OperationSelection = {
+    operationIds?: readonly string[];
+    record?: RecordSelection;
+    checkpoint?: string;
+    signal?: AbortSignal;
+  };
+  const logoutObservation = async (
+    selection: OperationSelection,
+  ): Promise<HttpObservation | undefined> => {
+    // A revoked credential can recover only its own completed receipt. Do not
+    // attach history, streams, record selections, or cursor-selected operations.
+    if (
+      scope.authority && !selection.record &&
+      selection.operationIds?.length === 1
+    ) {
+      let receipt = await runtime.authorization.logoutReceipt(
+        receiptAuthority ?? scope.authority,
+        selection.operationIds[0],
+      );
+      if (receipt) {
+        const operationId = receipt.operationId;
+        if (receipt.state === "accepted" || receipt.state === "running") {
+          const changes = await runtime.operations.watch(operationId, {
+            namespace,
+            kind: "operation",
+          });
+          const deadline = Date.now() + 10_000;
+          try {
+            for (;;) {
+              selection.signal?.throwIfAborted();
+              // Subscribe before rereading so completion cannot fall in a gap.
+              receipt = await runtime.authorization.logoutReceipt(
+                receiptAuthority ?? scope.authority,
+                operationId,
+              );
+              if (!receipt) {
+                throw failure("forbidden", 403, "Receipt is unavailable.");
+              }
+              if (
+                receipt.state !== "accepted" && receipt.state !== "running"
+              ) break;
+              const remaining = deadline - Date.now();
+              if (
+                remaining <= 0 ||
+                !await changes.wait({
+                  timeoutMs: remaining,
+                  signal: selection.signal,
+                })
+              ) {
+                throw failure(
+                  "operation_result_pending",
+                  409,
+                  "Logout completion is still pending; retry observation.",
+                );
+              }
+            }
+          } finally {
+            changes.close();
+          }
+        }
+        if (receipt.state !== "completed") {
+          throw failure(
+            "forbidden",
+            403,
+            "Completed receipt is unavailable.",
+          );
+        }
+        selection.signal?.throwIfAborted();
+        const position = decodeOperationReplayCursor(selection.checkpoint);
+        const cursorIds = [
+          ...Object.keys(position.operationEventPositions ?? {}),
+          ...Object.keys(position.operationStreamPositions ?? {}),
+          ...Object.keys(position.operationSelectionPositions ?? {}),
+          ...Object.keys(position.operationRetirementPositions ?? {}),
+        ];
+        if (cursorIds.some((id) => id !== operationId)) {
+          throw failure(
+            "invalid_replay_cursor",
+            403,
+            "Checkpoint is outside the authorized selection.",
+          );
+        }
+        const output = {
+          ...createEphemeralEvent({
+            type: "operation.settled",
+            namespace,
+            correlationId: receipt.correlationId,
+            payload: { outcome: "completed" },
+          }),
+          operationId: receipt.operationId,
+          state: "settled",
+          outcome: "completed",
+          data: { outcome: "completed" },
+          seq: await runtime.operations.resultSequence(namespace, operationId),
+        } as ApplicationOutput;
+        return {
+          type: HTTP_OBSERVATION,
+          operationId: receipt.operationId,
+          async authorizePublication(publish) {
+            const current = await runtime.authorization.logoutReceipt(
+              receiptAuthority ?? scope.authority!,
+              operationId,
+            );
+            if (current?.state !== "completed") {
+              throw failure("forbidden", 403, "Receipt is unavailable.");
+            }
+            await publish();
+          },
+          outputs: new ReadableStream<ApplicationOutput>({
+            start(controller) {
+              controller.enqueue(output);
+              controller.close();
+            },
+          }),
+          done: Promise.resolve(),
+          async cancel() {},
+        };
+      }
+    }
+  };
   return ({
     get,
     async checkpoint(
-      threadId: string,
+      record: RecordSelection,
       coverage?: { checkpoint: string; actionRunIds: readonly string[] },
     ) {
-      await thread(threadId);
+      await authorizeRecord(record);
       if (coverage) {
         const position = decodeOperationReplayCursor(coverage.checkpoint);
         let tracker = createOperationReplayCursorTracker(position);
         const covered = new Set(coverage.actionRunIds);
         for (
           const operationId of await discover(
-            threadId,
+            record,
             position.selectionPosition,
           )
         ) {
@@ -155,19 +320,15 @@ export async function createHttpOperations(
         }
         return tracker.cursor();
       }
-      const position =
-        await threadEventWatermark(runtime.operations, namespace, threadId) ??
-          "0";
+      const position = await watermark(record) ??
+        "0";
       return encodeOperationReplayCursor({ selectionPosition: position });
     },
     async observe(
-      selection: {
-        operationIds?: readonly string[];
-        threadId?: string;
-        checkpoint?: string;
-        signal?: AbortSignal;
-      },
+      selection: OperationSelection,
     ): Promise<HttpObservation> {
+      const recovered = await logoutObservation(selection);
+      if (recovered) return recovered;
       const abort = new AbortController();
       const attachments = new Map<string, ApplicationOperationAttachment>();
       const draining = new Set<ApplicationOperationAttachment>();
@@ -256,9 +417,7 @@ export async function createHttpOperations(
         authorityChannel = await runtime.authorization.observe(
           scope.authority,
           {
-            ...(selection.threadId
-              ? { record: { collection: "thread", id: selection.threadId } }
-              : {}),
+            ...(selection.record ? { record: selection.record } : {}),
             ...(selection.operationIds
               ? { operationIds: selection.operationIds }
               : {}),
@@ -268,23 +427,19 @@ export async function createHttpOperations(
           },
         );
         stopAccess = () => authorityChannel?.close();
-        if (selection.threadId) {
-          await thread(selection.threadId);
+        if (selection.record) {
+          await authorizeRecord(selection.record);
           feed = await watchSelection(
             runtime.operations,
             namespace,
-            coreThreadObservationKey(selection.threadId),
+            descriptor(selection.record).key(selection.record.id),
             notify,
           );
         }
         checkpoint = selection.checkpoint ??
-          (selection.threadId
+          (selection.record
             ? encodeOperationReplayCursor({
-              selectionPosition: await threadEventWatermark(
-                runtime.operations,
-                namespace,
-                selection.threadId,
-              ) ?? "0",
+              selectionPosition: await watermark(selection.record) ?? "0",
             })
             : undefined);
         position = decodeOperationReplayCursor(checkpoint);
@@ -302,11 +457,11 @@ export async function createHttpOperations(
           ...Object.keys(position.operationStreamPositions ?? {}),
         ]);
         const authorizedIds = new Set([...cursorIds, ...retired.keys()]);
-        ids = selection.threadId
+        ids = selection.record
           ? [...cursorIds]
           : [...selection.operationIds ?? []];
         if (
-          (!selection.threadId && !ids.length) || ids.length > 32 ||
+          (!selection.record && !ids.length) || ids.length > 32 ||
           new Set(ids).size !== ids.length || ids.some((id) =>
             typeof id !== "string" || !id
           )
@@ -317,11 +472,9 @@ export async function createHttpOperations(
             "Select 1 to 32 distinct operations.",
           );
         }
-        if (selection.threadId) {
+        if (selection.record) {
           const members = authorizedIds.size
-            ? await listThreadOperations(runtime.operations, {
-              namespace,
-              threadId: selection.threadId,
+            ? await list(selection.record, {
               operationIds: [...authorizedIds],
               limit: 64,
             })
@@ -344,9 +497,7 @@ export async function createHttpOperations(
           }
           // The history boundary covers terminal work. Operations still running
           // at that boundary must be followed even if they began earlier.
-          const active = await listThreadOperations(runtime.operations, {
-            namespace,
-            threadId: selection.threadId,
+          const active = await list(selection.record, {
             states: ["accepted", "running"],
             limit: 33,
           });
@@ -375,7 +526,7 @@ export async function createHttpOperations(
           }
           for (const id of ids) await get(id);
         }
-        bootstrap = selection.threadId ? [] : undefined;
+        bootstrap = selection.record ? [] : undefined;
         if (bootstrap) {
           const tracker = createOperationReplayCursorTracker(position);
           for (const operationId of ids) {
@@ -409,10 +560,19 @@ export async function createHttpOperations(
         if (abort.signal.aborted) throw abort.signal.reason;
       } catch (error) {
         await detach(error);
+        const code = (error as { code?: string }).code;
+        if (
+          !selection.signal?.aborted &&
+          ["forbidden", "revoked"].includes(code ?? "")
+        ) {
+          // The self-revocation effect may have committed after initial lookup.
+          const recovered = await logoutObservation(selection);
+          if (recovered) return recovered;
+        }
         throw error;
       }
       const selectionFrame = async (operationIds: readonly string[]) => {
-        if (!selection.threadId) return;
+        if (!selection.record) return;
         await writer.write(
           {
             type: "observation.selection",
@@ -421,6 +581,7 @@ export async function createHttpOperations(
           } as unknown as ApplicationOutput,
         );
       };
+      const actionOrigins = createHttpActionOrigins(runtime, namespace);
       const attach = async (id: string) => {
         if (abort.signal.aborted || attachments.has(id) || attaching.has(id)) {
           return;
@@ -441,27 +602,47 @@ export async function createHttpOperations(
           draining.add(attachment);
           void attachment.drained.then(() => draining.delete(attachment));
           const pump = (async () => {
-            for await (const output of attachment.outputs) {
+            for await (const rawOutput of attachment.outputs) {
               if (abort.signal.aborted) break;
+              let output: ApplicationOutput | null = rawOutput;
+              for (const adapter of adapters) {
+                if (output && adapter.projectOutput) {
+                  output = await adapter.projectOutput(
+                    output,
+                    scope,
+                    read,
+                    (runId) => actionOrigins(id, runId),
+                  );
+                }
+              }
+              if (!output) {
+                if (rawOutput.type === "stream.output") {
+                  const stream =
+                    rawOutput as import("../runtime/streams/types.ts").StreamOutput;
+                  await stream.payload.cancel("output_not_visible");
+                  void stream.terminal.catch(() => undefined);
+                }
+                continue;
+              }
               const attributed = {
                 ...output,
                 operationId: id,
-                ...(selection.threadId ? { threadId: selection.threadId } : {}),
+                ...(selection.record
+                  ? descriptor(selection.record).outputMetadata?.(
+                    selection.record.id,
+                  ) ?? {}
+                  : {}),
               };
               if (
-                selection.threadId &&
-                [
-                  "operation.completed",
-                  "operation.failed",
-                  "operation.cancelled",
-                ].includes(output.type)
+                selection.record &&
+                output.type === "operation.settled"
               ) {
                 terminal.set(id, attributed);
                 notify();
               } else await writer.write(attributed);
             }
             await attachment.done;
-            if (!selection.threadId) attachments.delete(id);
+            if (!selection.record) attachments.delete(id);
           })();
           pumps.add(pump);
           void pump.then(
@@ -484,7 +665,7 @@ export async function createHttpOperations(
         try {
           await selectionFrame(ids);
           for (const id of ids) await attach(id);
-          while (selection.threadId && !abort.signal.aborted) {
+          while (selection.record && !abort.signal.aborted) {
             if (!changed) {
               await new Promise<void>((resolve) => {
                 wake = resolve;
@@ -541,9 +722,7 @@ export async function createHttpOperations(
             if (terminal.size) {
               // Indexed membership probes are small and shared live scans stay
               // independent of historical event payload size.
-              const latest = await listThreadOperations(runtime.operations, {
-                namespace,
-                threadId: selection.threadId,
+              const latest = await list(selection.record, {
                 operationIds: [...terminal.keys()],
                 limit: 32,
               });
@@ -608,7 +787,9 @@ export async function createHttpOperations(
         done,
         replayCursor: checkpoint,
         compositeCursor: true,
-        threadId: selection.threadId,
+        selectionMetadata: selection.record
+          ? descriptor(selection.record).outputMetadata?.(selection.record.id)
+          : undefined,
         cancel: (reason) => detach(reason),
       };
     },

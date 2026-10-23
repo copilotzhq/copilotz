@@ -1,3 +1,13 @@
+import {
+  authorizeCoreActionResult,
+  authorizeCoreAsset,
+  coreVisibilityReads,
+  projectCoreOutput,
+} from "../../../shared/tool-visibility.ts";
+import {
+  coreThreadObservationKey,
+  coreThreadObservationMetadata,
+} from "@copilotz/copilotz/core";
 /** Reusable conversation HTTP endpoints; application policy remains in Server. @module */
 import { mapHistoryContent } from "@copilotz/copilotz/core/client";
 
@@ -12,6 +22,16 @@ import {
   mapThreadRecord,
 } from "../../../../core/index.ts";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
+function viewerParticipantId(context: HttpHandlerContext): string {
+  const id = context.scope.actor?.id;
+  if (!id) {
+    throw Object.assign(new Error("A viewer actor is required."), {
+      status: 403,
+      code: "actor_required",
+    });
+  }
+  return id;
+}
 function query(
   context: HttpHandlerContext,
 ): import("@copilotz/copilotz/core/client").ThreadQuery {
@@ -72,7 +92,23 @@ async function project(
 /** Core conversation routes use ordinary authorized participant reads. */
 export function createCoreHttpAdapter(): HttpAdapter {
   return createHttpAdapter({
+    reads: coreVisibilityReads,
+    authorizeAsset: authorizeCoreAsset,
+    authorizeActionResult: authorizeCoreActionResult,
+    projectOutput: projectCoreOutput,
     collections: ["thread", "participant", "message"],
+    observations: {
+      thread: {
+        key: coreThreadObservationKey,
+        outputMetadata: (id) => ({ threadId: id }),
+      },
+    },
+    ingressMetadata: (metadata) => ({
+      ...(typeof metadata.threadId === "string"
+        ? coreThreadObservationMetadata(metadata.threadId)
+        : {}),
+      core: { visibility: { kind: "internal" } },
+    }),
     routes: [
       {
         id: "core.threads.list",
@@ -120,11 +156,12 @@ export function createCoreHttpAdapter(): HttpAdapter {
         method: "GET",
         path: "/threads/:id/messages",
         async handler(context) {
+          const viewerId = viewerParticipantId(context);
           await thread(context, context.params.id);
           // Capture before the read. Live discovery replays every overlapping operation,
           // including ones that start and settle while history is being projected.
           const checkpoint = await context.operations.checkpoint(
-            context.params.id,
+            { collection: "thread", id: context.params.id },
           );
           const input = query(context);
           const limit = input.limit ?? 100;
@@ -138,7 +175,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
             ...input,
             threadId: context.params.id,
             content: true,
-            viewerParticipantIds: [context.scope.actor!.id],
+            viewerParticipantIds: [viewerId],
             limit,
             overfetch: true,
           });
@@ -179,7 +216,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
             },
           );
           const coveredCheckpoint = await context.operations.checkpoint(
-            context.params.id,
+            { collection: "thread", id: context.params.id },
             { checkpoint, actionRunIds },
           );
           return Response.json({
@@ -199,13 +236,14 @@ export function createCoreHttpAdapter(): HttpAdapter {
         method: "GET",
         path: "/threads/:id/messages/:messageId/assets/:assetId",
         async handler(context) {
+          const viewerId = viewerParticipantId(context);
           await thread(context, context.params.id);
           const [message] = await context.read.query("message", "history", {
             threadId: context.params.id,
             messageId: context.params.messageId,
             // Retained revisions remain readable through the authorized all-history view.
             view: "all",
-            viewerParticipantIds: [context.scope.actor!.id],
+            viewerParticipantIds: [viewerId],
           });
           const refs = message
             ? [
@@ -255,7 +293,7 @@ export function createCoreHttpAdapter(): HttpAdapter {
         async handler(context) {
           await thread(context, context.params.id);
           return await context.operations.observe({
-            threadId: context.params.id,
+            record: { collection: "thread", id: context.params.id },
             checkpoint: (context.input as { checkpoint?: string }).checkpoint,
           });
         },

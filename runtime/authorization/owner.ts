@@ -1,4 +1,6 @@
-import { authorizeOperation } from "./operation.ts";
+import { assertFlowOperation } from "./flow.ts";
+import { createCredentialEffects } from "./credentials.ts";
+import { authorizeOperation, logoutReceipt } from "./operation.ts";
 import { afterSqlCommit } from "../events/session.ts";
 import { completeOwnerDeadline, writeOwnerDeadline } from "../engine/alarms.ts";
 import type { CommandContext } from "../engine/commands.ts";
@@ -27,10 +29,13 @@ import {
 import { type AuthenticatedAuthority, retainedAuthority } from "./authority.ts";
 
 export type AuthorityObservation = Readonly<{
+  /** Cached gate for Collection push; notices fence it before queued policy work. */
+  current(): boolean;
   publish<T>(send: () => Promise<T>): Promise<T>;
   close(): void;
 }>;
 export type AuthorizationOwner = Readonly<{
+  credentials: ReturnType<typeof createCredentialEffects>;
   assertResources(
     resources: Readonly<
       { collections: readonly string[]; actions: readonly string[] }
@@ -40,14 +45,28 @@ export type AuthorizationOwner = Readonly<{
     authority: AuthenticatedAuthority,
     id: string,
   ): Promise<import("../streams/catalog.ts").OperationRecord>;
+  logoutReceipt(
+    authority: AuthenticatedAuthority,
+    id: string,
+  ): Promise<import("../streams/catalog.ts").OperationRecord | undefined>;
   observe(
     authority: AuthenticatedAuthority,
     input: Readonly<
       {
+        collection?: string;
+        query?: import("../collections/types.ts").CollectionQuery;
         record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
       }
     >,
+    failed: (error: unknown) => void,
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void,
+  ): Promise<AuthorityObservation>;
+  /** Watches only this credential's liveness, without granting resource reads. */
+  observeCredential(
+    authority: AuthenticatedAuthority,
     failed: (error: unknown) => void,
   ): Promise<AuthorityObservation>;
   notice(change: { namespace: string; collection?: string; id?: string }): void;
@@ -60,6 +79,8 @@ export type AuthorizationOwner = Readonly<{
 }>;
 export function createAuthorizationOwner(
   options: Readonly<{
+    master?: import("../actions/secret-adapter.ts").SecretAdapter;
+    actions?: Readonly<Record<string, { id: string }>>;
     session: SqlSession;
     databaseSchema: string;
     owner: DatabaseOwner;
@@ -96,9 +117,19 @@ export function createAuthorizationOwner(
     id: string;
     authority: AuthenticatedAuthority;
     intent: AuthorizationIntent;
+    credentialOnly: boolean;
+    selection: {
+      collection?: string;
+      record?: Readonly<{ collection: string; id: string }>;
+      operationIds?: readonly string[];
+    };
     dependencies: readonly AuthorityDependency[];
     generation: number;
     active: boolean;
+    pending: number;
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void;
     failed(reason: unknown): void;
   };
   const channels = new Map<string, Channel>();
@@ -138,13 +169,58 @@ export function createAuthorizationOwner(
   ) => {
     check(channel);
     if (!evaluate) authorizationRefused();
+    if (channel.credentialOnly) {
+      const authority = channel.authority;
+      if (
+        authority.authorityBasis.kind !== "session" ||
+        authority.validity.kind !== "credential"
+      ) authorizationRefused();
+      const live = await command.transaction.query<{ expires_at: string }>(
+        `SELECT expires_at::text FROM "${options.databaseSchema}".authorization_sessions WHERE namespace=$1 AND tenant=$2 AND id=$3 AND principal=$4 AND revoked_at IS NULL AND expires_at>$5::timestamptz`,
+        [
+          authority.scope.namespace,
+          authority.scope.tenant,
+          authority.authorityBasis.id,
+          authority.principal.id,
+          command.commandTime,
+        ],
+      );
+      if (!live.rows.length) authorizationRefused();
+      channel.authority = retainedAuthority({
+        ...authority,
+        validity: {
+          ...authority.validity,
+          expiresAt: new Date(
+            Math.min(
+              Date.parse(authority.validity.expiresAt),
+              Date.parse(live.rows[0].expires_at),
+            ),
+          ).toISOString(),
+        },
+      });
+      channel.dependencies = [{
+        owner: authority.scope.owner,
+        namespace: authority.scope.namespace,
+        collection: "@authorization/session",
+        id: authority.authorityBasis.id,
+      }];
+      return {
+        authority: channel.authority,
+        constraints: {},
+        dependencies: channel.dependencies,
+      };
+    }
     const decision = await evaluate(channel.authority, channel.intent, command);
     channel.authority = decision.authority;
-    const input = channel.intent.input as {
-      record?: Readonly<{ collection: string; id: string }>;
-      operationIds?: readonly string[];
-    };
+    const input = channel.selection;
     const dependencies = [...decision.dependencies];
+    if (input.collection) {
+      const definition = options.collections[input.collection];
+      if (
+        !definition || !(decision.constraints.collections?.[input.collection] ??
+          decision.constraints.collections?.[definition.name])
+      ) authorizationRefused();
+    }
     if (input.record) {
       const definition = options.collections[input.record.collection];
       const filter =
@@ -169,6 +245,7 @@ export function createAuthorizationOwner(
       });
     }
     for (const id of input.operationIds ?? []) {
+      await assertFlowOperation(channel.authority, id, command.transaction);
       const result = await options.operations.get(
         channel.authority.scope.namespace,
         id,
@@ -197,29 +274,50 @@ export function createAuthorizationOwner(
     value: AuthenticatedAuthority,
     input: Readonly<
       {
+        collection?: string;
+        query?: import("../collections/types.ts").CollectionQuery;
         record?: Readonly<{ collection: string; id: string }>;
         operationIds?: readonly string[];
       }
     >,
     failed: (error: unknown) => void,
+    changed?: (
+      decision: import("./evaluator.ts").AuthorizationDecision,
+    ) => void,
+    credentialOnly = false,
   ) => {
     const authority = retainedAuthority(value);
     const channel: Channel = {
       id: crypto.randomUUID(),
       authority,
+      credentialOnly,
+      selection: input,
       intent: {
-        kind: "observation",
-        resource: input.record?.id ?? "operations",
-        operation: "attach",
-        input,
+        kind: input.collection ? "collection" : "observation",
+        resource: input.collection ?? input.record?.id ?? "operations",
+        operation: input.collection ? "list" : "attach",
+        input: input.collection
+          ? {
+            collection: {
+              alias: input.collection,
+              name: options.collections[input.collection]?.name ??
+                input.collection,
+            },
+            method: "list",
+            phase: "read",
+            args: input.query ?? {},
+          }
+          : input,
       },
       dependencies: [],
       generation: 0,
       active: true,
+      pending: 0,
+      changed,
       failed,
     };
     await run("authorization.attach", {}, async (_, command) => {
-      await checkObservation(channel, command);
+      const decision = await checkObservation(channel, command);
       await command.transaction.query(
         `INSERT INTO ${channelTable}(id,namespace,tenant,authority,dependencies,owner_epoch) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,
         [
@@ -243,9 +341,14 @@ export function createAuthorizationOwner(
       }
       afterSqlCommit(command.transaction, () => {
         channels.set(channel.id, channel);
+        channel.changed?.(decision);
       });
     });
     return {
+      current() {
+        check(channel);
+        return channel.pending === 0;
+      },
       async publish<T>(send: () => Promise<T>): Promise<T> {
         const delivered = Promise.withResolvers<T>();
         void delivered.promise.catch(() => undefined);
@@ -320,15 +423,20 @@ export function createAuthorizationOwner(
         )
       ) continue;
       channel.generation++;
+      channel.pending++;
       void run(
         "authorization.reauthorize",
         { id: channel.id },
         async (_, command) => {
-          await checkObservation(channel, command);
+          const decision = await checkObservation(channel, command);
           await command.transaction.query(
             `UPDATE ${channelTable} SET dependencies=$2::jsonb WHERE id=$1`,
             [channel.id, JSON.stringify(channel.dependencies)],
           );
+          afterSqlCommit(command.transaction, () => {
+            channel.pending--;
+            channel.changed?.(decision);
+          });
         },
       ).catch(() => close(channel, revoked()));
     }
@@ -366,23 +474,31 @@ export function createAuthorizationOwner(
   const createSession = async (
     value: AuthenticatedAuthority,
     input: Readonly<{ id: string; principal: string; expiresAt: string }>,
+    joined?: CommandContext,
+    invocation?: { kind: "action"; id: string; runId: string },
   ) => {
     const authority = retainedAuthority(value);
     if (
       !input.id.trim() || !input.principal.trim() ||
       !Number.isFinite(Date.parse(input.expiresAt))
     ) throw new TypeError("Invalid tenant session.");
-    await run("authorization.session.create", input, async (_, command) => {
+    const execute = async (command: CommandContext) => {
       if (!evaluate) authorizationRefused();
       const decision = await evaluate(authority, {
         kind: "session",
         resource: input.id,
         operation: "create",
         input,
+        ...(invocation ? { invocation } : {}),
       }, command);
+      const grant = decision.constraints.sessions?.create;
+      const lifetime = Date.parse(input.expiresAt) -
+        Date.parse(command.commandTime);
       if (
-        !decision.constraints.sessions?.create ||
-        Date.parse(input.expiresAt) <= Date.parse(command.commandTime)
+        !grant || grant.principal !== input.principal ||
+        !Number.isSafeInteger(grant.maxAge) || grant.maxAge <= 0 ||
+        grant.maxAge > 31536000 || lifetime <= 0 ||
+        lifetime > grant.maxAge * 1000
       ) authorizationRefused();
       await command.transaction.query(
         `INSERT INTO ${sessionTable}(namespace,tenant,id,principal,expires_at) VALUES($1,$2,$3,$4,$5::timestamptz)`,
@@ -394,17 +510,26 @@ export function createAuthorizationOwner(
           input.expiresAt,
         ],
       );
-    });
+    };
+    if (joined) await execute(joined);
+    else {await run("authorization.session.create", input, (_, command) =>
+        execute(command));}
   };
-  const revokeSession = async (value: AuthenticatedAuthority, id: string) => {
+  const revokeSession = async (
+    value: AuthenticatedAuthority,
+    id: string,
+    joined?: CommandContext,
+    invocation?: { kind: "action"; id: string; runId: string },
+  ) => {
     const authority = retainedAuthority(value);
-    await run("authorization.session.revoke", { id }, async (_, command) => {
+    const execute = async (command: CommandContext) => {
       if (!evaluate) authorizationRefused();
       const decision = await evaluate(authority, {
         kind: "session",
         resource: id,
         operation: "revoke",
         input: { id },
+        ...(invocation ? { invocation } : {}),
       }, command);
       const permission = decision.constraints.sessions?.revoke;
       if (
@@ -432,9 +557,30 @@ export function createAuthorizationOwner(
           ) close(channel, revoked());
         }
       });
-    });
+    };
+    if (joined) await execute(joined);
+    else {await run("authorization.session.revoke", { id }, (_, command) =>
+        execute(command));}
   };
   return {
+    credentials: createCredentialEffects({
+      session: options.session,
+      schema: options.databaseSchema,
+      master: options.master,
+      evaluate,
+      actions: options.actions ?? {},
+      authorizeProjection: (authority, id, command) =>
+        authorizeOperation(
+          evaluate,
+          options.operations,
+          authority,
+          id,
+          "read",
+          command,
+        ),
+      create: createSession,
+      revoke: revokeSession,
+    }),
     asset(value, id) {
       const authority = retainedAuthority(value);
       return run("authorization.asset", { id }, async (_, command) => {
@@ -455,6 +601,17 @@ export function createAuthorizationOwner(
     notice,
     createSession,
     revokeSession,
+    logoutReceipt: (value, id) => {
+      const authority = retainedAuthority(value);
+      return run(
+        "authorization.logout.receipt",
+        { id },
+        (_, command) =>
+          logoutReceipt(options.operations, authority, id, command),
+      );
+    },
+    observeCredential: (authority, failed) =>
+      observe(authority, {}, failed, undefined, true),
     assertResources(resources) {
       for (const kind of ["collections", "actions"] as const) {
         for (const alias of resources[kind]) {

@@ -13,6 +13,33 @@ export type TranscribeAudioOutput = {
   model: string;
 };
 
+/** File extensions transcription services recognize, by audio media type. */
+const AUDIO_EXTENSIONS: Readonly<Record<string, string>> = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/opus": "ogg",
+  "audio/mp4": "m4a",
+  "audio/m4a": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/aac": "aac",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/wave": "wav",
+  "audio/x-wav": "wav",
+  "audio/flac": "flac",
+  "audio/x-flac": "flac",
+};
+
+/**
+ * The upload name for a recording: services read the format from the
+ * extension, so a Safari recording (`audio/mp4`) is `voice.m4a`.
+ */
+export function audioFilename(mediaType: string): string {
+  const type = mediaType.split(";", 1)[0].trim().toLowerCase();
+  return `voice.${AUDIO_EXTENSIONS[type] ?? "audio"}`;
+}
+
 /** Interrupts a pending host wait; underlying host cleanup remains host-owned. */
 async function wait<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -139,9 +166,7 @@ export const transcribeAudioAction: ActionDefinition<
       (connection.provider === "openai" ? transcribeOpenAi : transcribeGemini)({
         bytes,
         mimeType: asset.mediaType.split(";", 1)[0],
-        filename: `voice.${
-          asset.mediaType.includes("webm") ? "webm" : "audio"
-        }`,
+        filename: audioFilename(asset.mediaType),
         model: connection.model,
         apiKey,
         signal,

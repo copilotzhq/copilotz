@@ -5,7 +5,8 @@ import type {
   CollectionRecord,
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
-import { type ContentSequence, isContentRef } from "@copilotz/copilotz/content";
+import type { ContentSequence } from "@copilotz/copilotz/content";
+import { isContentRef } from "@copilotz/copilotz/content/codec";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   ConversationMessage,
@@ -147,6 +148,7 @@ export function mapMessageRecord(
     recipientIds: stringArray(record.recipientIds),
     content: contentSequence(record.content),
     metadata: asRecord(record.metadata),
+    ...(record.visibility ? { visibility: asRecord(record.visibility) } : {}),
     ...(record.revision && typeof record.revision === "object"
       ? { revision: record.revision as ConversationMessage["revision"] }
       : {}),
@@ -566,9 +568,22 @@ export async function loadThreadMessageRecordWindow(
     ...stringArray(threadRecord.participantIds),
     ...selected.map((record) => String(record.senderId)),
   ]);
-  const participantRecords = (await Promise.all(
-    [...participantIds].map((id) => participants.get({ id })),
-  )).filter((record): record is CollectionRecord => record !== null);
+  // One batched read per 1,000 ids: each get is its own owner command.
+  const ids = [...participantIds];
+  const found = new Map<string, CollectionRecord>();
+  for (let offset = 0; offset < ids.length; offset += 1_000) {
+    const batch = ids.slice(offset, offset + 1_000);
+    for (
+      const record of await participants.list({
+        where: { id: { in: batch } },
+        limit: batch.length,
+      })
+    ) found.set(String(record.id), record);
+  }
+  const participantRecords = ids.flatMap((id) => {
+    const record = found.get(id);
+    return record ? [record] : [];
+  });
   return ({
     threadRecord,
     participantRecords,

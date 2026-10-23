@@ -62,7 +62,7 @@ from `@copilotz/copilotz/core/server` contributes:
 The plan has four parts:
 
 1. `server.ts` stays a generic factory but accepts **extensions**: extra
-   plugins, resources, adapters, extra public Action IDs and the host's
+   plugins, resources, adapters, extra public Action aliases and the host's
    **access** policy. It still imports nothing from Core, and `auth.ts` does not
    change.
 2. A new definition module, `chat-access.ts`, extends the Notes policy for chat.
@@ -72,7 +72,7 @@ The plan has four parts:
    member. Raw thread observation stays refused.
 3. A new host, `serve-agent.ts` (or `serve-agent-node.ts`), passes Core, the
    agent harness, `coreHttpPlugin` and `chatAccess` into the factory and exposes
-   exactly two Actions: `notes.save` and `copilotz.core.conversation.send`.
+   exactly two Actions, by alias: `saveNote` and `sendConversation`.
 4. `chat-client.ts` sends a message over HTTP, waits for the operation to
    settle, and prints the reply from the **filtered** thread history.
 
@@ -80,7 +80,7 @@ The plan has four parts:
 
 Replace `server.ts` with this complete file. Compared with Chapter 16 it adds
 five optional fields to `ServerAppOptions` (`plugins`, `resources`, `adapters`,
-`publicActionIds` and `access`) and merges them into the composition.
+`publicActionAliases` and `access`) and merges them into the composition.
 Authentication, `principalScope`, `publicActions`, the `member` Collection and
 the exposure rules for Collections and Channels are unchanged. Without `access`,
 the factory keeps Chapter 16's `notesAccess`. The types come from the factory's
@@ -132,15 +132,16 @@ export type ServerAppOptions = Readonly<{
   resources?: ApplicationResources;
   // Extra adapters, such as a scripted model in a test.
   adapters?: ApplicationAdapters;
-  // Extra Action IDs to publish, on top of `publicActions`.
-  publicActionIds?: readonly string[];
+  // Extra Action aliases to publish, on top of `publicActions`.
+  publicActionAliases?: readonly string[];
   // The host's policy. Defaults to `notesAccess` from `auth.ts`.
   access?: Access;
 }>;
 
-// The only Action IDs the facade publishes by default. Adding a plugin does not
-// add routes until its Action is listed here or in `publicActionIds`.
-export const publicActions = ["notes.save"];
+// The only Action aliases the facade publishes by default. Adding a plugin does
+// not add routes until its Action's alias is listed here or in
+// `publicActionAliases`.
+export const publicActions = ["saveNote"];
 
 // Plugins the server application composes: the Notes package and the facade.
 export const serverPlugins = [notesPlugin, serverPlugin];
@@ -190,7 +191,10 @@ export function createServerApp(options: ServerAppOptions) {
           // Channel would be exposed.
           expose: {
             actions: {
-              include: [...publicActions, ...(options.publicActionIds ?? [])],
+              include: [
+                ...publicActions,
+                ...(options.publicActionAliases ?? []),
+              ],
             },
             // Notes and memberships stay off raw Collection routes.
             collections: false,
@@ -272,9 +276,10 @@ export const chatAccess: Access = {
                 },
               };
             case "collection":
-              // Core's own Actions and Processors create threads and enroll
-              // participants on the member's behalf. Direct reads, such as
-              // the thread routes, get the membership filter and nothing else.
+              // Core's own Actions and Processors create threads, enroll
+              // participants and record each message as the thread's activity
+              // on the member's behalf. Direct reads, such as the thread
+              // routes, get the membership filter and nothing else.
               return intent.invocation
                 ? {
                   collections: memberThreads,
@@ -282,7 +287,7 @@ export const chatAccess: Access = {
                     thread: {
                       create: {},
                       update: {},
-                      commands: { ensureMembership: {} },
+                      commands: { ensureMembership: {}, recordMessage: {} },
                     },
                   },
                 }
@@ -312,11 +317,12 @@ Three details are deliberate:
   `core.threads.get` and `core.threads.messages` answer `404` for a thread the
   actor is not in.
 - **`intent.invocation` separates Core's work from the caller.** Creating a
-  thread, enrolling participants and recording replies happen inside Core's
-  Actions and Processors, which run with the member's retained authority. The
-  owner tells the policy which Action, Processor or alarm is executing, so the
-  policy can grant those writes there and nowhere else. A direct call has no
-  invocation and gets only the read filter.
+  thread, enrolling participants, recording replies and marking each message as
+  the thread's latest activity happen inside Core's Actions and Processors,
+  which run with the member's retained authority. The owner tells the policy
+  which Action, Processor or alarm is executing, so the policy can grant those
+  writes there and nowhere else. A direct call has no invocation and gets only
+  the read filter.
 - **The assistant acts with the member's authority.** When the assistant calls
   `saveNote`, the owner evaluates the same policy for that member. A member
   without the `editor` role can chat, but the policy refuses the assistant's
@@ -382,7 +388,7 @@ const app = await createServerApp({
   // Agents, model connections and tools that Core reads.
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });
@@ -466,7 +472,7 @@ const app = await createServerApp({
   // Agents, model connections and tools that Core reads.
   resources: agentResources,
   // Publish the send Action. Update, delete and edit stay unpublished.
-  publicActionIds: ["copilotz.core.conversation.send"],
+  publicActionAliases: ["sendConversation"],
   // The policy that also covers chat.
   access: chatAccess,
 });
@@ -526,16 +532,16 @@ The flow:
 2. `client.operations.observe` follows the work this operation carries,
    including the assistant's turn; detached background work settles separately.
    The script reads only output descriptor types: the operation's terminal
-   descriptor (`operation.completed`, `operation.failed` or
-   `operation.cancelled`) and `llm.call.failed`. A well-formed observation can
-   end without a terminal descriptor, so the script treats that as a premature
-   end, not success. And as in Chapter 8, an operation can complete even though
-   the model call failed, so completion alone does not prove the assistant
-   replied.
-3. `client.operations.result` returns the send Action's output,
-   `{ threadId, message }`. That is the Action's own result, available as soon
-   as the message is recorded; it does not wait for the assistant's turn. The
-   script uses it only for `threadId`, after step 2 saw the operation settle.
+   descriptor (`operation.settled` with an `outcome` of `completed`, `failed` or
+   `cancelled`) and `llm.call.failed`. A well-formed observation can end without
+   a terminal descriptor, so the script treats that as a premature end, not
+   success. And as in Chapter 8, an operation can complete even though the model
+   call failed, so completion alone does not prove the assistant replied.
+3. `client.operations.result` returns `{ value, seq }`, where `value` is the
+   send Action's `{ threadId, message }` output. That result is available as
+   soon as the message is recorded; it does not wait for the assistant's turn.
+   The script uses it only for `threadId`, after step 2 saw the operation
+   settle.
 4. `core.threads.messages` reads the thread history, filtered for this actor,
    and the script prints the latest visible messages from it.
 
@@ -585,10 +591,9 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
         // The operation's terminal state, after the work it carries, including
         // the assistant's turn. Detached background work settles separately.
         if (
-          type === "operation.completed" || type === "operation.failed" ||
-          type === "operation.cancelled"
+          type === "operation.settled"
         ) {
-          terminal = type;
+          terminal = String(frame.output.outcome);
         }
         // A model call that ended in failure. Keep consuming frames.
         if (type === "llm.call.failed") modelCallFailed = true;
@@ -611,7 +616,7 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
     return 1;
   }
   // The operation failed or was cancelled.
-  if (terminal !== "operation.completed") {
+  if (terminal !== "completed") {
     console.error(`operation ended: ${terminal}`);
     return 1;
   }
@@ -620,9 +625,10 @@ async function chat(prompt: string, idempotencyKey: string): Promise<number> {
   // already settled above.
   let threadId: string;
   try {
-    const result = await client.operations.result(receipt.operationId) as {
-      threadId: string;
-    };
+    const result = (await client.operations.result(receipt.operationId))
+      .value as {
+        threadId: string;
+      };
     threadId = result.threadId;
   } catch (error) {
     if (error instanceof CopilotzHttpError) {
@@ -734,7 +740,7 @@ node chat-client.ts "Save a note: ship chat." chat-017
 Expected facts, not exact text:
 
 - an `operation …` line, then the script exits with status 0: the operation
-  reached `operation.completed` and no `llm.call.failed` was observed;
+  reached `operation.settled` and no `llm.call.failed` was observed;
 - the script prints a bounded page of the latest messages visible to
   `local-guide-user` on its `team-notes-chat` thread, ending with the
   assistant's reply. With Chapter 9's tool or Chapter 12's specialist, extra

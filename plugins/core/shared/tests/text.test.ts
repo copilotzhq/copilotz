@@ -1,7 +1,6 @@
 import { recordTestContentTerminal } from "../../../../runtime/testing/content-catalog.ts";
 import {
   createBundledSkill as defineSkill,
-  createInlineSkill,
 } from "../../../skills/resources/skill/index.ts";
 import { skillsPlugin } from "../../../skills/plugin.ts";
 import type { EventVisibility } from "@copilotz/copilotz/core";
@@ -733,17 +732,19 @@ for (const cancelWaiting of [false, true]) {
             content: oversized ? "context ".repeat(2_000) : "ready",
           };
         },
-        async reserveCompact() {
-          return {
+        reserveCompact() {
+          return Promise.resolve({
             status: "pending",
             checkpointId: "checkpoint-a",
             start: { action: "checkpointProducer", input: {} },
-          };
+          });
         },
-        async checkCompact() {
-          return checkpointReady
-            ? { status: "ready", advances: true }
-            : { status: "pending" };
+        checkCompact() {
+          return Promise.resolve(
+            checkpointReady
+              ? { status: "ready", advances: true }
+              : { status: "pending" },
+          );
         },
       });
       const releaseCheckpoint = defineProcessor<CoreProcessorContext>({
@@ -1052,7 +1053,7 @@ Deno.test("an oversized first route can fall through to a fitting LLM candidate"
     },
   } satisfies AgentResource;
   const fixture = await createFixture(
-    (input) => ({
+    () => ({
       result: {
         content: { type: "text", text: "Backup succeeded", role: "body" },
         attempts: [{ status: "completed" }],
@@ -1592,6 +1593,7 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "availableToolIds",
         "initiatorParticipantId",
         "originMessageId",
+        "outputVisibility",
         "parentLlmActionRunId",
         "planId",
         "planIndex",
@@ -1606,6 +1608,13 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "triggerMessageId",
       ]);
       assertEquals(event.metadata.schema, "copilotz.core.tool-action.v1");
+      // The private response audience narrows the default public_status policy.
+      assertEquals(event.metadata.outputVisibility, {
+        kind: "tool",
+        policy: "requester_only",
+        requesterId: "agent-north",
+        initiatorId: "user-a",
+      });
     }
     const firstToolMetadata = messages[2].metadata;
     const firstWorkflow = firstToolMetadata.copilotzWorkflow as Record<
@@ -1640,6 +1649,12 @@ Deno.test("Core invokes and projects an Action-backed Tool plan", async () => {
         "participants",
       ],
     );
+    for (const event of messageEvents.slice(2, 5)) {
+      assertEquals(
+        coreEvent(event).visibility,
+        toolCalls[0].metadata.outputVisibility,
+      );
+    }
     assertEquals(
       coreEvent(messageEvents.at(-1)!).visibility,
       privateVisibility,

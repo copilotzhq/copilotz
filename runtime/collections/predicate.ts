@@ -2,6 +2,17 @@ import { assertJsonValue } from "../json.ts";
 import { stableStringify } from "./equal.ts";
 import type { CollectionFilter } from "./types.ts";
 
+/** Unicode scalar ordering, matching UTF-8 PostgreSQL COLLATE "C". */
+export function compareCodePoints(left: string, right: string): number {
+  const a = left[Symbol.iterator](), b = right[Symbol.iterator]();
+  for (;;) {
+    const x = a.next(), y = b.next();
+    if (x.done || y.done) return x.done ? y.done ? 0 : -1 : 1;
+    const difference = x.value.codePointAt(0)! - y.value.codePointAt(0)!;
+    if (difference) return difference < 0 ? -1 : 1;
+  }
+}
+
 /** Scalar predicates deliberately avoid string/number coercion. */
 export type CollectionPredicateValue = string | number | boolean | null;
 export type CollectionPredicate =
@@ -110,8 +121,11 @@ function predicateCompare(
       ? comparison(left, right)
       : false;
   }
+  if (typeof actual === "string" && typeof expected === "string") {
+    return comparison(compareCodePoints(actual, expected), 0);
+  }
   return typeof actual === typeof expected
-    ? comparison(actual as string | number, expected)
+    ? comparison(actual as number, expected)
     : false;
 }
 
@@ -203,6 +217,21 @@ export function matchesCollectionPredicate(
   return false;
 }
 
+/** ID operator shorthand shares the typed predicate semantics in every reader. */
+export function idWherePredicate(
+  field: string,
+  value: unknown,
+): CollectionPredicate | undefined {
+  if (field !== "id" || value === null || typeof value !== "object") return;
+  const keys = Object.keys(value);
+  if (
+    Array.isArray(value) || keys.length !== 1 || !["in", "eq"].includes(keys[0])
+  ) {
+    throw new TypeError("ID where operators must be in or eq.");
+  }
+  return { field: "id", ...value } as CollectionPredicate;
+}
+
 export function matchesCollectionFilter(
   filter: CollectionFilter,
   record: Readonly<Record<string, unknown>>,
@@ -211,6 +240,11 @@ export function matchesCollectionFilter(
     return false;
   }
   for (const [field, expected] of Object.entries(filter.where ?? {})) {
+    const id = idWherePredicate(field, expected);
+    if (id) {
+      if (!matchesCollectionPredicate(id, record)) return false;
+      continue;
+    }
     const actualText = jsonText(valueAt(record, field));
     const expectedText = jsonText(expected);
     if (
@@ -338,9 +372,9 @@ export function compileCollectionPredicate(
       const value = scalar(raw);
       if (column) {
         if (value === null || typeof value !== "string") return "FALSE";
-        return `COALESCE(${column} = ${parameter(value)}${
-          timestamp ? "::timestamptz" : "::text"
-        }, FALSE)`;
+        return `COALESCE(${column}${timestamp ? "" : ' COLLATE "C"'} = ${
+          parameter(value)
+        }${timestamp ? "::timestamptz" : "::text"}, FALSE)`;
       }
       return `COALESCE(${json} = ${
         parameter(JSON.stringify(value))
@@ -352,7 +386,7 @@ export function compileCollectionPredicate(
       }
       return `(COALESCE(jsonb_typeof(${json}) = 'string' AND btrim(${text}::text, ${
         parameter(BLANK_CHARACTERS)
-      }) = ${parameter(value)}, FALSE))`;
+      }) COLLATE "C" = ${parameter(value)}::text COLLATE "C", FALSE))`;
     }
     if (op === "eqIgnoreCase" || op === "inIgnoreCase") {
       if (timestamp) {
@@ -415,7 +449,7 @@ export function compileCollectionPredicate(
         ? `COALESCE(${json} = 'null'::jsonb, FALSE)`
         : `COALESCE(jsonb_typeof(${json}) = 'string' AND btrim(${text}::text, ${
           parameter(BLANK_CHARACTERS)
-        }) = '', FALSE)`;
+        }) COLLATE "C" = '', FALSE)`;
       return `(${value ? expression : `NOT (${expression})`})`;
     }
     const comparisons: Record<string, string> = {
@@ -447,9 +481,14 @@ export function compileCollectionPredicate(
       // Physical node columns are NOT NULL. Unlike nullable JSON paths, a
       // direct comparison retains two-valued semantics and lets PostgreSQL
       // use the timestamp/id keyset indexes without a COALESCE wrapper.
-      return `(${column} ${comparison} ${parameter(value)}${
-        timestamp ? "::timestamptz" : "::text"
-      })`;
+      return `(${column}${timestamp ? "" : ' COLLATE "C"'} ${comparison} ${
+        parameter(value)
+      }${timestamp ? "::timestamptz" : '::text COLLATE "C"'})`;
+    }
+    if (typeof value === "string") {
+      return `(COALESCE(jsonb_typeof(${json}) = 'string' AND ${text} COLLATE "C" ${comparison} ${
+        parameter(value)
+      }::text COLLATE "C", FALSE))`;
     }
     return `(COALESCE(jsonb_typeof(${json}) = '${
       typeof value === "number" ? "number" : "string"

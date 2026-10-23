@@ -865,6 +865,9 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
         await transaction.query(
           `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second'`,
         );
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second'`,
+        );
       },
     );
 
@@ -878,6 +881,16 @@ Deno.test("asset maintenance retries body deletion and removes old orphan upload
     const pendingBody = await memory.head({ bodyId: key });
     const orphanBody = await memory.head({ bodyId: orphanKey });
     assertEquals(Number(pendingBody !== null) + Number(orphanBody !== null), 1);
+    // A retry is due only after its persisted deadline, even on manual maintenance.
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.retryDue",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second' WHERE state='retiring'`,
+        );
+      },
+    );
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
@@ -917,6 +930,7 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
           key: bodyId,
           backendKind: memory.kind,
           backendId: memory.backendId,
+          collectable: true,
         },
         protectForMs: 0,
       });
@@ -938,11 +952,23 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
       () => memory,
     );
     assertEquals(recovered.terminated, 2);
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.retentionDue",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_copies} SET retire_after=NOW()-INTERVAL '1 second'`,
+        );
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()+INTERVAL '1 day' WHERE body_id=$1`,
+          [retainedId],
+        );
+      },
+    );
 
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
-        isBodyRetained: (bodyId) => Promise.resolve(bodyId === retainedId),
       }),
       { orphanedBodiesDeleted: 1 },
     );
@@ -952,10 +978,19 @@ Deno.test("asset maintenance collects failed copies but preserves catalog retent
       "open",
     );
 
+    await createSchemaCommandRunner(fixture.session, TEST_SCHEMA)(
+      "test.releaseRetention",
+      {},
+      async (_, { transaction }) => {
+        await transaction.query(
+          `UPDATE ${fixture.store.tables.content_logical_bodies} SET protected_until=NOW()-INTERVAL '1 second' WHERE body_id=$1`,
+          [retainedId],
+        );
+      },
+    );
     assertEquals(
       await fixture.assets.maintainBodies({
         orphanAfterMs: 0,
-        isBodyRetained: () => Promise.resolve(false),
       }),
       { orphanedBodiesDeleted: 1 },
     );
@@ -1437,5 +1472,169 @@ Deno.test("content Collection joins an existing owner command without preparatio
     );
   } finally {
     await closeFixture(fixture);
+  }
+});
+
+Deno.test("explicit Asset IDs and replay receipts are isolated by namespace", async () => {
+  const f = await createFixture();
+  try {
+    for (const namespace of ["tenant-a", "tenant-b"]) {
+      const input = {
+        namespace,
+        id: "same-asset",
+        idempotencyKey: "same-receipt",
+        mediaType: "text/plain",
+        body: new TextEncoder().encode(namespace),
+      };
+      const first = await f.assets.publish(input);
+      const replay = await f.assets.publish(input);
+      assertEquals(first, replay);
+    }
+    for (const namespace of ["tenant-a", "tenant-b"]) {
+      assertEquals(
+        new TextDecoder().decode(
+          (await f.assets.read(namespace, "same-asset")).bytes,
+        ),
+        namespace,
+      );
+    }
+  } finally {
+    await closeFixture(f);
+  }
+});
+
+Deno.test("delivery retry captures a fresh stream incarnation and commits the complete reply after adoption rollback", async () => {
+  const { createContentStreamRuntime } = await import("../streams/stream.ts");
+  const { createDatabaseBodyStore } = await import("./database-body-store.ts");
+  const { captureWorkerContent } = await import(
+    "../execution/owner-capture.ts"
+  );
+  const fixture = await createFixture();
+  try {
+    const storage = createDatabaseBodyStore({
+      session: fixture.session,
+      schema: TEST_SCHEMA,
+    });
+    fixture.assets.registerStore(storage);
+    const answer = "The complete reply, including UTF-8: café.\n".repeat(4000);
+    const prepared = await createContentPreparer().prepare(answer, {
+      namespace: "tenant-a",
+      idempotencyKey: "answer",
+    });
+    const capture = async (incarnationId: string) => {
+      const streams = createContentStreamRuntime({
+        namespace: "tenant-a",
+        store: storage,
+        catalog: fixture.assets.catalog,
+        producerId: "turn",
+        incarnationId,
+        onOpen(_opened, publication) {
+          publication.established();
+        },
+      });
+      return await captureWorkerContent(prepared, { operationKey: "reply" }, {
+        namespace: "tenant-a",
+        signal: new AbortController().signal,
+        open: (input) =>
+          streams.open(
+            { ...input, id: `content.capture:${input.operationKey}` } as never,
+          ),
+        reference: () => {
+          throw new Error("unexpected reference");
+        },
+      }) as import("./types.ts").GeneratedContentSequence;
+    };
+    const first = await capture("attempt-1");
+    const adopter = collectionAssetAdopterFor(fixture.assets);
+    const origin = { type: "message", id: "reply" };
+    const plan = await adopter.prepareMaterialization({
+      namespace: "tenant-a",
+      content: first,
+      origin,
+    });
+    await assertRejects(() =>
+      fixture.coordinator.commitMutation({
+        draft: {
+          type: "reply.created",
+          namespace: "tenant-a",
+          subject: origin,
+          payload: {},
+        },
+        async mutate(context) {
+          await adopter.adoptMaterialization(context, plan);
+          throw new Error("delivery lost after streamed reply");
+        },
+      })
+    );
+    const retry = await capture("attempt-2");
+    assert(isPendingContentRef(first[0]) && isPendingContentRef(retry[0]));
+    assert(first[0].pendingRef !== retry[0].pendingRef);
+    const refs = await fixture.assets.materialize({
+      namespace: "tenant-a",
+      content: retry,
+      origin,
+    });
+    const committed = await fixture.assets.read("tenant-a", refs[0].assetId);
+    assertEquals(new TextDecoder().decode(committed.bytes), answer);
+    assertEquals(
+      committed.bytes.length,
+      new TextEncoder().encode(answer).length,
+    );
+    assertEquals(
+      await fixture.assets.materialize({
+        namespace: "tenant-a",
+        content: retry,
+        origin,
+      }),
+      refs,
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("batched native asset reads preserve order, isolation, deletion and digest checks", async () => {
+  const f = await createFixture();
+  try {
+    const bytes = new TextEncoder().encode("first body");
+    const one = await f.assets.publish({
+      namespace: "tenant-a",
+      id: "batch-one",
+      mediaType: "text/plain",
+      body: bytes,
+    });
+    const two = await f.assets.publish({
+      namespace: "tenant-a",
+      id: "batch-two",
+      mediaType: "text/plain",
+      body: new TextEncoder().encode("second body"),
+    });
+    const result = await f.assets.readMany("tenant-a", [
+      two.id,
+      one.id,
+      one.id,
+    ]);
+    assertEquals(result.map((r) => r.asset.id), [two.id, one.id, one.id]);
+    result[1].bytes.fill(0);
+    assertEquals(result[2].bytes, bytes);
+    await assertRejects(() =>
+      f.assets.readMany("tenant-other", [one.id, two.id])
+    );
+    const logical = await f.assets.catalog.read(one.bodyId);
+    await f.session.query(
+      `UPDATE "${TEST_SCHEMA}".content_body_parts SET bytes=$1 WHERE body_id=$2`,
+      [new Uint8Array(bytes.length), logical!.copy.key],
+    );
+    const error = await assertRejects(() =>
+      f.assets.readMany("tenant-a", [one.id, two.id])
+    );
+    assertEquals((error as ContentError).code, "asset_corrupted");
+    await f.assets.markDeleted("tenant-a", two.id);
+    const deleted = await assertRejects(() =>
+      f.assets.readMany("tenant-a", [two.id, one.id])
+    );
+    assertEquals((deleted as ContentError).code, "asset_deleted");
+  } finally {
+    await closeFixture(f);
   }
 });

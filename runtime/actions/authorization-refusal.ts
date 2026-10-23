@@ -36,6 +36,7 @@ export async function settleActionAuthorizationRefusal(
     actionRunId: frame.actionRunId,
     parentActionRunId: frame.parentActionRunId,
     metadata: structuredClone(frame.metadata),
+    actionScopeId: frame.identity?.actionScopeId,
   });
   const { store, namespace } = options;
   const source = Object.freeze({ ...options.source }),
@@ -50,8 +51,8 @@ export async function settleActionAuthorizationRefusal(
         { actionRunId: binding.actionRunId },
         async (_, command) => {
           const tx = command.transaction;
-          const lease = await tx.query(
-            `SELECT delivery.id FROM ${store.tables.event_deliveries} delivery JOIN ${store.tables.events} event ON event.id=delivery.event_id WHERE delivery.id=$1 AND delivery.event_id=$2 AND event.namespace=$3 AND delivery.status='leased' AND delivery.lease_owner=$4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>$6::timestamptz) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema') AND ($5::text IS NULL OR delivery.settlement_scope_id=$5)`,
+          const lease = await tx.query<{ id: string; correlation_id: string }>(
+            `SELECT delivery.id,event.correlation_id FROM ${store.tables.event_deliveries} delivery JOIN ${store.tables.events} event ON event.id=delivery.event_id WHERE delivery.id=$1 AND delivery.event_id=$2 AND event.namespace=$3 AND delivery.status='leased' AND delivery.lease_owner=$4 AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at>$6::timestamptz) AND delivery.owner_epoch=(SELECT epoch FROM ${store.tables.owner_epochs} WHERE owner='schema') AND ($5::text IS NULL OR delivery.settlement_scope_id=$5)`,
             [
               writer.deliveryId,
               source.eventId,
@@ -84,7 +85,51 @@ export async function settleActionAuthorizationRefusal(
             ],
           )).rows[0];
           if (!event) {
-            return { error: sanitizedAuthorizationRefusal(), settled: false }; // The refused claim never became an obligation.
+            // Admission can refuse before an invocation is captured. Publish a
+            // terminal with no input under the live owner lease checked above.
+            // There is no open obligation to settle and no user code to run.
+            const lifecycle = createActionLifecycleEmitter({
+              namespace,
+              metadata: {
+                sourceEventId: source.eventId,
+                sourceDeliveryId: writer.deliveryId,
+              },
+              append: createActionLifecycleAppender({
+                store,
+                coordinator: options.coordinator,
+                transaction: tx,
+              }),
+            });
+            const result = await lifecycle.emit({
+              actionId: binding.actionId,
+              actionRunId: binding.actionRunId,
+              ...(binding.parentActionRunId
+                ? { parentActionRunId: binding.parentActionRunId }
+                : {}),
+              input: null,
+              metadata: binding.metadata,
+              status: "failed",
+              error: {
+                name: "ActionError",
+                message: "Forbidden",
+                code: "forbidden",
+                status: 403,
+                callerSafe: true,
+              },
+              deduplicationId: `${binding.actionRunId}:action:terminal`,
+              settlementScopeId: source.operationId,
+              actionScopeId: binding.actionScopeId,
+              causationId: source.eventId,
+              correlationId: lease.rows[0].correlation_id,
+            });
+            command.afterCommit(async () => {
+              await awaitEventPublication(
+                result as import("../events/store.ts").CommitEventMutationResult<
+                  unknown
+                >,
+              );
+            });
+            return { error: sanitizedAuthorizationRefusal(), settled: true };
           }
           const data = publicActionLifecycleData(
             await readEventBody(

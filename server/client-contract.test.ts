@@ -54,13 +54,13 @@ Deno.test("real facade and browser client share durable Action submission and re
   });
   try {
     assertEquals(
-      await client.actions.invoke("test.echo", { value: "hello" }, {
+      await client.actions.invoke("echo", { value: "hello" }, {
         idempotencyKey: "once",
       }),
       { echoed: "hello" },
     );
     assertEquals(
-      await client.actions.invoke("test.echo", { value: "hello" }, {
+      await client.actions.invoke("echo", { value: "hello" }, {
         idempotencyKey: "once",
       }),
       { echoed: "hello" },
@@ -68,12 +68,12 @@ Deno.test("real facade and browser client share durable Action submission and re
     assertEquals(executions, 1);
     await assertRejects(
       () =>
-        client.actions.submit("test.echo", { value: "different" }, {
+        client.actions.submit("echo", { value: "different" }, {
           idempotencyKey: "once",
         }),
       CopilotzHttpError,
     );
-    const receipt = await client.actions.submit("test.echo", {
+    const receipt = await client.actions.submit("echo", {
       value: "observe",
     }, { idempotencyKey: "observe" });
     const outputs: string[] = [];
@@ -83,7 +83,17 @@ Deno.test("real facade and browser client share durable Action submission and re
         if (frame.kind === "output") outputs.push(frame.output.type);
       },
     });
-    assertEquals(outputs.includes("operation.completed"), true);
+    assertEquals(outputs.includes("operation.settled"), true);
+    const result = await client.operations.result(receipt.operationId);
+    assertEquals(result.value, { echoed: "observe" });
+    assertEquals(
+      result.seq,
+      await application.operations.resultSequence(
+        "tenant",
+        receipt.operationId,
+      ),
+    );
+    assertEquals(BigInt(result.seq) > 0n, true);
   } finally {
     await application.close();
     await database.close();

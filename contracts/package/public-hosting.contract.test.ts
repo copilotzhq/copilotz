@@ -188,8 +188,8 @@ Deno.test({
 Deno.test("unsupported dispatcher objects are refused before persistence opens", async () => {
   await assertRejects(
     () =>
-      // @ts-expect-error runtime validation of untyped host configuration
       createCopilotz({
+        // @ts-expect-error runtime validation of untyped host configuration
         role: "gateway",
         dispatcher: {
           dispatch() {

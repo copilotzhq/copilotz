@@ -1,4 +1,5 @@
 import { Ominipg } from "../../dependencies/ominipg.ts";
+import { markExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
 import {
   bindSnapshotSession,
@@ -98,6 +99,25 @@ export async function openManagedOminipgDatabase(
     useWorker: false,
   });
   const adapted = database as unknown as OminipgDatabaseLike;
+  if (adapted.withReadSnapshot) {
+    // The prototype method is shared by PostgreSQL and PGlite instances. Retain
+    // backend identity on this connection's capability, never on that prototype.
+    const snapshot = adapted.withReadSnapshot.bind(adapted);
+    Object.defineProperty(adapted, "withReadSnapshot", { value: snapshot });
+    // Custom providers/hooks and background sync retain native admission checks;
+    // they are not evidence of a private, exclusively owned physical connection.
+    const postgres = /^postgres(?:ql)?:/.test(url);
+    // Ominipg's native PostgreSQL snapshot reserves a reader/current pair.
+    // With one connection, Collections must use their existing fenced owner
+    // command snapshot instead; attempting a pair always fails admission.
+    if (
+      !options.syncUrl &&
+      (postgres
+        ? options.pgPoolMax === 1 && options.pgProvider === undefined
+        : options.pgliteProvider === undefined &&
+          options.pgliteConfig === undefined)
+    ) markExclusiveReadSnapshot(snapshot);
+  }
   const session = createOminipgSqlSession(adapted);
   let closeTask: Promise<void> | undefined;
   return ({

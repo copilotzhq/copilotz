@@ -1,4 +1,29 @@
-/** Fetch-only client for the canonical Copilotz HTTP facade. @module */
+export { createDeviceTransport } from "./device.ts";
+export type {
+  DeviceAuthEvent,
+  DeviceTransport,
+  DeviceTransportOptions,
+} from "./device.ts";
+import {
+  createLiveQuery,
+  type LiveQuery,
+  type LiveQueryOptions,
+  type OperationResult,
+  type SubscriptionTransport,
+} from "./live-query.ts";
+import type { CollectionQuery } from "../runtime/collections/types.ts";
+export type {
+  LiveQuery,
+  LiveQueryOptions,
+  OperationResult,
+  SubscriptionTransport,
+} from "./live-query.ts";
+export type {
+  CollectionSubscription,
+  SubscriptionDelta,
+  SubscriptionFrame,
+} from "../runtime/subscriptions/types.ts";
+/** HTTP client with owner-backed live Collection queries. @module */
 import {
   decodeObservation,
   type ObservationFrame as DecodedObservationFrame,
@@ -18,6 +43,7 @@ export type ObservationFrame = Exclude<
 export type OperationReceipt = Readonly<{
   operationId: string;
   correlationId: string;
+  /** Scope phase at admission/replay: accepted, running or settled. */
   status: string;
   acceptedAt: string;
   checkpoint?: string;
@@ -47,8 +73,16 @@ export type ObserveOptions = Readonly<{
   signal?: AbortSignal;
   onFrame(frame: ObservationFrame): void | Promise<void>;
 }>;
+/** A scope outcome, independent of the invoked Action's result. */
+export type OperationSettlement = Readonly<{
+  operationId: string;
+  state: "settled";
+  outcome: "completed" | "failed" | "cancelled";
+  seq: string;
+}>;
 export type ClientOptions = Readonly<{
   baseUrl: string;
+  device?: SubscriptionTransport;
   getRequestHeaders?: () => HeadersInit | Promise<HeadersInit>;
   fetch?: typeof globalThis.fetch;
 }>;
@@ -87,15 +121,54 @@ function pause(ms: number, signal?: AbortSignal): Promise<void> {
 export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   const base = options.baseUrl.replace(/\/+$/, "");
   const fetcher = options.fetch ?? globalThis.fetch;
+  const credentialProof = Array.from(
+    crypto.getRandomValues(new Uint8Array(32)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+  let flowCredential: string | undefined;
+  let flowActionPath: string | undefined;
+  const flowOperations = new Map<string, string>();
+  const flowSubmissions = new Map<string, string>();
+  const belongsToFlow = (path: string, init: RequestInit) => {
+    if (path === flowActionPath) return true;
+    const operation = /^\/operations\/([^/]+)(?:\/result)?$/.exec(path)?.[1];
+    if (operation && flowOperations.has(decodeURIComponent(operation))) {
+      return true;
+    }
+    if (path === "/operations/observe" && typeof init.body === "string") {
+      const ids = JSON.parse(init.body).operationIds;
+      return Array.isArray(ids) && ids.length > 0 &&
+        ids.every((id) =>
+          flowOperations.get(id) === flowOperations.get(ids[0])
+        ) &&
+        flowOperations.has(ids[0]);
+    }
+    return false;
+  };
   const request = async (path: string, init: RequestInit = {}) => {
     const headers = new Headers(await options.getRequestHeaders?.());
+    headers.set("x-copilotz-credential-proof", credentialProof);
+    const operation = /^\/operations\/([^/]+)(?:\/result)?$/.exec(path)?.[1];
+    const retainedFlow =
+      path === "/operations/observe" && typeof init.body === "string"
+        ? flowOperations.get(JSON.parse(init.body).operationIds?.[0])
+        : operation
+        ? flowOperations.get(decodeURIComponent(operation))
+        : undefined;
+    if (belongsToFlow(path, init) && (retainedFlow || flowCredential)) {
+      headers.set("x-copilotz-flow", retainedFlow || flowCredential!);
+    }
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     let response!: Response;
     const reading = !init.method || init.method === "GET";
     for (let attempt = 0;; attempt++) {
       init.signal?.throwIfAborted();
       try {
-        response = await fetcher(`${base}${path}`, { ...init, headers });
+        response = await fetcher(`${base}${path}`, {
+          credentials: "include",
+          ...init,
+          headers,
+        });
         if (!reading || response.status !== 503 || attempt >= 2) break;
         await response.body?.cancel();
       } catch (error) {
@@ -114,6 +187,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         error.code ?? "http_error",
         error.message ?? response.statusText,
       );
+    }
+    if (response.headers.has("x-copilotz-flow")) {
+      const next = response.headers.get("x-copilotz-flow") || undefined;
+      flowCredential = next;
+      const id = response.headers.get("x-copilotz-flow-action");
+      flowActionPath = next && id
+        ? `/actions/${id.split(".").map(segment).join("/")}`
+        : undefined;
+      const operation = /^\/operations\/([^/]+)\/result$/.exec(path)?.[1];
+      if (next && operation) {
+        flowOperations.set(decodeURIComponent(operation), next);
+      }
     }
     return response;
   };
@@ -139,6 +224,10 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     }
     const serialized = body(input);
     const key = submitOptions.idempotencyKey;
+    const submission = JSON.stringify([method, path, key]);
+    const originalFlow = flowSubmissions.get(submission) ??
+      (path === flowActionPath ? flowCredential : undefined);
+    if (originalFlow) flowSubmissions.set(submission, originalFlow);
     for (let attempt = 0;; attempt++) {
       let responseReceived = false;
       try {
@@ -149,6 +238,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
           headers: {
             "content-type": "application/json",
             "idempotency-key": key,
+            ...(originalFlow ? { "x-copilotz-flow": originalFlow } : {}),
           },
         });
         responseReceived = true;
@@ -159,6 +249,9 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         if (typeof receipt.operationId !== "string" || !receipt.operationId) {
           throw new ProtocolError("Invalid operation receipt.");
         }
+        const receiptFlow = originalFlow ||
+          response.headers.get("x-copilotz-flow");
+        if (receiptFlow) flowOperations.set(receipt.operationId, receiptFlow);
         return receipt;
       } catch (error) {
         if (
@@ -200,6 +293,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     observation: ObserveOptions,
   ): Promise<string | undefined> => {
     let checkpoint = observation.checkpoint;
+    let recoveredRevocation = false;
     for (let attempt = 0;; attempt++) {
       let applying = false;
       let responseReceived = false;
@@ -247,6 +341,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
         }
         return checkpoint;
       } catch (error) {
+        const ids =
+          (selection as { operationIds?: readonly string[] }).operationIds;
+        if (
+          !applying && !observation.signal?.aborted && !recoveredRevocation &&
+          ids?.length === 1 && error instanceof CopilotzHttpError &&
+          error.code === "revoked"
+        ) {
+          // A self-revoking operation can finish after its observation is fenced.
+          // One new admission may recover its proof-bound completed receipt.
+          recoveredRevocation = true;
+          continue;
+        }
         if (
           applying || observation.signal?.aborted ||
           error instanceof CopilotzHttpError ||
@@ -273,23 +379,43 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
   const result = async (
     operationId: string,
     signal?: AbortSignal,
-  ): Promise<unknown> => {
+  ): Promise<OperationResult> => {
     const path = `/operations/${segment(operationId)}/result`;
     for (;;) {
       const response = await request(path, { signal });
-      if (response.status !== 202) return (await response.json()).data;
+      if (response.status !== 202) {
+        const envelope = await response.json();
+        if (
+          typeof envelope.seq !== "string" ||
+          !/^(0|[1-9][0-9]*)$/.test(envelope.seq)
+        ) throw new ProtocolError("Operation result has no owner sequence.");
+        return { value: envelope.data, seq: envelope.seq };
+      }
       await pause(100, signal);
     }
+  };
+  const subscriptions: SubscriptionTransport = {
+    observe(collection, query, observation) {
+      if (!options.device) {
+        return Promise.reject(
+          new Error(
+            "An authenticated device subscription transport is required.",
+          ),
+        );
+      }
+      return options.device.observe(collection, query, observation);
+    },
   };
   const actionPath = (id: string) =>
     `/actions/${id.split(".").map(segment).join("/")}`;
   return ({
+    subscriptions,
     actions: {
       submit: (id: string, input: unknown, options: SubmitOptions) =>
         submit(actionPath(id), input, options),
       async invoke(id: string, input: unknown, options: SubmitOptions) {
         const receipt = await submit(actionPath(id), input, options);
-        return await result(receipt.operationId, options.signal);
+        return (await result(receipt.operationId, options.signal)).value;
       },
     } as const,
     channels: {
@@ -299,6 +425,43 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
     operations: {
       get: (id: string) => json(`/operations/${segment(id)}`),
       result,
+      async settled(
+        id: string,
+        signal?: AbortSignal,
+      ): Promise<OperationSettlement> {
+        let settlement: OperationSettlement | undefined;
+        await observe("/operations/observe", { operationIds: [id] }, {
+          signal,
+          onFrame(frame) {
+            if (
+              frame.kind !== "output" ||
+              frame.output.type !== "operation.settled"
+            ) return;
+            const output = frame.output;
+            if (
+              output.operationId !== id ||
+              output.state !== "settled" ||
+              !["completed", "failed", "cancelled"].includes(
+                String(output.outcome),
+              ) ||
+              typeof output.seq !== "string" ||
+              !/^(0|[1-9][0-9]*)$/.test(output.seq)
+            ) throw new ProtocolError("Invalid operation settlement.");
+            settlement = {
+              operationId: id,
+              state: "settled",
+              outcome: output.outcome as OperationSettlement["outcome"],
+              seq: output.seq,
+            };
+          },
+        });
+        if (!settlement) {
+          throw new ProtocolError(
+            "Observation ended without operation settlement.",
+          );
+        }
+        return settlement;
+      },
       cancel: (id: string) =>
         json(`/operations/${segment(id)}`, { method: "DELETE" }),
       observe: (
@@ -313,6 +476,18 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       },
     } as const,
     collections: {
+      observe: (
+        name: string,
+        query: CollectionQuery = {},
+        observation: LiveQueryOptions = {},
+      ) => {
+        if (!options.device) {
+          throw new Error(
+            "An authenticated device subscription transport is required.",
+          );
+        }
+        return createLiveQuery(subscriptions, name, query, observation);
+      },
       get: (name: string, id: string) =>
         json(`/collections/${segment(name)}/${segment(id)}`),
       list: (name: string, query: unknown = {}) =>
@@ -329,7 +504,7 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
       submit: submitCollectionMutation,
       async invoke(mutation: CollectionMutation, options: SubmitOptions) {
         const receipt = await submitCollectionMutation(mutation, options);
-        return await result(receipt.operationId, options.signal);
+        return (await result(receipt.operationId, options.signal)).value;
       },
       create: (name: string, input: unknown, options: SubmitOptions) =>
         submitCollectionMutation({ operation: "create", name, input }, options),
@@ -397,6 +572,8 @@ export function createCopilotzClient(options: ClientOptions): CopilotzClient {
 }
 
 export type CopilotzClient = Readonly<{
+  /** Shared raw subscription capability for platform hosts. */
+  subscriptions: SubscriptionTransport;
   actions: Readonly<{
     submit(
       id: string,
@@ -418,13 +595,19 @@ export type CopilotzClient = Readonly<{
   }>;
   operations: Readonly<{
     get(id: string): Promise<unknown>;
-    result(id: string, signal?: AbortSignal): Promise<unknown>;
+    result(id: string, signal?: AbortSignal): Promise<OperationResult>;
+    settled(id: string, signal?: AbortSignal): Promise<OperationSettlement>;
     cancel(id: string): Promise<unknown>;
     observe(
       options: ObserveOptions & { operationIds: readonly string[] },
     ): Promise<string | undefined>;
   }>;
   collections: Readonly<{
+    observe(
+      name: string,
+      query?: CollectionQuery,
+      options?: LiveQueryOptions,
+    ): LiveQuery;
     get(name: string, id: string): Promise<unknown>;
     list(name: string, query?: unknown): Promise<unknown>;
     query(name: string, queryName: string, input: unknown): Promise<unknown>;

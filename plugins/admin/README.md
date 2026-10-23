@@ -23,5 +23,11 @@ composition and `plugin.ts` exposes its public name. Regenerate with
 configuration at invocation; there is no plugin factory or runtime directory
 discovery.
 
+`@copilotz/copilotz/admin/web` is the browser side: an administration page
+(Overview, Agents, Conversations, People, Activity, Usage) that the chat shell's
+user menu opens, plus agent and participant detail Views. Each reads the
+authorized query Actions above; see
+[Web runtime and Views](../../docs/web-runtime-and-views.md).
+
 See [convention-first authoring](../../docs/convention-authoring.md) for the
 shared file structure, compiler, configuration locations, and migration guide.

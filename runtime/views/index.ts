@@ -6,11 +6,13 @@ export type {
   ViewCollections,
   ViewContext,
   ViewDefinition,
+  ViewEnvironment,
   ViewHints,
   ViewMap,
   ViewRead,
   ViewReference,
   ViewShows,
+  ViewUrl,
 } from "./definition.ts";
 export { createViewResolver } from "./resolution.ts";
 export type { ViewPreference } from "./resolution.ts";
@@ -19,4 +21,5 @@ export type {
   OneShotViewRenderer,
   TextRendererOptions,
   TextViewRenderer,
+  ViewRendererAdapter,
 } from "./renderer.ts";

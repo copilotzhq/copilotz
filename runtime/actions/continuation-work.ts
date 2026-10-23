@@ -1,3 +1,5 @@
+import { hintAuthorizationRows } from "../authorization/cache.ts";
+import { authorizationRefused } from "../authorization/evaluator.ts";
 import type { OwnerIngressProof } from "../application/ingress/authority.ts";
 import { awaitEventPublication } from "../events/coordinator.ts";
 import { createSchemaCommandRunner } from "../engine/commands.ts";
@@ -169,7 +171,7 @@ export async function startAwaitedOperation(
       SELECT child_operation_id, scope_id FROM ${store.tables.open_actions}
       WHERE namespace = $1 AND child_operation_id IS NOT NULL
     ), ancestors(id) AS (
-      SELECT $2::text UNION SELECT links.parent FROM links JOIN ancestors ON links.child = ancestors.id
+      SELECT $2::text COLLATE "C" UNION SELECT links.parent FROM links JOIN ancestors ON links.child = ancestors.id
       WHERE links.parent IS NOT NULL
     ) SELECT id AS operation_id FROM ancestors`,
     [namespace, parentId],
@@ -183,17 +185,24 @@ export async function startAwaitedOperation(
     );
   }
   const parent = await tx.query<
-    { metadata: Record<string, unknown>; observation_keys: string[] }
+    {
+      metadata: Record<string, unknown>;
+      observation_keys: string[];
+      flow: unknown;
+    }
   >(
     `SELECT operation.metadata,
+      (SELECT authority -> 'flow' FROM ${store.tables.authorization_invocations}
+       WHERE namespace=$1 AND run_id=$3) AS flow,
       ARRAY(SELECT DISTINCT key FROM unnest(operation.observation_keys ||
         ARRAY(SELECT jsonb_array_elements_text(COALESCE(event.metadata -> 'observationKeys', '[]'::jsonb)))) AS key ORDER BY key) AS observation_keys
       FROM ${operations} AS operation JOIN ${store.tables.events} AS event ON event.id = operation.root_event_id
       WHERE operation.namespace = $1 AND operation.operation_id = $2
       AND operation.state IN ('accepted','running') AND operation.cancellation_requested_at IS NULL`,
-    [namespace, parentId],
+    [namespace, parentId, data.actionRunId],
   );
   if (!parent.rows[0]) throw new ActionOwnershipLost(data.actionRunId);
+  if (data.start && parent.rows[0].flow) authorizationRefused();
   let committed: Awaited<ReturnType<typeof store.commitMutation>> | undefined;
   const existing = await tx.query<
     {
@@ -244,6 +253,9 @@ export async function startAwaitedOperation(
       existing,
     );
     const catalogTables = createOperationCatalogTables(store.databaseSchema);
+    hintAuthorizationRows(tx, store.databaseSchema, "copilotz_operations", [
+      childId,
+    ]);
     await tx.query(
       `WITH linked AS (
     UPDATE ${operations} SET parent_operation_id = COALESCE(parent_operation_id, $3),

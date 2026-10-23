@@ -21,7 +21,6 @@ import {
   MAX_JSON_FRAME_BYTES,
   OBSERVATION_FRAME_CAPACITY_CODE,
 } from "../client/protocol.ts";
-import { outputActionRuns } from "./output-order.ts";
 
 /** Hard ceiling for one HTTP observation, including a client that stops reading. */
 export const MAX_OBSERVATION_LIFETIME_MS = AUTHORITY_ADMISSION_MS;
@@ -116,9 +115,7 @@ function part(
 }
 
 function isTerminalOperationOutput(output: ApplicationOutput): boolean {
-  return output.type === "operation.completed" ||
-    output.type === "operation.failed" ||
-    output.type === "operation.cancelled";
+  return output.type === "operation.settled";
 }
 
 function descriptor(output: ApplicationOutput): unknown {
@@ -404,7 +401,6 @@ export function applicationOutputsMultipartResponse(
   };
   void (async () => {
     const pumps = new Set<Promise<void>>();
-    const actionPumps = new Map<string, Set<Promise<void>>>();
     const operationPumps = new Map<string, Set<Promise<void>>>();
     let sourcePrefixRenewal = false;
     const waitForPumps = async (pending: Iterable<Promise<void>>) => {
@@ -495,13 +491,8 @@ export function applicationOutputsMultipartResponse(
       );
       for await (const output of source.outputs) {
         if (cancelled) break;
-        if (!isStreamOutput(output) && !isTerminalOperationOutput(output)) {
-          await waitForPumps(
-            outputActionRuns(output).flatMap(
-              (id) => [...(actionPumps.get(id) ?? [])],
-            ),
-          );
-        }
+        // Durable events and byte lanes advance independently. Only settlement
+        // waits for every payload pump; an Action result must not wait for bytes.
         const outputRecord = output as unknown as Record<string, unknown>;
         const operationId = typeof outputRecord.operationId === "string" &&
             outputRecord.operationId.trim()
@@ -603,23 +594,11 @@ export function applicationOutputsMultipartResponse(
             operationPumps.set(operationId, operationLedger);
             operationLedger.add(pending);
           }
-          const actionRunId = output.metadata.sourceActionRunId;
-          const ledger = typeof actionRunId === "string"
-            ? actionPumps.get(actionRunId) ?? new Set<Promise<void>>()
-            : undefined;
-          if (ledger && typeof actionRunId === "string") {
-            actionPumps.set(actionRunId, ledger);
-            ledger.add(pending);
-          }
           void pending.then(() => {
             pumps.delete(pending);
             operationLedger?.delete(pending);
             if (operationId && operationLedger?.size === 0) {
               operationPumps.delete(operationId);
-            }
-            ledger?.delete(pending);
-            if (ledger?.size === 0 && typeof actionRunId === "string") {
-              actionPumps.delete(actionRunId);
             }
           }, (error) => {
             // Source renewal drains its bounded logical and byte prefix before
@@ -696,7 +675,7 @@ export function applicationOutputsMultipartResponse(
                 ...(source.operationId
                   ? { operationId: source.operationId }
                   : {}),
-                ...(source.threadId ? { threadId: source.threadId } : {}),
+                ...source.selectionMetadata,
               } as const,
             )),
             { ...partOptions, cursor: replayCursor },

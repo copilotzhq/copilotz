@@ -12,6 +12,8 @@ import {
 } from "./owner-capability-wire.ts";
 
 type Plan = {
+  sessions: import("../actions/session-effects.ts").ActionSessions;
+  flows: import("../actions/session-effects.ts").ActionFlows;
   collections: {
     notes: {
       create(input: { id?: string; title: string }): Promise<{ id: string }>;
@@ -290,4 +292,29 @@ Deno.test("worker cancellation drains a physically pending planning tail before 
   });
   assertEquals(result.value, "drained");
   assertEquals(result.calls.filter((call) => call.kind === "transaction"), []);
+});
+
+Deno.test("worker credential effects share one transaction plan without returning secrets", async () => {
+  const result = await invoke(async (context) => {
+    await context.transaction(async (plan) => {
+      assertEquals(
+        await plan.sessions.create({ principal: "account", maxAge: 3600 }),
+        undefined,
+      );
+      assertEquals(await plan.sessions.revoke(), undefined);
+      assertEquals(
+        await plan.flows.start({ kind: "oauth", continuation: "callback" }),
+        undefined,
+      );
+    });
+  });
+  const transactions = result.calls.filter((call) =>
+    call.kind === "transaction"
+  );
+  assertEquals(transactions.length, 1);
+  assertEquals(transactions[0].plan?.map((plan) => plan.path), [
+    ["sessions", "create"],
+    ["sessions", "revoke"],
+    ["flows", "start"],
+  ]);
 });

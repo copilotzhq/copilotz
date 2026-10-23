@@ -14,7 +14,7 @@ export type ListenCopilotzOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
-/** Starts HTTP and worker WebSocket hosting for an existing owner application. */
+/** Starts HTTP, device and worker WebSocket hosting for an owner application. */
 export async function listen(
   application: object & Readonly<{ hypervisor?: Hypervisor }>,
   options: ListenCopilotzOptions = {},
@@ -25,6 +25,9 @@ export async function listen(
       "Copilotz Node listener requires an owner application or Hypervisor.",
     );
   }
-  const listener = await serve({ hypervisor, ...options });
+  const listener = await serve({
+    hypervisor,
+    ...options,
+  });
   return await attachOwnedListener(application, listener);
 }

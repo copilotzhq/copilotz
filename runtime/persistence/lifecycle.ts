@@ -1,3 +1,4 @@
+import { trackReadSnapshotKind } from "../events/snapshot-kind.ts";
 import {
   closeSnapshotSession,
   isSnapshotQuarantined,
@@ -814,6 +815,10 @@ async function openRecoverablePersistence(
   } as const;
 
   markSnapshotDelegate(database);
+  trackReadSnapshotKind(
+    database.withReadSnapshot!,
+    () => current?.database.withReadSnapshot,
+  );
 
   const close = (): Promise<void> => {
     if (closeTask) return closeTask;

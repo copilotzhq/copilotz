@@ -537,7 +537,7 @@ Deno.test("application reattaches durable events and stream Bodies through a ter
     assertEquals(outputs.map((output) => output.type), [
       "stream.output",
       "test.correlated-output",
-      "operation.completed",
+      "operation.settled",
     ]);
     const stream = outputs.find((output) => output.type === "stream.output") as
       | StreamOutput
@@ -577,7 +577,7 @@ Deno.test("application reattaches durable events and stream Bodies through a ter
     const snapshotOutputs = await collect(snapshotAttachment.outputs);
     await snapshotAttachment.done;
     assertEquals(snapshotOutputs.map((output) => output.type), [
-      "operation.completed",
+      "operation.settled",
     ]);
   } finally {
     await application.shutdown();
@@ -769,7 +769,7 @@ Deno.test("operation attachment replays a retained failed prefix with generic te
         (await createOperationCatalog(db, `${SCHEMA}_retained_failed_prefix`)
           .findStream(NAMESPACE, stream.streamId))!.terminalAt!,
     });
-    assertEquals(outputs.at(-1)?.type, "operation.completed");
+    assertEquals(outputs.at(-1)?.type, "operation.settled");
     const catalog = createOperationCatalog(
       db,
       `${SCHEMA}_retained_failed_prefix`,

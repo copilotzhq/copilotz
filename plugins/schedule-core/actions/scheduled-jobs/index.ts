@@ -446,11 +446,15 @@ export const scheduledJobsAction: ActionDefinition<
             : jobStatus(input.status) as "active" | "paused",
           schedule: schedule(input.schedule),
           message: scheduledMessage,
-          ...(input.metadata === undefined ? {} : {
-            metadata: structuredClone(
+          metadata: {
+            ...(input.metadata === undefined ? {} : structuredClone(
               record(input.metadata, "Scheduled job metadata"),
-            ),
-          }),
+            )),
+            creatorParticipantId:
+              typeof context.action.metadata.initiatorParticipantId === "string"
+                ? context.action.metadata.initiatorParticipantId
+                : null,
+          },
         }),
         context,
       );
@@ -538,9 +542,10 @@ export const scheduledJobsAction: ActionDefinition<
       if (content !== undefined) patch.content = content;
     }
     if (input.metadata !== undefined) {
-      patch.metadata = structuredClone(
-        record(input.metadata, "Scheduled job metadata"),
-      );
+      patch.metadata = {
+        ...structuredClone(record(input.metadata, "Scheduled job metadata")),
+        creatorParticipantId: existing.metadata.creatorParticipantId ?? null,
+      };
     }
     if (Object.keys(patch).length === 0) {
       throw new TypeError("Scheduled job update requires at least one field.");

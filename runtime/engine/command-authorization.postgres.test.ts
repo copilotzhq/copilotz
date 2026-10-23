@@ -172,7 +172,7 @@ Deno.test({
       assertEquals(await Promise.all([one, two]), ["a", "b"]);
       assertEquals(seen, ["a", "a", "b", "b"]);
     } finally {
-      releaseDatabaseOwner(owner);
+      await releaseDatabaseOwner(owner);
       await db.query(`DROP SCHEMA "${schema}" CASCADE`);
       await db.close();
     }

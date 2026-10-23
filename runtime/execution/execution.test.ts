@@ -133,7 +133,7 @@ async function appendMessage(fixture: Fixture) {
   );
 }
 async function closeFixture(fixture: Fixture): Promise<void> {
-  releaseDatabaseOwner(fixture.owner);
+  await releaseDatabaseOwner(fixture.owner);
   if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
     await fixture.db.query(
       `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,
@@ -1227,7 +1227,7 @@ Deno.test("owner retry alarm retains the original backoff across executor and ow
     [delivery.id],
   )).rows[0];
   assertEquals(new Date(before.due_at).toISOString(), retry.availableAt);
-  releaseDatabaseOwner(fixture.owner);
+  await releaseDatabaseOwner(fixture.owner);
   const owner = await openDatabaseOwner(
     fixture.store.session,
     fixture.store.databaseSchema,
@@ -1265,7 +1265,7 @@ Deno.test("owner retry alarm retains the original backoff across executor and ow
     owner.pauseAlarms();
     await owner.drainAlarms();
     await executor.shutdown();
-    releaseDatabaseOwner(owner);
+    await releaseDatabaseOwner(owner);
     if (Deno.env.get("COPILOTZ_TEST_POSTGRES_URL")) {
       await fixture.db.query(
         `DROP SCHEMA "${fixture.store.databaseSchema}" CASCADE`,

@@ -102,31 +102,36 @@ Deno.test("Fetch adapter returns bounded HTTP errors and preserves native Respon
   assertEquals(streamed.headers.get("content-type"), "text/plain");
 });
 
-Deno.test("Fetch adapter exposes bounded retryable persistence failures as HTTP 503", async () => {
-  const app: HttpApplication = Object.freeze({
-    handle() {
-      throw Object.assign(
-        new Error("Application persistence is temporarily unavailable."),
-        {
-          status: 503,
-          code: "persistence_unavailable",
-          retryAfterSeconds: 4,
-        },
-      );
-    },
+for (
+  const code of [
+    "persistence_unavailable",
+    "owner_unavailable",
+    "ActionOwnershipLost",
+  ]
+) {
+  Deno.test(`Fetch adapter exposes ${code} as retryable HTTP 503`, async () => {
+    const app: HttpApplication = Object.freeze({
+      handle() {
+        throw Object.assign(
+          new Error("Application is temporarily unavailable."),
+          {
+            status: 503,
+            code,
+            retryAfterSeconds: 4,
+          },
+        );
+      },
+    });
+    const response = await createHttpFetchHandler(app)(
+      new Request("https://example.test/operations/observe"),
+    );
+    assertEquals(response.status, 503);
+    assertEquals(response.headers.get("retry-after"), "4");
+    assertEquals(await response.json(), {
+      error: { code, message: "Application is temporarily unavailable." },
+    });
   });
-  const response = await createHttpFetchHandler(app)(
-    new Request("https://example.test/threads"),
-  );
-  assertEquals(response.status, 503);
-  assertEquals(response.headers.get("retry-after"), "4");
-  assertEquals(await response.json(), {
-    error: {
-      code: "persistence_unavailable",
-      message: "Application persistence is temporarily unavailable.",
-    },
-  });
-});
+}
 
 Deno.test("Fetch adapter preserves application response headers for JSON, empty, and multipart responses", async () => {
   let mode: "json" | "empty" | "multipart" = "json";
@@ -205,7 +210,7 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
   } as StreamOutput);
   const terminal = Object.freeze({
     ...createEphemeralEvent({
-      type: "operation.completed",
+      type: "operation.settled",
       namespace: "tenant-a",
       correlationId: "operation-a",
       payload: { status: "completed" },
@@ -244,7 +249,7 @@ Deno.test("Fetch adapter drains progressive streams before exposing an operation
       "stream.output",
       "stream-chunk",
       "stream-end",
-      "operation.completed",
+      "operation.settled",
     ],
   );
 });
@@ -259,7 +264,7 @@ Deno.test("thread feed cursor preserves out-of-order positions independently per
       schemaVersion: 1,
       type: "message.created",
       namespace: "tenant-a",
-      threadId: "thread-a",
+      selectionMetadata: { threadId: "thread-a" },
       payload: { operationId },
       routing: {},
       visibility: { kind: "public" as const },
@@ -356,4 +361,97 @@ Deno.test("direct operation multipart advances global and operation event positi
   );
   assertEquals(cursor.eventPosition, "2");
   assertEquals(cursor.operationEventPositions?.[operationId], "2");
+});
+
+Deno.test("Fetch logs unexpected failures once without request secrets and keeps responses generic", async () => {
+  const logs: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  try {
+    const error = Object.assign(new TypeError("Forced route failure"), {
+      body: "error-body-secret",
+      headers: { authorization: "error-header-secret" },
+      cause: new Error("cause-secret"),
+    });
+    const app: HttpApplication = {
+      handle() {
+        throw error;
+      },
+    };
+    const request = () =>
+      new Request(
+        "https://example.test/api/items/private-id?token=query-secret",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer header-secret",
+            cookie: "session=cookie-secret",
+          },
+          body: JSON.stringify({ password: "body-secret" }),
+        },
+      );
+    for (const phase of ["handler", "authentication", "observer"] as const) {
+      const handle = createHttpFetchHandler(app, {
+        errorRoute: () => "/api/items/:id",
+        ...(phase === "authentication"
+          ? {
+            resolveContext() {
+              throw error;
+            },
+          }
+          : {}),
+        ...(phase === "observer"
+          ? {
+            onError() {
+              throw new Error("Observer failed");
+            },
+          }
+          : {}),
+      });
+      logs.length = 0;
+      const response = await handle(request());
+      assertEquals(response.status, 500);
+      assertEquals(await response.json(), {
+        error: {
+          code: "internal_error",
+          message: "Internal application error.",
+        },
+      });
+      assertEquals(logs, [[{
+        event: "http.server_error",
+        route: "/api/items/:id",
+        name: "TypeError",
+        message: error.message,
+        stack: error.stack,
+      }]]);
+      assert(!JSON.stringify(logs).includes("secret"));
+      assert(!JSON.stringify(logs).includes("private-id"));
+    }
+    logs.length = 0;
+    let observed = 0;
+    const custom = createHttpFetchHandler(app, {
+      onError(value) {
+        assertEquals(value, error);
+        observed++;
+      },
+    });
+    assertEquals((await custom(request())).status, 500);
+    assertEquals(observed, 1);
+    assertEquals(logs.length, 0);
+    const denied = createHttpFetchHandler({
+      handle() {
+        throw Object.assign(new Error("Denied"), {
+          status: 403,
+          code: "forbidden",
+        });
+      },
+    });
+    assertEquals((await denied(request())).status, 403);
+    assertEquals(logs.length, 0);
+  } finally {
+    console.error = original;
+  }
 });

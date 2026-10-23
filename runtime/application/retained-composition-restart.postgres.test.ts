@@ -45,7 +45,7 @@ for (const mode of ["in-process", "websocket"] as const) {
       assert(["postgres:", "postgresql:"].includes(url.protocol));
       assertEquals(Deno.env.get("COPILOTZ_TEST_POSTGRES_URL"), selected);
       const admin = await createTestDatabase({ url: url.href, pgPoolMax: 1 });
-      const databaseName = `retained_graph_${
+      const databaseName = `${url.pathname.slice(1)}_graph_${
         crypto.randomUUID().replaceAll("-", "")
       }`;
       await admin.query(`CREATE DATABASE "${databaseName}"`);
@@ -225,7 +225,7 @@ for (const mode of ["in-process", "websocket"] as const) {
               server: {
                 default: defineServerFacade({
                   expose: {
-                    actions: { include: [write.id] },
+                    actions: { include: ["write"] },
                     collections: false,
                     channels: false,
                   },
@@ -360,7 +360,7 @@ for (const mode of ["in-process", "websocket"] as const) {
         key: string,
       ) =>
         app.gateway.fetch(
-          new Request("http://retained.test/api/actions/retained/write", {
+          new Request("http://retained.test/api/actions/write", {
             method: "POST",
             headers: {
               "content-type": "application/json",

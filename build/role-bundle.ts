@@ -9,6 +9,7 @@ const workerEntry = new URL("../worker.ts", import.meta.url).href;
 // Reviewed Core runtime seams. User plugin modules are traversed, never pruned.
 const runtimeModules = new Set([
   "authoring.ts",
+  "dependencies/async-hooks.ts",
   "dependencies/ajv.ts",
   "dependencies/croner.ts",
   "dependencies/oxian-work.ts",
@@ -26,6 +27,9 @@ const runtimeModules = new Set([
   "runtime/actions/transaction-identity.ts",
   "runtime/actions/value.ts",
   "runtime/application/worker.ts",
+  "runtime/authorization/invocation.ts",
+  "runtime/application/shard-worker.ts",
+  "runtime/application/shard-identity.ts",
   "runtime/collections/definition.ts",
   "runtime/collections/errors.ts",
   "runtime/collections/validate.ts",
@@ -40,6 +44,7 @@ const runtimeModules = new Set([
   "runtime/events/types.ts",
   "runtime/events/workflow-id.ts",
   "runtime/execution/diagnostics.ts",
+  "runtime/execution/deadlines.ts",
   "runtime/execution/owner-capability-wire.ts",
   "runtime/execution/owner-capture.ts",
   "runtime/execution/owner-capability-worker.ts",
@@ -324,6 +329,22 @@ function emitted(source: string, path: string) {
     true,
   );
   const imports: { specifier: string; start: number; end: number }[] = [];
+  // The reviewed ambient-context wrapper has one lazy native dependency.
+  // It remains lazy in browser artifacts; unsupported hosts fail closed when
+  // execution starts. Plugin dynamic imports remain forbidden.
+  const nativeContextWrapper =
+    path === new URL("dependencies/async-hooks.ts", packageRoot).href &&
+    tree.statements.some((statement) =>
+      ts.isVariableStatement(statement) &&
+      (statement.declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+      statement.declarationList.declarations.some((declaration) =>
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === "ASYNC_HOOKS_SPECIFIER" &&
+        declaration.initializer &&
+        ts.isStringLiteral(declaration.initializer) &&
+        declaration.initializer.text === "node:async_hooks"
+      )
+    );
   const visit = (node: ts.Node): void => {
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -345,7 +366,12 @@ function emitted(source: string, path: string) {
       if (
         ts.isCallExpression(node) &&
         (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          name === "require")
+          name === "require") &&
+        !(nativeContextWrapper &&
+          node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          node.arguments.length === 1 &&
+          ts.isIdentifier(node.arguments[0]) &&
+          node.arguments[0].text === "ASYNC_HOOKS_SPECIFIER")
       ) {
         throw new Error(
           `Dynamic worker module loading is unsupported: ${path}`,
@@ -471,12 +497,15 @@ export async function buildWorkerRole(
       ...new Set([
         ...(Array.isArray(ownConfig.links)
           ? ownConfig.links.map((link) =>
-            new URL(String(link) + "/", ownConfigUrl).href
+            new URL(String(link).replace(/\/+$/, "") + "/", ownConfigUrl).href
           )
           : []),
         ...(Array.isArray(selected.links)
           ? selected.links.map((link) =>
-            new URL(String(link) + "/", pathToFileURL(config!)).href
+            new URL(
+              String(link).replace(/\/+$/, "") + "/",
+              pathToFileURL(config!),
+            ).href
           )
           : []),
       ]),

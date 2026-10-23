@@ -1,3 +1,4 @@
+import { importPersonalMemory } from "../../shared/personal.ts";
 /** Searches notes through bounded, authorized database queries. @module */
 import {
   type ActionDefinition,
@@ -47,7 +48,17 @@ export const searchMemoryAction: ActionDefinition<
   async execute(raw, context) {
     const input = record(raw);
     const provenance = memoryActionProvenance(context);
-    const spaces = await threadMemorySpaces(context, provenance.threadId);
+    if (provenance.initiatorParticipantId) {
+      const human = await context.collections.participant.get({
+        id: provenance.initiatorParticipantId,
+      });
+      if (human) await importPersonalMemory(context.collections, human);
+    }
+    const spaces = await threadMemorySpaces(
+      context,
+      provenance.threadId,
+      provenance.initiatorParticipantId,
+    );
     if (!spaces.length) return { notes: [], returned: 0, truncated: false };
     const filter = memoryFilter(spaces, input.includeRetired === true);
     const query = optionalText(input.query);
@@ -79,14 +90,30 @@ export const searchMemoryAction: ActionDefinition<
         filter,
         limit: limit + 1,
       });
-      const notes = matches.slice(0, limit).map(({ record, distance }) => ({
+      // Direct writes and legacy imports are searchable before any embedding job.
+      const lexical = await context.collections.memoryNote.list({
+        filter,
+        text: query,
+        order: { field: "createdAt", direction: "asc" },
+        limit: limit + 1,
+      });
+      const semantic = matches.map(({ record, distance }) => ({
         ...publicMemoryNote(memoryNote(record)),
         similarity: vectorSimilarity(profile.metric, distance),
       }));
+      const combined = [...new Map([
+        ...lexical.map((value) => {
+          const note = publicMemoryNote(memoryNote(value));
+          return [note.id, note] as const;
+        }),
+        ...semantic.map((note) => [note.id, note] as const),
+      ]).values()];
+      const notes = combined.slice(0, limit);
       return {
         notes,
         returned: notes.length,
-        truncated: matches.length > limit,
+        truncated: combined.length > limit || matches.length > limit ||
+          lexical.length > limit,
       };
     }
     const values = await context.collections.memoryNote.list({

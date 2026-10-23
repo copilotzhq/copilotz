@@ -10,9 +10,9 @@ import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts"
 export type StoredMemoryNote =
   & MemoryNote
   & Readonly<{
-    consolidationId: string;
-    createdByAgentId: string;
-    originThreadId: string;
+    consolidationId: string | null;
+    createdByAgentId: string | null;
+    originThreadId: string | null;
   }>;
 
 export function memoryNote(value: CollectionRecord): StoredMemoryNote {
@@ -24,9 +24,15 @@ export function memoryNote(value: CollectionRecord): StoredMemoryNote {
     memorySpaceId: value.memorySpaceId,
     text: value.text,
     createdAt: value.createdAt,
-    consolidationId: String(value.consolidationId),
-    createdByAgentId: String(value.createdByAgentId),
-    originThreadId: String(value.originThreadId),
+    consolidationId: typeof value.consolidationId === "string"
+      ? value.consolidationId
+      : null,
+    createdByAgentId: typeof value.createdByAgentId === "string"
+      ? value.createdByAgentId
+      : null,
+    originThreadId: typeof value.originThreadId === "string"
+      ? value.originThreadId
+      : null,
     sources: value.sources as MemoryNote["sources"],
     ...(value.retirement
       ? { retirement: value.retirement as MemoryNote["retirement"] }

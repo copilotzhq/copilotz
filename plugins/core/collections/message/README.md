@@ -48,8 +48,43 @@ authenticated participant identity, not a client-provided viewer list.
 
 Visibility and branch predicates run in the Collection database query before
 pagination. Cursors must belong to that same visible selection. Public-status
-Tool messages retain their status but have private content and execution
-metadata removed by Core's projection.
+Tool messages retain their status. Core removes content and execution metadata
+unless the viewer can read the output.
+
+Tool visibility is `{ kind: "tool", policy, requesterId, initiatorId? }`.
+`requesterId` identifies the requesting Agent participant; `initiatorId`
+identifies the original human participant, captured when a new plan is created
+and retained across Agent-to-Agent work. New public tool-call Messages carry the
+same identities with `policy: "public"`; Tool-result Messages retain the
+configured policy, which defaults to `public_status`.
+
+Output is readable when the policy is `public`, the viewer is the requester, or
+the policy is `public_status` and the viewer is the initiator. `requester_only`
+never grants the human initiator access. The same rule applies to live/progress
+streams, retained stream assets, message assets, and operation results.
+
+An unreadable result is still returned when its source Message advertises the
+same invocation and is visible to the viewer, including `requester_only`
+results. It keeps its original `visibility` and Message identity, with
+`content: []` and only these metadata fields:
+
+```json
+{
+  "toolStatus": "completed",
+  "toolId": "lookup",
+  "toolInvocation": { "id": "call-id", "tool": { "id": "lookup" } },
+  "copilotzWorkflow": { "sourceMessageId": "call-message-id" },
+  "copilotzToolAction": {
+    "actionRunId": "run-id",
+    "planMessageId": "call-message-id"
+  }
+}
+```
+
+`toolStatus` can also be `failed` or `cancelled`. Optional correlation fields
+are omitted when absent. This uses the existing Tool-result Message and requires
+no parallel status channel. No backfill is performed: retained Messages without
+`initiatorId` do not gain initiator access.
 
 Runtime callers can supply `content: true` or
 `content: { fields: ["content"], byteLimit: 1048576 }` in the query input. This
@@ -71,8 +106,9 @@ media codec. The private Agent window keeps its separate visibility policy, now
 compiled into database predicates before pagination. Core expands tool/ask
 dependencies and projects the participant-specific transcript before resolving
 the final selected messages. Attachment descriptors stay unloaded; only the
-target Agent's own assistant turns include resolved reasoning. The live
-observation coordinator is unchanged.
+target Agent's own assistant turns include resolved reasoning. HTTP and device
+collection reads apply the same projection; live observation projects Messages
+and authorizes Tool stream ancestry before publishing output.
 
 Both `content` and `metadata.llmReasoning` are declared content fields. New
 writes adopt and track both paths; resolved reads can load reasoning from

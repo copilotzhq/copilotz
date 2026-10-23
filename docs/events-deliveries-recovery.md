@@ -83,6 +83,14 @@ create no delivery. Its states are `pending`, `leased`, `retry_wait`,
 - **Bounded retries.** An unknown error is retryable: the delivery waits in
   `retry_wait` and runs again until it succeeds or uses its attempts. Then it is
   `dead_letter`, and an inheriting operation fails.
+- **Dead letters are logged.** Every move to `dead_letter`, including a final
+  attempt whose lease expired, writes one JSON line to `console.error` after it
+  commits: `severity: "ERROR"`, `message: "[copilotz] Delivery dead-lettered"`,
+  the `consumerId` (such as `processor:copilotz.core.message-to-llm-call`),
+  `operationId`, `deliveryId`, `eventId`, `databaseSchema`, `attempts`,
+  `maxAttempts` and `error: { code?, name, message }`. The line never carries
+  the Event, its input or a stack, and the message gets the same credential
+  masking as diagnostics.
 - **Non-retryable failures.** Wrap a deterministic failure with
   `markNonRetryable(error)` to dead-letter it on the current attempt. Collection
   schema-validation errors are already marked.
@@ -127,9 +135,9 @@ work that keeps its causation but does not block or fail the operation.
 | `app.send(input)`             | What happens while you watch. A deduplicated resend sees only live outputs | Resolves on `completed`; **rejects** when the operation fails or is cancelled |
 | `app.attach({ operationId })` | Replays recorded Events from the start, then follows until final           | Resolves when replay reaches **any** final state; check that state yourself   |
 
-A replay ends with one unstored output, `operation.completed`,
-`operation.failed` or `operation.cancelled`. `app.operationStatus` returns the
-recorded state, or `null` when the namespace has no such operation.
+A replay ends with one unstored output, `operation.settled` with an `outcome` of
+`completed`, `failed` or `cancelled`. `app.operationStatus` returns the recorded
+state, or `null` when the namespace has no such operation.
 
 Read `outputs` while waiting for `done`; a stream nobody reads can hold
 settlement back.

@@ -253,7 +253,7 @@ Deno.test("Channel receipt observation includes delayed Core model output before
       outputs.filter((type) => type === "message.created").length,
       2,
     );
-    assertEquals(outputs.at(-1), "operation.completed");
+    assertEquals(outputs.at(-1), "operation.settled");
   } finally {
     release();
     await application.close();

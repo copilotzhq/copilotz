@@ -446,7 +446,13 @@ export function createSharedOperationReaders(
             }
             // A final no-progress pass includes lanes/events racing settlement.
             if (!advanced && !lanes.size) {
-              terminal = terminalOutput(status);
+              terminal = {
+                ...terminalOutput(status),
+                seq: await runtime.operations.resultSequence(
+                  input.namespace,
+                  input.operationId,
+                ),
+              } as ApplicationOutput;
               for (const subscriber of [...subscribers]) {
                 subscriber.output(terminal);
                 subscriber.finish();
@@ -1200,14 +1206,15 @@ function terminalOutput(status: ApplicationOperationStatus): ApplicationOutput {
   const state = status.state as "completed" | "failed" | "cancelled";
   return {
     durable: false,
-    type: `operation.${state}`,
+    type: "operation.settled",
     namespace: status.namespace,
     correlationId: status.correlationId,
-    payload: { status: state },
-    data: { status: state },
-    metadata: { operationId: status.operationId, status: state },
+    payload: { outcome: state },
+    data: { outcome: state },
+    metadata: { operationId: status.operationId },
     createdAt: status.completedAt ?? status.updatedAt,
     operationId: status.operationId,
-    state,
+    state: "settled",
+    outcome: state,
   } as ApplicationOutput;
 }

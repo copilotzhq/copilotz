@@ -44,15 +44,17 @@ factory. Its `role` option selects what the returned object can do:
 | `"worker"`              | `{ ready, closed, close }` only | execution of deliveries placed on its worker |
 
 Every role accepts the same composition: `namespace`, `databaseSchema`,
-`plugins`, `collections`, `actions`, `processors`, `views`, `resources` and
-`adapters`. Each database schema has one **owner**, a single serialized writer,
-and the embedded or Gateway role holds it. Only those roles accept persistence
-options (`database`, or a shared `persistence` created by
-`createCopilotzPersistence()`), `assets`, `authorization` and `databaseScopes`.
-A Worker rejects them: it executes Processors and Actions without a database
-connection, and its reads, writes and Action calls go to the owner. Plugin code
-is the same in every role. The creator of a shared persistence facade closes it
-after closing the roles that use it. Role placement is covered in
+`plugins`, `collections`, `actions`, `processors`, `views`, `resources`,
+`adapters` and `deliveryTimeoutMs`, the delivery safety ceiling (six hours by
+default; see [Execution liveness](execution-liveness.md)). Each database schema
+has one **owner**, a single serialized writer, and the embedded or Gateway role
+holds it. Only those roles accept persistence options (`database`, or a shared
+`persistence` created by `createCopilotzPersistence()`), `assets`,
+`authorization` and `databaseScopes`. A Worker rejects them: it executes
+Processors and Actions without a database connection, and its reads, writes and
+Action calls go to the owner. Plugin code is the same in every role. The creator
+of a shared persistence facade closes it after closing the roles that use it.
+Role placement is covered in
 [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md).
 
 A Worker result has no operation methods. Await `worker.ready` before relying on
@@ -226,8 +228,8 @@ admitted, with `operationId`, `eventId`, `correlationId`, `replayCursor`, an
   observes live outputs; `attach` replays recorded history.
 - **`send.done`** rejects when the operation fails or is cancelled.
 - **`attach.done`** resolves when the replay reaches _any_ terminal state. Check
-  the final `operation.failed` or `operation.cancelled` output, or
-  `operationStatus`, before treating an attached operation as successful.
+  the final `operation.settled` output's `outcome`, or `operationStatus`, before
+  treating an attached operation as successful.
 - **Outputs and `done` run together.** Read `outputs` concurrently with awaiting
   `done`, and cancel byte streams you do not consume.
 - **`detach()`** stops only that local observer. `cancel()` and
@@ -242,7 +244,7 @@ chat readers inspect model failure separately.
 
 Prerequisites: the Notes application from
 [Persist and recover](getting-started/part-2-verify-and-recover/07-persist-and-recover.md),
-with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.89.0`.
+with `composition.ts` and `notes-plugin.ts`, and `@copilotz/copilotz@^0.90.0`.
 
 ### Create `operations.ts`
 
@@ -308,7 +310,7 @@ try {
   const recent = await app.listOperations({ states: ["completed"], limit: 5 });
   for (const operation of recent) {
     console.log(
-      `completed ${operation.operationId} at ${operation.completedAt}`,
+      `completed ${operation.operationId} at ${operation.settledAt}`,
     );
   }
 } finally {
@@ -337,12 +339,14 @@ the host verifies credentials and writes the policy, as shown in
 See [HTTP server and browser client](server.md) and
 [Owner authorization](authorization.md).
 
-Over HTTP, `client.operations.result` and `client.actions.invoke` return the
-target Action's output once that Action is ready. They do not wait for
+Over HTTP, `client.operations.result` returns `{ value, seq }`, containing the
+target Action's output and owner sequence. `client.actions.invoke` returns the
+value directly. Both resolve once that Action is ready. They do not wait for
 descendant work or an agent reply: `sendConversation` returns
 `{ threadId, message }` once the message is stored, which can happen before the
-model produces output. Observe the terminal operation state when you need full
-completion.
+model produces output. Use `client.operations.settled(id)` when you need the
+whole scope, and inspect its `outcome`. Browser handles offer `settled()` and
+reject failed settlement without changing `result()`.
 
 ### Package entrypoints
 
@@ -383,3 +387,26 @@ settlement apart from domain or model success.
 - [Events, deliveries and recovery](events-deliveries-recovery.md)
 - [HTTP server and browser client](server.md)
 - [Deploy and scale](getting-started/part-5-operate-and-scale/21-deploy-and-scale.md)
+
+### Collection subscriptions
+
+See [Subscriptions](./subscriptions.md) for lifecycle and limits.
+
+| Surface                                              | Contract                                                                                                                                                                                                   |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.collections[name].observe(query?, options?)`    | Authorized async `frames` and `detach()`. Options include retained `authority`, scope, `checkpoint`, `signal`.                                                                                             |
+| `context.read.observe(name, query?, options?)`       | Same owner subscription, using the adapter's admitted authority.                                                                                                                                           |
+| `createCopilotzClient({ baseUrl, device })`          | Supplies the authenticated device's `observe` transport. WebSocket binding is a separate integration dependency in this branch.                                                                            |
+| `client.collections.observe(name, query?, options?)` | Live handle: `rows`, `deltas`, `sequence`, `checkpoint`, `optimisticLayers`, `done`, `optimistic(id, value, result)`, `reconnect()`, `close()`.                                                            |
+| `client.operations.result(id, signal?)`              | `{ value, seq }`, where `seq` is an owner sequence string. HTTP result responses carry `{ data, seq }`; pending results do not carry a sequence. This is the Action result boundary, not scope settlement. |
+
+`client.operations.settled(id, signal?)` returns
+`{ operationId, state: "settled", outcome, seq }` after the scope finishes.
+
+Data frames are `snapshot { rows, sequence, complete: true, checkpoint }` or
+`batch { from, to, changes, checkpoint }`. Each change has `seq`, `id`, and
+`record` (null means removal). The query supplies the membership sort direction;
+deltas are ordered by sequence then record id. Control frames are
+`reset { reason }` and `revoked { reason }`; they do not advance an applied
+checkpoint. These contracts are exported by `./collections`, `./application`,
+and `./client`.

@@ -4,10 +4,24 @@ import type { ContentResolver } from "../content/resolver.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { getPath } from "./content-path.ts";
 import type {
+  CollectionContentOptions,
   ResolvedCollectionContent,
   ResolvedCollectionFields,
   ScopedCollectionReadOptions,
 } from "./read-options.ts";
+
+/**
+ * Content options for a window read (a live subscription): a body that does
+ * not fit the budget is deferred rather than failing the window, unless the
+ * caller explicitly chose `overflow: "reject"`.
+ */
+export function windowContentOptions(
+  content: CollectionContentOptions | undefined,
+): CollectionContentOptions | undefined {
+  if (content === true) return { overflow: "defer" };
+  if (!content) return content;
+  return { overflow: "defer", ...content };
+}
 
 /** Resolves selected declared fields without mutating records returned by storage. */
 async function resolveCollectionRead<T>(
@@ -49,6 +63,16 @@ async function resolveCollectionRead<T>(
     throw new TypeError(
       "content.byteLimit must be a non-negative safe integer.",
     );
+  }
+  const maxBodyBytes = config.bodyByteLimit ?? maxBytes;
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw new TypeError(
+      "content.bodyByteLimit must be a non-negative safe integer.",
+    );
+  }
+  const overflow = config.overflow ?? "reject";
+  if (overflow !== "reject" && overflow !== "defer") {
+    throw new TypeError('content.overflow must be "reject" or "defer".');
   }
   const data = await read();
   signal?.throwIfAborted();
@@ -92,12 +116,34 @@ async function resolveCollectionRead<T>(
   if (refs.length && !resolver) {
     throw new Error("Collection content resolver is not configured.");
   }
-  const resolved = refs.length
-    ? await resolver!.getMany(refs, { namespace, signal, maxBytes })
-    : [];
+  // References are budgeted in read order: records as read, then fields and
+  // entries in order, so a newest-first window resolves its newest first.
+  const resolved = !refs.length
+    ? []
+    : overflow === "defer"
+    ? await resolver!.getMany(refs, {
+      namespace,
+      signal,
+      maxBytes,
+      maxBodyBytes,
+      overflow,
+    })
+    : await resolver!.getMany(refs, { namespace, signal, maxBytes });
   signal?.throwIfAborted();
   for (const [offset, { values, index }] of targets.entries()) {
     const item = resolved[offset];
+    if ("deferred" in item) {
+      const { resolve: _policy, value: _body, ...metadata } = structuredClone(
+        refs[offset],
+      ) as ContentRef & { resolve?: unknown; value?: unknown };
+      values[index] = {
+        ...metadata,
+        resolve: false,
+        deferred: item.deferred,
+        byteLength: item.asset.byteLength,
+      };
+      continue;
+    }
     const value = item.ref.kind === "text"
       ? item.text
       : item.ref.kind === "json"

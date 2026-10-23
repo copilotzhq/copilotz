@@ -370,7 +370,7 @@ that boundary.
 | `actionMetadata`      | Trusted metadata added to the Action invocation.                                                                                                                                                                |
 | `collections`         | A read filter per Collection (`where`, `contains`, `containsAny` or `filter`), keyed by alias or name. Required for every read and applied before pagination and aggregation. `{}` allows every record.         |
 | `collectionMutations` | `create`, `update`, `delete` and named `commands`, each with optional `fields` allowlist, trusted `input` and a `filter` that the current and resulting record must match. Read filters never authorize writes. |
-| `operations`          | `{ metadata, absentMetadata? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                               |
+| `operations`          | `{ metadata, absentMetadata?, anyOf? }`. Admission stamps `metadata` onto the operation; reads, observation and cancellation treat a non-matching operation as not found.                                       |
 | `observationKeys`     | Opaque catalog keys stamped on admitted work, such as a conversation's selection key from that domain's helper.                                                                                                 |
 | `assets`              | `{ read: [assetId, …] }`: exact Assets the caller may read.                                                                                                                                                     |
 | `sessions`            | `{ create?: { principal, maxAge }, revoke?: "self" \| "tenant" }`.                                                                                                                                              |
@@ -385,6 +385,36 @@ that boundary.
 Writes validate both the current and the resulting scope. Action input is
 captured once, atomically with its retained authority; retries re-authorize that
 capture instead of preparing the input again.
+
+Operation constraints always require every top-level `metadata` value and every
+top-level `absentMetadata` exclusion. Optional `anyOf` additionally requires one
+complete alternative to match. Each alternative has its own `metadata` and
+optional `absentMetadata`; requirements from different alternatives never mix.
+Alternatives are a nonempty array of at most 16 entries and cannot nest.
+Explicit null is a value, not absence. Undefined values are rejected at the JSON
+boundary.
+
+Use alternatives on read decisions when an operation has independent ownership
+paths, such as an authenticated actor or the original browser's identity
+receipt:
+
+```ts
+operations: {
+  metadata: { tenantId },
+  absentMetadata: ["credentialId", "computerOperationKind"],
+  anyOf: [
+    { metadata: { actorId } },
+    { metadata: { identityReceipt: true, clientProof } },
+  ],
+}
+```
+
+Derive these values from verified authority and stamp the receipt marker and
+proof only on the intended identity Actions. Admission still stamps only the
+top-level `metadata`; alternatives are never merged into admitted metadata. Keep
+ordinary Action ownership independent of a client's in-memory proof so a new
+client instance can recover its user's ordinary results. Grant a proof
+alternative for reads only if it must not also authorize cancellation.
 
 ### Trusted host calls
 
@@ -758,6 +788,14 @@ client-held proof: a hash is bound to admission, so another caller sharing an
 anonymous grant cannot obtain a session merely by reading its operation. The
 projection command reauthorizes operation access before reconstructing a
 credential, including current session revocation and policy constraints.
+
+A flow token may also be projected to its original nonempty credential proof
+after the browser's session changes. This applies only to `flow.start` effects:
+the owner must first authorize access to that operation, and the flow must
+remain unexpired. Another proof cannot receive the token. This permits the first
+start result to deliver the flow token before the client can send a flow header.
+Session-token projection and the dedicated self-logout receipt rules are
+unchanged.
 
 ## Device and live-read admission
 

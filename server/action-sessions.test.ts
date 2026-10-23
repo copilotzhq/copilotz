@@ -28,6 +28,7 @@ import {
   credentialValidity,
 } from "../runtime/authorization/authority.ts";
 import { credentialHeaders } from "./session-cookie.ts";
+import type { ServerConstraints } from "../runtime/authorization/contracts.ts";
 
 async function fixture(
   now = () => new Date(),
@@ -40,6 +41,10 @@ async function fixture(
     after: Promise<void>;
   },
   anonymousHost = false,
+  operationPolicy?: (
+    authority: AuthenticatedAuthority,
+    intent: AuthorizationIntent,
+  ) => ServerConstraints["operations"],
 ) {
   const detached = Promise.withResolvers<{ code: string; flow?: string }>();
   const seen: {
@@ -348,7 +353,9 @@ async function fixture(
               collectionMutations: {
                 entries: { create: {}, commands: { touch: {} } },
               },
-              operations: allowOperationReads
+              operations: operationPolicy
+                ? operationPolicy(authority, intent)
+                : allowOperationReads
                 ? {
                   metadata: strict
                     ? intent.kind === "action" && intent.operation === "admit"
@@ -514,6 +521,106 @@ async function fixture(
     },
   };
 }
+Deno.test("Proof alternatives recover flow receipts across sessions without widening ordinary ownership", async () => {
+  const f = await fixture(
+    () => new Date(),
+    true,
+    undefined,
+    false,
+    undefined,
+    true,
+    (authority, intent) => {
+      const proof = authority.scope.bindings["@credential-proof"];
+      if (intent.kind === "action" && intent.operation === "admit") {
+        return {
+          metadata: ["start", "callback"].includes(intent.resource)
+            ? { identityFlow: true, proof }
+            : { actorId: authority.principal.id },
+        };
+      }
+      return {
+        metadata: {},
+        absentMetadata: ["developerCredentialId", "computerOperationKind"],
+        anyOf: [
+          {
+            metadata: { actorId: authority.principal.id },
+            absentMetadata: ["identityFlow"],
+          },
+          { metadata: { identityFlow: true, proof } },
+        ],
+      };
+    },
+  );
+  try {
+    const login = await f.result(await f.submit("login", "proof-login"));
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const other = await f.result(await f.submit("replay", "proof-other"));
+    const otherCookie = other.headers.get("set-cookie")!.split(";")[0];
+    const start = await f.submit("start", "proof-start");
+    const started = await f.result(start, { cookie });
+    assertEquals(started.status, 200, await started.clone().text());
+    const flow = started.headers.get("x-copilotz-flow");
+    assert(
+      flow,
+      "The original proof receives the flow token even with a session",
+    );
+    const callback = await f.submit("callback", "proof-callback", {
+      cookie,
+      "x-copilotz-flow": flow,
+    });
+    assertEquals(
+      (await f.result(callback, { cookie, "x-copilotz-flow": flow })).status,
+      200,
+    );
+    for (const id of [start, callback]) {
+      for (
+        const heldCookie of [
+          cookie,
+          otherCookie,
+          "__Host-copilotz_session=stale",
+          "",
+        ]
+      ) {
+        for (const suffix of ["", "/result"]) {
+          const response = await f.request(
+            `/operations/${id}${suffix}`,
+            undefined,
+            { cookie: heldCookie },
+          );
+          assertEquals(response.status, 200, await response.text());
+          const denied = await f.request(
+            `/operations/${id}${suffix}`,
+            undefined,
+            {
+              cookie: heldCookie,
+              "x-copilotz-credential-proof": "b".repeat(64),
+            },
+          );
+          assertEquals(denied.status, 404, await denied.text());
+        }
+      }
+    }
+    const ordinary = await f.submit("child", "proof-ordinary", { cookie });
+    assertEquals(
+      (await f.result(ordinary, {
+        cookie,
+        "x-copilotz-credential-proof": "b".repeat(64),
+      })).status,
+      200,
+    );
+    assertEquals(
+      (await f.result(ordinary, { cookie: otherCookie })).status,
+      404,
+    );
+    for (const key of ["developerCredentialId", "computerOperationKind"]) {
+      f.metadata({ [key]: null });
+      const hidden = await f.submit("child", `proof-hidden-${key}`, { cookie });
+      assertEquals((await f.result(hidden, { cookie })).status, 404);
+    }
+  } finally {
+    await f.close();
+  }
+});
 Deno.test("Action login replay projects only cookies; logout revokes an open channel", async () => {
   const f = await fixture();
   try {

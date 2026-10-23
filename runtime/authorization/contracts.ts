@@ -58,5 +58,10 @@ export type ServerConstraints = Readonly<{
     metadata: Readonly<Record<string, unknown>>;
     /** Required missing own keys. Null and omitted requirements are not absence. */
     absentMetadata?: readonly string[];
+    /** Reads must also match one complete alternative. Never stamped at admission. */
+    anyOf?: readonly Readonly<{
+      metadata: Readonly<Record<string, unknown>>;
+      absentMetadata?: readonly string[];
+    }>[];
   }>;
 }>;

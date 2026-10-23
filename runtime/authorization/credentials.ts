@@ -361,6 +361,12 @@ export function createCredentialEffects(options: {
               basis: AuthenticatedAuthority["authorityBasis"];
             };
             const own = row.initiator === identity(authority) ||
+              // A flow starts before its token is available to the browser.
+              // Session changes must not prevent the initiating proof from
+              // receiving that token, after operation policy authorizes the read.
+              (row.claims.type === "flow" && !!original.proof &&
+                original.proof ===
+                  authority.scope.bindings["@credential-proof"]) ||
               (row.claims.type === "clear" && !!original.proof &&
                 original.proof ===
                   authority.scope.bindings["@credential-proof"]) ||

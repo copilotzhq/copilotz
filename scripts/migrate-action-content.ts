@@ -28,7 +28,11 @@ if (import.meta.main) {
   const decisions = decisionsPath
     ? JSON.parse(await Deno.readTextFile(decisionsPath))
     : undefined;
-  const database = await openManagedOminipgDatabase({ url });
+  const database = await openManagedOminipgDatabase({
+    url,
+    statementTimeoutMs: null,
+    requestTimeoutMs: 24 * 60 * 60 * 1000,
+  });
   try {
     console.log(
       JSON.stringify(

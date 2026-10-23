@@ -24,13 +24,15 @@ import { digestContent } from "../content/digest.ts";
 import {
   type BodyReader,
   installTransferBodies,
+  iterateTransferBodies,
   lockOwnerTables,
-  readTransferBodies,
+  type TransferBody,
 } from "./owner-transfer-storage.ts";
 
 export type ProtectedBinding = ProtectedValueCoordinates & {
   ref: ProtectedValueRef;
 };
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -74,7 +76,6 @@ export async function migrateOwnerKeys(input: {
       throw new Error("Owner key migration requires schema v11.");
     }
     assertRetainedDataDrained(await inspectRetainedDataDrain(tx, schema));
-    const bodies = await readTransferBodies(tx, schema, input.readExternalBody);
     const columns =
       (await tx.query<{ table_name: string; column_name: string }>(
         `SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=$1 AND data_type IN ('json','jsonb') ORDER BY table_name,column_name`,
@@ -97,19 +98,46 @@ export async function migrateOwnerKeys(input: {
       bindings.set(binding.ref.bodyId, binding);
     };
     for (const binding of input.bindings ?? []) bind(binding);
+    const byTable = new Map<string, string[]>();
     for (const column of columns) {
+      const list = byTable.get(column.table_name) ?? [];
+      list.push(column.column_name);
+      byTable.set(column.table_name, list);
+    }
+    let tablesDone = 0;
+    for (const [tableName, columnNames] of byTable) {
       const table = `${quoteEventIdentifier(schema)}.${
-        quoteEventIdentifier(column.table_name)
+        quoteEventIdentifier(tableName)
       }`;
-      const rows =
-        (await tx.query<{ tid: string; value: unknown; namespace?: string }>(
-          `SELECT ctid::text AS tid,${
-            quoteEventIdentifier(column.column_name)
-          } AS value${
-            column.table_name === "event_bodies" ? ",namespace" : ""
-          } FROM ${table}`,
-        )).rows;
-      cells.push({ table, column: column.column_name, rows });
+      // One scan per table. Only cells that can contain a protected reference or
+      // a body identity can change; malformed schema-bearing captures still visit
+      // the exact same validator below.
+      const selected = (await tx.query<
+        {
+          tid: string;
+          column_name: string;
+          value: unknown;
+          namespace?: string;
+        }
+      >(
+        `SELECT t.ctid::text AS tid,v.column_name,v.value${
+          tableName === "event_bodies" ? ",t.namespace" : ""
+        }
+         FROM ${table} t CROSS JOIN LATERAL (VALUES ${
+          columnNames.map((name) =>
+            `(${literal(name)},t.${quoteEventIdentifier(name)}::jsonb)`
+          ).join(",")
+        }) v(column_name,value)
+         WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'`,
+      )).rows;
+      const grouped = new Map<string, typeof selected>();
+      for (const row of selected) {
+        const list = grouped.get(row.column_name) ?? [];
+        list.push(row);
+        grouped.set(row.column_name, list);
+      }
+      for (const [column, rows] of grouped) cells.push({ table, column, rows });
+      const rows = selected;
       for (const row of rows) {
         visit(row.value, (value) => {
           if (value.schema === PROTECTED_VALUE_REF_SCHEMA) {
@@ -151,12 +179,29 @@ export async function migrateOwnerKeys(input: {
           }
         });
       }
+      console.error(
+        `[upgrade:${schema}] protected reference tables ${++tablesDone}/${byTable.size}`,
+      );
     }
     for (const binding of input.bindings ?? []) {
       if (!refs.has(binding.ref.bodyId)) {
         refs.set(binding.ref.bodyId, protectedValueRef(binding.ref));
       }
     }
+    const bodies: TransferBody[] = [];
+    let bodyCount = 0;
+    for await (
+      const body of iterateTransferBodies(tx, schema, input.readExternalBody)
+    ) {
+      bodyCount++;
+      if (
+        refs.has(body.bodyId) ||
+        body.mediaType ===
+          "application/vnd.copilotz.action-protected-value+json" ||
+        body.backendKind !== "database"
+      ) bodies.push(body);
+    }
+    const bodyById = new Map(bodies.map((body) => [body.bodyId, body]));
     for (const body of bodies) {
       if (
         body.mediaType ===
@@ -176,7 +221,7 @@ export async function migrateOwnerKeys(input: {
     const replacements = new Map<string, ProtectedValueRef>();
     for (const [id, ref] of refs) {
       const binding = bindings.get(id),
-        body = bodies.find((body) => body.bodyId === id);
+        body = bodyById.get(id);
       if (
         !binding || !body || body.namespace !== binding.namespace ||
         body.digest !== ref.digest ||
@@ -246,20 +291,41 @@ export async function migrateOwnerKeys(input: {
     await tx.query(
       `ALTER TABLE ${tables.events} DISABLE TRIGGER copilotz_events_immutable`,
     );
+    const groups = new Map<
+      string,
+      { table: string; columns: string[]; rows: Record<string, unknown>[] }
+    >();
     for (const update of updates.values()) {
-      const params: unknown[] = [update.tid], sets: string[] = [];
-      for (const [column, value] of Object.entries(update.fields)) {
-        params.push(JSON.stringify(value));
-        sets.push(`${quoteEventIdentifier(column)}=$${params.length}::jsonb`);
-      }
-      if (update.table === tables.event_bodies && "body" in update.fields) {
-        params.push((await encodeEventBody(update.fields.body)).digest);
-        sets.push(`digest=$${params.length}`);
-      }
-      await tx.query(
-        `UPDATE ${update.table} SET ${sets.join(",")} WHERE ctid=$1::tid`,
-        params,
+      const columns = Object.keys(update.fields).sort();
+      const withDigest = update.table === tables.event_bodies &&
+        "body" in update.fields;
+      const key = JSON.stringify([update.table, columns, withDigest]);
+      const group = groups.get(key) ??
+        { table: update.table, columns, rows: [] };
+      group.rows.push({
+        tid: update.tid,
+        fields: update.fields,
+        ...(withDigest
+          ? { digest: (await encodeEventBody(update.fields.body)).digest }
+          : {}),
+      });
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const sets = group.columns.map((column) =>
+        `${quoteEventIdentifier(column)}=v.fields->${literal(column)}`
       );
+      if (
+        group.table === tables.event_bodies && group.columns.includes("body")
+      ) sets.push("digest=v.digest");
+      for (let start = 0; start < group.rows.length; start += 2000) {
+        await tx.query(
+          `UPDATE ${group.table} t SET ${sets.join(",")}
+           FROM jsonb_to_recordset($1::jsonb) AS v(tid text,fields jsonb,digest text)
+           WHERE t.ctid=v.tid::tid`,
+          [JSON.stringify(group.rows.slice(start, start + 2000))],
+        );
+      }
     }
     await tx.query(
       `ALTER TABLE ${tables.events} ENABLE TRIGGER copilotz_events_immutable`,
@@ -275,11 +341,11 @@ export async function migrateOwnerKeys(input: {
     );
     await tx.query(
       `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical','owner-keys-upgrade:12','offline-upgrade','owner-keys.upgrade','{}',$1::jsonb)`,
-      [JSON.stringify({ protectedValues: refs.size, bodies: bodies.length })],
+      [JSON.stringify({ protectedValues: refs.size, bodies: bodyCount })],
     );
     await tx.query(
       `UPDATE ${tables.copilotz_schema_metadata} SET version=12 WHERE singleton AND version=11`,
     );
-    return { protectedValues: refs.size, bodies: bodies.length };
+    return { protectedValues: refs.size, bodies: bodyCount };
   });
 }

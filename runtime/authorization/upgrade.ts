@@ -1,3 +1,4 @@
+import { captureOfflineManifest } from "./offline-manifest.ts";
 import { authorityRequired } from "../actions/upgrade-errors.ts";
 import {
   assertRetainedDataDrained,
@@ -44,11 +45,13 @@ export type AuthorityUpgradeManifest = Readonly<{
       import("../actions/protected-action-types.ts").ProtectedActionIngress;
   })[];
 }>;
-async function digest(value: unknown): Promise<string> {
+async function digest(value: unknown, captured = false): Promise<string> {
   const bytes = new Uint8Array(
     await crypto.subtle.digest(
       "SHA-256",
-      new TextEncoder().encode(stableStringify(captureHostCommandJson(value))),
+      new TextEncoder().encode(
+        stableStringify(captured ? value : captureHostCommandJson(value)),
+      ),
     ),
   );
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -56,6 +59,18 @@ async function digest(value: unknown): Promise<string> {
 export async function inspectAuthorityUpgrade(
   transaction: SqlExecutor,
   schema: string,
+): Promise<
+  Readonly<{
+    invocations: readonly RetainedInvocation[];
+    events: readonly RetainedAuthorityEvent[];
+  }>
+> {
+  return await inspectAuthorityState(transaction, schema);
+}
+async function inspectAuthorityState(
+  transaction: SqlExecutor,
+  schema: string,
+  ingress = new Map<string, Record<string, unknown>>(),
 ): Promise<
   Readonly<{
     invocations: readonly RetainedInvocation[];
@@ -75,18 +90,40 @@ export async function inspectAuthorityUpgrade(
     intent: unknown;
     result: unknown;
   }>(
-    `SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
-    FROM ${tables.events} e LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
-    WHERE COALESCE(b.body->'data',b.body)->>'status'='invoked' OR NULLIF(e.owner_ingress,'null'::jsonb) IS NOT NULL OR e.type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') OR EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.event_id=e.id AND d.status IN ('pending','leased','retry_wait'))
+    `WITH invoked AS MATERIALIZED (
+      SELECT namespace,event_body_id FROM ${tables.event_bodies}
+      WHERE COALESCE(body->'data',body)->>'status'='invoked'
+    ), candidates AS MATERIALIZED (
+      SELECT e.namespace,e.id FROM ${tables.events} e JOIN invoked b
+        ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
+      UNION
+      SELECT namespace,id FROM ${tables.events}
+        WHERE NULLIF(owner_ingress,'null'::jsonb) IS NOT NULL
+          OR type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested')
+      UNION
+      SELECT e.namespace,e.id FROM ${tables.events} e JOIN
+        (SELECT DISTINCT event_id FROM ${tables.event_deliveries} WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id
+    )
+    SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
+    FROM candidates c JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
+    LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
     ORDER BY e.namespace,e.id`,
   )).rows;
   const receipts =
     (await transaction.query<{ key: string; intent: unknown; result: unknown }>(
       `SELECT key,intent,result FROM ${tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND kind='action.protected-input'`,
     )).rows;
+  const receiptByKey = new Map(
+    receipts.map((receipt) => [receipt.key, receipt]),
+  );
   const invocations: RetainedInvocation[] = [];
   const events: RetainedAuthorityEvent[] = [];
+  let done = 0;
   for (const row of rows) {
+    ingress.set(
+      JSON.stringify([row.namespace, row.id]),
+      row.owner_ingress as Record<string, unknown>,
+    );
     const body = row.payload && typeof row.payload === "object" &&
         Object.hasOwn(row.payload, "dataRef")
       ? await verifiedEventBody(row, eventDataRef(row.payload))
@@ -96,14 +133,11 @@ export async function inspectAuthorityUpgrade(
       unknown
     >;
     if (data.status === "invoked" && typeof data.actionRunId === "string") {
-      const receipt = receipts.find((receipt) =>
-        receipt.key ===
-          JSON.stringify([
-            "action.protected-input",
-            row.namespace,
-            data.actionRunId,
-          ])
-      );
+      const receipt = receiptByKey.get(JSON.stringify([
+        "action.protected-input",
+        row.namespace,
+        data.actionRunId,
+      ]));
       const capture = receipt
         ? { intent: receipt.intent, result: receipt.result } as NonNullable<
           RetainedInvocation["capture"]
@@ -144,6 +178,11 @@ export async function inspectAuthorityUpgrade(
         }),
       });
     }
+    if (++done % 2000 === 0 || done === rows.length) {
+      console.error(
+        `[upgrade:${schema}] authority inventory ${done}/${rows.length}`,
+      );
+    }
   }
   return { invocations, events };
 }
@@ -152,7 +191,8 @@ async function applyAuthorityUpgrade(
   schema: string,
   manifest: AuthorityUpgradeManifest,
 ): Promise<void> {
-  const inventory = await inspectAuthorityUpgrade(transaction, schema);
+  const ingress = new Map<string, Record<string, unknown>>();
+  const inventory = await inspectAuthorityState(transaction, schema, ingress);
   const plan = await planAuthorityMigration(
     inventory.invocations,
     manifest.invocations,
@@ -180,6 +220,23 @@ async function applyAuthorityUpgrade(
       `ALTER TABLE ${tables.events} DISABLE TRIGGER copilotz_events_immutable`,
     );
   }
+  const policies = new Set(
+    manifest.policies.map((policy) =>
+      JSON.stringify([policy.id, policy.revision])
+    ),
+  );
+  const updates: Record<string, unknown>[] = [];
+  async function flushEvents() {
+    if (!updates.length) return;
+    await transaction.query(
+      `UPDATE ${tables.events} e SET owner_ingress=COALESCE(NULLIF(e.owner_ingress,'null'::jsonb), v.ingress) || jsonb_build_object('authority',v.authority)
+       FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text,authority jsonb,ingress jsonb)
+       WHERE e.namespace=v.namespace AND e.id=v.id`,
+      [JSON.stringify(updates)],
+    );
+    updates.length = 0;
+  }
+  let eventsDone = 0;
   for (const event of inventory.events) {
     const entry = entries.get(JSON.stringify([event.namespace, event.eventId]));
     if (!entry || entry.digest !== event.digest) {
@@ -189,9 +246,8 @@ async function applyAuthorityUpgrade(
     if (
       authority.scope.databaseSchema !== schema ||
       authority.scope.namespace !== event.namespace ||
-      !manifest.policies.some((policy) =>
-        policy.id === authority.policy.id &&
-        policy.revision === authority.policy.revision
+      !policies.has(
+        JSON.stringify([authority.policy.id, authority.policy.revision]),
       )
     ) throw new Error("Retained ingress authority scope or policy is invalid.");
     if (event.unclassified && !entry.ingress) {
@@ -246,10 +302,7 @@ async function applyAuthorityUpgrade(
       }
     }
     const provenance = entry.ingress ??
-      (await transaction.query<{ owner_ingress: Record<string, unknown> }>(
-        `SELECT owner_ingress FROM ${tables.events} WHERE namespace=$1 AND id=$2`,
-        [event.namespace, event.eventId],
-      )).rows[0]?.owner_ingress;
+      ingress.get(JSON.stringify([event.namespace, event.eventId]));
     if (provenance?.kind === "authenticated-server") {
       const actor = provenance.actor as Record<string, unknown> | undefined;
       if (
@@ -269,24 +322,60 @@ async function applyAuthorityUpgrade(
     } else if (entry.actorBinding !== undefined) {
       throw new Error("Actor binding requires authenticated ingress.");
     }
-    await transaction.query(
-      `UPDATE ${tables.events} SET owner_ingress=COALESCE(NULLIF(owner_ingress,'null'::jsonb), $4::jsonb) || jsonb_build_object('authority',$3::jsonb) WHERE namespace=$1 AND id=$2`,
-      [
-        event.namespace,
-        event.eventId,
-        JSON.stringify(authority),
-        JSON.stringify(entry.ingress ?? null),
-      ],
-    );
+    updates.push({
+      namespace: event.namespace,
+      id: event.eventId,
+      authority,
+      ingress: entry.ingress ?? null,
+    });
+    eventsDone++;
+    if (updates.length === 2000) {
+      await flushEvents();
+      console.error(
+        `[upgrade:${schema}] authority events ${eventsDone}/${inventory.events.length}`,
+      );
+    }
   }
+  await flushEvents();
+  console.error(
+    `[upgrade:${schema}] authority events ${eventsDone}/${inventory.events.length}`,
+  );
   if (inventory.events.length) {
     await transaction.query(
       `ALTER TABLE ${tables.events} ENABLE TRIGGER copilotz_events_immutable`,
     );
   }
+  const invocationByKey = new Map(
+    inventory.invocations.map((
+      item,
+    ) => [JSON.stringify([item.namespace, item.runId]), item]),
+  );
+  const captures: Record<string, unknown>[] = [];
+  const bindings: Record<string, unknown>[] = [];
+  async function flushInvocations() {
+    if (captures.length) {
+      await transaction.query(
+        `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result)
+         SELECT 'schema','logical',key,'runtime','action.protected-input',intent,result
+         FROM jsonb_to_recordset($1::jsonb) AS v(key text,intent jsonb,result jsonb)`,
+        [JSON.stringify(captures)],
+      );
+      captures.length = 0;
+    }
+    if (bindings.length) {
+      await transaction.query(
+        `INSERT INTO ${tables.authorization_invocations}(namespace,run_id,source_event_id,authority,capture,inventory_digest)
+         SELECT namespace,run_id,source_event_id,authority,COALESCE(capture,'null'::jsonb),inventory_digest
+         FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,run_id text,source_event_id text,authority jsonb,capture jsonb,inventory_digest text)`,
+        [JSON.stringify(bindings)],
+      );
+      bindings.length = 0;
+    }
+  }
+  let invocationsDone = 0;
   for (const entry of plan) {
-    const invocation = inventory.invocations.find((item) =>
-      item.namespace === entry.namespace && item.runId === entry.runId
+    const invocation = invocationByKey.get(
+      JSON.stringify([entry.namespace, entry.runId]),
     )!;
     if (!entry.capture) {
       if (
@@ -305,45 +394,50 @@ async function applyAuthorityUpgrade(
         ...(inputSchema ? { inputSchema } : {}),
         execute: () => undefined,
       }, data.input);
-      await transaction.query(
-        `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical',$1,'runtime','action.protected-input',$2::jsonb,$3::jsonb)`,
-        [
-          JSON.stringify([
-            "action.protected-input",
-            invocation.namespace,
-            invocation.runId,
-          ]),
-          JSON.stringify({
-            databaseSchema: schema,
-            namespace: invocation.namespace,
-            actionId: invocation.actionId,
-            inputSchema,
-            publicRevisionFields: [],
-          }),
-          JSON.stringify({
-            source: {
-              eventId: invocation.sourceEventId,
-              ...(invocation.operationId
-                ? { operationId: invocation.operationId }
-                : {}),
-            },
-            request,
-          }),
-        ],
+      captures.push({
+        key: JSON.stringify([
+          "action.protected-input",
+          invocation.namespace,
+          invocation.runId,
+        ]),
+        intent: {
+          databaseSchema: schema,
+          namespace: invocation.namespace,
+          actionId: invocation.actionId,
+          inputSchema,
+          publicRevisionFields: [],
+        },
+        result: {
+          source: {
+            eventId: invocation.sourceEventId,
+            ...(invocation.operationId
+              ? { operationId: invocation.operationId }
+              : {}),
+          },
+          request,
+        },
+      });
+    }
+    bindings.push({
+      namespace: entry.namespace,
+      run_id: entry.runId,
+      source_event_id: invocation.sourceEventId,
+      authority: entry.authority,
+      capture: entry.capture,
+      inventory_digest: entry.expectedDigest,
+    });
+    invocationsDone++;
+    if (bindings.length === 2000) {
+      await flushInvocations();
+      console.error(
+        `[upgrade:${schema}] authority invocations ${invocationsDone}/${plan.length}`,
       );
     }
-    await transaction.query(
-      `INSERT INTO ${tables.authorization_invocations}(namespace,run_id,source_event_id,authority,capture,inventory_digest) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6)`,
-      [
-        entry.namespace,
-        entry.runId,
-        invocation.sourceEventId,
-        JSON.stringify(entry.authority),
-        JSON.stringify(entry.capture),
-        entry.expectedDigest,
-      ],
-    );
   }
+  await flushInvocations();
+  console.error(
+    `[upgrade:${schema}] authority invocations ${invocationsDone}/${plan.length}`,
+  );
   // Transport instances never survive the offline cutover; clients reattach.
   await transaction.query(`DELETE FROM ${tables.authorization_channels}`);
   await transaction.query(
@@ -358,8 +452,8 @@ export async function upgradeAuthoritySchema(
   if (!supplied) throw authorityRequired();
   const schema = validateEventSchemaName(schemaName);
   const tables = createCoreTableNames(schema);
-  const manifest = captureHostCommandJson(supplied) as AuthorityUpgradeManifest;
-  const fingerprint = await digest(manifest);
+  const manifest = captureOfflineManifest(supplied);
+  const fingerprint = await digest(manifest, true);
   await session.transaction(async (transaction) => {
     const names = (await transaction.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name",

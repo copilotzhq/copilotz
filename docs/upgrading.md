@@ -572,6 +572,43 @@ Owner schemas missing the required receipt-reader column are also refused by
 current validation. Do not relabel them or add a runtime compatibility path. See
 the offline guide for the exact supported inventory.
 
+### Offline database deadlines and progress
+
+The offline CLIs (`upgrade-retained-data.ts`, `migrate-action-content.ts`,
+`migrate-ingress-provenance.ts`, `provision-content-indexes.ts`, and
+`owner-bundle.ts`) disable the per-statement online deadline and allow a 24-hour
+client request deadline. This does not change application connection defaults.
+Use the same explicit options in application migration modules and `deno eval`
+snippets:
+
+```ts
+const database = await openManagedOminipgDatabase({
+  url: Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL"),
+  statementTimeoutMs: null,
+  requestTimeoutMs: 24 * 60 * 60 * 1000,
+});
+```
+
+Setting only `statementTimeoutMs: null` leaves the default 30-second client
+request deadline in place. A long transaction must fit within the client
+deadline as well. Keep all producers stopped; these settings are for the
+explicit offline connection, not the running application.
+
+Long phases emit `[upgrade:SCHEMA] PHASE done/total` progress to **stderr**.
+Stdout remains the CLI's JSON result, and review-plan fingerprints keep their
+existing format. Progress within a transaction is not a committed checkpoint.
+After interruption, inspect the durable marker and repeat the same reviewed
+command; do not restart producers based on a progress line. Preparation and
+finalization still verify retained bytes and event-body digests.
+
+The native database path batches up to 2,000 records, with a 16 MiB byte budget
+for physical reads. Individual large bodies retain the chunked prefix reader;
+physical layout conversion can require memory for the largest individual body.
+Custom/external storage adapters keep their existing verification path. Rehearse
+using the same storage adapter and client/database hardware as the cutover. See
+[the synthetic benchmark](../scripts/benchmark-offline-upgrade.md) for
+reproduction commands, measured results and their limits.
+
 ## The pain
 
 Your team-notes application has been running for weeks. Its database holds

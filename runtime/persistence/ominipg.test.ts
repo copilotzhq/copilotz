@@ -6,6 +6,36 @@ import {
   openManagedOminipgDatabase,
 } from "./ominipg.ts";
 
+Deno.test({
+  name:
+    "offline statement timeout is explicit and does not change online defaults",
+  ignore: !Deno.env.get("COPILOTZ_TEST_POSTGRES_URL"),
+  async fn() {
+    for (
+      const [statementTimeoutMs, expected] of [[undefined, "1s"], [null, "0"], [
+        100,
+        "100ms",
+      ]] as const
+    ) {
+      const managed = await openManagedOminipgDatabase({
+        url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL"),
+        requestTimeoutMs: 2000,
+        statementTimeoutMs,
+        pgPoolMax: 1,
+      });
+      try {
+        assertEquals(
+          (await managed.session.query("SHOW statement_timeout")).rows[0]
+            .statement_timeout,
+          expected,
+        );
+      } finally {
+        await managed.close();
+      }
+    }
+  },
+});
+
 Deno.test("custom PGlite constructor configuration retains native snapshot admission", async () => {
   const managed = await openManagedOminipgDatabase({
     pgliteConfig: { extensions: {} },

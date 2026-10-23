@@ -1,0 +1,724 @@
+{
+  "events": 1020,
+  "eventBodies": 814,
+  "method": "Exact result comparison and exhaustive table digests, shared transaction and controlled synthetic generated identities; column, constraint and index definitions compared exactly.",
+  "comparisons": [
+    {
+      "step": "prepare-v7-to-marker0",
+      "equal": true,
+      "tables": {
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "6c89ba6f05dee935e236f7ec673c5037bda904724e6067c477b6e04a88fde7de"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "f068a732832d3f04052e1e89fcd16d38c01ee4edb81339bfc88c793055d4976c"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "3a02d551a357ab8d343f5bb8f87b98371aedf0ea43aeb4f3ca691f6164b66810"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "03f093828dacc4ed08f7f70e8f22ee51fe78d26a1361abddbfc1685c162df30f"
+        },
+        "edges": {
+          "rows": "82",
+          "digest": "b3cc6cf69cbbe97d07bb5abcbc71e252106be2d77642419035dd0b64d3e590a7"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "34dfa31c1021fb7b754d118aafa34b082358de3d581259551dc284f269eb47e7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "5871d960af3d980e78f7c6e984d64f4d6ccdb0d04ad3c4d5c5fff3df2ced672a"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "96001b0862d51fbcdd5c66ff1a3a4930513259859a3be5b41c29d5c92ef48883"
+        },
+        "nodes": {
+          "rows": "253",
+          "digest": "516f9d13642e62fab96139bf8379f32e65a7763ae376655b4c14aca01159e6de"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "6a2e95342e038ae33dd924922a8471dcc7d3f18213dc988e5ce6d3fc3f3f86f6"
+    },
+    {
+      "step": "prepared-plan-and-fingerprint",
+      "equal": true,
+      "tables": {
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "6c89ba6f05dee935e236f7ec673c5037bda904724e6067c477b6e04a88fde7de"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "f068a732832d3f04052e1e89fcd16d38c01ee4edb81339bfc88c793055d4976c"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "3a02d551a357ab8d343f5bb8f87b98371aedf0ea43aeb4f3ca691f6164b66810"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "03f093828dacc4ed08f7f70e8f22ee51fe78d26a1361abddbfc1685c162df30f"
+        },
+        "edges": {
+          "rows": "82",
+          "digest": "b3cc6cf69cbbe97d07bb5abcbc71e252106be2d77642419035dd0b64d3e590a7"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "34dfa31c1021fb7b754d118aafa34b082358de3d581259551dc284f269eb47e7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "5871d960af3d980e78f7c6e984d64f4d6ccdb0d04ad3c4d5c5fff3df2ced672a"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "96001b0862d51fbcdd5c66ff1a3a4930513259859a3be5b41c29d5c92ef48883"
+        },
+        "nodes": {
+          "rows": "253",
+          "digest": "516f9d13642e62fab96139bf8379f32e65a7763ae376655b4c14aca01159e6de"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "6a2e95342e038ae33dd924922a8471dcc7d3f18213dc988e5ce6d3fc3f3f86f6"
+    },
+    {
+      "step": "finalize-v11",
+      "equal": true,
+      "tables": {
+        "action_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_adoptions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "content_copies": {
+          "rows": "85",
+          "digest": "ab70243d0c2656e1aee9ede9b420781cb0fec5d833e9d201298b76dcba1204d0"
+        },
+        "content_logical_bodies": {
+          "rows": "86",
+          "digest": "b38a143984bbe7dd3a74786c00bc2cc28dff13f4de21ba9061d5713f311587c2"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "a389849f44cb31058041a7d3426355cb40d3fe0769a13b5c0205b600f90294e7"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "5950a6adb1d4467601182d351630b8a92f0a91461db1203cba8b8266e5a2a12f"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "414fa29826692743d27219ed60612a62d3c5fc4cef773ee598fbe06af1f44907"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "7deb4a82e22a673238c1697fecf34f025609d092d9ba092c62cf2b6c97c40810"
+        },
+        "edges": {
+          "rows": "81",
+          "digest": "fc4a2104f5cd4a33e1dddcbc1d54a4154885f7ec33ce96e0595890b3eb2dd376"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "84d9554dcc0c3f3652b494def9f4a8a871fc2d0d432ead471b09e28b18e095a7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "9fd98d06bc5cb6316e69d4eb393d8024e5baa953acf69633c3c29df5b4434c37"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "d0389c77c1439b8c9e2d66bda92ae8abd4ab53b5c8dc517a32f4e0fa8c39c5a7"
+        },
+        "nodes": {
+          "rows": "172",
+          "digest": "81ae8b48a22f3ab08bd4803f1a682c07fe8a17e6e99e1dda11d3300293247e46"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_alarms": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_body_retirements": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_deadlines": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_epochs": {
+          "rows": "1",
+          "digest": "2f9006dd6840285d7bbdfee8c3a7b2153eea4cd3ad70f1533970e51f189d4c7a"
+        },
+        "owner_receipts": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "pending_content": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "8a2a655c5c2cd5f5ede950f94a696131bd754c26c42d1290a5a440a577c3f859"
+    },
+    {
+      "step": "owner-keys-v12",
+      "equal": true,
+      "tables": {
+        "action_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_adoptions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "content_copies": {
+          "rows": "85",
+          "digest": "ab70243d0c2656e1aee9ede9b420781cb0fec5d833e9d201298b76dcba1204d0"
+        },
+        "content_logical_bodies": {
+          "rows": "86",
+          "digest": "b38a143984bbe7dd3a74786c00bc2cc28dff13f4de21ba9061d5713f311587c2"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "a389849f44cb31058041a7d3426355cb40d3fe0769a13b5c0205b600f90294e7"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "5950a6adb1d4467601182d351630b8a92f0a91461db1203cba8b8266e5a2a12f"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "414fa29826692743d27219ed60612a62d3c5fc4cef773ee598fbe06af1f44907"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "a0fc43cd884b7f6d3919bd37d4cf8964efb2f264f15744f080687a63dea0bc0d"
+        },
+        "edges": {
+          "rows": "81",
+          "digest": "fc4a2104f5cd4a33e1dddcbc1d54a4154885f7ec33ce96e0595890b3eb2dd376"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "84d9554dcc0c3f3652b494def9f4a8a871fc2d0d432ead471b09e28b18e095a7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "9fd98d06bc5cb6316e69d4eb393d8024e5baa953acf69633c3c29df5b4434c37"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "d0389c77c1439b8c9e2d66bda92ae8abd4ab53b5c8dc517a32f4e0fa8c39c5a7"
+        },
+        "nodes": {
+          "rows": "172",
+          "digest": "81ae8b48a22f3ab08bd4803f1a682c07fe8a17e6e99e1dda11d3300293247e46"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_alarms": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_body_retirements": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_data_keys": {
+          "rows": "1",
+          "digest": "1c36407aa71149c574a185a076b8505a90b1705b6f763bfc165d295651851f5e"
+        },
+        "owner_deadlines": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_epochs": {
+          "rows": "1",
+          "digest": "2f9006dd6840285d7bbdfee8c3a7b2153eea4cd3ad70f1533970e51f189d4c7a"
+        },
+        "owner_receipts": {
+          "rows": "1",
+          "digest": "ec99d400543f5e4985dd0832bd36332982f4d2194633a0a91b822de4290dc4e9"
+        },
+        "pending_content": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "ea39c94e6d09c12f0d050df5f83c83cf5060bdd54cfb65744709e45ffd951cbe"
+    },
+    {
+      "step": "authority-inventory",
+      "equal": true,
+      "tables": {
+        "action_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_adoptions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "content_copies": {
+          "rows": "85",
+          "digest": "ab70243d0c2656e1aee9ede9b420781cb0fec5d833e9d201298b76dcba1204d0"
+        },
+        "content_logical_bodies": {
+          "rows": "86",
+          "digest": "b38a143984bbe7dd3a74786c00bc2cc28dff13f4de21ba9061d5713f311587c2"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "a389849f44cb31058041a7d3426355cb40d3fe0769a13b5c0205b600f90294e7"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "5950a6adb1d4467601182d351630b8a92f0a91461db1203cba8b8266e5a2a12f"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "414fa29826692743d27219ed60612a62d3c5fc4cef773ee598fbe06af1f44907"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "a0fc43cd884b7f6d3919bd37d4cf8964efb2f264f15744f080687a63dea0bc0d"
+        },
+        "edges": {
+          "rows": "81",
+          "digest": "fc4a2104f5cd4a33e1dddcbc1d54a4154885f7ec33ce96e0595890b3eb2dd376"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "84d9554dcc0c3f3652b494def9f4a8a871fc2d0d432ead471b09e28b18e095a7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "9fd98d06bc5cb6316e69d4eb393d8024e5baa953acf69633c3c29df5b4434c37"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "d0389c77c1439b8c9e2d66bda92ae8abd4ab53b5c8dc517a32f4e0fa8c39c5a7"
+        },
+        "nodes": {
+          "rows": "172",
+          "digest": "81ae8b48a22f3ab08bd4803f1a682c07fe8a17e6e99e1dda11d3300293247e46"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_alarms": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_body_retirements": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_data_keys": {
+          "rows": "1",
+          "digest": "1c36407aa71149c574a185a076b8505a90b1705b6f763bfc165d295651851f5e"
+        },
+        "owner_deadlines": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_epochs": {
+          "rows": "1",
+          "digest": "2f9006dd6840285d7bbdfee8c3a7b2153eea4cd3ad70f1533970e51f189d4c7a"
+        },
+        "owner_receipts": {
+          "rows": "1",
+          "digest": "ec99d400543f5e4985dd0832bd36332982f4d2194633a0a91b822de4290dc4e9"
+        },
+        "pending_content": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "ea39c94e6d09c12f0d050df5f83c83cf5060bdd54cfb65744709e45ffd951cbe"
+    },
+    {
+      "step": "authority-v13",
+      "equal": true,
+      "tables": {
+        "action_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_channels": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_invocations": {
+          "rows": "85",
+          "digest": "f4a444b440730c94ce7e5b7f72239856ed4ffda51de65f38d37c5d5961a834bc"
+        },
+        "authorization_sessions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_adoptions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "content_copies": {
+          "rows": "85",
+          "digest": "ab70243d0c2656e1aee9ede9b420781cb0fec5d833e9d201298b76dcba1204d0"
+        },
+        "content_logical_bodies": {
+          "rows": "86",
+          "digest": "b38a143984bbe7dd3a74786c00bc2cc28dff13f4de21ba9061d5713f311587c2"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "a389849f44cb31058041a7d3426355cb40d3fe0769a13b5c0205b600f90294e7"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "5950a6adb1d4467601182d351630b8a92f0a91461db1203cba8b8266e5a2a12f"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "414fa29826692743d27219ed60612a62d3c5fc4cef773ee598fbe06af1f44907"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "c79b8646c25a13942e4366c2eb225fd4736c48bc2e745060d3805c97d2e0a09c"
+        },
+        "edges": {
+          "rows": "81",
+          "digest": "fc4a2104f5cd4a33e1dddcbc1d54a4154885f7ec33ce96e0595890b3eb2dd376"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "84d9554dcc0c3f3652b494def9f4a8a871fc2d0d432ead471b09e28b18e095a7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "9fd98d06bc5cb6316e69d4eb393d8024e5baa953acf69633c3c29df5b4434c37"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "e8450747b92cbfc5bcb22674af9223232ab97c60fe105dad73dacca7dc608af6"
+        },
+        "nodes": {
+          "rows": "172",
+          "digest": "81ae8b48a22f3ab08bd4803f1a682c07fe8a17e6e99e1dda11d3300293247e46"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_alarms": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_body_retirements": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_data_keys": {
+          "rows": "1",
+          "digest": "1c36407aa71149c574a185a076b8505a90b1705b6f763bfc165d295651851f5e"
+        },
+        "owner_deadlines": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_epochs": {
+          "rows": "1",
+          "digest": "95e4f634235bf6675caa3ee8b43c2b29e691db258df34c6d1ea9aec036cf7341"
+        },
+        "owner_receipts": {
+          "rows": "87",
+          "digest": "ebcf93982521715efd206ee0c23ffa11b70a6bbcdc626b0db53c24627b963c6c"
+        },
+        "pending_content": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "c5729ef9890667f80587cd74232d8ac5c6e338d8973a19a86f0e7cc5c08f6655"
+    },
+    {
+      "step": "storage-v14",
+      "equal": true,
+      "tables": {
+        "action_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_channels": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_effects": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "authorization_invocations": {
+          "rows": "85",
+          "digest": "f4a444b440730c94ce7e5b7f72239856ed4ffda51de65f38d37c5d5961a834bc"
+        },
+        "authorization_sessions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_adoptions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "content_bodies": {
+          "rows": "85",
+          "digest": "b4cdb4ea19e1fcde3876b245ed41cefd4ed533aca068d97101a9ff5f836a610d"
+        },
+        "content_body_parts": {
+          "rows": "85",
+          "digest": "2aaca6de84ca1fa14e8532b30ab9248d67c20e7f1122c4ba4ad27bc0b2ffd451"
+        },
+        "content_copies": {
+          "rows": "85",
+          "digest": "ab70243d0c2656e1aee9ede9b420781cb0fec5d833e9d201298b76dcba1204d0"
+        },
+        "content_logical_bodies": {
+          "rows": "86",
+          "digest": "b38a143984bbe7dd3a74786c00bc2cc28dff13f4de21ba9061d5713f311587c2"
+        },
+        "copilotz_operation_catalog_metadata": {
+          "rows": "1",
+          "digest": "a389849f44cb31058041a7d3426355cb40d3fe0769a13b5c0205b600f90294e7"
+        },
+        "copilotz_operation_events": {
+          "rows": "19",
+          "digest": "e9a587119339356d821d03b99d6f5d5c8a4d76bf222d042096f282a1bc327e23"
+        },
+        "copilotz_operation_selection_heads": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_selections": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "copilotz_operation_streams": {
+          "rows": "5",
+          "digest": "5950a6adb1d4467601182d351630b8a92f0a91461db1203cba8b8266e5a2a12f"
+        },
+        "copilotz_operations": {
+          "rows": "8",
+          "digest": "414fa29826692743d27219ed60612a62d3c5fc4cef773ee598fbe06af1f44907"
+        },
+        "copilotz_schema_metadata": {
+          "rows": "1",
+          "digest": "31d663b5a46190acf7673b492ebd459970bd1286c0d51440d2fef8e298c229fc"
+        },
+        "edges": {
+          "rows": "81",
+          "digest": "fc4a2104f5cd4a33e1dddcbc1d54a4154885f7ec33ce96e0595890b3eb2dd376"
+        },
+        "event_bodies": {
+          "rows": "814",
+          "digest": "84d9554dcc0c3f3652b494def9f4a8a871fc2d0d432ead471b09e28b18e095a7"
+        },
+        "event_deliveries": {
+          "rows": "203",
+          "digest": "9fd98d06bc5cb6316e69d4eb393d8024e5baa953acf69633c3c29df5b4434c37"
+        },
+        "events": {
+          "rows": "1020",
+          "digest": "e8450747b92cbfc5bcb22674af9223232ab97c60fe105dad73dacca7dc608af6"
+        },
+        "nodes": {
+          "rows": "172",
+          "digest": "81ae8b48a22f3ab08bd4803f1a682c07fe8a17e6e99e1dda11d3300293247e46"
+        },
+        "open_actions": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_alarms": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_body_retirements": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_data_keys": {
+          "rows": "1",
+          "digest": "1c36407aa71149c574a185a076b8505a90b1705b6f763bfc165d295651851f5e"
+        },
+        "owner_deadlines": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "owner_epochs": {
+          "rows": "1",
+          "digest": "b9eed6dfc72a63d0e80ed800f720b3e22001d8a61f82b152a10d1767fcf2a49c"
+        },
+        "owner_receipts": {
+          "rows": "87",
+          "digest": "ebcf93982521715efd206ee0c23ffa11b70a6bbcdc626b0db53c24627b963c6c"
+        },
+        "pending_content": {
+          "rows": "0",
+          "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "ddlDigest": "8d150fb8d217d8a41274ac84f098b64ee35392c6909da67c6714693a351be967"
+    }
+  ]
+}

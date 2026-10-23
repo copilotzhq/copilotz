@@ -143,6 +143,7 @@ function inspector(
     streamBackend: storage.streamBackend ??
       { kind: "database", backendId: "database:default" },
     copyMappings: storage.copyMappings,
+    ...(storage.storeFor ? {} : { nativeDatabase: session }),
     storeFor: (location: EmbeddedBodyLocation) => {
       if (storage.storeFor) return storage.storeFor(location, session);
       if (
@@ -315,7 +316,8 @@ async function finalizeRetainedDataUpgrade(
   }
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
   const decisions = canonicalDecisions(options.contentDecisions);
-  let plan = options.plan ? structuredClone(options.plan) : undefined;
+  // The public entry point already detached the plan before its first await.
+  let plan = options.plan;
   const reviewedFingerprint = options.reviewedFingerprint;
   const hasReviewedIntent = reviewedFingerprint !== undefined ||
     options.contentDecisions !== undefined;

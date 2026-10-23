@@ -138,6 +138,19 @@ export async function readTransferBodies(
   schema: string,
   external?: BodyReader,
 ): Promise<TransferBody[]> {
+  const result: TransferBody[] = [];
+  for await (const body of iterateTransferBodies(executor, schema, external)) {
+    result.push(body);
+  }
+  return result;
+}
+
+/** Verify every copy, yielding bounded batches so upgrades need not retain plain bytes. */
+export async function* iterateTransferBodies(
+  executor: SqlExecutor,
+  schema: string,
+  external?: BodyReader,
+): AsyncGenerator<TransferBody> {
   const tables = createCoreTableNames(schema),
     physical = bodyStoreTables(schema);
   // A purged historical failed stream retains only its zero-length tombstone.
@@ -167,81 +180,114 @@ export async function readTransferBodies(
     current_copy: string;
     backend_kind: string;
     backend_id: string;
+    physical_state: string | null;
+    media_type: string | null;
+    byte_length: string | null;
     terminal: {
       outcome: TransferBody["outcome"];
       length: number;
       digest?: `sha256:${string}`;
     };
   }>(
-    `SELECT b.body_id,b.namespace,b.current_copy,b.terminal,c.backend_kind,c.backend_id FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy WHERE c.state='current' ORDER BY b.body_id`,
+    `SELECT b.body_id,b.namespace,b.current_copy,b.terminal,c.backend_kind,c.backend_id,p.state AS physical_state,p.media_type,p.byte_length FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy LEFT JOIN ${physical.bodies} p ON c.backend_kind='database' AND p.body_id=b.current_copy WHERE c.state='current' ORDER BY b.body_id`,
   )).rows;
-  const result: TransferBody[] = [];
-  for (const row of rows) {
-    let bytes: Uint8Array, mediaType: string;
-    if (row.backend_kind === "database") {
-      const head =
-        (await executor.query<{ media_type: string; byte_length: string }>(
-          `SELECT media_type,byte_length FROM ${physical.bodies} WHERE body_id=$1 AND state IN ('ready','incomplete')`,
-          [row.current_copy],
-        )).rows[0];
-      if (!head || Number(head.byte_length) < row.terminal.length) {
-        throw new Error("Missing database body.");
-      }
-      mediaType = head.media_type;
-      bytes = new Uint8Array(row.terminal.length);
-      let offset = 0;
+  let done = 0;
+  while (done < rows.length) {
+    let end = done, size = 0;
+    while (end < rows.length && end - done < 2000) {
+      const length = Number(rows[end].byte_length ?? 0);
+      if (end > done && size + length > 16 * 1024 * 1024) break;
+      size += length;
+      end++;
+    }
+    const batch = rows.slice(done, end);
+    const keys = batch.filter((row) => row.backend_kind === "database").map((
+      row,
+    ) => row.current_copy);
+    const partsByBody = new Map<
+      string,
+      { start_offset: string; bytes: string; part_digest: string }[]
+    >();
+    if (keys.length) {
       const parts = (await executor.query<
-        { start_offset: string; bytes: string; part_digest: string }
+        {
+          body_id: string;
+          start_offset: string;
+          bytes: string;
+          part_digest: string;
+        }
       >(
-        `SELECT start_offset,encode(bytes,'base64') AS bytes,part_digest FROM ${physical.parts} WHERE body_id=$1 ORDER BY start_offset`,
-        [row.current_copy],
+        `SELECT body_id,start_offset,encode(bytes,'base64') AS bytes,part_digest FROM ${physical.parts} WHERE body_id=ANY($1::text[]) ORDER BY body_id,start_offset`,
+        [keys],
       )).rows;
       for (const part of parts) {
-        const chunk = base64ToBytes(part.bytes);
-        if (
-          Number(part.start_offset) !== offset ||
-          await digestContent(chunk) !== part.part_digest
-        ) throw new Error("Corrupt database body part.");
-        bytes.set(
-          chunk.subarray(0, Math.max(0, bytes.length - offset)),
-          Math.min(offset, bytes.length),
-        );
-        offset += chunk.length;
+        const list = partsByBody.get(part.body_id) ?? [];
+        list.push(part);
+        partsByBody.set(part.body_id, list);
       }
-      if (offset < bytes.length) throw new Error("Truncated database body.");
-    } else {
-      if (!external) {
-        throw new Error(
-          `An explicit reader is required for backend ${row.backend_id}.`,
-        );
-      }
-      ({ bytes, mediaType } = await external({
-        key: row.current_copy,
-        backendId: row.backend_id,
-        namespace: row.namespace,
-        length: row.terminal.length,
-      }));
     }
-    const digest = await digestContent(bytes);
-    if (
-      bytes.length !== row.terminal.length ||
-      (row.terminal.digest !== undefined && digest !== row.terminal.digest) ||
-      (row.terminal.outcome === "completed" &&
-        row.terminal.digest === undefined)
-    ) throw new Error("Body integrity check failed.");
-    result.push({
-      bodyId: row.body_id,
-      key: row.current_copy,
-      namespace: row.namespace,
-      backendKind: row.backend_kind,
-      backendId: row.backend_id,
-      mediaType,
-      bytes: bytesToBase64(bytes),
-      digest,
-      outcome: row.terminal.outcome,
-    });
+    for (const row of batch) {
+      let bytes: Uint8Array, mediaType: string;
+      if (row.backend_kind === "database") {
+        if (
+          !row.physical_state ||
+          !["ready", "incomplete"].includes(row.physical_state) ||
+          Number(row.byte_length) < row.terminal.length
+        ) {
+          throw new Error("Missing database body.");
+        }
+        mediaType = row.media_type!;
+        bytes = new Uint8Array(row.terminal.length);
+        let offset = 0;
+        const parts = partsByBody.get(row.current_copy) ?? [];
+        for (const part of parts) {
+          const chunk = base64ToBytes(part.bytes);
+          if (
+            Number(part.start_offset) !== offset ||
+            await digestContent(chunk) !== part.part_digest
+          ) throw new Error("Corrupt database body part.");
+          bytes.set(
+            chunk.subarray(0, Math.max(0, bytes.length - offset)),
+            Math.min(offset, bytes.length),
+          );
+          offset += chunk.length;
+        }
+        if (offset < bytes.length) throw new Error("Truncated database body.");
+      } else {
+        if (!external) {
+          throw new Error(
+            `An explicit reader is required for backend ${row.backend_id}.`,
+          );
+        }
+        ({ bytes, mediaType } = await external({
+          key: row.current_copy,
+          backendId: row.backend_id,
+          namespace: row.namespace,
+          length: row.terminal.length,
+        }));
+      }
+      const digest = await digestContent(bytes);
+      if (
+        bytes.length !== row.terminal.length ||
+        (row.terminal.digest !== undefined && digest !== row.terminal.digest) ||
+        (row.terminal.outcome === "completed" &&
+          row.terminal.digest === undefined)
+      ) throw new Error("Body integrity check failed.");
+      yield {
+        bodyId: row.body_id,
+        key: row.current_copy,
+        namespace: row.namespace,
+        backendKind: row.backend_kind,
+        backendId: row.backend_id,
+        mediaType,
+        bytes: bytesToBase64(bytes),
+        digest,
+        outcome: row.terminal.outcome,
+      };
+    }
+    done = end;
+    console.error(`[upgrade:${schema}] verified copies ${done}/${rows.length}`);
   }
-  return result;
 }
 /** Publish fresh schema-prefixed copies atomically with the owning rows. */
 export async function installTransferBodies(

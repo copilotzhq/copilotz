@@ -47,14 +47,14 @@ export type ContentMigrationReport = {
   assignedOwners: number;
 };
 
-function references(value: unknown, assetId: string): boolean {
+function references(value: unknown, ids: Set<string>): void {
   if (Array.isArray(value)) {
-    return value.some((child) => references(child, assetId));
+    for (const child of value) references(child, ids);
+  } else if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    if (typeof object.assetId === "string") ids.add(object.assetId);
+    for (const child of Object.values(object)) references(child, ids);
   }
-  if (!value || typeof value !== "object") return false;
-  const object = value as Record<string, unknown>;
-  if (object.assetId === assetId) return true;
-  return Object.values(object).some((child) => references(child, assetId));
 }
 
 async function inspect(tx: SqlExecutor, schema: string) {
@@ -78,6 +78,45 @@ async function inspect(tx: SqlExecutor, schema: string) {
     node.type !== EXECUTION_OWNER && node.type !== "asset" &&
     node.type !== "protected_value"
   );
+  const nodeByKey = new Map(
+    nodes.map((node) => [nodeKey(node.namespace, node.id), node]),
+  );
+  const domainByKey = new Map(
+    domains.map((node) => [nodeKey(node.namespace, node.id), node]),
+  );
+  const outgoing = new Map<string, string[]>();
+  const owners = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (edge.type !== "has_asset") continue;
+    const source = nodeKey(edge.namespace, edge.source_node_id);
+    const target = nodeKey(edge.namespace, edge.target_node_id);
+    const targets = outgoing.get(source) ?? [];
+    targets.push(edge.target_node_id);
+    outgoing.set(source, targets);
+    if (domainByKey.has(source)) {
+      const ids = owners.get(target) ?? new Set<string>();
+      ids.add(source);
+      owners.set(target, ids);
+    }
+  }
+  const referrers = new Map<string, Set<string>>();
+  const order = new Map(
+    domains.map((node, index) => [nodeKey(node.namespace, node.id), index]),
+  );
+  for (const node of domains) {
+    const ids = new Set<string>();
+    references(node.data, ids);
+    for (const id of ids) {
+      const key = nodeKey(node.namespace, id);
+      const refs = referrers.get(key) ?? new Set<string>();
+      refs.add(nodeKey(node.namespace, node.id));
+      referrers.set(key, refs);
+    }
+  }
+  const orderedNodes = (ids: Iterable<string>) =>
+    [...ids]
+      .sort((a, b) => order.get(a)! - order.get(b)!)
+      .map((id) => domainByKey.get(id)!);
   const report: ContentMigrationReport = {
     executionOwners: execution.length,
     executionEdges: executionEdges.length,
@@ -93,10 +132,7 @@ async function inspect(tx: SqlExecutor, schema: string) {
   >();
   for (const owner of execution) {
     const ids = new Set([
-      ...edges.filter((edge) =>
-        edge.namespace === owner.namespace &&
-        edge.source_node_id === owner.id && edge.type === "has_asset"
-      ).map((edge) => edge.target_node_id),
+      ...(outgoing.get(nodeKey(owner.namespace, owner.id)) ?? []),
       ...(Array.isArray(owner.data.assetIds)
         ? owner.data.assetIds.filter((id): id is string =>
           typeof id === "string"
@@ -112,26 +148,19 @@ async function inspect(tx: SqlExecutor, schema: string) {
     }
   }
   for (const item of referenced.values()) {
-    const asset = nodes.find((node) =>
-      node.id === item.assetId && node.namespace === item.namespace &&
-      node.type === "asset"
-    );
-    const owned = domains.filter((node) =>
-      node.namespace === item.namespace &&
-      edges.some((edge) =>
-        edge.namespace === item.namespace && edge.source_node_id === node.id &&
-        edge.target_node_id === item.assetId && edge.type === "has_asset"
-      )
-    );
+    const key = nodeKey(item.namespace, item.assetId);
+    const found = nodeByKey.get(key);
+    const asset = found?.type === "asset" ? found : undefined;
+    const owned = orderedNodes(owners.get(key) ?? []);
     const origin = asset?.data.origin as Producer | undefined;
-    const candidates = owned.length
-      ? owned
-      : domains.filter((node) =>
-        node.namespace === item.namespace && (
-          (origin?.id === node.id && origin?.type === node.type) ||
-          references(node.data, item.assetId)
-        )
-      );
+    const candidateIds = new Set(referrers.get(key) ?? []);
+    if (origin) {
+      const originKey = nodeKey(item.namespace, origin.id);
+      if (domainByKey.get(originKey)?.type === origin.type) {
+        candidateIds.add(originKey);
+      }
+    }
+    const candidates = owned.length ? owned : orderedNodes(candidateIds);
     const classification = !asset
       ? "missing"
       : candidates.length > 1
@@ -183,6 +212,23 @@ export function migrateActionContent(
       schema,
     );
     if (!options.apply) return report;
+    const assetKeys = new Set(
+      report.assets.map((asset) => nodeKey(asset.namespace, asset.assetId)),
+    );
+    const domainByKey = new Map(
+      domains.map((node) => [nodeKey(node.namespace, node.id), node]),
+    );
+    const assignments: Record<string, unknown>[] = [];
+    async function flush() {
+      if (!assignments.length) return;
+      await tx.query(
+        `INSERT INTO ${tables.edges}(id,namespace,source_node_id,target_node_id,type,data)
+         SELECT id,namespace,owner,asset,'has_asset','{}'::jsonb
+         FROM jsonb_to_recordset($1::jsonb) AS v(id text,namespace text,owner text,asset text)`,
+        [JSON.stringify(assignments)],
+      );
+      assignments.length = 0;
+    }
     const decisions = new Map<string, ContentMigrationDecision>();
     for (const decision of options.decisions ?? []) {
       const key = JSON.stringify([decision.namespace, decision.assetId]);
@@ -190,10 +236,7 @@ export function migrateActionContent(
         throw new Error(`Duplicate decision for ${decision.assetId}.`);
       }
       if (
-        !report.assets.some((asset) =>
-          asset.namespace === decision.namespace &&
-          asset.assetId === decision.assetId
-        )
+        !assetKeys.has(nodeKey(decision.namespace, decision.assetId))
       ) {
         throw new Error(
           `Decision references an unrelated asset: ${decision.assetId}.`,
@@ -226,21 +269,23 @@ export function migrateActionContent(
       }
       const ownerId = inferred ?? decision!.ownerId;
       if (ownerId === null) continue;
-      const owner = domains.find((node) =>
-        node.id === ownerId && node.namespace === asset.namespace
-      );
+      const owner = domainByKey.get(nodeKey(asset.namespace, ownerId));
       if (!owner) {
         throw new Error(
           `Domain producer not found in asset namespace: ${ownerId}.`,
         );
       }
       if (asset.classification === "owned") continue;
-      await tx.query(
-        `INSERT INTO ${tables.edges} (id, namespace, source_node_id, target_node_id, type, data) VALUES ($1,$2,$3,$4,'has_asset','{}'::jsonb)`,
-        [crypto.randomUUID(), asset.namespace, ownerId, asset.assetId],
-      );
+      assignments.push({
+        id: crypto.randomUUID(),
+        namespace: asset.namespace,
+        owner: ownerId,
+        asset: asset.assetId,
+      });
       report.assignedOwners++;
+      if (assignments.length === 2000) await flush();
     }
+    await flush();
     // Composite foreign keys remove only edges in each deleted node's namespace.
     await tx.query(`DELETE FROM ${tables.nodes} WHERE type=$1`, [
       EXECUTION_OWNER,

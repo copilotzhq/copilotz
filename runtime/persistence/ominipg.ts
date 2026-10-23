@@ -38,6 +38,8 @@ export type CopilotzOminipgOptions = Readonly<{
   pgProvider?: OminipgConnectionOptions["pgProvider"];
   pgPoolMax?: number;
   requestTimeoutMs?: OminipgConnectionOptions["requestTimeoutMs"];
+  /** null disables the server statement cap; offline callers also need a long request deadline. */
+  statementTimeoutMs?: OminipgConnectionOptions["statementTimeoutMs"];
   logMetrics?: boolean;
 }>;
 
@@ -91,6 +93,9 @@ export async function openManagedOminipgDatabase(
     ...(options.requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs: options.requestTimeoutMs }),
+    ...(options.statementTimeoutMs === undefined
+      ? {}
+      : { statementTimeoutMs: options.statementTimeoutMs }),
     ...(options.logMetrics === undefined
       ? {}
       : { logMetrics: options.logMetrics }),

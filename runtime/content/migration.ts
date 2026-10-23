@@ -9,6 +9,10 @@ import { contentCatalogStatements } from "./catalog-schema.ts";
 import type { BodyStore } from "./body-store.ts";
 import { digestContent } from "./digest.ts";
 import { digestCatalogPrefix } from "./prefix-digest.ts";
+import {
+  inspectOfflinePrefixes,
+  type OfflinePrefix,
+} from "./offline-prefixes.ts";
 export type EmbeddedBodyLocation = Readonly<
   { namespace: string; kind: string; backendId: string; key: string }
 >;
@@ -78,6 +82,8 @@ export async function inspectEmbeddedContent(
     session: SqlSession;
     schema: string;
     storeFor: (location: EmbeddedBodyLocation) => BodyStore;
+    /** Private native database selected by the offline upgrade, never inferred from an adapter label. */
+    nativeDatabase?: SqlSession;
     streamBackend?: Readonly<{ kind: string; backendId: string }>;
     copyMappings?: readonly Readonly<
       {
@@ -120,6 +126,51 @@ export async function inspectEmbeddedContent(
     a.kind.localeCompare(b.kind) || a.namespace.localeCompare(b.namespace) ||
     a.id.localeCompare(b.id)
   );
+  const mappings = new Map<
+    string,
+    NonNullable<typeof input.copyMappings>[number]
+  >();
+  for (const mapping of input.copyMappings ?? []) {
+    const key = JSON.stringify([
+      mapping.namespace,
+      mapping.backendId,
+      mapping.sourceBodyId,
+    ]);
+    if (!mappings.has(key)) mappings.set(key, mapping);
+  }
+  const mappingFor = (loc: EmbeddedBodyLocation) =>
+    mappings.get(JSON.stringify([loc.namespace, loc.backendId, loc.key]));
+  let prefixes: ReadonlyMap<string, OfflinePrefix> = new Map();
+  if (input.nativeDatabase) {
+    const requests = new Map<string, { key: string; length?: number }>();
+    const collect = (value: unknown, namespace: string): void => {
+      if (Array.isArray(value)) {
+        for (const child of value) collect(child, namespace);
+        return;
+      }
+      const item = object(value);
+      if (!item) return;
+      const loc = location(item, namespace);
+      if (
+        loc?.kind === "database" && loc.backendId === "database:default" &&
+        !requests.has(identity(loc))
+      ) {
+        requests.set(identity(loc), {
+          key: mappingFor(loc)?.targetBodyId ?? loc.key,
+          ...(typeof item.byteLength === "number"
+            ? { length: item.byteLength }
+            : {}),
+        });
+      }
+      for (const child of Object.values(item)) collect(child, namespace);
+    };
+    for (const row of rows) collect(row.value, row.namespace);
+    prefixes = await inspectOfflinePrefixes(
+      input.nativeDatabase,
+      schema,
+      requests,
+    );
+  }
   const copies = new Map<string, Copy>();
   async function include(
     loc: EmbeddedBodyLocation,
@@ -142,13 +193,11 @@ export async function inspectEmbeddedContent(
       }
       return existing;
     }
-    const mapping = input.copyMappings?.find((copy) =>
-      copy.namespace === loc.namespace && copy.backendId === loc.backendId &&
-      copy.sourceBodyId === loc.key
-    );
+    const mapping = mappingFor(loc);
     const physicalKey = mapping?.targetBodyId ?? loc.key;
     const store = input.storeFor({ ...loc, key: physicalKey }),
-      head = await store.head({ bodyId: physicalKey });
+      head = prefixes.get(key)?.head ??
+        await store.head({ bodyId: physicalKey });
     if (!head || !(head.state === "ready" || head.state === "incomplete")) {
       throw new Error(
         `Migration requires a retained terminal copy: ${loc.key}`,
@@ -157,7 +206,8 @@ export async function inspectEmbeddedContent(
     const length = typeof claims.byteLength === "number"
       ? claims.byteLength
       : head.byteLength;
-    const digest = await digestCatalogPrefix(store, physicalKey, length);
+    const digest = prefixes.get(key)?.digest ??
+      await digestCatalogPrefix(store, physicalKey, length);
     if (typeof claims.digest === "string" && claims.digest !== digest) {
       throw new Error(`Migration integrity mismatch: ${loc.key}`);
     }
@@ -271,16 +321,17 @@ function convert(
   value: unknown,
   namespace: string,
   copies: ReadonlyMap<string, Copy>,
+  byBody: ReadonlyMap<string, readonly Copy[]>,
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map((child) => convert(child, namespace, copies));
+    return value.map((child) => convert(child, namespace, copies, byBody));
   }
   const item = object(value);
   if (!item) return value;
   const output = Object.fromEntries(
     Object.entries(item).map((
       [key, child],
-    ) => [key, convert(child, namespace, copies)]),
+    ) => [key, convert(child, namespace, copies, byBody)]),
   );
   const loc = location(item, namespace);
   if (loc) {
@@ -292,10 +343,7 @@ function convert(
     delete output.protectedUntil;
     output.bodyId = copy.bodyId;
   } else if (typeof item.bodyId === "string") {
-    const matches = [...copies.values()].filter((copy) =>
-      copy.namespace === namespace &&
-      (copy.sourceKey ?? copy.key) === item.bodyId
-    );
+    const matches = byBody.get(JSON.stringify([namespace, item.bodyId])) ?? [];
     if (matches.length === 1) output.bodyId = matches[0].bodyId;
     else if (matches.length > 1) {
       throw new Error("Ambiguous embedded body identity requires review.");
@@ -335,88 +383,122 @@ export async function migrateEmbeddedContent(
   }
   const tables = createCoreTableNames(plan.schema),
     copies = new Map(plan.inventory.map((copy) => [identity(copy), copy]));
+  const byBody = new Map<string, Copy[]>();
+  for (const copy of plan.inventory) {
+    const key = JSON.stringify([copy.namespace, copy.sourceKey ?? copy.key]);
+    const list = byBody.get(key) ?? [];
+    list.push(copy);
+    byBody.set(key, list);
+  }
   let documents = 0;
   await runSqlTransaction(input.session, async (transaction) => {
     for (const statement of contentCatalogStatements(plan.schema)) {
       await transaction.query(statement);
     }
-    for (const copy of plan.inventory) {
+    for (let start = 0; start < plan.inventory.length; start += 2000) {
+      const batch = plan.inventory.slice(start, start + 2000).map((copy) => ({
+        body_id: copy.bodyId,
+        namespace: copy.namespace,
+        key: copy.key,
+        length: copy.length,
+        seal: copy.outcome === "completed"
+          ? { length: copy.length, digest: copy.digest }
+          : null,
+        terminal: {
+          length: copy.length,
+          ...(copy.outcome === "completed" ? { digest: copy.digest } : {}),
+          outcome: copy.outcome,
+        },
+        kind: copy.kind,
+        backend: copy.backendId,
+        version: copy.versionToken,
+        collectable: copy.collectable,
+      }));
+      const json = JSON.stringify(batch);
       await transaction.query(
-        `INSERT INTO ${tables.content_logical_bodies}(body_id,namespace,current_copy,writer_id,generation,revocation,protected_until,committed_offset,seal_intent,terminal) VALUES($1,$2,$3,'offline-migration',1,'revoked',NOW(),$4,$5::jsonb,$6::jsonb) ON CONFLICT(body_id) DO NOTHING`,
-        [
-          copy.bodyId,
-          copy.namespace,
-          copy.key,
-          copy.length,
-          copy.outcome === "completed"
-            ? JSON.stringify({ length: copy.length, digest: copy.digest })
-            : null,
-          JSON.stringify({
-            length: copy.length,
-            ...(copy.outcome === "completed" ? { digest: copy.digest } : {}),
-            outcome: copy.outcome,
-          }),
-        ],
+        `INSERT INTO ${tables.content_logical_bodies}(body_id,namespace,current_copy,writer_id,generation,revocation,protected_until,committed_offset,seal_intent,terminal)
+         SELECT body_id,namespace,key,'offline-migration',1,'revoked',NOW(),length,seal,terminal
+         FROM jsonb_to_recordset($1::jsonb) AS v(body_id text,namespace text,key text,length bigint,seal jsonb,terminal jsonb)
+         ON CONFLICT(body_id) DO NOTHING`,
+        [json],
       );
       await transaction.query(
-        `INSERT INTO ${tables.content_copies}(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable) VALUES($1,$2,$3,$4,$5,'current',$6) ON CONFLICT(copy_key) DO NOTHING`,
-        [
-          copy.key,
-          copy.kind,
-          copy.backendId,
-          copy.bodyId,
-          copy.versionToken,
-          copy.collectable,
-        ],
+        `INSERT INTO ${tables.content_copies}(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable)
+         SELECT key,kind,backend,body_id,version,'current',collectable
+         FROM jsonb_to_recordset($1::jsonb) AS v(key text,kind text,backend text,body_id text,version text,collectable boolean)
+         ON CONFLICT(copy_key) DO NOTHING`,
+        [json],
       );
-      const stored =
-        (await transaction.query<{ body_id: string; version_token: string }>(
-          `SELECT body_id,version_token FROM ${tables.content_copies} WHERE copy_key=$1`,
-          [copy.key],
-        )).rows[0];
-      if (
-        stored.body_id !== copy.bodyId ||
-        stored.version_token !== copy.versionToken
-      ) {
+      const conflict = await transaction.query(
+        `SELECT 1 FROM jsonb_to_recordset($1::jsonb) AS v(key text,body_id text,version text)
+         LEFT JOIN ${tables.content_copies} c ON c.copy_key=v.key
+         WHERE c.body_id IS DISTINCT FROM v.body_id OR c.version_token IS DISTINCT FROM v.version LIMIT 1`,
+        [json],
+      );
+      if (conflict.rows.length) {
         throw new Error(
           "Migration copy conflicts with existing catalog state.",
         );
       }
+      console.error(
+        `[upgrade:${plan.schema}] logical copies ${
+          Math.min(start + 2000, plan.inventory.length)
+        }/${plan.inventory.length}`,
+      );
     }
-    for (const row of plan.rows) {
-      const converted = convert(row.value, row.namespace, copies);
-      if (JSON.stringify(converted) === JSON.stringify(row.value)) continue;
-      documents++;
-      if (row.kind === "node") {
+    const nodes: Record<string, unknown>[] = [],
+      events: Record<string, unknown>[] = [];
+    async function flush() {
+      if (nodes.length) {
         const result = await transaction.query(
-          `UPDATE ${tables.nodes} SET data=$3::jsonb WHERE namespace=$1 AND id=$2 AND data=$4::jsonb RETURNING id`,
-          [
-            row.namespace,
-            row.id,
-            JSON.stringify(converted),
-            JSON.stringify(row.value),
-          ],
+          `UPDATE ${tables.nodes} n SET data=v.converted
+           FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text,converted jsonb,original jsonb)
+           WHERE n.namespace=v.namespace AND n.id=v.id AND n.data=v.original RETURNING n.id`,
+          [JSON.stringify(nodes)],
         );
-        if (!result.rows.length) {
+        if (result.rows.length !== nodes.length) {
           throw new Error("Migration source changed after review.");
         }
-      } else {
-        const encoded = await encodeEventBody(converted);
+        nodes.length = 0;
+      }
+      if (events.length) {
         const result = await transaction.query(
-          `UPDATE ${tables.event_bodies} SET body=$3::jsonb,digest=$4 WHERE namespace=$1 AND event_body_id=$2 AND body=$5::jsonb RETURNING event_body_id`,
-          [
-            row.namespace,
-            row.id,
-            encoded.body,
-            encoded.digest,
-            JSON.stringify(row.value),
-          ],
+          `UPDATE ${tables.event_bodies} b SET body=v.converted,digest=v.digest
+           FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text,converted jsonb,digest text,original jsonb)
+           WHERE b.namespace=v.namespace AND b.event_body_id=v.id AND b.body=v.original RETURNING b.event_body_id`,
+          [JSON.stringify(events)],
         );
-        if (!result.rows.length) {
+        if (result.rows.length !== events.length) {
           throw new Error("Migration event changed after review.");
         }
+        events.length = 0;
       }
     }
+    for (const row of plan.rows) {
+      const converted = convert(row.value, row.namespace, copies, byBody);
+      if (JSON.stringify(converted) === JSON.stringify(row.value)) continue;
+      documents++;
+      const update = {
+        namespace: row.namespace,
+        id: row.id,
+        converted,
+        original: row.value,
+      };
+      if (row.kind === "node") nodes.push(update);
+      else {
+        const encoded = await encodeEventBody(converted);
+        events.push({
+          ...update,
+          converted: JSON.parse(encoded.body),
+          digest: encoded.digest,
+        });
+      }
+      if (nodes.length + events.length >= 2000) await flush();
+    }
+    await flush();
+    console.error(
+      `[upgrade:${plan.schema}] converted documents ${documents}/${plan.rows.length}`,
+    );
     for (const stream of plan.streamRows) {
       if (stream.reason) {
         await transaction.query(

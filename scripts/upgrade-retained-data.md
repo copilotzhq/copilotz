@@ -221,7 +221,9 @@ function required(name: string): string {
 const bucket = required("MIGRATION_S3_BUCKET");
 const store = createLegacyObjectBodyStore({
   backendId: `gcs:${bucket}`, // Must exactly match the retained backend ID.
-  provider: "gcs",
+  // HMAC (AWS4-signed) requests: GCS ignores x-goog-* generation guards under
+  // this signature, so read through S3 mode and its strong-ETag guard.
+  provider: "s3",
   endpoint: "https://storage.googleapis.com",
   region: "auto",
   bucket,
@@ -241,12 +243,14 @@ export default {
 } satisfies RetainedDataUpgradeStorage;
 ```
 
-For another S3-compatible bucket, use `provider: "s3"`, its endpoint and region,
-and the exact retained backend ID. S3 requires a strong ETag; GCS requires both
-generation and metageneration. Keep HMAC credentials in the environment and
-grant only source reads. The legacy adapter applies **no prefix**, even if a
-config contains one: every body ID is already the absolute object name,
-including any prefix, schema, namespace and percent-encoded segments.
+For another S3-compatible bucket, use its endpoint and region and the exact
+retained backend ID. S3 mode requires a strong ETag. `provider: "gcs"` guards
+reads with generation and metageneration headers; use it only with requests GCS
+signs natively, not with HMAC interoperability. Keep HMAC credentials in the
+environment and grant only source reads. The legacy adapter applies **no
+prefix**, even if a config contains one: every body ID is already the absolute
+object name, including any prefix, schema, namespace and percent-encoded
+segments.
 
 **No object copy or import is needed.** Prepare and finalization read legacy
 objects in place. The v12 owner-key step re-homes retained external bytes into

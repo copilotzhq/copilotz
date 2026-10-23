@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import type { ActionContext } from "@copilotz/copilotz/actions";
-import { transcribeAudioAction } from "./index.ts";
+import { audioFilename, transcribeAudioAction } from "./index.ts";
 function context(signal = new AbortController().signal): ActionContext {
   return {
     signal,
@@ -75,4 +75,13 @@ Deno.test("whole operation abort interrupts stalled source acquisition", async (
     Error,
     "cancelled source",
   );
+});
+
+Deno.test("recordings are uploaded under their format's extension", () => {
+  assertEquals(audioFilename("audio/webm;codecs=opus"), "voice.webm");
+  assertEquals(audioFilename("audio/mp4"), "voice.m4a");
+  assertEquals(audioFilename("audio/ogg; codecs=opus"), "voice.ogg");
+  assertEquals(audioFilename("audio/mpeg"), "voice.mp3");
+  assertEquals(audioFilename("audio/x-wav"), "voice.wav");
+  assertEquals(audioFilename("audio/unknown"), "voice.audio");
 });

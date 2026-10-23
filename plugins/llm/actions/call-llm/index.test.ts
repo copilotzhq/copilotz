@@ -1868,7 +1868,7 @@ Deno.test("llm.call keeps attachments reference-only while preserving mixed cont
     {
       type: "text",
       text:
-        'Copilotz attachment {"name":"render.png","mediaType":"image/png","assetRef":"asset://tenant-a/tool-export-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+        'Copilotz attachment {"name":"render.png","mediaType":"image/png","assetRef":"asset://tenant-a/tool-export-a"}. Its body is not included in this LLM request; use an asset tool only if you need more than the conversation already says about it.',
       role: "tool.output",
       mediaType: "text/plain; charset=utf-8",
       name: "render.png",
@@ -1876,7 +1876,7 @@ Deno.test("llm.call keeps attachments reference-only while preserving mixed cont
     {
       type: "text",
       text:
-        'Copilotz attachment {"name":"brief.pdf","mediaType":"application/pdf","assetRef":"asset://tenant-a/file-a"}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.',
+        'Copilotz attachment {"name":"brief.pdf","mediaType":"application/pdf","assetRef":"asset://tenant-a/file-a"}. Its body is not included in this LLM request; use an asset tool only if you need more than the conversation already says about it.',
       role: "body",
       mediaType: "text/plain; charset=utf-8",
       name: "brief.pdf",

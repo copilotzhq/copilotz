@@ -60,7 +60,11 @@ function preparedPart(ref: PreparedEntry): LlmAdapterContentPart {
 /**
  * Attachment bodies remain application-owned. Adapters receive only this
  * provider-neutral notice, so an Agent can deliberately use an asset Tool
- * instead of silently inlining a potentially large or sensitive body.
+ * instead of silently inlining a potentially large or sensitive body. The
+ * notice carries the attachment's text alternative (`alt`), and leaves
+ * opening it to the Agent's judgment: a model told to open every attachment
+ * opens ones the conversation already describes (a recording followed by its
+ * transcript) and answers twice, before and after the tool.
  */
 function attachmentPart(
   ref: ContentRef,
@@ -69,12 +73,13 @@ function attachmentPart(
   const descriptor = JSON.stringify({
     name: ref.name ?? ref.assetId,
     mediaType: ref.mediaType,
+    ...(ref.alt ? { alt: ref.alt } : {}),
     assetRef: formatAssetRef(namespace, ref.assetId),
   });
   return ({
     type: "text",
     text:
-      `Copilotz attachment ${descriptor}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.`,
+      `Copilotz attachment ${descriptor}. Its body is not included in this LLM request; use an asset tool only if you need more than the conversation already says about it.`,
     role: ref.role,
     mediaType: "text/plain; charset=utf-8",
     ...(ref.name ? { name: ref.name } : {}),

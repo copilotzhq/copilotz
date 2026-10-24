@@ -29,6 +29,9 @@ Deno.test("authority candidate union preserves OR semantics and deduplicates act
     await db.query(
       `CREATE TABLE ${q}.copilotz_operations(namespace text,root_event_id text,state text,operation_id text,parent_operation_id text)`,
     );
+    await db.query(
+      `CREATE TABLE ${q}.open_actions(namespace text,action_run_id text)`,
+    );
     for (
       const [id, type, ingress, body] of [
         ["invoked", "copilotz.server.action.requested", { kind: "host" }, {

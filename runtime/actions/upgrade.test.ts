@@ -41,6 +41,7 @@ async function fixture(active = false) {
     payload: { retained: true },
   }, active ? ["worker"] : []);
   if (!active) await catalog.reconcile();
+  const options = await testUpgradeOptions(db, schema);
   await db.query(`DROP TABLE ${store.tables.open_actions}`);
   await db.query(
     `ALTER TABLE ${store.tables.event_deliveries} DROP COLUMN action_scope_id`,
@@ -69,7 +70,7 @@ async function fixture(active = false) {
     store,
     root,
     catalogTables,
-    options: await testUpgradeOptions(db, schema),
+    options,
   };
 }
 
@@ -255,6 +256,7 @@ for (const baseline of [6, 7]) {
         type: "existing.work",
         payload: { kept: true },
       }, []);
+      const options = await testUpgradeOptions(db, schema);
       await db.query(
         `DROP TABLE ${tables.open_actions}`,
       );
@@ -269,7 +271,7 @@ for (const baseline of [6, 7]) {
       await upgradeActionLifecycle(
         db,
         schema,
-        await testUpgradeOptions(db, schema),
+        options,
       );
       assertEquals(
         (await validateCopilotzSchema(db, schema)).version,

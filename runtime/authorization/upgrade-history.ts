@@ -34,6 +34,7 @@ export async function terminalAuthorityEvidence(
     receipt: Record<string, unknown> | null;
     receipt_key: string | null;
     receipt_fingerprint: string | null;
+    reviewed_fingerprint: string | null;
   }>(`WITH keys AS MATERIALIZED (
     SELECT namespace,event_body_id,COALESCE(body->'data',body)->>'actionRunId' AS run_id,
       COALESCE(body->'data',body)->>'actionId' AS action_id,
@@ -47,11 +48,12 @@ export async function terminalAuthorityEvidence(
       AND count(*) FILTER (WHERE status IN ('completed','failed','cancelled'))<=1
       AND count(DISTINCT action_id)=1 AND bool_and(action_id IS NOT NULL)
       AND bool_and(COALESCE(status IN ('invoked','progress','awaiting','completed','failed','cancelled'),false))
-  ) SELECT r.*,receipt.result AS receipt,receipt.key AS receipt_key,receipt.intent->>'fingerprint' AS receipt_fingerprint FROM runs r
+  ) SELECT r.*,receipt.result AS receipt,receipt.key AS receipt_key,receipt.intent->>'fingerprint' AS receipt_fingerprint,
+      (SELECT to_jsonb(m)->>'upgrade_reviewed_fingerprint' FROM ${t.copilotz_schema_metadata} m WHERE singleton) AS reviewed_fingerprint FROM runs r
     LEFT JOIN ${t.owner_receipts} receipt ON receipt.owner='schema' AND receipt.domain='logical'
       AND receipt.kind='action.upgrade-terminal' AND receipt.principal='offline-upgrade'
-      AND receipt.intent->>'fingerprint'=(SELECT to_jsonb(m)->>'upgrade_reviewed_fingerprint' FROM ${t.copilotz_schema_metadata} m WHERE singleton)
-      AND receipt.result->>'namespace'=r.namespace AND receipt.result->>'runId'=r.run_id
+      AND (receipt.key=('["action.upgrade-terminal",' || to_json(r.namespace)::text || ',' || to_json(r.run_id)::text || ']')
+        OR (receipt.result->>'namespace'=r.namespace AND receipt.result->>'runId'=r.run_id))
     WHERE r.terminal_id IS NOT NULL OR receipt.key IS NOT NULL`)).rows;
   return new Map(rows.map((r) => [JSON.stringify([r.namespace, r.run_id]), r]));
 }
@@ -63,10 +65,11 @@ export async function verifiedTerminalEvidence(
   row: Awaited<ReturnType<typeof terminalAuthorityEvidence>> extends
     Map<string, infer T> ? T : never,
   bodyId: string,
-) {
+): Promise<Record<string, unknown> | undefined> {
   if (row.invoked_id !== bodyId) return;
+  let ownTerminal;
   if (row.terminal_id) {
-    if (!terminal || row.receipt) return;
+    if (!terminal) return;
     const raw = await verifiedEventBody(terminal, {
       eventBodyId: row.terminal_id,
       schemaVersion: terminal.schema_version,
@@ -80,7 +83,7 @@ export async function verifiedTerminalEvidence(
       data.actionRunId !== row.run_id || data.actionId !== row.action_id ||
       !["completed", "failed", "cancelled"].includes(String(data.status))
     ) return;
-    return {
+    ownTerminal = {
       terminalSource: "own-terminal",
       bodyId: row.terminal_id,
       bodyDigest: terminal.digest,
@@ -88,8 +91,11 @@ export async function verifiedTerminalEvidence(
     };
   }
   const r = row.receipt;
+  if (!r) return row.receipt_key ? undefined : ownTerminal;
   if (
-    !r ||
+    !row.reviewed_fingerprint ||
+    row.receipt_fingerprint !== row.reviewed_fingerprint ||
+    (ownTerminal && ownTerminal.status !== r.status) ||
     row.receipt_key !==
       JSON.stringify(["action.upgrade-terminal", row.namespace, row.run_id]) ||
     r.namespace !== row.namespace || r.runId !== row.run_id ||
@@ -103,6 +109,13 @@ export async function verifiedTerminalEvidence(
   ) return;
   return {
     ...r,
+    // Receipt bodyId/bodyDigest identify the reviewed invocation, not a terminal.
+    ...(ownTerminal
+      ? {
+        terminalBodyId: ownTerminal.bodyId,
+        terminalBodyDigest: ownTerminal.bodyDigest,
+      }
+      : {}),
     receiptKey: row.receipt_key,
     receiptFingerprint: row.receipt_fingerprint,
   };

@@ -1480,3 +1480,339 @@ Deno.test("reviewed ambiguous ownership accepts all candidates or a subset throu
     }
   }
 });
+
+Deno.test("v7 conversion retains attested, abandoned and shared ask history through empty-manifest v14", async () => {
+  const { abandonmentDecisions } = await import("./upgrade-terminals.ts");
+  const { inspectAuthorityUpgrade } = await import(
+    "../authorization/upgrade.ts"
+  );
+  const { createActionLifecycleLoader, createActionLifecycleAppender } =
+    await import("./persistence.ts");
+  const { createEventCoordinator } = await import("../events/coordinator.ts");
+  const { createActionLifecycleEmitter } = await import("./lifecycle.ts");
+  const { createActionCallers } = await import("./invoker.ts");
+  const f = await fixture();
+  try {
+    const runs = [
+      { id: "attested", actionId: "synthetic.target", status: "completed" },
+      { id: "abandoned", actionId: "synthetic.target", status: "cancelled" },
+      { id: "ask", actionId: "copilotz.core.ask", status: "completed" },
+      {
+        id: "compact",
+        actionId: "copilotz.core.context.compact",
+        status: "completed",
+      },
+    ] as const;
+    const retainedBodyId = (id: string) =>
+      id.includes(":action:") ? `event-body:archive:${id}` : id;
+    const body = async (id: string, data: unknown) => {
+      const encoded = await encodeEventBody(data);
+      await f.db.query(
+        `INSERT INTO ${f.tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('archive',$1,1,$2::jsonb,$3)`,
+        [retainedBodyId(id), encoded.body, encoded.digest],
+      );
+    };
+    let converted = false;
+    const event = async (
+      id: string,
+      bodyId: string,
+      actionId: string,
+      status: string,
+    ) => {
+      await f.db.query(
+        `INSERT INTO ${f.tables.events}(id,schema_version,namespace,type,subject_type,subject_id,deduplication_id,payload,metadata,correlation_id${
+          converted ? ",seq" : ""
+        })
+        VALUES($1,7,'archive',$2,$3,$4,$1,$5::jsonb,$6::jsonb,$1${
+          converted
+            ? `,(SELECT COALESCE(max(seq),0)+1 FROM ${f.tables.events})`
+            : ""
+        })`,
+        [
+          id,
+          `${actionId}.${status}`,
+          actionId,
+          bodyId.split(":")[0],
+          JSON.stringify({
+            dataRef: {
+              eventBodyId: retainedBodyId(bodyId),
+              schemaVersion: 1,
+              mediaType: "application/json",
+            },
+          }),
+          JSON.stringify({
+            actionId,
+            actionStatus: status,
+            sourceEventId: f.original.rows.events[0].id,
+          }),
+        ],
+      );
+    };
+    for (const run of runs) {
+      const data = {
+        actionId: run.actionId,
+        actionRunId: run.id,
+        input: {},
+        metadata: {},
+      };
+      await body(`${run.id}:action:invoked`, { ...data, status: "invoked" });
+      await event(
+        `${run.id}:action:invoked`,
+        `${run.id}:action:invoked`,
+        run.actionId,
+        "invoked",
+      );
+      if (run.id === "attested") {
+        await body("wrapper", {
+          actionId: "copilotz.server.internal.invoke",
+          actionRunId: "wrapper",
+          status: "completed",
+          output: { targetActionRunId: run.id, status: run.status },
+        });
+      } else if (run.id !== "abandoned") {
+        await body(`${run.id}:action:terminal`, {
+          ...data,
+          status: run.status,
+          output: "historical",
+        });
+        await event(
+          `${run.id}:action:terminal`,
+          `${run.id}:action:terminal`,
+          run.actionId,
+          run.status,
+        );
+        await event(
+          `${run.id}:answer`,
+          `${run.id}:action:invoked`,
+          run.actionId,
+          "invoked",
+        );
+        await event(
+          `${run.id}:resume`,
+          `${run.id}:action:invoked`,
+          run.actionId,
+          "invoked",
+        );
+      }
+    }
+    // Also retain an intermediate step; it is not a live obligation after completion.
+    await body("ask:action:awaiting", {
+      actionId: "copilotz.core.ask",
+      actionRunId: "ask",
+      status: "awaiting",
+      input: {},
+      metadata: {},
+      handoff: {},
+      operationId: "synthetic-child",
+      progressIndex: 0,
+    });
+    await event(
+      "ask:action:awaiting",
+      "ask:action:awaiting",
+      "copilotz.core.ask",
+      "awaiting",
+    );
+    const abandoned = await abandonmentDecisions([{
+      namespace: "archive",
+      runId: "abandoned",
+      actionId: "synthetic.target",
+      bodyId: retainedBodyId("abandoned:action:invoked"),
+    }]);
+    const plan = await prepareRetainedDataUpgrade(f.db, f.schema, {
+      abandoned,
+    });
+    assertExists(plan);
+    assertEquals(plan.sourceVersion, 7);
+    assertEquals(plan.terminals?.attested, 1);
+    assertEquals(plan.terminals?.abandoned, 1);
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          plan,
+          reviewedFingerprint: plan.fingerprint,
+          abandoned,
+        }),
+      Error,
+      "owner",
+    );
+    assertEquals(await marker(f.db, f.schema), 11);
+    converted = true;
+    // This converter writes receipts only. Reproduce the reported v11 state
+    // with materialized terminals as well, without attributing them to conversion.
+    for (const run of runs.slice(0, 2)) {
+      assertEquals(
+        (await f.db.query(
+          `SELECT 1 FROM ${f.tables.event_bodies} WHERE event_body_id=$1`,
+          [retainedBodyId(`${run.id}:action:terminal`)],
+        )).rows.length,
+        0,
+      );
+      await body(`${run.id}:action:terminal`, {
+        actionId: run.actionId,
+        actionRunId: run.id,
+        input: {},
+        metadata: {},
+        status: run.status,
+        ...(run.status === "cancelled"
+          ? {
+            error: {
+              name: "RetainedHistoryTerminal",
+              message: "abandoned-before-upgrade",
+            },
+          }
+          : { output: "historical" }),
+      });
+      await event(
+        `${run.id}:action:terminal`,
+        `${run.id}:action:terminal`,
+        run.actionId,
+        run.status,
+      );
+    }
+    const adapter = await testSecretAdapter();
+    await assertRejects(
+      () =>
+        upgradeChain(f.db, f.schema, {
+          ownerKeys: { sourceAdapter: adapter, masterAdapter: adapter },
+        }),
+      Error,
+      "authority",
+    );
+    assertEquals(await marker(f.db, f.schema), 12);
+    const inventory = await inspectAuthorityUpgrade(f.db, f.schema);
+    assertEquals(inventory.invocations, []);
+    assertEquals(inventory.events, []);
+    for (const run of runs) {
+      const entries = inventory.history.invocations.filter((entry) =>
+        entry.id === run.id
+      );
+      assertEquals(entries.length, 1);
+      assertEquals(
+        entries[0].evidence.terminalSource,
+        run.id === "attested"
+          ? "wrapper-attested"
+          : run.id === "abandoned"
+          ? "reviewed-abandonment"
+          : "own-terminal",
+      );
+      if (run.id === "attested" || run.id === "abandoned") {
+        assertEquals(entries[0].evidence.receiptFingerprint, plan.fingerprint);
+        assertEquals(
+          entries[0].evidence.bodyId,
+          retainedBodyId(`${run.id}:action:invoked`),
+        );
+        assertEquals(
+          entries[0].evidence.terminalBodyId,
+          retainedBodyId(`${run.id}:action:terminal`),
+        );
+      }
+    }
+    for (
+      const mutation of [
+        `intent=jsonb_build_object('fingerprint','wrong')`,
+        `result=result || '{"status":"failed"}'::jsonb`,
+        `result=result || '{"runId":"wrong"}'::jsonb`,
+        `key='wrong'`,
+      ]
+    ) {
+      await assertRejects(
+        () =>
+          f.db.transaction(async (tx) => {
+            await tx.query(
+              `UPDATE ${f.tables.owner_receipts} SET ${mutation} WHERE kind='action.upgrade-terminal' AND result->>'runId'='attested'`,
+            );
+            const invalid = await inspectAuthorityUpgrade(tx, f.schema);
+            assertEquals(invalid.invocations.map((entry) => entry.runId), [
+              "attested",
+            ]);
+            assertEquals(
+              invalid.history.invocations.some((entry) =>
+                entry.id === "attested"
+              ),
+              false,
+            );
+            throw new Error("rollback invalid evidence");
+          }),
+        Error,
+        "rollback invalid evidence",
+      );
+    }
+    await upgradeChain(f.db, f.schema, {
+      authority: { policies: [], invocations: [], events: [] },
+    });
+    const recorded = (await f.db.query<
+      { result: { history: { invocations: number; events: number } } }
+    >(
+      `SELECT result FROM ${f.tables.owner_receipts} WHERE key='authorization-upgrade:13'`,
+    )).rows[0].result.history;
+    assertEquals(recorded.invocations, inventory.history.counts.invocations);
+    assertEquals(recorded.events, inventory.history.counts.events);
+    assertEquals(await marker(f.db, f.schema), 14);
+    const store = createEventStore({ session: f.db, schema: f.schema });
+    const coordinator = createEventCoordinator({
+      store,
+      registry: { durableConsumers: () => [] } as never,
+      executor: { scheduleDelivery() {} } as never,
+    });
+    try {
+      const lifecycle = createActionLifecycleEmitter({
+        namespace: "archive",
+        load: createActionLifecycleLoader({ store }),
+        append: createActionLifecycleAppender({ store, coordinator }),
+      });
+      let executions = 0;
+      for (const run of runs) {
+        const action = defineAction({
+          id: run.actionId,
+          execute() {
+            executions++;
+            return "new";
+          },
+          resume() {
+            executions++;
+            return "new";
+          },
+        });
+        await assertRejects(
+          () =>
+            lifecycle.emit({
+              actionId: run.actionId,
+              actionRunId: run.id,
+              status: "invoked",
+              input: {},
+              metadata: {},
+              deduplicationId: `${run.id}:new-claim`,
+            }),
+          Error,
+          "no longer owned",
+        );
+        const callers = createActionCallers({ work: action }, {
+          actionLifecycle: lifecycle,
+          createInvocationKey: () => run.id,
+          signal: new AbortController().signal,
+          createContext: () => ({} as import("./types.ts").ActionContext),
+          resumption: {
+            receipt: {
+              actionId: run.actionId,
+              actionRunId: run.id,
+              status: "awaiting",
+              input: {},
+              metadata: {},
+              handoff: {},
+              operationId: "child",
+              progressIndex: 0,
+            },
+            outcome: { operationId: "child", status: "completed" },
+          },
+        });
+        if (run.id === "abandoned") await assertRejects(() => callers.work({}));
+        else assertEquals(await callers.work({}), "historical");
+      }
+      assertEquals(executions, 0);
+    } finally {
+      coordinator.close();
+    }
+  } finally {
+    await f.close();
+  }
+});

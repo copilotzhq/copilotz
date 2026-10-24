@@ -476,3 +476,193 @@ Deno.test("authority history stays fail closed for captures, missing sources, am
     await f.close();
   }
 });
+
+Deno.test("terminal receipt and body must agree on the reviewed plan, run and status", async () => {
+  const { verifiedTerminalEvidence } = await import("./upgrade-history.ts");
+  const encoded = await encodeEventBody({
+    ...invoked("run"),
+    status: "completed",
+  });
+  const terminal = {
+    ...encoded,
+    body: JSON.parse(encoded.body),
+    schema_version: 1,
+  };
+  const receipt = {
+    namespace: "space",
+    runId: "run",
+    actionId: "synthetic.retired",
+    bodyId: "invoked",
+    status: "completed",
+    terminalSource: "wrapper-attested",
+  };
+  const row = {
+    namespace: "space",
+    run_id: "run",
+    action_id: "synthetic.retired",
+    invoked_id: "invoked",
+    terminal_id: "terminal",
+    receipt,
+    receipt_key: JSON.stringify(["action.upgrade-terminal", "space", "run"]),
+    receipt_fingerprint: "reviewed",
+    reviewed_fingerprint: "reviewed",
+  };
+  assertEquals(await verifiedTerminalEvidence(terminal, row, "invoked"), {
+    ...receipt,
+    terminalBodyId: "terminal",
+    terminalBodyDigest: terminal.digest,
+    receiptKey: row.receipt_key,
+    receiptFingerprint: "reviewed",
+  });
+  for (
+    const change of [
+      { status: "failed" },
+      { runId: "different" },
+      { actionId: "different" },
+      { namespace: "different" },
+      { bodyId: "different" },
+      { terminalSource: "own-terminal" },
+      { terminalSource: "reviewed-abandonment", status: "cancelled" },
+    ]
+  ) {
+    assertEquals(
+      await verifiedTerminalEvidence(terminal, {
+        ...row,
+        receipt: { ...receipt, ...change },
+      }, "invoked"),
+      undefined,
+    );
+  }
+  for (
+    const change of [
+      { receipt_key: "wrong" },
+      { receipt_fingerprint: "wrong" },
+      { reviewed_fingerprint: null },
+      { run_id: "wrong" },
+      { action_id: "wrong" },
+    ]
+  ) {
+    assertEquals(
+      await verifiedTerminalEvidence(
+        terminal,
+        { ...row, ...change },
+        "invoked",
+      ),
+      undefined,
+    );
+  }
+  assertEquals(
+    await verifiedTerminalEvidence(undefined, row, "invoked"),
+    undefined,
+  );
+  await assertRejects(() =>
+    verifiedTerminalEvidence({ ...terminal, digest: "wrong" }, row, "invoked")
+  );
+});
+
+Deno.test("shared invocation references are history across batches only when every lifecycle reference is settled", async () => {
+  const f = await fixture();
+  try {
+    const event = await f.store.commitMutation({
+      draft: {
+        namespace: "space",
+        type: "synthetic.retired.invoked",
+        metadata: { sourceEventId: "source" },
+        payload: {
+          dataRef: {
+            eventBodyId: "shared",
+            schemaVersion: 1,
+            mediaType: "application/json",
+          },
+        },
+      },
+      body: { id: "shared", json: invoked("shared") },
+      consumers: [],
+    });
+    await f.body("terminal", { ...invoked("shared"), status: "completed" });
+    await f.body("awaiting", { ...invoked("shared"), status: "awaiting" });
+    await f.db.query(
+      `INSERT INTO "${f.schema}".events(id,seq,schema_version,namespace,type,payload,metadata,correlation_id)
+      SELECT 'reference-' || n,seq+n+10000,schema_version,'space','synthetic.answer',payload,metadata,correlation_id FROM "${f.schema}".events CROSS JOIN generate_series(1,1001) n WHERE id=$1`,
+      [event.event.id],
+    );
+    const settled = await inspectAuthorityUpgrade(f.db, f.schema);
+    assertEquals(settled.invocations, []);
+    assertEquals(settled.history.counts.invocations, 1);
+    for (const bodyId of ["shared", "awaiting"]) {
+      const live = await f.store.commitMutation({
+        draft: {
+          namespace: "space",
+          type: "synthetic.resume",
+          metadata: { sourceEventId: "source" },
+          payload: {
+            dataRef: {
+              eventBodyId: bodyId,
+              schemaVersion: 1,
+              mediaType: "application/json",
+            },
+          },
+        },
+        consumers: [],
+      });
+      await f.db.query(
+        `INSERT INTO "${f.schema}".event_deliveries(id,event_id,consumer_id,settlement_scope_id,status)
+        VALUES('live',$1,'synthetic','scope','pending')`,
+        [live.event.id],
+      );
+      const inventory = await inspectAuthorityUpgrade(f.db, f.schema);
+      assertEquals(inventory.history.counts.invocations, 0);
+      assertEquals(
+        inventory.invocations.every((i) => i.runId === "shared"),
+        true,
+      );
+      assertEquals(inventory.invocations.length > 0, true);
+      await f.db.query(
+        `DELETE FROM "${f.schema}".event_deliveries WHERE id='live'`,
+      );
+      await f.db.query(`DELETE FROM "${f.schema}".events WHERE id=$1`, [
+        live.event.id,
+      ]);
+    }
+    await f.db.query(
+      `INSERT INTO "${f.schema}".copilotz_operations(operation_id,namespace,root_event_id,correlation_id,state,accepted_at,updated_at)
+       VALUES('live','space',$1,'live','running',now(),now())`,
+      [event.event.id],
+    );
+    assertEquals(
+      (await inspectAuthorityUpgrade(f.db, f.schema)).history.counts
+        .invocations,
+      0,
+    );
+    await f.db.query(
+      `UPDATE "${f.schema}".copilotz_operations SET state='completed'`,
+    );
+    await f.db.query(
+      `INSERT INTO "${f.schema}".open_actions(namespace,action_run_id,action_id,scope_id,invoked_event_id,state)
+       VALUES('space','shared','synthetic.retired','live',$1,'invoked')`,
+      [event.event.id],
+    );
+    assertEquals(
+      (await inspectAuthorityUpgrade(f.db, f.schema)).history.counts
+        .invocations,
+      0,
+    );
+    await f.db.query(`DELETE FROM "${f.schema}".open_actions`);
+    const owner = await openDatabaseOwner(f.db, f.schema);
+    await releaseDatabaseOwner(owner);
+    owner.stop();
+    await f.db.query(
+      `UPDATE "${f.schema}".copilotz_schema_metadata SET version=12`,
+    );
+    await upgradeAuthoritySchema(f.db, f.schema, { policies: [] });
+    await upgradeCredentialEffects(f.db, f.schema);
+    assertEquals(
+      (await f.db.query(
+        `SELECT result->>'id' AS id FROM "${f.schema}".owner_receipts WHERE kind='authorization.history'`,
+      )).rows,
+      [{ id: "shared" }],
+    );
+  } finally {
+    await f.close();
+  }
+});

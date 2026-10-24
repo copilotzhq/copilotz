@@ -127,9 +127,17 @@ export async function* iterateAuthorityUpgrade(
         OR EXISTS (SELECT 1 FROM live_operations o WHERE o.namespace=e.namespace AND o.root_event_id=e.id)
       UNION
       SELECT e.namespace,e.id,e.causation_id FROM ${tables.events} e JOIN live_events child ON child.namespace=e.namespace AND child.causation_id=e.id
+    ), lifecycle AS MATERIALIZED (
+      SELECT namespace,event_body_id,COALESCE(body->'data',body)->>'actionRunId' AS run_id,
+        COALESCE(body->'data',body)->>'status' AS status FROM ${tables.event_bodies}
+    ), live_runs AS (
+      SELECT b.namespace,b.run_id FROM lifecycle b JOIN ${tables.events} e
+        ON e.namespace=b.namespace AND e.payload->'dataRef'->>'eventBodyId'=b.event_body_id
+        JOIN live_events l ON l.namespace=e.namespace AND l.id=e.id
+      UNION
+      SELECT namespace,action_run_id FROM ${tables.open_actions}
     ), invoked AS MATERIALIZED (
-      SELECT namespace,event_body_id FROM ${tables.event_bodies}
-      WHERE COALESCE(body->'data',body)->>'status'='invoked'
+      SELECT namespace,event_body_id FROM lifecycle WHERE status='invoked'
     ), candidates AS MATERIALIZED (
       SELECT b.namespace,e.id,b.event_body_id AS body_id FROM invoked b LEFT JOIN ${tables.events} e
         ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
@@ -141,18 +149,23 @@ export async function* iterateAuthorityUpgrade(
       SELECT e.namespace,e.id,e.payload->'dataRef'->>'eventBodyId' FROM ${tables.events} e JOIN
         (SELECT DISTINCT event_id FROM ${tables.event_deliveries} WHERE status IS NULL OR status NOT IN ('succeeded','cancelled','dead_letter')) d ON d.event_id=e.id
     )
-    SELECT c.namespace,c.id,c.body_id,EXISTS(SELECT 1 FROM live_events l WHERE l.namespace=c.namespace AND l.id=c.id) AS live FROM candidates c ORDER BY namespace,id,body_id`,
+    SELECT c.namespace,c.id,c.body_id,
+      (EXISTS(SELECT 1 FROM live_events l WHERE l.namespace=c.namespace AND l.id=c.id)
+        OR EXISTS(SELECT 1 FROM lifecycle b JOIN live_runs r ON r.namespace=b.namespace AND r.run_id=b.run_id
+          WHERE b.namespace=c.namespace AND b.event_body_id=c.body_id)) AS live
+      FROM candidates c ORDER BY namespace,id,body_id`,
   )).rows;
   const liveEvents = new Set(
     candidates.filter((c) => c.live).map((c) =>
       JSON.stringify([c.namespace, c.id])
     ),
   );
-  const bodyReferences = new Map<string, number>();
+  const liveBodies = new Set<string>();
+  const historicalRuns = new Set<string>();
   for (const candidate of candidates) {
-    if (candidate.body_id === null) continue;
+    if (candidate.body_id === null || !candidate.live) continue;
     const key = JSON.stringify([candidate.namespace, candidate.body_id]);
-    bodyReferences.set(key, (bodyReferences.get(key) ?? 0) + 1);
+    liveBodies.add(key);
   }
   let done = 0;
   for (let start = 0; start < candidates.length; start += 1000) {
@@ -268,8 +281,7 @@ export async function* iterateAuthorityUpgrade(
           JSON.stringify([row.namespace, data.actionRunId]),
         );
         const evidence = !capture && terminal &&
-            bodyReferences.get(JSON.stringify([row.namespace, row.body_id])) ===
-              1
+            !liveBodies.has(JSON.stringify([row.namespace, row.body_id]))
           ? await verifiedTerminalEvidence(
             terminalByKey.get(
               JSON.stringify([row.namespace, terminal.terminal_id]),
@@ -279,6 +291,11 @@ export async function* iterateAuthorityUpgrade(
           )
           : undefined;
         if (evidence) {
+          // Several retained events can reference one invocation, including
+          // across batches. Verify every reference, but record the run once.
+          const runKey = JSON.stringify([row.namespace, data.actionRunId]);
+          if (historicalRuns.has(runKey)) continue;
+          historicalRuns.add(runKey);
           history.push({
             kind: "invocation",
             namespace: row.namespace,

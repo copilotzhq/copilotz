@@ -184,7 +184,9 @@ export async function inspectEmbeddedContent(
           (await digestContent(new TextEncoder().encode(key))).slice(7)
         }`,
         length: 0,
-        outcome: "failed",
+        // Keep the referencing record's terminal outcome; eligibility already
+        // excludes completed references.
+        outcome: outcome === "completed" ? "failed" : outcome,
         unavailable: true,
       };
       copies.set(key, copy);
@@ -663,7 +665,11 @@ export async function migrateEmbeddedContent(
     }
     const nodes: Record<string, unknown>[] = [],
       events: Record<string, unknown>[] = [];
+    // Batch by encoded size as well as count: a few large retained bodies can
+    // otherwise exceed V8's maximum string length in one JSON parameter.
+    let pendingBytes = 0;
     async function flush() {
+      pendingBytes = 0;
       if (nodes.length) {
         const result = await transaction.query(
           `UPDATE ${tables.nodes} n SET data=v.converted
@@ -695,7 +701,9 @@ export async function migrateEmbeddedContent(
         : retainedRows(transaction, plan.schema)
     ) {
       const converted = convert(row.value, row.namespace, copies, byBody);
-      if (JSON.stringify(converted) === JSON.stringify(row.value)) continue;
+      const convertedJson = JSON.stringify(converted),
+        originalJson = JSON.stringify(row.value);
+      if (convertedJson === originalJson) continue;
       documents++;
       const update = {
         namespace: row.namespace,
@@ -712,7 +720,10 @@ export async function migrateEmbeddedContent(
           digest: encoded.digest,
         });
       }
-      if (nodes.length + events.length >= 2000) await flush();
+      pendingBytes += convertedJson.length * 2 + originalJson.length;
+      if (
+        nodes.length + events.length >= 2000 || pendingBytes >= 32 * 1024 * 1024
+      ) await flush();
     }
     await flush();
     console.error(

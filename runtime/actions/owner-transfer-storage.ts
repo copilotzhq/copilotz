@@ -167,7 +167,7 @@ export async function* iterateTransferBodies(
   const invalid =
     (await executor.query(`SELECT 1 FROM ${tables.content_logical_bodies} b
     LEFT JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy
-    WHERE (c.copy_key IS NULL AND NOT COALESCE((b.revocation='revoked' AND b.committed_offset=0 AND b.terminal->>'outcome'='failed' AND b.terminal->>'length'='0'),FALSE)) OR c.body_id<>b.body_id OR c.state NOT IN ('current','retired') OR b.revocation='revoking' LIMIT 1`))
+    WHERE (c.copy_key IS NULL AND NOT COALESCE((b.revocation='revoked' AND b.committed_offset=0 AND b.terminal->>'outcome' IN ('failed','cancelled') AND b.terminal->>'length'='0'),FALSE)) OR c.body_id<>b.body_id OR c.state NOT IN ('current','retired') OR b.revocation='revoking' LIMIT 1`))
       .rows;
   const retiring = (await executor.query(
     `SELECT 1 FROM ${tables.owner_body_retirements} WHERE completed=FALSE LIMIT 1`,

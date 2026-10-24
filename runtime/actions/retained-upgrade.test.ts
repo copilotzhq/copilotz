@@ -1290,6 +1290,11 @@ Deno.test("reviewed missing non-completed streams become unavailable through v14
       `SELECT namespace,stream_id,outcome FROM ${streams} WHERE state='terminal' AND outcome='failed' LIMIT 1`,
     )).rows[0];
     assertExists(old);
+    // A cancelled lane must keep its own outcome when its bytes are missing.
+    await f.db.query(
+      `UPDATE ${streams} SET outcome='cancelled' WHERE namespace=$1 AND stream_id=$2`,
+      [old.namespace, old.stream_id],
+    );
     // Seed a genuinely external synthetic store; its reader never queries the
     // outer database while v12 holds the transaction connection.
     const physical = (await f.db.query<
@@ -1381,7 +1386,7 @@ Deno.test("reviewed missing non-completed streams become unavailable through v14
       `SELECT outcome,availability,availability_reason FROM ${streams} WHERE stream_id=$1`,
       [old.stream_id],
     )).rows[0];
-    assertEquals(record.outcome, old.outcome);
+    assertEquals(record.outcome, "cancelled");
     assertEquals(record.availability, "purged");
     assertEquals(record.availability_reason, "missing");
     const copy = plan.content.inventory.find((v) => v.unavailable)!;
@@ -1392,7 +1397,10 @@ Deno.test("reviewed missing non-completed streams become unavailable through v14
       )).rows[0];
     assertEquals(tombstone.revocation, "revoked");
     assertEquals((tombstone.terminal as { length: number }).length, 0);
-    assertEquals((tombstone.terminal as { outcome: string }).outcome, "failed");
+    assertEquals(
+      (tombstone.terminal as { outcome: string }).outcome,
+      "cancelled",
+    );
     assertEquals(
       (await f.db.query(
         `SELECT 1 FROM ${f.tables.content_copies} WHERE body_id=$1`,

@@ -32,7 +32,7 @@ export function actionOwnershipStatement(
   // reviewed terminal receipt must still prevent claiming that run anew.
   const canInvoke = data.status === "invoked"
     ? `NOT EXISTS (SELECT 1 FROM ${tables.owner_receipts} WHERE owner='schema'
-        AND domain='logical' AND kind='action.upgrade-terminal' AND key=${
+        AND domain='logical' AND ((kind='action.upgrade-terminal' AND key=${
       param(
         JSON.stringify([
           "action.upgrade-terminal",
@@ -40,7 +40,16 @@ export function actionOwnershipStatement(
           data.actionRunId,
         ]),
       )
-    })`
+    }) OR (kind='authorization.history' AND key=${
+      param(
+        JSON.stringify([
+          "authorization.history",
+          "invocation",
+          draft.namespace,
+          data.actionRunId,
+        ]),
+      )
+    })))`
     : "TRUE";
   const effectsSettled =
     data.status === "completed" || data.status === "awaiting"
@@ -63,9 +72,16 @@ export function actionOwnershipStatement(
       ctes: [],
       gate: `${effectsSettled} AND ${canInvoke}`,
       effects: () => [],
-      report: `jsonb_build_object('effectsSettled', ${effectsSettled})`,
+      report:
+        `jsonb_build_object('effectsSettled', ${effectsSettled}, 'canInvoke', ${canInvoke})`,
       resolve(report, inserted) {
         if (!inserted) {
+          const value = typeof report === "string"
+            ? JSON.parse(report)
+            : report;
+          if ((value as { canInvoke?: boolean })?.canInvoke === false) {
+            throw new ActionOwnershipLost(data.actionRunId);
+          }
           checkEffects(
             typeof report === "string" ? JSON.parse(report) : report,
           );

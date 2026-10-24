@@ -1,4 +1,4 @@
-import { bindTestActions } from "../testing/authority.ts";
+import { bindTestActions, testAuthority } from "../testing/authority.ts";
 import { testAuthorityManifest } from "../testing/upgrade.ts";
 import { testSecretAdapter } from "../testing/secret-adapter.ts";
 import { UpgradeStepRequiredError } from "./upgrade-errors.ts";
@@ -206,7 +206,7 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
     );
     const manifest = inputs.get(f.schema)!.authority!;
     for (const event of upgraded) {
-      const binding = manifest.events.find((entry) =>
+      const binding = (manifest.events ?? []).find((entry) =>
         entry.eventId === event.id
       );
       assertEquals(
@@ -220,7 +220,7 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
           `SELECT COUNT(*)::integer AS count FROM ${f.tables.authorization_invocations}`,
         )).rows[0].count,
       ),
-      manifest.invocations.length,
+      (manifest.invocations ?? []).length,
     );
     assertEquals(
       upgraded.map((event) => Number(event.seq)),
@@ -249,7 +249,7 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
     );
     assertEquals(
       (await f.db.query(
-        `SELECT * FROM ${f.tables.owner_receipts} WHERE kind NOT IN ('owner-keys.upgrade','authorization.upgrade','action.protected-input')`,
+        `SELECT * FROM ${f.tables.owner_receipts} WHERE kind NOT IN ('owner-keys.upgrade','authorization.upgrade','authorization.history','action.protected-input')`,
       )).rows,
       [],
     );
@@ -364,19 +364,15 @@ Deno.test("real old-code history upgrades, replays historical cursors and activa
         },
       })],
     });
-    const source = upgraded.find((event) =>
-      event.deduplication_id === "host:retained-preparation"
-    )!;
-    const authority = manifest.events.find((entry) =>
-      entry.eventId === source.id
-    )!.authority;
-    const actions = bindTestActions(app.actions, authority);
+    const actions = bindTestActions(
+      app.actions,
+      testAuthority(f.schema, "archive"),
+    );
     try {
-      assertEquals(
-        await actions.prepareParent({}, {
+      await assertRejects(() =>
+        actions.prepareParent({}, {
           idempotencyKey: "retained-preparation",
-        }),
-        { value: "original captured input" },
+        })
       );
       assertEquals(executed, 0);
       assertEquals(

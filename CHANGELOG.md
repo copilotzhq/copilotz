@@ -1,5 +1,12 @@
 ## Unreleased
 
+- Exclude terminal uncaptured invocation history and fully settled ingress from
+  v13 authority review. Inventory reports history separately; manifest-bound
+  non-resumable receipts record counts and a deterministic history digest.
+  Captured, live and ambiguous work still requires explicit bindings. Guard
+  historical claims and authorization reuse; support an empty or policy-only
+  manifest when all retained work is history.
+
 - Support reviewed shared content ownership during offline upgrades, with
   candidate validation, stable legacy fingerprints and a deterministic
   `content-decisions --plan=...` review template.

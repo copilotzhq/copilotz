@@ -45,13 +45,21 @@ Run commands as `deno run -A scripts/upgrade-retained-data.ts ...` with
    `apply --schema=SCHEMA --owner-keys=./migration-keys.ts`. Starting at v12,
    skip preparation and key conversion. Never change the marker manually.
 5. At v12, run `authority-inventory --schema=SCHEMA > authority-inventory.json`.
-   Build and review `authority.json` against the application's policy. Supply
-   exact retained invocation/event digests and explicit authority bindings;
-   unbound captures need original Action schema snapshots and unclassified
-   ingress needs explicit provenance. Do not derive authority from worker IDs.
-   Inspect after key conversion, which may change capture digests. An empty
-   inventory still requires
-   `{ "policies": [], "invocations": [], "events": [] }`.
+   Build and review `authority.json` against the application's policy. The
+   top-level `invocations` and `events` contain work that still needs authority:
+   non-terminal invocations, every captured invocation (including terminal
+   captures), ingress with live work, and ambiguous cases. Supply exact retained
+   invocation/event digests and explicit authority bindings; unbound captures
+   need original Action schema snapshots and unclassified ingress needs explicit
+   provenance. Do not derive authority from worker IDs. Inspect after key
+   conversion, which may change capture digests. `history.invocations` lists
+   terminal uncaptured runs, including accepted wrapper attestations and
+   reviewed v11 abandonments; `history.events` lists ingress with only terminal
+   deliveries and operations. `history.counts` reports both totals. Missing
+   invocation sources are permitted only for this terminal uncaptured history.
+   No manifest entries or original Action schemas are required for it. When all
+   work is history, use `{ "policies": [], "invocations": [], "events": [] }` or
+   `{ "policies": [] }`.
 6. Run `apply --schema=SCHEMA --authority=authority.json`. The authority step
    commits v13 and its manifest receipt, clears transport attachments and fences
    the owner epoch. The credential-effects step then adds private effect storage
@@ -61,6 +69,22 @@ Run commands as `deno run -A scripts/upgrade-retained-data.ts ...` with
    drained. This additive step preserves sessions and retained authority and
    fences the owner epoch. No new manifest or key input is required. Replaying
    v14 preserves effect and flow bindings without advancing the epoch again.
+
+The v13 step writes one `authorization.history` owner receipt per excluded item.
+Its key is the compact JSON array
+`["authorization.history", "invocation" | "event", namespace, runId | eventId]`.
+The intent is `{ fingerprint }`, matching the accepted manifest. The result is
+`{ kind, namespace, id, resumable: false, evidence }`: invocation evidence binds
+the invoked body and terminal body or accepted v11 receipt; ingress evidence
+binds the event digest and records `terminalSource: "settled-ingress"`. The
+accepted `authorization-upgrade:13` receipt's result is
+`{ history: { invocations, events, digest } }`. Its SHA-256 chain starts with
+the canonical empty array digest and hashes `[previousDigest, historyEntry]` in
+inventory order (namespace, event ID, body ID). Canonical JSON sorts object
+keys; arrays preserve order. The supplied manifest fingerprint and replay
+comparison remain unchanged. History markers grant no authority, block new
+claims on the same run, and cannot satisfy protected capture, result or
+decision-reuse checks.
 
 `--owner-keys` is a trusted local TypeScript module path, resolved from the
 working directory. It must default-export `OwnerKeyUpgradeOptions`:

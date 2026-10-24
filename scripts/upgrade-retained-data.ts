@@ -116,6 +116,11 @@ try {
       }
     };
     const events = [];
+    const history = {
+      invocations: [] as unknown[],
+      events: [] as unknown[],
+      counts: { invocations: 0, events: 0 },
+    };
     let count = 0;
     await write('{"invocations":[');
     for await (
@@ -125,8 +130,16 @@ try {
         await write((count++ ? "," : "") + JSON.stringify(invocation));
       }
       events.push(...batch.events);
+      for (const entry of batch.history) {
+        const kind = entry.kind === "invocation" ? "invocations" : "events";
+        history[kind].push(entry);
+        history.counts[kind]++;
+      }
     }
-    await write('],"events":' + JSON.stringify(events) + "}\n");
+    await write(
+      '],"events":' + JSON.stringify(events) + ',"history":' +
+        JSON.stringify(history) + "}\n",
+    );
   } else if (command === "drain") {
     const report = await inspectRetainedDataDrain(database.session, schema);
     console.log(JSON.stringify(report, null, 2));

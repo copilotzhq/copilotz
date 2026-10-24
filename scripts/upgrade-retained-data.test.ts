@@ -106,10 +106,12 @@ export default { sourceAdapter: adapter, masterAdapter: adapter };
       );
     assertEquals((await apply()).version, 14);
     assertEquals((await apply()).version, 14);
-    assertEquals(await command("authority-inventory"), {
-      invocations: [],
-      events: [],
-    });
+    const inventory = await command("authority-inventory");
+    assertEquals(inventory.invocations, []);
+    assertEquals(inventory.events, []);
+    assertEquals(inventory.history.counts, { invocations: 1, events: 0 });
+    assertEquals(inventory.history.invocations[0].id, "crash");
+    assertEquals(inventory.history.invocations[0].resumable, false);
   } finally {
     const cleanup = await createTestDatabase({ url });
     try {

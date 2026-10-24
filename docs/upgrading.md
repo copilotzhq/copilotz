@@ -545,15 +545,34 @@ their next step; never relabel a schema or skip a step.
    omit the retained plan. The standalone `migrateOwnerKeys` API also performs
    exactly this step and stops at v12.
 4. At v12, run `inspectAuthorityUpgrade(session, schema)` (CLI
-   `authority-inventory`). Review the resulting invocations and ingress events
-   against application policy. Build an explicit `AuthorityUpgradeManifest`
-   containing policy revisions, exact invocation/event digests, authority
-   bindings, and any required original Action schemas or ingress provenance.
-   Inspect after key conversion because reencrypting captures can change their
-   digests. Even an empty inventory requires an explicit empty manifest.
+   `authority-inventory`). Review the top-level `invocations` and `events`
+   against application policy: every non-terminal or captured invocation,
+   ingress with live work, and anything ambiguous still needs a binding.
+   Terminal uncaptured runs (own terminal, accepted wrapper attestation, or
+   reviewed v11 abandonment) and ingress whose deliveries and operations are all
+   terminal appear separately under `history`, with counts. They need no binding
+   or Action schema snapshot; a missing source does not disqualify terminal
+   uncaptured history. Build an explicit `AuthorityUpgradeManifest` containing
+   policy revisions, exact invocation/event digests, authority bindings, and any
+   required original Action schemas or ingress provenance. Inspect after key
+   conversion because reencrypting captures can change their digests. If
+   everything is history, supply
+   `{ "policies": [], "invocations": [], "events": [] }` or just the policy
+   list, such as `{ "policies": [] }`. The manifest is still explicit.
 5. Call `upgradeActionLifecycle(session, schema, { authority })` to commit v12 →
    v13. This validates every binding, writes the accepted manifest receipt,
-   invalidates old transport attachments, and fences the old owner epoch.
+   invalidates old transport attachments, and fences the old owner epoch. Each
+   excluded item gets an `authorization.history` owner receipt keyed by
+   `["authorization.history", "invocation" | "event", namespace, runId | eventId]`.
+   Its intent contains the accepted manifest fingerprint; its result contains
+   `kind`, `namespace`, `id`, `resumable: false`, and terminal evidence. The
+   `authorization-upgrade:13` receipt retains that fingerprint in its intent and
+   records `{ history: { invocations, events, digest } }` in its result. The
+   SHA-256 chain starts with the canonical empty array digest and hashes
+   `[previousDigest, historyEntry]` in deterministic inventory order. These
+   markers authorize nothing and prevent historical runs from being claimed
+   again. Observation keeps existing disclosure checks; terminal history is
+   never a reusable execution grant.
 6. The same call then commits v13 → v14 in one transaction: private credential
    effect storage, indexed run/operation lookup, accepted flow continuation
    bindings, namespace-local `(namespace, id)` node identity, and `COLLATE "C"`

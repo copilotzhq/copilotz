@@ -13,7 +13,7 @@ import { upgradeCredentialEffects } from "../authorization/credentials-upgrade.t
 import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
 import { authorityRequired, ownerKeysRequired } from "./upgrade-errors.ts";
 import {
-  type AuthorityUpgradeManifest,
+  type AuthorityUpgradeInput,
   upgradeAuthoritySchema,
 } from "../authorization/upgrade.ts";
 import {
@@ -319,7 +319,7 @@ async function finalizeRetainedDataUpgrade(
       reviewedFingerprint?: string;
       contentDecisions?: readonly ContentMigrationDecision[];
       ownerKeys?: OwnerKeyUpgradeOptions;
-      authority?: AuthorityUpgradeManifest;
+      authority?: AuthorityUpgradeInput;
     }> = {},
 ): Promise<void> {
   const schema = validateEventSchemaName(schemaName);

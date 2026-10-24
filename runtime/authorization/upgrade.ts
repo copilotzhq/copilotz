@@ -1,3 +1,9 @@
+import {
+  type AuthorityHistory,
+  authorityHistoryKey,
+  terminalAuthorityEvidence,
+  verifiedTerminalEvidence,
+} from "./upgrade-history.ts";
 import { captureOfflineManifest } from "./offline-manifest.ts";
 import { authorityRequired } from "../actions/upgrade-errors.ts";
 import {
@@ -45,6 +51,10 @@ export type AuthorityUpgradeManifest = Readonly<{
       import("../actions/protected-action-types.ts").ProtectedActionIngress;
   })[];
 }>;
+/** Omitted binding arrays are empty; supplied JSON still fingerprints exactly. */
+export type AuthorityUpgradeInput =
+  & Omit<AuthorityUpgradeManifest, "invocations" | "events">
+  & Partial<Pick<AuthorityUpgradeManifest, "invocations" | "events">>;
 async function digest(value: unknown, captured = false): Promise<string> {
   const bytes = new Uint8Array(
     await crypto.subtle.digest(
@@ -63,15 +73,30 @@ export async function inspectAuthorityUpgrade(
   Readonly<{
     invocations: readonly RetainedInvocation[];
     events: readonly RetainedAuthorityEvent[];
+    history: {
+      invocations: readonly AuthorityHistory[];
+      events: readonly AuthorityHistory[];
+      counts: { invocations: number; events: number };
+    };
   }>
 > {
   const invocations: RetainedInvocation[] = [],
     events: RetainedAuthorityEvent[] = [];
+  const history = {
+    invocations: [] as AuthorityHistory[],
+    events: [] as AuthorityHistory[],
+    counts: { invocations: 0, events: 0 },
+  };
   for await (const batch of iterateAuthorityUpgrade(transaction, schema)) {
     invocations.push(...batch.invocations);
     events.push(...batch.events);
+    for (const entry of batch.history) {
+      const kind = entry.kind === "invocation" ? "invocations" : "events";
+      history[kind].push(entry);
+      history.counts[kind]++;
+    }
   }
-  return { invocations, events };
+  return { invocations, events, history };
 }
 /** Bounded inventory for CLI consumers and the v13 migration. */
 export async function* iterateAuthorityUpgrade(
@@ -79,31 +104,63 @@ export async function* iterateAuthorityUpgrade(
   schema: string,
 ) {
   const tables = createCoreTableNames(schema);
+  const terminalEvidence = await terminalAuthorityEvidence(transaction, schema);
   // Extract candidate identities once, without retaining historical payloads.
-  const candidates =
-    (await transaction.query<{ namespace: string; id: string }>(
-      `WITH invoked AS MATERIALIZED (
+  const candidates = (await transaction.query<
+    {
+      namespace: string;
+      id: string | null;
+      body_id: string | null;
+      live: boolean;
+    }
+  >(
+    `WITH RECURSIVE live_operations AS (
+      SELECT o.namespace,o.operation_id,o.root_event_id,o.parent_operation_id FROM "${schema}".copilotz_operations o
+      WHERE o.state IS NULL OR o.state NOT IN ('completed','failed','cancelled')
+        OR EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.settlement_scope_id=o.operation_id AND (d.status IS NULL OR d.status NOT IN ('succeeded','cancelled','dead_letter')))
+      UNION
+      SELECT o.namespace,o.operation_id,o.root_event_id,o.parent_operation_id FROM "${schema}".copilotz_operations o
+      JOIN live_operations child ON child.namespace=o.namespace AND child.parent_operation_id=o.operation_id
+    ), live_events(namespace,id,causation_id) AS (
+      SELECT e.namespace,e.id,e.causation_id FROM ${tables.events} e WHERE
+        EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.event_id=e.id AND (d.status IS NULL OR d.status NOT IN ('succeeded','cancelled','dead_letter')))
+        OR EXISTS (SELECT 1 FROM live_operations o WHERE o.namespace=e.namespace AND o.root_event_id=e.id)
+      UNION
+      SELECT e.namespace,e.id,e.causation_id FROM ${tables.events} e JOIN live_events child ON child.namespace=e.namespace AND child.causation_id=e.id
+    ), invoked AS MATERIALIZED (
       SELECT namespace,event_body_id FROM ${tables.event_bodies}
       WHERE COALESCE(body->'data',body)->>'status'='invoked'
     ), candidates AS MATERIALIZED (
-      SELECT e.namespace,e.id FROM ${tables.events} e JOIN invoked b
+      SELECT b.namespace,e.id,b.event_body_id AS body_id FROM invoked b LEFT JOIN ${tables.events} e
         ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
       UNION
-      SELECT namespace,id FROM ${tables.events}
+      SELECT namespace,id,payload->'dataRef'->>'eventBodyId' FROM ${tables.events}
         WHERE NULLIF(owner_ingress,'null'::jsonb) IS NOT NULL
           OR type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested')
       UNION
-      SELECT e.namespace,e.id FROM ${tables.events} e JOIN
-        (SELECT DISTINCT event_id FROM ${tables.event_deliveries} WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id
+      SELECT e.namespace,e.id,e.payload->'dataRef'->>'eventBodyId' FROM ${tables.events} e JOIN
+        (SELECT DISTINCT event_id FROM ${tables.event_deliveries} WHERE status IS NULL OR status NOT IN ('succeeded','cancelled','dead_letter')) d ON d.event_id=e.id
     )
-    SELECT namespace,id FROM candidates ORDER BY namespace,id`,
-    )).rows;
+    SELECT c.namespace,c.id,c.body_id,EXISTS(SELECT 1 FROM live_events l WHERE l.namespace=c.namespace AND l.id=c.id) AS live FROM candidates c ORDER BY namespace,id,body_id`,
+  )).rows;
+  const liveEvents = new Set(
+    candidates.filter((c) => c.live).map((c) =>
+      JSON.stringify([c.namespace, c.id])
+    ),
+  );
+  const bodyReferences = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (candidate.body_id === null) continue;
+    const key = JSON.stringify([candidate.namespace, candidate.body_id]);
+    bodyReferences.set(key, (bodyReferences.get(key) ?? 0) + 1);
+  }
   let done = 0;
   for (let start = 0; start < candidates.length; start += 1000) {
     const ingress = new Map<string, Record<string, unknown>>();
     const rows = (await transaction.query<{
       namespace: string;
       id: string;
+      body_id: string;
       metadata: Record<string, unknown>;
       payload: unknown;
       owner_ingress: unknown;
@@ -113,13 +170,45 @@ export async function* iterateAuthorityUpgrade(
       intent: unknown;
       result: unknown;
     }>(
-      `SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
-       FROM jsonb_to_recordset($1::jsonb) AS c(namespace text,id text)
-       JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
-       LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
-       ORDER BY e.namespace,e.id`,
+      `SELECT c.namespace,c.id,c.body_id,COALESCE(e.metadata,'{}'::jsonb) AS metadata,
+         COALESCE(e.payload,jsonb_build_object('dataRef',jsonb_build_object('eventBodyId',c.body_id,'schemaVersion',b.schema_version,'mediaType','application/json'))) AS payload,
+         e.owner_ingress,b.body,b.digest,b.schema_version
+       FROM jsonb_to_recordset($1::jsonb) AS c(namespace text,id text,body_id text)
+       LEFT JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
+       LEFT JOIN ${tables.event_bodies} b ON b.namespace=c.namespace AND b.event_body_id=c.body_id
+       ORDER BY c.namespace,c.id,c.body_id`,
       [JSON.stringify(candidates.slice(start, start + 1000))],
     )).rows;
+    const terminalKeys = rows.flatMap((row) => {
+      const data = (protectedActionLifecycleBody(row.body)?.data ?? row.body) as
+        | Record<string, unknown>
+        | null;
+      const evidence = terminalEvidence.get(
+        JSON.stringify([row.namespace, data?.actionRunId]),
+      );
+      return evidence?.terminal_id
+        ? [{ namespace: row.namespace, id: evidence.terminal_id }]
+        : [];
+    });
+    const terminalBodies = (await transaction.query<
+      {
+        namespace: string;
+        event_body_id: string;
+        body: unknown;
+        digest: string;
+        schema_version: number;
+      }
+    >(
+      `SELECT b.* FROM ${tables.event_bodies} b JOIN
+       (SELECT DISTINCT namespace,id FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text)) k
+       ON b.namespace=k.namespace AND b.event_body_id=k.id`,
+      [JSON.stringify(terminalKeys)],
+    )).rows;
+    const terminalByKey = new Map(
+      terminalBodies.map((
+        b,
+      ) => [JSON.stringify([b.namespace, b.event_body_id]), b]),
+    );
     const receipts = (await transaction.query<
       { key: string; intent: unknown; result: unknown }
     >(
@@ -143,9 +232,15 @@ export async function* iterateAuthorityUpgrade(
     const receiptByKey = new Map(
       receipts.map((receipt) => [receipt.key, receipt]),
     );
+    const history: AuthorityHistory[] = [];
     const invocations: RetainedInvocation[] = [];
     const events: RetainedAuthorityEvent[] = [];
     for (const row of rows) {
+      if (++done % 2000 === 0 || done === candidates.length) {
+        console.error(
+          `[upgrade:${schema}] authority inventory ${done}/${candidates.length}`,
+        );
+      }
       ingress.set(
         JSON.stringify([row.namespace, row.id]),
         row.owner_ingress as Record<string, unknown>,
@@ -169,6 +264,34 @@ export async function* iterateAuthorityUpgrade(
             RetainedInvocation["capture"]
           >
           : null;
+        const terminal = terminalEvidence.get(
+          JSON.stringify([row.namespace, data.actionRunId]),
+        );
+        const evidence = !capture && terminal &&
+            bodyReferences.get(JSON.stringify([row.namespace, row.body_id])) ===
+              1
+          ? await verifiedTerminalEvidence(
+            terminalByKey.get(
+              JSON.stringify([row.namespace, terminal.terminal_id]),
+            ),
+            terminal,
+            row.body_id,
+          )
+          : undefined;
+        if (evidence) {
+          history.push({
+            kind: "invocation",
+            namespace: row.namespace,
+            id: data.actionRunId,
+            resumable: false,
+            evidence: {
+              invokedBodyId: row.body_id,
+              invokedBodyDigest: row.digest,
+              ...evidence,
+            },
+          });
+          continue;
+        }
         const sourceEventId = capture?.result.source.eventId ??
           row.metadata.sourceEventId;
         if (typeof sourceEventId !== "string" || !sourceEventId) {
@@ -190,7 +313,7 @@ export async function* iterateAuthorityUpgrade(
           capture,
         });
       } else {
-        events.push({
+        const event = {
           namespace: row.namespace,
           eventId: row.id,
           ...(row.owner_ingress === null ? { unclassified: true } : {}),
@@ -202,22 +325,30 @@ export async function* iterateAuthorityUpgrade(
             ownerIngress: row.owner_ingress,
             body,
           }),
-        });
-      }
-      if (++done % 2000 === 0 || done === rows.length) {
-        console.error(
-          `[upgrade:${schema}] authority inventory ${done}/${rows.length}`,
-        );
+        };
+        if (liveEvents.has(JSON.stringify([row.namespace, row.id]))) {
+          events.push(event);
+        } else {history.push({
+            kind: "event",
+            namespace: row.namespace,
+            id: row.id,
+            resumable: false,
+            evidence: {
+              digest: event.digest,
+              terminalSource: "settled-ingress",
+            },
+          });}
       }
     }
-    yield { invocations, events, ingress };
+    yield { invocations, events, ingress, history };
   }
 }
 async function applyAuthorityUpgrade(
   transaction: SqlExecutor,
   schema: string,
   manifest: AuthorityUpgradeManifest,
-): Promise<void> {
+  fingerprint: string,
+) {
   const tables = createCoreTableNames(schema);
   for (const statement of authorizationSchemaStatements(schema)) {
     await transaction.query(statement);
@@ -236,7 +367,25 @@ async function applyAuthorityUpgrade(
     invocations.size !== manifest.invocations.length ||
     events.size !== manifest.events.length
   ) throw new Error("Duplicate authority migration entry.");
+  const history = { invocations: 0, events: 0, digest: await digest([]) };
   for await (const inventory of iterateAuthorityUpgrade(transaction, schema)) {
+    const markers = [];
+    for (const entry of inventory.history) {
+      history[entry.kind === "invocation" ? "invocations" : "events"]++;
+      history.digest = await digest([history.digest, entry]);
+      markers.push({
+        key: authorityHistoryKey(entry.kind, entry.namespace, entry.id),
+        result: entry,
+      });
+    }
+    if (markers.length) {
+      await transaction.query(
+        `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result)
+       SELECT 'schema','logical',key,'offline-upgrade','authorization.history',$1::jsonb,result
+       FROM jsonb_to_recordset($2::jsonb) AS v(key text,result jsonb)`,
+        [JSON.stringify({ fingerprint }), JSON.stringify(markers)],
+      );
+    }
     const selectedInvocations = inventory.invocations.map((entry) => {
       const key = JSON.stringify([entry.namespace, entry.runId]),
         selected = invocations.get(key);
@@ -273,6 +422,7 @@ async function applyAuthorityUpgrade(
   await transaction.query(
     `DELETE FROM ${tables.owner_deadlines} WHERE source='authorization'`,
   );
+  return { history };
 }
 async function applyAuthorityBatch(
   transaction: SqlExecutor,
@@ -531,13 +681,28 @@ async function applyAuthorityBatch(
 export async function upgradeAuthoritySchema(
   session: SqlSession,
   schemaName: string,
-  supplied?: AuthorityUpgradeManifest,
+  supplied?: AuthorityUpgradeInput,
 ): Promise<void> {
   if (!supplied) throw authorityRequired();
   const schema = validateEventSchemaName(schemaName);
   const tables = createCoreTableNames(schema);
-  const manifest = captureOfflineManifest(supplied);
-  const fingerprint = await digest(manifest, true);
+  const snapshot = captureOfflineManifest(supplied);
+  if (
+    !Array.isArray(snapshot.policies) ||
+    (snapshot.invocations !== undefined &&
+      !Array.isArray(snapshot.invocations)) ||
+    (snapshot.events !== undefined && !Array.isArray(snapshot.events))
+  ) {
+    throw new TypeError(
+      "Authority manifest policies and bindings must be arrays.",
+    );
+  }
+  const fingerprint = await digest(snapshot, true);
+  const manifest = {
+    ...snapshot,
+    invocations: snapshot.invocations ?? [],
+    events: snapshot.events ?? [],
+  };
   await session.transaction(async (transaction) => {
     const names = (await transaction.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name",
@@ -577,10 +742,15 @@ export async function upgradeAuthoritySchema(
     assertRetainedDataDrained(
       await inspectRetainedDataDrain(transaction, schema),
     );
-    await applyAuthorityUpgrade(transaction, schema, manifest);
+    const result = await applyAuthorityUpgrade(
+      transaction,
+      schema,
+      manifest,
+      fingerprint,
+    );
     await transaction.query(
-      `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical','authorization-upgrade:13','offline-upgrade','authorization.upgrade',$1::jsonb,'null')`,
-      [JSON.stringify({ fingerprint })],
+      `INSERT INTO ${tables.owner_receipts}(owner,domain,key,principal,kind,intent,result) VALUES('schema','logical','authorization-upgrade:13','offline-upgrade','authorization.upgrade',$1::jsonb,$2::jsonb)`,
+      [JSON.stringify({ fingerprint }), JSON.stringify(result)],
     );
     await transaction.query(
       `UPDATE ${tables.owner_epochs} SET epoch=epoch+1,holder=''`,

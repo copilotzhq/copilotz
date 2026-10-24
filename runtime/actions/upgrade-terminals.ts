@@ -120,21 +120,19 @@ export async function inspectUnterminatedRuns(tx: SqlExecutor, schema: string) {
 }
 async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
   const table = createCoreTableNames(schema).event_bodies;
-  let after: [string, string, string] | undefined;
-  while (true) {
-    const rows = (await tx.query<{
-      namespace: string;
-      event_body_id: string;
-      run_id: string;
-      action_id: string | null;
-      body_count: number;
-      invoked_count: number;
-      conflicting: boolean;
-      wrapper_ids: string[] | null;
-    }>(
-      // Extract every key once and hash-join; a per-run JSON predicate over
-      // event_bodies has no index and rescans the whole table for each run.
-      `WITH keys AS MATERIALIZED (
+  const summaries = (await tx.query<{
+    namespace: string;
+    event_body_id: string;
+    run_id: string;
+    action_id: string | null;
+    body_count: number;
+    invoked_count: number;
+    conflicting: boolean;
+    wrapper_ids: string[] | null;
+  }>(
+    // Extract every key once and hash-join; a per-run JSON predicate over
+    // event_bodies has no index and rescans the whole table for each run.
+    `WITH keys AS MATERIALIZED (
          SELECT namespace,event_body_id,body->>'status' AS status,
                 body->>'actionRunId' AS run_id,body->>'actionId' AS action_id,
                 body->'output'->>'targetActionRunId' AS target_run
@@ -172,23 +170,34 @@ async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
        FROM incomplete_runs i
        JOIN stats s USING (namespace,run_id,event_body_id)
        LEFT JOIN wrappers w USING (namespace,run_id)
-       ${after ? "WHERE (i.namespace,i.run_id,i.event_body_id)>($1,$2,$3)" : ""}
-       ORDER BY i.namespace,i.run_id,i.event_body_id LIMIT 1000`,
-      after ?? [],
+       ORDER BY i.namespace,i.run_id,i.event_body_id`,
+  )).rows;
+  // Retain summaries only; payloads are fetched once per bounded PK batch.
+  const bodyKey = (namespace: string, id: string) =>
+    JSON.stringify([namespace, id]);
+  for (let start = 0; start < summaries.length; start += 1000) {
+    const rows = summaries.slice(start, start + 1000);
+    const keys = rows.flatMap((row) =>
+      [row.event_body_id, ...(row.wrapper_ids ?? []).slice(0, 2)].map((id) => ({
+        namespace: row.namespace,
+        id,
+      }))
+    );
+    const bodies = (await tx.query<Body>(
+      `SELECT b.* FROM ${table} b JOIN
+       (SELECT DISTINCT namespace,id FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text)) k
+       ON b.namespace=k.namespace AND b.event_body_id=k.id`,
+      [JSON.stringify(keys)],
     )).rows;
+    const byKey = new Map(
+      bodies.map((body) => [bodyKey(body.namespace, body.event_body_id), body]),
+    );
     for (const row of rows) {
-      const body = (await tx.query<Body>(
-        `SELECT * FROM ${table} WHERE namespace=$1 AND event_body_id=$2`,
-        [row.namespace, row.event_body_id],
-      )).rows[0];
+      const body = byKey.get(bodyKey(row.namespace, row.event_body_id))!;
       // Same as the former LIMIT 2: two candidates are enough to refuse.
-      const wrapperIds = (row.wrapper_ids ?? []).slice(0, 2);
-      const wrappers = wrapperIds.length
-        ? (await tx.query<Body>(
-          `SELECT * FROM ${table} WHERE namespace=$1 AND event_body_id=ANY($2::text[]) ORDER BY event_body_id`,
-          [row.namespace, wrapperIds],
-        )).rows
-        : [];
+      const wrappers = (row.wrapper_ids ?? []).slice(0, 2).map((id) =>
+        byKey.get(bodyKey(row.namespace, id))!
+      );
       const identity = {
         namespace: row.namespace,
         runId: row.run_id,
@@ -245,9 +254,6 @@ async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
         bodyCount: row.body_count,
       };
     }
-    if (rows.length < 1000) break;
-    const last = rows.at(-1)!;
-    after = [last.namespace, last.run_id, last.event_body_id];
   }
 }
 
@@ -322,14 +328,21 @@ export async function recordRetainedTerminals(
   report: RetainedTerminals | undefined,
   fingerprint: string,
 ) {
-  for (const run of report?.runs ?? []) {
+  const runs = report?.runs ?? [];
+  for (let start = 0; start < runs.length; start += 1000) {
     await tx.query(
       `INSERT INTO ${createCoreTableNames(schema).owner_receipts}
-      (owner,domain,key,principal,kind,intent,result) VALUES ('schema','logical',$1,'offline-upgrade','action.upgrade-terminal',$2::jsonb,$3::jsonb)`,
+       (owner,domain,key,principal,kind,intent,result)
+       SELECT 'schema','logical',key,'offline-upgrade','action.upgrade-terminal',$1::jsonb,result
+       FROM jsonb_to_recordset($2::jsonb) AS v(key text,result jsonb)`,
       [
-        retainedTerminalKey(run.namespace, run.runId),
         JSON.stringify({ fingerprint }),
-        JSON.stringify(run),
+        JSON.stringify(
+          runs.slice(start, start + 1000).map((run) => ({
+            key: retainedTerminalKey(run.namespace, run.runId),
+            result: run,
+          })),
+        ),
       ],
     );
   }

@@ -521,6 +521,18 @@ their next step; never relabel a schema or skip a step.
    identity under reserved marker `0`. Review the exact fingerprint, physical
    copies and explicit ownership decisions. Repeat preparation to recover the
    same identity after interruption. External stores require explicit mappings.
+   Generate an ownership review template with
+   `deno run --allow-read scripts/upgrade-retained-data.ts content-decisions --plan=review.json > decisions.json`.
+   Ambiguous assets propose `{ namespace, assetId, ownerIds: [...] }` with every
+   reported candidate; unowned assets propose
+   `{ namespace, assetId, ownerId: null }`. Review before use. `ownerIds` is
+   mutually exclusive with `ownerId`, must be nonempty and duplicate-free, and
+   may select all candidates or a subset. Every selected owner must remain a
+   candidate domain record in that namespace. Existing edges survive; missing
+   selected ownership edges are added. Ambiguous assets without decisions and
+   missing assets are refused. Legacy decisions keep identical canonical bytes
+   and fingerprints; shared-owner fingerprints bind sorted IDs. Generation never
+   applies the template automatically.
 3. Call
    `upgradeActionLifecycle(session, schema, { plan,
    reviewedFingerprint: plan.fingerprint, contentDecisions, ownerKeys })`.

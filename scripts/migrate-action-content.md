@@ -21,17 +21,23 @@ The report lists each referenced asset, its origin, consuming Actions, candidate
 domain producers, and classification. It groups counts by producer record type.
 Existing domain `has_asset` edges establish ownership. Without those edges,
 provenance matching an existing domain record or a reference in domain data
-identifies a candidate producer. Multiple candidates and missing assets require
-repair before applying; the script does not guess between them. An asset hidden
-inside another asset's body needs an explicit decision because the report scans
-domain records, not body storage.
+identifies a candidate producer. Multiple candidates require an explicit
+reviewed `ownerIds` decision. Missing assets still require repair before
+applying; no decision can bypass that refusal. An asset hidden inside another
+asset's body needs an explicit decision because the report scans domain records,
+not body storage.
 
-For unowned assets, supply a reviewed JSON decision file:
+Supply a reviewed JSON decision file:
 
 ```json
 [
   { "namespace": "example", "assetId": "asset-a", "ownerId": "record-a" },
-  { "namespace": "example", "assetId": "asset-b", "ownerId": null }
+  { "namespace": "example", "assetId": "asset-b", "ownerId": null },
+  {
+    "namespace": "example",
+    "assetId": "asset-c",
+    "ownerIds": ["record-a", "record-b"]
+  }
 ]
 ```
 
@@ -39,6 +45,28 @@ A non-null owner must be an existing domain record in the asset's namespace.
 `null` explicitly permits the asset to become collectable after the synthetic
 owners are removed. It does not delete the asset or its bytes. Decisions may not
 replace an already identified domain owner.
+
+`ownerIds` and `ownerId` are mutually exclusive. A shared-owner list must be
+nonempty, contain no duplicates, and contain only the asset's reported candidate
+producers, each still an existing domain record in its namespace. Selecting a
+subset is allowed. Apply adds one `has_asset` edge for each selected owner that
+does not already have one; existing domain edges are preserved. An ambiguous
+asset without a shared-owner decision remains refused. The legacy `ownerId`
+format, including `null` for unowned assets, keeps its existing behavior.
+
+Generate suggestions from a retained upgrade plan without opening a database:
+
+```sh
+deno run --allow-read scripts/upgrade-retained-data.ts content-decisions --plan=review.json > decisions.json
+```
+
+The deterministic template includes all candidates for each ambiguous asset and
+`ownerId: null` for each unowned asset. Other classifications are omitted.
+Review and edit the file before explicitly passing it to apply; generation never
+applies decisions. `contentDecisionTemplate({ ownership })` in
+`runtime/actions/content-migration.ts` exposes the same helper. Shared-owner
+arrays are sorted for fingerprinting; legacy decisions retain byte-identical
+canonical forms and fingerprints.
 
 ```sh
 deno run --allow-env --allow-net --allow-read scripts/migrate-action-content.ts --schema=SCHEMA --apply --decisions=decisions.json

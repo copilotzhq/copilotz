@@ -329,8 +329,12 @@ export async function inspectEmbeddedContent(
       [streams],
     )).rows[0]?.present
   ) {
-    let streamAfter: [string, string] | undefined;
-    while (true) {
+    const streamKeys = (await input.session.query<
+      { namespace: string; operation_id: string; stream_id: string }
+    >(
+      `SELECT namespace,operation_id,stream_id FROM ${streams} ORDER BY namespace COLLATE "C",stream_id COLLATE "C"`,
+    )).rows;
+    for (let start = 0; start < streamKeys.length; start += 2000) {
       const entries = (await input.session.query<
         {
           namespace: string;
@@ -344,14 +348,11 @@ export async function inspectEmbeddedContent(
           availability: string;
         }
       >(
-        `SELECT namespace,stream_id,body_id,state,outcome,to_jsonb(s)->>'committed_offset' AS committed_offset,to_jsonb(s)->>'digest' AS digest,availability,to_jsonb(s)->>'reason' AS reason FROM ${streams} s
-      ${
-          streamAfter
-            ? 'WHERE (namespace COLLATE "C",stream_id COLLATE "C")>($1 COLLATE "C",$2 COLLATE "C")'
-            : ""
-        }
-      ORDER BY namespace COLLATE "C",stream_id COLLATE "C" LIMIT 2000`,
-        streamAfter ?? [],
+        `SELECT s.namespace,s.stream_id,s.body_id,s.state,s.outcome,to_jsonb(s)->>'committed_offset' AS committed_offset,to_jsonb(s)->>'digest' AS digest,s.availability,to_jsonb(s)->>'reason' AS reason
+         FROM ${streams} s JOIN jsonb_to_recordset($1::jsonb) AS k(namespace text,operation_id text,stream_id text)
+         ON s.namespace=k.namespace AND s.operation_id=k.operation_id AND s.stream_id=k.stream_id
+         ORDER BY s.namespace COLLATE "C",s.stream_id COLLATE "C"`,
+        [JSON.stringify(streamKeys.slice(start, start + 2000))],
       ))
         .rows;
       for (const stream of entries) {
@@ -421,8 +422,6 @@ export async function inspectEmbeddedContent(
           },
         });
       }
-      if (entries.length < 2000) break;
-      streamAfter = [entries.at(-1)!.namespace, entries.at(-1)!.stream_id];
     }
   }
   const referencesFor = (
@@ -723,36 +722,47 @@ export async function migrateEmbeddedContent(
           : (plan.rows as RowManifest).count
       }`,
     );
-    if (
-      plan.streamRows.some((stream) =>
-        plan.inventory.some((copy) =>
-          copy.bodyId === stream.bodyId && copy.unavailable
-        )
-      )
-    ) {
+    const unavailable = new Set(
+      plan.inventory.filter((copy) => copy.unavailable).map((copy) =>
+        copy.bodyId
+      ),
+    );
+    if (plan.streamRows.some((stream) => unavailable.has(stream.bodyId))) {
       await transaction.query(
         `ALTER TABLE "${plan.schema}"."copilotz_operation_streams" ADD COLUMN IF NOT EXISTS availability_reason TEXT`,
       );
     }
-    for (const stream of plan.streamRows) {
-      if (
-        plan.inventory.find((copy) => copy.bodyId === stream.bodyId)
-          ?.unavailable
-      ) {
+    for (let start = 0; start < plan.streamRows.length; start += 2000) {
+      const batch = plan.streamRows.slice(start, start + 2000);
+      const missing = batch.filter((stream) => unavailable.has(stream.bodyId));
+      if (missing.length) {
         await transaction.query(
-          `UPDATE "${plan.schema}"."copilotz_operation_streams" SET committed_offset=0,digest=NULL,availability='purged',availability_reason='missing' WHERE namespace=$1 AND stream_id=$2`,
-          [stream.namespace, stream.streamId],
+          `UPDATE "${plan.schema}"."copilotz_operation_streams" s
+         SET committed_offset=0,digest=NULL,availability='purged',availability_reason='missing'
+         FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,"streamId" text)
+         WHERE s.namespace=v.namespace AND s.stream_id=v."streamId"`,
+          [JSON.stringify(missing)],
         );
       }
-      if (stream.reason) {
+      // Several streams may share one logical body; preserve the last reason.
+      const reasons = new Map(
+        batch.filter((stream) => stream.reason).map(
+          (stream) => [stream.bodyId, stream],
+        ),
+      );
+      if (reasons.size) {
         await transaction.query(
-          `UPDATE ${tables.content_logical_bodies} SET terminal=terminal || jsonb_build_object('reason',$2::text) WHERE body_id=$1`,
-          [stream.bodyId, stream.reason],
+          `UPDATE ${tables.content_logical_bodies} b SET terminal=b.terminal || jsonb_build_object('reason',v.reason)
+         FROM jsonb_to_recordset($1::jsonb) AS v("bodyId" text,reason text)
+         WHERE b.body_id=v."bodyId"`,
+          [JSON.stringify([...reasons.values()])],
         );
       }
       await transaction.query(
-        `UPDATE "${plan.schema}"."copilotz_operation_streams" SET body_id=$3 WHERE namespace=$1 AND stream_id=$2 AND body_id=$4`,
-        [stream.namespace, stream.streamId, stream.bodyId, stream.physicalKey],
+        `UPDATE "${plan.schema}"."copilotz_operation_streams" s SET body_id=v."bodyId"
+         FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,"streamId" text,"bodyId" text,"physicalKey" text)
+         WHERE s.namespace=v.namespace AND s.stream_id=v."streamId" AND s.body_id=v."physicalKey"`,
+        [JSON.stringify(batch)],
       );
     }
   });

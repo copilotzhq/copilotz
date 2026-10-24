@@ -79,21 +79,9 @@ export async function* iterateAuthorityUpgrade(
   schema: string,
 ) {
   const tables = createCoreTableNames(schema);
-  let after: [string, string] | undefined, done = 0;
-  while (true) {
-    const ingress = new Map<string, Record<string, unknown>>();
-    const rows = (await transaction.query<{
-      namespace: string;
-      id: string;
-      metadata: Record<string, unknown>;
-      payload: unknown;
-      owner_ingress: unknown;
-      body: unknown;
-      digest: string;
-      schema_version: number;
-      intent: unknown;
-      result: unknown;
-    }>(
+  // Extract candidate identities once, without retaining historical payloads.
+  const candidates =
+    (await transaction.query<{ namespace: string; id: string }>(
       `WITH invoked AS MATERIALIZED (
       SELECT namespace,event_body_id FROM ${tables.event_bodies}
       WHERE COALESCE(body->'data',body)->>'status'='invoked'
@@ -108,12 +96,29 @@ export async function* iterateAuthorityUpgrade(
       SELECT e.namespace,e.id FROM ${tables.events} e JOIN
         (SELECT DISTINCT event_id FROM ${tables.event_deliveries} WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id
     )
-    SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
-    FROM candidates c JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
-    LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
-    ${after ? "WHERE (e.namespace,e.id)>($1,$2)" : ""}
-    ORDER BY e.namespace,e.id LIMIT 1000`,
-      after ?? [],
+    SELECT namespace,id FROM candidates ORDER BY namespace,id`,
+    )).rows;
+  let done = 0;
+  for (let start = 0; start < candidates.length; start += 1000) {
+    const ingress = new Map<string, Record<string, unknown>>();
+    const rows = (await transaction.query<{
+      namespace: string;
+      id: string;
+      metadata: Record<string, unknown>;
+      payload: unknown;
+      owner_ingress: unknown;
+      body: unknown;
+      digest: string;
+      schema_version: number;
+      intent: unknown;
+      result: unknown;
+    }>(
+      `SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version
+       FROM jsonb_to_recordset($1::jsonb) AS c(namespace text,id text)
+       JOIN ${tables.events} e ON e.id=c.id AND e.namespace=c.namespace
+       LEFT JOIN ${tables.event_bodies} b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId'
+       ORDER BY e.namespace,e.id`,
+      [JSON.stringify(candidates.slice(start, start + 1000))],
     )).rows;
     const receipts = (await transaction.query<
       { key: string; intent: unknown; result: unknown }
@@ -206,8 +211,6 @@ export async function* iterateAuthorityUpgrade(
       }
     }
     yield { invocations, events, ingress };
-    if (rows.length < 1000) break;
-    after = [rows.at(-1)!.namespace, rows.at(-1)!.id];
   }
 }
 async function applyAuthorityUpgrade(
@@ -215,6 +218,10 @@ async function applyAuthorityUpgrade(
   schema: string,
   manifest: AuthorityUpgradeManifest,
 ): Promise<void> {
+  const tables = createCoreTableNames(schema);
+  for (const statement of authorizationSchemaStatements(schema)) {
+    await transaction.query(statement);
+  }
   const invocations = new Map(
     manifest.invocations.map((
       entry,
@@ -261,6 +268,11 @@ async function applyAuthorityUpgrade(
   if (invocations.size || events.size) {
     throw new Error("Authority manifest names unknown retained work.");
   }
+  // Transport instances never survive the offline cutover; clients reattach.
+  await transaction.query(`DELETE FROM ${tables.authorization_channels}`);
+  await transaction.query(
+    `DELETE FROM ${tables.owner_deadlines} WHERE source='authorization'`,
+  );
 }
 async function applyAuthorityBatch(
   transaction: SqlExecutor,
@@ -292,9 +304,6 @@ async function applyAuthorityBatch(
     );
   }
   const tables = createCoreTableNames(schema);
-  for (const statement of authorizationSchemaStatements(schema)) {
-    await transaction.query(statement);
-  }
   if (inventory.events.length) {
     await transaction.query(
       `ALTER TABLE ${tables.events} DISABLE TRIGGER copilotz_events_immutable`,
@@ -517,11 +526,6 @@ async function applyAuthorityBatch(
   await flushInvocations();
   console.error(
     `[upgrade:${schema}] authority invocations ${invocationsDone}/${plan.length}`,
-  );
-  // Transport instances never survive the offline cutover; clients reattach.
-  await transaction.query(`DELETE FROM ${tables.authorization_channels}`);
-  await transaction.query(
-    `DELETE FROM ${tables.owner_deadlines} WHERE source='authorization'`,
   );
 }
 export async function upgradeAuthoritySchema(

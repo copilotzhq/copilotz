@@ -1217,10 +1217,16 @@ export async function upgradeOperationCatalog(
         `ALTER TABLE ${tables.operationEvents} ALTER COLUMN event_ordinal SET NOT NULL`,
       );
       await transaction.query(
-        `UPDATE ${tables.operations} AS operation SET next_event_ordinal = 1 + COALESCE((
-      SELECT max(event_ordinal) FROM ${tables.operationEvents} AS event
-      WHERE event.namespace = operation.namespace AND event.operation_id = operation.operation_id
-    ), 0)`,
+        `WITH maxima AS MATERIALIZED (
+        SELECT namespace,operation_id,max(event_ordinal) AS ordinal
+        FROM ${tables.operationEvents} GROUP BY namespace,operation_id
+      ), resolved AS (
+        SELECT o.namespace,o.operation_id,1+COALESCE(m.ordinal,0) AS next_ordinal
+        FROM ${tables.operations} o LEFT JOIN maxima m
+          ON m.namespace=o.namespace AND m.operation_id=o.operation_id
+      ) UPDATE ${tables.operations} o SET next_event_ordinal=r.next_ordinal
+        FROM resolved r
+        WHERE r.namespace=o.namespace AND r.operation_id=o.operation_id`,
       );
       await provisionSelectionTables(transaction, tables);
       const resolve = options.resolveObservationKeys ??
@@ -1284,6 +1290,12 @@ export async function upgradeOperationCatalog(
             entry.metadata,
           );
         }
+        const selectedOperations = JSON.stringify(
+          operations.rows.map(({ namespace, operation_id }) => ({
+            namespace,
+            operation_id,
+          })),
+        );
         let afterEventPosition = "0";
         let afterEventId = "";
         while (true) {
@@ -1295,15 +1307,15 @@ export async function upgradeOperationCatalog(
           }>(
             `SELECT indexed.operation_id, indexed.event_id, indexed.event_position,
             ${projectMetadata("event", "$4")} AS metadata
-          FROM ${tables.operationEvents} AS indexed
+          FROM jsonb_to_recordset($1::jsonb) AS selected(namespace text,operation_id text)
+          JOIN ${tables.operationEvents} AS indexed ON indexed.namespace=selected.namespace AND indexed.operation_id=selected.operation_id
           JOIN ${tables.events} AS event ON event.id = indexed.event_id AND event.namespace = indexed.namespace
-          WHERE indexed.operation_id = ANY($1::text[])
-            AND (indexed.event_position, indexed.event_id) > ($2::bigint, $3::text)
+          WHERE (indexed.event_position, indexed.event_id) > ($2::bigint, $3::text)
           ORDER BY indexed.event_position, indexed.event_id LIMIT 1000`,
             metadataKeys === undefined
-              ? [[...batch.keys()], afterEventPosition, afterEventId]
+              ? [selectedOperations, afterEventPosition, afterEventId]
               : [
-                [...batch.keys()],
+                selectedOperations,
                 afterEventPosition,
                 afterEventId,
                 metadataKeys,

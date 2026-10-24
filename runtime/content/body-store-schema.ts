@@ -258,8 +258,13 @@ export async function migrateBodyStoreSchema(
     await transaction.query(
       `ALTER TABLE ${parts} ADD COLUMN part_digest TEXT,DROP COLUMN created_at`,
     );
-    let after = "", total = 0;
-    while (true) {
+    // The old primary key may use a different collation. Extract C-ordered
+    // identities once instead of sorting the whole legacy table per page.
+    const keys = (await transaction.query<{ body_id: string }>(
+      `SELECT body_id FROM ${bodies} WHERE body_id COLLATE "C">'' COLLATE "C" ORDER BY body_id COLLATE "C"`,
+    )).rows.map((row) => row.body_id);
+    let total = 0;
+    for (let offset = 0; offset < keys.length; offset += 2000) {
       const rows = await transaction.query<
         {
           body_id: string;
@@ -268,11 +273,9 @@ export async function migrateBodyStoreSchema(
           digest: string | null;
         }
       >(
-        `SELECT body_id,state,byte_length,digest FROM ${bodies} WHERE body_id COLLATE "C">$1 COLLATE "C" ORDER BY body_id COLLATE "C" LIMIT 2000`,
-        [after],
+        `SELECT body_id,state,byte_length,digest FROM ${bodies} WHERE body_id=ANY($1::text[]) ORDER BY body_id COLLATE "C"`,
+        [keys.slice(offset, offset + 2000)],
       );
-      if (!rows.rows.length) break;
-      after = rows.rows.at(-1)!.body_id;
       for (let start = 0; start < rows.rows.length; start += 2000) {
         const updates = rows.rows.slice(start, start + 2000).map((row) => ({
           id: row.body_id,

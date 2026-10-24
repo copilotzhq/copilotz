@@ -1404,3 +1404,75 @@ Deno.test("reviewed missing non-completed streams become unavailable through v14
     await f.close();
   }
 });
+
+Deno.test("reviewed ambiguous ownership accepts all candidates or a subset through v14 and binds replay", async () => {
+  for (const selected of [["shared-a", "shared-b"], ["shared-b"]]) {
+    const f = await fixture();
+    try {
+      await f.db.query(
+        `INSERT INTO ${f.tables.nodes}(id,namespace,type,name,data) VALUES
+        ('shared-a','archive','message','a','{"assetId":"shared-asset"}'),
+        ('shared-b','archive','long_term_memory','b','{"assetId":"shared-asset"}'),
+        ('unrelated','archive','message','unrelated','{}'),
+        ('shared-asset','archive','asset','asset','{"state":"ready"}'),
+        ('shared-orphan','archive','asset','orphan','{"state":"ready"}'),
+        ('shared-execution','archive','@copilotz/action-content','consumer','{"assetIds":["shared-asset","shared-orphan"]}')`,
+      );
+      const plan = (await prepareRetainedDataUpgrade(f.db, f.schema))!;
+      const options = { plan, reviewedFingerprint: plan.fingerprint };
+      await assertRejects(
+        () => upgradeActionLifecycle(f.db, f.schema, options),
+        Error,
+        "ambiguous",
+      );
+      const contentDecisions = [
+        { namespace: "archive", assetId: "shared-asset", ownerIds: selected },
+        { namespace: "archive", assetId: "shared-orphan", ownerId: null },
+      ] as const;
+      await assertRejects(
+        () =>
+          upgradeActionLifecycle(f.db, f.schema, {
+            ...options,
+            contentDecisions: [
+              { ...contentDecisions[0], ownerIds: ["unrelated"] },
+              contentDecisions[1],
+            ],
+          }),
+        Error,
+        "not a candidate",
+      );
+      await upgradeActionLifecycle(f.db, f.schema, {
+        ...options,
+        contentDecisions,
+      });
+      assertEquals(await marker(f.db, f.schema), 14);
+      assertEquals(
+        (await f.db.query<{ source_node_id: string }>(
+          `SELECT source_node_id FROM ${f.tables.edges} WHERE target_node_id='shared-asset' AND type='has_asset' ORDER BY source_node_id`,
+        )).rows.map((r) => r.source_node_id),
+        selected,
+      );
+      await upgradeActionLifecycle(f.db, f.schema, {
+        ...options,
+        contentDecisions: [
+          { ...contentDecisions[0], ownerIds: [...selected].reverse() },
+          contentDecisions[1],
+        ],
+      });
+      await assertRejects(
+        () =>
+          upgradeActionLifecycle(f.db, f.schema, {
+            ...options,
+            contentDecisions: [
+              { ...contentDecisions[0], ownerIds: ["shared-a"] },
+              contentDecisions[1],
+            ],
+          }),
+        Error,
+        "accepted plan or ownership decisions",
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});

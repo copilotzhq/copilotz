@@ -34,23 +34,13 @@ export async function* retainedRows(
     const id = kind === "event" ? "event_body_id" : "id";
     const value = kind === "event" ? "body" : "data";
     // SQL collation is not JS localeCompare. Sort identities only, never values.
-    const keys: { namespace: string; id: string }[] = [];
-    let after: [string, string] | undefined;
-    while (true) {
-      const batch = (await session.query<{ namespace: string; id: string }>(
-        `SELECT namespace,${id} AS id FROM ${table}
-         ${
-          after
-            ? `WHERE (namespace COLLATE "C",${id} COLLATE "C")>($1 COLLATE "C",$2 COLLATE "C")`
-            : ""
-        }
-         ORDER BY namespace COLLATE "C",${id} COLLATE "C" LIMIT 2000`,
-        after ?? [],
-      )).rows;
-      keys.push(...batch);
-      if (batch.length < 2000) break;
-      after = [batch.at(-1)!.namespace, batch.at(-1)!.id];
-    }
+    // Legacy collations may not have an index for COLLATE C pagination.
+    // Read compact identities once, then use their native PK equality below.
+    const keys = [
+      ...(await session.query<{ namespace: string; id: string }>(
+        `SELECT namespace,${id} AS id FROM ${table} ORDER BY namespace COLLATE "C",${id} COLLATE "C"`,
+      )).rows,
+    ];
     keys.sort((a, b) =>
       a.namespace.localeCompare(b.namespace) || a.id.localeCompare(b.id)
     );

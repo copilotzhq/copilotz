@@ -18,11 +18,27 @@ import {
   type RetainedDataUpgradePlan,
   upgradeActionLifecycle,
 } from "../runtime/actions/upgrade.ts";
-import type { ContentMigrationDecision } from "../runtime/actions/content-migration.ts";
+import {
+  contentDecisionTemplate,
+  type ContentMigrationDecision,
+} from "../runtime/actions/content-migration.ts";
 
 const [command, ...args] = Deno.args;
 const get = (name: string) =>
   args.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+if (command === "content-decisions") {
+  const path = get("plan");
+  if (!path || args.some((arg) => !arg.startsWith("--plan="))) {
+    throw new Error(
+      "Usage: upgrade-retained-data.ts content-decisions --plan=FILE.json",
+    );
+  }
+  const plan = JSON.parse(
+    await Deno.readTextFile(path),
+  ) as RetainedDataUpgradePlan;
+  console.log(JSON.stringify(contentDecisionTemplate(plan), null, 2));
+  Deno.exit(0);
+}
 const schema = get("schema");
 if (
   !schema ||

@@ -49,6 +49,7 @@ import {
   migrateEmbeddedContent,
 } from "../content/migration.ts";
 import {
+  canonicalContentDecision,
   type ContentMigrationDecision,
   type ContentMigrationReport,
   migrateActionContent,
@@ -192,28 +193,13 @@ async function fingerprint(plan: Omit<RetainedDataUpgradePlan, "fingerprint">) {
   })));
 }
 
-function canonicalDecisions(
+export function canonicalDecisions(
   decisions: readonly ContentMigrationDecision[] | undefined,
 ): ContentMigrationDecision[] {
   if (decisions !== undefined && !Array.isArray(decisions)) {
     throw new TypeError("Content migration decisions must be an array.");
   }
-  return (decisions ?? []).map((decision) => {
-    if (
-      !decision || typeof decision.namespace !== "string" ||
-      typeof decision.assetId !== "string" ||
-      (decision.ownerId !== null && typeof decision.ownerId !== "string")
-    ) {
-      throw new TypeError(
-        "Content migration decisions require an explicit owner or null.",
-      );
-    }
-    return {
-      namespace: decision.namespace,
-      assetId: decision.assetId,
-      ownerId: decision.ownerId,
-    };
-  }).sort((a, b) => {
+  return (decisions ?? []).map(canonicalContentDecision).sort((a, b) => {
     const left = JSON.stringify(a), right = JSON.stringify(b);
     return left < right ? -1 : left > right ? 1 : 0;
   });

@@ -22,7 +22,14 @@ Run commands as `deno run -A scripts/upgrade-retained-data.ts ...` with
    target **v11**, and commits reserved marker `0`. Keep the plan privately with
    the backup. Review every copy, reference and execution-owned Asset. Supply
    explicit ownership/collection decisions using the
-   [content decision format](migrate-action-content.md). Use
+   [content decision format](migrate-action-content.md). Generate a review
+   template with `content-decisions --plan=review.json > decisions.json` (no
+   schema or database connection required). It proposes all candidate `ownerIds`
+   for ambiguous assets and `ownerId: null` for unowned assets. Review it before
+   passing `--decisions`; it is never applied automatically. Shared lists must
+   be nonempty, unique, and restricted to reported candidate domain records in
+   the asset namespace; a subset is allowed. Missing assets remain refused.
+   Legacy decision fingerprints are unchanged. Use
    `--storage=./migration-storage.ts` on prepare and apply for external
    inventories. The module maps explicit backends; legacy raw objects can be
    read in place without import. See the storage example below.
@@ -505,3 +512,17 @@ deno run -A scripts/upgrade-retained-data.ts apply --schema=SCHEMA \
 
 Continue from the resulting v11/v12 checkpoint with the reviewed key and
 authority inputs described above.
+
+## SQL scale regression
+
+Run `deno run -A scripts/benchmark-offline-scans.ts` sequentially with
+`COPILOTZ_TEST_POSTGRES_URL=postgres://postgres@localhost:55439/cutover_round5`
+(or leave the variable unset for PGlite). The database must already exist. The
+benchmark creates and always drops its own synthetic schema: over 100,000 event
+bodies, 100,000 operation-event memberships, 1,000 operations and streams, 1,001
+unterminated runs, 10,000 asset producers and 1,001 external copies served
+entirely from memory. It exercises pruner listing/retirement, drain, prepare,
+v11 finalization, v12 transfer, v13 inventory/application and v14.
+Statement-count bounds, one-time key extraction checks, query-plan scan-loop
+checks and a five-minute budget per phase catch per-item table scans. Payloads
+are small to limit disk usage. Run one heavy process at a time.

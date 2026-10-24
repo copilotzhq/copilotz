@@ -226,3 +226,63 @@ Deno.test("migration refuses ambiguous or broken ownership and active execution"
     await f.close();
   }
 });
+
+Deno.test("reviewed shared ownership validates candidates and preserves existing shared edges", async () => {
+  const f = await fixture(
+    Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  );
+  try {
+    for (const id of ["a", "b"]) {
+      await f.node(id, "message", { assetId: "shared" });
+    }
+    await f.node("unrelated", "message");
+    await f.node("foreign", "message", { assetId: "shared" }, "other");
+    await f.node("shared", "asset");
+    await f.node("receipt", "@copilotz/action-content", {
+      assetIds: ["shared"],
+    });
+    const before = await f.snapshot();
+    const decision = { namespace: "test", assetId: "shared" };
+    for (
+      const owners of [[], ["a", "a"], ["unrelated"], ["foreign"], ["shared"], [
+        "receipt",
+      ], ["missing"]]
+    ) {
+      await assertRejects(() =>
+        migrateActionContent(f.db, f.schema, {
+          apply: true,
+          decisions: [{ ...decision, ownerIds: owners }],
+        })
+      );
+      assertEquals(await f.snapshot(), before);
+    }
+    await assertRejects(
+      () =>
+        migrateActionContent(f.db, f.schema, {
+          apply: true,
+          decisions: [
+            {
+              ...decision,
+              ownerId: "a",
+              ownerIds: ["a"],
+            } as unknown as import("../runtime/actions/content-migration.ts").ContentMigrationDecision,
+          ],
+        }),
+      TypeError,
+      "exactly one",
+    );
+    await f.edge("owned-a", "a", "shared");
+    await f.edge("owned-b", "b", "shared");
+    const report = await migrateActionContent(f.db, f.schema, {
+      apply: true,
+      decisions: [{ ...decision, ownerIds: ["b", "a"] }],
+    });
+    assertEquals(report.assignedOwners, 0);
+    assertEquals((await f.snapshot()).edges.map((e) => e.id).sort(), [
+      "owned-a",
+      "owned-b",
+    ]);
+  } finally {
+    await f.close();
+  }
+});

@@ -23,12 +23,89 @@ type Edge = {
   type: string;
 };
 type Producer = { id: string; type: string };
-export type ContentMigrationDecision = Readonly<{
-  namespace: string;
-  assetId: string;
-  /** null explicitly permits collection of content with no surviving producer. */
-  ownerId: string | null;
-}>;
+export type ContentMigrationDecision = Readonly<
+  & {
+    namespace: string;
+    assetId: string;
+  }
+  & (
+    | {
+      /** null explicitly permits collection with no surviving producer. */
+      ownerId: string | null;
+      ownerIds?: never;
+    }
+    | {
+      /** Reviewed shared ownership, restricted to reported candidates. */
+      ownerIds: string[];
+      ownerId?: never;
+    }
+  )
+>;
+
+/** Validate both CLI JSON and direct callers without changing legacy canonical bytes. */
+export function canonicalContentDecision(
+  decision: ContentMigrationDecision,
+): ContentMigrationDecision {
+  if (
+    !decision || typeof decision.namespace !== "string" ||
+    typeof decision.assetId !== "string" ||
+    (Object.hasOwn(decision, "ownerId") === Object.hasOwn(decision, "ownerIds"))
+  ) {
+    throw new TypeError(
+      "Content migration decisions require exactly one of ownerId or ownerIds.",
+    );
+  }
+  if (Object.hasOwn(decision, "ownerIds")) {
+    const ids = decision.ownerIds;
+    if (
+      !Array.isArray(ids) || !ids.length || ids.some((id) =>
+        typeof id !== "string" || !id.trim()
+      ) || new Set(ids).size !== ids.length
+    ) {
+      throw new TypeError(
+        "ownerIds requires at least one owner and no duplicates.",
+      );
+    }
+    return {
+      namespace: decision.namespace,
+      assetId: decision.assetId,
+      ownerIds: [...ids].sort(),
+    };
+  }
+  if (decision.ownerId !== null && typeof decision.ownerId !== "string") {
+    throw new TypeError(
+      "Content migration decisions require an explicit owner or null.",
+    );
+  }
+  return {
+    namespace: decision.namespace,
+    assetId: decision.assetId,
+    ownerId: decision.ownerId!,
+  };
+}
+
+/** Suggestions only: operators must review this template before applying it. */
+export function contentDecisionTemplate(
+  plan: { ownership: ContentMigrationReport },
+): ContentMigrationDecision[] {
+  return plan.ownership.assets.flatMap((asset): ContentMigrationDecision[] =>
+    asset.classification === "ambiguous"
+      ? [{
+        namespace: asset.namespace,
+        assetId: asset.assetId,
+        ownerIds: [...new Set(asset.producers.map((p) => p.id))].sort(),
+      }]
+      : asset.classification === "unowned"
+      ? [{ namespace: asset.namespace, assetId: asset.assetId, ownerId: null }]
+      : []
+  ).sort((a, b) =>
+    JSON.stringify(a) < JSON.stringify(b)
+      ? -1
+      : JSON.stringify(a) > JSON.stringify(b)
+      ? 1
+      : 0
+  );
+}
 export type ContentMigrationReport = {
   executionOwners: number;
   executionEdges: number;
@@ -61,14 +138,15 @@ async function inspect(tx: SqlExecutor, schema: string) {
   const tables = createCoreTableNames(schema);
   const nodes: Node[] = [];
   const referenceIds = new Map<string, Set<string>>();
-  let after: [string, string] | undefined;
-  while (true) {
-    const batch: Node[] = (await tx.query<Node>(
-      `SELECT id,namespace,type,name,data FROM ${tables.nodes}
-       ${
-        after ? "WHERE (namespace,id)>($1,$2)" : ""
-      } ORDER BY namespace,id LIMIT 1000`,
-      after ?? [],
+  const keys = (await tx.query<{ namespace: string; id: string }>(
+    `SELECT namespace,id FROM ${tables.nodes} ORDER BY namespace,id`,
+  )).rows;
+  for (let start = 0; start < keys.length; start += 1000) {
+    const batch = (await tx.query<Node>(
+      `SELECT n.id,n.namespace,n.type,n.name,n.data FROM ${tables.nodes} n
+       JOIN jsonb_to_recordset($1::jsonb) AS k(namespace text,id text)
+         ON n.namespace=k.namespace AND n.id=k.id ORDER BY n.namespace,n.id`,
+      [JSON.stringify(keys.slice(start, start + 1000))],
     )).rows;
     for (const node of batch) {
       const ids = new Set<string>();
@@ -86,8 +164,6 @@ async function inspect(tx: SqlExecutor, schema: string) {
         },
       });
     }
-    if (batch.length < 1000) break;
-    after = [batch.at(-1)!.namespace, batch.at(-1)!.id];
   }
   const execution = nodes.filter((node) => node.type === EXECUTION_OWNER);
   const executionIds = new Set(
@@ -216,7 +292,7 @@ async function inspect(tx: SqlExecutor, schema: string) {
     const group = candidates.length === 1 ? candidates[0].type : classification;
     report.byProducer[group] = (report.byProducer[group] ?? 0) + 1;
   }
-  return { tables, domains, report };
+  return { tables, domains, owners, report };
 }
 
 /** Dry runs never mutate. Apply is atomic and refuses unresolved ownership. */
@@ -241,7 +317,7 @@ export function migrateActionContent(
         throw new Error("Drain all execution before content migration.");
       }
     }
-    const { domains, report } = await inspect(
+    const { domains, owners, report } = await inspect(
       tx,
       schema,
     );
@@ -264,7 +340,8 @@ export function migrateActionContent(
       assignments.length = 0;
     }
     const decisions = new Map<string, ContentMigrationDecision>();
-    for (const decision of options.decisions ?? []) {
+    for (const supplied of options.decisions ?? []) {
+      const decision = canonicalContentDecision(supplied);
       const key = JSON.stringify([decision.namespace, decision.assetId]);
       if (decisions.has(key)) {
         throw new Error(`Duplicate decision for ${decision.assetId}.`);
@@ -279,45 +356,64 @@ export function migrateActionContent(
       decisions.set(key, decision);
     }
     for (const asset of report.assets) {
+      const decision = decisions.get(nodeKey(asset.namespace, asset.assetId));
       if (
         asset.classification === "missing" ||
-        asset.classification === "ambiguous"
+        (asset.classification === "ambiguous" && !decision)
       ) {
         throw new Error(
           `Resolve ${asset.classification} content before migration: ${asset.assetId}.`,
         );
       }
-      const decision = decisions.get(
-        JSON.stringify([asset.namespace, asset.assetId]),
-      );
-      const inferred = asset.producers[0]?.id;
-      if (decision && inferred && decision.ownerId !== inferred) {
-        throw new Error(
-          `Decision conflicts with producer for ${asset.assetId}.`,
-        );
+      let ownerIds: string[];
+      if (decision?.ownerIds !== undefined) {
+        const candidates = new Set(asset.producers.map((p) => p.id));
+        if (decision.ownerIds.some((id) => !candidates.has(id))) {
+          throw new Error(
+            `Decision owner is not a candidate producer for ${asset.assetId}.`,
+          );
+        }
+        ownerIds = decision.ownerIds;
+      } else {
+        // Legacy single-owner decisions retain their original semantics.
+        if (asset.classification === "ambiguous") {
+          throw new Error(
+            `Resolve ambiguous content with ownerIds before migration: ${asset.assetId}.`,
+          );
+        }
+        const inferred = asset.producers[0]?.id;
+        if (decision && inferred && decision.ownerId !== inferred) {
+          throw new Error(
+            `Decision conflicts with producer for ${asset.assetId}.`,
+          );
+        }
+        if (!inferred && !decision) {
+          throw new Error(
+            `Explicit owner or collection decision required for ${asset.assetId}.`,
+          );
+        }
+        const ownerId = inferred ?? decision!.ownerId;
+        ownerIds = ownerId === null ? [] : [ownerId!];
       }
-      if (!inferred && !decision) {
-        throw new Error(
-          `Explicit owner or collection decision required for ${asset.assetId}.`,
-        );
+      for (const ownerId of ownerIds) {
+        const key = nodeKey(asset.namespace, ownerId);
+        if (!domainByKey.has(key)) {
+          throw new Error(
+            `Domain producer not found in asset namespace: ${ownerId}.`,
+          );
+        }
+        if (owners.get(nodeKey(asset.namespace, asset.assetId))?.has(key)) {
+          continue;
+        }
+        assignments.push({
+          id: crypto.randomUUID(),
+          namespace: asset.namespace,
+          owner: ownerId,
+          asset: asset.assetId,
+        });
+        report.assignedOwners++;
+        if (assignments.length === 2000) await flush();
       }
-      const ownerId = inferred ?? decision!.ownerId;
-      if (ownerId === null) continue;
-      const owner = domainByKey.get(nodeKey(asset.namespace, ownerId));
-      if (!owner) {
-        throw new Error(
-          `Domain producer not found in asset namespace: ${ownerId}.`,
-        );
-      }
-      if (asset.classification === "owned") continue;
-      assignments.push({
-        id: crypto.randomUUID(),
-        namespace: asset.namespace,
-        owner: ownerId,
-        asset: asset.assetId,
-      });
-      report.assignedOwners++;
-      if (assignments.length === 2000) await flush();
     }
     await flush();
     // Composite foreign keys remove only edges in each deleted node's namespace.

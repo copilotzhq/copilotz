@@ -318,7 +318,53 @@ export async function installTransferBodies(
   await provisionBodyStoreSchema(executor, schema);
   const tables = createCoreTableNames(schema),
     physical = bodyStoreTables(schema);
+  const pending: {
+    body_id: string;
+    key: string;
+    token: string;
+    length: number;
+    digest: string;
+  }[] = [];
+  const ids = new Set<string>();
+  async function flush() {
+    if (!pending.length) return;
+    const values = JSON.stringify(pending);
+    const records =
+      `jsonb_to_recordset($1::jsonb) AS v(body_id text,key text,token text,length bigint,digest text)`;
+    await executor.query(
+      `UPDATE ${tables.content_copies} c SET state='orphan',collectable=FALSE
+       FROM ${records} WHERE c.body_id=v.body_id AND c.state NOT IN ('retiring','retired')`,
+      [values],
+    );
+    await executor.query(
+      `INSERT INTO ${tables.content_copies}(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable)
+       SELECT key,'database','database:default',body_id,token,'current',TRUE FROM ${records}`,
+      [values],
+    );
+    await executor.query(
+      `UPDATE ${tables.content_logical_bodies} b SET current_copy=v.key,committed_offset=v.length,
+       seal_intent=CASE WHEN b.seal_intent IS NULL THEN NULL ELSE jsonb_build_object('length',v.length,'digest',v.digest) END,
+       terminal=b.terminal || jsonb_build_object('length',v.length,'digest',v.digest)
+       FROM ${records} WHERE b.body_id=v.body_id`,
+      [values],
+    );
+    await executor.query(
+      `DELETE FROM ${physical.bodies} p USING ${tables.content_copies} c, ${records}
+       WHERE c.body_id=v.body_id AND c.backend_kind='database' AND c.copy_key<>v.key AND p.body_id=c.copy_key`,
+      [values],
+    );
+    await executor.query(
+      `UPDATE ${tables.content_copies} c SET state='retired',collectable=FALSE
+       FROM ${records} WHERE c.body_id=v.body_id AND c.backend_kind='database' AND c.copy_key<>v.key`,
+      [values],
+    );
+    pending.length = 0;
+    ids.clear();
+  }
   for (const body of bodies) {
+    // Preserve sequential replacement semantics even for repeated body IDs.
+    if (ids.has(body.bodyId) || pending.length === 1000) await flush();
+
     const bytes = base64ToBytes(body.bytes);
     if (await digestContent(bytes) !== body.digest) {
       throw new Error("Bundle body integrity check failed.");
@@ -348,28 +394,14 @@ export async function installTransferBodies(
         [key, offset, `import:${offset}`, chunk, await digestContent(chunk)],
       );
     }
-    await executor.query(
-      `UPDATE ${tables.content_copies} SET state='orphan',collectable=FALSE WHERE body_id=$1 AND state NOT IN ('retiring','retired')`,
-      [body.bodyId],
-    );
-    await executor.query(
-      `INSERT INTO ${tables.content_copies}(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable) VALUES($1,'database','database:default',$2,$3,'current',TRUE)`,
-      [key, body.bodyId, token],
-    );
-    await executor.query(
-      `UPDATE ${tables.content_logical_bodies} SET current_copy=$2,committed_offset=$3,seal_intent=CASE WHEN seal_intent IS NULL THEN NULL ELSE jsonb_build_object('length',$3::bigint,'digest',$4::text) END,terminal=terminal || jsonb_build_object('length',$3::bigint,'digest',$4::text) WHERE body_id=$1`,
-      [body.bodyId, key, bytes.length, body.digest],
-    );
-    // Remove every old database staging copy, including copies left by promotion.
-    await executor.query(
-      `DELETE FROM ${physical.bodies} WHERE body_id IN (
-      SELECT copy_key FROM ${tables.content_copies} WHERE body_id=$1 AND backend_kind='database' AND copy_key<>$2
-    )`,
-      [body.bodyId, key],
-    );
-    await executor.query(
-      `UPDATE ${tables.content_copies} SET state='retired',collectable=FALSE WHERE body_id=$1 AND backend_kind='database' AND copy_key<>$2`,
-      [body.bodyId, key],
-    );
+    pending.push({
+      body_id: body.bodyId,
+      key,
+      token,
+      length: bytes.length,
+      digest: body.digest,
+    });
+    ids.add(body.bodyId);
   }
+  await flush();
 }

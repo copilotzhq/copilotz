@@ -1,5 +1,12 @@
 ## Unreleased
 
+- Support reviewed shared content ownership during offline upgrades, with
+  candidate validation, stable legacy fingerprints and a deterministic
+  `content-decisions --plan=...` review template.
+- Extract terminal, authority and legacy content identities once; batch terminal
+  evidence and transfer-copy retirement; group operation ordinal backfills. Add
+  a synthetic 100,000-body SQL scale guard across the offline chain.
+
 - Bound offline cutover payload memory across retained inspection, v11
   conversion, v12 owner keys and v13 authority application. Add compact review
   manifests with content fingerprint parity and a synthetic scale rehearsal.

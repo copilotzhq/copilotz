@@ -130,17 +130,48 @@ async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
       body_count: number;
       invoked_count: number;
       conflicting: boolean;
+      wrapper_ids: string[] | null;
     }>(
-      `WITH incomplete_runs AS MATERIALIZED (${
-        unterminatedInvocationsSql(schema)
-      })
-       SELECT i.*,s.body_count,s.invoked_count,s.conflicting FROM incomplete_runs i
-       CROSS JOIN LATERAL (
-         SELECT count(*)::integer AS body_count,
-           count(*) FILTER (WHERE b.body->>'status'='invoked')::integer AS invoked_count,
-           bool_or(b.body->>'actionId' IS DISTINCT FROM i.action_id OR b.body->>'status' IN ('completed','failed','cancelled')) AS conflicting
-         FROM ${table} b WHERE b.namespace=i.namespace AND b.body->>'actionRunId'=i.run_id
-       ) s
+      // Extract every key once and hash-join; a per-run JSON predicate over
+      // event_bodies has no index and rescans the whole table for each run.
+      `WITH keys AS MATERIALIZED (
+         SELECT namespace,event_body_id,body->>'status' AS status,
+                body->>'actionRunId' AS run_id,body->>'actionId' AS action_id,
+                body->'output'->>'targetActionRunId' AS target_run
+         FROM ${table}
+       ),
+       incomplete AS (
+         SELECT namespace,run_id,action_id FROM keys
+         WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled')
+         GROUP BY namespace,run_id,action_id
+         HAVING bool_or(status='invoked') AND
+           (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled')))
+       ),
+       incomplete_runs AS MATERIALIZED (
+         SELECT k.namespace,k.event_body_id,k.run_id,k.action_id
+         FROM keys k JOIN incomplete i ON k.namespace=i.namespace
+           AND k.run_id=i.run_id AND k.action_id IS NOT DISTINCT FROM i.action_id
+         WHERE k.status='invoked'
+       ),
+       runs AS MATERIALIZED (SELECT DISTINCT namespace,run_id FROM incomplete_runs),
+       stats AS (
+         SELECT i.namespace,i.run_id,i.event_body_id,
+           count(*)::integer AS body_count,
+           (count(*) FILTER (WHERE b.status='invoked'))::integer AS invoked_count,
+           bool_or(b.action_id IS DISTINCT FROM i.action_id OR b.status IN ('completed','failed','cancelled')) AS conflicting
+         FROM incomplete_runs i JOIN keys b ON b.namespace=i.namespace AND b.run_id=i.run_id
+         GROUP BY i.namespace,i.run_id,i.event_body_id
+       ),
+       wrappers AS (
+         SELECT k.namespace,k.target_run AS run_id,
+           array_agg(k.event_body_id ORDER BY k.event_body_id) AS wrapper_ids
+         FROM keys k JOIN runs r ON k.namespace=r.namespace AND k.target_run=r.run_id
+         GROUP BY k.namespace,k.target_run
+       )
+       SELECT i.*,s.body_count,s.invoked_count,s.conflicting,w.wrapper_ids
+       FROM incomplete_runs i
+       JOIN stats s USING (namespace,run_id,event_body_id)
+       LEFT JOIN wrappers w USING (namespace,run_id)
        ${after ? "WHERE (i.namespace,i.run_id,i.event_body_id)>($1,$2,$3)" : ""}
        ORDER BY i.namespace,i.run_id,i.event_body_id LIMIT 1000`,
       after ?? [],
@@ -150,10 +181,14 @@ async function* iterateUnterminatedRuns(tx: SqlExecutor, schema: string) {
         `SELECT * FROM ${table} WHERE namespace=$1 AND event_body_id=$2`,
         [row.namespace, row.event_body_id],
       )).rows[0];
-      const wrappers = (await tx.query<Body>(
-        `SELECT * FROM ${table} WHERE namespace=$1 AND body->'output'->>'targetActionRunId'=$2 ORDER BY event_body_id LIMIT 2`,
-        [row.namespace, row.run_id],
-      )).rows;
+      // Same as the former LIMIT 2: two candidates are enough to refuse.
+      const wrapperIds = (row.wrapper_ids ?? []).slice(0, 2);
+      const wrappers = wrapperIds.length
+        ? (await tx.query<Body>(
+          `SELECT * FROM ${table} WHERE namespace=$1 AND event_body_id=ANY($2::text[]) ORDER BY event_body_id`,
+          [row.namespace, wrapperIds],
+        )).rows
+        : [];
       const identity = {
         namespace: row.namespace,
         runId: row.run_id,

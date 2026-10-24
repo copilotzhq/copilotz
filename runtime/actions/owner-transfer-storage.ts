@@ -183,6 +183,17 @@ export async function* iterateTransferBodies(
   if (pending.length) {
     throw new Error("Drain logical writers and promotions before transfer.");
   }
+  // A schema that never used database storage has no physical body tables.
+  const hasPhysical = (await executor.query<{ present: boolean }>(
+    `SELECT to_regclass($1) IS NOT NULL AS present`,
+    [physical.bodies],
+  )).rows[0]?.present === true;
+  const physicalColumns = hasPhysical
+    ? "p.state AS physical_state,p.media_type,p.byte_length"
+    : "NULL::text AS physical_state,NULL::text AS media_type,NULL::bigint AS byte_length";
+  const physicalJoin = hasPhysical
+    ? `LEFT JOIN ${physical.bodies} p ON c.backend_kind='database' AND p.body_id=b.current_copy`
+    : "";
   let after = "", total = 0;
   while (true) {
     const rows = (await executor.query<{
@@ -200,7 +211,7 @@ export async function* iterateTransferBodies(
         digest?: `sha256:${string}`;
       };
     }>(
-      `SELECT b.body_id,b.namespace,b.current_copy,b.terminal,c.backend_kind,c.backend_id,p.state AS physical_state,p.media_type,p.byte_length FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy LEFT JOIN ${physical.bodies} p ON c.backend_kind='database' AND p.body_id=b.current_copy WHERE c.state='current' AND b.body_id COLLATE "C">$1 COLLATE "C" ORDER BY b.body_id COLLATE "C" LIMIT 2000`,
+      `SELECT b.body_id,b.namespace,b.current_copy,b.terminal,c.backend_kind,c.backend_id,${physicalColumns} FROM ${tables.content_logical_bodies} b JOIN ${tables.content_copies} c ON c.copy_key=b.current_copy ${physicalJoin} WHERE c.state='current' AND b.body_id COLLATE "C">$1 COLLATE "C" ORDER BY b.body_id COLLATE "C" LIMIT 2000`,
       [after],
     )).rows;
     if (!rows.length) break;

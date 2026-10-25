@@ -24,7 +24,13 @@ export function deviceOrigin(
 ): "cookie" | "header" | false {
   const origin = request.headers.get("origin");
   if (origin === null) return "header";
-  return origin === new URL(request.url).origin ||
+  const own = new URL(request.url);
+  // Behind a TLS-terminating edge the request arrives as http for the same
+  // host; the https origin of that exact host is the same site, never foreign.
+  const secure = own.protocol === "http:"
+    ? new URL(`https://${own.host}`).origin
+    : undefined;
+  return origin === own.origin || origin === secure ||
       allowedOrigins.includes(origin)
     ? "cookie"
     : false;

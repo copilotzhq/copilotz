@@ -1638,3 +1638,40 @@ Deno.test("batched native asset reads preserve order, isolation, deletion and di
     await closeFixture(f);
   }
 });
+
+Deno.test("database copies stay readable when new bodies go to another backend", async () => {
+  // Offline upgrades import retained external bytes as database:default copies.
+  const fixture = await createFixture();
+  try {
+    const bytes = new TextEncoder().encode("retained history body");
+    const asset = await fixture.assets.publish({
+      namespace: "tenant-a",
+      id: "retained-asset",
+      idempotencyKey: "retained-body",
+      mediaType: "text/plain; charset=utf-8",
+      body: bytes,
+    });
+    const objects = createDatabaseAssetRepository({
+      coordinator: fixture.coordinator,
+      session: fixture.session,
+      eventStore: fixture.store,
+      databaseSchema: TEST_SCHEMA,
+      storage: createBodyStorageRuntime({
+        storage: {
+          type: "custom",
+          config: {
+            store: createMemoryBodyStore({ backendId: "gcs:new-bodies" }),
+            deployment: {
+              durability: "ephemeral",
+              reach: "process",
+              readyGarbageCollection: false,
+            },
+          },
+        },
+      }),
+    });
+    assertEquals((await objects.read("tenant-a", asset.id)).bytes, bytes);
+  } finally {
+    await closeFixture(fixture);
+  }
+});

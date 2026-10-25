@@ -126,6 +126,12 @@ export type ServerFacadeResource = Readonly<{
   sessionCookie?: SessionCookieOptions;
   /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
   allowedOrigins?: readonly string[];
+  /**
+   * Public host a trusted edge forwarded for this request (for example from a
+   * proxy-set header). Its origin may authenticate device sockets with cookies;
+   * browsers cannot set such headers on a WebSocket handshake.
+   */
+  publicHost?: (request: Request) => string | undefined;
   deviceLimits?: Readonly<
     {
       maxSubscriptions?: number;
@@ -149,6 +155,12 @@ export type DefineServerFacadeInput = Readonly<{
   sessionCookie?: SessionCookieOptions;
   /** Additional canonical HTTP(S) origins allowed to authenticate device sockets with cookies. */
   allowedOrigins?: readonly string[];
+  /**
+   * Public host a trusted edge forwarded for this request (for example from a
+   * proxy-set header). Its origin may authenticate device sockets with cookies;
+   * browsers cannot set such headers on a WebSocket handshake.
+   */
+  publicHost?: (request: Request) => string | undefined;
   deviceLimits?: Readonly<
     {
       maxSubscriptions?: number;

@@ -126,7 +126,7 @@ export function defineServerFacade(
     Reflect.ownKeys(input).some((key) =>
       key !== "basePath" && key !== "expose" && key !== "sessionCookie" &&
       key !== "authenticate" && key !== "resolveActor" &&
-      key !== "allowedOrigins" &&
+      key !== "allowedOrigins" && key !== "publicHost" &&
       key !== "deviceLimits" &&
       key !== "maxAssetUploadBytes"
     )
@@ -140,6 +140,11 @@ export function defineServerFacade(
     input.resolveActor !== undefined && typeof input.resolveActor !== "function"
   ) {
     throw new TypeError("Server resolveActor must be a function.");
+  }
+  if (
+    input.publicHost !== undefined && typeof input.publicHost !== "function"
+  ) {
+    throw new TypeError("Server publicHost must be a function.");
   }
   const expose = input.expose === undefined
     ? {}
@@ -212,6 +217,7 @@ export function defineServerFacade(
     } as const,
     authenticate: input.authenticate,
     ...(input.resolveActor ? { resolveActor: input.resolveActor } : {}),
+    ...(input.publicHost ? { publicHost: input.publicHost } : {}),
   } as const);
 }
 

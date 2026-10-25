@@ -666,3 +666,39 @@ Deno.test("shared invocation references are history across batches only when eve
     await f.close();
   }
 });
+
+Deno.test("legacy deferred Actions that resolved and terminated are history", async () => {
+  const f = await fixture();
+  try {
+    for (const id of ["deferred-resolved", "deferred-only"]) {
+      await f.body(`${id}:invoked`, invoked(id));
+      await f.body(`${id}:deferred`, {
+        ...invoked(id),
+        status: "deferred",
+        work: {},
+        progressIndex: 0,
+      });
+      if (id === "deferred-resolved") {
+        await f.body(`${id}:resolve`, {
+          actionId: "synthetic.retired",
+          actionRunId: id,
+          outcome: "resolved",
+          resolveGeneration: 1,
+        });
+      }
+      await f.body(`${id}:terminal`, {
+        ...invoked(id),
+        status: "completed",
+        output: "historical",
+      });
+    }
+    await f.db.query(
+      `UPDATE "${f.schema}".copilotz_schema_metadata SET version=12`,
+    );
+    const inventory = await inspectAuthorityUpgrade(f.db, f.schema);
+    assertEquals(inventory.invocations, []);
+    assertEquals(inventory.history.counts, { invocations: 2, events: 0 });
+  } finally {
+    await f.close();
+  }
+});

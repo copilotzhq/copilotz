@@ -105,6 +105,14 @@ export async function* iterateAuthorityUpgrade(
 ) {
   const tables = createCoreTableNames(schema);
   const terminalEvidence = await terminalAuthorityEvidence(transaction, schema);
+  // Operation parentage arrives with the v14 catalog; older catalogs had none.
+  const parent = (await transaction.query<{ present: boolean }>(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=$1
+        AND table_name='copilotz_operations' AND column_name='parent_operation_id') AS present`,
+      [schema],
+    )).rows[0]?.present
+    ? "o.parent_operation_id"
+    : "NULL::text";
   // Extract candidate identities once, without retaining historical payloads.
   const candidates = (await transaction.query<
     {
@@ -115,11 +123,11 @@ export async function* iterateAuthorityUpgrade(
     }
   >(
     `WITH RECURSIVE live_operations AS (
-      SELECT o.namespace,o.operation_id,o.root_event_id,o.parent_operation_id FROM "${schema}".copilotz_operations o
+      SELECT o.namespace,o.operation_id,o.root_event_id,${parent} AS parent_operation_id FROM "${schema}".copilotz_operations o
       WHERE o.state IS NULL OR o.state NOT IN ('completed','failed','cancelled')
         OR EXISTS (SELECT 1 FROM ${tables.event_deliveries} d WHERE d.settlement_scope_id=o.operation_id AND (d.status IS NULL OR d.status NOT IN ('succeeded','cancelled','dead_letter')))
       UNION
-      SELECT o.namespace,o.operation_id,o.root_event_id,o.parent_operation_id FROM "${schema}".copilotz_operations o
+      SELECT o.namespace,o.operation_id,o.root_event_id,${parent} AS parent_operation_id FROM "${schema}".copilotz_operations o
       JOIN live_operations child ON child.namespace=o.namespace AND child.parent_operation_id=o.operation_id
     ), live_events(namespace,id,causation_id) AS (
       SELECT e.namespace,e.id,e.causation_id FROM ${tables.events} e WHERE

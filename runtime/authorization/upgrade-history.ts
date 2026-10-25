@@ -36,9 +36,13 @@ export async function terminalAuthorityEvidence(
     receipt_fingerprint: string | null;
     reviewed_fingerprint: string | null;
   }>(`WITH keys AS MATERIALIZED (
+    -- Legacy deferred Actions also wrote 'deferred' bodies and status-less
+    -- resolve bodies; both are known, non-terminal lifecycle steps.
     SELECT namespace,event_body_id,COALESCE(body->'data',body)->>'actionRunId' AS run_id,
       COALESCE(body->'data',body)->>'actionId' AS action_id,
-      COALESCE(body->'data',body)->>'status' AS status FROM ${t.event_bodies}
+      COALESCE(COALESCE(body->'data',body)->>'status',
+        CASE WHEN COALESCE(body->'data',body) ? 'resolveGeneration' THEN 'resolve' END) AS status
+    FROM ${t.event_bodies}
   ), runs AS (
     SELECT namespace,run_id,min(action_id) AS action_id,
       min(event_body_id) FILTER (WHERE status='invoked') AS invoked_id,
@@ -47,7 +51,7 @@ export async function terminalAuthorityEvidence(
     HAVING count(*) FILTER (WHERE status='invoked')=1
       AND count(*) FILTER (WHERE status IN ('completed','failed','cancelled'))<=1
       AND count(DISTINCT action_id)=1 AND bool_and(action_id IS NOT NULL)
-      AND bool_and(COALESCE(status IN ('invoked','progress','awaiting','completed','failed','cancelled'),false))
+      AND bool_and(COALESCE(status IN ('invoked','progress','awaiting','deferred','resolve','completed','failed','cancelled'),false))
   ) SELECT r.*,receipt.result AS receipt,receipt.key AS receipt_key,receipt.intent->>'fingerprint' AS receipt_fingerprint,
       (SELECT to_jsonb(m)->>'upgrade_reviewed_fingerprint' FROM ${t.copilotz_schema_metadata} m WHERE singleton) AS reviewed_fingerprint FROM runs r
     LEFT JOIN ${t.owner_receipts} receipt ON receipt.owner='schema' AND receipt.domain='logical'

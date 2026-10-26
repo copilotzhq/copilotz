@@ -1,4 +1,25 @@
-## Unreleased
+## 0.90.2 — 2026-10-26
+
+Read snapshots are replaced by registered owner reads, so parallel agent work no
+longer competes for one held snapshot. Device sockets work behind TLS edges that
+rewrite the host, and the offline upgrade path reaches v14 linearly.
+
+- **Breaking:** the owner-capability layer no longer refuses work by count.
+  Ordinary multi-agent fan-out reached the per-assignment context, resource,
+  assignment and worker-invocation limits, or the message node, depth and
+  per-input limits, and replies were dead-lettered with `owner_capacity` or
+  `owner_data_limit`. Those limits are removed. One 32 MiB per-message ceiling
+  remains as a memory-safety net. Admission still comes from worker capacity,
+  delivery leases and the read limiter. Limits with backpressure return before
+  any release that admits untrusted workers.
+- Device sockets accept the https origin of the request's own host when a TLS
+  edge forwards the upgrade as http. Server facades may declare
+  `publicHost(request)`, the host a trusted edge forwarded (for example when an
+  edge rewrites `Host`); its https origin also authenticates device sockets.
+  Browsers cannot set proxy headers on a WebSocket handshake, so foreign origins
+  stay refused.
+- Upgraded schemas keep reading `database:default` body copies when the
+  application configures its own body storage adapter.
 
 - **Breaking:** remove `readSnapshot`. Register loaders with `defineRead` under
   `resources.reads` and invoke `context.read(name, args)` for one owner-side

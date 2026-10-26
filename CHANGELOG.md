@@ -21,6 +21,7 @@ rewrite the host, and the offline upgrade path reaches v14 linearly.
   recorded its failure. Reader handles no longer expire after 30 s idle or 120
   s; they close at EOF, cancellation, invocation end or retirement. Worker call
   concurrency uses Oxian's maxima (1,024 per connection).
+- Depends on Ominipg 0.11.0, which removes the read-snapshot API and protocol.
 - Device sockets accept the https origin of the request's own host when a TLS
   edge forwards the upgrade as http. Server facades may declare
   `publicHost(request)`, the host a trusted edge forwarded (for example when an

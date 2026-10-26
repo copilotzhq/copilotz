@@ -169,6 +169,7 @@ async function fixture(
     },
   );
   return {
+    concurrentReads: storage.concurrentReads === true,
     queries,
     get transactions() {
       return transactions;
@@ -269,11 +270,18 @@ for (const acrossRuns of [false, true]) {
         Deno.env.get("AUTHZ_REUSE_BASELINE") !== "1" &&
         Deno.env.get("AUTHZ_READSET_BASELINE") !== "1"
       ) {
-        assertEquals(evaluations, 2);
-        assertEquals(warm.map((s) => s.evals), Array(20).fill(0));
-        // Background owner work may add statements; the median isolates a get.
-        const sql = warm.map((s) => s.sql).sort((a, b) => a - b);
-        assertEquals(sql[Math.floor(sql.length / 2)], acrossRuns ? 4 : 3);
+        if (f.concurrentReads) {
+          // Independent reader views cannot reuse the writer's current-view proof.
+          // Each read authorizes and discloses exactly once on its transaction.
+          assertEquals(evaluations, samples.length * 2);
+          assertEquals(samples.map((s) => s.evals), Array(21).fill(2));
+        } else {
+          assertEquals(evaluations, 2);
+          assertEquals(warm.map((s) => s.evals), Array(20).fill(0));
+          // Background owner work may add statements; the median isolates a get.
+          const sql = warm.map((s) => s.sql).sort((a, b) => a - b);
+          assertEquals(sql[Math.floor(sql.length / 2)], acrossRuns ? 4 : 3);
+        }
       }
     } finally {
       await f.close();

@@ -1,9 +1,7 @@
 import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
-import {
-  withoutOwnerCommandAuthorization,
-} from "../engine/command-authorization.ts";
+import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import type {
   DeliveryAttemptRegistration,
   OwnerSessionAuthority,
@@ -18,7 +16,6 @@ import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,
 } from "../collections/command-receipt.ts";
-import { snapshotControl } from "../collections/snapshot-control.ts";
 /** Owner-side capability admission. Worker code never imports this module. */
 import type {
   HypervisorLifecycleCallbacks,
@@ -58,7 +55,7 @@ const RESOURCE_LIFETIME_MS = 120_000;
 type Resource = {
   id: string;
   context: string;
-  kind: "snapshot" | "writer" | "reader";
+  kind: "writer" | "reader";
   value: RecordValue;
   serial: Promise<unknown>;
   created: number;
@@ -69,7 +66,6 @@ type Resource = {
   writerSealed?: boolean;
   removeFailure?(): void;
   close(reason?: unknown): Promise<void>;
-  run?(path: readonly string[], args: readonly unknown[]): Promise<unknown>;
 };
 type ResourceReservation = {
   resource: Resource;
@@ -99,7 +95,6 @@ type Assignment = {
   wake?: Deferred<void>;
   task: Promise<void>;
   terminal?: { result?: WorkerWorkResult; error?: unknown };
-  snapshotOpen?: boolean;
   authority?: Readonly<{ epoch: number; signal: AbortSignal }>;
   interruption?: Error;
   semanticRetirement?: boolean;
@@ -146,11 +141,11 @@ function scopeOf(context: ProcessorContext | ActionContext): RecordValue {
     now: context.now().toISOString(),
   };
 }
-function allowedPath(path: readonly string[], snapshot = false): boolean {
+function allowedPath(path: readonly string[]): boolean {
   const [root, method, leaf, nested] = path;
   if (root === "collections") {
     if (!method || path.length < 3) return false;
-    if (leaf === "commands") return !snapshot && path.length === 4 && !!nested;
+    if (leaf === "commands") return path.length === 4 && !!nested;
     if (leaf === "queries") return path.length === 4 && !!nested;
     if (leaf === "relations") return nested === "list" && path.length === 4;
     return path.length === 3 &&
@@ -159,10 +154,11 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
         "list",
         "aggregate",
         "search",
-        ...(!snapshot ? ["create", "update", "delete"] : []),
+        "create",
+        "update",
+        "delete",
       ].includes(leaf);
   }
-  if (snapshot) return false;
   if (root === "authentication") {
     return path.length === 2 && method === "verify";
   }
@@ -814,126 +810,6 @@ export function createOwnerCapabilityHost(
     }
     return value;
   };
-  const snapshot = async (
-    assignment: Assignment,
-    contextId: string,
-    context: ProcessorContext | ActionContext,
-  ) => {
-    if (assignment.resources.size >= MAX_RESOURCES) {
-      throw capabilityError("owner_capacity");
-    }
-    if (assignment.snapshotOpen) {
-      throw capabilityError("owner_snapshot_nested");
-    }
-    assignment.snapshotOpen = true;
-    const opened = Promise.withResolvers<RecordValue>();
-    const exit = Promise.withResolvers<void>();
-    const wake = { current: Promise.withResolvers<void>() };
-    const jobs: {
-      path: readonly string[];
-      args: readonly unknown[];
-      result: Deferred<unknown>;
-    }[] = [];
-    let closing = false;
-    let closeError: unknown;
-    let cleanup:
-      | Promise<import("../events/session.ts").SqlSnapshotCleanup>
-      | undefined;
-    const task = context.readSnapshot(async (scope) => {
-      const control = snapshotControl(scope);
-      if (!control) throw capabilityError("owner_snapshot_unavailable");
-      cleanup = control.cleanup;
-      const schema = context.databaseSchema;
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
-        throw capabilityError("owner_snapshot_scope");
-      }
-      const validate = async () => {
-        assignment.abort.signal.throwIfAborted();
-        const read = async (
-          query: import("../events/session.ts").SqlExecutor,
-        ) => {
-          const result = await query.query<{ epoch: number | string }>(
-            `SELECT epoch FROM "${schema}".owner_epochs WHERE owner='schema'`,
-          );
-          if (
-            Number(result.rows[0]?.epoch) !==
-              assignment.binding.parent!.metadata.ownerEpoch
-          ) {
-            throw capabilityError("ActionOwnershipLost");
-          }
-        };
-        if (control.kind === "pooled") await control.current(read);
-        else await read(control.snapshot);
-      };
-      await validate();
-      opened.resolve(scope);
-      while (!closing || jobs.length) {
-        const job = jobs.shift();
-        if (!job) {
-          await wake.current.promise;
-          wake.current = Promise.withResolvers<void>();
-          continue;
-        }
-        try {
-          check(assignment);
-          const value = await callPath(scope, job.path, job.args);
-          await validate();
-          check(assignment);
-          job.result.resolve(value);
-        } catch (error) {
-          job.result.reject(error);
-        }
-      }
-      if (closeError) throw closeError;
-    });
-    void task.then(exit.resolve, (error) => {
-      opened.reject(error);
-      exit.reject(error);
-    });
-    void opened.promise.catch(() => undefined);
-    void exit.promise.catch(() => undefined);
-    const resource = addResource(assignment, {
-      kind: "snapshot",
-      context: contextId,
-      value: {},
-      async close(reason) {
-        closing = true;
-        closeError = reason;
-        wake.current.resolve();
-        let failed = false;
-        let failure: unknown;
-        try {
-          await exit.promise;
-        } catch (error) {
-          failed = true;
-          failure = error;
-        } finally {
-          assignment.snapshotOpen = false;
-        }
-        // Unknown cleanup takes precedence over callback failure; a confirmed
-        // cleanup preserves the original callback error without throwing from
-        // finally (including an explicitly thrown undefined value).
-        if (!cleanup || (await cleanup) !== "confirmed") {
-          throw capabilityError("owner_cleanup_unknown");
-        }
-        if (failed) throw failure;
-      },
-      run(path, args) {
-        const result = Promise.withResolvers<unknown>();
-        jobs.push({ path, args, result });
-        wake.current.resolve();
-        return result.promise;
-      },
-    });
-    try {
-      await opened.promise;
-      check(assignment);
-      return { handle: resource.id };
-    } catch (error) {
-      await closeResource(assignment, resource, error).catch(() => undefined);
-      throw error;
-    }
-  };
   const execute = async (
     binding: WorkerCallContext,
     call: CapabilityCall,
@@ -1096,11 +972,14 @@ export function createOwnerCapabilityHost(
       const callDone = Promise.withResolvers<void>();
       invocation.calls.add(callDone.promise);
       try {
-        if (call.kind === "snapshot") {
-          const result = await snapshot(
-            active,
-            call.context!,
-            invocation.context,
+        if (call.kind === "read") {
+          const result = await invocation.context.read(
+            call.name!,
+            call.args?.[0],
+            {
+              signal: invocation.context.signal,
+              timeoutMs: call.options?.timeoutMs as number | undefined,
+            },
           );
           checkInvocation();
           return result;
@@ -1252,11 +1131,10 @@ export function createOwnerCapabilityHost(
           }
           resource.used = Date.now();
           if (
-            resource.kind === "snapshot"
-              ? !allowedPath(path, true)
-              : path.length !== 1 || !(resource.kind === "reader"
-                ? ["read"]
-                : ["append", "close", "abort", "retain"]).includes(path[0])
+            path.length !== 1 ||
+            !(resource.kind === "reader"
+              ? ["read"]
+              : ["append", "close", "abort", "retain"]).includes(path[0])
           ) throw capabilityError("owner_capability_refused");
           const append = resource.kind === "writer" && path[0] === "append";
           if (append && (resource.pendingAppends ?? 0) >= 2) {
@@ -1281,9 +1159,7 @@ export function createOwnerCapabilityHost(
                 resource.kind === "writer" && path[0] === "retain" &&
                 !resource.writerSealed
               ) throw capabilityError("owner_handle_not_sealed");
-              const value = resource.run
-                ? await resource.run(path, args)
-                : await callPath(resource.value, path, args);
+              const value = await callPath(resource.value, path, args);
               check(active);
               checkInvocation();
               if (resource.closed) {

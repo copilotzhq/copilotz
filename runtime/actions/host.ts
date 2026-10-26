@@ -1,8 +1,5 @@
 import { createActionInvocationContext } from "./execution-context.ts";
-import {
-  snapshotControl,
-  withSnapshotControl,
-} from "../collections/snapshot-control.ts";
+
 import type { VectorReader } from "../vectors/index.ts";
 import type {
   CollectionDefinition,
@@ -79,7 +76,7 @@ export type ActionHostContext = Readonly<{
   signal: AbortSignal;
   now(): Date;
   transaction: ActionContext["transaction"];
-  readSnapshot: ActionContext["readSnapshot"];
+  read: import("../collections/reads.ts").OwnerRead;
 }>;
 
 export type ActionContextBindings = Readonly<{
@@ -202,32 +199,26 @@ export function createActionContext(
     throwIfAborted(options.signal);
     return result.value;
   };
-  const readSnapshot: ActionHostContext["readSnapshot"] = async (execute) =>
-    await bindings.collections.readSnapshot(
-      { namespace },
-      async (snapshotScope) => {
-        const { collections: byName } = snapshotScope;
-        const snapshotCollections = Object.fromEntries(
-          Object.entries(bindings.plugins.collections).map(
-            ([alias, definition]) => {
-              const collection =
-                byName[(definition as CollectionDefinition).name];
-              if (!collection) {
-                throw new Error(
-                  `Collection '${definition.name}' for alias '${alias}' is not bound.`,
-                );
-              }
-              return [alias, collection];
-            },
-          ),
-        );
-        return await execute(
-          withSnapshotControl(
-            { collections: snapshotCollections } as const,
-            snapshotControl(snapshotScope),
-          ) as never,
-        );
+  const read: ActionHostContext["read"] = (name, args, config, execution) =>
+    bindings.collections.read(
+      {
+        namespace,
+        reads: bindings.plugins.resources.reads,
+        aliases: bindings.plugins.collections,
+        context: {
+          namespace,
+          databaseSchema,
+          resources: bindings.plugins.resources,
+          signal,
+          now: bindings.now ?? (() => new Date()),
+          operationKey: execution?.operationKey ?? "read",
+          identity: execution?.identity ?? {},
+          ...(execution ? { signal: execution.signal } : {}),
+        },
       },
+      name,
+      args,
+      config,
     );
 
   const actions = createActionCallers(bindings.plugins.actions, {
@@ -268,7 +259,7 @@ export function createActionContext(
     signal,
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
-    readSnapshot,
+    read,
   } as const;
   return host;
 }

@@ -1,9 +1,6 @@
 import { createOwnerContentStreamRuntime } from "../streams/stream.ts";
 import { bindProcessorCollectionInvocation } from "../authorization/invocation.ts";
-import {
-  snapshotControl,
-  withSnapshotControl,
-} from "../collections/snapshot-control.ts";
+
 import type { CollectionDefinition } from "../collections/index.ts";
 import {
   createContentStreamRuntime,
@@ -497,33 +494,32 @@ export function createProcessorContext(
     return result.value;
   };
 
-  const readSnapshot: ProcessorContext["readSnapshot"] = async (execute) => {
-    return await options.collections.readSnapshot(
-      { namespace },
-      async (snapshotScope) => {
-        const { collections: byName } = snapshotScope;
-        const snapshotCollections = Object.fromEntries(
-          Object.entries(options.registry.collections).map(
-            ([alias, definition]) => {
-              const collection = byName[definition.name];
-              if (!collection) {
-                throw new Error(
-                  `Collection '${definition.name}' for alias '${alias}' is not bound.`,
-                );
-              }
-              return [alias, collection];
-            },
-          ),
-        );
-        return await execute(
-          withSnapshotControl(
-            { collections: snapshotCollections } as const,
-            snapshotControl(snapshotScope),
-          ),
-        );
+  const read: import("../collections/reads.ts").OwnerRead = (
+    name,
+    args,
+    config,
+    execution,
+  ) =>
+    options.collections.read(
+      {
+        namespace,
+        reads: options.registry.resources.reads,
+        aliases: options.registry.collections,
+        context: {
+          namespace,
+          databaseSchema,
+          resources: options.registry.resources,
+          signal: options.base.signal,
+          now: options.now ?? (() => new Date()),
+          operationKey: execution?.operationKey ?? options.base.idempotencyKey,
+          identity: execution?.identity ?? contextIdentity,
+          ...(execution ? { signal: execution.signal } : {}),
+        },
       },
+      name,
+      args,
+      config,
     );
-  };
 
   const contextIdentity = {
     ...(options.base.event.durable
@@ -605,7 +601,7 @@ export function createProcessorContext(
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),
     transaction,
-    readSnapshot,
+    read,
   }, options.protectedEventResolver);
   const context: ProcessorContext = options.collectionInvocation
     ? bindProcessorCollectionInvocation(

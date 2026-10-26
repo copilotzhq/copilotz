@@ -1,3 +1,4 @@
+import { defineRead } from "../collections/reads.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 import { ActionError } from "../actions/errors.ts";
 import { defineCollection } from "../collections/definition.ts";
@@ -321,14 +322,19 @@ Deno.test({
     let first: Promise<void> | undefined;
     let second: Promise<void> | undefined;
     try {
-      await f.runtime.readSnapshot(
-        { namespace: "space" },
-        async ({ collections }) => {
-          retained = () => collections.boundary_record.get({ id: "missing" });
-          first = held(f.caller, { input: {} });
-          await bounded(entered.promise, "A snapshot seeds drain");
-        },
-      );
+      await (async () => {
+        const definition = defineRead(
+          async (_args: unknown, { collections }) => {
+            retained = () => collections.boundary_record.get({ id: "missing" });
+            first = held(f.caller, { input: {} });
+            await bounded(entered.promise, "A snapshot seeds drain");
+          },
+        );
+        f.runtime.registerRead("testRead0", definition);
+        return (await f.runtime.read<
+          Awaited<ReturnType<typeof definition.execute>>
+        >({ namespace: "space" }, "testRead0")).value;
+      })();
       second = next(f.caller, { input: {} });
       release.resolve();
       await bounded(

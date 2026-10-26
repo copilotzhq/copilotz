@@ -19,9 +19,10 @@ export type CapabilityCall = Readonly<{
     | "complete"
     | "call"
     | "transaction"
-    | "snapshot"
+    | "read"
     | "close"
     | "receipt";
+  name?: string;
   id?: string;
   context?: string;
   path?: CapabilityPath;

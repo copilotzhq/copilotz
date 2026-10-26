@@ -29,12 +29,18 @@
     "collections/space/index.ts",
     "collections/thread/index.ts",
     "processors/message-input/index.ts",
-    "resources/capabilities/default/index.ts"
+    "resources/capabilities/default/index.ts",
+    "resources/reads/turnContext/index.ts",
+    "resources/reads/threadWindow/index.ts"
   ],
   "plugins": [
     {
       "from": "../llm/plugin.ts",
       "export": "llmPlugin"
     }
-  ]
+  ],
+  "aliases": {
+    "resources/reads/turnContext/index.ts": "coreTurnContext",
+    "resources/reads/threadWindow/index.ts": "coreThreadWindow"
+  }
 }

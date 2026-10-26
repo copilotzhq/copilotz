@@ -380,7 +380,7 @@ export function authorizeActionCapabilities(
       "confirm",
       "notStarted",
     ]),
-    ...methods(context, ["transaction", "readSnapshot", "progress"]),
+    ...methods(context, ["transaction", "read", "progress"]),
   };
   const descriptors = Object.getOwnPropertyDescriptors(context);
   for (const [key, value] of Object.entries(bindings)) {

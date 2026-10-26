@@ -1,3 +1,4 @@
+import { defineRead } from "../collections/reads.ts";
 import { completeOwnerDeadline } from "../engine/alarms.ts";
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -609,7 +610,7 @@ Deno.test("F4 failed logout commit leaves the session and channel live", async (
   }
 });
 
-Deno.test("F4 historical snapshots use current authority and authorize the actual retained row", async () => {
+Deno.test("F4 batches use one authority view and honour revocation committed before admission", async () => {
   const f = await fixture();
   try {
     await f.run("fixture.rows", {}, async (_, { transaction }) => {
@@ -624,33 +625,43 @@ Deno.test("F4 historical snapshots use current authority and authorize the actua
         );
       });
     const pooled = !!Deno.env.get("COPILOTZ_TEST_POSTGRES_URL");
-    await f.bound(() =>
-      f.runtime.readSnapshot(
-        { namespace: "main" },
-        ({ collections }) =>
-          f.bound(async () => {
-            // Pin the historical data snapshot, then change the current row's scope.
-            assertEquals(await collections.entry.list(), []);
-            // PostgreSQL can commit another owner command while the historical
-            // snapshot stays pinned. PGlite serializes both on one transaction.
-            if (pooled) await move();
-            await assertRejects(() =>
-              collections.entry.get({ id: "historic" })
-            );
-          }),
+    await assertRejects(() =>
+      f.bound(() =>
+        (async () => {
+          const definition = defineRead((
+            _args: unknown,
+            { collections },
+          ) =>
+            f.bound(async () => {
+              // Pin the historical data snapshot, then change the current row's scope.
+              assertEquals(await collections.entry.list(), []);
+              // PostgreSQL can commit another owner command while the historical
+              // snapshot stays pinned. PGlite serializes both on one transaction.
+              if (pooled) await move();
+              await collections.entry.get({ id: "historic" });
+            })
+          );
+          f.runtime.registerRead("testRead0", definition);
+          return (await f.runtime.read<
+            Awaited<ReturnType<typeof definition.execute>>
+          >({ namespace: "main" }, "testRead0")).value;
+        })()
       )
     );
     if (!pooled) await move();
-    await f.bound(() =>
-      f.runtime.readSnapshot(
-        { namespace: "main" },
-        ({ collections }) =>
-          f.bound(async () => {
-            assertEquals((await collections.entry.list()).length, 1);
-            await f.setMember(false);
-            await assertRejects(() => collections.entry.list());
-          }),
-      )
+    f.runtime.registerRead(
+      "visible",
+      defineRead((_args, { collections }) => collections.entry.list()),
+    );
+    assertEquals(
+      (await f.bound(() =>
+        f.runtime.read<unknown[]>({ namespace: "main" }, "visible")
+      )).value.length,
+      1,
+    );
+    await f.setMember(false);
+    await assertRejects(() =>
+      f.bound(() => f.runtime.read({ namespace: "main" }, "visible"))
     );
   } finally {
     await f.close();

@@ -97,7 +97,7 @@ Deno.test("protected owner policy opens a real read snapshot without granting wr
         ),
     );
     const snapshot = <T>(run: (facade: SqlExecutor) => Promise<T>) =>
-      db.readSnapshot!(async (read) => {
+      db.readTransaction!(async (read) => {
         const facade = Object.freeze({ query: read.query.bind(read) });
         retained = facade;
         return await withProtectedValueRead(

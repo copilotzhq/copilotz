@@ -1,5 +1,14 @@
 ## Unreleased
 
+- **Breaking:** remove `readSnapshot`. Register loaders with `defineRead` under
+  `resources.reads` and invoke `context.read(name, args)` for one owner-side
+  transaction and one worker RPC. Results include diagnostic `asOf` metadata.
+  Policy is evaluated on the batch view, including final disclosure. FIFO read
+  admission replaces immediate capacity refusals: deadlines raise retryable
+  `read_capacity_timeout` with `retryAfterMs`; `persistence_unavailable` means
+  an unavailable database. Ownership mismatch raises `ActionOwnershipLost`. Held
+  read handles and their cleanup protocol have been removed.
+
 - Exclude terminal uncaptured invocation history and fully settled ingress from
   v13 authority review. Inventory reports history separately; manifest-bound
   non-resumable receipts record counts and a deterministic history digest.

@@ -1,6 +1,6 @@
+import { readConfiguration } from "../persistence/read-limiter.ts";
 import { bindSqlDatabaseIdentity } from "./database-identity.ts";
 import { createEventStoreError } from "./errors.ts";
-import { retainReadSnapshotKind } from "./snapshot-kind.ts";
 
 export type SqlQueryResult<TRow extends Record<string, unknown>> = {
   rows: TRow[];
@@ -14,20 +14,6 @@ export type SqlExecutor = {
   ): Promise<SqlQueryResult<TRow>>;
 };
 
-/** Cleanup is confirmed only after the backend has released the exact resource. */
-export type SqlSnapshotCleanup = "confirmed" | "unknown";
-export type SqlReadSnapshot =
-  | Readonly<{ kind: "exclusive"; snapshot: SqlExecutor }>
-  | Readonly<
-    {
-      kind: "pooled";
-      snapshot: SqlExecutor;
-      current<T>(
-        operation: (transaction: SqlExecutor) => Promise<T>,
-      ): Promise<T>;
-    }
-  >;
-
 export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
@@ -36,17 +22,10 @@ export type SqlSession = SqlExecutor & {
    * Runs a short, repeatable read-only database snapshot. The callback must
    * finish its selection before content or provider work begins.
    */
-  readSnapshot?<T>(
+  concurrentReads?: boolean;
+  readTransaction?<T>(
     operation: (snapshot: SqlExecutor) => Promise<T>,
-  ): Promise<T>;
-  withReadSnapshot?<T>(
-    operation: (scope: SqlReadSnapshot) => Promise<T>,
-    options?: Readonly<
-      {
-        signal?: AbortSignal;
-        onCleanup?: (outcome: SqlSnapshotCleanup) => void;
-      }
-    >,
+    options?: import("../persistence/read-limiter.ts").ReadOptions,
   ): Promise<T>;
 };
 
@@ -225,7 +204,6 @@ type DatabaseLike = SqlExecutor & {
   transaction?: <T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ) => Promise<T>;
-  withReadSnapshot?: SqlSession["withReadSnapshot"];
 };
 
 /** Adapts an Ominipg/Copilotz database into the narrow atomic-session seam. */
@@ -252,23 +230,19 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
   const transaction: SqlSession["transaction"] = (operation) =>
     runSqlTransaction(atomic, operation);
 
-  const withReadSnapshot = typeof database.withReadSnapshot === "function"
-    ? database.withReadSnapshot.bind(database)
-    : undefined;
-  if (withReadSnapshot) {
-    retainReadSnapshotKind(withReadSnapshot, database.withReadSnapshot!);
-  }
+  const config = readConfiguration(database);
   return bindSqlDatabaseIdentity({
+    concurrentReads: config.concurrent,
     query,
-    ...(withReadSnapshot ? { withReadSnapshot } : {}),
     transaction,
-    async readSnapshot(operation) {
-      return await transaction(async (snapshot) => {
-        await snapshot.query(
-          "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-        );
-        return await operation(snapshot);
-      });
+    async readTransaction(operation, options) {
+      return await config.limiter.run(() =>
+        transaction(async (snapshot) => {
+          await snapshot.query(
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          );
+          return await operation(snapshot);
+        }), options);
     },
   }, database);
 }

@@ -1,3 +1,4 @@
+import { defineRead } from "./reads.ts";
 import {
   type BoundCollection,
   createCollectionKernel as createCollectionRuntime,
@@ -353,9 +354,8 @@ Deno.test("read snapshots expose only scoped reads and close before later work",
     }, { namespace: "tenant-snapshot" });
     await settle(created);
     let escaped!: (input: { id: string }) => Promise<CollectionRecord | null>;
-    await fixture.runtime.readSnapshot(
-      { namespace: "tenant-snapshot" },
-      async ({ collections }) => {
+    await (async () => {
+      const definition = defineRead(async (_args: unknown, { collections }) => {
         const jobs = collections.job;
         assertEquals("create" in jobs, false);
         assertEquals(
@@ -373,13 +373,17 @@ Deno.test("read snapshots expose only scoped reads and close before later work",
             fixture.runtime.transaction({
               operationKey: "blocked-snapshot-write",
               namespace: "tenant-snapshot",
-              execute: async () => undefined,
+              execute: () => Promise.resolve(undefined),
             }),
           Error,
           "not allowed inside a read snapshot",
         );
-      },
-    );
+      });
+      fixture.runtime.registerRead("testRead0", definition);
+      return (await fixture.runtime.read<
+        Awaited<ReturnType<typeof definition.execute>>
+      >({ namespace: "tenant-snapshot" }, "testRead0")).value;
+    })();
     await assertRejects(
       () => escaped({ id: "snapshot-job" }),
       Error,
@@ -407,29 +411,35 @@ Deno.test({
         title: "Before concurrent update",
       }, { namespace: "tenant-snapshot" });
       await settle(created);
-      await fixture.runtime.readSnapshot(
-        { namespace: "tenant-snapshot" },
-        async ({ collections }) => {
-          assertEquals(
-            (await collections.job.get({ id: "snapshot-job" }))?.title,
-            "Before concurrent update",
-          );
-          await writer.query(
-            `UPDATE ${fixture.store.tables.nodes}
+      await (async () => {
+        const definition = defineRead(
+          async (_args: unknown, { collections }) => {
+            assertEquals(
+              (await collections.job.get({ id: "snapshot-job" }))?.title,
+              "Before concurrent update",
+            );
+            await writer.query(
+              `UPDATE ${fixture.store.tables.nodes}
                 SET data = jsonb_set(data, '{title}', $1::jsonb)
               WHERE namespace = $2 AND id = $3`,
-            [
-              JSON.stringify("After concurrent update"),
-              "tenant-snapshot",
-              "snapshot-job",
-            ],
-          );
-          assertEquals(
-            (await collections.job.get({ id: "snapshot-job" }))?.title,
-            "Before concurrent update",
-          );
-        },
-      );
+              [
+                JSON.stringify("After concurrent update"),
+                "tenant-snapshot",
+                "snapshot-job",
+              ],
+            );
+            assertEquals(
+              (await collections.job.list({ where: { id: "snapshot-job" } }))[0]
+                ?.title,
+              "Before concurrent update",
+            );
+          },
+        );
+        fixture.runtime.registerRead("testRead1", definition);
+        return (await fixture.runtime.read<
+          Awaited<ReturnType<typeof definition.execute>>
+        >({ namespace: "tenant-snapshot" }, "testRead1")).value;
+      })();
       assertEquals(
         (await fixture.jobs.get("snapshot-job", "tenant-snapshot"))?.title,
         "After concurrent update",
@@ -1207,4 +1217,60 @@ Deno.test({
       `v3_ck_${crypto.randomUUID().replaceAll("-", "")}`,
     );
   },
+});
+
+Deno.test("nested registered reads join one batch on a single connection", async () => {
+  const f = await createFixture(":memory:", "nested_reads");
+  try {
+    const created = await f.jobs.create({
+      id: "joined",
+      externalId: "joined",
+      title: "Joined",
+    }, { namespace: "tenant" });
+    await settle(created);
+    f.runtime.registerRead(
+      "child",
+      defineRead((_args, { collections }) =>
+        collections.job.get({ id: "joined" })
+      ),
+    );
+    f.runtime.registerRead(
+      "parent",
+      defineRead(async (_args, context) => {
+        const first = await context.read("child");
+        const second = await context.read("child");
+        assertEquals(first.asOf, second.asOf);
+        return first;
+      }),
+    );
+    const result = await f.runtime.read<
+      { value: CollectionRecord; asOf: unknown }
+    >({ namespace: "tenant" }, "parent");
+    assertEquals(result.value.value.title, "Joined");
+    assertEquals(result.value.asOf, result.asOf);
+  } finally {
+    await closeFixture(f);
+  }
+});
+
+Deno.test("owner retirement during a registered batch raises ActionOwnershipLost", async () => {
+  const f = await createFixture(":memory:", "retired_reads");
+  const { bindSchemaOwner } = await import("../engine/commands.ts");
+  const owner = await bindSchemaOwner(f.session, f.store.databaseSchema)();
+  try {
+    f.runtime.registerRead(
+      "retire",
+      defineRead(async (_args, { collections }) => {
+        await collections.job.list();
+        owner.stop(new Error("synthetic owner replacement"));
+        return null;
+      }),
+    );
+    const error = await assertRejects(() =>
+      f.runtime.read({ namespace: "tenant" }, "retire")
+    );
+    assertEquals((error as { code?: string }).code, "ActionOwnershipLost");
+  } finally {
+    await closeFixture(f);
+  }
 });

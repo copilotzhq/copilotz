@@ -1,3 +1,4 @@
+import { defineRead } from "../collections/reads.ts";
 import { hostIngressProof } from "../application/ingress/authority.ts";
 import {
   type BodyStorageOptions,
@@ -213,16 +214,7 @@ for (const transport of ["in-process", "websocket"] as const) {
           return local;
         }, { operationKey: "atomic" });
         assertEquals(returned, local);
-        let escaped: unknown;
-        const texts = await ctx.readSnapshot(async (scope) => {
-          escaped = scope.collections.records;
-          return (await scope.collections.records.list({
-            order: { field: "id", direction: "asc" },
-          })).map((row) => row.text);
-        });
-        await assertRejects(() =>
-          (escaped as ActionContext["collections"][string]).list({})
-        );
+        const { value: texts } = await ctx.read("texts");
         const prepared = await ctx.actions.child.prepare(() => {
           preparations++;
           return { input: { value: "prepared" } };
@@ -233,7 +225,18 @@ for (const transport of ["in-process", "websocket"] as const) {
         return { texts, prepared, ordinary };
       },
     });
-    const f = await fixture(transport, { actions: { run, child } });
+    const f = await fixture(transport, {
+      actions: { run, child },
+      resources: {
+        reads: {
+          texts: defineRead(async (_args, { collections }) =>
+            (await collections.records.list({
+              order: { field: "id", direction: "asc" },
+            })).map((row) => row.text)
+          ),
+        },
+      },
+    });
     try {
       const result = await f.gateway.actions.run({}, {
         idempotencyKey: "main",
@@ -432,7 +435,18 @@ for (const transport of ["in-process", "websocket"] as const) {
         return (handoff as { value: number }).value;
       },
     });
-    const f = await fixture(transport, { actions: { run, child } });
+    const f = await fixture(transport, {
+      actions: { run, child },
+      resources: {
+        reads: {
+          texts: defineRead(async (_args, { collections }) =>
+            (await collections.records.list({
+              order: { field: "id", direction: "asc" },
+            })).map((row) => row.text)
+          ),
+        },
+      },
+    });
     try {
       assertEquals(
         await f.gateway.actions.run({}, { idempotencyKey: "continuation" }),
@@ -1382,3 +1396,42 @@ Deno.test("WebSocket lost safe effect confirmation response preserves one dispat
     await f.close();
   }
 });
+
+for (const count of [3, 50]) {
+  Deno.test(`worker executes ${count} simultaneous registered reads in one RPC each`, async () => {
+    let requests = 0;
+    const run = defineAction({
+      id: "reads.parallel",
+      async execute(_input: unknown, context: ActionContext) {
+        return await Promise.all(
+          Array.from({ length: count }, () => context.read("records")),
+        );
+      },
+    });
+    const f = await fixture("in-process", {
+      actions: { run },
+      beforeCall(call) {
+        if (call.kind === "read") requests++;
+      },
+      resources: {
+        reads: {
+          records: defineRead(async (_args, { collections }) => {
+            const first = await collections.records.list();
+            const second = await collections.records.list();
+            assertEquals(first, second);
+            return first;
+          }),
+        },
+      },
+    });
+    try {
+      const values = await f.gateway.actions.run({}, {
+        idempotencyKey: "read-burst",
+      }) as unknown[];
+      assertEquals(values.length, count);
+      assertEquals(requests, count);
+    } finally {
+      await f.close();
+    }
+  });
+}

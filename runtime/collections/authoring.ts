@@ -1,3 +1,5 @@
+export { defineRead } from "./reads.ts";
+export type { ReadContext, ReadResult, RegisteredRead } from "./reads.ts";
 /** Public Collection authoring declarations without the runtime kernel. @module */
 
 export { defineCollection, relation } from "./definition.ts";

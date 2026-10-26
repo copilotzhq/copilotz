@@ -350,14 +350,13 @@ delegation remain uncached. Mutable policy logic must use a new
 registration/revision; all changing authorization facts must be read through
 tracked sources.
 
-A warm worker Collection `get` needs no policy evaluation, session lookup,
-authorization-only record read or invocation-liveness query. It still reads the
-actual record and enters the serialized owner command. That fence protects
-cross-process owner takeover and the disclosure boundary. The existing
-repeatable read snapshot API is not a substitute for current authority:
-PostgreSQL snapshots can expose historical records, and protected PGlite
-snapshots themselves use an owner command. This optimization therefore retains
-that boundary.
+Standalone protected primitive reads on PostgreSQL use a short read transaction
+outside the serialized writer queue. Registered reads evaluate policy and data
+in the same batch view, with final disclosure before the result leaves the
+owner. A revocation committed before batch admission is always visible. PGlite
+uses the owner command transaction because it has one connection. Named
+selectors that hydrate external content use separate read transactions for
+authorization and disclosure.
 
 ### What `evaluate` returns
 

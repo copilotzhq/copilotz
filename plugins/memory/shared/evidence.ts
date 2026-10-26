@@ -1,3 +1,4 @@
+import { defineRead } from "@copilotz/copilotz/collections/authoring";
 /** Evidence handles refer only to bodies the ordinary transcript exposes. @module */
 import {
   agentAskMetadata,
@@ -101,29 +102,44 @@ export function sourceCatalog(
 }
 
 /** Current maintenance results use the same Core history visibility as preparation. */
-export async function ownedTurnToolSources(
+async function loadToolSources(
+  provenance: NonNullable<ReturnType<typeof coreToolActionMetadata>>,
   context: MemoryActionContext,
 ): Promise<readonly ConversationMessage[]> {
-  const provenance = coreToolActionMetadata(context.action.metadata)!;
   if (!provenance.agentTurn) return []; // Ordinary results already belong to the reserved history.
   const trigger = await context.collections.message.get({
     id: provenance.triggerMessageId,
   });
   if (!trigger) return [];
-  const snapshot = await context.readSnapshot(({ collections }) =>
-    loadCoreThreadMessageSnapshot(
-      { collections } as typeof context,
-      provenance.threadId,
-      trigger,
-      {
-        historyScopeId: provenance.agentTurn!.id,
-        viewerIds: [provenance.agentParticipantId],
-      },
-    )
+  const snapshot = await loadCoreThreadMessageSnapshot(
+    context,
+    provenance.threadId,
+    trigger,
+    {
+      historyScopeId: provenance.agentTurn!.id,
+      viewerIds: [provenance.agentParticipantId],
+    },
   );
   if (!snapshot.active) return [];
   // Do not cite results that arrived after the model's continuation trigger.
   return snapshot.messages.filter((message) =>
     compareThreadMessageRecords(message, trigger) <= 0
   );
+}
+
+export const toolSourcesRead:
+  import("@copilotz/copilotz/collections").RegisteredRead<
+    NonNullable<ReturnType<typeof coreToolActionMetadata>>,
+    readonly ConversationMessage[]
+  > = defineRead((
+    provenance: NonNullable<ReturnType<typeof coreToolActionMetadata>>,
+    context,
+  ) => loadToolSources(provenance, context as MemoryActionContext));
+export async function ownedTurnToolSources(
+  context: MemoryActionContext,
+): Promise<readonly ConversationMessage[]> {
+  return (await context.read<readonly ConversationMessage[]>(
+    "memoryToolSources",
+    coreToolActionMetadata(context.action.metadata)!,
+  )).value;
 }

@@ -117,7 +117,7 @@ function bind<T extends object>(context: T, binding: Binding): T {
           : binding;
         const scope: CallScope = { authority, active: true };
         if (
-          (key === "transaction" || key === "readSnapshot") &&
+          (key === "transaction" || key === "read") &&
           typeof args[0] === "function"
         ) {
           const callback = args[0] as (value: object) => unknown;
@@ -158,7 +158,7 @@ function bind<T extends object>(context: T, binding: Binding): T {
         };
       }
     }
-    for (const key of ["transaction", "readSnapshot"]) {
+    for (const key of ["transaction", "read"]) {
       if (descriptors[key] && "value" in descriptors[key]) {
         descriptors[key] = {
           ...descriptors[key],

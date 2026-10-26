@@ -1,5 +1,4 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { usesExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 
 import {
   createOminipgSqlSession,
@@ -36,19 +35,15 @@ Deno.test({
   },
 });
 
-Deno.test("custom PGlite constructor configuration retains native snapshot admission", async () => {
+Deno.test("custom single connection configuration uses ordinary transactions", async () => {
   const managed = await openManagedOminipgDatabase({
     pgliteConfig: { extensions: {} },
   });
   try {
+    assertEquals(managed.session.concurrentReads, false);
     assertEquals(
-      usesExclusiveReadSnapshot(managed.session.withReadSnapshot),
-      false,
-    );
-    await assertRejects(
-      () => managed.session.withReadSnapshot!(() => Promise.resolve("read")),
-      Error,
-      "Exclusive snapshots are unsupported by this PGlite configuration",
+      await managed.session.readTransaction!(() => Promise.resolve("read")),
+      "read",
     );
   } finally {
     await managed.close();

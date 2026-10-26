@@ -1,3 +1,4 @@
+import { turnContextRead } from "../../../shared/turn-context.ts";
 /** Initial Ask provider input is bound to its canonical routed question. @module */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import type {
@@ -201,12 +202,16 @@ function fixture(source: readonly CollectionRecord[], options: {
     signal: new AbortController().signal,
     identity: { settlementScopeId: "test" },
     collections,
-    async readSnapshot(
-      run: (value: { collections: typeof collections }) => Promise<unknown>,
-    ) {
+    async read(_name: string, args: unknown) {
       snapshotDepth++;
       try {
-        return await run({ collections });
+        return {
+          value: await turnContextRead.execute(
+            args as Parameters<typeof turnContextRead.execute>[0],
+            context as never,
+          ),
+          asOf: { epoch: 1, lastSeq: 0 },
+        };
       } finally {
         snapshotDepth--;
       }

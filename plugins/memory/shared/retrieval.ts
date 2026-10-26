@@ -2,7 +2,7 @@
 import type {
   CollectionPredicate,
   CollectionRecord,
-  SnapshotCollections,
+  ReadCollections,
 } from "@copilotz/copilotz/collections";
 import type { MemoryNote } from "../authoring/notes/index.ts";
 import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
@@ -54,7 +54,7 @@ export function memoryFilter(
 
 /** Separate bounded own/peer candidates ensure peer volume cannot starve own notes. */
 export async function activeMemoryNotes(
-  context: { collections: SnapshotCollections },
+  context: { collections: ReadCollections },
   spaces: readonly MemorySpaceDescriptor[],
   limit: number,
 ) {

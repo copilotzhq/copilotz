@@ -1,3 +1,10 @@
+export { defineRead } from "./reads.ts";
+export type {
+  ReadContext,
+  ReadOptions,
+  ReadResult,
+  RegisteredRead,
+} from "./reads.ts";
 export {
   type NodeIndexDefinition,
   provisionCollectionIndexes,
@@ -30,6 +37,8 @@ export type {
   CollectionTransactionRelations,
   CollectionTransactionResult,
   CreateCollectionRuntimeOptions,
+  ReadCollection,
+  ReadCollections,
   ScopedCollection,
   ScopedCollectionCallOptions,
   ScopedCollectionCommand,
@@ -38,8 +47,6 @@ export type {
   ScopedCollectionReadOptions,
   ScopedCollections,
   ScopedCollectionUpdateInput,
-  SnapshotCollection,
-  SnapshotCollections,
   TransactionCollection,
 } from "./kernel.ts";
 export { isCollectionEvent } from "./replay.ts";

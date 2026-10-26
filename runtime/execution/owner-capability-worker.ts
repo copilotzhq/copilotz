@@ -27,6 +27,64 @@ import {
   readCapability,
 } from "./owner-capability-wire.ts";
 
+// Bound transport stream bursts independently of database admission. The current
+// transport can retire a connection when many streams start in the same tick.
+// Queue across this worker process; each read still sends exactly one request.
+let activeReadRequests = 0;
+const waitingReads: Array<() => void> = [];
+async function sendRead<T>(
+  execute: () => Promise<T>,
+  signal: AbortSignal,
+  timeoutMs = 2_000,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new RangeError("Read deadline must be nonnegative.");
+  }
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const start = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      activeReadRequests++;
+      resolve();
+    };
+    const cancel = () => {
+      const index = waitingReads.indexOf(start);
+      if (index >= 0) waitingReads.splice(index, 1);
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      reject(signal.reason);
+    };
+    if (activeReadRequests < 8 && waitingReads.length === 0) start();
+    else {
+      waitingReads.push(start);
+      signal.addEventListener("abort", cancel, { once: true });
+      timer = setTimeout(() => {
+        const index = waitingReads.indexOf(start);
+        if (index < 0) return;
+        waitingReads.splice(index, 1);
+        signal.removeEventListener("abort", cancel);
+        reject(
+          Object.assign(new Error("Read dispatch deadline exceeded."), {
+            code: "read_capacity_timeout",
+            status: 503,
+            retryable: true,
+            retryAfterMs: 50,
+          }),
+        );
+      }, timeoutMs);
+    }
+  });
+  try {
+    signal.throwIfAborted();
+    return await execute();
+  } finally {
+    activeReadRequests--;
+    waitingReads.shift()?.();
+  }
+}
+
 type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Request = (call: CapabilityCall, signal?: AbortSignal) => Promise<unknown>;
@@ -417,24 +475,31 @@ function workerContext(options: {
     transactionSignal.throwIfAborted();
     return value;
   };
-  const readSnapshot = async <T>(
-    execute: (context: unknown) => T | Promise<T>,
-  ): Promise<T> => {
-    const opened = await track(() =>
-      request({ kind: "snapshot", context: invocation.context }, signal)
-    ) as { handle: string };
-    let error: unknown;
-    let value: T;
-    try {
-      value = await execute({ collections: collections(opened.handle) });
-    } catch (caught) {
-      error = caught;
-      throw caught;
-    } finally {
-      await close(opened.handle, error);
-    }
+  const read = async <T>(
+    name: string,
+    args?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<import("../collections/reads.ts").ReadResult<T>> => {
+    const input = decodeCapability(encodeCapability(args ?? null));
+    const readSignal = options?.signal
+      ? AbortSignal.any([signal, options.signal])
+      : signal;
+    const value = await track(() =>
+      sendRead(
+        () =>
+          request({
+            kind: "read",
+            context: invocation.context,
+            name,
+            args: [input],
+            options: { timeoutMs: options?.timeoutMs },
+          }, readSignal),
+        readSignal,
+        options?.timeoutMs,
+      )
+    );
     check();
-    return value;
+    return value as import("../collections/reads.ts").ReadResult<T>;
   };
   const actions = Object.fromEntries(
     Object.entries(registry.actions).map(([alias, definition]) => {
@@ -529,7 +594,7 @@ function workerContext(options: {
     signal,
     now: () => new Date(ownerTime + Math.max(0, performance.now() - sampledAt)),
     transaction,
-    readSnapshot,
+    read,
   }, () => rpc(["protectedEvent"], []));
   const scope = {
     databaseSchema: String(invocation.scope.databaseSchema),

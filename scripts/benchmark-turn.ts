@@ -3,6 +3,11 @@
  * nice -n 10 deno run -A scripts/benchmark-turn.ts --backend=postgres --out=/tmp/turn.json
  * Use a fresh process for each backend. No production database is reused.
  */
+/**
+ * Full gateway / owner / in-process worker turn benchmark.
+ * nice -n 10 deno run -A scripts/benchmark-turn.ts --backend=postgres --out=/tmp/turn.json
+ * Use a fresh process for each backend. No production database is reused.
+ */
 import { createCopilotzGateway } from "../runtime/application/gateway.ts";
 import { admitActionRequest } from "../runtime/application/ingress/admit.ts";
 import { hostIngressProof } from "../runtime/application/ingress/authority.ts";
@@ -27,7 +32,6 @@ import {
   currentOwnerCommand,
 } from "../runtime/engine/commands.ts";
 import { bindSqlDatabaseIdentity } from "../runtime/events/database-identity.ts";
-import { retainReadSnapshotKind } from "../runtime/events/snapshot-kind.ts";
 import type { SqlExecutor, SqlSession } from "../runtime/events/session.ts";
 import type { DeliveryDiagnostic } from "../runtime/execution/types.ts";
 import {
@@ -139,30 +143,12 @@ const database: SqlSession = bindSqlDatabaseIdentity({
     if (active) counters.transactions++;
     return raw.transaction((tx) => fn(query(tx)));
   },
-  ...(raw.withReadSnapshot
-    ? {
-      withReadSnapshot: ((fn, options) => {
-        if (active) counters.transactions++;
-        return raw.withReadSnapshot!((scope) =>
-          fn({
-            ...scope,
-            snapshot: query(scope.snapshot),
-            ...(scope.kind === "pooled"
-              ? {
-                current: (op) => {
-                  if (active) counters.transactions++;
-                  return scope.current((tx) => op(query(tx)));
-                },
-              }
-              : {}),
-          }), options);
-      }) as NonNullable<SqlSession["withReadSnapshot"]>,
-    }
-    : {}),
+  readTransaction: (operation, options) => {
+    if (active) counters.transactions++;
+    return raw.readTransaction!((tx) => operation(query(tx)), options);
+  },
+  concurrentReads: raw.concurrentReads,
 }, raw);
-if (database.withReadSnapshot && raw.withReadSnapshot) {
-  retainReadSnapshotKind(database.withReadSnapshot, raw.withReadSnapshot);
-}
 type Stage = ReturnType<typeof snapshot>;
 let start = 0;
 let stages: Record<string, Stage> = {};

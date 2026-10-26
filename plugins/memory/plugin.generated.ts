@@ -17,12 +17,15 @@ import entry13 from "./processors/settle-consolidation/index.ts";
 import entry14 from "./resources/memory/config/index.ts";
 import entry15 from "./resources/promptContext/memory/index.ts";
 import entry16 from "./resources/promptContext/personal-memory/index.ts";
-import entry17 from "./resources/tools/consolidate-memory/index.ts";
-import entry18 from "./resources/tools/inspect-memory/index.ts";
-import entry19 from "./resources/tools/list-knowledge-spaces/index.ts";
-import entry20 from "./resources/tools/remember/index.ts";
-import entry21 from "./resources/tools/retire-memory/index.ts";
-import entry22 from "./resources/tools/search-memory/index.ts";
+import entry17 from "./resources/reads/checkpointSource/index.ts";
+import entry18 from "./resources/reads/reservationWindow/index.ts";
+import entry19 from "./resources/reads/toolSources/index.ts";
+import entry20 from "./resources/tools/consolidate-memory/index.ts";
+import entry21 from "./resources/tools/inspect-memory/index.ts";
+import entry22 from "./resources/tools/list-knowledge-spaces/index.ts";
+import entry23 from "./resources/tools/remember/index.ts";
+import entry24 from "./resources/tools/retire-memory/index.ts";
+import entry25 from "./resources/tools/search-memory/index.ts";
 import { corePlugin as dependency0 } from "../core/plugin.ts";
 const definition: {
   readonly id: "@copilotz/core-long-term-memory";
@@ -56,13 +59,18 @@ const definition: {
       readonly "memory": typeof entry15;
       readonly "personalMemory": typeof entry16;
     };
+    readonly "reads": {
+      readonly "memoryCheckpointSource": typeof entry17;
+      readonly "memoryReservationWindow": typeof entry18;
+      readonly "memoryToolSources": typeof entry19;
+    };
     readonly "tools": {
-      readonly "consolidate_memory": typeof entry17;
-      readonly "inspect_memory": typeof entry18;
-      readonly "list_knowledge_spaces": typeof entry19;
-      readonly "remember": typeof entry20;
-      readonly "retire_memory": typeof entry21;
-      readonly "search_memory": typeof entry22;
+      readonly "consolidate_memory": typeof entry20;
+      readonly "inspect_memory": typeof entry21;
+      readonly "list_knowledge_spaces": typeof entry22;
+      readonly "remember": typeof entry23;
+      readonly "retire_memory": typeof entry24;
+      readonly "search_memory": typeof entry25;
     };
   };
 } = {
@@ -97,13 +105,18 @@ const definition: {
       "memory": entry15,
       "personalMemory": entry16,
     },
+    "reads": {
+      "memoryCheckpointSource": entry17,
+      "memoryReservationWindow": entry18,
+      "memoryToolSources": entry19,
+    },
     "tools": {
-      "consolidate_memory": entry17,
-      "inspect_memory": entry18,
-      "list_knowledge_spaces": entry19,
-      "remember": entry20,
-      "retire_memory": entry21,
-      "search_memory": entry22,
+      "consolidate_memory": entry20,
+      "inspect_memory": entry21,
+      "list_knowledge_spaces": entry22,
+      "remember": entry23,
+      "retire_memory": entry24,
+      "search_memory": entry25,
     },
   },
 } as const;

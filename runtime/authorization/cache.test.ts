@@ -5,6 +5,8 @@ import {
   authorizationTableKey,
   hintAuthorizationChanges,
   hintAuthorizationRows,
+  memoAuthorizationRead,
+  memoizeSnapshotReads,
   observeAuthorizationWrites,
   OwnerAuthorizationCache,
   readAuthorizationRecord,
@@ -203,6 +205,93 @@ Deno.test("internal immutable record snapshots reuse captures without sharing mu
       hintAuthorizationChanges(tx, [dependency]);
       await tx.query("UPDATE public.nodes SET data='{}' WHERE id='one'");
       assertEquals((await snapshot()).nested.value, 2);
+    },
+  );
+});
+
+Deno.test("committed policy facts serve later commands until a write touches them", async () => {
+  const owner = new OwnerAuthorizationCache();
+  const raw: SqlExecutor = {
+    query: () => Promise.resolve({ rows: [], rowCount: 0 }),
+  };
+  let loads = 0;
+  const dependency = {
+    owner: "schema",
+    namespace: "space",
+    collection: "thread",
+    id: "one",
+  };
+  const keys = authorizationDependencyKeys("public", [dependency]);
+  const command = <T>(run: (tx: SqlExecutor) => Promise<T>) =>
+    runSqlTransaction(
+      { transaction: (operation) => operation(raw) },
+      (managed) => run(observeAuthorizationWrites(managed, owner, "public", 1)),
+    );
+  const fact = (tx: SqlExecutor) =>
+    memoAuthorizationRead(tx, "thread:one", keys, () => {
+      loads++;
+      return Promise.resolve({ members: [loads] });
+    });
+  const first = await command(fact);
+  (first as { members: number[] }).members.push(99);
+  assertEquals(await command(fact), { members: [1] });
+  assertEquals(loads, 1);
+  // A rolled-back command never publishes what it read.
+  owner.invalidate(keys);
+  await runSqlTransaction(
+    { transaction: (operation) => operation(raw) },
+    async (managed) => {
+      await fact(observeAuthorizationWrites(managed, owner, "public", 1));
+      throw new Error("rollback");
+    },
+  ).catch(() => undefined);
+  assertEquals(await command(fact), { members: [3] });
+  await command(async (tx) => {
+    hintAuthorizationChanges(tx, [dependency]);
+    await tx.query("UPDATE public.nodes SET data='{}' WHERE id='one'");
+  });
+  assertEquals(await command(fact), { members: [4] });
+  // A read whose write lands before it returns stays local to its command.
+  owner.invalidate(keys);
+  await command(async (tx) => {
+    const read = fact(tx);
+    hintAuthorizationChanges(tx, [dependency]);
+    await tx.query("UPDATE public.nodes SET data='{}' WHERE id='one'");
+    await read;
+  });
+  assertEquals(await command(fact), { members: [6] });
+  assertEquals(loads, 6);
+});
+
+Deno.test("a read snapshot shares facts privately and never publishes them to the owner", async () => {
+  const owner = new OwnerAuthorizationCache();
+  const raw: SqlExecutor = {
+    query: () => Promise.resolve({ rows: [], rowCount: 0 }),
+  };
+  let loads = 0;
+  const keys = [authorizationTableKey("public", "authorization_sessions")];
+  const read = (tx: SqlExecutor) =>
+    memoAuthorizationRead(tx, "session", keys, () => {
+      loads++;
+      return Promise.resolve({ loads });
+    });
+  const snapshot = () =>
+    runSqlTransaction(
+      { transaction: (operation) => operation(raw) },
+      async (managed) => {
+        const tx = memoizeSnapshotReads(managed);
+        return [await read(tx), await read(tx)];
+      },
+    );
+  assertEquals(await snapshot(), [{ loads: 1 }, { loads: 1 }]);
+  assertEquals(await snapshot(), [{ loads: 2 }, { loads: 2 }]);
+  await runSqlTransaction(
+    { transaction: (operation) => operation(raw) },
+    async (managed) => {
+      assertEquals(
+        await read(observeAuthorizationWrites(managed, owner, "public", 1)),
+        { loads: 3 },
+      );
     },
   );
 });

@@ -1771,7 +1771,13 @@ export function createOperationCatalog(
       createCoreTableNames(databaseSchema).content_logical_bodies
     } body
       ON body.body_id=stream.body_id AND body.namespace=stream.namespace`;
-  const reconciliations = new Map<string, Promise<number>>();
+  // One check per operation runs at a time. A caller arriving meanwhile may
+  // have settled work after that check read readiness, so every such caller
+  // shares exactly one follow-up check instead of the stale result.
+  const reconciliations = new Map<
+    string,
+    { followUp?: Promise<number>; start?: () => void }
+  >();
   const catalog: OperationCatalog = {
     pushState(input) {
       const snapshot = pushSnapshot?.();
@@ -3241,8 +3247,6 @@ export function createOperationCatalog(
       const key = !transaction && input.namespace && input.operationId
         ? JSON.stringify([input.namespace, input.operationId])
         : undefined;
-      const active = key && reconciliations.get(key);
-      if (active) return await active;
       const run = async () => {
         const deliveries = `${
           quoteEventIdentifier(databaseSchema)
@@ -3381,15 +3385,26 @@ export function createOperationCatalog(
         }
         return result.rows.length;
       };
-      const task = run();
-      if (key) reconciliations.set(key, task);
-      try {
-        return await task;
-      } finally {
-        if (key && reconciliations.get(key) === task) {
-          reconciliations.delete(key);
-        }
+      if (!key) return await run();
+      const keyed = (): Promise<number> => {
+        const slot: { followUp?: Promise<number>; start?: () => void } = {};
+        reconciliations.set(key, slot);
+        const task = run();
+        void task.then(() => undefined, () => undefined).then(() => {
+          if (reconciliations.get(key) === slot) reconciliations.delete(key);
+          // Start inside this callback so no caller can slip in between.
+          slot.start?.();
+        });
+        return task;
+      };
+      const running = reconciliations.get(key);
+      if (!running) return await keyed();
+      if (!running.followUp) {
+        const followUp = Promise.withResolvers<number>();
+        running.followUp = followUp.promise;
+        running.start = () => keyed().then(followUp.resolve, followUp.reject);
       }
+      return await running.followUp;
     },
     async pruneTerminalMetadata(input) {
       if (!Number.isFinite(input.retentionMs) || input.retentionMs < 0) {

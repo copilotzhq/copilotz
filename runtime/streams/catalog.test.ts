@@ -4,6 +4,7 @@ import { createSchemaCommandRunner } from "../engine/commands.ts";
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { createEventStore, provisionCopilotzSchema } from "../events/index.ts";
 import { createTestDatabase } from "../testing/ominipg.ts";
+import { bindSqlDatabaseIdentity } from "../events/database-identity.ts";
 import { createStreamOutputDescriptor } from "./observation.ts";
 import {
   createOperationCatalog,
@@ -690,6 +691,73 @@ Deno.test("operation reconciliation skips old live work instead of starving late
         "accepted",
       );
     }
+  } finally {
+    await database.close();
+  }
+});
+
+Deno.test("a settlement that arrives during a running reconciliation is checked again", async () => {
+  const database = await createTestDatabase({ url: ":memory:" });
+  try {
+    await provisionCopilotzSchema(database, SCHEMA);
+    await provisionOperationCatalog(database, SCHEMA);
+    let hold = false;
+    const read = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    // The first check reads readiness, then its reply is delayed while the
+    // operation's last delivery settles and asks for reconciliation again.
+    const session = bindSqlDatabaseIdentity({
+      ...database,
+      async query<T extends Record<string, unknown>>(
+        sql: string,
+        params?: unknown[],
+      ) {
+        const result = await database.query<T>(sql, params);
+        if (hold && sql.includes("ORDER BY operation.updated_at")) {
+          hold = false;
+          read.resolve();
+          await gate.promise;
+        }
+        return result;
+      },
+    }, database);
+    const catalog = createOperationCatalog(session, SCHEMA);
+    const store = createEventStore({
+      session: database,
+      schema: SCHEMA,
+      indexOperationEvent: (transaction, input) =>
+        catalog.indexEvent(transaction, input),
+    });
+    const added = await store.append({
+      type: "test.operation.pair",
+      namespace: "tenant-a",
+      payload: {},
+    }, ["consumer-a", "consumer-b"]);
+    for (const delivery of added.deliveries) {
+      assertExists(
+        await store.claimDelivery({ id: delivery.id, owner: delivery.id }),
+      );
+    }
+    const [first, last] = added.deliveries;
+    await store.succeedDelivery(first.id, first.id);
+    hold = true;
+    const running = catalog.reconcile({
+      namespace: "tenant-a",
+      operationId: added.event.id,
+    });
+    await read.promise;
+    await store.succeedDelivery(last.id, last.id);
+    const again = catalog.reconcile({
+      namespace: "tenant-a",
+      operationId: added.event.id,
+    });
+    gate.resolve();
+    assertEquals(await running, 0);
+    assertEquals(await again, 1);
+    assertEquals(
+      (await catalog.get("tenant-a", added.event.id))?.state,
+      "completed",
+    );
   } finally {
     await database.close();
   }

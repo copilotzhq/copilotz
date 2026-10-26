@@ -104,7 +104,6 @@ export async function exportOwnerBundle(input: {
     await assertPgDumpSupportsServer(db.session);
     await Deno.mkdir(directory, { mode: 0o700 });
     await db.session.transaction(async (tx) => {
-      await tx.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       await lockOwnerTables(tx, schema, "SHARE");
       await validateCopilotzSchema(tx, schema);
       assertRetainedDataDrained(await inspectRetainedDataDrain(tx, schema));
@@ -168,7 +167,7 @@ export async function exportOwnerBundle(input: {
         JSON.stringify(manifest, null, 2) + "\n",
         { createNew: true, mode: 0o600 },
       );
-    });
+    }, { isolation: "repeatable read" });
   } finally {
     await db.close();
   }

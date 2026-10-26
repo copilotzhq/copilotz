@@ -26,7 +26,7 @@ import type {
 import { coreAgent, type CoreToolProcessorContext } from "./runtime-context.ts";
 
 import { toolsForAgent } from "./helpers.ts";
-import { createThreadMessage } from "../actions/create-thread-message/index.ts";
+import { createThreadMessages } from "../actions/create-thread-message/index.ts";
 import {
   type AgentAskMetadata,
   type AgentAskResultMetadata,
@@ -49,6 +49,8 @@ import { evaluateCoreJq, mergePipelineArguments } from "./jq.ts";
 
 const TERMINAL_SCHEMA = "copilotz.core.tool-plan-stage-result.v1";
 type TerminalStatus = "completed" | "failed" | "cancelled";
+/** Tool-result Messages written per transaction. */
+const PROJECTION_BATCH = 16;
 export type ToolTerminal = Readonly<
   {
     actionRunId?: string;
@@ -1437,7 +1439,12 @@ export async function projectDurableToolPlan(
         stage?.type === "tool" && stage.action === completionAction;
     }))).some(Boolean)
     : false;
-  for (const [index, call] of loaded.calls.entries()) {
+  // Each branch's result Message reads only its own branch, so a batch is
+  // prepared at once and written in one transaction, in provider order.
+  const prepare = async (
+    call: (typeof loaded.calls)[number],
+    index: number,
+  ) => {
     const current = await branchState(context, claimed, index);
     const result = await readTerminal(
       context,
@@ -1551,7 +1558,7 @@ export async function projectDurableToolPlan(
           : {}),
         ...(base.ask ? { ask: base.ask } : {}),
       });
-    await createThreadMessage({
+    return {
       id: await deriveWorkflowId(
         "message",
         base.planId,
@@ -1571,7 +1578,19 @@ export async function projectDurableToolPlan(
       visibility,
       metadata,
       ...(base.agentTurn ? { historyScopeId: base.agentTurn.id } : {}),
-    }, context);
+    };
+  };
+  // A bounded batch keeps each owner plan well inside its limit.
+  for (let start = 0; start < loaded.calls.length; start += PROJECTION_BATCH) {
+    await createThreadMessages(
+      await Promise.all(
+        loaded.calls.slice(start, start + PROJECTION_BATCH).map((
+          call,
+          offset,
+        ) => prepare(call, start + offset)),
+      ),
+      context,
+    );
   }
   await retryCoreMutation(() =>
     collection.commands.finishProjection({

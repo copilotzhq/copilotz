@@ -292,11 +292,28 @@ function threadMembership(value: unknown): ThreadMembership {
   );
   return { participants, recipients };
 }
-/** One atomic write prepared from a fresh conversation snapshot. */
-async function createThreadMessageAttempt(
+/** One Message prepared from a fresh conversation snapshot. */
+type PreparedThreadMessage = Readonly<{
+  id: string;
+  threadId: string;
+  sender: ThreadMessageSender;
+  existingSender: CollectionRecord | null;
+  senderExternalId: string;
+  membership: ThreadMembership;
+  existingMembershipParticipants: readonly (CollectionRecord | null)[];
+  threadParticipantIds: readonly string[];
+  recipientIds: readonly string[];
+  defaultRecipientIds: readonly string[];
+  content: ReturnType<typeof decodeGeneratedContent>;
+  metadata: Record<string, unknown>;
+  messageVisibility: EventVisibility;
+  historyScopeId?: string;
+}>;
+
+async function prepareThreadMessage(
   input: unknown,
-  context: Pick<ActionContext, "collections" | "content" | "transaction">,
-): Promise<CollectionRecord> {
+  context: Pick<ActionContext, "collections">,
+): Promise<PreparedThreadMessage> {
   const data = asRecord(input);
   const id = requiredText(data.id, "Message ID");
   const threadId = requiredText(data.threadId, "Thread ID");
@@ -330,9 +347,6 @@ async function createThreadMessageAttempt(
   if (!thread) {
     throw new Error(`Thread '${threadId}' was not found.`);
   }
-  const senderExternalId = optionalText(existingSender?.externalId) ??
-    optionalText(sender.externalId) ?? optionalText(sender.id) ?? "";
-  const existingParticipantIds = stringArray(thread.participantIds);
   const defaultRecipientIds = namesRecipients
     ? []
     : (await threadAgentRecipients(
@@ -340,131 +354,205 @@ async function createThreadMessageAttempt(
       thread,
       optionalText(existingSender?.id),
     )).map((recipient) => recipient.id);
-  const content = decodeGeneratedContent(data.content ?? []);
-  const written = await context.transaction(async (tx) => {
-    const collections = tx.collections;
-    if (!collections.message) {
-      throw new Error("Collection 'message' is not bound.");
+  return {
+    id,
+    threadId,
+    sender,
+    existingSender,
+    senderExternalId: optionalText(existingSender?.externalId) ??
+      optionalText(sender.externalId) ?? optionalText(sender.id) ?? "",
+    membership,
+    existingMembershipParticipants,
+    threadParticipantIds: stringArray(thread.participantIds),
+    recipientIds,
+    defaultRecipientIds,
+    content: decodeGeneratedContent(data.content ?? []),
+    metadata,
+    messageVisibility,
+    ...(historyScopeId ? { historyScopeId } : {}),
+  };
+}
+
+/** What earlier Messages of one transaction already wrote. */
+type MessageBatch = {
+  participants: Map<string, Promise<CollectionMutationRef>>;
+  members: Map<string, Set<string>>;
+};
+
+async function writeThreadMessage(
+  message: PreparedThreadMessage,
+  collections: ActionTransactionContext["collections"],
+  batch: MessageBatch,
+): Promise<unknown> {
+  if (!collections.message) {
+    throw new Error("Collection 'message' is not bound.");
+  }
+  if (!collections.thread) {
+    throw new Error("Collection 'thread' is not bound.");
+  }
+  const { id, threadId, membership } = message;
+  // A participant new to this transaction is created once, however many of
+  // its Messages the batch writes.
+  const ensure = (
+    participant: ThreadMessageSender,
+    existing: CollectionRecord | null,
+  ): Promise<CollectionMutationRef> => {
+    if (existing) return Promise.resolve({ id: existing.id } as const);
+    const key = senderFields(participant).externalId?.trim() ?? "";
+    let ensured = batch.participants.get(key);
+    if (!ensured) {
+      ensured = ensureParticipantInTransaction(
+        collections,
+        participant,
+        existing,
+        threadId,
+      );
+      batch.participants.set(key, ensured);
     }
-    if (!collections.thread) {
-      throw new Error("Collection 'thread' is not bound.");
-    }
-    const ensured = await ensureParticipantInTransaction(
-      collections,
-      sender,
-      existingSender,
-      threadId,
-    );
-    const memberRefs = await Promise.all(
-      membership.participants.map((participant, index) =>
-        participant.externalId === senderExternalId
-          ? Promise.resolve(ensured)
-          : ensureParticipantInTransaction(
-            collections,
-            participant,
-            existingMembershipParticipants[index] ?? null,
-            threadId,
-          )
+    return ensured;
+  };
+  const ensured = await ensure(message.sender, message.existingSender);
+  const memberRefs = await Promise.all(
+    membership.participants.map((participant, index) =>
+      participant.externalId === message.senderExternalId
+        ? Promise.resolve(ensured)
+        : ensure(
+          participant,
+          message.existingMembershipParticipants[index] ?? null,
+        )
+    ),
+  );
+  const memberIdByExternalId = new Map(
+    membership.participants.map((participant, index) => [
+      participant.externalId,
+      memberRefs[index].id,
+    ]),
+  );
+  const messageRecipientIds = [
+    ...new Set([
+      ...message.recipientIds,
+      ...message.defaultRecipientIds,
+      ...membership.recipients.map((recipient) =>
+        "participantId" in recipient
+          ? recipient.participantId
+          : memberIdByExternalId.get(recipient.externalId)!
       ),
-    );
-    const memberIdByExternalId = new Map(
-      membership.participants.map((participant, index) => [
-        participant.externalId,
-        memberRefs[index].id,
-      ]),
-    );
-    const messageRecipientIds = [
-      ...new Set([
-        ...recipientIds,
-        ...defaultRecipientIds,
-        ...membership.recipients.map((recipient) =>
-          "participantId" in recipient
-            ? recipient.participantId
-            : memberIdByExternalId.get(recipient.externalId)!
-        ),
-      ]),
-    ];
-    // The sender joins with the batch. Most messages add nobody new, so the
-    // thread is written only when someone is not yet a member.
-    const joining = [
-      ...new Set([ensured.id, ...memberRefs.map((member) => member.id)]),
-    ].filter((participantId) =>
-      !existingParticipantIds.includes(participantId)
-    );
-    if (joining.length) {
-      await collections.thread.commands.ensureMembership({
-        id: threadId,
-        participantIds: joining.sort(),
-      }, {
-        operationKey: `message-membership:${id}`,
-        metadata: {
-          ...coreThreadObservationMetadata(threadId),
-          core: { threadId },
-        },
-      });
-    }
-    const options: ScopedCollectionCallOptions = {
-      identity: { metadata },
+    ]),
+  ];
+  let members = batch.members.get(threadId);
+  if (!members) {
+    members = new Set(message.threadParticipantIds);
+    batch.members.set(threadId, members);
+  }
+  // The sender joins with the batch. Most messages add nobody new, so the
+  // thread is written only when someone is not yet a member.
+  const joining = [
+    ...new Set([ensured.id, ...memberRefs.map((member) => member.id)]),
+  ].filter((participantId) => !members.has(participantId));
+  if (joining.length) {
+    await collections.thread.commands.ensureMembership({
+      id: threadId,
+      participantIds: joining.sort(),
+    }, {
+      operationKey: `message-membership:${id}`,
       metadata: {
         ...coreThreadObservationMetadata(threadId),
-        core: {
-          threadId,
-          routing: {
-            senderId: ensured.id,
-            recipientIds: [...messageRecipientIds],
-          },
-          visibility: messageVisibility,
-        },
+        core: { threadId },
       },
-    };
-    const created = await collections.message.create({
-      id,
-      threadId,
-      senderId: ensured.id,
-      recipientIds: [...messageRecipientIds],
-      content,
-      metadata,
-      visibility: messageVisibility,
-      ...(historyScopeId ? { historyScopeId } : {}),
-    }, options);
-    // A visible message is activity: the thread's updatedAt moves with it,
-    // in the same transaction, so recent lists reorder. Internal work does not.
-    if (messageVisibility.kind !== "internal") {
-      await collections.thread.commands.recordMessage({
-        id: threadId,
-        messageId: id,
-      }, {
-        operationKey: `message-activity:${id}`,
-        metadata: {
-          ...coreThreadObservationMetadata(threadId),
-          core: { threadId },
+    });
+    for (const participantId of joining) members.add(participantId);
+  }
+  const options: ScopedCollectionCallOptions = {
+    identity: { metadata: message.metadata },
+    metadata: {
+      ...coreThreadObservationMetadata(threadId),
+      core: {
+        threadId,
+        routing: {
+          senderId: ensured.id,
+          recipientIds: [...messageRecipientIds],
         },
-      });
+        visibility: message.messageVisibility,
+      },
+    },
+  };
+  const created = await collections.message.create({
+    id,
+    threadId,
+    senderId: ensured.id,
+    recipientIds: [...messageRecipientIds],
+    content: message.content,
+    metadata: message.metadata,
+    visibility: message.messageVisibility,
+    ...(message.historyScopeId
+      ? { historyScopeId: message.historyScopeId }
+      : {}),
+  }, options);
+  // A visible message is activity: the thread's updatedAt moves with it,
+  // in the same transaction, so recent lists reorder. Internal work does not.
+  if (message.messageVisibility.kind !== "internal") {
+    await collections.thread.commands.recordMessage({
+      id: threadId,
+      messageId: id,
+    }, {
+      operationKey: `message-activity:${id}`,
+      metadata: {
+        ...coreThreadObservationMetadata(threadId),
+        core: { threadId },
+      },
+    });
+  }
+  return created;
+}
+
+/** One atomic write of every Message, in order, from fresh snapshots. */
+async function createThreadMessagesAttempt(
+  inputs: readonly unknown[],
+  context: Pick<ActionContext, "collections" | "content" | "transaction">,
+): Promise<CollectionRecord[]> {
+  const prepared = await Promise.all(
+    inputs.map((input) => prepareThreadMessage(input, context)),
+  );
+  const written = await context.transaction(async (tx) => {
+    const batch: MessageBatch = { participants: new Map(), members: new Map() };
+    const created: unknown[] = [];
+    for (const message of prepared) {
+      created.push(await writeThreadMessage(message, tx.collections, batch));
     }
     return created;
   });
   // The committed create already returns the canonical record; read it back
   // only when the write path returned something else.
-  const created = written && typeof written === "object" &&
-      (written as CollectionRecord).id === id &&
-      typeof (written as CollectionRecord).createdAt === "string"
-    ? written as CollectionRecord
-    : await context.collections.message.get({ id });
-  if (!created) {
-    throw new Error(`Message '${id}' was not created.`);
-  }
-  return created;
+  return await Promise.all(prepared.map(async ({ id }, index) => {
+    const value = (written as unknown[] | undefined)?.[index];
+    const created = value && typeof value === "object" &&
+        (value as CollectionRecord).id === id &&
+        typeof (value as CollectionRecord).createdAt === "string"
+      ? value as CollectionRecord
+      : await context.collections.message.get({ id });
+    if (!created) {
+      throw new Error(`Message '${id}' was not created.`);
+    }
+    return created;
+  }));
 }
-/** Idempotent Core domain write, usable without creating a child Action receipt.
- * Re-read after known rollback: parallel Tool/Ask branches can update membership
- * or activity while another message is being prepared. */
+/** Idempotent Core domain write of several Messages in one transaction, in
+ * order. Re-read after known rollback: parallel Tool/Ask branches can update
+ * membership or activity while another message is being prepared. */
+export async function createThreadMessages(
+  inputs: readonly unknown[],
+  context: Pick<ActionContext, "collections" | "content" | "transaction">,
+): Promise<CollectionRecord[]> {
+  return await retryCoreMutation(() =>
+    createThreadMessagesAttempt(inputs, context)
+  );
+}
+/** Idempotent Core domain write, usable without creating a child Action receipt. */
 export async function createThreadMessage(
   input: unknown,
   context: Pick<ActionContext, "collections" | "content" | "transaction">,
 ): Promise<CollectionRecord> {
-  return await retryCoreMutation(() =>
-    createThreadMessageAttempt(input, context)
-  );
+  return (await createThreadMessages([input], context))[0];
 }
 const createInputSchema = {
   type: "object",

@@ -86,7 +86,12 @@ export async function runSqlTransaction<T>(
   }
 }
 
-/** A command has a revocable facade and output gate. Only groups need savepoints. */
+/**
+ * A command has a revocable facade and output gate. Only grouped commands need
+ * a savepoint, and only once they issue SQL: it is set before the command's
+ * first statement. It is never released; COMMIT releases them all, and
+ * ROLLBACK TO targets the latest one, which is the failing command's.
+ */
 export async function runSqlCommandScope<T>(
   parent: SqlExecutor,
   operation: (transaction: SqlExecutor) => Promise<T>,
@@ -102,6 +107,16 @@ export async function runSqlCommandScope<T>(
   let active = true;
   let queryFailed = false;
   let queryError: unknown;
+  let marked: Promise<void> | undefined;
+  let markFailure: { error: unknown } | undefined;
+  const mark = () =>
+    marked ??= parent.query("SAVEPOINT owner_command").then(
+      () => undefined,
+      (error) => {
+        markFailure = { error };
+        throw error;
+      },
+    );
   const transaction: SqlExecutor = {
     query<TRow extends Record<string, unknown>>(
       sql: string,
@@ -116,7 +131,8 @@ export async function runSqlCommandScope<T>(
           new Error("Command handlers cannot control transactions."),
         );
       }
-      return parent.query<TRow>(sql, params).catch((error) => {
+      const run = () => parent.query<TRow>(sql, params);
+      return (savepoint ? mark().then(run) : run()).catch((error) => {
         // Catching a SQL exception in the handler does not clear PostgreSQL's
         // aborted transaction. COMMIT would otherwise report a silent rollback
         // for a singleton without a receipt or another statement to detect it.
@@ -131,7 +147,6 @@ export async function runSqlCommandScope<T>(
   afterSqlSettlement(parent, () => {
     for (const callback of completion.settled.splice(0)) callback();
   });
-  if (savepoint) await parent.query("SAVEPOINT owner_command");
   let value: T;
   try {
     value = await operation(transaction);
@@ -140,14 +155,17 @@ export async function runSqlCommandScope<T>(
     completion.state = "failed";
     completion.callbacks.length = 0;
     if (!savepoint) throw error;
-    await parent.query("ROLLBACK TO SAVEPOINT owner_command");
-    await parent.query("RELEASE SAVEPOINT owner_command");
+    if (marked) {
+      // Without its rollback point the group cannot isolate this command.
+      await marked.catch(() => undefined);
+      if (markFailure) throw markFailure.error;
+      await parent.query("ROLLBACK TO SAVEPOINT owner_command");
+    }
     return { ok: false, error };
   } finally {
     active = false;
     completion.active = false;
   }
-  if (savepoint) await parent.query("RELEASE SAVEPOINT owner_command");
   afterSqlCommit(parent, () => {
     gate();
     completion.state = "committed";

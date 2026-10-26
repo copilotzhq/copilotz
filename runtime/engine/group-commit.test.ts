@@ -167,13 +167,100 @@ Deno.test("group isolates success, SQL failure and conflicting replay; times, ga
   }
 });
 
+Deno.test("a grouped command sets its savepoint only once it issues SQL and never releases it", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
+  });
+  const schema = "lazy_savepoint_group";
+  const tables = createCoreTableNames(schema);
+  const queries: string[] = [];
+  let transactions = 0;
+  const owner = createOwnerCommands({
+    schema,
+    session: {
+      ...db,
+      transaction: (run) => {
+        transactions++;
+        return db.transaction((tx) =>
+          run({
+            query(sql, params) {
+              queries.push(sql);
+              return tx.query(sql, params);
+            },
+          })
+        );
+      },
+    },
+    handlers: {
+      write: {
+        authorize() {},
+        async execute(input: { id: string; fail: boolean }, context) {
+          await context.transaction.query(
+            `INSERT INTO ${tables.nodes}(id,namespace,type,name) VALUES($1,'space','item',$1)`,
+            [input.id],
+          );
+          if (input.fail) throw new Error("refused");
+          return input.id;
+        },
+      },
+      check: {
+        authorize() {},
+        execute(input: { id: string; fail: boolean }) {
+          if (input.fail) throw new Error("not allowed");
+          return input.id;
+        },
+      },
+    },
+  });
+  try {
+    await provisionCopilotzSchema(db, schema);
+    const caller = { principal: "worker", epoch: await owner.acquire(0) };
+    queries.length = 0;
+    transactions = 0;
+    const submit = (kind: "write" | "check", id: string, fail = false) =>
+      owner.execute(kind, caller, { input: { id, fail } });
+    const results = await Promise.allSettled([
+      submit("write", "one"),
+      submit("check", "allowed"),
+      submit("write", "refused", true),
+      submit("check", "denied", true),
+      submit("write", "two"),
+    ]);
+    assertEquals(results.map((r) => r.status), [
+      "fulfilled",
+      "fulfilled",
+      "rejected",
+      "rejected",
+      "fulfilled",
+    ]);
+    assertEquals(transactions, 1);
+    assertEquals(
+      queries.filter((sql) => sql === "SAVEPOINT owner_command").length,
+      3,
+    );
+    assertEquals(
+      queries.filter((sql) => sql.startsWith("ROLLBACK TO SAVEPOINT")).length,
+      1,
+    );
+    assertEquals(queries.filter((sql) => sql.startsWith("RELEASE")), []);
+    assertEquals(
+      (await db.query(`SELECT id FROM ${tables.nodes} ORDER BY id`)).rows,
+      [{ id: "one" }, { id: "two" }],
+    );
+  } finally {
+    owner.stop();
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await db.close();
+  }
+});
+
 Deno.test("outer rollback discards all staged effects and retries commands individually in order", async () => {
   const db = await createTestDatabase({
     url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") || ":memory:",
   });
   const schema = "rollback_group";
   const tables = createCoreTableNames(schema);
-  let releases = 0, armed = false;
+  let armed = false;
   const statements: string[][] = [],
     executions: string[] = [],
     published: string[] = [];
@@ -188,9 +275,7 @@ Deno.test("outer rollback discards all staged effects and retries commands indiv
           return run({
             query(sql, params) {
               queries.push(sql);
-              if (
-                armed && sql.startsWith("RELEASE SAVEPOINT") && ++releases === 2
-              ) {
+              if (armed && sql.startsWith("ROLLBACK TO SAVEPOINT")) {
                 armed = false;
                 throw new Error("outer transaction failed before commit");
               }

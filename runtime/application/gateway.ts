@@ -257,7 +257,7 @@ export async function createCopilotzGateway(
         assign: options.assign,
         sessions: options.sessions,
         signal: options.signal,
-        config: options.hypervisorConfig,
+        config: { maxQueuedDispatches: 1024, ...options.hypervisorConfig },
         fallback: (request) => fetchFallback(request),
       }, { ...lifecycle, ...workerLifecycle }));
     options.signal?.throwIfAborted();

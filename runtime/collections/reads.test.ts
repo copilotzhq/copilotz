@@ -1,12 +1,9 @@
+import { defineRead } from "./reads.ts";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
 import { createCopilotzEngine } from "../engine/index.ts";
-import {
-  createSqlSession,
-  type SqlExecutor,
-  type SqlSession,
-} from "../events/index.ts";
+import type { SqlExecutor, SqlSession } from "../events/index.ts";
 import { createPluginRegistry, definePlugin } from "../plugins/index.ts";
 import { defineCollection } from "./definition.ts";
 import { readViews } from "./read-view.ts";
@@ -28,7 +25,7 @@ const note = defineCollection({
   content: { fields: ["content"] },
 });
 
-type Recorder = { statements: string[]; readSnapshots: number };
+type Recorder = { statements: string[]; readBatches: number };
 
 /** Counts every statement a session runs, inside or outside a transaction. */
 function recording(base: SqlSession, recorder: Recorder): SqlSession {
@@ -45,12 +42,10 @@ function recording(base: SqlSession, recorder: Recorder): SqlSession {
     ...recorded(base),
     transaction: (operation) =>
       base.transaction((transaction) => operation(recorded(transaction))),
-    withReadSnapshot: (operation, options) => {
-      recorder.readSnapshots++;
-      return base.withReadSnapshot!(
-        (scope) => operation({ ...scope, snapshot: recorded(scope.snapshot) }),
-        options,
-      );
+    concurrentReads: base.concurrentReads,
+    readTransaction: (operation, options) => {
+      recorder.readBatches++;
+      return base.readTransaction!((tx) => operation(recorded(tx)), options);
     },
   };
 }
@@ -67,7 +62,7 @@ const assetReads = (recorder: Recorder) =>
   nodeReads(recorder).filter((text) => text.includes("'asset'"));
 
 async function readScenarios(url: string) {
-  const recorder: Recorder = { statements: [], readSnapshots: 0 };
+  const recorder: Recorder = { statements: [], readBatches: 0 };
   const db = await createTestDatabase({ url });
   const schema = "reads_" +
     crypto.randomUUID().replaceAll("-", "").slice(0, 10);
@@ -79,7 +74,7 @@ async function readScenarios(url: string) {
     })],
   });
   const engine = await createCopilotzEngine({
-    session: recording(createSqlSession(db), recorder),
+    session: recording(db, recorder),
     registry,
     defaultDatabaseSchema: schema,
   });
@@ -131,30 +126,35 @@ async function readScenarios(url: string) {
 
     // Inside a snapshot the same question is asked once.
     const inside = await measure(() =>
-      engine.collections.readSnapshot(
-        { namespace },
-        async ({ collections }) => {
-          const first = await collections.note.get({ id: "a" });
-          const second = await collections.note.get({ id: "a" });
-          const listed = await collections.note.list({
-            where: { title: "Renamed" },
-          });
-          const again = await collections.note.list({
-            where: { title: "Renamed" },
-          });
-          const other = await collections.note.list({
-            where: { title: "Note b" },
-          });
-          return { first, second, listed, again, other };
-        },
-      )
+      (async () => {
+        const definition = defineRead(
+          async (_args: unknown, { collections }) => {
+            const first = await collections.note.get({ id: "a" });
+            const second = await collections.note.get({ id: "a" });
+            const listed = await collections.note.list({
+              where: { title: "Renamed" },
+            });
+            const again = await collections.note.list({
+              where: { title: "Renamed" },
+            });
+            const other = await collections.note.list({
+              where: { title: "Note b" },
+            });
+            return { first, second, listed, again, other };
+          },
+        );
+        engine.collections.registerRead("testRead0", definition);
+        return (await engine.collections.read<
+          Awaited<ReturnType<typeof definition.execute>>
+        >({ namespace }, "testRead0")).value;
+      })()
     );
-    assertEquals(recorder.readSnapshots, 1);
+    assertEquals(recorder.readBatches, url === ":memory:" ? 0 : 1);
     assertEquals(
       recorder.statements.filter((sql) => sql.includes("CURRENT_TIMESTAMP"))
         .length,
       0,
-      "ordinary snapshots do not acquire an unused policy timestamp",
+      "only exclusive reads use the owner command timestamp",
     );
     assertEquals(
       recordReads(recorder).length,
@@ -209,7 +209,7 @@ Deno.test({
  * from it.
  */
 async function hopViewScenarios(url: string) {
-  const recorder: Recorder = { statements: [], readSnapshots: 0 };
+  const recorder: Recorder = { statements: [], readBatches: 0 };
   const db = await createTestDatabase({ url });
   const schema = "hop_" + crypto.randomUUID().replaceAll("-", "").slice(0, 10);
   const registry = await createPluginRegistry({
@@ -220,7 +220,7 @@ async function hopViewScenarios(url: string) {
     })],
   });
   const engine = await createCopilotzEngine({
-    session: recording(createSqlSession(db), recorder),
+    session: recording(db, recorder),
     registry,
     defaultDatabaseSchema: schema,
   });
@@ -303,10 +303,15 @@ async function hopViewScenarios(url: string) {
     await readViews.run(async () => {
       assertEquals((await notes.get({ id: "a" }))?.title, "Note a");
       await changeElsewhere("a", "Later");
-      const snapshotted = await engine.collections.readSnapshot(
-        { namespace },
-        ({ collections }) => collections.note.get({ id: "a" }),
-      );
+      const snapshotted = await (async () => {
+        const definition = defineRead((_args: unknown, { collections }) =>
+          collections.note.get({ id: "a" })
+        );
+        engine.collections.registerRead("testRead1", definition);
+        return (await engine.collections.read<
+          Awaited<ReturnType<typeof definition.execute>>
+        >({ namespace }, "testRead1")).value;
+      })();
       assertEquals(snapshotted?.title, "Later");
     });
 

@@ -1,10 +1,6 @@
 import { Ominipg } from "../../dependencies/ominipg.ts";
-import { markExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
-import {
-  bindSnapshotSession,
-  retireSnapshotDatabase,
-} from "./snapshot-admission.ts";
+import { configureReads, retireReads } from "./read-limiter.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
 import { createSqlSession, type SqlSession } from "../events/index.ts";
 
@@ -23,7 +19,6 @@ export type OminipgDatabaseLike = Readonly<{
   transaction<T>(
     operation: (transaction: Readonly<{ query: Query }>) => T | Promise<T>,
   ): Promise<T>;
-  withReadSnapshot?: SqlSession["withReadSnapshot"];
   close(): Promise<void>;
 }>;
 
@@ -37,7 +32,10 @@ export type CopilotzOminipgOptions = Readonly<{
   pgliteProvider?: OminipgConnectionOptions["pgliteProvider"];
   pgProvider?: OminipgConnectionOptions["pgProvider"];
   pgPoolMax?: number;
+  readTimeoutMs?: number;
   requestTimeoutMs?: OminipgConnectionOptions["requestTimeoutMs"];
+  /** null disables the server statement cap; offline callers also need a long request deadline. */
+  statementTimeoutMs?: OminipgConnectionOptions["statementTimeoutMs"];
   logMetrics?: boolean;
 }>;
 
@@ -55,9 +53,10 @@ export type ManagedOminipgDatabase = Readonly<{
  */
 export function createOminipgSqlSession(
   database: OminipgDatabaseLike,
+  reads?: Readonly<{ poolSize: number; timeoutMs?: number }>,
 ): SqlSession {
+  if (reads) configureReads(database, reads);
   const session = createSqlSession(database);
-  bindSnapshotSession(session, database);
   return session;
 }
 
@@ -91,6 +90,9 @@ export async function openManagedOminipgDatabase(
     ...(options.requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs: options.requestTimeoutMs }),
+    ...(options.statementTimeoutMs === undefined
+      ? {}
+      : { statementTimeoutMs: options.statementTimeoutMs }),
     ...(options.logMetrics === undefined
       ? {}
       : { logMetrics: options.logMetrics }),
@@ -99,34 +101,17 @@ export async function openManagedOminipgDatabase(
     useWorker: false,
   });
   const adapted = database as unknown as OminipgDatabaseLike;
-  if (adapted.withReadSnapshot) {
-    // The prototype method is shared by PostgreSQL and PGlite instances. Retain
-    // backend identity on this connection's capability, never on that prototype.
-    const snapshot = adapted.withReadSnapshot.bind(adapted);
-    Object.defineProperty(adapted, "withReadSnapshot", { value: snapshot });
-    // Custom providers/hooks and background sync retain native admission checks;
-    // they are not evidence of a private, exclusively owned physical connection.
-    const postgres = /^postgres(?:ql)?:/.test(url);
-    // Ominipg's native PostgreSQL snapshot reserves a reader/current pair.
-    // With one connection, Collections must use their existing fenced owner
-    // command snapshot instead; attempting a pair always fails admission.
-    if (
-      !options.syncUrl &&
-      (postgres
-        ? options.pgPoolMax === 1 && options.pgProvider === undefined
-        : options.pgliteProvider === undefined &&
-          options.pgliteConfig === undefined)
-    ) markExclusiveReadSnapshot(snapshot);
-  }
+  configureReads(adapted, {
+    poolSize: /^postgres(?:ql)?:/.test(url) ? options.pgPoolMax ?? 5 : 1,
+    timeoutMs: options.readTimeoutMs,
+  });
   const session = createOminipgSqlSession(adapted);
   let closeTask: Promise<void> | undefined;
   return ({
     database: adapted,
     session,
     close() {
-      closeTask ??= retireSnapshotDatabase(adapted).then(() =>
-        database.close()
-      );
+      closeTask ??= retireReads(adapted).then(() => database.close());
       return closeTask;
     },
   } as const);

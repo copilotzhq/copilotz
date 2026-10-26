@@ -1,0 +1,202 @@
+{
+  "prepare": {
+    "source": "unmodified 7cffd2ce source copy",
+    "events": 250000,
+    "bodyBytes": 1024,
+    "schemas": 1,
+    "steps": [],
+    "pgStatStatements": false,
+    "latencyMs": 0,
+    "stepsSelected": [
+      "prepare"
+    ],
+    "server": {
+      "version": "PostgreSQL 18.3 (Postgres.app) on aarch64-apple-darwin23.6.0, compiled by Apple clang version 15.0.0 (clang-1500.3.9.4), 64-bit",
+      "shared_buffers": "128MB",
+      "work_mem": "4MB"
+    },
+    "running": {
+      "schema": "owner_2",
+      "step": "prepare",
+      "statements": 60000,
+      "startedAt": 1792770051098,
+      "wallMs": 17598.29825,
+      "top": [
+        {
+          "sql": "SELECT body.*, COALESCE((SELECT jsonb_agg(jsonb_build_object('appendId',part.append_id,'offset',part.start_offset,'length',octet_length(part.bytes),'digest',part.part_digest) ORDER BY part.start_offset) FROM \"owner_2\".\"content_body_parts\" part WHERE part.body_id=body.body_id),'[]'::jsonb) AS parts FROM \"owner_2\".\"content_bodies\" body WHERE body.body_id=$1",
+          "calls": 39986,
+          "ms": 7319.238222999655
+        },
+        {
+          "sql": "SELECT part.* FROM \"owner_2\".\"content_bodies\" body LEFT JOIN LATERAL ( WITH anchor AS (SELECT start_offset FROM \"owner_2\".\"content_body_parts\" WHERE body_id=body.body_id AND start_offset<=$2 ORDER BY start_offset DESC LIMIT 1) SELECT start_offset,octet_length(bytes) AS part_length, substring(bytes FROM (GREATEST($2::bigint-start_offset,0)+1)::integer FOR (LEAST($3::bigint-start_offset,octet_length(bytes))-GREATEST($2::bigint-start_offset,0))::integer) AS bytes FROM \"owner_2\".\"content_body_parts\" WHERE body_id=body.body_id AND $3::bigint>$2::bigint AND start_offset>=COALESCE((SELECT start_offset FROM anchor),$2::bigint) AND start_offset<$3::bigint ORDER BY start_offset ) part ON TRUE WHERE body.body_id=$1 AND body.reservation_id=$4 AND COALESCE(body.fenced_from,body.writer_generation)=$5 AND body.byte_length>=$3 AND body.state<>'aborted' ORDER BY part.start_offset",
+          "calls": 19993,
+          "ms": 6501.745490000059
+        },
+        {
+          "sql": "SELECT namespace,event_body_id,body FROM \"owner_2\".\"event_bodies\"",
+          "calls": 1,
+          "ms": 2184.06225
+        },
+        {
+          "sql": "SELECT namespace,id,data FROM \"owner_2\".\"nodes\"",
+          "calls": 1,
+          "ms": 221.25741700000003
+        },
+        {
+          "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_2\".\"event_deliveries\" GROUP BY \"status\"",
+          "calls": 1,
+          "ms": 62.60416699999996
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_2\".\"content_bodies\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 23.04804200000001
+        },
+        {
+          "sql": "SELECT table_name,column_name,data_type,is_nullable,is_identity,is_generated,domain_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=ANY($2::text[])",
+          "calls": 2,
+          "ms": 17.988291000000174
+        },
+        {
+          "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name",
+          "calls": 1,
+          "ms": 14.747458999999992
+        },
+        {
+          "sql": "SELECT c.relname AS name,c.relkind AS kind,c.relpersistence AS persistence, (c.relispartition OR EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)) AS inherited FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2::text[])",
+          "calls": 2,
+          "ms": 10.068041999999934
+        },
+        {
+          "sql": "SELECT t.relname AS table_name,c.contype AS kind,c.convalidated AS validated,c.condeferrable AS deferred,c.confdeltype AS delete_action, ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord) AS columns, target.relname AS target,tn.nspname AS target_schema, ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(num,ord) JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num ORDER BY k.ord) AS target_columns FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class t ON t.oid=c.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace LEFT JOIN pg_catalog.pg_class target ON target.oid=c.confrelid LEFT JOIN pg_catalog.pg_namespace tn ON tn.oid=target.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2::text[]) AND c.contype IN ('p','u','f')",
+          "calls": 2,
+          "ms": 8.21837499999981
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_2\".\"copilotz_operation_streams\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 5.983000000000004
+        },
+        {
+          "sql": "SELECT c.conname AS name,pg_catalog.pg_get_expr(c.conbin,c.conrelid) AS expression,c.convalidated AS validated FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class t ON t.oid=c.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname=$1 AND t.relname=ANY($2::text[]) AND c.contype='c'",
+          "calls": 2,
+          "ms": 3.1368739999999207
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_2\".\"copilotz_operations\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 2.9480419999999867
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_2\".\"open_actions\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 1.8668749999999932
+        },
+        {
+          "sql": "SELECT * FROM \"owner_2\".\"copilotz_schema_metadata\" WHERE singleton",
+          "calls": 1,
+          "ms": 1.0882079999999519
+        }
+      ]
+    },
+    "timeout": {
+      "wallSeconds": 120.042230709,
+      "phaseSeconds": 119.62600994110107,
+      "step": "prepare",
+      "sourceMarker": 0,
+      "rollback": true
+    }
+  },
+  "finalize": {
+    "source": "unmodified 7cffd2ce source copy",
+    "events": 250000,
+    "bodyBytes": 1024,
+    "schemas": 1,
+    "steps": [],
+    "pgStatStatements": false,
+    "latencyMs": 0,
+    "stepsSelected": [
+      "finalize-v11"
+    ],
+    "server": {
+      "version": "PostgreSQL 18.3 (Postgres.app) on aarch64-apple-darwin23.6.0, compiled by Apple clang version 15.0.0 (clang-1500.3.9.4), 64-bit",
+      "shared_buffers": "128MB",
+      "work_mem": "4MB"
+    },
+    "running": {
+      "schema": "owner_2",
+      "step": "finalize-v11",
+      "statements": 4000,
+      "wallMs": 45559.752958
+    },
+    "timeout": {
+      "wallSeconds": 120.731213083,
+      "limitSeconds": 120,
+      "step": "finalize-v11",
+      "rollback": true
+    }
+  },
+  "drain": {
+    "source": "unmodified 7cffd2ce source copy",
+    "events": 250000,
+    "bodyBytes": 1024,
+    "schemas": 1,
+    "steps": [
+      {
+        "schema": "owner_1",
+        "step": "drain",
+        "wallMs": 24.07995900000003,
+        "statements": 7,
+        "top": [
+          {
+            "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_1\".\"event_deliveries\" GROUP BY \"status\"",
+            "calls": 1,
+            "ms": 8.945625000000007
+          },
+          {
+            "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE'",
+            "calls": 1,
+            "ms": 6.950833999999986
+          },
+          {
+            "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"content_bodies\" GROUP BY \"state\"",
+            "calls": 1,
+            "ms": 2.631917000000044
+          },
+          {
+            "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"open_actions\" GROUP BY \"state\"",
+            "calls": 1,
+            "ms": 2.451832999999965
+          },
+          {
+            "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"copilotz_operation_streams\" GROUP BY \"state\"",
+            "calls": 1,
+            "ms": 1.2972500000000196
+          },
+          {
+            "sql": "SELECT version FROM \"owner_1\".\"copilotz_schema_metadata\" WHERE singleton",
+            "calls": 1,
+            "ms": 0.7647499999999923
+          },
+          {
+            "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"copilotz_operations\" GROUP BY \"state\"",
+            "calls": 1,
+            "ms": 0.6922910000000115
+          }
+        ],
+        "server": []
+      }
+    ],
+    "pgStatStatements": false,
+    "latencyMs": 0,
+    "stepsSelected": [
+      "drain"
+    ],
+    "server": {
+      "version": "PostgreSQL 18.3 (Postgres.app) on aarch64-apple-darwin23.6.0, compiled by Apple clang version 15.0.0 (clang-1500.3.9.4), 64-bit",
+      "shared_buffers": "128MB",
+      "work_mem": "4MB"
+    },
+    "databaseBytes": "420443839"
+  }
+}

@@ -30,9 +30,9 @@ type ActionInvocationHost =
     | "signal"
     | "now"
     | "transaction"
-    | "readSnapshot"
   >
-  & Partial<Pick<RuntimeContext, "directory" | "authentication">>;
+  & Partial<Pick<RuntimeContext, "directory" | "authentication">>
+  & { read: import("../collections/reads.ts").OwnerRead };
 
 /** Reserved stream metadata injected by the generic Action invocation host. */
 const SOURCE_ACTION_RUN_ID_METADATA_KEY = "sourceActionRunId";
@@ -147,8 +147,15 @@ export function createActionInvocationContext(
           signal: transactionOptions.signal ?? frame.signal,
         }) as never;
       },
-      readSnapshot: (execute: Parameters<ActionContext["readSnapshot"]>[0]) =>
-        host.readSnapshot(execute as never),
+      read: (name, args, config) =>
+        host.read(name, args, {
+          ...config,
+          signal: config?.signal ?? frame.signal,
+        }, {
+          operationKey: frame.operationKey,
+          identity: frame.identity ?? {},
+          signal: frame.signal,
+        }),
     }, protectedEventResolverFrom(host)),
     host,
     frame,

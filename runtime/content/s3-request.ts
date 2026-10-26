@@ -1,4 +1,4 @@
-/** Signed, bounded S3 requests. Conditional headers are part of the signature; no retries. */
+/** Signed, bounded S3 requests. Conditional headers are part of the signature; bounded retries for idempotent reads. */
 import { AwsClient } from "aws4fetch";
 import { parseStrongEtag } from "./s3-transport.ts";
 import type { S3BodyStorageConfig } from "./body-store.ts";
@@ -36,7 +36,14 @@ function unavailable(): never {
 }
 export function createS3Requester(
   config: S3BodyStorageConfig,
-  options: Readonly<{ fetch?: typeof fetch; timeoutMs?: number }> = {},
+  options: Readonly<
+    {
+      fetch?: typeof fetch;
+      timeoutMs?: number;
+      readRetries?: number;
+      retryDelayMs?: number;
+    }
+  > = {},
 ): S3Requester {
   if (
     config.provider !== undefined && config.provider !== "s3" &&
@@ -45,7 +52,9 @@ export function createS3Requester(
   const endpoint = new URL(config.endpoint);
   const bucket = config.bucket.trim();
   const pathStyle = config.pathStyle ?? true;
-  const timeoutMs = options.timeoutMs ?? 30_000;
+  const timeoutMs = options.timeoutMs ?? config.requestTimeoutMs ?? 30_000;
+  const retries = options.readRetries ?? 3;
+  const delay = options.retryDelayMs ?? 100;
   const send = options.fetch ?? globalThis.fetch.bind(globalThis);
   if (
     endpoint.username || endpoint.password || endpoint.search ||
@@ -55,7 +64,9 @@ export function createS3Requester(
         ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname))) ||
     !/^[a-z0-9][a-z0-9.-]{0,62}$/.test(bucket) || bucket.includes("..") ||
     bucket.endsWith(".") ||
-    !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000
+    !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000 ||
+    !Number.isSafeInteger(retries) || retries < 0 || retries > 8 ||
+    !Number.isSafeInteger(delay) || delay < 0 || delay > 10_000
   ) {
     throw createContentError(
       "content_invalid",
@@ -70,7 +81,7 @@ export function createS3Requester(
     region: config.region.trim() || "auto",
     retries: 0,
   });
-  return async (input) => {
+  const attempt: S3Requester = async (input) => {
     const { method, objectName, maxResponseBytes } = input;
     const headers = new Headers(input.headers);
     if (method === "PUT" || method === "DELETE") {
@@ -156,7 +167,7 @@ export function createS3Requester(
       url.searchParams.set(key, value);
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let complete = false;
     try {
@@ -172,7 +183,9 @@ export function createS3Requester(
         redirect: "error",
         aws: { allHeaders: true, signQuery: false },
       });
-      controller.signal.throwIfAborted();
+      // Signing can queue behind database/JSON work. Give the dispatched request
+      // its full transport budget, independently for each retry.
+      timer = setTimeout(() => controller.abort(), timeoutMs);
       const response = await send(signed);
       const limit = response.status >= 400
         ? Math.min(ERROR_RESPONSE_MAX_BYTES, PHYSICAL_MANIFEST_DECODE_BYTES)
@@ -210,19 +223,56 @@ export function createS3Requester(
         headers: new Headers(response.headers),
         bytes,
       });
-    } catch {
-      // Transport failure after dispatch leaves mutation outcome unknown.
-      unavailable();
+    } catch (cause) {
+      // Only transport failures are retryable; response bounds remain hard errors.
+      if (cause instanceof Error && cause.name === "CopilotzContentError") {
+        throw cause;
+      }
+      throw Object.assign(
+        new Error("Physical S3 transport failed.", { cause }),
+        { retryableRead: true },
+      );
     } finally {
       controller.abort();
       clearTimeout(timer);
       try {
         if (reader && !complete) await reader.cancel();
       } catch {
-        unavailable();
+        // An aborted reader may reject cancellation. The attempt already carries
+        // the transport/bound error; cleanup must not turn it into a new failure.
       } finally {
         reader?.releaseLock();
       }
+    }
+  };
+  return async (input) => {
+    // Pin caller intent across asynchronous attempts, including conditional guards.
+    input = {
+      ...input,
+      headers: new Headers(input.headers),
+      ...(input.query ? { query: { ...input.query } } : {}),
+    };
+    const retryable = input.method === "HEAD" || input.method === "GET";
+    for (let index = 0;; index++) {
+      try {
+        const response = await attempt(input);
+        // 412 and all other version-guard failures are returned immediately.
+        if (
+          !retryable || index >= retries ||
+          !(response.status === 429 || response.status >= 500)
+        ) return response;
+      } catch (error) {
+        if (
+          !retryable || index >= retries || !error ||
+          typeof error !== "object" || !("retryableRead" in error)
+        ) {
+          if (error && typeof error === "object" && "retryableRead" in error) {
+            unavailable();
+          }
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay * 2 ** index));
     }
   };
 }

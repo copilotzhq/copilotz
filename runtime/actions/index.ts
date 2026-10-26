@@ -30,8 +30,8 @@ export {
   actionCallerDefinitionId,
   createActionCallers,
   isActionInputValidationError,
-  isSettledActionError,
 } from "./invoker.ts";
+export { isSettledActionError } from "./errors.ts";
 export { actionTransactionIdentity } from "./transaction-identity.ts";
 export { createActionLifecycleEmitter } from "./lifecycle.ts";
 export {

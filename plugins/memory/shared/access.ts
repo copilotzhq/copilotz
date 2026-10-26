@@ -1,6 +1,6 @@
 import { ensureMemoryScope } from "./personal.ts";
 /** Memory-space access checks and trusted caller provenance. @module */
-import type { SnapshotCollections } from "@copilotz/copilotz/collections";
+import type { ReadCollections } from "@copilotz/copilotz/collections";
 import type { Participant } from "@copilotz/copilotz/core";
 import type { MemorySpaceDescriptor } from "../authoring/consolidation/index.ts";
 import type {
@@ -15,7 +15,7 @@ export function participantAgentId(participant: Participant): string {
 
 /** Canonical scopes follow current Core membership, never another thread's grants. */
 export async function threadMemorySpaces(
-  context: { collections: SnapshotCollections },
+  context: { collections: ReadCollections },
   threadId: string,
   initiatorParticipantId?: string,
 ): Promise<readonly MemorySpaceDescriptor[]> {

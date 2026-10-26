@@ -253,18 +253,39 @@ field test with exactly one operator: `eq`, `ne`, `in`, `jsonEquals`, `trimEq`,
 
 ### Consistency
 
-Each standalone read sees the latest committed state. When several reads must
-agree, wrap them in `context.readSnapshot(async ({ collections }) => ...)`: one
-repeatable, read-only point in time. Keep it short; do model or network work
-after it returns.
+Each standalone read sees committed state. When several reads must agree,
+register a loader with `defineRead` under `resources.reads`, then call
+`context.read("loaderName", jsonArgs)`. The result is
+`{ value, asOf: { epoch,
+lastSeq } }`. `asOf` is diagnostic; use record
+revisions or application fingerprints for optimistic validation.
 
-Managed PGlite runs Collection snapshots in the serialized owner transaction,
-including databases with vector extensions. Custom providers, custom constructor
-configuration, and background sync retain their native snapshot admission
-checks. PostgreSQL retains a pooled repeatable-read snapshot and a separate lane
-for current authorization checks. Both close their read scope before returning;
-a snapshot does not authorize writes or expose a raw SQL executor to application
-code.
+A worker sends one RPC. The owner executes the whole loader in one read-only
+REPEATABLE READ transaction on one PostgreSQL connection. PGlite and pools of
+one execute it in an owner command transaction. Nested `read` calls join the
+batch. Loaders expose read-only collections; finish record selection before
+content, network or model work.
+
+Protected collections evaluate policy against the same transaction view as the
+data, with final disclosure once per batch. Revocations committed before batch
+admission apply. PostgreSQL primitive protected reads also use the read pool;
+named selectors that hydrate content use separate read transactions for their
+authorization gates.
+
+Managed connections retain their pool configuration across session adapters. For
+an injected pool, initialize its adapter with
+`createOminipgSqlSession(database, { poolSize, timeoutMs })` before attaching
+it; unknown connections conservatively use the single-connection owner path.
+
+The shared FIFO limiter admits at most `pgPoolMax - 1` readers (minimum one),
+reserving a writer connection. `readTimeoutMs` configures the default admission
+deadline (2 seconds); a call can override it with `{ timeoutMs, signal }`.
+Deadline expiry raises retryable `read_capacity_timeout` with `retryAfterMs`.
+Retired or closed databases raise `persistence_unavailable`; ownership mismatch
+raises `ActionOwnershipLost`. No read handle survives the call. The epoch is
+checked in the transaction view and known owner retirement is checked before
+return. A remote takeover committed after that view begins is visible only when
+the owner observes retirement; subsequent writes remain fenced.
 
 When several writes must commit together, use
 `context.transaction(async ({ collections }) => ...)`. Its writes stage and
@@ -298,6 +319,7 @@ command and a filtered list. It needs `@copilotz/copilotz@^0.90.0` on Deno 2.9+
 or Node 24+, and no credential.
 
 ```ts
+import { defineRead } from "@copilotz/copilotz/collections";
 // Runtime factory and primitive helpers.
 import {
   createCopilotz,
@@ -376,6 +398,26 @@ type CaptureContext = ProcessorContext<
   ActionCallers<{ saveNote: typeof saveNote }>
 >;
 
+const noteSummary = defineRead(async (_input: unknown, { collections }) => ({
+  // Pinned notes, newest first. `where` compares JSON text.
+  pinned: await collections.note.list({
+    where: { pinned: true },
+    order: { field: "createdAt", direction: "desc" },
+    limit: 10,
+  }),
+  // Notes whose whole text equals this sentence, ignoring case, or that
+  // are explicitly unpinned. This is equality, not word search.
+  exactMatches: await collections.note.list({
+    filter: {
+      or: [
+        { field: "text", eqIgnoreCase: "prepare the release." },
+        { field: "pinned", eq: false },
+      ],
+    },
+    limit: 10,
+  }),
+}));
+
 // Saves, pins and lists notes for every capture request.
 const captureNote = defineProcessor<CaptureContext>({
   id: "notes.capture",
@@ -392,28 +434,10 @@ const captureNote = defineProcessor<CaptureContext>({
       { id: saved.id },
       { operationKey: "pin-note" },
     );
-    // Two reads that must agree, taken from one snapshot.
-    const { pinned, exactMatches } = await context.readSnapshot(
-      async ({ collections }) => ({
-        // Pinned notes, newest first. `where` compares JSON text.
-        pinned: await collections.note.list({
-          where: { pinned: true },
-          order: { field: "createdAt", direction: "desc" },
-          limit: 10,
-        }),
-        // Notes whose whole text equals this sentence, ignoring case, or that
-        // are explicitly unpinned. This is equality, not word search.
-        exactMatches: await collections.note.list({
-          filter: {
-            or: [
-              { field: "text", eqIgnoreCase: "prepare the release." },
-              { field: "pinned", eq: false },
-            ],
-          },
-          limit: 10,
-        }),
-      }),
-    );
+    const { value: { pinned, exactMatches } } = await context.read<{
+      pinned: readonly { id: string }[];
+      exactMatches: readonly { id: string }[];
+    }>("noteSummary", null);
     console.log(`pinned=${pinned.length} matching=${exactMatches.length}`);
   },
 });
@@ -423,6 +447,7 @@ const app = await createCopilotz({
   collections: { note },
   actions: { saveNote },
   processors: { captureNote },
+  resources: { reads: { noteSummary } },
 });
 
 try {
@@ -451,7 +476,7 @@ Run `deno run -A app.ts` or `node app.ts`. Among the printed Event types expect
 
 - State that is validated, versioned by Events, and safe under retries.
 - Domain commands that Processors subscribe to by name.
-- Bounded queries with enforced filters, and consistent multi-read snapshots.
+- Bounded queries with enforced filters, and consistent registered read batches.
 - Atomic multi-record changes through transactions.
 
 ## Next steps

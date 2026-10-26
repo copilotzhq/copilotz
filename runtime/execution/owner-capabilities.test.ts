@@ -4,7 +4,6 @@ import { createOwnerCapabilityHost } from "./owner-capabilities.ts";
 import { createPluginRegistry } from "../plugins/registry.ts";
 import { defineAction } from "../actions/define.ts";
 import type { ActionContext } from "../actions/types.ts";
-import { withSnapshotControl } from "../collections/snapshot-control.ts";
 import {
   type CapabilityCall,
   type CapabilityPoll,
@@ -15,9 +14,7 @@ import {
 import type { WorkerCallContext } from "../../dependencies/oxian-hypervisor.ts";
 
 async function setup(
-  cleanup: "confirmed" | "unknown" = "confirmed",
   overrides: Record<string, unknown> = {},
-  limits: { resourceIdleMs?: number; resourceLifetimeMs?: number } = {},
   afterRegistration?: (options: Record<string, unknown>) => void,
 ) {
   let epoch = 1;
@@ -36,24 +33,15 @@ async function setup(
     collections: {
       notes: { list: async () => held ? await held : [{ id: "visible" }] },
     },
-    async readSnapshot(fn: (scope: unknown) => unknown | Promise<unknown>) {
-      const disposed = Promise.withResolvers<"confirmed" | "unknown">();
-      try {
-        return await fn(
-          withSnapshotControl({ collections: context.collections }, {
-            kind: "exclusive",
-            snapshot: {
-              query: () => {
-                epochReads++;
-                return Promise.resolve({ rows: [{ epoch }] });
-              },
-            } as never,
-            cleanup: disposed.promise,
-          }),
-        );
-      } finally {
-        disposed.resolve(cleanup);
+    async read() {
+      const value = await context.collections.notes.list();
+      epochReads++;
+      if (epoch !== 1) {
+        throw Object.assign(new Error("ActionOwnershipLost"), {
+          code: "ActionOwnershipLost",
+        });
       }
+      return { value, asOf: { epoch, lastSeq: 0 } };
     },
     ...overrides,
   } as unknown as ActionContext;
@@ -61,7 +49,6 @@ async function setup(
   const registry = createPluginRegistry({ actions: { run: action } });
   const hostOptions = {
     localExecution: true,
-    ...limits,
     registry,
     resolveAuthority() {
       authorityCalls++;
@@ -209,35 +196,6 @@ Deno.test("owner takeover suppresses a held read result and retires its assignme
     await f.close();
   }
 });
-for (const cleanup of ["confirmed", "unknown"] as const) {
-  Deno.test(`snapshot ${cleanup} cleanup releases or quarantines actual resource capacity`, async () => {
-    const f = await setup(cleanup);
-    try {
-      const opened = await f.call({ kind: "snapshot", context: f.id }) as {
-        handle: string;
-      };
-
-      const close = () =>
-        f.call({ kind: "close", context: f.id, id: opened.handle });
-      if (cleanup === "unknown") {
-        await assertRejects(close, Error, "owner_cleanup_unknown");
-      } else {
-        await close();
-      }
-      await assertRejects(() =>
-        f.call({
-          kind: "call",
-          context: f.id,
-          id: opened.handle,
-          path: ["collections", "notes", "list"],
-        })
-      );
-    } finally {
-      await f.close();
-    }
-  });
-}
-
 Deno.test("disconnect cancels blocked follower reads and drains resources before retirement", async () => {
   let cancelled = 0;
   const stream = new ReadableStream<Uint8Array>({
@@ -245,7 +203,7 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
       cancelled++;
     },
   });
-  const f = await setup("confirmed", {
+  const f = await setup({
     streams: {
       follow: () => ({
         bodyId: "body",
@@ -278,9 +236,9 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
     await f.close();
   }
 });
-Deno.test("writer capacity is bounded while quiet live writers outlast generic handle limits", async () => {
+Deno.test("live writers stay open until completion closes them all", async () => {
   let opened = 0, aborted = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     streams: {
       open: () => {
         opened++;
@@ -294,9 +252,9 @@ Deno.test("writer capacity is bounded while quiet live writers outlast generic h
         };
       },
     },
-  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
+  });
   try {
-    for (let index = 0; index < 32; index++) {
+    for (let index = 0; index < 33; index++) {
       await f.call({
         kind: "call",
         context: f.id,
@@ -304,31 +262,19 @@ Deno.test("writer capacity is bounded while quiet live writers outlast generic h
         args: [{}],
       });
     }
-    await assertRejects(
-      () =>
-        f.call({
-          kind: "call",
-          context: f.id,
-          path: ["streams", "open"],
-          args: [{}],
-        }),
-      Error,
-      "owner_capacity",
-    );
-    assertEquals(opened, 32);
-    await new Promise((resolve) => setTimeout(resolve, 220));
+    assertEquals(opened, 33);
     assertEquals(aborted, 0);
 
     await f.call({ kind: "complete", id: f.id, value: "quiet live writers" });
     assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
-    assertEquals(aborted, 32);
+    assertEquals(aborted, 33);
   } finally {
     await f.close();
   }
 });
-Deno.test("active writers outlast generic lifetime and still close on cancellation", async () => {
+Deno.test("active writers close on invocation cancellation", async () => {
   let appended = 0, aborted = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     streams: {
       open: () => ({
         id: "active",
@@ -341,7 +287,7 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
         },
       }),
     },
-  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
+  });
   try {
     const writer = await f.call({
       kind: "call",
@@ -350,7 +296,6 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
       args: [{}],
     }) as { handle: string };
     for (let index = 0; index < 8; index++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
       await f.call({
         kind: "call",
         context: f.id,
@@ -370,39 +315,9 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
   }
 });
 
-Deno.test("idle reader handles retain bounded expiry while writers use invocation lifetime", async () => {
-  let cancelled = 0;
-  const f = await setup("confirmed", {
-    content: {
-      open: () =>
-        new ReadableStream({
-          cancel() {
-            cancelled++;
-          },
-        }),
-    },
-  }, { resourceIdleMs: 20, resourceLifetimeMs: 100 });
-  try {
-    await f.call({
-      kind: "call",
-      context: f.id,
-      path: ["content", "open"],
-      args: [{}],
-    });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    assertEquals(cancelled, 1);
-
-    await assertRejects(() =>
-      f.call({ kind: "complete", id: f.id, value: "expired reader" })
-    );
-  } finally {
-    await f.close();
-  }
-});
-
 Deno.test("effect outcome data is not mistaken for authority options", async () => {
   let outcome: unknown;
-  const f = await setup("confirmed", {
+  const f = await setup({
     effect: {
       confirm: (_step: string, value: unknown) => {
         outcome = value;
@@ -517,56 +432,11 @@ Deno.test("concurrent Open reserves one parent before deferred authority and cle
     await host.close();
   }
 });
-Deno.test("deferred concurrent Open admissions cannot exceed assignment capacity", async () => {
-  const authority = Promise.withResolvers<void>(),
-    entered = Promise.withResolvers<void>();
-  let admissions = 0, started = 0;
-  const host = createOwnerCapabilityHost({
-    localExecution: true,
-    registry: createPluginRegistry({}),
-    async resolveAuthority() {
-      if (++admissions === 256) entered.resolve();
-      await authority.promise;
-      return { epoch: 1, signal: new AbortController().signal };
-    },
-    createWorkloads: () => ({
-      test: () => {
-        started++;
-        return {};
-      },
-    }),
-  });
-  const pending = Array.from(
-    { length: 256 },
-    (_, index) =>
-      rawCall(host, admissionBinding(String(index)), {
-        kind: "open",
-        value: new Uint8Array(),
-      }),
-  );
-  try {
-    await entered.promise;
-
-    const overflow = rawCall(host, admissionBinding("overflow"), {
-      kind: "open",
-      value: new Uint8Array(),
-    });
-    void overflow.catch(() => undefined);
-    authority.resolve();
-    await Promise.all(pending);
-    await assertRejects(() => overflow, Error, "owner_capacity");
-    assertEquals(started, 256);
-  } finally {
-    authority.resolve();
-    await Promise.allSettled(pending);
-    await host.close();
-  }
-});
-Deno.test("deferred concurrent resource opens reserve physical capacity and clean failed opens", async () => {
+Deno.test("deferred concurrent resource opens all complete and failed opens clean up", async () => {
   const gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
   let opened = 0, aborted = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     streams: {
       async open() {
         if (++opened === 32) entered.resolve();
@@ -594,17 +464,8 @@ Deno.test("deferred concurrent resource opens reserve physical capacity and clea
   );
   try {
     await entered.promise;
-
-    const overflow = f.call({
-      kind: "call",
-      context: f.id,
-      path: ["streams", "open"],
-      args: [{}],
-    });
-    void overflow.catch(() => undefined);
     gate.resolve();
     await Promise.all(pending);
-    await assertRejects(() => overflow, Error, "owner_capacity");
     assertEquals(opened, 32);
   } finally {
     gate.resolve();
@@ -612,7 +473,7 @@ Deno.test("deferred concurrent resource opens reserve physical capacity and clea
     await f.close();
   }
   assertEquals(aborted, 32);
-  const rejected = await setup("confirmed", {
+  const rejected = await setup({
     streams: {
       open() {
         throw new Error("open failed");
@@ -637,7 +498,7 @@ Deno.test("retirement during deferred resource creation retains slot until actua
     entered = Promise.withResolvers<void>(),
     cleanup = Promise.withResolvers<void>();
   let aborted = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     content: {
       async openCapture() {
         entered.resolve();
@@ -685,7 +546,7 @@ Deno.test("retirement during deferred resource creation retains slot until actua
 
 Deno.test("hostile per-operation transaction options are refused before transaction or receipt side effects", async () => {
   let transactions = 0, writes = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     transaction: async (fn: (scope: unknown) => unknown | Promise<unknown>) => {
       transactions++;
       await fn({
@@ -762,7 +623,7 @@ Deno.test("complete seals context before an admitted open resolves and drains it
     cleanup = Promise.withResolvers<void>(),
     cleaning = Promise.withResolvers<void>();
   let opens = 0, aborted = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     content: {
       async openCapture() {
         opens++;
@@ -830,7 +691,7 @@ Deno.test("owner context cancellation revokes a blocked reader before waiting fo
       cancelled++;
     },
   }, { highWaterMark: 0 });
-  const f = await setup("confirmed", { content: { open: () => stream } });
+  const f = await setup({ content: { open: () => stream } });
   try {
     const opened = await f.call({
       kind: "call",
@@ -855,9 +716,9 @@ Deno.test("owner context cancellation revokes a blocked reader before waiting fo
   }
 });
 
-Deno.test("cancelled capability calls do not execute and authority is captured once", async () => {
+Deno.test("a cancelled call ends only itself; authority is captured once", async () => {
   let reads = 0;
-  const f = await setup("confirmed", {
+  const f = await setup({
     collections: {
       notes: {
         list() {
@@ -889,6 +750,15 @@ Deno.test("cancelled capability calls do not execute and authority is captured o
       "cancelled call",
     );
     assertEquals(reads, 4100);
+    // Sibling calls of the same delivery keep working.
+    await f.call({
+      kind: "call",
+      context: f.id,
+      path: ["collections", "notes", "list"],
+    });
+    assertEquals(reads, 4101);
+    await f.call({ kind: "complete", id: f.id, value: "sibling done" });
+    assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
   } finally {
     await f.close();
   }
@@ -935,7 +805,7 @@ Deno.test("delayed old connection readiness failure cannot retire a replacement 
 });
 
 Deno.test("owner capability registration captures callbacks before asynchronous startup", async () => {
-  const f = await setup("confirmed", {}, {}, (options) => {
+  const f = await setup({}, (options) => {
     // Mutate before the first Open's authority await. The captured factory and
     // callback must already be detached in the construction turn.
     options.resolveAuthority = () =>
@@ -1081,57 +951,51 @@ Deno.test("late completion is fenced by stream even when operation and connectio
   }
 });
 
-Deno.test("snapshot cleanup confirmation controls future admission, without a lifetime quota", async () => {
-  for (const cleanup of ["confirmed", "unknown"] as const) {
-    const f = await setup(cleanup);
+for (const count of [3, 50]) {
+  Deno.test(`${count} registered reads cross the worker capability without resources`, async () => {
+    const f = await setup();
     try {
-      for (let i = 0; i < (cleanup === "confirmed" ? 64 : 32); i++) {
-        const opened = await f.call({ kind: "snapshot", context: f.id }) as {
-          handle: string;
-        };
-        const close = () =>
-          f.call({ kind: "close", context: f.id, id: opened.handle });
-        if (cleanup === "confirmed") await close();
-        else await assertRejects(close, Error, "owner_cleanup_unknown");
-      }
-      if (cleanup === "unknown") {
-        await assertRejects(
-          () => f.call({ kind: "snapshot", context: f.id }),
-          Error,
-          "owner_capacity",
-        );
-      }
+      const values = await Promise.all(
+        Array.from(
+          { length: count },
+          () =>
+            f.call({
+              kind: "read",
+              context: f.id,
+              name: "notes",
+              args: [null],
+            }),
+        ),
+      );
+      assertEquals(values.length, count);
+      assertEquals(f.epochReads(), count);
+      assertEquals(values[0], {
+        value: [{ id: "visible" }],
+        asOf: { epoch: 1, lastSeq: 0 },
+      });
     } finally {
       await f.close();
     }
-  }
-});
-
-Deno.test("snapshot reads have one current-epoch result gate even before owner retirement is noticed", async () => {
+  });
+}
+Deno.test("ownership change during registered read preserves ownership error", async () => {
   const f = await setup();
+  const held = Promise.withResolvers<unknown>();
   try {
-    const opened = await f.call({ kind: "snapshot", context: f.id }) as {
-      handle: string;
-    };
-    const read = () =>
-      f.call({
-        kind: "call",
-        context: f.id,
-        id: opened.handle,
-        path: ["collections", "notes", "list"],
-      });
-    const before = f.epochReads();
-    await read();
-    assertEquals(f.epochReads() - before, 1);
-    const held = Promise.withResolvers<unknown>();
     f.hold(held.promise);
-    const pending = read();
+    const read = f.call({
+      kind: "read",
+      context: f.id,
+      name: "notes",
+      args: [null],
+    });
     await new Promise((resolve) => setTimeout(resolve, 5));
     f.setDatabaseEpoch(2);
-    held.resolve([{ id: "stale secret" }]);
-    await assertRejects(() => pending, Error, "ActionOwnershipLost");
-    assertEquals(f.authorityCalls(), 1);
+    held.resolve([]);
+    await assertRejects(() => read, Error, "ActionOwnershipLost");
+    assertEquals(f.epochReads(), 1);
   } finally {
+    held.resolve([]);
     await f.close();
   }
 });

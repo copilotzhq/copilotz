@@ -40,7 +40,7 @@ The helper validates aliases and static data.
 `dynamicResolve(context,
 execution)` is optional and runs inside Core's
 read-only turn snapshot. Its context includes `baseAgent`, the agent
-participant, thread, trigger message, and `SnapshotCollections`. It may return
+participant, thread, trigger message, and `ReadCollections`. It may return
 `instructions`, `models`, `history`, and an opaque `revision`; omitted values
 inherit the authored resource, while a provided model map or history policy
 replaces it. Core captures the result in the prepared `llm.call` input. The

@@ -12,8 +12,8 @@ import {
   bodyInteger,
 } from "./body-store-operations.ts";
 import { createS3BodyStore } from "./s3-body-store.ts";
-import { createS3Requester, type S3Response } from "./s3-request.ts";
-import { parseStrongEtag } from "./s3-transport.ts";
+import { createS3Requester } from "./s3-request.ts";
+import { createLegacyS3Source } from "./s3-legacy-source.ts";
 import { digestContent } from "./digest.ts";
 export type S3BodyImport = Readonly<{
   sourceBodyId: string;
@@ -34,13 +34,6 @@ export type S3BodyImportResult = Readonly<{
 type SourcePart = { key: string; offset: number; length: number };
 function invalid(message: string): never {
   throw new Error(`Offline S3 import: ${message}`);
-}
-function naturalGeneration(value: string | null): string {
-  if (
-    !value || !/^[1-9][0-9]{0,19}$/.test(value) ||
-    BigInt(value) > 18446744073709551615n
-  ) invalid("missing exact source generation");
-  return value;
 }
 /** Copies only explicitly listed, reviewed terminal bodies. Leaves every source object intact. */
 export async function importS3BodyCopies(
@@ -67,58 +60,14 @@ export async function importS3BodyCopies(
   const send = createS3Requester(config, options),
     target = createS3BodyStore(config, options),
     results: S3BodyImportResult[] = [];
-  const token = (response: S3Response) =>
-    config.provider === "gcs"
-      ? `${naturalGeneration(response.headers.get("x-goog-generation"))}:${
-        naturalGeneration(response.headers.get("x-goog-metageneration"))
-      }`
-      : parseStrongEtag(response.headers.get("etag")) ??
-        invalid("missing exact source ETag");
-  const guard = (version: string): Record<string, string> =>
-    config.provider === "gcs"
-      ? {
-        "x-goog-if-generation-match": version.split(":")[0],
-        "x-goog-if-metageneration-match": version.split(":")[1],
-      }
-      : { "if-match": version };
-  async function inspect(
-    key: string,
-  ): Promise<{ version: string; response: S3Response; length: number }> {
-    const response = await send({
-      method: "HEAD",
-      objectName: key,
-      maxResponseBytes: 0,
-    });
-    if (response.status !== 200) {
+  const { token, guard, read, inspect: inspectSource } = createLegacyS3Source(
+    config,
+    send,
+    invalid,
+  );
+  const inspect = async (key: string) =>
+    await inspectSource(key) ??
       invalid("source object is missing or unavailable");
-    }
-    const raw = response.headers.get("content-length");
-    if (raw === null || !/^\d+$/.test(raw)) invalid("source length is missing");
-    const length = bodyInteger(Number(raw));
-    return { version: token(response), response, length };
-  }
-  async function read(
-    key: string,
-    version: string,
-    start: number,
-    end: number,
-    length: number,
-  ): Promise<Uint8Array> {
-    if (start === end) return new Uint8Array();
-    const response = await send({
-      method: "GET",
-      objectName: key,
-      headers: { ...guard(version), range: `bytes=${start}-${end - 1}` },
-      maxResponseBytes: end - start,
-    });
-    if (
-      response.status !== 206 ||
-      response.headers.get("content-range") !==
-        `bytes ${start}-${end - 1}/${length}` ||
-      response.bytes.length !== end - start || token(response) !== version
-    ) invalid("source changed or returned a short/transformed range");
-    return response.bytes;
-  }
   for (const copy of copies) {
     const sourceKey = copy.state === "ready"
         ? copy.sourceBodyId

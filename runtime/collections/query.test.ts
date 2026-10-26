@@ -1,3 +1,4 @@
+import { defineRead } from "./reads.ts";
 import { assertEquals } from "@std/assert";
 import {
   createCopilotz,
@@ -38,33 +39,38 @@ Deno.test("Collection where binds scalar text consistently with in-memory matchi
       for (const row of rows) {
         await context.collections.item.create(row, { operationKey: row.id });
       }
-      await context.readSnapshot(async ({ collections }) => {
-        for (const [value, expected] of cases) {
-          const where = { value };
-          assertEquals(
-            rows.filter((row) => matchesCollectionFilter({ where }, row))
-              .map((row) => row.id).sort(),
-            [...expected],
-          );
-          assertEquals(
-            (await collections.item.list({ where })).map((row) => row.id)
-              .sort(),
-            [...expected],
-          );
-          assertEquals(
-            (await collections.item.list({ all: [{ where }] })).map((row) =>
-              row.id
-            ).sort(),
-            [...expected],
-          );
-        }
-      });
+      await context.read("verifyRows");
     },
   });
   const app = await createCopilotz({
     namespace: "scalar-test",
     collections: { item },
     processors: { verify },
+    resources: {
+      reads: {
+        verifyRows: defineRead(async (_args: unknown, { collections }) => {
+          for (const [value, expected] of cases) {
+            const where = { value };
+            assertEquals(
+              rows.filter((row) => matchesCollectionFilter({ where }, row))
+                .map((row) => row.id).sort(),
+              [...expected],
+            );
+            assertEquals(
+              (await collections.item.list({ where })).map((row) => row.id)
+                .sort(),
+              [...expected],
+            );
+            assertEquals(
+              (await collections.item.list({ all: [{ where }] })).map((row) =>
+                row.id
+              ).sort(),
+              [...expected],
+            );
+          }
+        }),
+      },
+    },
   });
   try {
     const handle = await app.send({ type: "scalar.verify.requested" });

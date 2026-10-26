@@ -58,12 +58,23 @@ export async function upgradeStorageIdentity(
     "content_bodies",
     "content_body_parts",
   ]);
+  const alterations = new Map<string, string[]>();
   for (const column of columns) {
     if (!managed.has(column.table_name)) continue;
-    await tx.query(
-      `ALTER TABLE ${qualified(column.table_name)} ALTER COLUMN ${
+    const clauses = alterations.get(column.table_name) ?? [];
+    clauses.push(
+      `ALTER COLUMN ${
         quoteEventIdentifier(column.column_name)
       } TYPE TEXT COLLATE "C"`,
+    );
+    alterations.set(column.table_name, clauses);
+  }
+  // PostgreSQL rebuilds affected indexes once per table, not once per column.
+  let done = 0;
+  for (const [table, clauses] of alterations) {
+    await tx.query(`ALTER TABLE ${qualified(table)} ${clauses.join(",")}`);
+    console.error(
+      `[upgrade:${schema}] storage tables ${++done}/${alterations.size}`,
     );
   }
   // JSON expressions do not inherit the collation changes on identity columns.

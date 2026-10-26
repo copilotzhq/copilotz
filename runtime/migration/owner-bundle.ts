@@ -95,7 +95,11 @@ export async function exportOwnerBundle(input: {
 }): Promise<void> {
   const schema = validateEventSchemaName(input.schema),
     directory = resolve(input.directory);
-  const db = await openManagedOminipgDatabase({ url: input.url });
+  const db = await openManagedOminipgDatabase({
+    url: input.url,
+    statementTimeoutMs: null,
+    requestTimeoutMs: 24 * 60 * 60 * 1000,
+  });
   try {
     await assertPgDumpSupportsServer(db.session);
     await Deno.mkdir(directory, { mode: 0o700 });
@@ -201,7 +205,11 @@ export async function importOwnerBundle(input: {
     );
     material.fill(0);
   }
-  const db = await openManagedOminipgDatabase({ url: input.url });
+  const db = await openManagedOminipgDatabase({
+    url: input.url,
+    statementTimeoutMs: null,
+    requestTimeoutMs: 24 * 60 * 60 * 1000,
+  });
   try {
     if (
       (await db.session.query(

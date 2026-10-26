@@ -16,7 +16,8 @@ test("execution context preserves canonical capability composition", async () =>
       captured.push(options);
       return await callback();
     },
-    readSnapshot: (callback: () => unknown) => callback(),
+    read: () =>
+      Promise.resolve({ value: null, asOf: { epoch: 1, lastSeq: 0 } }),
     content: {
       prepare: (input: unknown, options: unknown) => {
         captured.push([input, options]);

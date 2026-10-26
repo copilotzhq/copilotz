@@ -265,13 +265,17 @@ for (
         assertEquals(evaluations["action|model|authorize|"] ?? 0, 0);
         assertEquals(
           evaluations["collection|records|get|read"],
-          2,
+          db.concurrentReads ? total * 2 : 2,
         );
         assertEquals(
           evaluations["collection|records|get|result"],
-          2,
+          db.concurrentReads ? total * 2 : 2,
         );
-        assert((counts["evaluation.hit"] ?? 0) >= 4 * (total - 1));
+        // Reader transactions evaluate their own view; writer decisions still
+        // reuse exact dependency proofs under the serialized owner command.
+        if (!db.concurrentReads) {
+          assert((counts["evaluation.hit"] ?? 0) >= 4 * (total - 1));
+        }
         for (const scope of ["action", "authorization-record", "evaluation"]) {
           assertEquals(counts[`${scope}.stale`] ?? 0, 0, scope);
         }

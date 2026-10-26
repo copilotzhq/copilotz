@@ -245,16 +245,32 @@ export function createAuthorizedActions(
       throw new Error("Protected Action hooks require an active execution.");
     }
   };
-  const read = async (tx: SqlExecutor, runId: string) =>
-    (await tx.query<
-      {
-        intent: unknown;
-        result: { source: ProtectedActionSourceBinding; request: unknown };
-      }
-    >(
-      `SELECT intent,result FROM ${store.tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND key=$1 AND kind='action.protected-input'`,
-      [key(runId)],
-    )).rows[0];
+  const read = async (tx: SqlExecutor, runId: string) => {
+    // Check history at the capture boundary, before any decision can be cached.
+    // The offline upgrade fences the owner epoch, so pre-upgrade grants cannot
+    // survive it. Cold result checks use this same reader; warm checks stay SQL-free.
+    const rows = (await tx.query<{
+      kind: string;
+      intent: unknown;
+      result: { source: ProtectedActionSourceBinding; request: unknown };
+    }>(
+      `SELECT kind,intent,result FROM ${store.tables.owner_receipts} WHERE owner='schema' AND domain='logical'
+       AND ((key=$1 AND kind='action.protected-input') OR (key=$2 AND kind='authorization.history'))`,
+      [
+        key(runId),
+        JSON.stringify([
+          "authorization.history",
+          "invocation",
+          namespace,
+          runId,
+        ]),
+      ],
+    )).rows;
+    if (rows.some((row) => row.kind === "authorization.history")) {
+      authorizationRefused();
+    }
+    return rows.find((row) => row.kind === "action.protected-input");
+  };
   // A verified terminal contains the captured input too. Replaying completed
   // work must not reopen an invoked body that is no longer needed.
   const capturedInput = async (
@@ -316,6 +332,18 @@ export function createAuthorizedActions(
       `SELECT authority FROM ${store.tables.authorization_invocations} WHERE namespace=$1 AND run_id=$2`,
       [namespace, frame.actionRunId],
     )).rows[0];
+    if (firstCapture && !retained) {
+      const historical = await command.transaction.query(
+        `SELECT 1 FROM ${store.tables.owner_receipts} WHERE owner='schema' AND domain='logical' AND kind='authorization.history' AND key=$1`,
+        [JSON.stringify([
+          "authorization.history",
+          "event",
+          namespace,
+          source.eventId,
+        ])],
+      );
+      if (historical.rows.length) authorizationRefused();
+    }
     const binding = retained?.authority ??
       (firstCapture
         ? resolved.ingress?.authority ??

@@ -39,7 +39,11 @@ if (import.meta.main) {
     });
   } else {
     if (!schema) throw new Error("Migration requires --schema.");
-    const db = await openManagedOminipgDatabase({ url });
+    const db = await openManagedOminipgDatabase({
+      url,
+      statementTimeoutMs: null,
+      requestTimeoutMs: 24 * 60 * 60 * 1000,
+    });
     try {
       console.log(
         await migrateOwnerKeys({

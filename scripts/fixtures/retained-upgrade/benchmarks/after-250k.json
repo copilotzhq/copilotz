@@ -1,0 +1,607 @@
+{
+  "source": "optimized source",
+  "events": 250000,
+  "bodyBytes": 1024,
+  "schemas": 1,
+  "steps": [
+    {
+      "schema": "owner_1",
+      "step": "fixture",
+      "wallMs": 16174.719750000002,
+      "statements": 222,
+      "top": [
+        {
+          "sql": "INSERT INTO \"owner_1\".events(id,schema_version,type,namespace,payload,metadata,correlation_id,created_at) SELECT 'synthetic-event-'||i,7, CASE WHEN i%10=2 THEN 'copilotz.server.action.requested' ELSE 'synthetic.history' END, 'archive',CASE WHEN i<$2 THEN jsonb_build_object('dataRef',jsonb_build_object('eventBodyId','synthetic-body-'||i,'schemaVersion',1,'mediaType','application/json')) ELSE '{}'::jsonb END, jsonb_build_object('sourceEventId','synthetic-event-'||(i-i%10+2)),'synthetic-correlation-'||i,$3::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 5460.9915
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".event_bodies SELECT * FROM jsonb_populate_recordset(NULL::\"owner_1\".event_bodies,$1::jsonb)",
+          "calls": 100,
+          "ms": 2822.7277889999946
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".event_deliveries(id,event_id,consumer_id,settlement_scope_id,status,attempts,created_at,updated_at,settled_at) SELECT 'synthetic-delivery-'||i,'synthetic-event-'||i,'synthetic.consumer','synthetic-event-'||i,'succeeded',1,$2::timestamptz,$2::timestamptz,$2::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 1330.8459590000002
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".content_body_parts(body_id,start_offset,append_id,bytes,created_at) SELECT 'synthetic-physical-'||i,0,'synthetic-put',$2::bytea,$3::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 849.2019999999993
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".nodes(id,namespace,type,name,data,created_at,updated_at) SELECT 'synthetic-asset-'||i,'archive','asset','asset-'||i, jsonb_build_object('state','ready','byteLength',$2::integer,'digest',$3::text, 'location',jsonb_build_object('kind','database','backendId','database:default','key','synthetic-physical-'||i), 'origin',jsonb_build_object('id','synthetic-document-'||i,'type','synthetic_document')), $4::timestamptz,$4::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 812.8153330000005
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".edges(id,namespace,source_node_id,target_node_id,type,data,created_at) SELECT 'synthetic-edge-'||i,'archive','synthetic-owner-'||i,'synthetic-asset-'||i,'has_asset','{}',$2::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 485.6514590000006
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".nodes(id,namespace,type,name,data,created_at,updated_at) SELECT 'synthetic-owner-'||i,'archive','@copilotz/action-content','owner-'||i, jsonb_build_object('assetIds',jsonb_build_array('synthetic-asset-'||i)), $2::timestamptz,$2::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 443.03804200000013
+        },
+        {
+          "sql": "ANALYZE \"owner_1\".\"event_bodies\"",
+          "calls": 1,
+          "ms": 427.8345419999987
+        },
+        {
+          "sql": "ANALYZE \"owner_1\".\"events\"",
+          "calls": 1,
+          "ms": 344.9406250000011
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".nodes(id,namespace,type,name,data,created_at,updated_at) SELECT 'synthetic-document-'||i,'archive','synthetic_document','document-'||i, jsonb_build_object('assetId','synthetic-asset-'||i),$2::timestamptz,$2::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 316.17870799999946
+        },
+        {
+          "sql": "ANALYZE \"owner_1\".\"nodes\"",
+          "calls": 1,
+          "ms": 188.5031250000011
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".content_bodies(body_id,state,media_type,byte_length,digest,maintenance_version,created_at,updated_at,ready_at) SELECT 'synthetic-physical-'||i,'ready','application/octet-stream',$2,$3,1,$4::timestamptz,$4::timestamptz,$4::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 112.21720800000003
+        },
+        {
+          "sql": "ANALYZE \"owner_1\".\"event_deliveries\"",
+          "calls": 1,
+          "ms": 93.5502090000009
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".nodes(id,namespace,type,name,data,created_at,updated_at) SELECT 'synthetic-session-'||i,'archive','synthetic_session','session-'||i, jsonb_build_object('principal','synthetic-principal-'||i,'expiresAt','2030-01-01T00:00:00Z'), $2::timestamptz,$2::timestamptz FROM generate_series(0,$1::integer-1) i",
+          "calls": 1,
+          "ms": 43.80045799999971
+        },
+        {
+          "sql": "ANALYZE \"owner_1\".\"edges\"",
+          "calls": 1,
+          "ms": 40.6745409999985
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "drain",
+      "wallMs": 25.699500000002445,
+      "statements": 7,
+      "top": [
+        {
+          "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE'",
+          "calls": 1,
+          "ms": 11.174667000002955
+        },
+        {
+          "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_1\".\"event_deliveries\" GROUP BY \"status\"",
+          "calls": 1,
+          "ms": 5.911833000001934
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"open_actions\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 2.897166999999172
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"content_bodies\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 1.819959000000381
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"copilotz_operation_streams\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 0.6603749999994761
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"copilotz_operations\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 0.6253749999996217
+        },
+        {
+          "sql": "SELECT version FROM \"owner_1\".\"copilotz_schema_metadata\" WHERE singleton",
+          "calls": 1,
+          "ms": 0.43845800000053714
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "prepare",
+      "wallMs": 10139.201916000002,
+      "statements": 326,
+      "top": [
+        {
+          "sql": "SELECT b.namespace,b.event_body_id,b.body,b.digest,b.schema_version FROM \"owner_1\".\"event_bodies\" b JOIN (SELECT DISTINCT namespace,id FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text)) k ON b.namespace=k.namespace AND b.event_body_id=k.id",
+          "calls": 101,
+          "ms": 1376.010957999988
+        },
+        {
+          "sql": "SELECT namespace,event_body_id,body FROM \"owner_1\".\"event_bodies\"",
+          "calls": 1,
+          "ms": 827.6502499999988
+        },
+        {
+          "sql": "SELECT e.position,e.namespace,e.payload->'dataRef' AS ref FROM \"owner_1\".\"events\" e WHERE e.position>$1::bigint AND e.payload ? 'dataRef' ORDER BY e.position LIMIT $2",
+          "calls": 101,
+          "ms": 564.2429169999705
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"content_body_parts\"(body_id,start_offset,append_id,bytes,part_digest) SELECT body_id,start_offset,append_id,decode(bytes,'base64'),part_digest FROM jsonb_to_recordset($1::jsonb) AS v(body_id text,start_offset bigint,append_id text,bytes text,part_digest text)",
+          "calls": 11,
+          "ms": 561.0480420000022
+        },
+        {
+          "sql": "SELECT id, namespace, type, name, data FROM \"owner_1\".\"nodes\" ORDER BY namespace, id",
+          "calls": 1,
+          "ms": 299.34708300000057
+        },
+        {
+          "sql": "SELECT v.id,p.start_offset,substring(p.bytes FROM 1 FOR (v.length-p.start_offset)::integer) AS bytes FROM jsonb_to_recordset($1::jsonb) AS v(id text,key text,length bigint) LEFT JOIN \"owner_1\".\"content_body_parts\" p ON p.body_id=v.key AND p.start_offset<v.length ORDER BY v.id,p.start_offset",
+          "calls": 11,
+          "ms": 234.80025099999693
+        },
+        {
+          "sql": "DELETE FROM \"owner_1\".\"content_body_parts\" WHERE body_id=ANY($1::text[])",
+          "calls": 11,
+          "ms": 226.94041700000525
+        },
+        {
+          "sql": "UPDATE \"owner_1\".\"content_bodies\" b SET reservation_id=v.reservation,writer_generation=COALESCE(b.writer_generation,1),version_token=v.version,maintenance_version=GREATEST(b.maintenance_version,1),digest=CASE WHEN b.state='aborted' THEN NULL ELSE b.digest END FROM jsonb_to_recordset($1::jsonb) AS v(id text,reservation text,version text) WHERE b.body_id=v.id",
+          "calls": 11,
+          "ms": 209.99779200000194
+        },
+        {
+          "sql": "SELECT body_id,sum(octet_length(bytes)) AS size FROM \"owner_1\".\"content_body_parts\" GROUP BY body_id",
+          "calls": 1,
+          "ms": 198.8995419999992
+        },
+        {
+          "sql": "SELECT namespace,id,data FROM \"owner_1\".\"nodes\"",
+          "calls": 1,
+          "ms": 189.2313749999994
+        },
+        {
+          "sql": "SELECT body_id,bytes,start_offset FROM \"owner_1\".\"content_body_parts\" WHERE body_id=ANY($1::text[]) ORDER BY body_id,start_offset",
+          "calls": 11,
+          "ms": 167.78408499999932
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"content_bodies\" ADD CONSTRAINT body_state CHECK(state IN ('open','ready','incomplete','aborted')), ADD CONSTRAINT body_generation CHECK(writer_generation>=1 AND writer_generation<=9007199254740991), ADD CONSTRAINT body_fenced CHECK(fenced_from IS NULL OR (fenced_from>=1 AND fenced_from=writer_generation-1)), ADD CONSTRAINT body_length CHECK(byte_length>=0 AND byte_length<=9007199254740991), ADD CONSTRAINT body_revision CHECK(maintenance_version>=1), ADD CONSTRAINT body_digest CHECK((state IN ('ready','incomplete') AND digest IS NOT NULL AND digest ~ '^sha256:[0-9a-f]{64}$') OR (state IN ('open','aborted') AND digest IS NULL))",
+          "calls": 1,
+          "ms": 141.203042000001
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"content_body_parts\" ADD CONSTRAINT body_offset CHECK(start_offset>=0 AND start_offset<=9007199254740991), ADD CONSTRAINT body_part_length CHECK(octet_length(bytes)>=1 AND octet_length(bytes)<=1048576), ADD CONSTRAINT body_part_digest CHECK(part_digest ~ '^sha256:[0-9a-f]{64}$')",
+          "calls": 1,
+          "ms": 139.6153340000019
+        },
+        {
+          "sql": "WITH keys AS MATERIALIZED ( SELECT namespace,event_body_id,body->>'status' AS status, body->>'actionRunId' AS run_id,body->>'actionId' AS action_id FROM \"owner_1\".\"event_bodies\" ) SELECT min(event_body_id) FILTER (WHERE status='invoked') AS event_body_id FROM keys WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled') GROUP BY namespace,run_id,action_id HAVING bool_or(status='invoked') AND (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled'))) LIMIT 1",
+          "calls": 1,
+          "ms": 73.11433299999771
+        },
+        {
+          "sql": "SELECT body_id,state,media_type,byte_length,digest,version_token,maintenance_version FROM \"owner_1\".\"content_bodies\" WHERE body_id=ANY($1::text[])",
+          "calls": 11,
+          "ms": 61.85966600000029
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "finalize-v11",
+      "wallMs": 34571.8905,
+      "statements": 671,
+      "top": [
+        {
+          "sql": "WITH numbered AS (SELECT id, row_number() OVER (ORDER BY position) AS seq FROM \"owner_1\".\"events\") UPDATE \"owner_1\".\"events\" AS event SET seq=numbered.seq FROM numbered WHERE event.id=numbered.id",
+          "calls": 1,
+          "ms": 11309.675208
+        },
+        {
+          "sql": "SELECT b.namespace,b.event_body_id,b.body,b.digest,b.schema_version FROM \"owner_1\".\"event_bodies\" b JOIN (SELECT DISTINCT namespace,id FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text)) k ON b.namespace=k.namespace AND b.event_body_id=k.id",
+          "calls": 202,
+          "ms": 3386.74704700003
+        },
+        {
+          "sql": "SELECT e.position,e.namespace,e.payload->'dataRef' AS ref FROM \"owner_1\".\"events\" e WHERE e.position>$1::bigint AND e.payload ? 'dataRef' ORDER BY e.position LIMIT $2",
+          "calls": 202,
+          "ms": 2071.657746000041
+        },
+        {
+          "sql": "UPDATE \"owner_1\".\"nodes\" n SET data=v.converted FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text,converted jsonb,original jsonb) WHERE n.namespace=v.namespace AND n.id=v.id AND n.data=v.original RETURNING n.id",
+          "calls": 11,
+          "ms": 1230.0271649999995
+        },
+        {
+          "sql": "SELECT id, namespace, type, name, data FROM \"owner_1\".\"nodes\" ORDER BY namespace, id",
+          "calls": 2,
+          "ms": 1028.9079169999968
+        },
+        {
+          "sql": "SELECT namespace,event_body_id,body FROM \"owner_1\".\"event_bodies\"",
+          "calls": 1,
+          "ms": 837.3454999999958
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"edges\"(id,namespace,source_node_id,target_node_id,type,data) SELECT id,namespace,owner,asset,'has_asset','{}'::jsonb FROM jsonb_to_recordset($1::jsonb) AS v(id text,namespace text,owner text,asset text)",
+          "calls": 10,
+          "ms": 644.4835000000094
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"content_logical_bodies\"(body_id,namespace,current_copy,writer_id,generation,revocation,protected_until,committed_offset,seal_intent,terminal) SELECT body_id,namespace,key,'offline-migration',1,'revoked',NOW(),length,seal,terminal FROM jsonb_to_recordset($1::jsonb) AS v(body_id text,namespace text,key text,length bigint,seal jsonb,terminal jsonb) ON CONFLICT(body_id) DO NOTHING",
+          "calls": 11,
+          "ms": 434.9830010000005
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"content_copies\"(copy_key,backend_kind,backend_id,body_id,version_token,state,collectable) SELECT key,kind,backend,body_id,version,'current',collectable FROM jsonb_to_recordset($1::jsonb) AS v(key text,kind text,backend text,body_id text,version text,collectable boolean) ON CONFLICT(copy_key) DO NOTHING",
+          "calls": 11,
+          "ms": 377.770875000002
+        },
+        {
+          "sql": "WITH keys AS MATERIALIZED ( SELECT namespace,event_body_id,body->>'status' AS status, body->>'actionRunId' AS run_id,body->>'actionId' AS action_id FROM \"owner_1\".\"event_bodies\" ) SELECT min(event_body_id) FILTER (WHERE status='invoked') AS event_body_id FROM keys WHERE run_id IS NOT NULL AND status IN ('invoked','completed','failed','cancelled') GROUP BY namespace,run_id,action_id HAVING bool_or(status='invoked') AND (action_id IS NULL OR NOT bool_or(status IN ('completed','failed','cancelled'))) LIMIT 1",
+          "calls": 2,
+          "ms": 372.2348750000019
+        },
+        {
+          "sql": "CREATE UNIQUE INDEX IF NOT EXISTS events_owner_seq_idx ON \"owner_1\".\"events\" (seq)",
+          "calls": 1,
+          "ms": 327.66833300000144
+        },
+        {
+          "sql": "UPDATE \"owner_1\".\"owner_epochs\" SET last_seq=COALESCE((SELECT MAX(seq) FROM \"owner_1\".\"events\"),0) WHERE owner='schema'",
+          "calls": 1,
+          "ms": 258.5237500000003
+        },
+        {
+          "sql": "DELETE FROM \"owner_1\".\"nodes\" WHERE type=$1",
+          "calls": 1,
+          "ms": 252.28866600000038
+        },
+        {
+          "sql": "SELECT namespace,id,data FROM \"owner_1\".\"nodes\"",
+          "calls": 1,
+          "ms": 213.30675000000338
+        },
+        {
+          "sql": "SELECT v.id,p.start_offset,substring(p.bytes FROM 1 FOR (v.length-p.start_offset)::integer) AS bytes FROM jsonb_to_recordset($1::jsonb) AS v(id text,key text,length bigint) LEFT JOIN \"owner_1\".\"content_body_parts\" p ON p.body_id=v.key AND p.start_offset<v.length ORDER BY v.id,p.start_offset",
+          "calls": 11,
+          "ms": 208.10012399999687
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "owner-keys-v12",
+      "wallMs": 4345.048415999998,
+      "statements": 51,
+      "top": [
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"events\" t CROSS JOIN LATERAL (VALUES ('delta',t.\"delta\"::jsonb),('metadata',t.\"metadata\"::jsonb),('owner_ingress',t.\"owner_ingress\"::jsonb),('payload',t.\"payload\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 2141.0113340000025
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"nodes\" t CROSS JOIN LATERAL (VALUES ('data',t.\"data\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 418.06766599999537
+        },
+        {
+          "sql": "SELECT body_id,start_offset,encode(bytes,'base64') AS bytes,part_digest FROM \"owner_1\".\"content_body_parts\" WHERE body_id=ANY($1::text[]) ORDER BY body_id,start_offset",
+          "calls": 11,
+          "ms": 206.07958299999882
+        },
+        {
+          "sql": "SELECT b.body_id,b.namespace,b.current_copy,b.terminal,c.backend_kind,c.backend_id,p.state AS physical_state,p.media_type,p.byte_length FROM \"owner_1\".\"content_logical_bodies\" b JOIN \"owner_1\".\"content_copies\" c ON c.copy_key=b.current_copy LEFT JOIN \"owner_1\".\"content_bodies\" p ON c.backend_kind='database' AND p.body_id=b.current_copy WHERE c.state='current' ORDER BY b.body_id",
+          "calls": 1,
+          "ms": 163.6001249999972
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"content_logical_bodies\" t CROSS JOIN LATERAL (VALUES ('promotion_target',t.\"promotion_target\"::jsonb),('seal_intent',t.\"seal_intent\"::jsonb),('terminal',t.\"terminal\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 106.24474999999802
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"edges\" t CROSS JOIN LATERAL (VALUES ('data',t.\"data\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 92.16783399999986
+        },
+        {
+          "sql": "SELECT 1 FROM \"owner_1\".\"content_logical_bodies\" b LEFT JOIN \"owner_1\".\"content_copies\" c ON c.copy_key=b.current_copy WHERE (c.copy_key IS NULL AND NOT COALESCE((b.revocation='revoked' AND b.committed_offset=0 AND b.terminal->>'outcome'='failed' AND b.terminal->>'length'='0'),FALSE)) OR c.body_id<>b.body_id OR c.state NOT IN ('current','retired') OR b.revocation='revoking' LIMIT 1",
+          "calls": 1,
+          "ms": 83.24629099998856
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"content_bodies\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 32.31149999999616
+        },
+        {
+          "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_1\".\"event_deliveries\" GROUP BY \"status\"",
+          "calls": 1,
+          "ms": 30.00816599999962
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value,t.namespace FROM \"owner_1\".\"event_bodies\" t CROSS JOIN LATERAL (VALUES ('body',t.\"body\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 24.701042000000598
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS \"owner_1\".\"owner_data_keys\" ( singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK(singleton), key_id TEXT COLLATE \"C\" NOT NULL UNIQUE, wrapped_key TEXT NOT NULL, envelope JSONB NOT NULL )",
+          "calls": 1,
+          "ms": 11.264624999996158
+        },
+        {
+          "sql": "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=$1 AND data_type IN ('json','jsonb') ORDER BY table_name,column_name",
+          "calls": 1,
+          "ms": 5.0442499999990105
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"event_deliveries\" t CROSS JOIN LATERAL (VALUES ('last_error',t.\"last_error\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 3.081665999998222
+        },
+        {
+          "sql": "SELECT t.ctid::text AS tid,v.column_name,v.value FROM \"owner_1\".\"action_effects\" t CROSS JOIN LATERAL (VALUES ('evidence',t.\"evidence\"::jsonb),('outcome',t.\"outcome\"::jsonb)) v(column_name,value) WHERE v.value @? '$.**.bodyId' OR v.value @? '$.**.schema'",
+          "calls": 1,
+          "ms": 3.0333749999990687
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"open_actions\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 2.339749999999185
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "authority-inventory",
+      "wallMs": 3108.754249999998,
+      "statements": 2,
+      "top": [
+        {
+          "sql": "WITH invoked AS MATERIALIZED ( SELECT namespace,event_body_id FROM \"owner_1\".\"event_bodies\" WHERE COALESCE(body->'data',body)->>'status'='invoked' ), candidates AS MATERIALIZED ( SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN invoked b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' UNION SELECT namespace,id FROM \"owner_1\".\"events\" WHERE NULLIF(owner_ingress,'null'::jsonb) IS NOT NULL OR type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') UNION SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN (SELECT DISTINCT event_id FROM \"owner_1\".\"event_deliveries\" WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id ) SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version FROM candidates c JOIN \"owner_1\".\"events\" e ON e.id=c.id AND e.namespace=c.namespace LEFT JOIN \"owner_1\".\"event_bodies\" b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' ORDER BY e.namespace,e.id",
+          "calls": 1,
+          "ms": 1804.4224170000089
+        },
+        {
+          "sql": "SELECT key,intent,result FROM \"owner_1\".\"owner_receipts\" WHERE owner='schema' AND domain='logical' AND kind='action.protected-input'",
+          "calls": 1,
+          "ms": 7.2746250000054715
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "test-manifest",
+      "wallMs": 3266.001583999998,
+      "statements": 2,
+      "top": [
+        {
+          "sql": "WITH invoked AS MATERIALIZED ( SELECT namespace,event_body_id FROM \"owner_1\".\"event_bodies\" WHERE COALESCE(body->'data',body)->>'status'='invoked' ), candidates AS MATERIALIZED ( SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN invoked b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' UNION SELECT namespace,id FROM \"owner_1\".\"events\" WHERE NULLIF(owner_ingress,'null'::jsonb) IS NOT NULL OR type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') UNION SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN (SELECT DISTINCT event_id FROM \"owner_1\".\"event_deliveries\" WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id ) SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version FROM candidates c JOIN \"owner_1\".\"events\" e ON e.id=c.id AND e.namespace=c.namespace LEFT JOIN \"owner_1\".\"event_bodies\" b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' ORDER BY e.namespace,e.id",
+          "calls": 1,
+          "ms": 1723.5476669999916
+        },
+        {
+          "sql": "SELECT key,intent,result FROM \"owner_1\".\"owner_receipts\" WHERE owner='schema' AND domain='logical' AND kind='action.protected-input'",
+          "calls": 1,
+          "ms": 4.520707999996375
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "authority-v13",
+      "wallMs": 16077.743541999997,
+      "statements": 61,
+      "top": [
+        {
+          "sql": "UPDATE \"owner_1\".\"events\" e SET owner_ingress=COALESCE(NULLIF(e.owner_ingress,'null'::jsonb), v.ingress) || jsonb_build_object('authority',v.authority) FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,id text,authority jsonb,ingress jsonb) WHERE e.namespace=v.namespace AND e.id=v.id",
+          "calls": 13,
+          "ms": 6145.565456000011
+        },
+        {
+          "sql": "WITH invoked AS MATERIALIZED ( SELECT namespace,event_body_id FROM \"owner_1\".\"event_bodies\" WHERE COALESCE(body->'data',body)->>'status'='invoked' ), candidates AS MATERIALIZED ( SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN invoked b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' UNION SELECT namespace,id FROM \"owner_1\".\"events\" WHERE NULLIF(owner_ingress,'null'::jsonb) IS NOT NULL OR type IN ('copilotz.server.action.requested','copilotz.server.collection.mutation.requested') UNION SELECT e.namespace,e.id FROM \"owner_1\".\"events\" e JOIN (SELECT DISTINCT event_id FROM \"owner_1\".\"event_deliveries\" WHERE status IN ('pending','leased','retry_wait')) d ON d.event_id=e.id ) SELECT e.namespace,e.id,e.metadata,e.payload,e.owner_ingress,b.body,b.digest,b.schema_version FROM candidates c JOIN \"owner_1\".\"events\" e ON e.id=c.id AND e.namespace=c.namespace LEFT JOIN \"owner_1\".\"event_bodies\" b ON b.namespace=e.namespace AND b.event_body_id=e.payload->'dataRef'->>'eventBodyId' ORDER BY e.namespace,e.id",
+          "calls": 1,
+          "ms": 5375.581458000001
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"authorization_invocations\"(namespace,run_id,source_event_id,authority,capture,inventory_digest) SELECT namespace,run_id,source_event_id,authority,COALESCE(capture,'null'::jsonb),inventory_digest FROM jsonb_to_recordset($1::jsonb) AS v(namespace text,run_id text,source_event_id text,authority jsonb,capture jsonb,inventory_digest text)",
+          "calls": 11,
+          "ms": 527.7695849999727
+        },
+        {
+          "sql": "INSERT INTO \"owner_1\".\"owner_receipts\"(owner,domain,key,principal,kind,intent,result) SELECT 'schema','logical',key,'runtime','action.protected-input',intent,result FROM jsonb_to_recordset($1::jsonb) AS v(key text,intent jsonb,result jsonb)",
+          "calls": 11,
+          "ms": 325.152041000023
+        },
+        {
+          "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_1\".\"event_deliveries\" GROUP BY \"status\"",
+          "calls": 1,
+          "ms": 37.230292000007466
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS \"owner_1\".authorization_effects ( ordinal BIGSERIAL NOT NULL, namespace TEXT COLLATE \"C\" NOT NULL, tenant TEXT COLLATE \"C\" NOT NULL, effect_key TEXT COLLATE \"C\" NOT NULL, run_id TEXT COLLATE \"C\" NOT NULL, operation_id TEXT COLLATE \"C\" NOT NULL, initiator TEXT NOT NULL, method TEXT NOT NULL, intent JSONB NOT NULL, claims JSONB NOT NULL, accepted_operation TEXT COLLATE \"C\", consumed_run TEXT COLLATE \"C\", PRIMARY KEY(namespace,tenant,effect_key) )",
+          "calls": 1,
+          "ms": 9.97566700000607
+        },
+        {
+          "sql": "SELECT key,intent,result FROM \"owner_1\".\"owner_receipts\" WHERE owner='schema' AND domain='logical' AND kind='action.protected-input'",
+          "calls": 1,
+          "ms": 5.577457999999751
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"content_bodies\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 4.236791999996058
+        },
+        {
+          "sql": "SELECT table_name FROM information_schema.tables WHERE table_schema=$1 AND table_type='BASE TABLE' ORDER BY table_name",
+          "calls": 1,
+          "ms": 1.8166669999918668
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"events\" ENABLE TRIGGER copilotz_events_immutable",
+          "calls": 1,
+          "ms": 1.6777080000028946
+        },
+        {
+          "sql": "SELECT \"state\" AS state, COUNT(*) AS count FROM \"owner_1\".\"copilotz_operation_streams\" GROUP BY \"state\"",
+          "calls": 1,
+          "ms": 1.6691670000000158
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"events\" DISABLE TRIGGER copilotz_events_immutable",
+          "calls": 1,
+          "ms": 1.580708000008599
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS \"owner_1\".authorization_sessions ( namespace TEXT COLLATE \"C\" NOT NULL, tenant TEXT COLLATE \"C\" NOT NULL, id TEXT COLLATE \"C\" NOT NULL, principal TEXT COLLATE \"C\" NOT NULL, expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ, PRIMARY KEY(namespace,tenant,id) )",
+          "calls": 1,
+          "ms": 1.5295840000035241
+        },
+        {
+          "sql": "CREATE TABLE IF NOT EXISTS \"owner_1\".authorization_channels ( id TEXT COLLATE \"C\" PRIMARY KEY, namespace TEXT COLLATE \"C\" NOT NULL, tenant TEXT COLLATE \"C\" NOT NULL, authority JSONB NOT NULL, dependencies JSONB NOT NULL, owner_epoch BIGINT NOT NULL )",
+          "calls": 1,
+          "ms": 1.3911669999943115
+        },
+        {
+          "sql": "LOCK TABLE \"owner_1\".\"action_effects\",\"owner_1\".\"content_adoptions\",\"owner_1\".\"content_bodies\",\"owner_1\".\"content_body_parts\",\"owner_1\".\"content_copies\",\"owner_1\".\"content_logical_bodies\",\"owner_1\".\"copilotz_operation_catalog_metadata\",\"owner_1\".\"copilotz_operation_events\",\"owner_1\".\"copilotz_operation_selection_heads\",\"owner_1\".\"copilotz_operation_selections\",\"owner_1\".\"copilotz_operation_streams\",\"owner_1\".\"copilotz_operations\",\"owner_1\".\"copilotz_schema_metadata\",\"owner_1\".\"edges\",\"owner_1\".\"event_bodies\",\"owner_1\".\"event_deliveries\",\"owner_1\".\"events\",\"owner_1\".\"nodes\",\"owner_1\".\"open_actions\",\"owner_1\".\"owner_alarms\",\"owner_1\".\"owner_body_retirements\",\"owner_1\".\"owner_data_keys\",\"owner_1\".\"owner_deadlines\",\"owner_1\".\"owner_epochs\",\"owner_1\".\"owner_receipts\",\"owner_1\".\"pending_content\" IN ACCESS EXCLUSIVE MODE",
+          "calls": 1,
+          "ms": 1.2362080000020796
+        }
+      ],
+      "server": []
+    },
+    {
+      "schema": "owner_1",
+      "step": "storage-v14",
+      "wallMs": 5212.8081250000105,
+      "statements": 64,
+      "top": [
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"events\" ALTER COLUMN \"id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"namespace\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"subject_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"causation_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"correlation_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"deduplication_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 2587.661917000005
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"nodes\" ALTER COLUMN \"id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"namespace\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"source_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 407.9144159999996
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"event_bodies\" ALTER COLUMN \"namespace\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"event_body_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 282.2872500000085
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"event_deliveries\" ALTER COLUMN \"id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"event_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"consumer_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"settlement_scope_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"action_scope_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"lease_owner\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 199.88370800000848
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"edges\" ALTER COLUMN \"id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"namespace\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"source_node_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"target_node_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 182.49304200000188
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"content_body_parts\" ALTER COLUMN \"body_id\" TYPE TEXT COLLATE \"C\",ALTER COLUMN \"append_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 142.41049999999814
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"owner_receipts\" ADD CONSTRAINT \"owner_receipts_owner_fkey\" FOREIGN KEY (owner) REFERENCES owner_1.owner_epochs(owner)",
+          "calls": 1,
+          "ms": 102.34383399999933
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"event_deliveries\" ADD CONSTRAINT \"event_deliveries_event_id_fkey\" FOREIGN KEY (event_id) REFERENCES owner_1.events(id) ON DELETE CASCADE",
+          "calls": 1,
+          "ms": 69.91987500000687
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"nodes\" ADD PRIMARY KEY (namespace,id)",
+          "calls": 1,
+          "ms": 51.987624999994296
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"content_bodies\" ALTER COLUMN \"body_id\" TYPE TEXT COLLATE \"C\"",
+          "calls": 1,
+          "ms": 49.90649999999732
+        },
+        {
+          "sql": "CREATE INDEX IF NOT EXISTS \"nodes_ready_content_body_idx\" ON \"owner_1\".\"nodes\" ((data ->> 'bodyId') COLLATE \"C\") WHERE type IN ('asset','protected_value') AND data ->> 'state' = 'ready'",
+          "calls": 1,
+          "ms": 39.4919169999921
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"edges\" ADD CONSTRAINT \"edges_source_node_id_fkey\" FOREIGN KEY (namespace,\"source_node_id\") REFERENCES \"owner_1\".\"nodes\"(namespace,id) ON DELETE CASCADE",
+          "calls": 1,
+          "ms": 35.25158399999782
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"edges\" ADD CONSTRAINT \"edges_target_node_id_fkey\" FOREIGN KEY (namespace,\"target_node_id\") REFERENCES \"owner_1\".\"nodes\"(namespace,id) ON DELETE CASCADE",
+          "calls": 1,
+          "ms": 33.932749999992666
+        },
+        {
+          "sql": "ALTER TABLE \"owner_1\".\"content_body_parts\" ADD CONSTRAINT \"content_body_parts_body_id_fkey\" FOREIGN KEY (body_id) REFERENCES owner_1.content_bodies(body_id) ON DELETE CASCADE",
+          "calls": 1,
+          "ms": 22.153416000001016
+        },
+        {
+          "sql": "SELECT \"status\" AS state, COUNT(*) AS count FROM \"owner_1\".\"event_deliveries\" GROUP BY \"status\"",
+          "calls": 1,
+          "ms": 14.507958000001963
+        }
+      ],
+      "server": []
+    }
+  ],
+  "pgStatStatements": false,
+  "latencyMs": 0,
+  "stepsSelected": [
+    "all"
+  ],
+  "server": {
+    "version": "PostgreSQL 18.3 (Postgres.app) on aarch64-apple-darwin23.6.0, compiled by Apple clang version 15.0.0 (clang-1500.3.9.4), 64-bit",
+    "shared_buffers": "128MB",
+    "work_mem": "4MB"
+  },
+  "databaseBytes": "607884991",
+  "requestedSchemas": 3,
+  "limitation": "Only owner_1 completed. The second schema failed due to insufficient local disk space."
+}

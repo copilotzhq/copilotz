@@ -2,6 +2,17 @@ import { createContentError } from "./errors.ts";
 import { createMemoryOperations } from "./body-store-operations.ts";
 import type { AssetOrigin } from "./types.ts";
 
+/** Full retained-object reader used by offline owner-key and tenancy transfers. */
+export type BodyReader = (
+  copy: {
+    key: string;
+    backendId: string;
+    namespace: string;
+    length: number;
+    kind?: string;
+  },
+) => Promise<{ bytes: Uint8Array; mediaType: string }>;
+
 export type BodyStoreKind =
   | "memory"
   | "object"
@@ -316,6 +327,8 @@ export type BodyStorageOptions = Readonly<{
 }>;
 
 export type S3BodyStorageConfig = Readonly<{
+  /** Per-attempt transport timeout, 1..600000 ms; default 30000. */
+  requestTimeoutMs?: number;
   backendId: string;
   endpoint: string;
   region: string;

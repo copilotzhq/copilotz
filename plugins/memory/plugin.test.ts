@@ -1,5 +1,6 @@
 /** Native Agent-turn composition and integration contract for semantic memory. @module */
 
+/** Native Agent-turn composition and integration contract for semantic memory. @module */
 import {
   assert,
   assertEquals,
@@ -140,22 +141,11 @@ function recording(
     ...recorded(base),
     transaction: (operation) =>
       base.transaction((tx) => operation(recorded(tx))),
-    ...(base.withReadSnapshot
-      ? {
-        withReadSnapshot: ((operation, options) =>
-          base.withReadSnapshot!(
-            (scope) =>
-              operation({ ...scope, snapshot: recorded(scope.snapshot) }),
-            options,
-          )) as SqlSession["withReadSnapshot"],
-      }
-      : {}),
-    ...(base.readSnapshot
-      ? {
-        readSnapshot: <T>(operation: (executor: SqlExecutor) => Promise<T>) =>
-          base.readSnapshot!((snapshot) => operation(recorded(snapshot))),
-      }
-      : {}),
+    readTransaction: base.readTransaction
+      ? (operation, options) =>
+        base.readTransaction!((tx) => operation(recorded(tx)), options)
+      : undefined,
+    concurrentReads: base.concurrentReads,
   };
 }
 

@@ -12,9 +12,9 @@ import type { CoordinatedMutationResult } from "../events/coordinator.ts";
 import type { DurableEvent, DurableEventDraft } from "../events/types.ts";
 import type {
   CollectionTransactionRelations,
+  ReadCollection,
   ScopedCollection,
   ScopedCollections,
-  SnapshotCollection,
   TransactionCollection,
 } from "../collections/kernel.ts";
 import type {
@@ -43,15 +43,15 @@ export type RuntimeContextNamespaces = Readonly<
 
 export type RuntimeCollections = ScopedCollections;
 
-export type RuntimeSnapshotCollections<
+export type RuntimeReadCollections<
   TCollections extends RuntimeCollections = RuntimeCollections,
 > = Readonly<
   {
     [K in keyof TCollections]: TCollections[K] extends ScopedCollection<
       infer TSelect,
       infer TInsert
-    > ? SnapshotCollection<TSelect, TInsert>
-      : SnapshotCollection;
+    > ? ReadCollection<TSelect, TInsert>
+      : ReadCollection;
   }
 >;
 
@@ -266,16 +266,14 @@ export interface RuntimeContext<
     options?: ActionTransactionOptions,
   ): Promise<T>;
   /**
-   * Captures a short repeatable, read-only database snapshot for metadata
-   * selection. Finish it before resolving remote content or calling providers.
+   * Executes a registered owner-side read by name and JSON input.
+   * Returns one consistent batch and diagnostic ownership metadata.
    */
-  readSnapshot<T>(
-    execute: (
-      context: Readonly<{
-        collections: RuntimeSnapshotCollections<TCollections>;
-      }>,
-    ) => T | Promise<T>,
-  ): Promise<T>;
+  read<T = unknown>(
+    name: string,
+    args?: unknown,
+    options?: import("../collections/reads.ts").ReadOptions,
+  ): Promise<import("../collections/reads.ts").ReadResult<T>>;
 }
 
 /** Runtime context for one Action invocation and its durable lifecycle. */

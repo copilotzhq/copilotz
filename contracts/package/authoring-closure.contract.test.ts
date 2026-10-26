@@ -73,6 +73,7 @@ test("primitive authoring runtime closure excludes persistence and protected-val
     "runtime/actions/value.ts",
     "runtime/collections/authoring.ts",
     "runtime/collections/definition.ts",
+    "runtime/collections/reads.ts",
     "runtime/collections/errors.ts",
     "runtime/content/decode.ts",
     "runtime/content/digest.ts",

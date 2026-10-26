@@ -141,38 +141,13 @@ Deno.test("F4 version 13 offline upgrade validates every retained binding and pr
       ),
       12,
     );
+    assertEquals(inventory.events.length, 0);
+    assertEquals(inventory.history.counts.events, 2);
     await assertRejects(
       () =>
-        upgradeAuthoritySchema(db, schema, {
-          ...manifest,
-          events: manifest.events.map((event) => ({
-            ...event,
-            digest: "changed",
-          })),
-        }),
+        upgradeAuthoritySchema(db, schema, { ...manifest, invocations: [] }),
       Error,
-    );
-    await assertRejects(() =>
-      upgradeAuthoritySchema(db, schema, {
-        ...manifest,
-        events: manifest.events.map(({ ingress: _ingress, ...event }) => event),
-      })
-    );
-    await assertRejects(() =>
-      upgradeAuthoritySchema(db, schema, {
-        ...manifest,
-        events: manifest.events.map((event) =>
-          event.unclassified
-            ? {
-              ...event,
-              ingress: {
-                kind: "authenticated-server",
-                actor: { id: "substitute" },
-              },
-            }
-            : event
-        ),
-      })
+      "no explicit authority",
     );
     await upgradeAuthoritySchema(db, schema, manifest);
     await upgradeAuthoritySchema(db, schema, manifest);
@@ -207,141 +182,54 @@ Deno.test("F4 version 13 offline upgrade validates every retained binding and pr
   }
 });
 
-for (const principalKind of ["session", "api-key"] as const) {
-  Deno.test(`F4 upgrade keeps reviewed actor separate from ${principalKind} principal and preserves provenance`, async () => {
-    const db = await createTestDatabase({
-      url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
-    });
-    const schema = `actor_upgrade_${crypto.randomUUID().replaceAll("-", "")}`;
+Deno.test("terminal ingress preserves its original actor and provenance without a binding", async () => {
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = `actor_upgrade_${crypto.randomUUID().replaceAll("-", "")}`;
+  try {
     await provisionCopilotzSchema(db, schema);
     await provisionOperationCatalog(db, schema);
     const store = createEventStore({ session: db, schema });
-    const actor = {
-      id: "human-participant",
-      externalId: "login-identity",
-      name: "Member",
-    };
     const { authenticatedServerIngressProof } = await import(
       "../application/ingress/authority.ts"
     );
-    for (const classified of [false, true]) {
-      await store.commitMutation({
-        draft: {
-          namespace: "space",
-          type: "copilotz.server.action.requested",
-          payload: { classified },
-          metadata: { source: "original" },
-        },
-        consumers: [],
-        ...(classified
-          ? { ingress: authenticatedServerIngressProof(actor) }
-          : {}),
-      });
-    }
-    const owner = await openDatabaseOwner(db, schema);
-    await releaseDatabaseOwner(owner);
-    owner.stop();
-    try {
-      await db.query(
-        `UPDATE "${schema}".copilotz_schema_metadata SET version=12`,
-      );
-      const inventory = await inspectAuthorityUpgrade(db, schema);
-      const before = (await db.query(
-        `SELECT id,metadata,payload FROM "${schema}".events ORDER BY id`,
-      )).rows;
-      const authority = {
-        ...testAuthority(schema, "space", "credential-id"),
-        principal: { kind: principalKind, id: "credential-id" },
-        authorityBasis: {
-          kind: principalKind === "session"
-            ? "session" as const
-            : "credential" as const,
-          id: "credential-id",
-        },
-        requestFacts: {
-          ...testAuthority(schema).requestFacts,
-          transport: "http" as const,
-        },
-        provenance: {
-          ingress: "http" as const,
-          source: "exact-reviewed-source",
-        },
-      };
-      const manifest: AuthorityUpgradeManifest = {
-        policies: [{ id: "fixture", revision: "1" }],
-        invocations: [],
-        events: inventory.events.map((event) => ({
-          ...event,
-          authority,
-          actorBinding: actor,
-          ...(event.unclassified
-            ? { ingress: { kind: "authenticated-server" as const, actor } }
-            : {}),
-        })),
-      };
-      for (
-        const actorBinding of [undefined, { ...actor, id: "other" }, {
-          ...actor,
-          name: "changed",
-        }]
-      ) {
-        for (const reviewed of manifest.events) {
-          await assertRejects(
-            () =>
-              upgradeAuthoritySchema(db, schema, {
-                ...manifest,
-                events: manifest.events.map((
-                  { actorBinding: _binding, ...event },
-                ) =>
-                  event.eventId === reviewed.eventId
-                    ? ({ ...event, ...(actorBinding ? { actorBinding } : {}) })
-                    : ({ ...event, actorBinding: actor })
-                ),
-              }),
-            Error,
-            "exact reviewed actor binding",
-          );
-        }
-      }
-      await assertRejects(
-        () =>
-          upgradeAuthoritySchema(db, schema, {
-            ...manifest,
-            events: manifest.events.map((event) => ({
-              ...event,
-              authority: {
-                ...authority,
-                authorityBasis: { ...authority.authorityBasis, id: actor.id },
-              },
-            })),
-          }),
-        TypeError,
-        "credential basis",
-      );
-      await upgradeAuthoritySchema(db, schema, manifest);
-      await upgradeAuthoritySchema(db, schema, manifest);
-      assertEquals(
-        (await db.query(
-          `SELECT id,metadata,payload FROM "${schema}".events ORDER BY id`,
-        )).rows,
-        before,
-      );
-      const rows = (await db.query<{ owner_ingress: unknown }>(
-        `SELECT owner_ingress FROM "${schema}".events`,
-      )).rows;
-      assertEquals(
-        rows.map((row) => row.owner_ingress),
-        rows.map(() => ({ kind: "authenticated-server", actor, authority })),
-      );
-      assertEquals(
-        (await db.query(
-          `SELECT count(*)::int AS n FROM "${schema}".owner_receipts WHERE kind='authorization.upgrade'`,
-        )).rows,
-        [{ n: 1 }],
-      );
-    } finally {
-      await db.query(`DROP SCHEMA "${schema}" CASCADE`);
-      await db.close();
-    }
-  });
-}
+    await store.commitMutation({
+      draft: {
+        namespace: "space",
+        type: "copilotz.server.action.requested",
+        payload: {},
+      },
+      consumers: [],
+      ingress: authenticatedServerIngressProof({ id: "synthetic-actor" }),
+    });
+    const before =
+      (await db.query(`SELECT owner_ingress FROM "${schema}".events`)).rows;
+    await db.query(
+      `UPDATE "${schema}".copilotz_schema_metadata SET version=12`,
+    );
+    const inventory = await inspectAuthorityUpgrade(db, schema);
+    assertEquals(inventory.events, []);
+    assertEquals(inventory.history.counts, { invocations: 0, events: 1 });
+    const manifest = { policies: [] };
+    await upgradeAuthoritySchema(db, schema, manifest);
+    await upgradeAuthoritySchema(db, schema, manifest);
+    assertEquals(
+      (await db.query(`SELECT owner_ingress FROM "${schema}".events`)).rows,
+      before,
+    );
+    await assertRejects(
+      () =>
+        upgradeAuthoritySchema(db, schema, {
+          ...manifest,
+          invocations: [],
+          events: [],
+        }),
+      Error,
+      "replay differs",
+    );
+  } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
+  }
+});

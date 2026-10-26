@@ -1,3 +1,4 @@
+import { defineRead } from "@copilotz/copilotz/collections/authoring";
 /** Authorized source ranges and history-boundary certification. @module */
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import type {
@@ -208,7 +209,7 @@ export async function sourceRangeFingerprint(
   );
 }
 
-export async function checkpointSourceMessages(
+async function loadCheckpointSource(
   context: MemoryProcessorContext,
   checkpoint: CollectionRecord,
 ): Promise<readonly ConversationMessage[]> {
@@ -221,47 +222,62 @@ export async function checkpointSourceMessages(
       "Memory source range is no longer available.",
     );
   }
-  return await context.readSnapshot(async ({ collections }) => {
-    const scoped = { ...context, collections } as typeof context;
-    const snapshot = await loadCoreThreadMessageSnapshot(
-      scoped,
-      String(checkpoint.threadId),
-      sourceEnd,
-      {
-        range: {
-          startMessageId: String(checkpoint.sourceStartMessageId),
-          endMessageId: String(checkpoint.sourceEndMessageId),
-        },
-        viewerIds: [
-          String(
-            candidate.agentParticipantId ??
-              record(checkpoint.metadata).agentParticipantId,
-          ),
-        ],
-        ...(typeof candidate.historyScopeId === "string"
-          ? { historyScopeId: candidate.historyScopeId }
-          : {}),
+  const scoped = context;
+  const snapshot = await loadCoreThreadMessageSnapshot(
+    scoped,
+    String(checkpoint.threadId),
+    sourceEnd,
+    {
+      range: {
+        startMessageId: String(checkpoint.sourceStartMessageId),
+        endMessageId: String(checkpoint.sourceEndMessageId),
       },
+      viewerIds: [
+        String(
+          candidate.agentParticipantId ??
+            record(checkpoint.metadata).agentParticipantId,
+        ),
+      ],
+      ...(typeof candidate.historyScopeId === "string"
+        ? { historyScopeId: candidate.historyScopeId }
+        : {}),
+    },
+  );
+  const messages = rangeMessages(snapshot.messages, checkpoint);
+  if (
+    !snapshot.active ||
+    !snapshot.thread.participants.some((participant) =>
+      participant.id ===
+        String(
+          candidate.agentParticipantId ??
+            record(checkpoint.metadata).agentParticipantId,
+        ) && participant.participantType === "agent"
+    ) ||
+    candidate.schema === "copilotz.memory.coverage.v1" &&
+      (candidate.branch !== branchCertificate(snapshot.thread) ||
+        candidate.sourceFingerprint !==
+          await sourceRangeFingerprint(messages))
+  ) {
+    throw new MemorySourceInvalidatedError(
+      "Memory source range changed before checkpoint settlement.",
     );
-    const messages = rangeMessages(snapshot.messages, checkpoint);
-    if (
-      !snapshot.active ||
-      !snapshot.thread.participants.some((participant) =>
-        participant.id ===
-          String(
-            candidate.agentParticipantId ??
-              record(checkpoint.metadata).agentParticipantId,
-          ) && participant.participantType === "agent"
-      ) ||
-      candidate.schema === "copilotz.memory.coverage.v1" &&
-        (candidate.branch !== branchCertificate(snapshot.thread) ||
-          candidate.sourceFingerprint !==
-            await sourceRangeFingerprint(messages))
-    ) {
-      throw new MemorySourceInvalidatedError(
-        "Memory source range changed before checkpoint settlement.",
-      );
-    }
-    return messages;
-  });
+  }
+  return messages;
+}
+
+export const checkpointSourceRead:
+  import("@copilotz/copilotz/collections").RegisteredRead<
+    CollectionRecord,
+    readonly ConversationMessage[]
+  > = defineRead((checkpoint: CollectionRecord, context) =>
+    loadCheckpointSource(context as MemoryProcessorContext, checkpoint)
+  );
+export async function checkpointSourceMessages(
+  context: MemoryProcessorContext,
+  checkpoint: CollectionRecord,
+): Promise<readonly ConversationMessage[]> {
+  return (await context.read<readonly ConversationMessage[]>(
+    "memoryCheckpointSource",
+    checkpoint,
+  )).value;
 }

@@ -400,8 +400,8 @@ What this means for authors:
 
 ### Deferred input with `prepare`
 
-Sometimes the input is built at call time, for example from a snapshot read.
-`caller.prepare(factory, { operationKey })` captures the factory's
+Sometimes the input is built at call time, for example from a registered read
+batch. `caller.prepare(factory, { operationKey })` captures the factory's
 `{ input, metadata? }` under a required key. `capture-note.ts` is a complete
 pure Processor module that uses it with the two files above:
 

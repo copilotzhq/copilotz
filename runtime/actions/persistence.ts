@@ -326,7 +326,123 @@ export function createActionLifecycleLoader(
       throw new TypeError("Action event deduplication id must be non-empty.");
     }
     const event = await options.store.getEventByDeduplicationId(namespace, id);
-    if (!event) return null;
+    if (!event) {
+      if (!id.endsWith(":action:terminal")) return null;
+      const runId = id.slice(0, -":action:terminal".length);
+      const history = (await options.store.session.query<{
+        body: unknown;
+        digest: string;
+        schema_version: number;
+        body_id: string;
+        expected_digest: string;
+      }>(
+        `SELECT b.body,b.digest,b.schema_version,b.event_body_id AS body_id,r.result->'evidence'->>'bodyDigest' AS expected_digest
+         FROM ${options.store.tables.owner_receipts} r
+         LEFT JOIN ${options.store.tables.event_bodies} b ON b.namespace=$1 AND b.event_body_id=r.result->'evidence'->>'bodyId'
+         WHERE r.owner='schema' AND r.domain='logical' AND r.kind='authorization.history' AND r.key=$2
+           AND r.result->'evidence'->>'terminalSource'='own-terminal'`,
+        [
+          namespace,
+          JSON.stringify([
+            "authorization.history",
+            "invocation",
+            namespace,
+            runId,
+          ]),
+        ],
+      )).rows[0];
+      if (history) {
+        if (!history.body || history.digest !== history.expected_digest) {
+          throw new Error(
+            "Historical terminal evidence is missing or changed.",
+          );
+        }
+        const raw = await verifiedEventBody(history, {
+          eventBodyId: history.body_id,
+          schemaVersion: history.schema_version,
+          mediaType: "application/json",
+        });
+        const terminal = publicActionLifecycleData(raw) as ActionEventData;
+        if (
+          terminal.actionRunId !== runId ||
+          !["completed", "failed", "cancelled"].includes(terminal.status)
+        ) {
+          throw new Error("Historical terminal identity changed.");
+        }
+        return terminal;
+      }
+      // Offline conversion receipts attest status only. They carry no output
+      // or invented Event body/digest and can never reopen an old invocation.
+      const retained = (await options.store.session.query<{
+        result: {
+          status: "completed" | "failed" | "cancelled";
+          actionId: string;
+          namespace: string;
+          runId: string;
+          bodyId: string;
+          bodyDigest: string;
+          terminalSource: string;
+          reason?: string;
+        };
+        body: unknown;
+        digest: string;
+        schema_version: number;
+      }>(
+        `SELECT r.result,b.body,b.digest,b.schema_version
+        FROM ${options.store.tables.owner_receipts} r
+        LEFT JOIN ${options.store.tables.event_bodies} b ON b.namespace=$1 AND b.event_body_id=r.result->>'bodyId'
+        WHERE r.owner='schema' AND r.domain='logical' AND r.kind='action.upgrade-terminal' AND r.key=$2`,
+        [
+          namespace,
+          JSON.stringify(["action.upgrade-terminal", namespace, runId]),
+        ],
+      )).rows[0];
+      if (!retained) return null;
+      const evidence = retained.result;
+      if (
+        !retained.body || evidence.namespace !== namespace ||
+        evidence.runId !== runId ||
+        !["completed", "failed", "cancelled"].includes(evidence.status) ||
+        !["wrapper-attested", "reviewed-abandonment"].includes(
+          evidence.terminalSource,
+        )
+      ) {
+        throw new Error(
+          "Retained terminal evidence is missing or inconsistent.",
+        );
+      }
+      // Source digests in the receipt describe v11 evidence. Later reviewed
+      // key conversion may re-encode a capture; verify its current digest below.
+      const raw = await verifiedEventBody(retained, {
+        eventBodyId: evidence.bodyId,
+        schemaVersion: retained.schema_version,
+        mediaType: "application/json",
+      });
+      const invoked = publicActionLifecycleData(raw) as ActionEventData;
+      if (
+        invoked.status !== "invoked" || invoked.actionRunId !== runId ||
+        invoked.actionId !== evidence.actionId
+      ) throw new Error("Retained terminal identity changed.");
+      return {
+        actionRunId: invoked.actionRunId,
+        actionId: invoked.actionId,
+        input: invoked.input,
+        metadata: invoked.metadata,
+        ...(invoked.parentActionRunId
+          ? { parentActionRunId: invoked.parentActionRunId }
+          : {}),
+        status: evidence.status,
+        terminalSource: evidence.terminalSource,
+        ...(evidence.reason ? { reason: evidence.reason } : {}),
+        ...(evidence.status === "completed" ? {} : {
+          error: {
+            name: "RetainedHistoryTerminal",
+            message: evidence.reason ??
+              `Historical Action ${evidence.status}; outcome attested by retained wrapper.`,
+          },
+        }),
+      } as ActionEventData;
+    }
     let raw: unknown;
     try {
       raw = await rawEventBody(options.store, event);

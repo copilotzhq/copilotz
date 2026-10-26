@@ -1,6 +1,6 @@
+import { readConfiguration } from "../persistence/read-limiter.ts";
 import { bindSqlDatabaseIdentity } from "./database-identity.ts";
 import { createEventStoreError } from "./errors.ts";
-import { retainReadSnapshotKind } from "./snapshot-kind.ts";
 
 export type SqlQueryResult<TRow extends Record<string, unknown>> = {
   rows: TRow[];
@@ -14,20 +14,6 @@ export type SqlExecutor = {
   ): Promise<SqlQueryResult<TRow>>;
 };
 
-/** Cleanup is confirmed only after the backend has released the exact resource. */
-export type SqlSnapshotCleanup = "confirmed" | "unknown";
-export type SqlReadSnapshot =
-  | Readonly<{ kind: "exclusive"; snapshot: SqlExecutor }>
-  | Readonly<
-    {
-      kind: "pooled";
-      snapshot: SqlExecutor;
-      current<T>(
-        operation: (transaction: SqlExecutor) => Promise<T>,
-      ): Promise<T>;
-    }
-  >;
-
 export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
@@ -36,17 +22,10 @@ export type SqlSession = SqlExecutor & {
    * Runs a short, repeatable read-only database snapshot. The callback must
    * finish its selection before content or provider work begins.
    */
-  readSnapshot?<T>(
+  concurrentReads?: boolean;
+  readTransaction?<T>(
     operation: (snapshot: SqlExecutor) => Promise<T>,
-  ): Promise<T>;
-  withReadSnapshot?<T>(
-    operation: (scope: SqlReadSnapshot) => Promise<T>,
-    options?: Readonly<
-      {
-        signal?: AbortSignal;
-        onCleanup?: (outcome: SqlSnapshotCleanup) => void;
-      }
-    >,
+    options?: import("../persistence/read-limiter.ts").ReadOptions,
   ): Promise<T>;
 };
 
@@ -107,7 +86,12 @@ export async function runSqlTransaction<T>(
   }
 }
 
-/** A command has a revocable facade and output gate. Only groups need savepoints. */
+/**
+ * A command has a revocable facade and output gate. Only grouped commands need
+ * a savepoint, and only once they issue SQL: it is set before the command's
+ * first statement. It is never released; COMMIT releases them all, and
+ * ROLLBACK TO targets the latest one, which is the failing command's.
+ */
 export async function runSqlCommandScope<T>(
   parent: SqlExecutor,
   operation: (transaction: SqlExecutor) => Promise<T>,
@@ -123,6 +107,16 @@ export async function runSqlCommandScope<T>(
   let active = true;
   let queryFailed = false;
   let queryError: unknown;
+  let marked: Promise<void> | undefined;
+  let markFailure: { error: unknown } | undefined;
+  const mark = () =>
+    marked ??= parent.query("SAVEPOINT owner_command").then(
+      () => undefined,
+      (error) => {
+        markFailure = { error };
+        throw error;
+      },
+    );
   const transaction: SqlExecutor = {
     query<TRow extends Record<string, unknown>>(
       sql: string,
@@ -137,7 +131,8 @@ export async function runSqlCommandScope<T>(
           new Error("Command handlers cannot control transactions."),
         );
       }
-      return parent.query<TRow>(sql, params).catch((error) => {
+      const run = () => parent.query<TRow>(sql, params);
+      return (savepoint ? mark().then(run) : run()).catch((error) => {
         // Catching a SQL exception in the handler does not clear PostgreSQL's
         // aborted transaction. COMMIT would otherwise report a silent rollback
         // for a singleton without a receipt or another statement to detect it.
@@ -152,7 +147,6 @@ export async function runSqlCommandScope<T>(
   afterSqlSettlement(parent, () => {
     for (const callback of completion.settled.splice(0)) callback();
   });
-  if (savepoint) await parent.query("SAVEPOINT owner_command");
   let value: T;
   try {
     value = await operation(transaction);
@@ -161,14 +155,17 @@ export async function runSqlCommandScope<T>(
     completion.state = "failed";
     completion.callbacks.length = 0;
     if (!savepoint) throw error;
-    await parent.query("ROLLBACK TO SAVEPOINT owner_command");
-    await parent.query("RELEASE SAVEPOINT owner_command");
+    if (marked) {
+      // Without its rollback point the group cannot isolate this command.
+      await marked.catch(() => undefined);
+      if (markFailure) throw markFailure.error;
+      await parent.query("ROLLBACK TO SAVEPOINT owner_command");
+    }
     return { ok: false, error };
   } finally {
     active = false;
     completion.active = false;
   }
-  if (savepoint) await parent.query("RELEASE SAVEPOINT owner_command");
   afterSqlCommit(parent, () => {
     gate();
     completion.state = "committed";
@@ -225,7 +222,6 @@ type DatabaseLike = SqlExecutor & {
   transaction?: <T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ) => Promise<T>;
-  withReadSnapshot?: SqlSession["withReadSnapshot"];
 };
 
 /** Adapts an Ominipg/Copilotz database into the narrow atomic-session seam. */
@@ -252,23 +248,19 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
   const transaction: SqlSession["transaction"] = (operation) =>
     runSqlTransaction(atomic, operation);
 
-  const withReadSnapshot = typeof database.withReadSnapshot === "function"
-    ? database.withReadSnapshot.bind(database)
-    : undefined;
-  if (withReadSnapshot) {
-    retainReadSnapshotKind(withReadSnapshot, database.withReadSnapshot!);
-  }
+  const config = readConfiguration(database);
   return bindSqlDatabaseIdentity({
+    concurrentReads: config.concurrent,
     query,
-    ...(withReadSnapshot ? { withReadSnapshot } : {}),
     transaction,
-    async readSnapshot(operation) {
-      return await transaction(async (snapshot) => {
-        await snapshot.query(
-          "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-        );
-        return await operation(snapshot);
-      });
+    async readTransaction(operation, options) {
+      return await config.limiter.run(() =>
+        transaction(async (snapshot) => {
+          await snapshot.query(
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          );
+          return await operation(snapshot);
+        }), options);
     },
   }, database);
 }

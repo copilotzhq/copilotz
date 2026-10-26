@@ -1,3 +1,10 @@
+export { defineRead } from "./runtime/collections/reads.ts";
+export type {
+  ReadContext,
+  ReadOptions,
+  ReadResult,
+  RegisteredRead,
+} from "./runtime/collections/reads.ts";
 /** Shared primitive authoring surface. No application or persistence runtime. @module */
 export { defineAction, isActionDefinition } from "./runtime/actions/define.ts";
 export { secret } from "./runtime/actions/secret.ts";

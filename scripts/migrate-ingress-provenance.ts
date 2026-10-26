@@ -93,7 +93,11 @@ if (import.meta.main) {
       "Stop all owners, then set COPILOTZ_MIGRATION_DATABASE_URL and pass --schema=SCHEMA --apply.",
     );
   }
-  const database = await openManagedOminipgDatabase({ url });
+  const database = await openManagedOminipgDatabase({
+    url,
+    statementTimeoutMs: null,
+    requestTimeoutMs: 24 * 60 * 60 * 1000,
+  });
   try {
     await migrateIngressProvenance(database.session, schema);
   } finally {

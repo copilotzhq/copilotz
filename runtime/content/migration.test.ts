@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../testing/ominipg.ts";
 import {
   createCoreTableNames,
@@ -218,6 +218,203 @@ Deno.test("offline object import mapping keeps original identity while selecting
       "retained",
     );
   } finally {
+    await db.close();
+  }
+});
+
+Deno.test("parallel inspection deduplicates claims and keeps disagreement checks", async () => {
+  const bytes = new TextEncoder().encode("parallel"),
+    digest = await digestContent(bytes);
+  const store = createMemoryBodyStore({ backendId: "synthetic:parallel" });
+  for (let i = 0; i < 20; i++) {
+    await store.put({
+      bodyId: `copy-${i}`,
+      bytes,
+      digest,
+      mediaType: "text/plain",
+    });
+  }
+  const nodes = Array.from(
+    { length: 40 },
+    (_, i) => ({
+      namespace: "synthetic",
+      id: `node-${i}`,
+      data: {
+        location: {
+          kind: "memory",
+          backendId: store.backendId,
+          key: `copy-${i % 20}`,
+        },
+        byteLength: bytes.length,
+        digest,
+      },
+    }),
+  );
+  const session: import("../events/session.ts").SqlSession = {
+    query: (sql) =>
+      Promise.resolve(
+        {
+          rows: sql.includes('"parallel"."nodes"')
+            ? sql.includes("JOIN")
+              ? nodes.map((n) => ({
+                namespace: n.namespace,
+                id: n.id,
+                value: n.data,
+              })).sort((a, b) => a.id.localeCompare(b.id))
+              : nodes
+            : sql.includes("to_regclass")
+            ? [{ present: false }]
+            : [],
+        } as never,
+      ),
+    transaction: (run) => run(session),
+  };
+  let heads = 0, active = 0, peak = 0;
+  const reader = {
+    ...store,
+    async head(input: Parameters<typeof store.head>[0]) {
+      heads++;
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Number(input.bodyId.split("-")[1]) % 3)
+      );
+      active--;
+      return await store.head(input);
+    },
+  };
+  const inspect = (concurrency: number) =>
+    inspectEmbeddedContent({
+      session,
+      schema: "parallel",
+      storeFor: () => reader,
+      concurrency,
+    });
+  const sequential = await inspect(1);
+  heads = 0;
+  assertEquals(await inspect(7), sequential);
+  assertEquals(heads, 20);
+  assert(peak > 1 && peak <= 7);
+  nodes[20].data.byteLength++;
+  await assertRejects(() => inspect(7), Error, "references disagree");
+  assertEquals(active, 0, "all workers settle before inspection rejects");
+  await assertRejects(() => inspect(0), TypeError, "concurrency");
+  await assertRejects(() => inspect(257), TypeError, "concurrency");
+});
+
+Deno.test("missing decisions refuse existing, completed, live, shared and unrelated content", async () => {
+  const { unrecoverableDecisions } = await import("./unrecoverable.ts");
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = "missing_decision_refusals";
+  try {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await provisionCopilotzSchema(db, schema);
+    const tables = createCoreTableNames(schema),
+      store = createMemoryBodyStore({ backendId: "synthetic:missing" });
+    const loc = {
+      kind: "memory",
+      namespace: "synthetic",
+      backendId: store.backendId,
+      key: "missing",
+    };
+    const unrecoverable = await unrecoverableDecisions([{
+      namespace: loc.namespace,
+      backendId: loc.backendId,
+      key: loc.key,
+    }]);
+    const inspect = () =>
+      inspectEmbeddedContent({
+        session: db,
+        schema,
+        storeFor: () => store,
+        unrecoverable,
+      });
+    await assertRejects(inspect, Error, "not referenced");
+    const set = (outcome: string, state = "terminal") =>
+      db.query(
+        `INSERT INTO ${tables.nodes}(namespace,id,type,name,data) VALUES('synthetic','a','asset','a',$1::jsonb) ON CONFLICT(namespace,id) DO UPDATE SET data=EXCLUDED.data`,
+        [JSON.stringify({ location: loc, outcome, state, byteLength: 10 })],
+      );
+    await set("completed");
+    await assertRejects(inspect, Error, "completed or non-terminal");
+    await set("failed", "open");
+    await assertRejects(inspect, Error, "completed or non-terminal");
+    await set("cancelled");
+    assertEquals((await inspect()).inventory[0].unavailable, true);
+    await db.query(
+      `INSERT INTO ${tables.nodes}(namespace,id,type,name,data) VALUES('synthetic','b','asset','b',$1::jsonb)`,
+      [JSON.stringify({ bodyId: loc.key, status: "completed" })],
+    );
+    await assertRejects(inspect, Error, "completed or non-terminal");
+    await db.query(`DELETE FROM ${tables.nodes} WHERE id='b'`);
+    const bytes = new Uint8Array([1]);
+    await store.put({
+      bodyId: loc.key,
+      bytes,
+      mediaType: "text/plain",
+      digest: await digestContent(bytes),
+    });
+    await assertRejects(inspect, Error, "object exists");
+  } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
+  }
+});
+
+Deno.test("streamed content fingerprint matches original payload serialization and locale ordering", async () => {
+  const { retainedRows } = await import("./offline-rows.ts");
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+  });
+  const schema = "content_fingerprint_parity";
+  try {
+    await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+    await provisionCopilotzSchema(db, schema);
+    const tables = createCoreTableNames(schema),
+      store = createMemoryBodyStore();
+    for (const id of ["z", "A", "a", "ä", "_", "10", "2"]) {
+      await db.query(
+        `INSERT INTO ${tables.nodes}(namespace,id,type,name,data) VALUES('synthetic',$1,'synthetic',$1,$2::jsonb)`,
+        [id, JSON.stringify({ padding: "retained ".repeat(400), id })],
+      );
+    }
+    const plan = await inspectEmbeddedContent({
+      session: db,
+      schema,
+      storeFor: () => store,
+    });
+    const rows = [];
+    for await (const row of retainedRows(db, schema)) rows.push(row);
+    const legacy =
+      (await db.query<{ namespace: string; id: string; data: unknown }>(
+        `SELECT namespace,id,data FROM ${tables.nodes}`,
+      )).rows.map((r) => ({
+        namespace: r.namespace,
+        id: r.id,
+        value: r.data,
+        kind: "node",
+      })).sort((a, b) =>
+        a.kind.localeCompare(b.kind) ||
+        a.namespace.localeCompare(b.namespace) || a.id.localeCompare(b.id)
+      );
+    assertEquals(rows, legacy);
+    assertEquals(
+      plan.fingerprint,
+      await digestContent(
+        new TextEncoder().encode(
+          JSON.stringify({
+            schema,
+            inventory: plan.inventory,
+            rows: legacy,
+            streamRows: plan.streamRows,
+          }),
+        ),
+      ),
+    );
+  } finally {
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
     await db.close();
   }
 });

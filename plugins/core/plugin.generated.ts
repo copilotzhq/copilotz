@@ -25,9 +25,11 @@ import entry21 from "./processors/project-tool-result/index.ts";
 import entry22 from "./processors/resume-compaction-route/index.ts";
 import entry23 from "./processors/tool-plan-coordinator/index.ts";
 import entry24 from "./resources/capabilities/default/index.ts";
-import entry25 from "./resources/toolResults/default/index.ts";
-import entry26 from "./resources/tools/ask/index.ts";
-import entry27 from "./resources/tools/read-tool-result/index.ts";
+import entry25 from "./resources/reads/threadWindow/index.ts";
+import entry26 from "./resources/reads/turnContext/index.ts";
+import entry27 from "./resources/toolResults/default/index.ts";
+import entry28 from "./resources/tools/ask/index.ts";
+import entry29 from "./resources/tools/read-tool-result/index.ts";
 import { llmPlugin as dependency0 } from "../llm/plugin.ts";
 const definition: {
   readonly id: "@copilotz/core";
@@ -67,12 +69,16 @@ const definition: {
     readonly "capabilities": {
       readonly "default": typeof entry24;
     };
+    readonly "reads": {
+      readonly "coreThreadWindow": typeof entry25;
+      readonly "coreTurnContext": typeof entry26;
+    };
     readonly "toolResults": {
-      readonly "default": typeof entry25;
+      readonly "default": typeof entry27;
     };
     readonly "tools": {
-      readonly "ask": typeof entry26;
-      readonly "readToolResult": typeof entry27;
+      readonly "ask": typeof entry28;
+      readonly "readToolResult": typeof entry29;
     };
   };
 } = {
@@ -113,12 +119,16 @@ const definition: {
     "capabilities": {
       "default": entry24,
     },
+    "reads": {
+      "coreThreadWindow": entry25,
+      "coreTurnContext": entry26,
+    },
     "toolResults": {
-      "default": entry25,
+      "default": entry27,
     },
     "tools": {
-      "ask": entry26,
-      "readToolResult": entry27,
+      "ask": entry28,
+      "readToolResult": entry29,
     },
   },
 } as const;

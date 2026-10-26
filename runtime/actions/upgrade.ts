@@ -1,8 +1,19 @@
+import {
+  type UnrecoverableDecisions,
+  verifyUnrecoverableDecisions,
+} from "../content/unrecoverable.ts";
+import {
+  type AbandonmentDecisions,
+  recordRetainedTerminals,
+  type RetainedTerminals,
+  verifyAbandonmentDecisions,
+} from "./upgrade-terminals.ts";
+import { bodyStoreReader } from "./owner-transfer-storage.ts";
 import { upgradeCredentialEffects } from "../authorization/credentials-upgrade.ts";
 import { migrateOwnerKeys } from "./migrate-owner-keys.ts";
 import { authorityRequired, ownerKeysRequired } from "./upgrade-errors.ts";
 import {
-  type AuthorityUpgradeManifest,
+  type AuthorityUpgradeInput,
   upgradeAuthoritySchema,
 } from "../authorization/upgrade.ts";
 import {
@@ -38,6 +49,7 @@ import {
   migrateEmbeddedContent,
 } from "../content/migration.ts";
 import {
+  canonicalContentDecision,
   type ContentMigrationDecision,
   type ContentMigrationReport,
   migrateActionContent,
@@ -49,8 +61,15 @@ import {
 import { validateRetainedHistory } from "./upgrade-history.ts";
 
 export type RetainedDataUpgradeStorage = Readonly<{
+  abandoned?: AbandonmentDecisions;
+  unrecoverable?: UnrecoverableDecisions;
   /** Resolve only the explicit backend identity in the reviewed inventory. */
-  storeFor?: (location: EmbeddedBodyLocation, session: SqlSession) => BodyStore;
+  storeFor?: (
+    location: EmbeddedBodyLocation,
+    session: SqlSession,
+  ) => BodyStore | undefined;
+  /** Bounded content head/digest parallelism; defaults to 16. */
+  concurrency?: number;
   streamBackend?: Readonly<{ kind: string; backendId: string }>;
   copyMappings?: Parameters<typeof inspectEmbeddedContent>[0]["copyMappings"];
 }>;
@@ -61,6 +80,7 @@ export type RetainedDataUpgradePlan = Readonly<{
   targetVersion: number;
   content: ContentMigrationPlan;
   ownership: ContentMigrationReport;
+  terminals?: RetainedTerminals;
   fingerprint: string;
 }>;
 const RETAINED_TARGET_VERSION = 11;
@@ -127,7 +147,7 @@ function assertInterrupted(value: Marker) {
     );
   }
 }
-function inspector(
+export function retainedContentInspector(
   session: SqlSession,
   schema: string,
   storage: RetainedDataUpgradeStorage,
@@ -143,8 +163,12 @@ function inspector(
     streamBackend: storage.streamBackend ??
       { kind: "database", backendId: "database:default" },
     copyMappings: storage.copyMappings,
+    concurrency: storage.concurrency,
+    unrecoverable: storage.unrecoverable,
+    ...(storage.storeFor ? {} : { nativeDatabase: session }),
     storeFor: (location: EmbeddedBodyLocation) => {
-      if (storage.storeFor) return storage.storeFor(location, session);
+      const selected = storage.storeFor?.(location, session);
+      if (selected !== undefined) return selected;
       if (
         location.kind !== "database" ||
         location.backendId !== database.backendId
@@ -165,31 +189,17 @@ async function fingerprint(plan: Omit<RetainedDataUpgradePlan, "fingerprint">) {
     targetVersion: plan.targetVersion,
     content: plan.content,
     ownership: plan.ownership,
+    ...(plan.terminals ? { terminals: plan.terminals } : {}),
   })));
 }
 
-function canonicalDecisions(
+export function canonicalDecisions(
   decisions: readonly ContentMigrationDecision[] | undefined,
 ): ContentMigrationDecision[] {
   if (decisions !== undefined && !Array.isArray(decisions)) {
     throw new TypeError("Content migration decisions must be an array.");
   }
-  return (decisions ?? []).map((decision) => {
-    if (
-      !decision || typeof decision.namespace !== "string" ||
-      typeof decision.assetId !== "string" ||
-      (decision.ownerId !== null && typeof decision.ownerId !== "string")
-    ) {
-      throw new TypeError(
-        "Content migration decisions require an explicit owner or null.",
-      );
-    }
-    return {
-      namespace: decision.namespace,
-      assetId: decision.assetId,
-      ownerId: decision.ownerId,
-    };
-  }).sort((a, b) => {
+  return (decisions ?? []).map(canonicalContentDecision).sort((a, b) => {
     const left = JSON.stringify(a), right = JSON.stringify(b);
     return left < right ? -1 : left > right ? 1 : 0;
   });
@@ -207,6 +217,16 @@ export async function prepareRetainedDataUpgrade(
   schemaName = "public",
   storage: RetainedDataUpgradeStorage = {},
 ): Promise<RetainedDataUpgradePlan | undefined> {
+  storage = {
+    ...storage,
+    unrecoverable: await verifyUnrecoverableDecisions(
+      structuredClone(storage.unrecoverable),
+    ),
+    abandoned: await verifyAbandonmentDecisions(
+      structuredClone(storage.abandoned),
+    ),
+  };
+  let terminals: RetainedTerminals | undefined;
   const schema = validateEventSchemaName(schemaName);
   const metadata = createCoreTableNames(schema).copilotz_schema_metadata;
   const prepared = await session.transaction(async (transaction) => {
@@ -227,6 +247,11 @@ export async function prepareRetainedDataUpgrade(
         await inspectRetainedDataDrain(transaction, schema),
       );
       await validateBodyStoreSchema(transaction, schema);
+      terminals = await validateRetainedHistory(
+        transaction,
+        schema,
+        storage.abandoned,
+      );
       return current;
     }
     if (
@@ -241,7 +266,11 @@ export async function prepareRetainedDataUpgrade(
     assertRetainedDataDrained(
       await inspectRetainedDataDrain(transaction, schema),
     );
-    await validateRetainedHistory(transaction, schema);
+    terminals = await validateRetainedHistory(
+      transaction,
+      schema,
+      storage.abandoned,
+    );
     await assertReceiptUpgradeAuthority(transaction, schema);
     await migrateBodyStoreSchema(joined(transaction), schema);
     await transaction.query(
@@ -259,7 +288,7 @@ export async function prepareRetainedDataUpgrade(
   });
   if (!prepared) return undefined;
   const content = await inspectEmbeddedContent(
-    inspector(session, schema, storage),
+    retainedContentInspector(session, schema, storage),
   );
   const ownership = await migrateActionContent(session, schema);
   const plan = {
@@ -269,6 +298,7 @@ export async function prepareRetainedDataUpgrade(
     targetVersion: Number(prepared.upgrade_to),
     content,
     ownership,
+    ...(terminals ? { terminals } : {}),
   };
   return { ...plan, fingerprint: await fingerprint(plan) };
 }
@@ -289,7 +319,7 @@ async function finalizeRetainedDataUpgrade(
       reviewedFingerprint?: string;
       contentDecisions?: readonly ContentMigrationDecision[];
       ownerKeys?: OwnerKeyUpgradeOptions;
-      authority?: AuthorityUpgradeManifest;
+      authority?: AuthorityUpgradeInput;
     }> = {},
 ): Promise<void> {
   const schema = validateEventSchemaName(schemaName);
@@ -305,7 +335,8 @@ async function finalizeRetainedDataUpgrade(
   ) {
     if (
       options.reviewedFingerprint !== undefined ||
-      options.contentDecisions !== undefined
+      options.contentDecisions !== undefined ||
+      options.abandoned !== undefined || options.unrecoverable !== undefined
     ) {
       throw new Error(
         "Reviewed upgrade options require the original retained-data plan.",
@@ -315,12 +346,26 @@ async function finalizeRetainedDataUpgrade(
   }
   // Snapshot accepted intent before any asynchronous inventory or SQL work.
   const decisions = canonicalDecisions(options.contentDecisions);
-  let plan = options.plan ? structuredClone(options.plan) : undefined;
+  const abandoned = await verifyAbandonmentDecisions(options.abandoned);
+  const unrecoverable = await verifyUnrecoverableDecisions(
+    options.unrecoverable,
+  );
+  // The public entry point already detached the plan before its first await.
+  let plan = options.plan;
   const reviewedFingerprint = options.reviewedFingerprint;
   const hasReviewedIntent = reviewedFingerprint !== undefined ||
-    options.contentDecisions !== undefined;
+    options.contentDecisions !== undefined || options.abandoned !== undefined ||
+    options.unrecoverable !== undefined;
   const decisionsFingerprint = await digestContent(
-    new TextEncoder().encode(JSON.stringify(decisions)),
+    new TextEncoder().encode(
+      JSON.stringify(
+        unrecoverable?.entries.length
+          ? { content: decisions, abandoned, unrecoverable }
+          : abandoned?.entries.length
+          ? { content: decisions, abandoned }
+          : decisions,
+      ),
+    ),
   );
   if (!plan) {
     if (hasReviewedIntent) {
@@ -330,7 +375,10 @@ async function finalizeRetainedDataUpgrade(
     }
     plan = await prepareRetainedDataUpgrade(session, schema, options);
     if (!plan) return;
-    if (plan.content.inventory.length || plan.ownership.executionOwners) {
+    if (
+      plan.content.inventory.length || plan.ownership.executionOwners ||
+      plan.terminals
+    ) {
       throw Object.assign(
         new Error(
           "Review the prepared retained-content inventory before finalizing the offline upgrade.",
@@ -384,11 +432,20 @@ async function finalizeRetainedDataUpgrade(
     assertRetainedDataDrained(
       await inspectRetainedDataDrain(transaction, schema),
     );
-    await validateRetainedHistory(transaction, schema);
+    const terminals = await validateRetainedHistory(
+      transaction,
+      schema,
+      abandoned,
+    );
+    if (JSON.stringify(terminals) !== JSON.stringify(reviewed.terminals)) {
+      throw new Error(
+        "Retained terminal evidence or abandonment decisions changed after review.",
+      );
+    }
     await assertReceiptUpgradeAuthority(transaction, schema);
     const session = joined(transaction);
     const actual = await inspectEmbeddedContent(
-      inspector(session, schema, options),
+      retainedContentInspector(session, schema, options),
     );
     const ownership = await migrateActionContent(session, schema);
     if (
@@ -421,18 +478,24 @@ async function finalizeRetainedDataUpgrade(
       `ALTER TABLE ${core.events} ADD COLUMN IF NOT EXISTS owner_ingress JSONB`,
     );
     await upgradeReceiptReaders(transaction, schema);
-    await migrateActionContent(session, schema, {
-      apply: true,
-      decisions,
-    });
     await migrateEmbeddedContent({
       session,
       plan: actual,
       drained: true,
       reviewedFingerprint: actual.fingerprint,
     });
+    await migrateActionContent(session, schema, {
+      apply: true,
+      decisions,
+    });
     await upgradeOperationCatalog(session, schema);
-    await validateRetainedHistory(transaction, schema);
+    await validateRetainedHistory(transaction, schema, abandoned);
+    await recordRetainedTerminals(
+      transaction,
+      schema,
+      terminals,
+      reviewed.fingerprint,
+    );
     await assertReceiptUpgradeAuthority(transaction, schema);
     const updated = await transaction.query(
       `UPDATE ${core.copilotz_schema_metadata} SET version = $1,upgrade_reviewed_fingerprint=$4,upgrade_decisions_fingerprint=$5 WHERE singleton AND version=0 AND upgrade_id=$2 AND upgrade_from=$3 AND upgrade_to=$1 AND upgrade_reviewed_fingerprint IS NULL AND upgrade_decisions_fingerprint IS NULL RETURNING version`,
@@ -463,6 +526,12 @@ export async function upgradeActionLifecycle(
   // Preserve the reviewed intent across every asynchronous checkpoint.
   options = {
     ...options,
+    ...(options.unrecoverable
+      ? { unrecoverable: structuredClone(options.unrecoverable) }
+      : {}),
+    ...(options.abandoned
+      ? { abandoned: structuredClone(options.abandoned) }
+      : {}),
     ...(options.plan ? { plan: structuredClone(options.plan) } : {}),
     ...(options.contentDecisions
       ? { contentDecisions: structuredClone(options.contentDecisions) }
@@ -481,7 +550,28 @@ export async function upgradeActionLifecycle(
     ) {
       throw ownerKeysRequired();
     }
-    await migrateOwnerKeys({ ...options.ownerKeys, session, schema });
+    const readExternalBody = options.ownerKeys.readExternalBody ??
+      (options.storeFor
+        ? (
+          copy: Parameters<
+            NonNullable<OwnerKeyUpgradeOptions["readExternalBody"]>
+          >[0],
+        ) =>
+          bodyStoreReader(() =>
+            retainedContentInspector(session, schema, options).storeFor({
+              namespace: copy.namespace,
+              kind: copy.kind ?? "object",
+              backendId: copy.backendId,
+              key: copy.key,
+            })
+          )(copy)
+        : undefined);
+    await migrateOwnerKeys({
+      ...options.ownerKeys,
+      readExternalBody,
+      session,
+      schema,
+    });
   }
   if (version === 11 || version === 12 || options.authority) {
     await upgradeAuthoritySchema(session, schema, options.authority);

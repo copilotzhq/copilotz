@@ -138,6 +138,19 @@ for (const objectStore of [false, true]) {
         `INSERT INTO ${tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('space','history',1,$1::jsonb,$2)`,
         [encoded.body, encoded.digest],
       );
+      if (objectStore) {
+        // Retained invocations reach v12 terminated (or with a v11 receipt).
+        const terminal = await encodeEventBody({
+          actionId: "test.action",
+          actionRunId: "run",
+          status: "completed",
+          output: null,
+        });
+        await db.query(
+          `INSERT INTO ${tables.event_bodies}(namespace,event_body_id,schema_version,body,digest) VALUES('space','history-terminal',1,$1::jsonb,$2)`,
+          [terminal.body, terminal.digest],
+        );
+      }
       const event = await createEventStore({ session: db, schema }).append({
         type: "test.history",
         namespace: "space",
@@ -273,7 +286,7 @@ for (const objectStore of [false, true]) {
       });
       await validateCopilotzSchema(db, schema);
       const row = (await db.query<{ body: typeof history; digest: string }>(
-        `SELECT body,digest FROM ${tables.event_bodies}`,
+        `SELECT body,digest FROM ${tables.event_bodies} WHERE event_body_id='history'`,
       )).rows[0];
       assertEquals(row.digest, (await encodeEventBody(row.body)).digest);
       const moved = protectedValueRef(
@@ -337,7 +350,9 @@ for (const objectStore of [false, true]) {
         { protectedValues: 1, bodies: 1 },
       );
       assertEquals(
-        (await db.query(`SELECT body,digest FROM ${tables.event_bodies}`))
+        (await db.query(
+          `SELECT body,digest FROM ${tables.event_bodies} WHERE event_body_id='history'`,
+        ))
           .rows[0],
         row,
       );

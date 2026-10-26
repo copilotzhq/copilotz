@@ -486,11 +486,22 @@ export function createDatabaseAssetRepository(
     databaseSchema: options.databaseSchema,
   } as const;
   const scopedWriter = adapter.forScope(scope);
+  // Offline upgrades import retained bytes as database copies; they stay
+  // readable when the application writes new bodies to another backend.
+  const retainedDatabase = defaultDatabaseAdapter
+    ? undefined
+    : createDatabaseBodyStoreAdapter({
+      session: options.session,
+      backendId: "database:default",
+    }).forScope(scope);
 
   const storage: BodyStorageRuntime = {
     adapter,
     writer: scopedWriter,
     readers: new Map([
+      ...(retainedDatabase
+        ? [[retainedDatabase.backendId, retainedDatabase] as const]
+        : []),
       ...configuredStorage.readers,
       [scopedWriter.backendId, scopedWriter],
     ]),

@@ -60,6 +60,19 @@ returned IDs, direct mutations or live subscriptions need no settlement wait.
 
 #### Database
 
+For retained v5–v10 history, stop writers and **drain → list unterminated runs →
+optionally retire unreferenced noise → review abandonment decisions → prepare
+and finalize**. A unique terminal internal-invoke wrapper can attest its
+target's outcome even when the target has no terminal body. Plans list and
+fingerprint that evidence. Unattested crash victims require exact, digest-bound
+abandonment identities supplied with `--abandoned=FILE.json` on prepare and
+apply. Referenced runs may be preserved; decisions cannot override live work or
+an existing terminal. Conversion records provenance-bearing terminal receipts:
+wrapper status for attestations, cancelled with `abandoned-before-upgrade` for
+reviewed abandonment. It invents no output or Event body digest and never
+reopens abandoned work. Follow the
+[operator flow and file format](../scripts/upgrade-retained-data.md#old-invocations-without-their-own-terminal-body).
+
 1. **Upgrade every owner schema from v13 to v14, offline.** Stop admission,
    schedules, workers, owners and every physical writer. Confirm the drain with
    `inspectRetainedDataDrain(session, schema)`, then call
@@ -508,6 +521,18 @@ their next step; never relabel a schema or skip a step.
    identity under reserved marker `0`. Review the exact fingerprint, physical
    copies and explicit ownership decisions. Repeat preparation to recover the
    same identity after interruption. External stores require explicit mappings.
+   Generate an ownership review template with
+   `deno run --allow-read scripts/upgrade-retained-data.ts content-decisions --plan=review.json > decisions.json`.
+   Ambiguous assets propose `{ namespace, assetId, ownerIds: [...] }` with every
+   reported candidate; unowned assets propose
+   `{ namespace, assetId, ownerId: null }`. Review before use. `ownerIds` is
+   mutually exclusive with `ownerId`, must be nonempty and duplicate-free, and
+   may select all candidates or a subset. Every selected owner must remain a
+   candidate domain record in that namespace. Existing edges survive; missing
+   selected ownership edges are added. Ambiguous assets without decisions and
+   missing assets are refused. Legacy decisions keep identical canonical bytes
+   and fingerprints; shared-owner fingerprints bind sorted IDs. Generation never
+   applies the template automatically.
 3. Call
    `upgradeActionLifecycle(session, schema, { plan,
    reviewedFingerprint: plan.fingerprint, contentDecisions, ownerKeys })`.
@@ -520,15 +545,34 @@ their next step; never relabel a schema or skip a step.
    omit the retained plan. The standalone `migrateOwnerKeys` API also performs
    exactly this step and stops at v12.
 4. At v12, run `inspectAuthorityUpgrade(session, schema)` (CLI
-   `authority-inventory`). Review the resulting invocations and ingress events
-   against application policy. Build an explicit `AuthorityUpgradeManifest`
-   containing policy revisions, exact invocation/event digests, authority
-   bindings, and any required original Action schemas or ingress provenance.
-   Inspect after key conversion because reencrypting captures can change their
-   digests. Even an empty inventory requires an explicit empty manifest.
+   `authority-inventory`). Review the top-level `invocations` and `events`
+   against application policy: every non-terminal or captured invocation,
+   ingress with live work, and anything ambiguous still needs a binding.
+   Terminal uncaptured runs (own terminal, accepted wrapper attestation, or
+   reviewed v11 abandonment) and ingress whose deliveries and operations are all
+   terminal appear separately under `history`, with counts. They need no binding
+   or Action schema snapshot; a missing source does not disqualify terminal
+   uncaptured history. Build an explicit `AuthorityUpgradeManifest` containing
+   policy revisions, exact invocation/event digests, authority bindings, and any
+   required original Action schemas or ingress provenance. Inspect after key
+   conversion because reencrypting captures can change their digests. If
+   everything is history, supply
+   `{ "policies": [], "invocations": [], "events": [] }` or just the policy
+   list, such as `{ "policies": [] }`. The manifest is still explicit.
 5. Call `upgradeActionLifecycle(session, schema, { authority })` to commit v12 →
    v13. This validates every binding, writes the accepted manifest receipt,
-   invalidates old transport attachments, and fences the old owner epoch.
+   invalidates old transport attachments, and fences the old owner epoch. Each
+   excluded item gets an `authorization.history` owner receipt keyed by
+   `["authorization.history", "invocation" | "event", namespace, runId | eventId]`.
+   Its intent contains the accepted manifest fingerprint; its result contains
+   `kind`, `namespace`, `id`, `resumable: false`, and terminal evidence. The
+   `authorization-upgrade:13` receipt retains that fingerprint in its intent and
+   records `{ history: { invocations, events, digest } }` in its result. The
+   SHA-256 chain starts with the canonical empty array digest and hashes
+   `[previousDigest, historyEntry]` in deterministic inventory order. These
+   markers authorize nothing and prevent historical runs from being claimed
+   again. Observation keeps existing disclosure checks; terminal history is
+   never a reusable execution grant.
 6. The same call then commits v13 → v14 in one transaction: private credential
    effect storage, indexed run/operation lookup, accepted flow continuation
    bindings, namespace-local `(namespace, id)` node identity, and `COLLATE "C"`
@@ -571,6 +615,43 @@ pre-conversion histories without owner receipts remain eligible.
 Owner schemas missing the required receipt-reader column are also refused by
 current validation. Do not relabel them or add a runtime compatibility path. See
 the offline guide for the exact supported inventory.
+
+### Offline database deadlines and progress
+
+The offline CLIs (`upgrade-retained-data.ts`, `migrate-action-content.ts`,
+`migrate-ingress-provenance.ts`, `provision-content-indexes.ts`, and
+`owner-bundle.ts`) disable the per-statement online deadline and allow a 24-hour
+client request deadline. This does not change application connection defaults.
+Use the same explicit options in application migration modules and `deno eval`
+snippets:
+
+```ts
+const database = await openManagedOminipgDatabase({
+  url: Deno.env.get("COPILOTZ_MIGRATION_DATABASE_URL"),
+  statementTimeoutMs: null,
+  requestTimeoutMs: 24 * 60 * 60 * 1000,
+});
+```
+
+Setting only `statementTimeoutMs: null` leaves the default 30-second client
+request deadline in place. A long transaction must fit within the client
+deadline as well. Keep all producers stopped; these settings are for the
+explicit offline connection, not the running application.
+
+Long phases emit `[upgrade:SCHEMA] PHASE done/total` progress to **stderr**.
+Stdout remains the CLI's JSON result, and review-plan fingerprints keep their
+existing format. Progress within a transaction is not a committed checkpoint.
+After interruption, inspect the durable marker and repeat the same reviewed
+command; do not restart producers based on a progress line. Preparation and
+finalization still verify retained bytes and event-body digests.
+
+The native database path batches up to 2,000 records, with a 16 MiB byte budget
+for physical reads. Individual large bodies retain the chunked prefix reader;
+physical layout conversion can require memory for the largest individual body.
+External heads and full prefix digests use bounded concurrency (default 16).
+Rehearse using the same storage adapter and client/database hardware as the
+cutover. See [the synthetic benchmark](../scripts/benchmark-offline-upgrade.md)
+for reproduction commands, measured results and their limits.
 
 ## The pain
 
@@ -744,3 +825,163 @@ layers; check each optional feature you enable for its own provisioning needs.
   index.
 - [Persist and recover](./getting-started/part-2-verify-and-recover/07-persist-and-recover.md):
   choosing the database URL your hosts share.
+
+## External storage during offline cutover
+
+First use the pruner's `--list-unterminated`, review the digest-bound JSON,
+dry-run `--abandoned=FILE.json`, then retire with `--apply --writers-stopped`.
+Refused closures must be resolved before preparing. Retirement performs SQL
+deletes only; it does not read, write or delete physical content.
+
+Both `prepare` and `apply` accept `--storage=MODULE.ts`. The module
+default-exports `RetainedDataUpgradeStorage`: optional `storeFor`,
+`streamBackend`, `copyMappings` and `concurrency`. The CLI validates its shape
+before opening the database. `storeFor(location, session)` may return
+`undefined` for the platform database store. Unknown external backends still
+fail closed. `--concurrency=16` overrides the module; the supported range is
+1–256. Concurrency changes no plan fields or fingerprints. Duplicate physical
+identities share one check, and conflicting length/digest/outcome claims still
+fail.
+
+For legacy objects whose retained `location.key` is the full physical object
+name, create `migration-storage.ts` in the repository root. This complete
+example uses GCS HMAC interoperability through the S3-compatible XML endpoint:
+
+```ts
+import { createLegacyObjectBodyStore } from "@copilotz/copilotz/content";
+import type { RetainedDataUpgradeStorage } from "@copilotz/copilotz/actions";
+
+function required(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new Error(`Missing ${name}`);
+  return value;
+}
+const bucket = required("MIGRATION_S3_BUCKET");
+const store = createLegacyObjectBodyStore({
+  backendId: `gcs:${bucket}`, // Must exactly match the retained backend ID.
+  // HMAC (AWS4-signed) requests: GCS ignores x-goog-* generation guards under
+  // this signature, so read through S3 mode and its strong-ETag guard.
+  provider: "s3",
+  endpoint: "https://storage.googleapis.com",
+  region: "auto",
+  bucket,
+  accessKeyId: required("MIGRATION_S3_ACCESS_KEY_ID"),
+  secretAccessKey: required("MIGRATION_S3_SECRET_ACCESS_KEY"),
+  pathStyle: true,
+});
+export default {
+  storeFor: (location) =>
+    location.kind === "object" && location.backendId === store.backendId
+      ? store
+      : undefined, // Database locations use the default database reader.
+  // Include this when retained operation streams also use this legacy bucket.
+  // Omit it when their bodies are in the database.
+  streamBackend: { kind: "object", backendId: store.backendId },
+  concurrency: 16,
+} satisfies RetainedDataUpgradeStorage;
+```
+
+For another S3-compatible bucket, use its endpoint and region and the exact
+retained backend ID. S3 mode requires a strong ETag. `provider: "gcs"` guards
+reads with generation and metageneration headers; use it only with requests GCS
+signs natively, not with HMAC interoperability. Keep HMAC credentials in the
+environment and grant only source reads. The legacy adapter applies **no
+prefix**, even if a config contains one: every body ID is already the absolute
+object name, including any prefix, schema, namespace and percent-encoded
+segments.
+
+**No object copy or import is needed.** Prepare and finalization read legacy
+objects in place. The v12 owner-key step re-homes retained external bytes into
+database-owned copies. The CLI storage resolver automatically uses
+`legacyObjectBodyReader(store)` for this step; applications invoking
+`migrateOwnerKeys` directly can supply it as `readExternalBody` (dispatch by
+backend ID when there are multiple stores).
+
+Ready legacy objects require exact Content-Length, `copilotz-sha256` metadata
+(hex SHA-256, optionally prefixed with `sha256:`), and a media type from
+`copilotz-media-type` or Content-Type. Both `x-goog-meta-*` and `x-amz-meta-*`
+headers are accepted. Reads use bounded ranged GETs guarded by the observed
+version; changed versions, missing objects, absent/invalid digest metadata,
+short/transformed ranges, length mismatches and digest mismatches refuse the
+upgrade. The reader never invents missing digest metadata. Progressive legacy
+objects at `KEY.progressive/meta.json`, including terminal `incomplete`
+prefixes, are explicitly unsupported by this adapter and must be resolved before
+cutover. The separate offline importer still supports reviewed incomplete
+prefixes; it is not required for ready raw objects. The adapter rejects every
+mutation and every maintenance operation.
+
+For current manifest-based layouts, use the matching `createS3BodyStore` or
+`createGcsBodyStore` adapter instead. `copyMappings` only identifies previously
+imported keys; omit it for legacy in-place reads.
+
+```sh
+deno run -A scripts/upgrade-retained-data.ts prepare --schema=SCHEMA \
+  --storage=./migration-storage.ts --concurrency=16 --plan=review.json
+# Review the plan and supply the required keys, ownership and authority inputs.
+deno run -A scripts/upgrade-retained-data.ts apply --schema=SCHEMA \
+  --storage=./migration-storage.ts --plan=review.json --reviewed=FINGERPRINT \
+  --owner-keys=./migration-keys.ts
+```
+
+### Store operation audit
+
+| Step                                     | External BodyStore operations                                                               | Writes                                                                                                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pruner/list/retire and drain             | None                                                                                        | Retirement deletes approved SQL closures                                                                                                                         |
+| Prepare                                  | `head`, `readRange` in 1 MiB digest chunks                                                  | Database physical-format/stream migration and reserved marker; no external mutations                                                                             |
+| Retained finalization to v11             | Repeats `head`, `readRange` and digest verification                                         | SQL logical-body/copy catalog, ownership, document conversions and schema changes; no external mutations                                                         |
+| Owner-key conversion to v12              | `head`, `readRange` via the storage module, unless `ownerKeys.readExternalBody` is supplied | Imports external bytes into database-owned copies and rewrites protected values; marks source catalog copies orphan/noncollectable; leaves source objects intact |
+| Authority/v13 and credential effects/v14 | None                                                                                        | SQL schema and authority changes                                                                                                                                 |
+
+The legacy adapter uses HEAD and version-guarded ranged GETs. Current S3 layouts
+use manifest and immutable-part GETs; native GCS uses metadata GETs and
+generation-bound media range GETs. One BodyStore call can make multiple HTTP
+requests. The upgrade invokes no external `put`, `reserve`, `append`, `fence`,
+`seal`, `terminate`, `abort`, maintenance list or delete. There is no external
+mutation opt-in because none is needed. Custom modules are executable operator
+code and must uphold the read-only contract.
+
+Provision database capacity for the v12 imports, including transaction/WAL
+space. That step currently retains imported external bytes in memory and reads
+them sequentially; the configurable concurrency applies to prepare/v11
+inspection. Keep all writers stopped until the entire chain reaches v14.
+
+After the final verification of the upgraded history and database-owned bytes,
+the operator can delete the legacy objects. Before deletion, retain an object
+listing as evidence with **keys, sizes and generations** (and ETags for S3).
+Delete only the reviewed source objects, only after verification; the upgrade
+never deletes them. Retain the listing with the review plan and verification
+results.
+
+### Reviewed missing content and memory-bounded offline inspection
+
+With producers stopped, use
+`list-missing-content --schema=SCHEMA
+--storage=./migration-storage.ts` in
+`scripts/upgrade-retained-data.ts`. Review the returned references and outcomes,
+then write a digest-bound `unrecoverable.json` using `unrecoverableDecisions`
+from `runtime/content/unrecoverable.ts`. Its entries are exact
+`{ namespace, backendId, key }` locations. Supply
+`--unrecoverable=unrecoverable.json` to both prepare and apply/finalize.
+
+Only missing objects referenced exclusively by terminal failed, cancelled,
+abandoned or superseded content qualify. Existing objects, completed/live
+references, and unreferenced decisions are refused. Converted records retain
+terminal history and use explicit unavailable, zero-retained-byte content
+without fabricated bytes or digests. See the
+[operator flow and decision format](../scripts/upgrade-retained-data.md#missing-terminal-object-content).
+
+Inspection, v11 conversion, owner-key migration and authority application
+process payload batches. New review plans contain a compact row manifest; their
+content fingerprint preserves the former sorted JSON serialization, while the
+outer plan fingerprint binds the new format. Regenerate old plans with the new
+tools. Run one heavy process/schema at a time and allow headroom for the largest
+individual row/body. The
+[synthetic memory rehearsal](../scripts/benchmark-cutover-memory.ts) covers 140k
+event bodies, 60k nodes and 20k object locations using disk-efficient padding.
+
+External inspection defaults to 16 workers. HEAD/ranged GET requests retry
+transient transport, 429 and 5xx failures with bounded backoff while preserving
+version guards. Configure `requestTimeoutMs` on the S3/GCS storage configuration
+(default 30 seconds per attempt). A changed version is never retried into
+success.

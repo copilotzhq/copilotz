@@ -247,20 +247,59 @@ export function observeAuthorizationWrites(
   return observed;
 }
 
-/** No memoization outside a managed owner command. Each caller gets a detached row. */
+/**
+ * A read-only REPEATABLE READ snapshot cannot change, so identical policy reads
+ * inside it share one result: a disclosure checks every row against the same
+ * session, actor and thread facts. The snapshot gets a private cache that ends
+ * with it and never publishes into owner memory.
+ */
+export function memoizeSnapshotReads(snapshot: SqlExecutor): SqlExecutor {
+  if (!contexts.has(snapshot)) {
+    contexts.set(snapshot, {
+      owner: new OwnerAuthorizationCache(),
+      reads: new Map(),
+      grants: new Map(),
+    });
+  }
+  return snapshot;
+}
+
+const factReads = { cache: "authorization-fact" };
+/**
+ * No memoization outside an owner command or read snapshot. Each caller gets a
+ * detached row. A committed fact stays in owner memory until a write touches
+ * one of its keys, so later commands evaluate policy without re-reading it.
+ */
 export async function memoAuthorizationRead<T>(
   transaction: SqlExecutor,
   key: string,
   keys: readonly string[],
   read: () => Promise<T>,
+  options: { remember?: boolean } = {},
 ): Promise<T> {
   const context = contexts.get(transaction);
   if (!context) return await read();
   let entry = context.reads.get(key);
   if (!entry || !context.owner.valid(entry.stamp)) {
+    const remember = options.remember ?? true;
+    const saved = remember
+      ? cachedAuthorization<{ value: T }>(transaction, factReads, key)
+      : undefined;
+    if (saved) return structuredClone(saved.value);
+    // Stamp before reading: a write issued meanwhile makes the result stale.
+    const stamp = context.owner.stamp(keys);
     entry = {
-      stamp: context.owner.stamp(keys),
-      value: Promise.resolve().then(read),
+      stamp,
+      value: Promise.resolve().then(read).then((value) => {
+        if (remember && context.owner.valid(stamp)) {
+          try {
+            rememberStamped(transaction, factReads, key, { value }, stamp);
+          } catch {
+            // The command already closed; the fact stays command-local.
+          }
+        }
+        return value;
+      }),
     };
     context.reads.set(key, entry);
   }
@@ -290,7 +329,18 @@ export function rememberAuthorization<T>(
 ) {
   const context = contexts.get(transaction);
   if (!context) return;
-  const entry = { value, stamp: context.owner.stamp(keys) };
+  rememberStamped(transaction, scope, key, value, context.owner.stamp(keys));
+}
+function rememberStamped<T>(
+  transaction: SqlExecutor,
+  scope: object,
+  key: string,
+  value: T,
+  stamp: Stamp,
+) {
+  const context = contexts.get(transaction);
+  if (!context) return;
+  const entry = { value, stamp };
   let local = context.grants.get(scope);
   if (!local) context.grants.set(scope, local = new Map());
   local.set(key, entry);
@@ -357,7 +407,9 @@ export async function readAuthorizationRecord<T>(
   const context = contexts.get(transaction);
   const keys = authorizationDependencyKeys(schema, [dependency]);
   const stamp = context?.owner.stamp(keys);
-  const loaded = await memoAuthorizationRead(transaction, key, keys, read);
+  const loaded = await memoAuthorizationRead(transaction, key, keys, read, {
+    remember: false,
+  });
   const value = options.immutableJson
     ? captureHostCommandJson(loaded) as T
     : loaded;

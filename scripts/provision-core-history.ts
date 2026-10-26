@@ -94,7 +94,8 @@ if (import.meta.main) {
       const database = await openManagedOminipgDatabase({
         url,
         pgPoolMax: 1,
-        requestTimeoutMs: 30 * 60_000,
+        statementTimeoutMs: null,
+        requestTimeoutMs: 24 * 60 * 60 * 1000,
       });
       try {
         console.log(

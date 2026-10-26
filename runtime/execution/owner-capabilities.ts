@@ -1,9 +1,7 @@
 import { resolveDeliveryTimeoutMs } from "./deadlines.ts";
 import { observeContentStreamFailure } from "../streams/stream.ts";
 import { ActionOwnershipLost } from "../actions/ownership.ts";
-import {
-  withoutOwnerCommandAuthorization,
-} from "../engine/command-authorization.ts";
+import { withoutOwnerCommandAuthorization } from "../engine/command-authorization.ts";
 import type {
   DeliveryAttemptRegistration,
   OwnerSessionAuthority,
@@ -18,7 +16,6 @@ import {
   capabilityReceiptIntent,
   withCollectionCommandReceipt,
 } from "../collections/command-receipt.ts";
-import { snapshotControl } from "../collections/snapshot-control.ts";
 /** Owner-side capability admission. Worker code never imports this module. */
 import type {
   HypervisorLifecycleCallbacks,
@@ -48,28 +45,20 @@ import {
 type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Deferred<T> = ReturnType<typeof Promise.withResolvers<T>>;
-const MAX_CONTEXTS = 256;
-const MAX_RESOURCES = 32;
-const MAX_ASSIGNMENTS = 256;
 const POLL_MS = 10_000;
-const RESOURCE_IDLE_MS = 30_000;
-const RESOURCE_LIFETIME_MS = 120_000;
 
 type Resource = {
   id: string;
   context: string;
-  kind: "snapshot" | "writer" | "reader";
+  kind: "writer" | "reader";
   value: RecordValue;
   serial: Promise<unknown>;
-  created: number;
-  used: number;
   closed: boolean;
   pendingAppends?: number;
   /** Body sealing does not revoke its bounded retention capability. */
   writerSealed?: boolean;
   removeFailure?(): void;
   close(reason?: unknown): Promise<void>;
-  run?(path: readonly string[], args: readonly unknown[]): Promise<unknown>;
 };
 type ResourceReservation = {
   resource: Resource;
@@ -99,7 +88,6 @@ type Assignment = {
   wake?: Deferred<void>;
   task: Promise<void>;
   terminal?: { result?: WorkerWorkResult; error?: unknown };
-  snapshotOpen?: boolean;
   authority?: Readonly<{ epoch: number; signal: AbortSignal }>;
   interruption?: Error;
   semanticRetirement?: boolean;
@@ -146,11 +134,11 @@ function scopeOf(context: ProcessorContext | ActionContext): RecordValue {
     now: context.now().toISOString(),
   };
 }
-function allowedPath(path: readonly string[], snapshot = false): boolean {
+function allowedPath(path: readonly string[]): boolean {
   const [root, method, leaf, nested] = path;
   if (root === "collections") {
     if (!method || path.length < 3) return false;
-    if (leaf === "commands") return !snapshot && path.length === 4 && !!nested;
+    if (leaf === "commands") return path.length === 4 && !!nested;
     if (leaf === "queries") return path.length === 4 && !!nested;
     if (leaf === "relations") return nested === "list" && path.length === 4;
     return path.length === 3 &&
@@ -159,10 +147,11 @@ function allowedPath(path: readonly string[], snapshot = false): boolean {
         "list",
         "aggregate",
         "search",
-        ...(!snapshot ? ["create", "update", "delete"] : []),
+        "create",
+        "update",
+        "delete",
       ].includes(leaf);
   }
-  if (snapshot) return false;
   if (root === "authentication") {
     return path.length === 2 && method === "verify";
   }
@@ -256,8 +245,6 @@ export function createOwnerCapabilityHost(
       input: unknown,
     ): Promise<unknown>;
     deliveryTimeoutMs?: number;
-    resourceIdleMs?: number;
-    resourceLifetimeMs?: number;
     onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
   }>,
 ): OwnerCapabilityHost {
@@ -277,21 +264,11 @@ export function createOwnerCapabilityHost(
   >();
   let renewing: Promise<void> | undefined;
   let closed = false;
-  const idleMs = options.resourceIdleMs ?? RESOURCE_IDLE_MS;
-  const lifetimeMs = options.resourceLifetimeMs ?? RESOURCE_LIFETIME_MS;
-  for (const duration of [idleMs, lifetimeMs]) {
-    if (!Number.isSafeInteger(duration) || duration < 1) {
-      throw new TypeError("Resource timeouts must be positive integers.");
-    }
-  }
   const keyOf = (binding: WorkerCallContext) =>
     `${binding.fence.connectionId}:${binding.fence.sessionGeneration}:${
       binding.parent!.streamId
     }`;
   const notify = (assignment: Assignment, event: CapabilityPoll) => {
-    if (assignment.queue.length >= MAX_CONTEXTS) {
-      throw capabilityError("owner_capacity");
-    }
     assignment.queue.push(event);
     assignment.wake?.resolve();
   };
@@ -468,26 +445,6 @@ export function createOwnerCapabilityHost(
       "Session subscription must return an unsubscribe function.",
     );
   }
-  const timer = setInterval(() => {
-    const now = Date.now();
-    for (const assignment of assignments.values()) {
-      for (const resource of assignment.resources.values()) {
-        if (
-          resource.kind !== "writer" && !resource.closed &&
-          (now - resource.used >= idleMs ||
-            now - resource.created >= lifetimeMs)
-        ) {
-          const error = capabilityError("owner_handle_expired");
-          void closeResource(assignment, resource, error).catch(() =>
-            undefined
-          );
-          // Expiry fails the execution, including a callback that caught a read failure.
-          abortAssignment(assignment, error);
-        }
-      }
-    }
-  }, Math.min(1000, idleMs, lifetimeMs));
-  (timer as unknown as { unref?: () => void }).unref?.();
 
   const invoke = async (
     assignment: Assignment,
@@ -497,9 +454,6 @@ export function createOwnerCapabilityHost(
     context: ProcessorContext | ActionContext,
   ): Promise<unknown> => {
     check(assignment);
-    if (assignment.contexts.size >= MAX_CONTEXTS) {
-      throw capabilityError("owner_capacity");
-    }
     const id = crypto.randomUUID();
     const result = Promise.withResolvers<unknown>();
     void result.promise.catch(() => undefined);
@@ -513,9 +467,7 @@ export function createOwnerCapabilityHost(
           );
         }
       }
-      if (assignment.queue.length < MAX_CONTEXTS) {
-        notify(assignment, { aborted: id });
-      } else abortAssignment(assignment, capabilityError("owner_capacity"));
+      notify(assignment, { aborted: id });
     };
     const abort = () => {
       // A caller cancellation predating placement revocation stays semantic.
@@ -697,14 +649,9 @@ export function createOwnerCapabilityHost(
       reservation.ready.resolve(resource.close);
       return reservation.resource;
     }
-    if (assignment.resources.size >= MAX_RESOURCES) {
-      throw capabilityError("owner_capacity");
-    }
     const value: Resource = {
       ...resource,
       id: crypto.randomUUID(),
-      created: Date.now(),
-      used: Date.now(),
       closed: false,
       serial: Promise.resolve(),
     };
@@ -814,126 +761,6 @@ export function createOwnerCapabilityHost(
     }
     return value;
   };
-  const snapshot = async (
-    assignment: Assignment,
-    contextId: string,
-    context: ProcessorContext | ActionContext,
-  ) => {
-    if (assignment.resources.size >= MAX_RESOURCES) {
-      throw capabilityError("owner_capacity");
-    }
-    if (assignment.snapshotOpen) {
-      throw capabilityError("owner_snapshot_nested");
-    }
-    assignment.snapshotOpen = true;
-    const opened = Promise.withResolvers<RecordValue>();
-    const exit = Promise.withResolvers<void>();
-    const wake = { current: Promise.withResolvers<void>() };
-    const jobs: {
-      path: readonly string[];
-      args: readonly unknown[];
-      result: Deferred<unknown>;
-    }[] = [];
-    let closing = false;
-    let closeError: unknown;
-    let cleanup:
-      | Promise<import("../events/session.ts").SqlSnapshotCleanup>
-      | undefined;
-    const task = context.readSnapshot(async (scope) => {
-      const control = snapshotControl(scope);
-      if (!control) throw capabilityError("owner_snapshot_unavailable");
-      cleanup = control.cleanup;
-      const schema = context.databaseSchema;
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(schema)) {
-        throw capabilityError("owner_snapshot_scope");
-      }
-      const validate = async () => {
-        assignment.abort.signal.throwIfAborted();
-        const read = async (
-          query: import("../events/session.ts").SqlExecutor,
-        ) => {
-          const result = await query.query<{ epoch: number | string }>(
-            `SELECT epoch FROM "${schema}".owner_epochs WHERE owner='schema'`,
-          );
-          if (
-            Number(result.rows[0]?.epoch) !==
-              assignment.binding.parent!.metadata.ownerEpoch
-          ) {
-            throw capabilityError("ActionOwnershipLost");
-          }
-        };
-        if (control.kind === "pooled") await control.current(read);
-        else await read(control.snapshot);
-      };
-      await validate();
-      opened.resolve(scope);
-      while (!closing || jobs.length) {
-        const job = jobs.shift();
-        if (!job) {
-          await wake.current.promise;
-          wake.current = Promise.withResolvers<void>();
-          continue;
-        }
-        try {
-          check(assignment);
-          const value = await callPath(scope, job.path, job.args);
-          await validate();
-          check(assignment);
-          job.result.resolve(value);
-        } catch (error) {
-          job.result.reject(error);
-        }
-      }
-      if (closeError) throw closeError;
-    });
-    void task.then(exit.resolve, (error) => {
-      opened.reject(error);
-      exit.reject(error);
-    });
-    void opened.promise.catch(() => undefined);
-    void exit.promise.catch(() => undefined);
-    const resource = addResource(assignment, {
-      kind: "snapshot",
-      context: contextId,
-      value: {},
-      async close(reason) {
-        closing = true;
-        closeError = reason;
-        wake.current.resolve();
-        let failed = false;
-        let failure: unknown;
-        try {
-          await exit.promise;
-        } catch (error) {
-          failed = true;
-          failure = error;
-        } finally {
-          assignment.snapshotOpen = false;
-        }
-        // Unknown cleanup takes precedence over callback failure; a confirmed
-        // cleanup preserves the original callback error without throwing from
-        // finally (including an explicitly thrown undefined value).
-        if (!cleanup || (await cleanup) !== "confirmed") {
-          throw capabilityError("owner_cleanup_unknown");
-        }
-        if (failed) throw failure;
-      },
-      run(path, args) {
-        const result = Promise.withResolvers<unknown>();
-        jobs.push({ path, args, result });
-        wake.current.resolve();
-        return result.promise;
-      },
-    });
-    try {
-      await opened.promise;
-      check(assignment);
-      return { handle: resource.id };
-    } catch (error) {
-      await closeResource(assignment, resource, error).catch(() => undefined);
-      throw error;
-    }
-  };
   const execute = async (
     binding: WorkerCallContext,
     call: CapabilityCall,
@@ -949,9 +776,6 @@ export function createOwnerCapabilityHost(
     let assignment = assignments.get(key);
     if (call.kind === "open") {
       if (assignment) throw capabilityError("owner_assignment_started");
-      if (assignments.size >= MAX_ASSIGNMENTS) {
-        throw capabilityError("owner_capacity");
-      }
       assignment = {
         key,
         binding,
@@ -1033,11 +857,15 @@ export function createOwnerCapabilityHost(
     if (!assignment) throw capabilityError("owner_assignment_unknown");
     const active = assignment;
     check(active);
-    const abort = () => abortAssignment(active, binding.signal.reason);
+    // A cancelled call ends only itself: one fan-out branch's cancellation
+    // must not fail its siblings. Worker completion and disconnect retire the
+    // assignment (lifecycle below).
+    const abort = () => {
+      if (call.kind === "next") active.wake?.resolve();
+    };
     binding.signal.addEventListener("abort", abort, { once: true });
     try {
-      // Cancellation may have happened while authority resolution was awaited.
-      if (binding.signal.aborted) abort();
+      binding.signal.throwIfAborted();
       active.abort.signal.throwIfAborted();
       if (call.kind === "next") {
         if (!active.queue.length && !active.terminal) {
@@ -1096,11 +924,17 @@ export function createOwnerCapabilityHost(
       const callDone = Promise.withResolvers<void>();
       invocation.calls.add(callDone.promise);
       try {
-        if (call.kind === "snapshot") {
-          const result = await snapshot(
-            active,
-            call.context!,
-            invocation.context,
+        if (call.kind === "read") {
+          const result = await invocation.context.read(
+            call.name!,
+            call.args?.[0],
+            {
+              signal: AbortSignal.any([
+                invocation.context.signal,
+                binding.signal,
+              ]),
+              timeoutMs: call.options?.timeoutMs as number | undefined,
+            },
           );
           checkInvocation();
           return result;
@@ -1250,13 +1084,11 @@ export function createOwnerCapabilityHost(
           ) {
             throw capabilityError("owner_handle_unknown");
           }
-          resource.used = Date.now();
           if (
-            resource.kind === "snapshot"
-              ? !allowedPath(path, true)
-              : path.length !== 1 || !(resource.kind === "reader"
-                ? ["read"]
-                : ["append", "close", "abort", "retain"]).includes(path[0])
+            path.length !== 1 ||
+            !(resource.kind === "reader"
+              ? ["read"]
+              : ["append", "close", "abort", "retain"]).includes(path[0])
           ) throw capabilityError("owner_capability_refused");
           const append = resource.kind === "writer" && path[0] === "append";
           if (append && (resource.pendingAppends ?? 0) >= 2) {
@@ -1281,9 +1113,7 @@ export function createOwnerCapabilityHost(
                 resource.kind === "writer" && path[0] === "retain" &&
                 !resource.writerSealed
               ) throw capabilityError("owner_handle_not_sealed");
-              const value = resource.run
-                ? await resource.run(path, args)
-                : await callPath(resource.value, path, args);
+              const value = await callPath(resource.value, path, args);
               check(active);
               checkInvocation();
               if (resource.closed) {
@@ -1300,7 +1130,7 @@ export function createOwnerCapabilityHost(
                 resource.removeFailure?.();
                 resource.removeFailure = undefined;
                 if (path[0] === "close" && typeof retain === "function") {
-                  // Keep the same MAX_RESOURCES slot and original owner-bound
+                  // Keep the same resource slot and original owner-bound
                   // method, without append/close or physical cleanup authority.
                   // Disposal/invocation cleanup releases this terminal handle.
                   const writer = resource.value;
@@ -1429,8 +1259,9 @@ export function createOwnerCapabilityHost(
     workerCalls: {
       admit,
       admitUnassigned: admit,
-      maxConcurrent: 1024,
-      maxPerConnection: 128,
+      // Nested Action calls hold a slot for their whole run; use Oxian's maxima.
+      maxConcurrent: 65_536,
+      maxPerConnection: 1024,
       maxRequestBytes: OWNER_CAPABILITY_BYTES,
       maxResponseBytes: OWNER_CAPABILITY_BYTES,
       timeoutMs: resolveDeliveryTimeoutMs(
@@ -1494,7 +1325,6 @@ export function createOwnerCapabilityHost(
     },
     async close(reason = "owner_closed") {
       closed = true;
-      clearInterval(timer);
       pendingHeartbeats.clear();
       let failure: unknown;
       try {

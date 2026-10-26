@@ -8,10 +8,8 @@ import {
   ACTION_RESUME_EVENT,
 } from "./continuation-work.ts";
 import { createActionLifecycleLoader } from "./persistence.ts";
-import {
-  type CreateActionCallersOptions,
-  isSettledActionError,
-} from "./invoker.ts";
+import type { CreateActionCallersOptions } from "./invoker.ts";
+import { isSettledActionError } from "./errors.ts";
 import type { AnyActionDefinition } from "./types.ts";
 import type { ProtectedValueRuntime } from "./protected-value.ts";
 import { ActionOwnershipLost } from "./ownership.ts";

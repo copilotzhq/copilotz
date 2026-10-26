@@ -1858,3 +1858,76 @@ for (const mode of ["policy", "execution", "allowed"] as const) {
     }
   });
 }
+
+Deno.test("three parallel Ask targets all reply without dead letters", async () => {
+  const targets = [agent("b", []), agent("c", []), agent("d", [])];
+  const root = agent("a", [], targets.map((item) => item.id));
+  const replies = new Set<string>();
+  let parentCalls = 0;
+  const app = definePlugin({
+    id: "test.three-reads",
+    version: "1",
+    resources: {
+      agents: Object.fromEntries(
+        [root, ...targets].map((item) => [item.id, item]),
+      ),
+      llmConnections: { testModel: { adapter: "scripted" } },
+    },
+    adapters: {
+      llm: {
+        scripted: adapterFrom((input) => {
+          const id = activeAgent(input);
+          if (id === "a" && parentCalls++ === 0) {
+            return {
+              content: [],
+              toolCalls: targets.map((target) => ({
+                id: `ask-${target.id}`,
+                action: "ask",
+                input: {
+                  target: target.id,
+                  message: "Return one synthetic answer.",
+                },
+              })),
+              finishReason: "tool_calls",
+              attempts: [{ status: "completed" }],
+            };
+          }
+          if (id !== "a") replies.add(id);
+          return {
+            content: { type: "text", role: "body", text: `${id} replied` },
+            attempts: [{ status: "completed" }],
+          };
+        }),
+      },
+    },
+  });
+  const db = await createTestDatabase({
+    url: Deno.env.get("COPILOTZ_TEST_POSTGRES_URL") ?? ":memory:",
+    pgPoolMax: 4,
+  });
+  const schema = `reads_ask_${crypto.randomUUID().replaceAll("-", "")}`;
+  const registry = await createPluginRegistry({ plugins: [corePlugin, app] });
+  const engine = await createCopilotzEngine({
+    session: db,
+    registry,
+    defaultDatabaseSchema: schema,
+    execution: { capacity: 8 },
+  });
+  try {
+    const event = await startRun(engine, [root, ...targets]);
+    await waitForIdle(engine, event, 60_000);
+    assertEquals([...replies].sort(), ["b", "c", "d"]);
+    assertEquals(parentCalls, 2);
+    assertEquals(
+      await engine.deliveries.list({
+        namespace: NAMESPACE,
+        status: "dead_letter",
+      }),
+      [],
+    );
+  } finally {
+    await engine.shutdown();
+    await db.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await db.close();
+  }
+});

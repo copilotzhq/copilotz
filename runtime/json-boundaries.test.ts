@@ -163,23 +163,19 @@ Deno.test("validation and metadata limits count the root and repeated occurrence
   assertThrows(() => snapshotStreamMetadata({}, { maxNodes: 0 }));
 });
 
-Deno.test("host and capability depth and node budgets retain their inclusive boundaries", () => {
+Deno.test("host depth and node budgets retain their inclusive boundaries", () => {
   let nested: unknown = 1;
   for (let depth = 0; depth < 64; depth++) nested = [nested];
   captureHostCommandJson(nested);
-  encodeCapability(nested);
   assertThrows(
     () => captureHostCommandJson([nested]),
     RangeError,
     "too complex",
   );
-  assertThrows(() => encodeCapability([nested]), Error, "owner_data_limit");
   const nodes = Array(99_999).fill(0);
   captureHostCommandJson(nodes);
-  encodeCapability(nodes);
   nodes.push(0);
   assertThrows(() => captureHostCommandJson(nodes), RangeError, "too complex");
-  assertThrows(() => encodeCapability(nodes), Error, "owner_data_limit");
 });
 
 Deno.test("host conservative charges and stream exact byte limits stay unchanged", () => {

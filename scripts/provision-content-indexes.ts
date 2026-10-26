@@ -61,7 +61,11 @@ if (import.meta.main) {
   }
   const url = Deno.env.get("DATABASE_URL");
   if (!url) throw new Error("DATABASE_URL is required");
-  const database = await openManagedOminipgDatabase({ url });
+  const database = await openManagedOminipgDatabase({
+    url,
+    statementTimeoutMs: null,
+    requestTimeoutMs: 24 * 60 * 60 * 1000,
+  });
   try {
     console.log(
       JSON.stringify(

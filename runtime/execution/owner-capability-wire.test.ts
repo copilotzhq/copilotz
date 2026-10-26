@@ -8,7 +8,11 @@ import {
   awaitOperation,
   isActionContinuation,
 } from "../actions/continuation.ts";
-import { ActionError } from "../actions/errors.ts";
+import {
+  ActionError,
+  isSettledActionError,
+  settledActionError,
+} from "../actions/errors.ts";
 import { isNonRetryableError, markNonRetryable } from "../failure.ts";
 Deno.test("capability codec preserves explicit absence, bytes, typed failures and continuations", () => {
   const input = {
@@ -76,7 +80,7 @@ Deno.test("capability codec rejects accessors, cycles, executable and oversized 
   );
 });
 
-Deno.test("codec bounds scalar, aggregate keys and escaped strings before serialization", () => {
+Deno.test("codec bounds messages by the byte ceiling before serialization", () => {
   const stringify = JSON.stringify;
   let serialized = 0;
   JSON.stringify = ((...args: Parameters<typeof stringify>) => {
@@ -87,10 +91,6 @@ Deno.test("codec bounds scalar, aggregate keys and escaped strings before serial
     for (
       const input of [
         "a".repeat(OWNER_CAPABILITY_BYTES + 1),
-        { first: "a".repeat(600_000), second: "b".repeat(600_000) },
-        { ["a".repeat(600_000)]: 1, ["b".repeat(600_000)]: 2 },
-        "\u0000".repeat(200_000),
-        "\ud800".repeat(200_000),
         new Error("e".repeat(OWNER_CAPABILITY_BYTES)),
       ]
     ) {
@@ -148,12 +148,7 @@ Deno.test("codec uses trusted Date and byte intrinsics without subclass hooks", 
   assertEquals(hooks, 0);
 });
 
-Deno.test("codec bounds Error cause traversal by the same depth budget", () => {
-  let value = new Error("leaf");
-  for (let index = 0; index < 65; index++) {
-    value = new Error("parent", { cause: value });
-  }
-  assertThrows(() => encodeCapability(value), Error, "owner_data_limit");
+Deno.test("codec never runs Error cause getters", () => {
   let getters = 0;
   const hostile = new Error();
   Object.defineProperty(hostile, "cause", {
@@ -198,4 +193,17 @@ Deno.test("capability errors retain explicit retryability and bounded retry dela
     ) as typeof decoded).retryAfterMs,
     30_000,
   );
+});
+
+Deno.test("a settled Action failure stays settled across the worker wire", () => {
+  const settled = settledActionError(new Error("provider timed out"));
+  const decoded = decodeCapability(encodeCapability({ error: settled })) as {
+    error: Error;
+  };
+  assert(isSettledActionError(decoded.error));
+  assertEquals(decoded.error.message, "provider timed out");
+  const plain = decodeCapability(
+    encodeCapability({ error: new Error("unsettled") }),
+  ) as { error: Error };
+  assert(!isSettledActionError(plain.error));
 });

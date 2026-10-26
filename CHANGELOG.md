@@ -1,3 +1,99 @@
+## 0.90.2 — 2026-10-26
+
+Read snapshots are replaced by registered owner reads, so parallel agent work no
+longer competes for one held snapshot. Device sockets work behind TLS edges that
+rewrite the host, and the offline upgrade path reaches v14 linearly.
+
+- **Breaking:** the owner-capability layer no longer refuses work by count.
+  Ordinary multi-agent fan-out reached the per-assignment context, resource,
+  assignment and worker-invocation limits, or the message node, depth and
+  per-input limits, and replies were dead-lettered with `owner_capacity` or
+  `owner_data_limit`. Those limits are removed. One 32 MiB per-message ceiling
+  remains as a memory-safety net. Admission still comes from worker capacity,
+  delivery leases and the read limiter. Limits with backpressure return before
+  any release that admits untrusted workers.
+- A cancelled owner-capability call now ends only that call. Before, one
+  cancelled call (for example a provider attempt hitting its first-token
+  timeout) aborted every invocation in the delivery, so sibling fan-out branches
+  failed and retries reported "An external effect has no confirmed outcome".
+  Settled Action failures now keep their settled mark across the worker wire, so
+  placement on a worker no longer dead-letters a delivery whose Action already
+  recorded its failure. Reader handles no longer expire after 30 s idle or 120
+  s; they close at EOF, cancellation, invocation end or retirement. Worker call
+  concurrency uses Oxian's maxima (1,024 per connection).
+- Depends on Ominipg 0.11.0, which removes the read-snapshot API and protocol.
+- Agent turns cost far fewer database round trips. Identical policy reads within
+  one read snapshot share one result, committed policy facts stay in the owner's
+  memory across commands (invalidated by its own writes), a grouped command sets
+  its savepoint only once it issues SQL, observation record checks read the
+  owner's record cache, and a tool plan's result messages are written in one
+  transaction. At a 1.7 ms database round trip: a fresh agent turn replies in
+  1.4 s instead of 3.4 s, a turn on a 100-message thread in 1.9 s instead of
+  10.6 s, and a three-agent fan-out settles in 20.8 s instead of 39.8 s.
+- An operation whose last delivery settled while its readiness check was running
+  no longer stays `running`; an awaiting `ask` resumes when its answers arrive.
+- Concurrent tool-plan branches no longer collide on the projection's
+  deduplication id, which could dead-letter a multi-agent turn.
+- Depends on Oxian 0.23.2: a Hypervisor served through a route-hosted WebSocket
+  upgrade sees the public request URL (shard owner hosts no longer answer 404).
+- Device sockets accept the https origin of the request's own host when a TLS
+  edge forwards the upgrade as http. Server facades may declare
+  `publicHost(request)`, the host a trusted edge forwarded (for example when an
+  edge rewrites `Host`); its https origin also authenticates device sockets.
+  Browsers cannot set proxy headers on a WebSocket handshake, so foreign origins
+  stay refused.
+- Upgraded schemas keep reading `database:default` body copies when the
+  application configures its own body storage adapter.
+
+- **Breaking:** remove `readSnapshot`. Register loaders with `defineRead` under
+  `resources.reads` and invoke `context.read(name, args)` for one owner-side
+  transaction and one worker RPC. Results include diagnostic `asOf` metadata.
+  Policy is evaluated on the batch view, including final disclosure. FIFO read
+  admission replaces immediate capacity refusals: deadlines raise retryable
+  `read_capacity_timeout` with `retryAfterMs`; `persistence_unavailable` means
+  an unavailable database. Ownership mismatch raises `ActionOwnershipLost`. Held
+  read handles and their cleanup protocol have been removed.
+
+- Exclude terminal uncaptured invocation history and fully settled ingress from
+  v13 authority review. Inventory reports history separately; manifest-bound
+  non-resumable receipts record counts and a deterministic history digest.
+  Captured, live and ambiguous work still requires explicit bindings. Guard
+  historical claims and authorization reuse; support an empty or policy-only
+  manifest when all retained work is history.
+
+- Support reviewed shared content ownership during offline upgrades, with
+  candidate validation, stable legacy fingerprints and a deterministic
+  `content-decisions --plan=...` review template.
+- Extract terminal, authority and legacy content identities once; batch terminal
+  evidence and transfer-copy retirement; group operation ordinal backfills. Add
+  a synthetic 100,000-body SQL scale guard across the offline chain.
+
+- Bound offline cutover payload memory across retained inspection, v11
+  conversion, v12 owner keys and v13 authority application. Add compact review
+  manifests with content fingerprint parity and a synthetic scale rehearsal.
+- Add missing-content inventory and digest-bound unrecoverable decisions for
+  missing non-completed terminal bodies, retaining explicit unavailable history
+  through v14. Reject existing, completed, live and unreferenced locations.
+- Retry transient S3/GCS reads within bounded worker slots and expose
+  per-attempt transport timeouts, preserving conditional version guards.
+
+- Accept uniquely wrapper-attested terminals during offline retained-data
+  upgrades. Add digest-bound reviewed abandonment for crash victims, preserving
+  referenced history as cancelled with explicit provenance. Plans fingerprint
+  terminal evidence, and pruner listings distinguish attested/unattested runs.
+
+- Add a read-only legacy object store and verified owner-key reader for offline
+  cutover, reading raw S3/GCS objects in place before v12 installs database
+  copies.
+
+- Complete the linear offline retained-data upgrade through v14, with reviewed
+  content plans and resumable owner-key and authority checkpoints.
+- Add the retained-history pruner with closure/reference safety checks and
+  bounded payload memory. Add digest-bound inventory and reviewed retirement for
+  abandoned invocations that never recorded a terminal result.
+- Add `--storage=MODULE.ts` to the upgrade CLI, database fallback for unmapped
+  locations, and configurable concurrent external content verification.
+
 ## 0.90.1 — 2026-10-23
 
 - A new chat's first turn is live again: dots, who is replying, streaming text,

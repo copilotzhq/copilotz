@@ -14,7 +14,10 @@
     "resources/tools/remember/index.ts": "remember",
     "actions/retire-memory/index.ts": "retire_memory",
     "resources/tools/retire-memory/index.ts": "retire_memory",
-    "actions/personal-memory/index.ts": "personal_memory"
+    "actions/personal-memory/index.ts": "personal_memory",
+    "resources/reads/checkpointSource/index.ts": "memoryCheckpointSource",
+    "resources/reads/toolSources/index.ts": "memoryToolSources",
+    "resources/reads/reservationWindow/index.ts": "memoryReservationWindow"
   },
   "include": [
     "collections/memory-space/index.ts",
@@ -39,7 +42,10 @@
     "actions/retire-memory/index.ts",
     "resources/tools/retire-memory/index.ts",
     "resources/promptContext/personal-memory/index.ts",
-    "actions/personal-memory/index.ts"
+    "actions/personal-memory/index.ts",
+    "resources/reads/checkpointSource/index.ts",
+    "resources/reads/toolSources/index.ts",
+    "resources/reads/reservationWindow/index.ts"
   ],
   "plugins": [
     {

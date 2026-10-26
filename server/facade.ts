@@ -732,7 +732,11 @@ export function createServerFacadeFetchHandler(
     if (
       new URL(request.url).pathname !== `${facade.basePath}/device`
     ) return fetch(request);
-    const origin = deviceOrigin(request, allowedOrigins);
+    const origin = deviceOrigin(
+      request,
+      allowedOrigins,
+      facade.publicHost?.(request),
+    );
     if (origin === false) {
       return new Response("Device origin refused", { status: 403 });
     }

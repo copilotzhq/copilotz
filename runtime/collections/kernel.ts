@@ -1,4 +1,8 @@
-import { readAuthorizationRecord } from "../authorization/cache.ts";
+import { readConfiguration } from "../persistence/read-limiter.ts";
+import {
+  memoizeSnapshotReads,
+  readAuthorizationRecord,
+} from "../authorization/cache.ts";
 import { withTransactionEffects } from "./transaction-effects.ts";
 import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
@@ -35,8 +39,14 @@ import {
   withOwnerCommandAuthorization,
 } from "../engine/command-authorization.ts";
 import { collectionCommandReceipt } from "./command-receipt.ts";
-import { withSnapshotControl } from "./snapshot-control.ts";
-import { usesExclusiveReadSnapshot } from "../events/snapshot-kind.ts";
+import type {
+  ReadContext,
+  ReadOptions,
+  ReadResult,
+  ReadScope,
+  RegisteredRead,
+} from "./reads.ts";
+import { bindSchemaOwner } from "../engine/commands.ts";
 import { isPendingContentRef } from "../content/schema.ts";
 import { syncCollectionAlarm } from "./alarms.ts";
 import {
@@ -355,7 +365,7 @@ export type ScopedCollection<
 export type ScopedCollections = Readonly<Record<string, ScopedCollection>>;
 
 /** The deliberately read-only Collection surface available in a DB snapshot. */
-export type SnapshotCollection<
+export type ReadCollection<
   TSelect extends CollectionRecord = CollectionRecord,
   TInsert extends object = Record<string, unknown>,
 > = Pick<
@@ -369,7 +379,7 @@ export type SnapshotCollection<
   | "relations"
 >;
 
-export type SnapshotCollections = Readonly<Record<string, SnapshotCollection>>;
+export type ReadCollections = Readonly<Record<string, ReadCollection>>;
 
 export type CollectionScope = Readonly<{
   namespace: string;
@@ -463,12 +473,13 @@ export type CollectionKernel = Readonly<{
     command?: CommandContext,
   ): Promise<CollectionTransactionResult<T>>;
   withScope(scope: CollectionScope): ScopedCollections;
-  readSnapshot<T>(
-    scope: Pick<CollectionScope, "namespace">,
-    execute: (
-      context: Readonly<{ collections: SnapshotCollections }>,
-    ) => T | Promise<T>,
-  ): Promise<T>;
+  registerRead<A, T>(name: string, definition: RegisteredRead<A, T>): void;
+  read<T = unknown>(
+    scope: ReadScope,
+    name: string,
+    args?: unknown,
+    options?: ReadOptions,
+  ): Promise<ReadResult<T>>;
 }>;
 
 type PreparedWrite = Readonly<{
@@ -1000,20 +1011,20 @@ export function createCollectionKernel(
     state: "open" | "closing" | "closed";
   };
   const transactions = createAsyncContextStorage<TransactionScope>();
-  type SnapshotScope = {
+  type ReadBatchScope = {
     executor: SqlExecutor;
     state: "open" | "closed";
     /** A repeatable-read snapshot answers the same question the same way. */
     reads: Map<string, Promise<unknown>>;
-    control: import("../events/session.ts").SqlReadSnapshot;
-    commandTime?: Promise<string>;
+    asOf?: ReadResult<unknown>["asOf"];
   };
-  const snapshots = createAsyncContextStorage<SnapshotScope>();
+  const readBatches = createAsyncContextStorage<ReadBatchScope>();
   const activeScope = () => transactions.getStore();
-  const activeSnapshot = () => snapshots.getStore();
+  const activeReadBatch = () => readBatches.getStore();
   type PolicyRead = Readonly<{ transaction: SqlExecutor; commandTime: string }>;
   type ActivePolicyRead = PolicyRead & {
-    snapshot?: SnapshotScope;
+    snapshot?: ReadBatchScope;
+    deferDisclosure?: boolean;
     active: boolean;
     authority: ReturnType<typeof captureCollectionInvocation>;
   };
@@ -1040,6 +1051,18 @@ export function createCollectionKernel(
       policyReads.getStore()?.authority;
     if (authority && !authority.trustedHost) collectionPolicyRefused();
   };
+  const policyDecision = <T>(
+    kind: string,
+    execute: (read: PolicyRead) => Promise<T>,
+  ): Promise<T> =>
+    options.session.concurrentReads && options.session.readTransaction
+      ? options.session.readTransaction((transaction) =>
+        execute({
+          transaction: memoizeSnapshotReads(transaction),
+          commandTime: now().toISOString(),
+        })
+      )
+      : runCommand(kind, {}, (_, command) => execute(command));
   const readPolicy = async <T>(
     name: string,
     namespace: string,
@@ -1049,15 +1072,57 @@ export function createCollectionKernel(
     id?: string,
     disclosureRoot = false,
   ): Promise<T> => {
+    if (
+      options.policies?.size && !activeReadBatch() && !policyReads.getStore() &&
+      options.session.concurrentReads && method !== "query"
+    ) {
+      return await options.session.readTransaction!(async (snapshot) => {
+        const transaction = memoizeSnapshotReads(snapshot);
+        // A selector may disclose again after external work; retain its gate.
+        // A standalone primitive needs only this transaction's final gate.
+        const inheritedDisclosure = policyDisclosures.getStore();
+        const disclosure: PolicyDisclosure = inheritedDisclosure ??
+          { active: true, checks: [] };
+        const read: ActivePolicyRead = {
+          transaction,
+          commandTime: new Date().toISOString(),
+          authority: captureCollectionInvocation(),
+          active: true,
+          deferDisclosure: !inheritedDisclosure,
+        };
+        try {
+          return await policyDisclosures.run(
+            disclosure,
+            () =>
+              policyReads.run(read, async () => {
+                const value = await readPolicy(
+                  name,
+                  namespace,
+                  method,
+                  args,
+                  load,
+                  id,
+                );
+                if (!inheritedDisclosure) {
+                  for (const check of disclosure.checks) await check(read);
+                }
+                return value;
+              }),
+          );
+        } finally {
+          if (!inheritedDisclosure) disclosure.active = false;
+          read.active = false;
+        }
+      });
+    }
     const registration = options.policies?.get(name);
     const trusted = hasTrustedCollectionPolicyRead();
     if (trusted) {
       if (method === "query" || policyReads.getStore()) return await load();
       const authority = captureCollectionInvocation();
-      return await runCommand(
+      return await policyDecision(
         "collections.authenticate",
-        {},
-        (_input, command) =>
+        (command) =>
           withTrustedCollectionPolicyRead(() =>
             policyReads.run(
               { ...command, authority, active: true },
@@ -1179,11 +1244,13 @@ export function createCollectionKernel(
     if (nested) {
       await policy?.authorize(nested, "read");
       const result = await load(policy?.args());
-      await disclose(nested, result);
+      if (!nested.snapshot && !nested.deferDisclosure) {
+        await disclose(nested, result);
+      }
       disclosure.checks.push((read) => disclose(read, result));
       return result;
     }
-    const snapshot = activeSnapshot();
+    const snapshot = activeReadBatch();
     if (snapshot && snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
     }
@@ -1192,7 +1259,7 @@ export function createCollectionKernel(
     // read decides atomically; the shared disclosure gate rechecks all results.
     const result = method === "query"
       ? await (async () => {
-        await runCommand("collections.read", {}, async (_input, command) => {
+        await policyDecision("collections.read", async (command) => {
           await policy?.authorize(command, "read");
         });
         return await load(policy?.args());
@@ -1234,11 +1301,7 @@ export function createCollectionKernel(
     // Hydrated endpoints and named-query reads share the root's final fresh gate.
     // An unprotected root cannot disclose a protected descendant on an old check.
     if (disclosureRoot) {
-      await runCommand(
-        "collections.disclose",
-        {},
-        (_input, command) => discloseAll(command),
-      );
+      await policyDecision("collections.disclose", discloseAll);
     }
     return result;
   };
@@ -1317,7 +1380,7 @@ export function createCollectionKernel(
       }
       return read.snapshot?.executor ?? read.transaction;
     }
-    const snapshot = activeSnapshot();
+    const snapshot = activeReadBatch();
     if (!snapshot) return sql();
     if (snapshot.state !== "open") {
       throw new Error("Read snapshot access has already closed.");
@@ -1645,7 +1708,7 @@ export function createCollectionKernel(
       }
     };
     const assertStandaloneWrite = (): void => {
-      if (activeSnapshot()) {
+      if (activeReadBatch()) {
         throw new Error(
           "Collection mutations are not allowed inside a read snapshot.",
         );
@@ -3010,11 +3073,11 @@ export function createCollectionKernel(
         batch.waiting.set(id, waiters);
       });
 
-    const inSnapshot = <T>(
+    const inReadBatch = <T>(
       key: string,
       load: () => Promise<T>,
     ): Promise<T> => {
-      const snapshot = activeSnapshot();
+      const snapshot = activeReadBatch();
       if (!snapshot) return load();
       let remembered = snapshot.reads.get(key) as Promise<T> | undefined;
       if (!remembered) snapshot.reads.set(key, remembered = load());
@@ -3028,7 +3091,7 @@ export function createCollectionKernel(
       recordId: string,
     ): Promise<CollectionRecord | null> => {
       const memo =
-        options.policies?.has(name) || activeSnapshot() || activeScope() ||
+        options.policies?.has(name) || activeReadBatch() || activeScope() ||
           Boolean(currentCommand())
           ? undefined
           : readViews.memo();
@@ -3046,7 +3109,7 @@ export function createCollectionKernel(
       const ns = requireText(namespace, "Namespace");
       const recordId = requireText(id, `${name} id`);
       return readPolicy(name, ns, "get", { id: recordId }, () =>
-        inSnapshot(
+        inReadBatch(
           JSON.stringify(["get", name, ns, recordId]),
           () => loadInHop(ns, recordId),
         ), recordId) as Promise<TSelect | null>;
@@ -3099,7 +3162,7 @@ export function createCollectionKernel(
             ? load(authorizedArgs as CollectionQuery)
             : key === undefined
             ? load()
-            : inSnapshot(key, load),
+            : inReadBatch(key, load),
       );
     };
 
@@ -3416,7 +3479,7 @@ export function createCollectionKernel(
       name,
       createCollectionOperations(collection as BoundCollection, {
         activeTransaction: () => Boolean(activeScope()),
-        activeSnapshot: () => Boolean(activeSnapshot()),
+        activeSnapshot: () => Boolean(activeReadBatch()),
         contentResolver: options.contentResolver,
         relations: (namespace, query) => {
           query = structuredClone(query);
@@ -3468,7 +3531,7 @@ export function createCollectionKernel(
   ): Promise<CollectionTransactionResult<T>> => {
     const receipt = collectionCommandReceipt();
     const commandReceipt = receipt ? { ...receipt } : undefined;
-    if (activeSnapshot()) {
+    if (activeReadBatch()) {
       throw new Error(
         "Collection transactions are not allowed inside a read snapshot.",
       );
@@ -4473,39 +4536,59 @@ export function createCollectionKernel(
     ));
   };
 
-  const readSnapshot = async <T>(
-    scope: Pick<CollectionScope, "namespace">,
-    execute: (
-      context: Readonly<{ collections: SnapshotCollections }>,
-    ) => T | Promise<T>,
-  ): Promise<T> => {
-    if (activeSnapshot()) {
-      throw new Error("Nested read snapshots are not supported.");
+  const acquireReadOwner = bindSchemaOwner(
+    options.session,
+    options.eventStore.databaseSchema,
+  );
+  const registeredReads = new Map<string, RegisteredRead<unknown, unknown>>();
+  const registerRead = <A, T>(
+    name: string,
+    definition: RegisteredRead<A, T>,
+  ) => {
+    registeredReads.set(name, definition as RegisteredRead<unknown, unknown>);
+  };
+  const read = async <T = unknown>(
+    scope: ReadScope,
+    name: string,
+    args: unknown = null,
+    config: ReadOptions = {},
+  ): Promise<ReadResult<T>> => {
+    const authority = captureCollectionInvocation();
+    const definition = (scope.reads?.[name] ?? registeredReads.get(name)) as
+      | RegisteredRead<unknown, T>
+      | undefined;
+    if (!definition || definition.kind !== "registered-read") {
+      throw new TypeError(`Unknown registered read '${name}'.`);
     }
-    if (!options.session.withReadSnapshot) {
-      throw new Error(
-        "The configured SQL session does not support repeatable read snapshots.",
-      );
-    }
-    const cleanup = Promise.withResolvers<
-      import("../events/session.ts").SqlSnapshotCleanup
-    >();
-    const select = async (
-      control: import("./snapshot-control.ts").SnapshotControl,
-    ): Promise<T> => {
-      const executor = control.snapshot;
-      const snapshot: SnapshotScope = {
-        executor,
-        state: "open",
-        reads: new Map(),
-        control,
-      };
-      return await snapshots.run(snapshot, async () => {
+    assertJsonValue(args, { maxDepth: 64, maxNodes: 100_000 });
+    args = structuredClone(args);
+    const inherited = activeReadBatch();
+    const owner = await acquireReadOwner();
+    const assertOwner = () => {
+      if (owner.signal.aborted) {
+        throw Object.assign(new Error("Read ownership lost."), {
+          code: "ActionOwnershipLost",
+          retryable: false,
+        });
+      }
+      config.signal?.throwIfAborted();
+    };
+    const select = async (executor: SqlExecutor): Promise<ReadResult<T>> => {
+      const snapshot: ReadBatchScope = inherited ??
+        { executor, state: "open", reads: new Map() };
+      return await readBatches.run(snapshot, async () => {
         const closed = () =>
           Promise.reject(
             new Error("Read snapshot access has already closed."),
           );
-        const scoped = withScope({ namespace: scope.namespace });
+        const byName = withScope({ namespace: scope.namespace });
+        const scoped = scope.aliases
+          ? Object.fromEntries(
+            Object.entries(scope.aliases).map((
+              [alias, definition],
+            ) => [alias, byName[definition.name]]),
+          )
+          : byName;
         const collections = (Object.fromEntries(
           Object.entries(scoped).map((
             [name, collection],
@@ -4555,58 +4638,94 @@ export function createCollectionKernel(
               } as const,
             } as const,
           ]),
-        )) as unknown as SnapshotCollections;
+        )) as unknown as ReadCollections;
+
+        const policyRead: ActivePolicyRead = {
+          transaction: executor,
+          commandTime: new Date().toISOString(),
+          authority,
+          active: true,
+          snapshot,
+        };
+        const disclosure: PolicyDisclosure = { active: true, checks: [] };
         try {
-          return await execute(
-            withSnapshotControl(
-              { collections } as const,
-              control,
-            ),
-          );
+          assertOwner();
+          if (!inherited) {
+            const result = await executor.query<
+              { epoch: number | string; last_seq: number | string }
+            >(`SELECT epoch, last_seq FROM "${options.eventStore.databaseSchema}".owner_epochs WHERE owner='schema'`);
+            const row = result.rows[0];
+            if (Number(row?.epoch) !== owner.epoch) {
+              throw Object.assign(new Error("Read ownership lost."), {
+                code: "ActionOwnershipLost",
+                retryable: false,
+              });
+            }
+            snapshot.asOf = {
+              epoch: Number(row.epoch),
+              lastSeq: Number(row.last_seq),
+            };
+          }
+          const inheritedContext = scope.context as
+            | Partial<ReadContext>
+            | undefined;
+          const context = {
+            databaseSchema: options.eventStore.databaseSchema,
+            resources: {},
+            identity: {},
+            operationKey: "read",
+            now,
+            ...inheritedContext,
+            namespace: scope.namespace,
+            signal: AbortSignal.any([
+              owner.signal,
+              ...(config.signal ? [config.signal] : []),
+              ...(inheritedContext?.signal ? [inheritedContext.signal] : []),
+            ]),
+            collections,
+            read: (name: string, args?: unknown) =>
+              read(scope, name, args, config),
+          } as ReadContext;
+          const execute = () => definition.execute(args, context);
+          const value = inherited
+            ? await execute()
+            : await policyDisclosures.run(disclosure, () =>
+              policyReads.run(policyRead, async () => {
+                const value = await execute();
+                for (const check of disclosure.checks) {
+                  await check(policyRead);
+                }
+                return value;
+              }));
+          assertOwner();
+          return { value: value as T, asOf: snapshot.asOf! };
         } finally {
-          snapshot.state = "closed";
+          disclosure.active = false;
+          policyRead.active = false;
+          if (!inherited) snapshot.state = "closed";
         }
       });
     };
-    let exclusive = usesExclusiveReadSnapshot(options.session.withReadSnapshot);
-    if (!exclusive) {
-      const value = await options.session.withReadSnapshot(async (session) => {
-        if (session.kind === "exclusive" && options.policies?.size) {
-          exclusive = true;
-          return undefined;
-        }
-        return await select({ ...session, cleanup: cleanup.promise });
-      }, { onCleanup: cleanup.resolve });
-      if (!exclusive) return value as T;
-    }
-    // An exclusive backend cannot open a second owner command while its
-    // snapshot holds the connection. The acquired owner command itself provides
-    // the consistent read scope and evaluates policy in that same transaction.
-    // Known managed PGlite uses this boundary directly: its native raw-snapshot
-    // certification excludes extension configurations such as vector storage.
-    const released = Promise.withResolvers<
-      import("../events/session.ts").SqlSnapshotCleanup
-    >();
     try {
-      return await runCommand(
-        "collections.snapshot",
-        {},
-        async (_, command) => {
-          const selected = { context: command, active: true };
-          try {
-            return await commands.run(selected, () =>
-              select({
-                kind: "exclusive",
-                snapshot: command.transaction,
-                cleanup: released.promise,
-              }));
-          } finally {
-            selected.active = false;
-          }
-        },
+      if (inherited) return await select(inherited.executor);
+      if (options.session.concurrentReads && options.session.readTransaction) {
+        return await options.session.readTransaction(
+          (snapshot) => select(memoizeSnapshotReads(snapshot)),
+          config,
+        );
+      }
+      return await readConfiguration(options.session).limiter.run(
+        () =>
+          runCommand(
+            "collections.readBatch",
+            {},
+            (_, command) => select(command.transaction),
+          ),
+        config,
       );
-    } finally {
-      released.resolve("confirmed");
+    } catch (error) {
+      assertOwner();
+      throw error;
     }
   };
 
@@ -4639,7 +4758,8 @@ export function createCollectionKernel(
     operations: (name: string) => operations.get(name),
     transaction,
     withScope,
-    readSnapshot,
+    read,
+    registerRead,
   } as const;
   return runtime;
 }
@@ -4683,7 +4803,8 @@ export function createCollectionRuntime(
     get: (name: string) => kernel.operations(name),
     vectors: kernel.vectors,
     withScope: kernel.withScope,
-    readSnapshot: kernel.readSnapshot,
+    read: kernel.read,
+    registerRead: kernel.registerRead,
     transaction: kernel.transaction,
   } as const) as CollectionRuntime;
   return runtime;

@@ -1,3 +1,4 @@
+import type { ThreadWindowResult } from "../../core/shared/thread-window-read.ts";
 /** Bounded checkpoint reservation shared by background and foreground compaction. @module */
 import {
   coreMessageOrigin,
@@ -9,7 +10,6 @@ import { isContentByteLimitError } from "@copilotz/copilotz/content";
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 
-import { loadCoreThreadMessageSnapshot } from "@copilotz/copilotz/core";
 import {
   buildMemoryConsolidationInstruction,
   memorySourceManifestEntry,
@@ -139,22 +139,20 @@ export async function reserveMemoryCheckpoint(
   }
   const snapshot = options.prepared
     ? { active: true, messages: options.prepared.messages }
-    : await context.readSnapshot(({ collections }) =>
-      loadCoreThreadMessageSnapshot(
-        { collections } as typeof context,
-        message.threadId,
-        messageRecord,
-        {
-          ...(optionalText(messageRecord.historyScopeId)
-            ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
-            : {}),
-          viewerIds: [owner.id],
-          ...(certifiedPreviousBoundary
-            ? { afterMessageId: certifiedPreviousBoundary }
-            : {}),
-        },
-      )
-    );
+    : (await context.read<ThreadWindowResult>("memoryReservationWindow", {
+      threadId: message.threadId,
+      trigger: messageRecord,
+      options: {
+        ...(optionalText(messageRecord.historyScopeId)
+          ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
+          : {}),
+        viewerIds: [owner.id],
+        ...(certifiedPreviousBoundary
+          ? { afterMessageId: certifiedPreviousBoundary }
+          : {}),
+      },
+    })).value;
+
   if (!snapshot.active) return null;
   const instructionEstimatedTokens = estimateTextTokens(
     buildMemoryConsolidationInstruction({

@@ -4,13 +4,16 @@ import {
   isActionContinuation,
 } from "../actions/continuation.ts";
 /** Bounded, data-only owner capability protocol. No executable values cross it. */
-import { ActionError } from "../actions/errors.ts";
+import {
+  ActionError,
+  isSettledActionError,
+  settledActionError,
+} from "../actions/errors.ts";
 import { markNonRetryable } from "../failure.ts";
 
 export const OWNER_CAPABILITY_WORKLOAD = "copilotz.owner.capability.v1";
-export const OWNER_CAPABILITY_BYTES = 1024 * 1024;
-export const OWNER_CAPABILITY_NODES = 100_000;
-export const OWNER_CAPABILITY_DEPTH = 64;
+// One generous memory-safety ceiling per message; large content travels as bodies/streams.
+export const OWNER_CAPABILITY_BYTES = 32 * 1024 * 1024;
 export type CapabilityPath = readonly string[];
 export type CapabilityCall = Readonly<{
   kind:
@@ -19,9 +22,10 @@ export type CapabilityCall = Readonly<{
     | "complete"
     | "call"
     | "transaction"
-    | "snapshot"
+    | "read"
     | "close"
     | "receipt";
+  name?: string;
   id?: string;
   context?: string;
   path?: CapabilityPath;
@@ -71,7 +75,7 @@ const copyBytes = Uint8Array.prototype.set;
 
 /** Copies only own data properties; accessors and prototypes never execute. */
 export function encodeCapability(value: unknown): Uint8Array {
-  let nodes = 0, remaining = OWNER_CAPABILITY_BYTES;
+  let remaining = OWNER_CAPABILITY_BYTES;
   const charge = (bytes: number) => {
     remaining -= bytes;
     if (remaining < 0) throw capabilityError("owner_data_limit");
@@ -83,9 +87,6 @@ export function encodeCapability(value: unknown): Uint8Array {
     depth: number,
     plainContinuation = false,
   ): unknown => {
-    if (++nodes > OWNER_CAPABILITY_NODES || depth > OWNER_CAPABILITY_DEPTH) {
-      throw capabilityError("owner_data_limit");
-    }
     if (value === undefined) {
       charge(3);
       return [0];
@@ -167,7 +168,7 @@ export function encodeCapability(value: unknown): Uint8Array {
         throw capabilityError("owner_data_invalid");
       }
       const disposition = () => {
-        let current: unknown = value, causeDepth = depth;
+        let current: unknown = value;
         const seen = new Set<object>();
         while (
           current &&
@@ -175,13 +176,6 @@ export function encodeCapability(value: unknown): Uint8Array {
         ) {
           if (seen.has(current)) return null;
           seen.add(current);
-          if (
-            current !== value &&
-            (++nodes > OWNER_CAPABILITY_NODES ||
-              ++causeDepth > OWNER_CAPABILITY_DEPTH)
-          ) {
-            throw capabilityError("owner_data_limit");
-          }
           const marker = Object.getOwnPropertyDescriptor(current, "retryable");
           if (marker && !("value" in marker)) {
             throw capabilityError("owner_data_invalid");
@@ -201,9 +195,10 @@ export function encodeCapability(value: unknown): Uint8Array {
       const retryAfterMs = typeof hint === "number" && Number.isFinite(hint)
         ? Math.min(30_000, Math.max(0, hint))
         : null;
+      const settled = isSettledActionError(value);
       charge(
-        9 + String(retryable).length + String(status).length +
-          String(retryAfterMs).length,
+        10 + String(retryable).length + String(status).length +
+          String(retryAfterMs).length + String(settled).length,
       );
       string(name);
       string(message);
@@ -217,6 +212,8 @@ export function encodeCapability(value: unknown): Uint8Array {
         retryable,
         status,
         retryAfterMs,
+        // A settled Action already recorded its terminal; callers must not retry it.
+        settled,
       ];
     }
     if (!value || typeof value !== "object" || ancestors.has(value)) {
@@ -276,11 +273,7 @@ export function decodeCapability(bytes: Uint8Array): unknown {
   const input: unknown = JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(bytes),
   );
-  let nodes = 0;
   const visit = (value: unknown, depth: number): unknown => {
-    if (++nodes > OWNER_CAPABILITY_NODES || depth > OWNER_CAPABILITY_DEPTH) {
-      throw capabilityError("owner_data_limit");
-    }
     if (!Array.isArray(value)) throw capabilityError("owner_data_invalid");
     const [tag, body] = value;
     if (tag === 0 && value.length === 1) return undefined;
@@ -302,12 +295,13 @@ export function decodeCapability(bytes: Uint8Array): unknown {
       return Uint8Array.from(atob(body), (byte) => byte.charCodeAt(0));
     }
     if (
-      tag === 5 && value.length === 7 && typeof body === "string" &&
+      tag === 5 && value.length === 8 && typeof body === "string" &&
       typeof value[2] === "string" &&
       (value[4] === null || typeof value[4] === "boolean") &&
       (value[6] === null ||
         typeof value[6] === "number" && Number.isFinite(value[6]) &&
-          value[6] >= 0 && value[6] <= 30_000)
+          value[6] >= 0 && value[6] <= 30_000) &&
+      typeof value[7] === "boolean"
     ) {
       const error = Object.assign(
         body === "ActionError" && typeof value[3] === "string" &&
@@ -320,6 +314,7 @@ export function decodeCapability(bytes: Uint8Array): unknown {
         },
       );
       if (value[6] !== null) Object.assign(error, { retryAfterMs: value[6] });
+      if (value[7]) settledActionError(error);
       return value[4] === false
         ? markNonRetryable(error)
         : value[4] === true

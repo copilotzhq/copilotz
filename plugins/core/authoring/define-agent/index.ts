@@ -1,10 +1,11 @@
 /** Defines immutable process-local Agent Resources. @module */
 
+/** Defines immutable process-local Agent Resources. @module */
 import {
   type LlmModelSelections,
   normalizeLlmModelSelections,
 } from "@copilotz/copilotz/llm";
-import type { SnapshotCollections } from "@copilotz/copilotz/collections";
+import type { ReadCollections } from "@copilotz/copilotz/collections";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const UNSAFE_ALIASES = new Set(["__proto__", "constructor", "prototype"]);
@@ -87,7 +88,7 @@ export type AgentDynamicResolveContext = Readonly<{
   participant: import("../../shared/contracts.ts").Participant;
   thread: import("../../shared/contracts.ts").ConversationThread;
   triggerMessage: import("../../shared/contracts.ts").ConversationMessage;
-  collections: SnapshotCollections;
+  collections: ReadCollections;
 }>;
 
 /** Effective values selected for one prepared Agent turn. */

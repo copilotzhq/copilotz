@@ -7,6 +7,7 @@ import type { CommandContext } from "../engine/commands.ts";
 import type { AuthorizationIntent } from "./evaluator.ts";
 import { type AuthorityDependency, authorityDependsOn } from "./authority.ts";
 import { loadCollectionRecord } from "../collections/reducer.ts";
+import { readAuthorizationRecord } from "./cache.ts";
 import { createCoreTableNames } from "../events/schema.ts";
 import { matchesCollectionFilter } from "../collections/predicate.ts";
 /** Tenant-local protected commands and live authority. */
@@ -227,22 +228,32 @@ export function createAuthorizationOwner(
         decision.constraints.collections?.[input.record.collection] ??
           (definition && decision.constraints.collections?.[definition.name]);
       if (!definition || !filter) authorizationRefused();
-      const record = await loadCollectionRecord(
-        command.transaction,
-        createCoreTableNames(options.databaseSchema),
-        channel.authority.scope.namespace,
-        definition.name,
-        input.record.id,
-      );
-      if (!record || !matchesCollectionFilter(filter, record)) {
-        authorizationRefused();
-      }
-      dependencies.push({
+      const dependency = {
         owner: channel.authority.scope.owner,
         namespace: channel.authority.scope.namespace,
         collection: definition.name,
         id: input.record.id,
-      });
+      };
+      // Every publish rechecks the record; owner memory serves it until a
+      // write to the record invalidates it.
+      const record = await readAuthorizationRecord(
+        command.transaction,
+        options.databaseSchema,
+        dependency,
+        () =>
+          loadCollectionRecord(
+            command.transaction,
+            createCoreTableNames(options.databaseSchema),
+            dependency.namespace,
+            dependency.collection,
+            dependency.id,
+          ),
+        { immutableJson: true },
+      );
+      if (!record || !matchesCollectionFilter(filter, record)) {
+        authorizationRefused();
+      }
+      dependencies.push(dependency);
     }
     for (const id of input.operationIds ?? []) {
       await assertFlowOperation(channel.authority, id, command.transaction);

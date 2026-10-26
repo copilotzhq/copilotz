@@ -1,5 +1,8 @@
 import { readConfiguration } from "../persistence/read-limiter.ts";
-import { readAuthorizationRecord } from "../authorization/cache.ts";
+import {
+  memoizeSnapshotReads,
+  readAuthorizationRecord,
+} from "../authorization/cache.ts";
 import { withTransactionEffects } from "./transaction-effects.ts";
 import { rethrowNodeIdentityConflict } from "./errors.ts";
 import {
@@ -1054,7 +1057,10 @@ export function createCollectionKernel(
   ): Promise<T> =>
     options.session.concurrentReads && options.session.readTransaction
       ? options.session.readTransaction((transaction) =>
-        execute({ transaction, commandTime: now().toISOString() })
+        execute({
+          transaction: memoizeSnapshotReads(transaction),
+          commandTime: now().toISOString(),
+        })
       )
       : runCommand(kind, {}, (_, command) => execute(command));
   const readPolicy = async <T>(
@@ -1070,7 +1076,8 @@ export function createCollectionKernel(
       options.policies?.size && !activeReadBatch() && !policyReads.getStore() &&
       options.session.concurrentReads && method !== "query"
     ) {
-      return await options.session.readTransaction!(async (transaction) => {
+      return await options.session.readTransaction!(async (snapshot) => {
+        const transaction = memoizeSnapshotReads(snapshot);
         // A selector may disclose again after external work; retain its gate.
         // A standalone primitive needs only this transaction's final gate.
         const inheritedDisclosure = policyDisclosures.getStore();
@@ -4702,7 +4709,10 @@ export function createCollectionKernel(
     try {
       if (inherited) return await select(inherited.executor);
       if (options.session.concurrentReads && options.session.readTransaction) {
-        return await options.session.readTransaction(select, config);
+        return await options.session.readTransaction(
+          (snapshot) => select(memoizeSnapshotReads(snapshot)),
+          config,
+        );
       }
       return await readConfiguration(options.session).limiter.run(
         () =>

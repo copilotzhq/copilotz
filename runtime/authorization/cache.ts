@@ -247,7 +247,24 @@ export function observeAuthorizationWrites(
   return observed;
 }
 
-/** No memoization outside a managed owner command. Each caller gets a detached row. */
+/**
+ * A read-only REPEATABLE READ snapshot cannot change, so identical policy reads
+ * inside it share one result: a disclosure checks every row against the same
+ * session, actor and thread facts. The snapshot gets a private cache that ends
+ * with it and never publishes into owner memory.
+ */
+export function memoizeSnapshotReads(snapshot: SqlExecutor): SqlExecutor {
+  if (!contexts.has(snapshot)) {
+    contexts.set(snapshot, {
+      owner: new OwnerAuthorizationCache(),
+      reads: new Map(),
+      grants: new Map(),
+    });
+  }
+  return snapshot;
+}
+
+/** No memoization outside an owner command or read snapshot. Each caller gets a detached row. */
 export async function memoAuthorizationRead<T>(
   transaction: SqlExecutor,
   key: string,

@@ -45,9 +45,6 @@ import {
 type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Deferred<T> = ReturnType<typeof Promise.withResolvers<T>>;
-const MAX_CONTEXTS = 256;
-const MAX_RESOURCES = 32;
-const MAX_ASSIGNMENTS = 256;
 const POLL_MS = 10_000;
 const RESOURCE_IDLE_MS = 30_000;
 const RESOURCE_LIFETIME_MS = 120_000;
@@ -285,9 +282,6 @@ export function createOwnerCapabilityHost(
       binding.parent!.streamId
     }`;
   const notify = (assignment: Assignment, event: CapabilityPoll) => {
-    if (assignment.queue.length >= MAX_CONTEXTS) {
-      throw capabilityError("owner_capacity");
-    }
     assignment.queue.push(event);
     assignment.wake?.resolve();
   };
@@ -493,9 +487,6 @@ export function createOwnerCapabilityHost(
     context: ProcessorContext | ActionContext,
   ): Promise<unknown> => {
     check(assignment);
-    if (assignment.contexts.size >= MAX_CONTEXTS) {
-      throw capabilityError("owner_capacity");
-    }
     const id = crypto.randomUUID();
     const result = Promise.withResolvers<unknown>();
     void result.promise.catch(() => undefined);
@@ -509,9 +500,7 @@ export function createOwnerCapabilityHost(
           );
         }
       }
-      if (assignment.queue.length < MAX_CONTEXTS) {
-        notify(assignment, { aborted: id });
-      } else abortAssignment(assignment, capabilityError("owner_capacity"));
+      notify(assignment, { aborted: id });
     };
     const abort = () => {
       // A caller cancellation predating placement revocation stays semantic.
@@ -693,9 +682,6 @@ export function createOwnerCapabilityHost(
       reservation.ready.resolve(resource.close);
       return reservation.resource;
     }
-    if (assignment.resources.size >= MAX_RESOURCES) {
-      throw capabilityError("owner_capacity");
-    }
     const value: Resource = {
       ...resource,
       id: crypto.randomUUID(),
@@ -825,9 +811,6 @@ export function createOwnerCapabilityHost(
     let assignment = assignments.get(key);
     if (call.kind === "open") {
       if (assignment) throw capabilityError("owner_assignment_started");
-      if (assignments.size >= MAX_ASSIGNMENTS) {
-        throw capabilityError("owner_capacity");
-      }
       assignment = {
         key,
         binding,
@@ -1176,7 +1159,7 @@ export function createOwnerCapabilityHost(
                 resource.removeFailure?.();
                 resource.removeFailure = undefined;
                 if (path[0] === "close" && typeof retain === "function") {
-                  // Keep the same MAX_RESOURCES slot and original owner-bound
+                  // Keep the same resource slot and original owner-bound
                   // method, without append/close or physical cleanup authority.
                   // Disposal/invocation cleanup releases this terminal handle.
                   const writer = resource.value;

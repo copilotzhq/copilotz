@@ -88,7 +88,6 @@ async function sendRead<T>(
 type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Request = (call: CapabilityCall, signal?: AbortSignal) => Promise<unknown>;
-const MAX_ACTIVE_INVOCATIONS = 256;
 function authorizationRefused(): never {
   throw standardActionError({ code: "forbidden", status: 403 })!;
 }
@@ -699,7 +698,7 @@ export function createOwnerWorkerWorkloads(
     let size = 0;
     for await (const chunk of work.input) {
       size += chunk.length;
-      if (size > OWNER_CAPABILITY_BYTES / 2) {
+      if (size > OWNER_CAPABILITY_BYTES) {
         throw capabilityError("owner_data_limit");
       }
       chunks.push(chunk);
@@ -780,9 +779,6 @@ export function createOwnerWorkerWorkloads(
           );
         }
         if (poll.invocation) {
-          if (running.size >= MAX_ACTIVE_INVOCATIONS) {
-            throw capabilityError("owner_capacity");
-          }
           const invocation = poll.invocation;
           const controller = new AbortController();
           const task = Promise.resolve().then(() =>

@@ -8,9 +8,8 @@ import { ActionError } from "../actions/errors.ts";
 import { markNonRetryable } from "../failure.ts";
 
 export const OWNER_CAPABILITY_WORKLOAD = "copilotz.owner.capability.v1";
-export const OWNER_CAPABILITY_BYTES = 1024 * 1024;
-export const OWNER_CAPABILITY_NODES = 100_000;
-export const OWNER_CAPABILITY_DEPTH = 64;
+// One generous memory-safety ceiling per message; large content travels as bodies/streams.
+export const OWNER_CAPABILITY_BYTES = 32 * 1024 * 1024;
 export type CapabilityPath = readonly string[];
 export type CapabilityCall = Readonly<{
   kind:
@@ -72,7 +71,7 @@ const copyBytes = Uint8Array.prototype.set;
 
 /** Copies only own data properties; accessors and prototypes never execute. */
 export function encodeCapability(value: unknown): Uint8Array {
-  let nodes = 0, remaining = OWNER_CAPABILITY_BYTES;
+  let remaining = OWNER_CAPABILITY_BYTES;
   const charge = (bytes: number) => {
     remaining -= bytes;
     if (remaining < 0) throw capabilityError("owner_data_limit");
@@ -84,9 +83,6 @@ export function encodeCapability(value: unknown): Uint8Array {
     depth: number,
     plainContinuation = false,
   ): unknown => {
-    if (++nodes > OWNER_CAPABILITY_NODES || depth > OWNER_CAPABILITY_DEPTH) {
-      throw capabilityError("owner_data_limit");
-    }
     if (value === undefined) {
       charge(3);
       return [0];
@@ -168,7 +164,7 @@ export function encodeCapability(value: unknown): Uint8Array {
         throw capabilityError("owner_data_invalid");
       }
       const disposition = () => {
-        let current: unknown = value, causeDepth = depth;
+        let current: unknown = value;
         const seen = new Set<object>();
         while (
           current &&
@@ -176,13 +172,6 @@ export function encodeCapability(value: unknown): Uint8Array {
         ) {
           if (seen.has(current)) return null;
           seen.add(current);
-          if (
-            current !== value &&
-            (++nodes > OWNER_CAPABILITY_NODES ||
-              ++causeDepth > OWNER_CAPABILITY_DEPTH)
-          ) {
-            throw capabilityError("owner_data_limit");
-          }
           const marker = Object.getOwnPropertyDescriptor(current, "retryable");
           if (marker && !("value" in marker)) {
             throw capabilityError("owner_data_invalid");
@@ -277,11 +266,7 @@ export function decodeCapability(bytes: Uint8Array): unknown {
   const input: unknown = JSON.parse(
     new TextDecoder("utf-8", { fatal: true }).decode(bytes),
   );
-  let nodes = 0;
   const visit = (value: unknown, depth: number): unknown => {
-    if (++nodes > OWNER_CAPABILITY_NODES || depth > OWNER_CAPABILITY_DEPTH) {
-      throw capabilityError("owner_data_limit");
-    }
     if (!Array.isArray(value)) throw capabilityError("owner_data_invalid");
     const [tag, body] = value;
     if (tag === 0 && value.length === 1) return undefined;

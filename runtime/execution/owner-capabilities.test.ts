@@ -238,7 +238,7 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
     await f.close();
   }
 });
-Deno.test("writer capacity is bounded while quiet live writers outlast generic handle limits", async () => {
+Deno.test("quiet live writers outlast generic handle limits and close on completion", async () => {
   let opened = 0, aborted = 0;
   const f = await setup({
     streams: {
@@ -256,7 +256,7 @@ Deno.test("writer capacity is bounded while quiet live writers outlast generic h
     },
   }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
   try {
-    for (let index = 0; index < 32; index++) {
+    for (let index = 0; index < 33; index++) {
       await f.call({
         kind: "call",
         context: f.id,
@@ -264,24 +264,13 @@ Deno.test("writer capacity is bounded while quiet live writers outlast generic h
         args: [{}],
       });
     }
-    await assertRejects(
-      () =>
-        f.call({
-          kind: "call",
-          context: f.id,
-          path: ["streams", "open"],
-          args: [{}],
-        }),
-      Error,
-      "owner_capacity",
-    );
-    assertEquals(opened, 32);
+    assertEquals(opened, 33);
     await new Promise((resolve) => setTimeout(resolve, 220));
     assertEquals(aborted, 0);
 
     await f.call({ kind: "complete", id: f.id, value: "quiet live writers" });
     assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
-    assertEquals(aborted, 32);
+    assertEquals(aborted, 33);
   } finally {
     await f.close();
   }
@@ -477,52 +466,7 @@ Deno.test("concurrent Open reserves one parent before deferred authority and cle
     await host.close();
   }
 });
-Deno.test("deferred concurrent Open admissions cannot exceed assignment capacity", async () => {
-  const authority = Promise.withResolvers<void>(),
-    entered = Promise.withResolvers<void>();
-  let admissions = 0, started = 0;
-  const host = createOwnerCapabilityHost({
-    localExecution: true,
-    registry: createPluginRegistry({}),
-    async resolveAuthority() {
-      if (++admissions === 256) entered.resolve();
-      await authority.promise;
-      return { epoch: 1, signal: new AbortController().signal };
-    },
-    createWorkloads: () => ({
-      test: () => {
-        started++;
-        return {};
-      },
-    }),
-  });
-  const pending = Array.from(
-    { length: 256 },
-    (_, index) =>
-      rawCall(host, admissionBinding(String(index)), {
-        kind: "open",
-        value: new Uint8Array(),
-      }),
-  );
-  try {
-    await entered.promise;
-
-    const overflow = rawCall(host, admissionBinding("overflow"), {
-      kind: "open",
-      value: new Uint8Array(),
-    });
-    void overflow.catch(() => undefined);
-    authority.resolve();
-    await Promise.all(pending);
-    await assertRejects(() => overflow, Error, "owner_capacity");
-    assertEquals(started, 256);
-  } finally {
-    authority.resolve();
-    await Promise.allSettled(pending);
-    await host.close();
-  }
-});
-Deno.test("deferred concurrent resource opens reserve physical capacity and clean failed opens", async () => {
+Deno.test("deferred concurrent resource opens all complete and failed opens clean up", async () => {
   const gate = Promise.withResolvers<void>(),
     entered = Promise.withResolvers<void>();
   let opened = 0, aborted = 0;
@@ -554,17 +498,8 @@ Deno.test("deferred concurrent resource opens reserve physical capacity and clea
   );
   try {
     await entered.promise;
-
-    const overflow = f.call({
-      kind: "call",
-      context: f.id,
-      path: ["streams", "open"],
-      args: [{}],
-    });
-    void overflow.catch(() => undefined);
     gate.resolve();
     await Promise.all(pending);
-    await assertRejects(() => overflow, Error, "owner_capacity");
     assertEquals(opened, 32);
   } finally {
     gate.resolve();

@@ -239,11 +239,10 @@ Deno.test("remote startup requires the actual accepted session subscriber; real 
   );
 });
 
-Deno.test("only accepted exact heartbeat sequences produce bounded coalesced renewal", async () => {
+Deno.test("only accepted exact heartbeat sequences produce coalesced renewal", async () => {
   const f = await fixture();
   try {
     for (let i = 0; i < 256; i++) await f.open(String(i));
-    await assertRejects(() => f.open("overflow"), Error, "owner_capacity");
     f.sessions.reserve({ workload: "test" });
     f.sessions.release(f.fence);
     assertThrows(() => f.sessions.heartbeat(f.fence, { sequence: 2 }));

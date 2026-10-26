@@ -144,10 +144,12 @@ for (const permanent of [false, true]) {
         await f.text(replies[0]),
         `${error.message} Please try again.`,
       );
+      // The terminal failure is durable and shown; the router settles the
+      // delivery instead of dead-lettering it.
       assertEquals(
         (await f.deliveries()).slice(0, 1).map((d) => [d.status, d.attempts]),
         [[
-          "dead_letter",
+          "succeeded",
           permanent ? 1 : 3,
         ]],
       );

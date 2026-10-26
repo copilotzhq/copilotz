@@ -22,6 +22,8 @@ rewrite the host, and the offline upgrade path reaches v14 linearly.
   s; they close at EOF, cancellation, invocation end or retirement. Worker call
   concurrency uses Oxian's maxima (1,024 per connection).
 - Depends on Ominipg 0.11.0, which removes the read-snapshot API and protocol.
+- Depends on Oxian 0.23.2: a Hypervisor served through a route-hosted WebSocket
+  upgrade sees the public request URL (shard owner hosts no longer answer 404).
 - Device sockets accept the https origin of the request's own host when a TLS
   edge forwards the upgrade as http. Server facades may declare
   `publicHost(request)`, the host a trusted edge forwarded (for example when an

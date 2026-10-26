@@ -1276,14 +1276,35 @@ async function projectionReady(
   const plans = context.collections.toolPlan;
   if (!plans) throw new Error("Collection 'toolPlan' is not bound.");
   const deduplicationId = `tool-plan:${planId}:projection-ready`;
-  await retryCoreMutation(() =>
-    plans.commands.projectionReady({
-      id: planId,
-    }, {
-      operationKey: deduplicationId,
-      identity: { deduplicationId },
-    })
-  );
+  try {
+    await retryCoreMutation(() =>
+      plans.commands.projectionReady({
+        id: planId,
+      }, {
+        operationKey: deduplicationId,
+        identity: { deduplicationId },
+      })
+    );
+  } catch (error) {
+    // Two branch settlements can both observe the last branch settle. The
+    // plan becomes ready once under this identity; a later caller's event
+    // differs only in its cause, so its conflict means readiness is recorded.
+    if (!deduplicationConflict(error)) throw error;
+  }
+}
+function deduplicationConflict(error: unknown): boolean {
+  for (
+    let current = error, depth = 0;
+    current && typeof current === "object" && depth < 8;
+    current = (current as { cause?: unknown }).cause, depth++
+  ) {
+    if (
+      (current as { code?: unknown }).code === "event_deduplication_conflict"
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 type ToolVisibility = Extract<EventVisibility, { kind: "tool" }>;
 function configuredVisibility(

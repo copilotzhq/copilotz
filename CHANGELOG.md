@@ -22,15 +22,14 @@ rewrite the host, and the offline upgrade path reaches v14 linearly.
   s; they close at EOF, cancellation, invocation end or retirement. Worker call
   concurrency uses Oxian's maxima (1,024 per connection).
 - Depends on Ominipg 0.11.0, which removes the read-snapshot API and protocol.
-- Agent turns cost far fewer database round trips. Identical policy reads
-  within one read snapshot share one result, committed policy facts stay in the
-  owner's memory across commands (invalidated by its own writes), a grouped
-  command sets its savepoint only once it issues SQL, observation record checks
-  read the owner's record cache, and a tool plan's result messages are written
-  in one transaction. At a 1.7 ms database round trip: a fresh agent turn
-  replies in 1.4 s instead of 3.4 s, a turn on a 100-message thread in 1.9 s
-  instead of 10.6 s, and a three-agent fan-out settles in 20.8 s instead of
-  39.8 s.
+- Agent turns cost far fewer database round trips. Identical policy reads within
+  one read snapshot share one result, committed policy facts stay in the owner's
+  memory across commands (invalidated by its own writes), a grouped command sets
+  its savepoint only once it issues SQL, observation record checks read the
+  owner's record cache, and a tool plan's result messages are written in one
+  transaction. At a 1.7 ms database round trip: a fresh agent turn replies in
+  1.4 s instead of 3.4 s, a turn on a 100-message thread in 1.9 s instead of
+  10.6 s, and a three-agent fan-out settles in 20.8 s instead of 39.8 s.
 - An operation whose last delivery settled while its readiness check was running
   no longer stays `running`; an awaiting `ask` resumes when its answers arrive.
 - Concurrent tool-plan branches no longer collide on the projection's

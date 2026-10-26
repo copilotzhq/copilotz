@@ -12,6 +12,15 @@ rewrite the host, and the offline upgrade path reaches v14 linearly.
   remains as a memory-safety net. Admission still comes from worker capacity,
   delivery leases and the read limiter. Limits with backpressure return before
   any release that admits untrusted workers.
+- A cancelled owner-capability call now ends only that call. Before, one
+  cancelled call (for example a provider attempt hitting its first-token
+  timeout) aborted every invocation in the delivery, so sibling fan-out branches
+  failed and retries reported "An external effect has no confirmed outcome".
+  Settled Action failures now keep their settled mark across the worker wire, so
+  placement on a worker no longer dead-letters a delivery whose Action already
+  recorded its failure. Reader handles no longer expire after 30 s idle or 120
+  s; they close at EOF, cancellation, invocation end or retirement. Worker call
+  concurrency uses Oxian's maxima (1,024 per connection).
 - Device sockets accept the https origin of the request's own host when a TLS
   edge forwards the upgrade as http. Server facades may declare
   `publicHost(request)`, the host a trusted edge forwarded (for example when an

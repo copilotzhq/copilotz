@@ -169,7 +169,6 @@ function workerContext(options: {
         [
           "ActionOwnershipLost",
           "owner_cleanup_unknown",
-          "owner_handle_expired",
           "owner_commit_unknown",
           "persistence_indeterminate",
         ].includes(String((error as { code?: unknown })?.code))
@@ -685,9 +684,12 @@ export function createOwnerWorkerWorkloads(
             error.message,
           );
           Object.assign(failure, { execution: error.execution, cause: error });
+          // A call its caller cancelled ends only that call; transport loss
+          // or expiry leaves the execution indeterminate and ends it.
           if (
-            error.execution === "indeterminate" ||
-            error.code === "deadline_exceeded"
+            !(callSignal.aborted && !signal.aborted) &&
+            (error.execution === "indeterminate" ||
+              error.code === "deadline_exceeded")
           ) abort.abort(failure);
           throw failure;
         }

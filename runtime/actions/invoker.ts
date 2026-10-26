@@ -33,7 +33,7 @@ import {
   validateAgainstJsonSchema,
 } from "../collections/validate.ts";
 import { errorRetryability, markNonRetryable } from "../failure.ts";
-import { ActionError } from "./errors.ts";
+import { ActionError, settledActionError } from "./errors.ts";
 import {
   durableActionMetadata,
   durableActionValue,
@@ -67,7 +67,6 @@ import type {
 } from "./types.ts";
 
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
-const settledActionErrors = new WeakSet<object>();
 const actionInputValidationErrors = new WeakSet<object>();
 // A composed Action alias is presentation only: Core needs the immutable
 // definition identity behind a caller when it persists a continuation.
@@ -277,21 +276,6 @@ function restoredActionError(
     markNonRetryable(error);
   }
   return error;
-}
-
-function settledActionError(error: unknown): unknown {
-  const value = ((typeof error === "object" && error !== null) ||
-      typeof error === "function")
-    ? error as object
-    : new Error(String(error), { cause: error });
-  settledActionErrors.add(value);
-  return value;
-}
-
-/** True only after the Action terminal lifecycle Event is durable. */
-export function isSettledActionError(error: unknown): boolean {
-  return ((typeof error === "object" && error !== null) ||
-    typeof error === "function") && settledActionErrors.has(error as object);
 }
 
 function createFrame(

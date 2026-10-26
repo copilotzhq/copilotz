@@ -8,7 +8,11 @@ import {
   awaitOperation,
   isActionContinuation,
 } from "../actions/continuation.ts";
-import { ActionError } from "../actions/errors.ts";
+import {
+  ActionError,
+  isSettledActionError,
+  settledActionError,
+} from "../actions/errors.ts";
 import { isNonRetryableError, markNonRetryable } from "../failure.ts";
 Deno.test("capability codec preserves explicit absence, bytes, typed failures and continuations", () => {
   const input = {
@@ -189,4 +193,17 @@ Deno.test("capability errors retain explicit retryability and bounded retry dela
     ) as typeof decoded).retryAfterMs,
     30_000,
   );
+});
+
+Deno.test("a settled Action failure stays settled across the worker wire", () => {
+  const settled = settledActionError(new Error("provider timed out"));
+  const decoded = decodeCapability(encodeCapability({ error: settled })) as {
+    error: Error;
+  };
+  assert(isSettledActionError(decoded.error));
+  assertEquals(decoded.error.message, "provider timed out");
+  const plain = decodeCapability(
+    encodeCapability({ error: new Error("unsettled") }),
+  ) as { error: Error };
+  assert(!isSettledActionError(plain.error));
 });

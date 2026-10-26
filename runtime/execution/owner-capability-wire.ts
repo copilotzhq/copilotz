@@ -4,7 +4,11 @@ import {
   isActionContinuation,
 } from "../actions/continuation.ts";
 /** Bounded, data-only owner capability protocol. No executable values cross it. */
-import { ActionError } from "../actions/errors.ts";
+import {
+  ActionError,
+  isSettledActionError,
+  settledActionError,
+} from "../actions/errors.ts";
 import { markNonRetryable } from "../failure.ts";
 
 export const OWNER_CAPABILITY_WORKLOAD = "copilotz.owner.capability.v1";
@@ -191,9 +195,10 @@ export function encodeCapability(value: unknown): Uint8Array {
       const retryAfterMs = typeof hint === "number" && Number.isFinite(hint)
         ? Math.min(30_000, Math.max(0, hint))
         : null;
+      const settled = isSettledActionError(value);
       charge(
-        9 + String(retryable).length + String(status).length +
-          String(retryAfterMs).length,
+        10 + String(retryable).length + String(status).length +
+          String(retryAfterMs).length + String(settled).length,
       );
       string(name);
       string(message);
@@ -207,6 +212,8 @@ export function encodeCapability(value: unknown): Uint8Array {
         retryable,
         status,
         retryAfterMs,
+        // A settled Action already recorded its terminal; callers must not retry it.
+        settled,
       ];
     }
     if (!value || typeof value !== "object" || ancestors.has(value)) {
@@ -288,12 +295,13 @@ export function decodeCapability(bytes: Uint8Array): unknown {
       return Uint8Array.from(atob(body), (byte) => byte.charCodeAt(0));
     }
     if (
-      tag === 5 && value.length === 7 && typeof body === "string" &&
+      tag === 5 && value.length === 8 && typeof body === "string" &&
       typeof value[2] === "string" &&
       (value[4] === null || typeof value[4] === "boolean") &&
       (value[6] === null ||
         typeof value[6] === "number" && Number.isFinite(value[6]) &&
-          value[6] >= 0 && value[6] <= 30_000)
+          value[6] >= 0 && value[6] <= 30_000) &&
+      typeof value[7] === "boolean"
     ) {
       const error = Object.assign(
         body === "ActionError" && typeof value[3] === "string" &&
@@ -306,6 +314,7 @@ export function decodeCapability(bytes: Uint8Array): unknown {
         },
       );
       if (value[6] !== null) Object.assign(error, { retryAfterMs: value[6] });
+      if (value[7]) settledActionError(error);
       return value[4] === false
         ? markNonRetryable(error)
         : value[4] === true

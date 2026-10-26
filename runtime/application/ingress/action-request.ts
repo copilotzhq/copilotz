@@ -1,7 +1,7 @@
 /** Admits the requested Action directly through the ordinary Action caller. */
 import { defineProcessor, type Processor } from "../../plugins/index.ts";
 import { resolveActionSourceData } from "../../actions/protected-context.ts";
-import { isSettledActionError } from "../../actions/invoker.ts";
+import { isSettledActionError } from "../../actions/errors.ts";
 import {
   parseServerActionRequest,
   SERVER_ACTION_REQUEST_EVENT_TYPE,

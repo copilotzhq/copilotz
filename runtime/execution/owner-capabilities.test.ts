@@ -15,7 +15,6 @@ import type { WorkerCallContext } from "../../dependencies/oxian-hypervisor.ts";
 
 async function setup(
   overrides: Record<string, unknown> = {},
-  limits: { resourceIdleMs?: number; resourceLifetimeMs?: number } = {},
   afterRegistration?: (options: Record<string, unknown>) => void,
 ) {
   let epoch = 1;
@@ -50,7 +49,6 @@ async function setup(
   const registry = createPluginRegistry({ actions: { run: action } });
   const hostOptions = {
     localExecution: true,
-    ...limits,
     registry,
     resolveAuthority() {
       authorityCalls++;
@@ -238,7 +236,7 @@ Deno.test("disconnect cancels blocked follower reads and drains resources before
     await f.close();
   }
 });
-Deno.test("quiet live writers outlast generic handle limits and close on completion", async () => {
+Deno.test("live writers stay open until completion closes them all", async () => {
   let opened = 0, aborted = 0;
   const f = await setup({
     streams: {
@@ -254,7 +252,7 @@ Deno.test("quiet live writers outlast generic handle limits and close on complet
         };
       },
     },
-  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
+  });
   try {
     for (let index = 0; index < 33; index++) {
       await f.call({
@@ -265,7 +263,6 @@ Deno.test("quiet live writers outlast generic handle limits and close on complet
       });
     }
     assertEquals(opened, 33);
-    await new Promise((resolve) => setTimeout(resolve, 220));
     assertEquals(aborted, 0);
 
     await f.call({ kind: "complete", id: f.id, value: "quiet live writers" });
@@ -275,7 +272,7 @@ Deno.test("quiet live writers outlast generic handle limits and close on complet
     await f.close();
   }
 });
-Deno.test("active writers outlast generic lifetime and still close on cancellation", async () => {
+Deno.test("active writers close on invocation cancellation", async () => {
   let appended = 0, aborted = 0;
   const f = await setup({
     streams: {
@@ -290,7 +287,7 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
         },
       }),
     },
-  }, { resourceIdleMs: 40, resourceLifetimeMs: 100 });
+  });
   try {
     const writer = await f.call({
       kind: "call",
@@ -299,7 +296,6 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
       args: [{}],
     }) as { handle: string };
     for (let index = 0; index < 8; index++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
       await f.call({
         kind: "call",
         context: f.id,
@@ -314,36 +310,6 @@ Deno.test("active writers outlast generic lifetime and still close on cancellati
     f.abortContext(new Error("invocation cancelled"));
     await f.close();
     assertEquals(aborted, 1);
-  } finally {
-    await f.close();
-  }
-});
-
-Deno.test("idle reader handles retain bounded expiry while writers use invocation lifetime", async () => {
-  let cancelled = 0;
-  const f = await setup({
-    content: {
-      open: () =>
-        new ReadableStream({
-          cancel() {
-            cancelled++;
-          },
-        }),
-    },
-  }, { resourceIdleMs: 20, resourceLifetimeMs: 100 });
-  try {
-    await f.call({
-      kind: "call",
-      context: f.id,
-      path: ["content", "open"],
-      args: [{}],
-    });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    assertEquals(cancelled, 1);
-
-    await assertRejects(() =>
-      f.call({ kind: "complete", id: f.id, value: "expired reader" })
-    );
   } finally {
     await f.close();
   }
@@ -750,7 +716,7 @@ Deno.test("owner context cancellation revokes a blocked reader before waiting fo
   }
 });
 
-Deno.test("cancelled capability calls do not execute and authority is captured once", async () => {
+Deno.test("a cancelled call ends only itself; authority is captured once", async () => {
   let reads = 0;
   const f = await setup({
     collections: {
@@ -784,6 +750,15 @@ Deno.test("cancelled capability calls do not execute and authority is captured o
       "cancelled call",
     );
     assertEquals(reads, 4100);
+    // Sibling calls of the same delivery keep working.
+    await f.call({
+      kind: "call",
+      context: f.id,
+      path: ["collections", "notes", "list"],
+    });
+    assertEquals(reads, 4101);
+    await f.call({ kind: "complete", id: f.id, value: "sibling done" });
+    assertEquals((await f.call({ kind: "next" }) as CapabilityPoll).done, true);
   } finally {
     await f.close();
   }
@@ -830,7 +805,7 @@ Deno.test("delayed old connection readiness failure cannot retire a replacement 
 });
 
 Deno.test("owner capability registration captures callbacks before asynchronous startup", async () => {
-  const f = await setup({}, {}, (options) => {
+  const f = await setup({}, (options) => {
     // Mutate before the first Open's authority await. The captured factory and
     // callback must already be detached in the construction turn.
     options.resolveAuthority = () =>

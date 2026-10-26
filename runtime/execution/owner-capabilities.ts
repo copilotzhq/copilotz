@@ -46,8 +46,6 @@ type Method = (...args: unknown[]) => unknown;
 type RecordValue = Record<string, unknown>;
 type Deferred<T> = ReturnType<typeof Promise.withResolvers<T>>;
 const POLL_MS = 10_000;
-const RESOURCE_IDLE_MS = 30_000;
-const RESOURCE_LIFETIME_MS = 120_000;
 
 type Resource = {
   id: string;
@@ -55,8 +53,6 @@ type Resource = {
   kind: "writer" | "reader";
   value: RecordValue;
   serial: Promise<unknown>;
-  created: number;
-  used: number;
   closed: boolean;
   pendingAppends?: number;
   /** Body sealing does not revoke its bounded retention capability. */
@@ -249,8 +245,6 @@ export function createOwnerCapabilityHost(
       input: unknown,
     ): Promise<unknown>;
     deliveryTimeoutMs?: number;
-    resourceIdleMs?: number;
-    resourceLifetimeMs?: number;
     onDiagnostic?: import("./types.ts").DeliveryDiagnosticSink;
   }>,
 ): OwnerCapabilityHost {
@@ -270,13 +264,6 @@ export function createOwnerCapabilityHost(
   >();
   let renewing: Promise<void> | undefined;
   let closed = false;
-  const idleMs = options.resourceIdleMs ?? RESOURCE_IDLE_MS;
-  const lifetimeMs = options.resourceLifetimeMs ?? RESOURCE_LIFETIME_MS;
-  for (const duration of [idleMs, lifetimeMs]) {
-    if (!Number.isSafeInteger(duration) || duration < 1) {
-      throw new TypeError("Resource timeouts must be positive integers.");
-    }
-  }
   const keyOf = (binding: WorkerCallContext) =>
     `${binding.fence.connectionId}:${binding.fence.sessionGeneration}:${
       binding.parent!.streamId
@@ -458,26 +445,6 @@ export function createOwnerCapabilityHost(
       "Session subscription must return an unsubscribe function.",
     );
   }
-  const timer = setInterval(() => {
-    const now = Date.now();
-    for (const assignment of assignments.values()) {
-      for (const resource of assignment.resources.values()) {
-        if (
-          resource.kind !== "writer" && !resource.closed &&
-          (now - resource.used >= idleMs ||
-            now - resource.created >= lifetimeMs)
-        ) {
-          const error = capabilityError("owner_handle_expired");
-          void closeResource(assignment, resource, error).catch(() =>
-            undefined
-          );
-          // Expiry fails the execution, including a callback that caught a read failure.
-          abortAssignment(assignment, error);
-        }
-      }
-    }
-  }, Math.min(1000, idleMs, lifetimeMs));
-  (timer as unknown as { unref?: () => void }).unref?.();
 
   const invoke = async (
     assignment: Assignment,
@@ -685,8 +652,6 @@ export function createOwnerCapabilityHost(
     const value: Resource = {
       ...resource,
       id: crypto.randomUUID(),
-      created: Date.now(),
-      used: Date.now(),
       closed: false,
       serial: Promise.resolve(),
     };
@@ -892,11 +857,15 @@ export function createOwnerCapabilityHost(
     if (!assignment) throw capabilityError("owner_assignment_unknown");
     const active = assignment;
     check(active);
-    const abort = () => abortAssignment(active, binding.signal.reason);
+    // A cancelled call ends only itself: one fan-out branch's cancellation
+    // must not fail its siblings. Worker completion and disconnect retire the
+    // assignment (lifecycle below).
+    const abort = () => {
+      if (call.kind === "next") active.wake?.resolve();
+    };
     binding.signal.addEventListener("abort", abort, { once: true });
     try {
-      // Cancellation may have happened while authority resolution was awaited.
-      if (binding.signal.aborted) abort();
+      binding.signal.throwIfAborted();
       active.abort.signal.throwIfAborted();
       if (call.kind === "next") {
         if (!active.queue.length && !active.terminal) {
@@ -960,7 +929,10 @@ export function createOwnerCapabilityHost(
             call.name!,
             call.args?.[0],
             {
-              signal: invocation.context.signal,
+              signal: AbortSignal.any([
+                invocation.context.signal,
+                binding.signal,
+              ]),
               timeoutMs: call.options?.timeoutMs as number | undefined,
             },
           );
@@ -1112,7 +1084,6 @@ export function createOwnerCapabilityHost(
           ) {
             throw capabilityError("owner_handle_unknown");
           }
-          resource.used = Date.now();
           if (
             path.length !== 1 ||
             !(resource.kind === "reader"
@@ -1288,8 +1259,9 @@ export function createOwnerCapabilityHost(
     workerCalls: {
       admit,
       admitUnassigned: admit,
-      maxConcurrent: 1024,
-      maxPerConnection: 128,
+      // Nested Action calls hold a slot for their whole run; use Oxian's maxima.
+      maxConcurrent: 65_536,
+      maxPerConnection: 1024,
       maxRequestBytes: OWNER_CAPABILITY_BYTES,
       maxResponseBytes: OWNER_CAPABILITY_BYTES,
       timeoutMs: resolveDeliveryTimeoutMs(
@@ -1353,7 +1325,6 @@ export function createOwnerCapabilityHost(
     },
     async close(reason = "owner_closed") {
       closed = true;
-      clearInterval(timer);
       pendingHeartbeats.clear();
       let failure: unknown;
       try {

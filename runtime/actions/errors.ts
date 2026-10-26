@@ -50,3 +50,21 @@ export class ActionError extends Error {
     this.status = status;
   }
 }
+
+const settledActionErrors = new WeakSet<object>();
+
+/** Marks an error raised after the Action terminal lifecycle Event is durable. */
+export function settledActionError(error: unknown): unknown {
+  const value = ((typeof error === "object" && error !== null) ||
+      typeof error === "function")
+    ? error as object
+    : new Error(String(error), { cause: error });
+  settledActionErrors.add(value);
+  return value;
+}
+
+/** True only after the Action terminal lifecycle Event is durable. */
+export function isSettledActionError(error: unknown): boolean {
+  return ((typeof error === "object" && error !== null) ||
+    typeof error === "function") && settledActionErrors.has(error as object);
+}

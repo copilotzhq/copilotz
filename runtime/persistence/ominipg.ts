@@ -2,7 +2,11 @@ import { Ominipg } from "../../dependencies/ominipg.ts";
 import type { OminipgConnectionOptions } from "../../dependencies/ominipg.ts";
 import { configureReads, retireReads } from "./read-limiter.ts";
 import { resolveAutoProviders } from "../../dependencies/ominipg-auto.ts";
-import { createSqlSession, type SqlSession } from "../events/index.ts";
+import {
+  createSqlSession,
+  type SqlSession,
+  type SqlTransactionOptions,
+} from "../events/index.ts";
 
 type QueryResult<TRow extends Record<string, unknown>> = Readonly<{
   rows: TRow[];
@@ -16,8 +20,10 @@ type Query = <TRow extends Record<string, unknown> = Record<string, unknown>>(
 
 export type OminipgDatabaseLike = Readonly<{
   query: Query;
+  /** Must apply isolation and access mode on BEGIN (Ominipg 0.11.1+). */
   transaction<T>(
     operation: (transaction: Readonly<{ query: Query }>) => T | Promise<T>,
+    options?: SqlTransactionOptions,
   ): Promise<T>;
   close(): Promise<void>;
 }>;

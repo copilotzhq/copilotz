@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/copilotz",
-  "version": "0.90.2",
+  "version": "0.90.3",
   "description": "Copilotz Lib",
   "license": "MIT",
   "type": "module",
@@ -89,7 +89,7 @@
     "@bradenmacdonald/s3-lite-client": "npm:@jsr/bradenmacdonald__s3-lite-client@^0.9.6",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@noble/hashes": "1.8.0",
-    "@oxian/ominipg": "npm:@jsr/oxian__ominipg@0.11.0",
+    "@oxian/ominipg": "npm:@jsr/oxian__ominipg@0.11.1",
     "@oxian/oxian-js": "npm:@jsr/oxian__oxian-js@0.23.2",
     "@radix-ui/react-avatar": "1.1.10",
     "@radix-ui/react-dialog": "1.1.15",

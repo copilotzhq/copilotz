@@ -114,3 +114,47 @@ Deno.test("Ominipg SQL adapter delegates transaction ownership to Ominipg", asyn
     "transaction:SELECT inside",
   ]);
 });
+
+Deno.test("read snapshots set isolation on BEGIN instead of a SET TRANSACTION round trip", async () => {
+  const calls: unknown[] = [];
+  const session = createOminipgSqlSession({
+    query: () => Promise.resolve({ rows: [] }),
+    async close() {},
+    async transaction(operation, options) {
+      calls.push(options);
+      return await operation({
+        query(sql) {
+          calls.push(sql);
+          return Promise.resolve({ rows: [] });
+        },
+      });
+    },
+  });
+
+  await session.readTransaction!((snapshot) => snapshot.query("SELECT 1"));
+
+  assertEquals(calls, [
+    { isolation: "repeatable read", readOnly: true },
+    "SELECT 1",
+  ]);
+});
+
+Deno.test("managed read snapshots are repeatable read and read only", async () => {
+  const managed = await openManagedOminipgDatabase();
+  try {
+    const modes = await managed.session.readTransaction!(async (snapshot) => [
+      (await snapshot.query("SHOW transaction_isolation")).rows[0]
+        .transaction_isolation,
+      (await snapshot.query("SHOW transaction_read_only")).rows[0]
+        .transaction_read_only,
+    ]);
+    assertEquals(modes, ["repeatable read", "on"]);
+    await assertRejects(() =>
+      managed.session.readTransaction!((snapshot) =>
+        snapshot.query("CREATE TABLE refused (id TEXT)")
+      )
+    );
+  } finally {
+    await managed.close();
+  }
+});

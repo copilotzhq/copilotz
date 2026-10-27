@@ -14,9 +14,16 @@ export type SqlExecutor = {
   ): Promise<SqlQueryResult<TRow>>;
 };
 
+/** Applied by the adapter on BEGIN, so a snapshot costs no extra round trip. */
+export type SqlTransactionOptions = Readonly<{
+  isolation?: "read committed" | "repeatable read" | "serializable";
+  readOnly?: boolean;
+}>;
+
 export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
+    options?: SqlTransactionOptions,
   ): Promise<T>;
   /**
    * Runs a short, repeatable read-only database snapshot. The callback must
@@ -45,6 +52,7 @@ const completions = new WeakMap<SqlExecutor, TransactionCompletion>();
 export async function runSqlTransaction<T>(
   session: Pick<SqlSession, "transaction">,
   operation: (transaction: SqlExecutor) => Promise<T>,
+  options?: SqlTransactionOptions,
 ): Promise<T> {
   const completion: TransactionCompletion = {
     state: "pending",
@@ -73,7 +81,7 @@ export async function runSqlTransaction<T>(
         active = false;
         completion.active = false;
       }
-    });
+    }, options);
     completion.state = "committed";
     for (const callback of completion.callbacks.splice(0)) callback();
     return result;
@@ -217,10 +225,15 @@ export function sqlCommitGate(transaction: SqlExecutor): () => void {
   };
 }
 
+const SNAPSHOT: SqlTransactionOptions = Object.freeze({
+  isolation: "repeatable read",
+  readOnly: true,
+});
+
 type DatabaseLike = SqlExecutor & {
-  __copilotzTransaction?: <T>(operation: () => Promise<T>) => Promise<T>;
   transaction?: <T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
+    options?: SqlTransactionOptions,
   ) => Promise<T>;
 };
 
@@ -228,12 +241,12 @@ type DatabaseLike = SqlExecutor & {
 export function createSqlSession(database: DatabaseLike): SqlSession {
   const query: SqlExecutor["query"] = (sql, params) =>
     database.query(sql, params);
-  const rawTransaction: SqlSession["transaction"] = async (operation) => {
-    if (typeof database.__copilotzTransaction === "function") {
-      return await database.__copilotzTransaction(() => operation({ query }));
-    }
+  const rawTransaction: SqlSession["transaction"] = async (
+    operation,
+    options,
+  ) => {
     if (typeof database.transaction === "function") {
-      return await database.transaction(operation);
+      return await database.transaction(operation, options);
     }
     throw createEventStoreError(
       "event_transaction_unavailable",
@@ -245,8 +258,8 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
     { transaction: rawTransaction },
     database,
   );
-  const transaction: SqlSession["transaction"] = (operation) =>
-    runSqlTransaction(atomic, operation);
+  const transaction: SqlSession["transaction"] = (operation, options) =>
+    runSqlTransaction(atomic, operation, options);
 
   const config = readConfiguration(database);
   return bindSqlDatabaseIdentity({
@@ -254,13 +267,10 @@ export function createSqlSession(database: DatabaseLike): SqlSession {
     query,
     transaction,
     async readTransaction(operation, options) {
-      return await config.limiter.run(() =>
-        transaction(async (snapshot) => {
-          await snapshot.query(
-            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-          );
-          return await operation(snapshot);
-        }), options);
+      return await config.limiter.run(
+        () => transaction(operation, SNAPSHOT),
+        options,
+      );
     },
   }, database);
 }

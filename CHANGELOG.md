@@ -1,3 +1,25 @@
+## 0.90.3 — 2026-10-26
+
+Two latency fixes: read snapshots no longer pay an extra database round trip,
+and a delivery waiting for a worker slot starts as soon as one frees.
+
+- Read snapshots and owner bundle exports open with their isolation level and
+  access mode on `BEGIN`, which drops the separate `SET TRANSACTION` round trip
+  per snapshot. A database passed to `createSqlSession` receives these as the
+  second argument of `transaction(operation, options)` and must apply them;
+  Ominipg 0.11.1 does. The unused `__copilotzTransaction` hook is removed.
+- Depends on Ominipg 0.11.1, which applies transaction options on `BEGIN` and
+  sends `BEGIN` together with the transaction's first statement when that
+  statement has no parameters.
+- The gateway queues up to 1,024 dispatches while every worker slot is busy, as
+  the shard already did. Before, a delivery placed at full capacity was refused
+  and retried after a fixed 1 s; it now starts when a slot frees (about 20 ms
+  instead of 1,030 ms in the new test). The 1 s deferral remains the fallback
+  when the queue is full or its wait times out. A dispatch for a specific worker
+  that is not ready is still refused at once, so the owner's placement recovery
+  handles its work instead of waiting for that worker to return.
+  `hypervisorConfig` still overrides the default.
+
 ## 0.90.2 — 2026-10-26
 
 Read snapshots are replaced by registered owner reads, so parallel agent work no

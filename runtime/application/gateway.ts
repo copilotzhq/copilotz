@@ -131,6 +131,28 @@ async function settleAll(
   if (failures.length > 1) throw new AggregateError(failures, message);
 }
 
+/**
+ * Dispatches wait in the Hypervisor's queue for a free slot instead of being
+ * refused. A dispatch for a specific worker that is not ready is still refused
+ * at once: queued, it would wait for that worker to come back, while the
+ * owner's placement recovery must decide what happens to its work.
+ */
+function queueForPresentTargets(hypervisor: Hypervisor): Hypervisor {
+  return Object.freeze({
+    ...hypervisor,
+    dispatch(input: Parameters<Hypervisor["dispatch"]>[0]) {
+      const target = input.target?.workerId;
+      if (target && hypervisor.sessions.get(target)?.phase !== "ready") {
+        return Promise.reject(Object.assign(
+          new Error(`Worker ${target} is not ready for work.`),
+          { code: "worker_unavailable" },
+        ));
+      }
+      return hypervisor.dispatch(input);
+    },
+  });
+}
+
 /** Creates the durable ingress/dispatch role without hosting plugin work. */
 export async function createCopilotzGateway(
   options: CreateCopilotzGatewayOptions = {},
@@ -250,16 +272,18 @@ export async function createCopilotzGateway(
         workerCalls,
         lifecycle: workerLifecycle,
       }))
-      : (hypervisor = createHypervisor({
-        transports,
-        workerCalls,
-        admit: options.admit,
-        assign: options.assign,
-        sessions: options.sessions,
-        signal: options.signal,
-        config: { maxQueuedDispatches: 1024, ...options.hypervisorConfig },
-        fallback: (request) => fetchFallback(request),
-      }, { ...lifecycle, ...workerLifecycle }));
+      : queueForPresentTargets(
+        hypervisor = createHypervisor({
+          transports,
+          workerCalls,
+          admit: options.admit,
+          assign: options.assign,
+          sessions: options.sessions,
+          signal: options.signal,
+          config: { maxQueuedDispatches: 1024, ...options.hypervisorConfig },
+          fallback: (request) => fetchFallback(request),
+        }, { ...lifecycle, ...workerLifecycle }),
+      );
     options.signal?.throwIfAborted();
     if (!dispatcher || typeof dispatcher.dispatch !== "function") {
       throw new TypeError(

@@ -15,8 +15,10 @@ and a delivery waiting for a worker slot starts as soon as one frees.
   the shard already did. Before, a delivery placed at full capacity was refused
   and retried after a fixed 1 s; it now starts when a slot frees (about 20 ms
   instead of 1,030 ms in the new test). The 1 s deferral remains the fallback
-  when the queue is full or its wait times out. `hypervisorConfig` still
-  overrides the default.
+  when the queue is full or its wait times out. A dispatch for a specific worker
+  that is not ready is still refused at once, so the owner's placement recovery
+  handles its work instead of waiting for that worker to return.
+  `hypervisorConfig` still overrides the default.
 
 ## 0.90.2 — 2026-10-26
 

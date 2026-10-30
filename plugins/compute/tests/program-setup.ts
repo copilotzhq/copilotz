@@ -140,7 +140,7 @@ export async function setup(
   };
   try {
     if (options.enrolled !== false) {
-      await saveState({ url, root, id: "c1", secret: SECRET }, statePath);
+      await saveState({ connections: [{ url, root, id: "c1", secret: SECRET }] }, statePath);
     }
     const computer = await start();
     if (options.enrolled !== false) await computer.ready;

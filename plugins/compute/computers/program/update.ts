@@ -99,10 +99,20 @@ async function replace(next: string, program: string) {
 }
 
 /**
+ * The update this process is making now, if any: apps (orgs) it serves may
+ * offer one at once, and it's made once. Done (or failed), another can be.
+ */
+let making: Promise<void> | undefined;
+
+/**
  * Replaces `program` (this program, running) with `offer`'s binary, once it
  * checks (see above). It fails, leaving `program` as it was, if it doesn't.
  */
-export async function updateProgram(program: string, offer: Offer, signal?: AbortSignal) {
+export function updateProgram(program: string, offer: Offer, signal?: AbortSignal): Promise<void> {
+  return making ??= updateOnce(program, offer, signal).finally(() => making = undefined);
+}
+
+async function updateOnce(program: string, offer: Offer, signal?: AbortSignal) {
   const next = besideOf(program);
   try {
     await fetchChecked(offer, next, signal);
